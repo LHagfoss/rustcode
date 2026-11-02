@@ -1,90 +1,85 @@
 ---
 name: smart-ui
-description: Write a Smart UI (rustcode-ui v1) interactive component for the RustCode macOS chat. Use when the prompt's Smart UI section says it is on and the user asks for an interactive view, or sorting, filtering, sliders or toggles would help them explore the answer, even unasked.
+description: Write a Smart UI (rustcode-ui v1) interactive component for the RustCode chat. Use when the prompt's Smart UI section says it is on and the user asks for an interactive view, or controls would help them explore the answer, even unasked.
 triggers: smart ui, interactive view, rustcode-ui
-keywords: interactive, widget, component, html, slider, filter, sort, toggle
+keywords: interactive, widget, component, html, chart, slider, filter, sort, toggle
 ---
 
-# Smart UI authoring
+# Smart UI
 
-Smart UI runs one small HTML component inside a chat reply. It is for
-interaction the reader actually uses, not for decoration.
+One small HTML component inside a chat reply. It should read like the rest of
+the reply: no card, border or background of its own.
 
-## Pick the simplest form first
+## When
 
-1. **Prose or Markdown** (lists, a short table) when the answer is read once.
-2. **`rustcode-viz`** for a chart, table or tree that needs no controls. It is
-   native, runs no code and works with Smart UI off.
-3. **Smart UI** only when a control changes what the reader sees: filter or
-   sort many rows, drag a slider to explore a formula, toggle series,
-   step through states.
-
-If you cannot name the control and what it changes, do not write Smart UI.
-
-## Size it to the task
-
-- One component per question. The app keeps up to three interactive views
-  running at once; starting a fourth stops the oldest, which shows a Run
-  button. Two views in one reply are fine when each answers its own part;
-  for a static chart beside them, use `rustcode-viz`.
-- Aim for under 300 px tall and a handful of controls. The card is the chat
-  column's width (it can be narrow, ~320 px) and 48–720 pt tall; taller
-  content scrolls inside it.
-- No app chrome: no navigation bars, tabs of unrelated content, splash
-  headers, footers, logos or instructions the controls already make obvious.
-- Show the result of a control next to it. Keep the first state useful
-  without any interaction.
-- Keep data to what the view needs. Limits: 64 KB of source, 5,000 elements.
-  Pre-aggregate large data; never embed thousands of table rows.
+- Read once: Markdown. A static chart, table or tree: `rustcode-viz`.
+- Smart UI when a control changes what the reader sees (filter, sort, slider,
+  toggle, step) or a button asks a follow-up. If you cannot name the control,
+  do not write one.
+- One component per question. Put the key finding in a sentence before it.
 
 ## Format
 
-A fenced block whose info string is exactly `rustcode-ui v1`:
-
 ````markdown
 ```rustcode-ui v1
-<title>Slowest tests</title>
-<meta name="description" content="Filter by name, click a heading to sort">
-<style>
-  body { font: 13px -apple-system, system-ui; color: CanvasText; background: Canvas; margin: 0; }
-  input { width: 100%; box-sizing: border-box; }
-  th { color: AccentColor; cursor: pointer; text-align: left; }
-</style>
-<input id="q" placeholder="Filter" aria-label="Filter tests">
-<table id="t"></table>
+<title>Kristiansand, next 3 days</title>
+<label>Show <select id="m"><option value="0">Temperature</option><option value="1">Wind</option></select></label>
+<div style="height:200px"><canvas id="c" role="img" aria-label="Forecast"></canvas></div>
+<button id="d">Tuesday by hour</button>
+<script src="rustcode-lib:chart.js"></script>
 <script>
-  const rows = [["parse_config", 812], ["load_session", 640]];
-  /* plain JavaScript that renders rows and wires the controls */
+const series = [["°C", [8, 10, 7]], ["m/s", [5, 9, 4]]];
+const chart = new Chart(document.getElementById("c"), {type: "line",
+  data: {labels: ["Mon", "Tue", "Wed"], datasets: [{label: series[0][0], data: series[0][1]}]},
+  options: {maintainAspectRatio: false}});
+document.getElementById("m").onchange = (e) => {
+  const [label, data] = series[e.target.value];
+  Object.assign(chart.data.datasets[0], {label, data}); chart.update();
+};
+document.getElementById("d").onclick = () => window.rustcode?.send("Show Tuesday by hour");
 </script>
 ```
 ````
 
-- `<title>` becomes the card heading; `<meta name="description">` the line
-  under it. Both short.
-- Inline `<style>` and plain `<script>` only. No frameworks, imports, CDN,
-  fetch, external files, storage or navigation: all are blocked. Embed the
-  data.
-- For charts, use the bundled Chart.js (v4, global `Chart`) instead of
-  drawing by hand: `<canvas id="c"></canvas>` then
-  `<script src="rustcode-lib:chart.js"></script>` and a script that calls
-  `new Chart(...)`. It ships with the app, so it costs nothing against the
-  64 KB limit. Set `options.maintainAspectRatio: false` on a sized wrapper,
-  or keep the default ratio. Read colors from CSS (`getComputedStyle`) so the
-  chart follows light and dark mode.
-- Use system colors (`Canvas`, `CanvasText`, `AccentColor`, `GrayText`) and
-  the system font so it matches light and dark mode and the transcript.
-  No fixed background colors, gradients or shadows.
-- Fit any width: relative widths, `flex-wrap`, no horizontal scrolling.
-- Accessible: real `<button>`, `<input>`, `<select>` and `<label>`
-  elements, `aria-label` where a control has no visible label, keyboard
-  operable, visible focus. Respect `prefers-reduced-motion`.
+- `<title>` labels the view; do not repeat it as a heading.
+- Inline `<style>` and `<script>` only, data embedded. Network, imports,
+  storage and navigation are blocked. Limits: 64 KB source, 5,000 elements.
+
+## Runtime (already on the page)
+
+- Transparent body. Headings, tables, inputs, buttons and code already use the
+  app's typography, so write little CSS.
+- CSS variables: `--rc-text --rc-muted --rc-faint --rc-accent --rc-surface
+  --rc-separator --rc-danger --rc-success --rc-warning --rc-font --rc-mono
+  --rc-radius --rc-series-1` … `--rc-series-8`.
+- Classes: `.rc-row` `.rc-col` (flex), `.rc-grid`, `.rc-gap-1` … `.rc-gap-4`,
+  `.rc-muted`, `.rc-mono`, `.rc-num` (tabular figures), `.rc-card` (an inner
+  group), `.rc-scroll`.
+- Chart.js 4 (global `Chart`) via `<script src="rustcode-lib:chart.js">`.
+  `Chart.defaults` already use the variables, so set no colours. If you must,
+  read one: `getComputedStyle(document.documentElement).getPropertyValue('--rc-accent')`.
+  Never give a canvas a system colour (`CanvasText`, `AccentColor`): it draws
+  nothing.
+- `window.rustcode`: `send(text)` sends `text` as the user's next message,
+  only from a click or key press (follow-ups such as "Show details for X");
+  `copy(text)`; `theme` (`"light"` or `"dark"`); `onThemeChange(callback)`.
+- Older apps have no `rustcode` object and no runtime: call
+  `window.rustcode?.send(...)`, give variables a fallback
+  (`var(--rc-muted, GrayText)`), and keep the view readable without classes.
+
+## Design
+
+- No outer card, border, background, shadow or title banner.
+- Compact (aim under 300 px tall) and fits a 320 px column: relative widths,
+  wrapping rows, no horizontal scrolling.
+- The first state is useful without interaction; a control's effect shows
+  next to it.
+- Accessible: real `<button>`, `<select>`, `<input>` and `<label>`,
+  `aria-label` where a control has no visible label, keyboard operable.
+  Respect `prefers-reduced-motion`.
+- Pre-aggregate; never embed thousands of rows.
 
 ## Before you send
 
-- When the `smart_ui_preview` tool is offered, render the block's HTML with
-  it first. Check the screenshot at the card's width and read any page
-  errors; fix them, then write the fence with the HTML you checked.
-- Is a control doing real work? Otherwise use `rustcode-viz` or Markdown.
-- Is it one compact component, readable at 320 px wide?
-- Does the reply still make sense if the view does not run? Put the key
-  finding in a sentence before the block.
+When `smart_ui_preview` is offered, render the HTML once, fix what the
+screenshot or errors show, then write the fence with that HTML.
