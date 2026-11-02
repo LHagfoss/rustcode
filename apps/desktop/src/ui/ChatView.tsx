@@ -303,6 +303,24 @@ function TranscriptSkeleton() {
   );
 }
 
+/**
+ * A click on blank chat space lets go of the composer, so its caret does not
+ * keep blinking while you read. Controls, links, fields and the composer
+ * itself keep the click; text selection still starts as usual.
+ */
+function releaseComposer(e: React.MouseEvent) {
+  const target = e.target as HTMLElement;
+  const active = document.activeElement as HTMLElement | null;
+  if (!active?.matches('textarea[aria-label="Message"]')) return;
+  if (
+    target.closest(
+      'button, a, input, textarea, select, label, [role="button"], [contenteditable], .rc-composer',
+    )
+  )
+    return;
+  active.blur();
+}
+
 export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
@@ -350,7 +368,12 @@ export function ChatView() {
   const showsBanner = isNew && !!banner.name;
 
   return (
-    <main ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg" aria-label="Chat">
+    <main
+      ref={rootRef}
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
+      aria-label="Chat"
+      onMouseDown={releaseComposer}
+    >
       {showsBanner && (
         <NewThreadBanner
           key={banner.style}
