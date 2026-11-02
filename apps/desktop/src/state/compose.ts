@@ -38,18 +38,6 @@ export function hasExtras(extras: ComposeExtras | undefined): boolean {
   return !!extras && (!!extras.command || extras.links.length > 0 || extras.attachments.length > 0);
 }
 
-/** A pasted text that is one http(s) URL and nothing else. */
-export function pastedUrl(text: string): string | null {
-  const t = text.trim();
-  if (!/^https?:\/\/\S+$/i.test(t) || t.length > 2048) return null;
-  try {
-    const url = new URL(t);
-    return url.protocol === "http:" || url.protocol === "https:" ? t : null;
-  } catch {
-    return null;
-  }
-}
-
 /** The text the prompt carries, in the order the composer shows it: command, links, then what was typed. */
 export function composedText(text: string, extras: ComposeExtras): string {
   const head = [extras.command?.name, ...extras.links].filter(Boolean).join(" ");

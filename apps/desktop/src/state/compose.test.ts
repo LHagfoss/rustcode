@@ -1,16 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { composedText, emptyExtras, pastedUrl, promptBlocks, splitImageMarkers, splitUrls } from "./compose";
+import { composedText, emptyExtras, promptBlocks, splitImageMarkers, splitUrls } from "./compose";
 
 const command = { name: "/review", description: "", takesArguments: true, report: false, action: "execute" };
 
 describe("compose", () => {
-  test("a pasted URL is a link only when it is the whole paste", () => {
-    expect(pastedUrl(" https://example.com/a?b=1 ")).toBe("https://example.com/a?b=1");
-    expect(pastedUrl("see https://example.com")).toBeNull();
-    expect(pastedUrl("javascript:alert(1)")).toBeNull();
-    expect(pastedUrl("file:///etc/passwd")).toBeNull();
-  });
-
   test("the prompt text keeps the order the composer shows: command, links, text", () => {
     const extras = { ...emptyExtras, command, links: ["https://a.dev"] };
     expect(composedText("look at this", extras)).toBe("/review https://a.dev look at this");
