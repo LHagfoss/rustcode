@@ -407,7 +407,12 @@ export function ChatView() {
             }}
           />
         )}
-        {request && <AttentionCard request={request} />}
+        {request && (
+          <AttentionCard
+            request={request}
+            pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
+          />
+        )}
         <Composer thread={thread} compact={width < 600} />
       </div>
     </main>

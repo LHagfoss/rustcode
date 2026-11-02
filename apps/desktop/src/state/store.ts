@@ -748,6 +748,29 @@ export function removeQueued(id: string, queuedId: string) {
   updateThread(id, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== queuedId) }));
 }
 
+/** A queued message edited in place; an empty text removes it. */
+export function updateQueued(id: string, queuedId: string, text: string) {
+  const trimmed = text.trim();
+  updateThread(id, (t) => ({
+    ...t,
+    queue: trimmed
+      ? t.queue.map((q) => (q.id === queuedId ? { ...q, text: trimmed } : q))
+      : t.queue.filter((q) => q.id !== queuedId || q.extras?.attachments.length),
+  }));
+}
+
+/** Move a queued message one place earlier (-1) or later (1). */
+export function moveQueued(id: string, queuedId: string, by: -1 | 1) {
+  updateThread(id, (t) => {
+    const at = t.queue.findIndex((q) => q.id === queuedId);
+    const to = at + by;
+    if (at < 0 || to < 0 || to >= t.queue.length) return t;
+    const queue = t.queue.slice();
+    [queue[at], queue[to]] = [queue[to]!, queue[at]!];
+    return { ...t, queue };
+  });
+}
+
 async function runPrompt(
   id: string,
   text: string,
@@ -849,6 +872,17 @@ function reply(request: PermissionRequest, result: JsonObject) {
 
 export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
   reply(request, option ? permissionSelected(option.id) : permissionCancelled);
+}
+
+/** Approve every approval the thread waits on (not questions), each with its "allow once" option. */
+export function approveAll(threadId: string) {
+  const pending = get().threads[threadId]?.permissions.filter((p) => !p.question) ?? [];
+  for (const request of pending) {
+    const option =
+      request.options.find((o) => o.kind === "allow_once") ??
+      request.options.find((o) => o.kind === "allow_always");
+    if (option) reply(request, permissionSelected(option.id));
+  }
 }
 
 export function answerQuestionOptions(request: PermissionRequest, options: PermissionOption[]) {

@@ -2,7 +2,7 @@
 // `bun run dev:web` keeps working; the shell validates every argument.
 
 import { isTauri } from "../acp/transport";
-import { shellCall } from "./shell";
+import { hasShell, shellCall } from "./shell";
 
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return shellCall<T>(command, args);
@@ -51,10 +51,23 @@ export interface GitChanges {
   diff: string;
 }
 
-/** The working tree's uncommitted changes, from git in the Tauri shell. */
-export async function gitChanges(cwd: string): Promise<GitChanges | null> {
-  if (!isTauri()) return null;
-  return invoke<GitChanges>("git_changes", { cwd });
+/**
+ * The working tree's uncommitted changes, from git in the Tauri shell (the
+ * mock answers too). With `base`, everything since the branch left it.
+ */
+export async function gitChanges(cwd: string, base?: string): Promise<GitChanges | null> {
+  if (!isTauri() && !hasShell()) return null;
+  try {
+    return await invoke<GitChanges>("git_changes", base ? { cwd, base } : { cwd });
+  } catch (error) {
+    if (!isTauri() && /does not run|Unknown command/.test(String(error))) return null;
+    throw error;
+  }
+}
+
+/** A Terminal window in a folder (macOS). */
+export function openTerminalAt(path: string): Promise<void> {
+  return invoke("open_terminal_at", { path });
 }
 
 export function revealPath(path: string): void {

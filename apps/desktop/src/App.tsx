@@ -14,9 +14,9 @@ import {
 } from "./state/store";
 import { AgentsPanel } from "./ui/AgentViews";
 import { ChatView } from "./ui/ChatView";
+import { CommandPalette } from "./ui/CommandPalette";
 import { cx, Pill } from "./ui/primitives";
 import { Sidebar } from "./ui/Sidebar";
-import { Switcher } from "./ui/Switcher";
 
 const Settings = lazy(() => import("./ui/Settings").then((m) => ({ default: m.Settings })));
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
@@ -133,7 +133,8 @@ export function App() {
   const panel = useApp((s) => s.panel);
   return (
     <Tooltip.Provider delayDuration={600}>
-      <div className="flex h-full w-full overflow-hidden">
+      {/* Hidden, not unmounted, under Settings: its sidebar shows the window's material through. */}
+      <div className={cx("flex h-full w-full overflow-hidden", settings && "invisible")}>
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <ChatView />
@@ -147,7 +148,7 @@ export function App() {
           {panel === "pulls" && <PullsPanel />}
         </Suspense>
       </div>
-      <Switcher />
+      <CommandPalette />
       <Suspense fallback={null}>
         {settings && <Settings />}
         {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}

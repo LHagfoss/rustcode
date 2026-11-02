@@ -58,6 +58,8 @@ pub fn run() {
             native::open_login_terminal,
             native::git_changes,
             native::read_image,
+            native::open_terminal_at,
+            native::reduce_transparency,
             links::link_meta,
             threads::thread_rename,
             threads::thread_trash,

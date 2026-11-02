@@ -118,7 +118,7 @@ function General() {
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const shortcuts: [string, string][] = [
     ["New thread", "⌘N"],
-    ["Switch thread", "⌘K"],
+    ["Command palette: threads, actions", "⌘K"],
     ["Settings", "⌘,"],
     ["Toggle sidebar", "⌘B"],
     ["Find in thread", "⌘F"],
@@ -577,7 +577,7 @@ export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
   return (
-    <div className="fixed inset-0 z-30 flex bg-chat" role="dialog" aria-label="Settings">
+    <div className="fixed inset-0 z-30 flex" role="dialog" aria-label="Settings">
       <nav className="flex w-[240px] shrink-0 flex-col bg-sidebar" aria-label="Settings sections">
         <div data-tauri-drag-region className="flex h-[34px] items-end pr-2.5 pl-20">
           <ChromeButton label="Back to chat" tooltip="Back (Esc)" onClick={() => openSettings(null)}>
@@ -605,7 +605,7 @@ export function Settings() {
           ))}
         </div>
       </nav>
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className="min-w-0 flex-1 overflow-y-auto bg-chat">
         <div className="mx-auto max-w-[720px] px-[clamp(24px,5%,64px)] pb-16">
           <h2 className="pt-10 pb-3 font-semibold text-title2">{current.label}</h2>
           {section === "general" && <General />}

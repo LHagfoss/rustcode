@@ -5,6 +5,7 @@
 import {
   Archive,
   ArchiveRestore,
+  ChevronRight,
   Ellipsis,
   Folder,
   MessageCircleQuestion,
@@ -16,15 +17,18 @@ import {
   Settings,
   SquarePen,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import { pickFolder } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import {
   askConfirm,
+  openAgent,
   openSettings,
   renameThread,
   selectThread,
@@ -37,6 +41,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { AgentMark } from "./AgentViews";
 import { ChromeButton, Cluster, ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
 
 const MIN = 200;
@@ -222,6 +227,7 @@ function ThreadRow({
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          <AgentChildren threadId={session.id} />
         </div>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
@@ -235,6 +241,52 @@ function ThreadRow({
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  );
+}
+
+const NO_AGENTS: SubagentInfo[] = [];
+
+/** The thread's subagents, nested under its row: running ones first, then the latest finished. */
+function AgentChildren({ threadId }: { threadId: string }) {
+  const agents = useApp((s) => s.agents[threadId] ?? NO_AGENTS);
+  const [open, setOpen] = useState<boolean | null>(null);
+  const active = agents.filter(agentActive);
+  if (!agents.length) return null;
+  const expanded = open ?? active.length > 0;
+  const shown = [...active, ...agents.filter((a) => !agentActive(a)).slice(-3)].slice(0, 6);
+  return (
+    <div className="ml-[18px] border-fg/[0.08] border-l pl-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen(!expanded)}
+        aria-expanded={expanded}
+        className="flex h-[20px] w-full items-center gap-1 rounded-[6px] px-1.5 text-caption text-fg-2 hover:bg-fg/[0.035]"
+      >
+        <ChevronRight size={10} className={cx("transition-transform", expanded && "rotate-90")} />
+        <Users size={10} />
+        {active.length
+          ? `${active.length} agent${active.length === 1 ? "" : "s"} working`
+          : `${agents.length} agents`}
+      </button>
+      {expanded &&
+        shown.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => {
+              selectThread(threadId);
+              openAgent(a.id);
+            }}
+            className="flex h-[22px] w-full items-center gap-1.5 rounded-[6px] px-1.5 text-left text-caption hover:bg-fg/[0.035]"
+          >
+            <span className="flex w-3 justify-center">
+              <AgentMark agent={a} />
+            </span>
+            <span className="shrink-0 font-medium text-fg">{a.agentType || a.name}</span>
+            <span className="min-w-0 truncate text-fg-2">{a.task}</span>
+          </button>
+        ))}
+    </div>
   );
 }
 
@@ -262,6 +314,18 @@ export function Sidebar() {
   const [width, setWidth] = useSidebarWidth();
   const dragging = useRef(false);
   const now = useNow();
+  // The list scrolls under the floating project card: it ends above it with a fade, and its last row can scroll clear.
+  const card = useRef<HTMLDivElement>(null);
+  const [cardHeight, setCardHeight] = useState(60);
+  useEffect(() => {
+    const el = card.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setCardHeight(el.offsetHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const inset = cardHeight + 10;
+  const fade = `linear-gradient(to bottom, #000 calc(100% - ${inset + 28}px), transparent calc(100% - ${inset}px))`;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -365,7 +429,15 @@ export function Sidebar() {
             ]}
           />
         </div>
-        <nav className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-[84px]">
+        <nav
+          className="min-h-0 flex-1 overflow-y-auto px-2.5"
+          style={{
+            paddingBottom: inset + 24,
+            maskImage: fade,
+            WebkitMaskImage: fade,
+            scrollPaddingBottom: inset + 24,
+          }}
+        >
           {!sessionsLoaded && (
             <div className="flex items-center gap-2 px-2.5 py-3 text-callout text-fg-2">
               <Spinner /> Loading threads…
@@ -419,7 +491,10 @@ export function Sidebar() {
             </button>
           )}
         </nav>
-        <div className="surface absolute right-2.5 bottom-2.5 left-2.5 flex items-center gap-1 rounded-2xl border-[0.5px] border-hairline p-1">
+        <div
+          ref={card}
+          className="surface absolute right-2.5 bottom-2.5 left-2.5 flex items-center gap-1 rounded-2xl border-[0.5px] border-hairline p-1"
+        >
           <Tooltip label="Default folder for new threads">
             <button
               type="button"

@@ -5,7 +5,18 @@
 // ⏎ send (or queue while running), ⇧⏎ newline, ⌘⏎ steer, Esc closes
 // suggestions, then clears the draft, then stops the turn.
 
-import { ArrowUp, ChevronDown, FileText, Folder, ListEnd, Paperclip, Pencil, Square, X } from "lucide-react";
+import {
+  ArrowUp,
+  ChevronDown,
+  ChevronUp,
+  FileText,
+  Folder,
+  ListEnd,
+  Paperclip,
+  Pencil,
+  Square,
+  X,
+} from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectName, type SlashCommand } from "../acp/types";
 import { onFileDrop, pickFiles, pickFolder, readImage } from "../lib/native";
@@ -26,6 +37,7 @@ import {
   cancel,
   cancelEdit,
   canSteer,
+  moveQueued,
   removeQueued,
   sendQueuedNow,
   setDraft,
@@ -35,6 +47,7 @@ import {
   submit,
   threadHarness,
   toast,
+  updateQueued,
   useApp,
 } from "../state/store";
 import { localId, type ThreadState } from "../state/thread";
@@ -357,6 +370,9 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
           ))}
         </div>
       )}
+      {thread && thread.queue.length > 0 && (
+        <QueueStack thread={thread} steerable={steerable} onFocusField={() => field.current?.focus()} />
+      )}
       <div
         className={cx(
           "surface relative z-10 flex flex-col gap-2 rounded-[22px] p-2.5",
@@ -382,62 +398,6 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
           void attachmentsFromFiles([...e.dataTransfer.files], images, harnessName).then(attach);
         }}
       >
-        {thread && thread.queue.length > 0 && (
-          <div className="flex flex-col gap-1.5 px-1">
-            <div className="flex items-center gap-1.5 text-caption text-brand">
-              <ListEnd size={12} />
-              <b>Queued</b>
-              <span className="text-fg-2">
-                · sent when this turn ends{steerable ? ", or now with ⌘⏎" : ""}
-              </span>
-            </div>
-            {thread.queue.map((q, i) => (
-              <div key={q.id} className="flex items-center gap-2 rounded-xl bg-fill-2 px-2 py-1.5 rc-in">
-                <span className="font-mono text-caption text-fg-3">{i + 1}</span>
-                <span className="line-clamp-2 flex-1 text-callout">
-                  {q.text || (q.extras?.attachments.length ? "Attachments" : "")}
-                </span>
-                {steerable && !q.extras?.attachments.length && (
-                  <Tooltip label="Send now: the turn reads it after its current step">
-                    <button
-                      type="button"
-                      aria-label="Send now"
-                      onClick={() => void sendQueuedNow(thread.id, q.id)}
-                      className="text-fg-2 hover:text-fg"
-                    >
-                      <ArrowUp size={13} />
-                    </button>
-                  </Tooltip>
-                )}
-                <Tooltip label="Edit">
-                  <button
-                    type="button"
-                    aria-label="Edit queued message"
-                    onClick={() => {
-                      removeQueued(thread.id, q.id);
-                      update(q.text);
-                      if (q.extras) change(() => q.extras!);
-                      field.current?.focus();
-                    }}
-                    className="text-fg-2 hover:text-fg"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                </Tooltip>
-                <Tooltip label="Remove">
-                  <button
-                    type="button"
-                    aria-label="Remove queued message"
-                    onClick={() => removeQueued(thread.id, q.id)}
-                    className="text-fg-3 hover:text-fg"
-                  >
-                    <X size={13} />
-                  </button>
-                </Tooltip>
-              </div>
-            ))}
-          </div>
-        )}
         {editing && (
           <div className="flex items-center gap-1.5 px-1.5 text-caption text-brand">
             <Pencil size={11} />
@@ -569,6 +529,113 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Messages waiting for the running turn to end, as rows above the composer.
+ * Each can be edited in place (⏎ saves, Esc cancels), moved, sent now as a
+ * steer when the harness steers live, or removed.
+ */
+function QueueStack({
+  thread,
+  steerable,
+  onFocusField,
+}: {
+  thread: ThreadState;
+  steerable: boolean;
+  onFocusField: () => void;
+}) {
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const save = () => {
+    if (editing) updateQueued(thread.id, editing.id, editing.text);
+    setEditing(null);
+    onFocusField();
+  };
+  return (
+    <section className="mb-2 flex flex-col gap-1 px-2" aria-label="Queued messages">
+      <div className="flex items-center gap-1.5 px-1 text-caption text-brand">
+        <ListEnd size={12} />
+        <b>Queued</b>
+        <span className="text-fg-2">· sent when this turn ends{steerable ? ", or now with ⌘⏎" : ""}</span>
+      </div>
+      {thread.queue.map((q, i) => (
+        <div
+          key={q.id}
+          className="surface group flex min-h-[34px] items-center gap-2 rounded-[14px] px-2.5 py-1.5 rc-in"
+        >
+          <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-3">{i + 1}</span>
+          {editing?.id === q.id ? (
+            <textarea
+              autoFocus
+              rows={Math.min(6, Math.max(1, editing.text.split("\n").length))}
+              value={editing.text}
+              onChange={(e) => setEditing({ id: q.id, text: e.target.value })}
+              onBlur={save}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  save();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setEditing(null);
+                  onFocusField();
+                }
+              }}
+              aria-label="Edit queued message"
+              className="min-w-0 flex-1 resize-none rounded-md bg-field px-1.5 py-0.5 text-callout outline-none ring-2 ring-info/40"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => !q.extras?.attachments.length && setEditing({ id: q.id, text: q.text })}
+              className="min-w-0 flex-1 cursor-text text-left"
+              aria-label="Edit queued message"
+            >
+              <span className="line-clamp-2 text-callout">
+                {q.text || (q.extras?.attachments.length ? "Attachments" : "")}
+              </span>
+            </button>
+          )}
+          <span className="flex shrink-0 items-center gap-1.5 opacity-60 group-hover:opacity-100">
+            {i > 0 && (
+              <Tooltip label="Move up">
+                <button
+                  type="button"
+                  aria-label="Move up"
+                  onClick={() => moveQueued(thread.id, q.id, -1)}
+                  className="text-fg-2 hover:text-fg"
+                >
+                  <ChevronUp size={13} />
+                </button>
+              </Tooltip>
+            )}
+            {steerable && !q.extras?.attachments.length && (
+              <Tooltip label="Send now: the turn reads it after its current step">
+                <button
+                  type="button"
+                  aria-label="Send now"
+                  onClick={() => void sendQueuedNow(thread.id, q.id)}
+                  className="text-fg-2 hover:text-fg"
+                >
+                  <ArrowUp size={13} />
+                </button>
+              </Tooltip>
+            )}
+            <Tooltip label="Remove">
+              <button
+                type="button"
+                aria-label="Remove queued message"
+                onClick={() => removeQueued(thread.id, q.id)}
+                className="text-fg-3 hover:text-fg"
+              >
+                <X size={13} />
+              </button>
+            </Tooltip>
+          </span>
+        </div>
+      ))}
+    </section>
   );
 }
 
