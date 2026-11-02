@@ -512,3 +512,29 @@
 .rc-fade-in {
   animation: rc-fade 400ms ease-out;
 }
+
+/* The composer's tray: a step lighter than the chat, tucked under the box. */
+.rc-tray {
+  background: color-mix(in srgb, var(--rc-fg) 6%, var(--rc-chat));
+  box-shadow: inset 0 0 0 0.5px var(--rc-hairline);
+}
+
+/* Drilling into a panel's page and back. */
+@keyframes rc-drill {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+@keyframes rc-drill-back {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+}
+.rc-drill {
+  animation: rc-drill 220ms var(--ease-snappy);
+}
+.rc-drill-back {
+  animation: rc-drill-back 220ms var(--ease-snappy);
+}

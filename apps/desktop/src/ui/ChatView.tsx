@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
-import { agentActive, leftPercent, shownWindow, windowDetail, windowTitle } from "../acp/rustcode";
+import { agentActive } from "../acp/rustcode";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import {
@@ -37,7 +37,7 @@ import {
   useApp,
   worktreeOf,
 } from "../state/store";
-import { formatTokens, type ThreadState } from "../state/thread";
+import type { ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { LinkedThreads } from "./Links";
@@ -46,98 +46,6 @@ import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives
 import { StatusChip } from "./Status";
 import { useLightsInset } from "./Titlebar";
 import { Transcript } from "./Transcript";
-
-export function UsageCapsule({ thread }: { thread: ThreadState }) {
-  const usage = thread.usage;
-  const plan = useApp((s) => s.planUsage[thread.id]);
-  const shown = plan ? shownWindow(plan) : undefined;
-  if (!usage?.size && !shown) return null;
-  if (!usage?.size) return <PlanMeter thread={thread} />;
-  const fraction = Math.min(1, usage.used / usage.size);
-  const tint = fraction < 0.8 ? "bg-brand" : fraction < 0.95 ? "bg-attention" : "bg-danger";
-  const detail = [
-    `${Math.round((1 - fraction) * 100)}% context left${usage.estimated ? " (estimated)" : ""}`,
-    usage.inputTokens !== undefined
-      ? `${formatTokens(usage.inputTokens)} in · ${formatTokens(usage.outputTokens ?? 0)} out`
-      : undefined,
-    usage.cachedTokens ? `${formatTokens(usage.cachedTokens)} cached` : undefined,
-    ...(plan
-      ? [
-          "",
-          ...plan.windows.map((w) => `${windowTitle(w)}: ${windowDetail(w)}`),
-          plan.source === "codex" ? "As the Codex CLI reports for your ChatGPT plan" : undefined,
-        ]
-      : []),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  return (
-    <Tooltip label={<span className="whitespace-pre-line">{detail}</span>}>
-      <div
-        className="flex h-7 items-center gap-2 rounded-full bg-fill-3 px-2.5"
-        role="meter"
-        aria-label="Context used"
-        aria-valuemin={0}
-        aria-valuemax={usage.size}
-        aria-valuenow={usage.used}
-      >
-        <div className="h-[5px] w-[18px] overflow-hidden rounded-full bg-fg-4">
-          <div
-            className={cx("h-full rounded-full transition-[width] duration-300 ease-snappy", tint)}
-            style={{ width: `max(3px, ${fraction * 100}%)` }}
-          />
-        </div>
-        <span className="font-medium text-caption text-fg-2 tabular">
-          {formatTokens(usage.used)} / {formatTokens(usage.size)}
-        </span>
-        {shown && <PlanDot left={leftPercent(shown)} title={windowTitle(shown)} />}
-      </div>
-    </Tooltip>
-  );
-}
-
-/** The plan's shortest window, as the capsule's second part: `5-hour 58%`. */
-function PlanDot({ left, title }: { left: number; title: string }) {
-  const tint = left > 20 ? "text-fg-2" : left > 5 ? "text-attention" : "text-danger";
-  return (
-    <span
-      className={cx(
-        "flex items-center gap-1 border-hairline border-l pl-2 font-medium text-caption tabular",
-        tint,
-      )}
-    >
-      <span
-        className="relative size-[11px] rounded-full"
-        style={{ background: `conic-gradient(currentColor ${left * 3.6}deg, var(--rc-fg-4) 0)` }}
-      />
-      {title} {left}%
-    </span>
-  );
-}
-
-function PlanMeter({ thread }: { thread: ThreadState }) {
-  const plan = useApp((s) => s.planUsage[thread.id]);
-  const shown = plan ? shownWindow(plan) : undefined;
-  if (!plan || !shown) return null;
-  return (
-    <Tooltip
-      label={
-        <span className="whitespace-pre-line">
-          {plan.windows.map((w) => `${windowTitle(w)}: ${windowDetail(w)}`).join("\n")}
-        </span>
-      }
-    >
-      <div
-        className="flex h-7 items-center rounded-full bg-fill-3 px-2.5"
-        role="meter"
-        aria-label="Plan usage left"
-        aria-valuenow={leftPercent(shown)}
-      >
-        <PlanDot left={leftPercent(shown)} title={windowTitle(shown)} />
-      </div>
-    </Tooltip>
-  );
-}
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -287,7 +195,6 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
       </div>
       {thread && <ThreadStatusMenu threadId={thread.id} />}
       {thread && <PlanButton thread={thread} />}
-      {thread && <UsageCapsule thread={thread} />}
       <Cluster>
         {thread && agentsOn && (
           <ClusterButton

@@ -15,9 +15,12 @@ import {
   ListEnd,
   Paperclip,
   Pencil,
+  Plus,
   Square,
+  SquarePen,
   X,
 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
@@ -47,6 +50,7 @@ import {
   setExtras,
   setNewWorktree,
   setProjectCwd,
+  startNewThread,
   steerOrSubmit,
   submit,
   threadHarness,
@@ -56,6 +60,7 @@ import {
 } from "../state/store";
 import { localId, type ThreadState } from "../state/thread";
 import { AgentPill } from "./AgentViews";
+import { ContextRing, PlanMeter } from "./ComposerUsage";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
 import { cx, Tooltip } from "./primitives";
@@ -190,6 +195,7 @@ export const Composer = memo(function Composer({
     [draft, commands, dismissed, extras.command],
   );
   const harness = threadHarness(thread);
+  const defaultHarness = useApp((s) => s.harnesses?.default.harness ?? "rustcode");
   const harnessName = harness?.name ?? "This harness";
   const images = acceptsImages(thread);
   const cancelReason = controlDisabledReason("cancel", thread?.harness?.capabilities, harnessName);
@@ -201,13 +207,13 @@ export const Composer = memo(function Composer({
     field.current?.focus();
   }, [key]);
 
-  // Grow from 2 to 10 lines, then scroll.
+  // Grow from 1 to 10 lines, then scroll.
   // biome-ignore lint/correctness/useExhaustiveDependencies: measure on every draft change
   useLayoutEffect(() => {
     const el = field.current;
     if (!el) return;
     el.style.height = "0px";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE * 2), LINE * 10)}px`;
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE + 4), LINE * 10)}px`;
   }, [draft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
@@ -401,7 +407,8 @@ export const Composer = memo(function Composer({
       )}
       <div
         className={cx(
-          "surface relative z-10 flex flex-col gap-2 rounded-[22px] p-2.5",
+          "surface relative z-10 flex flex-col gap-1.5 rounded-[22px] p-2 transition-shadow duration-200 ease-out",
+          "focus-within:shadow-[var(--shadow-float),inset_0_0_0_0.5px_var(--rc-hairline),0_0_0_3px_color-mix(in_srgb,var(--rc-brand)_14%,transparent)]",
           dropping && "outline-2 outline-brand outline-dashed",
         )}
         onMouseDown={(e) => {
@@ -425,7 +432,7 @@ export const Composer = memo(function Composer({
         }}
       >
         {editing && (
-          <div className="flex items-center gap-1.5 px-1.5 text-caption text-brand">
+          <div className="flex items-center gap-1.5 px-2 pt-1 text-caption text-brand">
             <Pencil size={11} />
             <b>Editing a sent message</b>
             <span className="text-fg-2">· sending takes the thread back to it</span>
@@ -449,7 +456,7 @@ export const Composer = memo(function Composer({
             }
           />
         )}
-        <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-1.5 pt-1">
+        <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-2 pt-1.5">
           {extras.command && (
             <Tooltip label={extras.command.description}>
               <span className="flex h-[20px] shrink-0 items-center rounded-full bg-brand/15 px-2 font-semibold text-body text-brand">
@@ -470,36 +477,19 @@ export const Composer = memo(function Composer({
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            rows={2}
+            rows={1}
             placeholder={placeholder}
             aria-label="Message"
             spellCheck
             className="min-w-[160px] flex-1 basis-[160px] resize-none bg-transparent text-body leading-[18px] outline-none placeholder:text-fg-3"
           />
         </div>
-        <div className="flex items-center gap-1">
-          <FolderMenu thread={thread} cwd={cwd} />
-          {!thread && <WorktreeToggle draft={draft} compact={compact} />}
-          {thread?.worktree && (
-            <Tooltip label={`Worktree: ${thread.worktree.path}`}>
-              <span className="flex h-[26px] max-w-[220px] items-center gap-1.5 rounded-xl px-2 text-callout text-fg-2">
-                <GitBranch size={12} className="shrink-0" />
-                <span className="truncate">{thread.worktree.branch}</span>
-              </span>
-            </Tooltip>
-          )}
-          <Tooltip
-            label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}
-          >
-            <button
-              type="button"
-              onClick={chooseFiles}
-              className="flex h-[26px] items-center gap-1.5 rounded-xl px-2.5 text-callout text-fg-2 hover:bg-fill-2"
-            >
-              <Paperclip size={12} />
-              {!compact && <span>Files</span>}
-            </button>
-          </Tooltip>
+        <div className="flex items-center gap-0.5">
+          <PlusMenu
+            onAttach={chooseFiles}
+            attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
+            cwd={cwd}
+          />
           <input
             ref={fileInput}
             type="file"
@@ -511,18 +501,9 @@ export const Composer = memo(function Composer({
               void attachmentsFromFiles(files, images, harnessName).then(attach);
             }}
           />
-          <AgentPill thread={thread} />
           <span className="flex-1" />
-          {harness && !harness.builtin && (
-            <Tooltip
-              label={`${harness.name} runs this thread with its own sign-in, tools and permission rules. RustCode's sandbox does not apply.`}
-            >
-              <span className="flex h-[26px] items-center gap-1.5 rounded-xl px-2 text-callout text-fg-2">
-                <span className="size-1.5 rounded-full bg-brand" />
-                {!compact && harness.name}
-              </span>
-            </Tooltip>
-          )}
+          <PlanMeter threadId={thread?.id} />
+          {thread && <ContextRing threadId={thread.id} />}
           <ModelPicker thread={thread} compact={compact} />
           {running && canSend && (
             <Tooltip label="Queue for when this turn ends (⏎)">
@@ -530,7 +511,7 @@ export const Composer = memo(function Composer({
                 type="button"
                 aria-label="Queue message"
                 onClick={() => send(false)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white"
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white hover:brightness-110"
               >
                 <ListEnd size={13} strokeWidth={2.5} />
               </button>
@@ -543,7 +524,7 @@ export const Composer = memo(function Composer({
                 aria-label="Stop turn"
                 disabled={!!cancelReason}
                 onClick={() => void cancel(thread?.id)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-gradient-to-b from-[#ff5f57] to-[#e0352b] text-white disabled:opacity-40"
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-gradient-to-b from-[#ff5f57] to-[#e0352b] text-white hover:brightness-110 disabled:opacity-40"
               >
                 <Square size={10} fill="currentColor" strokeWidth={0} />
               </button>
@@ -555,13 +536,42 @@ export const Composer = memo(function Composer({
                 aria-label="Send"
                 disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
                 onClick={() => send(false)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white transition-colors disabled:bg-fg-2/25"
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white transition-[background-color,filter,transform] duration-150 enabled:hover:brightness-110 disabled:bg-fg-2/25"
               >
                 <ArrowUp size={14} strokeWidth={2.75} />
               </button>
             </Tooltip>
           )}
         </div>
+      </div>
+      {/* The tray under the box: where the thread works and what it brings, after the SwiftUI footer. */}
+      <div className="rc-tray mx-3 -mt-[18px] flex min-h-[52px] items-end gap-0.5 rounded-b-[18px] px-1.5 pt-[18px] pb-1">
+        <FolderMenu thread={thread} cwd={cwd} />
+        {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+        {thread?.worktree && (
+          <Tooltip label={thread.worktree.path}>
+            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-[10px] px-2 text-callout text-fg-2">
+              <GitBranch size={12} className="shrink-0" />
+              <span className="truncate">{thread.worktree.branch}</span>
+            </span>
+          </Tooltip>
+        )}
+        <Tooltip label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}>
+          <button type="button" onClick={chooseFiles} className={trayButton}>
+            <Paperclip size={12} />
+            {!compact && <span>Files</span>}
+          </button>
+        </Tooltip>
+        <span className="flex-1" />
+        <AgentPill thread={thread} />
+        {harness && !harness.builtin && harness.id !== defaultHarness && (
+          <Tooltip label="Its own sign-in and tools; RustCode's sandbox does not apply">
+            <span className="flex h-[28px] items-center gap-1.5 rounded-[10px] px-2 text-callout text-fg-2">
+              <span className="size-1.5 rounded-full bg-brand" />
+              {harness.name}
+            </span>
+          </Tooltip>
+        )}
       </div>
     </div>
   );
@@ -740,10 +750,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
     <div className="flex items-center gap-1">
       <Tooltip
         label={
-          missing ??
-          (wt.on
-            ? "This thread gets its own branch and folder (a git worktree)"
-            : "New worktree: run this thread on its own branch, in its own folder")
+          missing ?? (wt.on ? "Runs on its own branch and folder" : "Run on a new branch, in its own folder")
         }
       >
         <button
@@ -752,8 +759,8 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           disabled={!!missing}
           onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
           className={cx(
-            "flex h-[26px] items-center gap-1.5 rounded-xl px-2.5 text-callout disabled:opacity-40",
-            wt.on ? "bg-brand/15 text-brand" : "text-fg-2 enabled:hover:bg-fill-2",
+            "flex h-[28px] items-center gap-1.5 rounded-[10px] px-2 text-callout disabled:opacity-40",
+            wt.on ? "bg-brand/15 text-brand" : "text-fg-2 enabled:hover:bg-fill-2 enabled:hover:text-fg",
           )}
         >
           <GitBranch size={12} />
@@ -796,7 +803,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
           onClick={() => setOpen(!open)}
           aria-haspopup="menu"
           aria-expanded={open}
-          className="flex h-[26px] items-center gap-1.5 rounded-xl px-2.5 text-callout text-fg-2 hover:bg-fill-2 disabled:hover:bg-transparent"
+          className={cx(trayButton, "disabled:hover:bg-transparent")}
         >
           <Folder size={12} />
           <span className="max-w-[220px] truncate">{cwd ? projectName(cwd) : "Choose a folder"}</span>
@@ -843,5 +850,65 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+const trayButton =
+  "flex h-[28px] items-center gap-1.5 rounded-[10px] px-2 text-callout text-fg-2 hover:bg-fill-2 hover:text-fg";
+
+/** The + menu at the start of the composer's row, after the SwiftUI app's AddPanel. */
+function PlusMenu({
+  onAttach,
+  attachLabel,
+  cwd,
+}: {
+  onAttach: () => void;
+  attachLabel: string;
+  cwd: string;
+}) {
+  const item =
+    "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-[6px] text-body outline-none data-[highlighted]:bg-brand-fill data-[highlighted]:text-white";
+  return (
+    <DropdownMenu.Root>
+      <Tooltip label="Attach and more">
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            aria-label="Attach and more"
+            className="flex size-[30px] items-center justify-center rounded-full text-fg-2 hover:bg-fill-2 hover:text-fg data-[state=open]:bg-fill-2"
+          >
+            <Plus size={16} strokeWidth={2} />
+          </button>
+        </DropdownMenu.Trigger>
+      </Tooltip>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="top"
+          align="start"
+          sideOffset={8}
+          className="surface z-50 min-w-[220px] rounded-[14px] border border-hairline p-1"
+        >
+          <DropdownMenu.Item className={item} onSelect={onAttach}>
+            <Paperclip size={13} /> {attachLabel}
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-hairline" />
+          <DropdownMenu.Item className={item} onSelect={() => startNewThread()}>
+            <SquarePen size={13} /> New Thread
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            className={item}
+            onSelect={() =>
+              void pickFolder(cwd).then((p) => {
+                if (!p) return;
+                setProjectCwd(p);
+                startNewThread(p);
+              })
+            }
+          >
+            <Folder size={13} /> New Thread in Folder…
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
