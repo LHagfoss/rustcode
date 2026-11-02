@@ -9,7 +9,7 @@ mod permissions;
 mod presence;
 mod preview;
 mod prompt;
-mod questions;
+pub(crate) mod questions;
 mod remote;
 mod rewind;
 mod session;
@@ -291,7 +291,7 @@ fn acp_list_sessions(
     Ok(ListSessionsResponse::new(sessions).next_cursor(next.map(|id| format!("v1:{id}"))))
 }
 
-fn replay_history_updates(
+pub(crate) fn replay_history_updates(
     history: &[crate::app::ChatMessage],
     cwd: Option<&std::path::Path>,
 ) -> Vec<SessionUpdate> {

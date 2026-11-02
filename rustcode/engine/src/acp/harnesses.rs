@@ -8,8 +8,8 @@ use crate::harness::session::{ClientSink, ExternalSession, PermissionFuture};
 use crate::harness::{self, HarnessKind, store};
 use agent_client_protocol::schema::v1::{
     LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOptionValue,
-    SessionInfoUpdate, SessionNotification, SessionUpdate,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SessionConfigOptionValue, SessionInfoUpdate, SessionNotification, SessionUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use serde::{Deserialize, Serialize};
@@ -136,10 +136,10 @@ impl ClientSink for AcpClientSink {
         let connection = self.connection.clone();
         Box::pin(async move {
             match connection.send_request(request).block_task().await {
-                Ok(response) => response.outcome,
+                Ok(response) => response,
                 Err(error) => {
                     crate::dbg_log!("harness permission request failed: {error}");
-                    RequestPermissionOutcome::Cancelled
+                    RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
                 }
             }
         })
@@ -247,6 +247,10 @@ pub(crate) async fn load_session(
         .map(|(_, history)| history)
         .unwrap_or_default();
     let title = record.title.clone();
+    let usage = record
+        .usage
+        .clone()
+        .and_then(|usage| serde_json::from_value::<SessionUpdate>(usage).ok());
     let session = {
         let mut open = sessions.lock().await;
         if open.contains_key(&session_id) {
@@ -268,7 +272,8 @@ pub(crate) async fn load_session(
         session
     };
     super::mark_acp_session(&session_id);
-    let mut updates = super::replay_history_updates(&history, Some(&cwd));
+    let mut updates = harness::transcript::replay(&history, Some(&cwd));
+    updates.extend(usage);
     if let Some(title) = title.filter(|title| !title.trim().is_empty()) {
         updates.push(SessionUpdate::SessionInfoUpdate(
             SessionInfoUpdate::new().title(title),

@@ -13,6 +13,9 @@
 //! | command, file change, MCP and web items | `tool_call`, `tool_call_update` |
 //! | `turn/plan/updated` | `plan` |
 //! | `item/*/requestApproval` | `session/request_permission` |
+//! | `item/tool/requestUserInput` | a RustCode question (`acp/questions.rs`) |
+//! | `thread/tokenUsage/updated` | `usage_update` |
+//! | `mcpServer/elicitation/request` | declined (no form UI) |
 
 use super::rpc::{Incoming, RpcError, RpcPeer};
 use super::session::{Output, OutputSender, StartOptions};
@@ -22,7 +25,7 @@ use agent_client_protocol::schema::v1::{
     PlanEntryPriority, PlanEntryStatus, RequestPermissionOutcome, RequestPermissionRequest,
     SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionUpdate,
     StopReason, TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    ToolCallUpdate, ToolCallUpdateFields, ToolKind, UsageUpdate,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -670,6 +673,37 @@ fn plan_for(params: &Value) -> Option<Plan> {
     Some(Plan::new(entries))
 }
 
+/// Codex's token usage as the `usage_update` the built-in harness sends:
+/// `used` is the latest request's input, `size` the model's window (0 when
+/// Codex does not say), and the thread's totals ride in `_meta.rustcode`.
+fn usage_for(params: &Value) -> Option<UsageUpdate> {
+    let usage = params.get("tokenUsage")?;
+    let count = |breakdown: &str, field: &str| {
+        usage
+            .get(breakdown)
+            .and_then(|breakdown| breakdown.get(field))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let size = usage
+        .get("modelContextWindow")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "rustcode".to_owned(),
+        json!({
+            "kind": "usage",
+            "version": crate::acp::usage::USAGE_META_VERSION,
+            "estimated": false,
+            "inputTokens": count("total", "inputTokens"),
+            "outputTokens": count("total", "outputTokens"),
+            "cachedTokens": count("total", "cachedInputTokens"),
+        }),
+    );
+    Some(UsageUpdate::new(count("last", "inputTokens"), size).meta(meta))
+}
+
 /// Translate one Codex notification into ACP updates.
 fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionUpdate> {
     let item_id = str_field(params, "itemId").unwrap_or_default().to_owned();
@@ -779,6 +813,10 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
             .map(SessionUpdate::Plan)
             .into_iter()
             .collect(),
+        "thread/tokenUsage/updated" => usage_for(params)
+            .map(SessionUpdate::UsageUpdate)
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -821,6 +859,79 @@ fn settle(state: &Mutex<State>, method: &str, params: &Value) {
         }
         _ => {}
     }
+}
+
+/// Ask the user Codex's `request_user_input` questions, one at a time, as
+/// RustCode questions (`acp/questions.rs`), and answer with every reply.
+/// Dismissing any question fails the request, so Codex hears the user did
+/// not answer.
+async fn ask_user(peer: Arc<RpcPeer>, out: OutputSender, id: Value, params: Value) {
+    let item = str_field(&params, "itemId").unwrap_or("input").to_owned();
+    let questions = params
+        .get("questions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut answers = serde_json::Map::new();
+    for question in &questions {
+        let question_id = str_field(question, "id").unwrap_or_default().to_owned();
+        let options = question
+            .get("options")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let prompt = crate::controller::QuestionPrompt {
+            header: str_field(question, "header").unwrap_or_default().to_owned(),
+            text: str_field(question, "question")
+                .unwrap_or_default()
+                .to_owned(),
+            options: options
+                .iter()
+                .filter_map(|option| str_field(option, "label"))
+                .map(str::to_owned)
+                .collect(),
+            descriptions: options
+                .iter()
+                .map(|option| {
+                    str_field(option, "description")
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect(),
+            multiple: false,
+        };
+        let request = crate::acp::questions::question_permission_request(
+            "",
+            &format!("{item}:{question_id}"),
+            &prompt,
+        );
+        let (reply, answer) = oneshot::channel();
+        let reply = if out.send(Output::Permission { request, reply }).is_ok() {
+            answer
+                .await
+                .ok()
+                .and_then(|response| crate::acp::questions::question_reply(&response, &prompt))
+        } else {
+            None
+        };
+        let Some(reply) = reply else {
+            peer.respond(
+                id,
+                Err(RpcError {
+                    code: -32000,
+                    message: "the user dismissed the question".to_owned(),
+                    data: None,
+                }),
+            );
+            return;
+        };
+        let given = match reply {
+            crate::controller::QuestionReply::Options(labels) => labels,
+            crate::controller::QuestionReply::Custom(text) => vec![text],
+        };
+        answers.insert(question_id, json!({"answers": given}));
+    }
+    peer.respond(id, Ok(json!({"answers": answers})));
 }
 
 /// The ACP permission request for a Codex approval request, with the
@@ -898,6 +1009,20 @@ async fn relay(
             Incoming::Barrier(done) => {
                 let _ = done.send(());
             }
+            Incoming::Request { id, method, params } if method == "item/tool/requestUserInput" => {
+                tokio::spawn(ask_user(Arc::clone(&peer), out.clone(), id, params));
+            }
+            Incoming::Request { id, method, params }
+                if method == "mcpServer/elicitation/request" =>
+            {
+                // A form with its own JSON schema: RustCode has no form UI, so
+                // the MCP server hears a decline rather than an error.
+                crate::dbg_log!(
+                    "codex elicitation declined: {}",
+                    str_field(&params, "message").unwrap_or_default()
+                );
+                peer.respond(id, Ok(json!({"action": "decline", "content": null})));
+            }
             Incoming::Request { id, method, params } => {
                 let Some((request, legacy)) = approval_request(&method, &params) else {
                     peer.respond(id, Err(RpcError::method_not_found(&method)));
@@ -908,7 +1033,10 @@ async fn relay(
                 let peer = Arc::clone(&peer);
                 tokio::spawn(async move {
                     let outcome = if asked {
-                        answer.await.unwrap_or(RequestPermissionOutcome::Cancelled)
+                        answer
+                            .await
+                            .map(|response| response.outcome)
+                            .unwrap_or(RequestPermissionOutcome::Cancelled)
                     } else {
                         RequestPermissionOutcome::Cancelled
                     };

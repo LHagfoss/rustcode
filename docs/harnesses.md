@@ -191,18 +191,29 @@ What each part does for an external thread:
 - **Codex events.** Message deltas are `agent_message_chunk`, reasoning
   summaries `agent_thought_chunk`, command, file-change, MCP and web-search
   items `tool_call`/`tool_call_update` (command output and diffs as text
-  content), `turn/plan/updated` a `plan`. Command and file approvals are
-  `session/request_permission` with Allow / Allow for this thread / Deny
-  (`accept`, `acceptForSession`, `decline`); a cancelled request answers
-  `cancel`. Other Codex requests (user input, elicitations, dynamic tools)
-  are refused.
-- **ACP events.** The agent's `session/update`s are relayed under the
-  thread's id. RustCode advertises no `fs` or `terminal` client capability,
+  content), `turn/plan/updated` a `plan`, `thread/tokenUsage/updated` a
+  `usage_update` (`used` = the latest request's input tokens, `size` = the
+  model's context window or 0 when Codex does not say, thread totals in
+  `_meta.rustcode` as the built-in harness sends them). Command and file
+  approvals are `session/request_permission` with Allow / Allow for this
+  thread / Deny (`accept`, `acceptForSession`, `decline`); a cancelled
+  request answers `cancel`. `item/tool/requestUserInput` asks each question
+  as a RustCode question (a `session/request_permission` with
+  `_meta.rustcode.kind = "question"`, see `acp/questions.rs`), one at a time;
+  the selected option or free text is the answer, and dismissing one fails
+  the request. Secret questions are asked the same way (no masking). MCP
+  elicitations (`mcpServer/elicitation/request`) are declined, since they
+  need a form RustCode does not draw; dynamic tool calls are refused.
+- **ACP events.** The agent's `session/update`s (its `usage_update`s too)
+  are relayed under the thread's id. RustCode advertises no `fs` or `terminal` client capability,
   and refuses those requests, so the agent uses its own tools.
 - **Steer.** `_rustcode/steer` on a Codex thread sends `turn/steer` while a
   turn runs (`steer: "live"`). ACP has no equivalent (`steer: "none"`): the
   client sends the message as the next prompt.
-- **Load.** `session/load` replays the recorded transcript; the harness
+- **Load.** `session/load` replays the recorded transcript (messages,
+  thoughts, each tool call as one finished card with its title, kind,
+  status, locations and output summary, each turn's last plan) and then the
+  thread's latest `usage_update`; the harness
   starts with the next prompt and resumes its own session: Codex with
   `thread/resume`, an ACP agent with `session/load` when it advertises
   `loadSession` (its own replay is not sent again). An agent that cannot
@@ -261,7 +272,13 @@ are optional and only read from the user config: a project's
 - Thread metadata (harness id, native session id, cwd, title, model,
   effort, timestamps) is stored with the thread in
   `~/.config/rustcode/threads/…/harness.json`. The transcript is recorded in
-  the thread's `history.json` too (the user's messages and the harness's
-  replies, with its thoughts), so the thread list, search and history work
-  even when the harness cannot resume. Tool calls are shown live but not
-  recorded.
+  the thread's `history.json` too (the user's messages, the harness's
+  replies with its thoughts, its tool calls and plans), so the thread list,
+  search and history work even when the harness cannot resume. A tool call
+  is an `assistant` message naming it (`tool_calls[].name` = its title,
+  `arguments` = its raw input) and a `tool` message whose
+  `tool_result.tool_name` is its ACP kind and whose content is the text its
+  card showed, capped at 4 KB. A call still running when the turn ends is
+  recorded as failed. A plan is a `tool` message with `tool_name` `plan`
+  and a `- [x] / [~] / [ ]` checklist. The latest usage is kept in
+  `harness.json` (`usage`).

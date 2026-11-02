@@ -4,10 +4,11 @@
 
 use super::rpc::RpcPeer;
 use super::store::{self, HarnessRecord};
+use super::transcript::Transcript;
 use super::{HarnessKind, HarnessModel, ResolvedHarness, acp_child, codex, process};
 use agent_client_protocol::schema::v1::{
-    ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOption,
-    SessionUpdate, StopReason,
+    ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SessionConfigOption, SessionUpdate, StopReason,
 };
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -29,7 +30,9 @@ pub(crate) enum Output {
     Update(SessionUpdate),
     Permission {
         request: RequestPermissionRequest,
-        reply: oneshot::Sender<RequestPermissionOutcome>,
+        /// The client's whole answer: a question's free-text or several
+        /// options ride in its `_meta`.
+        reply: oneshot::Sender<RequestPermissionResponse>,
     },
     /// Answered once everything sent before it was handled.
     Flush(oneshot::Sender<()>),
@@ -37,7 +40,7 @@ pub(crate) enum Output {
 
 pub(crate) type OutputSender = mpsc::UnboundedSender<Output>;
 
-pub(crate) type PermissionFuture = Pin<Box<dyn Future<Output = RequestPermissionOutcome> + Send>>;
+pub(crate) type PermissionFuture = Pin<Box<dyn Future<Output = RequestPermissionResponse> + Send>>;
 
 /// Where a thread's updates and permission requests go: the ACP client in
 /// the engine, a channel in tests.
@@ -201,7 +204,9 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
         while let Some(output) = drain.recv().await {
             match output {
                 Output::Permission { reply, .. } => {
-                    let _ = reply.send(RequestPermissionOutcome::Cancelled);
+                    let _ = reply.send(RequestPermissionResponse::new(
+                        RequestPermissionOutcome::Cancelled,
+                    ));
                 }
                 Output::Flush(reply) => {
                     let _ = reply.send(());
@@ -289,58 +294,6 @@ pub(crate) fn prompt_text(prompt: &[ContentBlock]) -> String {
     parts.join("\n")
 }
 
-/// Turns recorded as the thread's `history.json`, so the thread list,
-/// search and replay work for every harness.
-#[derive(Default)]
-struct Transcript {
-    history: Vec<crate::app::ChatMessage>,
-    reply: String,
-    thought: String,
-}
-
-impl Transcript {
-    fn observe(&mut self, update: &SessionUpdate) {
-        use agent_client_protocol::schema::v1::ContentBlock as Block;
-        match update {
-            SessionUpdate::AgentMessageChunk(chunk) => {
-                if let Block::Text(text) = &chunk.content {
-                    self.reply.push_str(&text.text);
-                }
-            }
-            SessionUpdate::AgentThoughtChunk(chunk) => {
-                if let Block::Text(text) = &chunk.content {
-                    self.thought.push_str(&text.text);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn push_user(&mut self, text: &str) {
-        self.end_reply();
-        self.history
-            .push(crate::app::ChatMessage::new("user", text.to_owned()));
-    }
-
-    fn end_reply(&mut self) {
-        if self.reply.is_empty() && self.thought.is_empty() {
-            return;
-        }
-        let content = if self.thought.trim().is_empty() {
-            std::mem::take(&mut self.reply)
-        } else {
-            format!(
-                "<think>{}</think>{}",
-                std::mem::take(&mut self.thought),
-                std::mem::take(&mut self.reply)
-            )
-        };
-        self.thought.clear();
-        self.history
-            .push(crate::app::ChatMessage::new("assistant", content));
-    }
-}
-
 pub(crate) struct ExternalSession {
     pub id: String,
     pub harness: ResolvedHarness,
@@ -367,10 +320,7 @@ impl ExternalSession {
         persist: bool,
     ) -> Arc<Self> {
         let (out, mut outputs) = mpsc::unbounded_channel::<Output>();
-        let transcript = Arc::new(StdMutex::new(Transcript {
-            history,
-            ..Transcript::default()
-        }));
+        let transcript = Arc::new(StdMutex::new(Transcript::new(history)));
         {
             let transcript = Arc::clone(&transcript);
             tokio::spawn(async move {
@@ -434,12 +384,16 @@ impl ExternalSession {
     }
 
     fn save_history(&self) {
-        let history = self
-            .transcript
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .history
-            .clone();
+        let (history, usage) = {
+            let transcript = self
+                .transcript
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            (transcript.history.clone(), transcript.usage.clone())
+        };
+        if usage.is_some() && usage != self.record().usage {
+            self.save_record(|record| record.usage = usage);
+        }
         if !self.persist || history.is_empty() {
             return;
         }
@@ -462,6 +416,16 @@ impl ExternalSession {
     #[cfg(test)]
     pub(crate) fn output(&self) -> OutputSender {
         self.out.clone()
+    }
+
+    /// The transcript recorded so far (tests).
+    #[cfg(test)]
+    pub(crate) fn history(&self) -> Vec<crate::app::ChatMessage> {
+        self.transcript
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .history
+            .clone()
     }
 
     /// The running adapter, started (or restarted, resuming the harness's
@@ -768,12 +732,12 @@ pub(crate) mod test_support {
             let _ = self.permissions.send(request);
             let choice = self.choice.clone();
             Box::pin(async move {
-                match choice {
+                RequestPermissionResponse::new(match choice {
                     Some(choice) => RequestPermissionOutcome::Selected(
                         agent_client_protocol::schema::v1::SelectedPermissionOutcome::new(choice),
                     ),
                     None => RequestPermissionOutcome::Cancelled,
-                }
+                })
             })
         }
     }

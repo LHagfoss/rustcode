@@ -495,8 +495,9 @@ async fn relay(
                 }
                 let peer = Arc::clone(&peer);
                 tokio::spawn(async move {
-                    let outcome = answer.await.unwrap_or(RequestPermissionOutcome::Cancelled);
-                    let response = RequestPermissionResponse::new(outcome);
+                    let response = answer.await.unwrap_or_else(|_| {
+                        RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+                    });
                     peer.respond(
                         id,
                         Ok(serde_json::to_value(response).unwrap_or(Value::Null)),

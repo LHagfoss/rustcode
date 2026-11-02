@@ -138,6 +138,13 @@ async fn fake_agent(
                         "content": {"type": "text", "text": "Wrote it."}}),
                     ),
                 );
+                peer.notify(
+                    "session/update",
+                    update(
+                        "child-1",
+                        json!({"sessionUpdate": "usage_update", "used": 900, "size": 200000}),
+                    ),
+                );
                 peer.respond(id, Ok(json!({"stopReason": "end_turn"})));
             }
             other => peer.respond(id, Err(RpcError::method_not_found(other))),
@@ -198,10 +205,36 @@ async fn updates_and_permissions_are_relayed() {
             "agent_thought_chunk",
             "tool_call",
             "tool_call_update",
-            "agent_message_chunk"
+            "agent_message_chunk",
+            "usage_update"
         ]
     );
     assert_eq!(updates[3]["content"]["text"], "Wrote it.");
+    assert_eq!(updates[4]["used"], 900);
+    assert_eq!(
+        thread.session.record().usage.as_ref(),
+        Some(&updates[4]),
+        "the agent's usage is kept for session/load"
+    );
+
+    let history = thread.session.history();
+    let roles = history
+        .iter()
+        .map(|message| message.role.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(roles, ["user", "assistant", "tool", "assistant"]);
+    assert_eq!(history[1].content, "<think>hmm</think>");
+    let replayed = crate::harness::transcript::replay(&history, None)
+        .into_iter()
+        .map(|update| serde_json::to_value(update).unwrap())
+        .collect::<Vec<_>>();
+    let call = replayed
+        .iter()
+        .find(|update| update["sessionUpdate"] == "tool_call")
+        .unwrap();
+    assert_eq!(call["title"], "Write notes.md");
+    assert_eq!(call["kind"], "edit");
+    assert_eq!(call["status"], "completed");
 
     let permission = thread.permissions.try_recv().unwrap();
     assert_eq!(

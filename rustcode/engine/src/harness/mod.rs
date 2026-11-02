@@ -16,6 +16,7 @@ pub(crate) mod process;
 pub(crate) mod rpc;
 pub(crate) mod session;
 pub(crate) mod store;
+pub(crate) mod transcript;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

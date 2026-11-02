@@ -20,6 +20,9 @@ pub(crate) struct HarnessRecord {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The thread's latest `usage_update`, sent again on `session/load`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<serde_json::Value>,
     pub created_at: String,
     pub updated_at: String,
 }

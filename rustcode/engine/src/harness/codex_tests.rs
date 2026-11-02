@@ -16,6 +16,10 @@ enum Script {
     Stubborn,
     /// Fail the turn.
     Fail,
+    /// Report token usage, then finish.
+    Usage,
+    /// Ask the user two questions, then finish.
+    AskUser,
 }
 
 /// A fake app-server. Every request it gets is reported on `seen`.
@@ -91,6 +95,30 @@ async fn fake_codex(
                     Script::Fail => {
                         note("error", json!({"threadId": "thr_1", "turnId": turn_id, "willRetry": false, "error": {"message": "usage limit reached"}}));
                         note("turn/completed", json!({"threadId": "thr_1", "turn": {"id": turn_id, "status": "failed", "error": null, "items": []}}));
+                    }
+                    Script::Usage => {
+                        note("thread/tokenUsage/updated", json!({"threadId": "thr_1", "turnId": turn_id, "tokenUsage": {
+                            "total": {"totalTokens": 1500, "inputTokens": 1200, "cachedInputTokens": 800, "outputTokens": 300, "reasoningOutputTokens": 100},
+                            "last": {"totalTokens": 700, "inputTokens": 600, "cachedInputTokens": 400, "outputTokens": 100, "reasoningOutputTokens": 50},
+                            "modelContextWindow": 272000}}));
+                        note("turn/completed", json!({"threadId": "thr_1", "turn": {"id": turn_id, "status": "completed", "items": []}}));
+                    }
+                    Script::AskUser => {
+                        let answer = peer
+                            .request(
+                                "item/tool/requestUserInput",
+                                json!({"threadId": "thr_1", "turnId": turn_id, "itemId": "ask1", "isBlocking": true,
+                                    "questions": [
+                                        {"id": "db", "header": "Database", "question": "Which database?",
+                                         "options": [{"label": "Postgres", "description": "Relational"},
+                                                     {"label": "SQLite", "description": "Embedded"}]},
+                                        {"id": "tests", "header": "Tests", "question": "Add tests?",
+                                         "options": [{"label": "No", "description": ""},
+                                                     {"label": "Yes", "description": ""}]}]}),
+                            )
+                            .await;
+                        let _ = seen.send(("answer".into(), answer.unwrap_or_else(|error| json!(error.code))));
+                        note("turn/completed", json!({"threadId": "thr_1", "turn": {"id": turn_id, "status": "completed", "items": []}}));
                     }
                     Script::UntilInterrupted | Script::Stubborn => {}
                 }
@@ -374,4 +402,112 @@ fn file_changes_become_edit_cards() {
         json!({"type": "commandExecution", "id": "c", "status": "declined", "exitCode": null});
     let update = serde_json::to_value(tool_update_for(&declined).unwrap()).unwrap();
     assert_eq!(update["status"], "failed");
+}
+
+#[tokio::test]
+async fn the_transcript_records_tool_calls_and_plans_for_replay() {
+    let (thread, _seen) = start(Script::Reply, Some("accept"), StartOptions::default()).await;
+    thread.session.prompt(text("hi")).await.unwrap();
+    let history = thread.session.history();
+    let roles = history
+        .iter()
+        .map(|message| message.role.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(roles, ["user", "assistant", "tool", "tool", "assistant"]);
+    assert_eq!(history[1].tool_calls[0].name, "ls");
+    let record = history[2].tool_result.as_ref().unwrap();
+    assert_eq!(record.tool_name, "execute");
+    assert!(record.success && !record.pending);
+    assert_eq!(history[2].content, "a\nb");
+
+    let replayed = crate::harness::transcript::replay(&history, None)
+        .into_iter()
+        .map(|update| serde_json::to_value(update).unwrap())
+        .collect::<Vec<_>>();
+    let kinds = kinds(&replayed);
+    let call = kinds.iter().position(|kind| kind == "tool_call").unwrap();
+    let plan = kinds.iter().position(|kind| kind == "plan").unwrap();
+    assert_eq!(kinds[0], "user_message_chunk");
+    assert!(
+        kinds[1..call]
+            .iter()
+            .any(|kind| kind == "agent_message_chunk")
+    );
+    assert!(call < plan && plan < kinds.len() - 1);
+    assert_eq!(kinds.last().unwrap(), "agent_message_chunk");
+    let call = &replayed[call];
+    assert_eq!(call["toolCallId"], "cmd1");
+    assert_eq!(call["title"], "ls");
+    assert_eq!(call["kind"], "execute");
+    assert_eq!(call["status"], "completed");
+    assert_eq!(call["rawInput"]["command"], "ls");
+    assert_eq!(call["content"][0]["content"]["text"], "a\nb");
+    assert_eq!(replayed[plan]["entries"][0]["status"], "completed");
+    assert_eq!(replayed[plan]["entries"][1]["status"], "in_progress");
+    assert_eq!(replayed[plan]["entries"][1]["content"], "Answer");
+}
+
+#[tokio::test]
+async fn token_usage_becomes_a_usage_update_and_is_kept() {
+    let (mut thread, _seen) = start(Script::Usage, None, StartOptions::default()).await;
+    thread.session.prompt(text("hi")).await.unwrap();
+    let updates = drain(&mut thread.updates);
+    assert_eq!(kinds(&updates), ["usage_update"]);
+    let usage = &updates[0];
+    assert_eq!(usage["used"], 600);
+    assert_eq!(usage["size"], 272000);
+    let meta = &usage["_meta"]["rustcode"];
+    assert_eq!(meta["kind"], "usage");
+    assert_eq!(meta["version"], crate::acp::usage::USAGE_META_VERSION);
+    assert_eq!(meta["inputTokens"], 1200);
+    assert_eq!(meta["outputTokens"], 300);
+    assert_eq!(meta["cachedTokens"], 800);
+    assert_eq!(
+        thread.session.record().usage.as_ref(),
+        Some(usage),
+        "the thread keeps its latest usage for session/load"
+    );
+}
+
+#[tokio::test]
+async fn user_input_requests_are_asked_as_questions() {
+    let (mut thread, mut seen) = start(
+        Script::AskUser,
+        Some("question_option_1"),
+        StartOptions::default(),
+    )
+    .await;
+    thread.session.prompt(text("set it up")).await.unwrap();
+    let first = thread.permissions.try_recv().unwrap();
+    let second = thread.permissions.try_recv().unwrap();
+    let first = serde_json::to_value(first).unwrap();
+    assert_eq!(first["_meta"]["rustcode"]["kind"], "question");
+    assert_eq!(first["toolCall"]["rawInput"]["question"], "Which database?");
+    assert_eq!(
+        first["toolCall"]["rawInput"]["options"],
+        json!(["Postgres", "SQLite"])
+    );
+    assert_eq!(
+        serde_json::to_value(second).unwrap()["toolCall"]["title"],
+        "Tests: Add tests?"
+    );
+    let answer = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "answer")
+        .unwrap();
+    assert_eq!(
+        answer.1,
+        json!({"answers": {"db": {"answers": ["SQLite"]}, "tests": {"answers": ["Yes"]}}})
+    );
+}
+
+#[tokio::test]
+async fn a_dismissed_question_fails_the_user_input_request() {
+    let (thread, mut seen) = start(Script::AskUser, None, StartOptions::default()).await;
+    thread.session.prompt(text("set it up")).await.unwrap();
+    let answer = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "answer")
+        .unwrap();
+    assert_eq!(answer.1, json!(-32000));
 }
