@@ -165,8 +165,12 @@ export async function defaultTransport(): Promise<Transport> {
   }
   if (choice === "mock") {
     const { MockTransport } = await import("./mock");
-    const scenario = new URLSearchParams(window.location.search).get("scenario") ?? undefined;
-    return new MockTransport({ scenario });
+    const q = new URLSearchParams(window.location.search);
+    return new MockTransport({
+      scenario: q.get("scenario") ?? undefined,
+      bootMs: Number(q.get("boot")) || undefined,
+      crashAfterMs: Number(q.get("crash")) || undefined,
+    });
   }
   const port = import.meta.env.VITE_BRIDGE_PORT ?? "1421";
   return new WebSocketTransport(`ws://127.0.0.1:${port}`);

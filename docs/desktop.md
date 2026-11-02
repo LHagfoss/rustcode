@@ -12,6 +12,45 @@ approvals, attachments, link chips, Smart UI views, thread actions, find,
 rewind, subagents, pull requests, plan usage and a terminal. Parts of the
 SwiftUI app are not ported yet; see [Not yet ported](#not-yet-ported).
 
+## Status and roadmap
+
+Where the desktop work stands, so the next session (in any harness) can pick
+it up. Direction: this app replaces the SwiftUI app; external coding agents
+run threads as harnesses ([harnesses.md](harnesses.md)); agents can start
+and message other threads ([orchestrator.md](orchestrator.md)). The design
+rules are in [design.md](design.md), themes in [themes.md](themes.md), and
+reply formatting in [output-style.md](output-style.md).
+
+Shipped (#2788, #2790, #2791 and the PR after them):
+
+- Chat on any harness, approvals and questions, onboarding, settings,
+  Capabilities (skills + MCP), themes shared with the TUI, glass design.
+- Worktree threads, thread status and the sidebar sections, per-turn
+  checkpoints, review, fan-out compare, orchestration client.
+- Performance: virtualized transcript, batched updates, 120 Hz rendering,
+  highlighting in a worker.
+- Release bundles for macOS, Windows and Linux, native installers, an
+  in-app updater on macOS. The Swift app's updater moves existing installs
+  to this app.
+
+Next, in rough order:
+
+1. Run the Build workflow once by hand: the Windows and Linux bundle jobs
+   have never run. Then cut a beta (`scripts/release.sh --beta`).
+2. Signing and notarization once the Apple secrets exist (#2034).
+3. Open desktop issues: #2792 (queue/steer with images), #2793 (copy
+   actions), #2794 (report results, context inspector), #2795 (command
+   actions select their thread), #2796 (usage ring refresh), #2799
+   (cross-harness delegation, live test plan).
+4. The rest of [Not yet ported](#not-yet-ported), then archive `macos/` in
+   its own repository and drop its CI.
+
+How to continue: run the app with `bun tauri dev` in `apps/desktop` (it uses
+`target/debug/rustcode`; rebuild with `cargo build -p rustcode-tui --bin
+rustcode`), check with `bun run check`, and measure with `bun run perf` /
+`bun run perf:native`. Screenshots: `?transport=mock` in the browser dev
+mode gives a stable thread to capture.
+
 ## Run it
 
 Everything uses Bun from `apps/desktop`; nothing is installed globally.
@@ -241,10 +280,35 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   the gap the SwiftUI app leaves (`src/ui/Titlebar.tsx`); in full screen,
   where the lights hide, the rows start at the edge.
 - **One shell.** The sidebar and the main header (`src/ui/MainHeader.tsx`)
-  stay mounted for every view. Settings covers only the main column and
-  the right panel, which stay mounted and laid out underneath (`inert`),
-  so ⌘, renders Settings in the first frame with nothing remounted; its
-  pages open with the last engine answers and refresh behind them.
+  stay mounted for every view. The header floats in glass over its view
+  (the chat, new or open, and Settings), with a soft fade at its foot, and
+  content scrolls under it; views leave `HEADER_HEIGHT` (42 px) at their
+  top.
+- **Settings** takes the whole window: the shell (sidebar, chat, right
+  panel) stays mounted and laid out underneath, hidden and `inert`, so the
+  thread comes back exactly where it was (scroll, drafts, open rows). Its
+  header has Back on the traffic lights' line; Back, Esc and ⌘, return.
+  The pages sit in one centred 760 px column, the section list at its left
+  (sticky) and the page beside it; they open with the last engine answers
+  and refresh behind them, with skeleton rows the first time.
+- **Loading.** Skeletons stand where content will appear: the sidebar's
+  thread rows, the model pill, an opening thread's transcript and Settings'
+  lists (`Skeleton` in `src/ui/primitives.tsx`; the sweep stops under
+  Reduce motion). The engine says nothing while it starts quickly; after
+  2 s a toast says "Starting engine…" with progress (spawned, then
+  initializing). When it stops or crashes, an error toast carries Restart;
+  when the shell brings it back, "The engine restarted" (`state/store.ts`,
+  `onEngineStatus`). The mock takes `?boot=<ms>` (a slow start) and
+  `?crash=<ms>` (a crash after the first start) to show these.
+- **Toasts** (`src/ui/Toaster.tsx`, `toast()` in `state/store.ts`): one
+  stack at the bottom right of the chat column, just above the composer
+  stack (the window's corner while Settings is open), frosted like the
+  composer. Info and success leave after 4 s, errors stay until closed;
+  the pointer over the stack pauses them; a swipe right or the close
+  button dismisses; at most three show. A toast may carry one action. The
+  same text again restarts the shown toast, and an `id` replaces one in
+  place (the engine's). Copying, errors not tied to a message, engine,
+  worktree, harness and theme events use them.
 - **Settings › Capabilities.** Skills and MCP servers in one page, through
   `_rustcode/capabilities*`: servers with their state, tool count and
   names, errors and the engine log lines that name them, on/off (servers
@@ -271,16 +335,43 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   to that turn, hover shows its first words. The current turn comes from
   the virtualizer's row offsets on scroll, and the rail re-renders only
   when it or the turns change (`src/ui/TimelineRail.tsx`).
-- **Harness marks.** `HarnessIcon` draws each harness's mark in the model
-  pill, the harness picker and list (onboarding, Settings), the tray, the
-  sidebar's rows and the thread's header: Claude, Gemini and OpenCode from
-  simple-icons 16.35.0 (CC0, three paths vendored, no dependency), the app
-  icon for RustCode, a letter in a rounded square for the rest (Codex: the
-  OpenAI mark is not in simple-icons). A harness `icon` URL is preferred
-  when the engine sends one.
+- **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
+  (no fetch, no dependency), in the model pill, the harness picker and list
+  (onboarding, Settings), the tray, the sidebar's rows and the thread's
+  header: the OpenAI blossom for Codex (currentColor), the Claude mark in
+  its orange, the Gemini spark with its gradient (all three from
+  `@lobehub/icons-static-svg` 1.102.0, MIT), OpenCode's own mark from
+  `anomalyco/opencode` `packages/identity/mark.svg` (MIT; its two greys as
+  currentColor at 100 % and 35 %), and the app icon for RustCode; any other
+  harness gets a letter. `mono` draws the coloured marks in currentColor.
+  The marks are their owners' trademarks, used only to identify the
+  integration (a NOTICE in the file says so). A harness `icon` URL is
+  preferred when the engine sends one.
+- **Model picker.** An external harness lists its models only when asked
+  (`_rustcode/harness/models`): a new thread on one asks once per engine
+  run (`ensureHarnessModels`), so the model list, effort and the rest are
+  there before the thread exists; a stale default model falls back to the
+  harness's first.
+- **Turn folding.** A finished turn's work (thoughts, tool calls,
+  subagents, the replies between steps) folds into one row above its final
+  answer, "Worked for 1m 20s · 14 steps · 3 files changed", which opens to
+  every step as it streamed; the running turn shows everything live, and
+  replayed threads fold the same way (`src/state/fold.ts`, tests in
+  `fold.test.ts`; recipe in [design.md](design.md)).
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
-  pictures, a click zooms, Esc or a click outside closes).
+  pictures, a click zooms, Esc or a click outside closes). A reply's
+  `![](path)` shows the picture when the path (absolute, `~/`, `file://`
+  or relative to the thread's folder) resolves inside the thread's folder
+  or its worktree: the shell's `thread_image` follows symlinks and refuses
+  anything else, and anything that is not a PNG, JPEG, GIF, WebP or SVG of
+  at most 20 MB. Web and `data:` pictures show as they are.
+- **Diagrams.** A ```` ```mermaid ```` block loads mermaid (12.2.0, its own
+  chunk) the first time one appears, themed from the tokens (`base` theme,
+  re-rendered on a theme change), rendered with `securityLevel: "strict"`,
+  200 ms after a streaming block stops changing. Over 12,000 characters or
+  300 lines, or when it does not parse, it stays code with a note. A click
+  opens the diagram in the lightbox.
 - **File references.** Inline code naming a file (`src/a.rs:12`,
   `src/a.rs:12:4`, `Cargo.toml`) and relative links (`[a](src/a.rs#L12)`)
   open the file in the editor at that line, resolved against the thread's
@@ -491,29 +582,185 @@ engine, a scratch config) the engine now starts 0.85 s after launch
 instead of when the page asks for it (1.4 s); idle, the shell, the
 WebContent process and the engine sit at 0 % CPU.
 
+After the loading, toast, glass header, full-window Settings, pictures,
+diagrams and turn folding round (`perf prod`, same machine, before / after):
+startup thread list 261 / 244 ms; first rows of the 2,000-message thread
+149–163 / 152–221 ms (runs vary by about 60 ms; its longest task 62–80 ms
+in both); reopening it 6.5 / 5–13 ms; streaming 60 fps with 2 dropped
+frames, key-to-frame p95 15.3 / 15.7 ms, main thread 22 / 23 % busy; idle
+1–2 %. Mermaid is its own lazy chunk; the opening thread's skeleton shows
+only after 200 ms, so a fast open never draws it.
+
 Still open: the sidebar's 500 rows are not virtualized, so every store
 notification runs their selectors (about 3 % of the main thread while
-streaming) and filtering re-renders them; the window's vibrancy and
-`backdrop-filter` surfaces cost compositor time that a headless browser
-does not show.
+streaming) and filtering re-renders them. (The vibrancy and
+`backdrop-filter` cost this paragraph used to suspect was measured
+natively; see below: it is not measurable.)
+
+### Native frame rate
+
+`bun run perf:native [prod|dev] [--near60]` runs the same kind of scenarios
+in a real WKWebView (`scripts/perf-native.swift`,
+`scripts/perf-native-scenario.js`): a floating 1440×900 window set up like
+the app's (transparent web view over sidebar vibrancy), against
+`?transport=perf`. Per phase it prints the rAF rate, frame-interval p95,
+late frames (over 1.5× the display's interval), the main thread's
+rendering work after each rAF, long tasks (gaps in a 10 ms heartbeat:
+WebKit has no Long Tasks API) and the CPU of the WebContent, GPU and
+WindowServer processes. Scrolling is scripted (`scrollTop` per frame): a
+proxy, since WebKit scrolls wheel and trackpad input off the main thread
+and that input cannot be synthesized here. `sample` cannot attach to the
+system WebContent process (SIP), so causes come from this split, a
+CDP profile of the same build in Chrome, and A/B runs. In the dev app,
+⌘⌥F toggles an overlay (`src/lib/perfOverlay.ts`) with the rAF rate,
+frame p95, late frames, long tasks, the display's refresh rate, Low Power
+Mode and WebKit's 60 fps preference, and logs them to the console every
+5 s.
+
+What held the app below 120 fps, and what changed:
+
+- **WebKit renders near 60 fps by default.** Its "Prefer Page Rendering
+  Updates near 60fps" feature (on in every WKWebView) runs rAF, CSS
+  animations and rendering updates at 60 on a 120 Hz display. The main
+  window is now built in `src-tauri/src/webview.rs` (`"create": false` in
+  `tauri.conf.json`) on a `WKWebViewConfiguration` with the feature off,
+  through the private `_WKFeature` list; every selector is checked first,
+  so a WebKit without it leaves the default. WebKit reads it when the page
+  is created: set on a live web view it does nothing, so it cannot be
+  applied in `setup` to the config-built window.
+- **Low Power Mode caps WebKit at 30 fps**, whatever the preference says.
+  This Mac had it on for AC power only (`pmset -g custom`: `powermode 1`
+  under AC Power), so the app ran at 30 fps whenever it was plugged in.
+  The overlay says when it is on; it is the user's setting, not the app's.
+- **Shiki's JavaScript regex engine stalled scrolling.** The first
+  TypeScript block took 976 ms to highlight in JavaScriptCore (68 ms in
+  Chrome, which is why `bun run perf` never showed it), in one main-thread
+  task, as a code block scrolled into view; each 200-line block then took
+  60 ms. Highlighting now runs in a module worker
+  (`src/lib/highlight.worker.ts`) on the Oniguruma WebAssembly engine
+  (73 ms first block, 13 ms per 200 lines, none of it on the main thread);
+  the main thread keeps the HTML cache, so a remounted block is coloured
+  in its first frame. The app's CSP needs no change: Tauri sends it only
+  with HTML, and the worker compiles the WebAssembly under the app's
+  policy too (checked with it as a meta tag).
+- **The right panel animated its slot's width**, so the chat column
+  reflowed, every visible row re-measured and the transcript re-rendered
+  on each frame for 200 ms (about 40 ms of rendering work per frame). The
+  slot now takes its width at once and the frame slides and fades in on
+  the compositor (`rc-drill`, then `translate`/`opacity` out): one reflow
+  per toggle, a quarter of the main-thread work. (Its slide had never run:
+  Tailwind 4's `translate-x-*` sets `translate`, which
+  `transition-[opacity,transform]` did not list.) The sidebar did the same
+  with its own width; at the default 1280 px window the chat column is
+  narrower than its 1,036 px maximum, so each frame rewrapped the
+  transcript. It now slides out on `translate` and its slot collapses
+  after 200 ms (and opens before it slides in).
+- **Glass costs nothing measurable.** With `--rc-glass-filter: none` and
+  the header glass off, frames, WebContent, GPU-process and WindowServer
+  CPU stayed within run-to-run noise in every phase, so the blur stays.
+
+`perf:native prod`, built-in 120 Hz display, Low Power Mode off, before
+(near-60 preference on, as the app shipped) and after the preference fix:
+
+| | near-60 on | near-60 off | blur off |
+|---|---|---|---|
+| Idle rAF | 60 fps | 121 fps | 121 fps |
+| Streaming 100 chunks/s, composer focused | 59 fps, p95 18 ms | 118 fps, p95 9 ms | 119 fps |
+| Scripted scroll of `perf-long` (incl. the Shiki stall) | 45 fps, one 1,010 ms frame | 91 fps, one 979 ms frame | 91 fps |
+| ⌘K switcher open/close ×3 | 59 fps, max frame 59 ms | 114 fps, max 57 ms | 114 fps |
+| Settings open/close ×2 | 60 fps, max 37 ms | 117 fps, max 34 ms | 117 fps |
+| Right panel ×4 | 49 fps, p95 45 ms | 80 fps, p95 41 ms, work p95 39 ms | 79 fps |
+| Sidebar ×4 (1440 wide) | 60 fps | 121 fps, p95 10 ms | 121 fps |
+| CPU while streaming: WebContent / GPU / WindowServer | 34 / 14 / 54 % | 46 / 21 / 52 % | 46 / 19 / 50 % |
+
+Twice the frames cost the WebContent and GPU processes about a third more
+CPU while streaming. The Shiki stall and the panel's per-frame reflow are
+fixed after these runs: in WebKit the scroll no longer has a long task
+when a code block mounts, and four panel toggles take 77 ms of rendering
+work instead of 262 ms (one reflow per toggle, about 56 ms, instead of
+one per frame).
+
+Dev mode (`bun tauri dev`) adds React's development build on top: in
+Chrome, streaming keeps the main thread 31 % busy in dev against 22 % in
+a production build (table above). Native dev and bundled runs on the same display are still to be
+recorded with `perf:native dev` and `perf:native prod`.
+
+Still not 120: opening the ⌘K switcher (a 57 ms frame) and Settings
+(34 ms) each drop a few frames in one long React render, and the one
+reflow when the right panel or (at narrow widths) the sidebar opens or
+closes, about 56 ms of re-measuring the visible transcript rows, is a
+visible hitch.
 
 ## Release
 
 `bun run bundle` builds the engine in release mode and copies it to
 `src-tauri/binaries/rustcode-<target triple>` (`scripts/bundle-engine.ts`),
-then runs `tauri build` with `src-tauri/tauri.bundle.conf.json`, which adds
-`"externalBin": ["binaries/rustcode"]`. Keeping that out of
-`tauri.conf.json` means `tauri dev`, clippy and CI never need the engine
-built. The shell finds the sidecar next to its binary (a debug build still
-prefers the workspace's `target/debug/rustcode`). The bundle carries the
-SwiftUI app's layered macOS 26 icon: `scripts/app-icon.ts` compiles
-`macos/Resources/AppIcon.icon` with `xcrun actool` into `Assets.car`
-(mapped into `Contents/Resources` by a generated
-`src-tauri/gen-icon/tauri.conf.json`), and `src-tauri/Info.plist` sets
-`CFBundleIconName = AppIcon`, with `icons/icon.icns` as the fallback when
-actool is missing. `tauri dev` runs the bare binary, so the Dock shows the
-flat icon there; only the bundled app shows the layered one. Signing, notarization and
-an updater are not set up.
+then runs `bun run bundle:app`: `tauri build` with
+`src-tauri/tauri.bundle.conf.json`, a generated
+`src-tauri/gen-version/tauri.conf.json` and a generated
+`src-tauri/gen-icon/tauri.conf.json`. `bundle:app` alone bundles whatever
+sidecar is already in `binaries/`, which is how CI reuses the engine it
+built for the CLI. Extra arguments go to `tauri build`, e.g.
+`bun run bundle:app --bundles app`.
+
+- **Identity.** `tauri.bundle.conf.json` gives the bundle the SwiftUI app's
+  identifier, `com.lhagfoss.rustcode.desktop`, so the released app replaces
+  it in place (Dock pin, Launch Services, notification permissions); why that
+  is safe for both apps' data is in
+  [install.md](install.md#taking-over-from-the-swiftui-app). `tauri.conf.json`
+  keeps `dev.rustcode.desktop`, so `tauri dev` never shares data with the
+  installed app. It also adds `"externalBin": ["binaries/rustcode"]`, so
+  `tauri dev`, clippy and CI never need the engine built, and the targets
+  (`app`, `nsis` per-user, `appimage`, `deb`; each platform builds its own).
+- **Version.** `scripts/bundle-version.ts` writes the root `Cargo.toml`
+  version (the engine's, the release tag's) into `gen-version`, so the
+  bundle, the installer and the engine agree. `tauri.conf.json`'s `0.1.0` is
+  only the dev build's.
+- **Icon.** The bundle carries the SwiftUI app's layered macOS 26 icon:
+  `scripts/app-icon.ts` compiles `macos/Resources/AppIcon.icon` with `xcrun
+  actool` into `Assets.car` (mapped into `Contents/Resources` by `gen-icon`),
+  and `src-tauri/Info.plist` sets `CFBundleIconName = AppIcon`, with
+  `icons/icon.icns` as the fallback when actool is missing. `tauri dev` runs
+  the bare binary, so the Dock shows the flat icon there.
+- **Sidecar.** The shell finds the engine next to its binary
+  (`Contents/MacOS/rustcode`; a debug build still prefers the workspace's
+  `target/debug/rustcode`).
+- **Assets.** `scripts/release-assets.ts <dir> [--sums]` copies the bundles
+  under their release names: `RustCode-<ver>-macos-aarch64.app.zip`,
+  `RustCode-<ver>-windows-x64-setup.exe`,
+  `RustCode-<ver>-linux-x86_64.AppImage` and `.deb`; `--sums` writes a
+  `SHA256SUMS` for a local installer test (see
+  [install.md](install.md#testing-the-installers-without-a-release)).
+- **CI.** `build.yml`'s `desktop-macos` job (also for a beta) and `desktop`
+  job (Windows, Linux) build these from the CLI jobs' engine artifacts, and
+  the release lists them in `SHA256SUMS`. The macOS zip is also published as
+  `rustcode-macos-aarch64-swift-app.zip`, the name the SwiftUI app's updater
+  downloads, so existing SwiftUI installs update into this app.
+- **Signing.** The macOS bundle is ad-hoc signed (`signingIdentity: "-"`);
+  with the `MACOS_*` secrets (docs/macos-release-signing.md) the job passes
+  the Developer ID as `APPLE_SIGNING_IDENTITY` and notarizes and staples the
+  app. Windows and Linux packages are unsigned.
+
+### Updater
+
+`src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›
+Engine shows the version with **Check for Updates**. It reads the tag that
+`github.com/LHagfoss/rustcode/releases/latest` redirects to (betas are
+prereleases, never latest) and offers the update when it is newer and its
+app zip is uploaded. On macOS **Update to X** downloads
+`RustCode-<ver>-macos-<arch>.app.zip`, checks it against the release's
+`SHA256SUMS`, unpacks it with `ditto`, requires `codesign --verify --deep
+--strict` and this app's bundle id, then a detached shell waits for the app
+to quit, swaps the bundle, re-registers it with Launch Services and opens
+it. It installs in place only from a release bundle in a folder it can write;
+otherwise, and on Windows and Linux, the button opens the release page and
+the installer does the update. A `tauri dev` build always sees an update
+but never installs it.
+
+It does not use `tauri-plugin-updater`: that plugin requires its own
+signing key pair, and a release without the private key in CI would fail.
+`SHA256SUMS` over HTTPS from the release is what the installers and the
+SwiftUI updater already trust; Developer ID signing adds to it once set up.
 
 ## Not yet ported
 
@@ -527,11 +774,9 @@ From the SwiftUI app, still missing or partial:
   (`_rustcode/session/move`), the retention sweep, swipe actions; loading
   the thread list page by page. Trash moves the folder into `~/.Trash`
   (macOS); Finder's Put Back does not know it.
-- Markdown pictures from local paths (an asset protocol scoped to the
-  thread's folder) and `mermaid` blocks; a file reference that is changed
-  in the turn does not open the Changes or Review diff yet.
-- Turn folding ("Worked for … · N tool calls"), sticky
-  turn bar, stream pacing, quote in reply.
+- A file reference that is changed in the turn does not open the Changes
+  or Review diff yet.
+- Sticky turn bar, stream pacing, quote in reply.
 - The auto-approve (YOLO) toggle on approval cards.
 - Subagents' verification status and background agents of threads off
   screen (subagents of a thread whose agents were listed nest under it).
@@ -541,18 +786,18 @@ From the SwiftUI app, still missing or partial:
 - Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
   `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as
   Text or VoiceOver summaries.
-- Orchestrator v2 against the real engine: as of this build the engine does
-  not answer `_rustcode/worktrees/*`, `_rustcode/checkpoints/*` or
-  `_rustcode/session/status`, so those features are hidden there and were
-  checked against the mock only. Pull request watches that auto-settle are
-  the engine's. A link's `cancel_session_turn` and the target's *Pause
-  messages* / *Detach* are not offered.
+- Orchestrator v2 was checked against the mock and the engine's own tests;
+  orchestration through a real external harness has not run end to end
+  (#2799). A link's `cancel_session_turn` and the target's *Pause messages*
+  / *Detach* are not offered.
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
   keybinding editor, Discord presence, remote pairing, notifications,
-  updater, What's New.
+  What's New; a background update check (the SwiftUI app polls every five
+  minutes and shows a sidebar row; this one checks from Settings).
 - Terminal tabs (one terminal per folder).
-- An E2E driver for the native window; signing and notarization. The
+- An E2E driver for the native window; Developer ID signing and
+  notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in
   Chrome; a click in a view inside the native window was not exercised.

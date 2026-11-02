@@ -113,6 +113,15 @@ export async function readImage(path: string): Promise<ImageFile> {
 }
 
 /**
+ * A picture a reply shows: an absolute path, or one relative to the first of
+ * `roots` (the thread's folder, then its worktree). The shell refuses any
+ * path that resolves outside them, and anything that is not a picture.
+ */
+export async function threadImage(path: string, roots: string[]): Promise<ImageFile> {
+  return invoke<ImageFile>("thread_image", { path, roots });
+}
+
+/**
  * Files dropped on the window. The Tauri webview takes file drops itself and
  * reports paths; the browser delivers them as DOM drop events instead.
  */

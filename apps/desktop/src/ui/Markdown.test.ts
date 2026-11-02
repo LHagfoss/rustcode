@@ -8,3 +8,19 @@ describe("markdown render cache", () => {
     expect(renderBlock("Other text.")).not.toBe(a);
   });
 });
+
+describe("pictures in replies", () => {
+  test("file paths go to the shell; web and data pictures do not; other schemes are refused", async () => {
+    const { picturePath } = await import("./MarkdownMedia");
+    const { urlTransform } = await import("./Markdown");
+    expect(picturePath("docs/shot.png")).toBe("docs/shot.png");
+    expect(picturePath("/Users/me/repo/a%20b.png")).toBe("/Users/me/repo/a b.png");
+    expect(picturePath("file:///Users/me/repo/a.png")).toBe("/Users/me/repo/a.png");
+    expect(picturePath("https://example.com/a.png")).toBeNull();
+    expect(picturePath("data:image/png;base64,AAAA")).toBeNull();
+    expect(picturePath("javascript:alert(1)")).toBeNull();
+    expect(urlTransform("file:///a.png", "src")).toBe("file:///a.png");
+    expect(urlTransform("file:///a.png", "href")).toBe("");
+    expect(urlTransform("javascript:alert(1)", "src")).toBe("");
+  });
+});

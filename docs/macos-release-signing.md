@@ -1,9 +1,11 @@
 # macOS release signing and notarization
 
-Tagged releases publish two macOS assets: the CLI archive
+Tagged releases publish the macOS CLI archive
 `rustcode-macos-aarch64.tar.gz` (also used by the Homebrew formula) and the
-SwiftUI app `rustcode-macos-aarch64-swift-app.zip`, which bundles the same
-engine as `Contents/Helpers/rustcode`.
+desktop app `RustCode-<ver>-macos-aarch64.app.zip` (apps/desktop, Tauri),
+which bundles the same engine as `Contents/MacOS/rustcode`. The same zip is
+also published as `rustcode-macos-aarch64-swift-app.zip`, the name the
+retired SwiftUI app's updater downloads.
 
 The release workflow (`.github/workflows/build.yml`) signs both with a
 Developer ID and notarizes them **only when all five secrets below are set**.
@@ -24,9 +26,9 @@ for a signed release.
 3. CLI (`build` job, macOS): sign `rustcode` with the hardened runtime and a
    secure timestamp, then submit it to the notary service in a zip. A bare
    executable cannot be stapled; Gatekeeper fetches its ticket online.
-4. App (`swift-app` job): `scripts/package-swift-app.sh` sees
-   `MACOS_SIGN_IDENTITY` and signs `Contents/Helpers/rustcode`, then the
-   bundle, both with `--options runtime --timestamp`. `notarize` submits the
+4. App (`desktop-macos` job): `tauri build` gets `MACOS_SIGN_IDENTITY` as
+   `APPLE_SIGNING_IDENTITY` and signs the `Contents/MacOS/rustcode` sidecar,
+   then the bundle, with the hardened runtime and a timestamp. `notarize` submits the
    app with `xcrun notarytool submit --wait`, fails unless the result is
    `Accepted` (printing the notary log), staples the ticket, then runs
    `xcrun stapler validate` and `spctl --assess --type execute`.
@@ -72,7 +74,7 @@ is not wired up.)
    ```
 
 5. Run the Build workflow with **Run workflow** (`workflow_dispatch`) on
-   `main` and check that the `swift-app` job ends with `spctl` reporting
+   `main` and check that the `desktop-macos` job ends with `spctl` reporting
    `accepted` and `source=Notarized Developer ID`. Delete the local `.p12`.
 6. Once a release is signed, remove the quarantine workaround from
    [install.md](install.md#native-desktop-app).
@@ -80,7 +82,7 @@ is not wired up.)
 To check a downloaded release by hand:
 
 ```bash
-ditto -x -k rustcode-macos-aarch64-swift-app.zip .
+ditto -x -k RustCode-<ver>-macos-aarch64.app.zip .
 spctl --assess --type execute --verbose=4 RustCode.app
 xcrun stapler validate RustCode.app
 ```

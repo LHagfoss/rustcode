@@ -15,10 +15,12 @@
     "test": "bun test src",
     "tauri": "tauri",
     "bundle:engine": "bun scripts/bundle-engine.ts",
-    "bundle": "bun scripts/bundle-engine.ts --release && bun scripts/app-icon.ts && tauri build --config src-tauri/tauri.bundle.conf.json --config src-tauri/gen-icon/tauri.conf.json",
-    "bundle:debug": "bun scripts/bundle-engine.ts && bun scripts/app-icon.ts && tauri build --debug --config src-tauri/tauri.bundle.conf.json --config src-tauri/gen-icon/tauri.conf.json",
+    "bundle": "bun scripts/bundle-engine.ts --release && bun run bundle:app",
+    "bundle:app": "bun scripts/bundle-version.ts && bun scripts/app-icon.ts && tauri build --config src-tauri/tauri.bundle.conf.json --config src-tauri/gen-version/tauri.conf.json --config src-tauri/gen-icon/tauri.conf.json",
+    "bundle:debug": "bun scripts/bundle-engine.ts && bun scripts/bundle-version.ts && bun scripts/app-icon.ts && tauri build --debug --config src-tauri/tauri.bundle.conf.json --config src-tauri/gen-version/tauri.conf.json --config src-tauri/gen-icon/tauri.conf.json",
     "check": "bun run typecheck && bun run lint && bun run test && bun run build",
-    "perf": "bun scripts/perf.ts"
+    "perf": "bun scripts/perf.ts",
+    "perf:native": "bun scripts/perf-native.ts"
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.25",
@@ -28,6 +30,7 @@
     "@xterm/xterm": "6.0.0",
     "chart.js": "4.5.1",
     "lucide-react": "1.66.0",
+    "mermaid": "12.2.0",
     "radix-ui": "1.8.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",

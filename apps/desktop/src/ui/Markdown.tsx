@@ -13,7 +13,7 @@ import {
   useRef,
   useState,
 } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/fileRefs";
 import { highlight, peekHighlight } from "../lib/highlight";
@@ -22,6 +22,7 @@ import { openExternal, openInEditor } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
+import { MarkdownImage, MermaidBlock } from "./MarkdownMedia";
 import { copyText, cx } from "./primitives";
 
 export function CopyButton({
@@ -113,11 +114,11 @@ function openRef(ref: FileRef) {
   const s = useApp.getState();
   const cwd = (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
   if (!hasShell()) {
-    toast("Opening files needs the desktop app.", "warning");
+    toast("Opening files needs the desktop app.", "info");
     return;
   }
   openInEditor(resolveRef(ref, cwd), ref.line, ref.column).catch((e) =>
-    toast(e instanceof Error ? e.message : String(e), "warning"),
+    toast(e instanceof Error ? e.message : String(e), "error"),
   );
 }
 
@@ -168,6 +169,7 @@ const components: Components = {
     </blockquote>
   ),
   hr: () => <hr className="my-1 border-border" />,
+  img: ({ src, alt }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />,
   table: ({ children }) => (
     <div className="overflow-x-auto rounded-lg bg-fill-subtle py-1.5">
       <table className="w-full border-collapse text-left">{children}</table>
@@ -182,6 +184,10 @@ const components: Components = {
     // A fenced block has a language class or spans lines; inline code has neither.
     const block = lang !== undefined || text.includes("\n");
     void node;
+    if (block && lang === "mermaid") {
+      const source = text.replace(/\n$/, "");
+      return <MermaidBlock code={source} fallback={<CodeBlock code={source} lang={lang} />} />;
+    }
     if (block) return <CodeBlock code={text.replace(/\n$/, "")} lang={lang} />;
     const ref = parseInlineRef(text);
     if (ref)
@@ -201,6 +207,12 @@ const components: Components = {
 
 const plugins = [remarkGfm];
 
+/** react-markdown's safe URLs, plus `file://` and `data:image/` for pictures (MarkdownMedia.tsx checks them). */
+export function urlTransform(url: string, key: string): string {
+  if (key === "src" && /^(file:\/\/|data:image\/)/i.test(url)) return url;
+  return defaultUrlTransform(url);
+}
+
 // Rendered blocks by their source. react-markdown's `Markdown` is a plain
 // function (no hooks), so its element tree can be kept: a row scrolled back
 // into view, or a finished block above a streaming one, is not parsed again.
@@ -215,7 +227,7 @@ export function renderBlock(text: string): ReactElement {
     rendered.set(text, hit);
     return hit;
   }
-  const element = ReactMarkdown({ children: text, remarkPlugins: plugins, components });
+  const element = ReactMarkdown({ children: text, remarkPlugins: plugins, components, urlTransform });
   rendered.set(text, element);
   if (rendered.size > RENDERED_MAX) rendered.delete(rendered.keys().next().value as string);
   return element;

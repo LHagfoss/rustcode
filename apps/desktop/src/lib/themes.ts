@@ -63,9 +63,9 @@ export function cssName(token: Token): string {
 
 const DARK: Record<Token, string> = {
   bg: "#0b0b0c",
-  sidebar: "#0e0e10",
-  surface: "#141416",
-  surface_2: "#1a1a1d",
+  sidebar: "#131315",
+  surface: "#18181a",
+  surface_2: "#1e1e21",
   surface_3: "#232327",
   border: "#ffffff0f",
   border_strong: "#ffffff1c",
@@ -86,9 +86,9 @@ const DARK: Record<Token, string> = {
 const LIGHT: Record<Token, string> = {
   bg: "#ffffff",
   sidebar: "#f7f7f8",
-  surface: "#f4f4f5",
+  surface: "#f0f0f1",
   surface_2: "#ffffff",
-  surface_3: "#e9e9eb",
+  surface_3: "#e8e8ea",
   border: "#0000000f",
   border_strong: "#0000001f",
   text: "#171717",

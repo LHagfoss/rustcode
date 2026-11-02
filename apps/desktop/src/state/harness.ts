@@ -1,7 +1,14 @@
 // Pure harness and onboarding logic: what can be chosen, what is greyed out
 // and why. The UI reads capability flags only; it never branches on a harness id.
 
-import type { ConfigOption, Harness, HarnessCapabilities, HarnessModel, HarnessSnapshot } from "../acp/types";
+import type {
+  ConfigOption,
+  Harness,
+  HarnessCapabilities,
+  HarnessLast,
+  HarnessModel,
+  HarnessSnapshot,
+} from "../acp/types";
 
 export type HarnessStatus =
   | { tone: "ok"; label: string }
@@ -70,6 +77,44 @@ export function normalizeDefault(
     effort = model.default_effort ?? model.efforts[0] ?? null;
   }
   return { harness: h.id, model: modelId, effort };
+}
+
+/**
+ * The choice a new thread on `id` starts with: the harness's remembered model and effort (the
+ * engine's `last`, else what the app kept in `local`), else the default when it names this
+ * harness, else nothing (the harness picks). A model the harness no longer lists, or an effort its
+ * model does not offer, is dropped quietly.
+ */
+export function restoreChoice(
+  snapshot: HarnessSnapshot,
+  id: string,
+  local?: Record<string, HarnessLast>,
+): { harness: string; model: string | null; effort: string | null } {
+  const h = snapshot.harnesses.find((x) => x.id === id);
+  if (!h) return { harness: "rustcode", model: null, effort: null };
+  const last = h.last ?? local?.[id] ?? null;
+  const fallback = snapshot.default.harness === id ? snapshot.default : null;
+  const listed = (model: string | null) =>
+    !!model && (!h.models.length || h.models.some((m) => m.id === model));
+  const candidates = [last, fallback].filter((c): c is HarnessLast => !!c);
+  const model = candidates.map((c) => c.model).find(listed) ?? null;
+  const known = h.models.find((m) => m.id === model);
+  const offers = (effort: string | null) =>
+    !!effort && h.capabilities.effort && (!known?.efforts.length || known.efforts.includes(effort));
+  const effort =
+    candidates
+      .filter((c) => !c.model || c.model === model)
+      .map((c) => c.effort)
+      .find(offers) ?? null;
+  return { harness: h.id, model, effort };
+}
+
+/** The effort a model starts on when none is chosen: its default, else the first it offers. */
+export function defaultEffort(model: HarnessModel | undefined, efforts: string[]): string | null {
+  const preferred = model?.default_effort;
+  if (preferred && efforts.includes(preferred)) return preferred;
+  if (efforts.includes("default")) return "default";
+  return efforts[0] ?? null;
 }
 
 /** A shell-quoted command line for the copy button. */

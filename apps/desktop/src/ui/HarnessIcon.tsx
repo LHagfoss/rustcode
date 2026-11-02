@@ -1,27 +1,65 @@
-// The mark of each harness, after its brand: monochrome paths from
-// simple-icons 16.35.0 (CC0; https://simpleicons.org), drawn in currentColor,
-// vendored here so the bundle carries only these three. Codex has no mark in
-// simple-icons (OpenAI's was removed), so it and any other harness get a
-// letter in a rounded square; RustCode is the app's own icon. A harness that
-// later sends an `icon` (a URL or path) shows that instead.
+// design-lint: allow-file (brand marks carry their owners' colours, not theme tokens)
+//
+// The mark of each harness, inline so nothing is fetched at run time:
+// - Codex: the OpenAI blossom, from @lobehub/icons-static-svg 1.102.0 (MIT,
+//   https://github.com/lobehub/lobe-icons), monochrome in currentColor.
+// - Claude Code: the Claude mark in its orange, same source.
+// - Gemini CLI: the Gemini spark with its gradient, same source.
+// - OpenCode: `packages/identity/mark.svg` of https://github.com/anomalyco/opencode
+//   (MIT), its two greys as currentColor at full and 35%, cropped to the mark.
+// - RustCode: the app's own icon.
+// NOTICE: these marks are trademarks of their owners (OpenAI, Anthropic,
+// Google, Anomaly/OpenCode); they are used only to identify the integration.
+// A harness that sends its own `icon` (a URL or `data:`) shows that instead,
+// and any other harness a letter in a rounded square.
 
+import { useId } from "react";
 import { cx } from "./primitives";
 
-const PATHS: Record<string, string> = {
-  claude:
-    "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z",
-  gemini:
-    "M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81",
-  opencode: "M22 24H2V0h20zM17 4.8H7v14.4h10z",
-};
+const OPENAI =
+  "M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z";
+
+const CLAUDE =
+  "M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z";
+
+const GEMINI =
+  "M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z";
 
 /** Which mark a harness id or name shows. */
-function markOf(id: string, name?: string): string | undefined {
+function markOf(id: string, name?: string): "openai" | "claude" | "gemini" | "opencode" | undefined {
   const key = `${id} ${name ?? ""}`.toLowerCase();
   if (key.includes("claude")) return "claude";
   if (key.includes("gemini")) return "gemini";
   if (key.includes("opencode")) return "opencode";
+  if (key.includes("codex") || key.includes("openai")) return "openai";
   return undefined;
+}
+
+function GeminiMark({ mono }: { mono: boolean }) {
+  const id = useId().replace(/:/g, "");
+  if (mono) return <path d={GEMINI} fill="currentColor" />;
+  return (
+    <>
+      <defs>
+        <linearGradient id={`${id}g0`} gradientUnits="userSpaceOnUse" x1="7" x2="11" y1="15.5" y2="12">
+          <stop stopColor="#08B962" />
+          <stop offset="1" stopColor="#08B962" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id={`${id}g1`} gradientUnits="userSpaceOnUse" x1="8" x2="11.5" y1="5.5" y2="11">
+          <stop stopColor="#F94543" />
+          <stop offset="1" stopColor="#F94543" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id={`${id}g2`} gradientUnits="userSpaceOnUse" x1="3.5" x2="17.5" y1="13.5" y2="12">
+          <stop stopColor="#FABC12" />
+          <stop offset=".46" stopColor="#FABC12" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={GEMINI} fill="#3186FF" />
+      <path d={GEMINI} fill={`url(#${id}g0)`} />
+      <path d={GEMINI} fill={`url(#${id}g1)`} />
+      <path d={GEMINI} fill={`url(#${id}g2)`} />
+    </>
+  );
 }
 
 export function HarnessIcon({
@@ -29,6 +67,7 @@ export function HarnessIcon({
   name,
   icon,
   size = 14,
+  mono = false,
   className,
 }: {
   id: string;
@@ -36,6 +75,8 @@ export function HarnessIcon({
   /** A harness-supplied icon (URL or `data:`), preferred when present. */
   icon?: string;
   size?: number;
+  /** Draw a coloured mark (Claude, Gemini) in currentColor too, e.g. for an unavailable row. */
+  mono?: boolean;
   className?: string;
 }) {
   if (icon && /^(https?:|data:image\/)/.test(icon)) {
@@ -59,14 +100,26 @@ export function HarnessIcon({
   if (mark) {
     return (
       <svg
-        viewBox="0 0 24 24"
+        viewBox={mark === "opencode" ? "96 96 320 320" : "0 0 24 24"}
         width={size}
         height={size}
         aria-hidden
         className={cx("shrink-0", className)}
         fill="currentColor"
       >
-        <path d={PATHS[mark]} />
+        {mark === "openai" && <path d={OPENAI} fillRule="evenodd" />}
+        {mark === "claude" && <path d={CLAUDE} fill={mono ? "currentColor" : "#D97757"} />}
+        {mark === "gemini" && <GeminiMark mono={mono} />}
+        {mark === "opencode" && (
+          <>
+            <path d="M320 224V352H192V224H320Z" opacity={0.35} />
+            <path
+              fillRule="evenodd"
+              clipRule="evenodd"
+              d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"
+            />
+          </>
+        )}
       </svg>
     );
   }

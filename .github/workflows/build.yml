@@ -52,7 +52,7 @@ jobs:
                       exit 1
                   fi
 
-    # macOS on its own, so swift-app and the release wait only for it.
+    # macOS on its own, so desktop-macos and the release wait only for it.
     build-macos:
         needs: verify-tag
         uses: ./.github/workflows/build-rust.yml
@@ -73,11 +73,15 @@ jobs:
                  {"os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu", "name": "rustcode-linux-aarch64"},
                  {"os": "windows-latest", "target": "x86_64-pc-windows-msvc", "name": "rustcode-windows-x86_64"}]
 
-    # Build Swift sources only on macOS and reuse the arm64 engine artifact,
-    # avoiding another Rust compile and leaving Linux/Windows jobs unchanged.
-    swift-app:
+    # The desktop app (apps/desktop, Tauri) as RustCode.app, on macOS only so
+    # the release waits for nothing else. It reuses the arm64 engine artifact
+    # as its sidecar instead of compiling the engine again. A beta builds it
+    # too. The SwiftUI app (macos/) is no longer released; macos-swift-ci.yml
+    # still tests it until it is archived.
+    desktop-macos:
         needs: build-macos
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        # Xcode 26's actool compiles the layered icon (apps/desktop/scripts/app-icon.ts).
         runs-on: macos-26
         steps:
             - uses: actions/checkout@v7
@@ -88,8 +92,27 @@ jobs:
                   name: rustcode-macos-aarch64
                   path: engine
 
-            - name: Test Swift package
-              run: swift test --package-path macos
+            - name: Place the engine sidecar
+              run: |
+                  tar xzf engine/rustcode-macos-aarch64.tar.gz -C engine
+                  mkdir -p apps/desktop/src-tauri/binaries
+                  install -m 755 engine/rustcode-macos-aarch64 apps/desktop/src-tauri/binaries/rustcode-aarch64-apple-darwin
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.3.14
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Cache the shell crate
+              uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: apps/desktop/src-tauri
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
 
             # Without the MACOS_* secrets the app stays ad-hoc signed and
             # unnotarized (docs/macos-release-signing.md).
@@ -113,14 +136,25 @@ jobs:
                   MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
               run: scripts/macos-release-signing.sh import
 
-            # Signs with MACOS_SIGN_IDENTITY when the import set it, else ad hoc.
-            - name: Package SwiftUI app
+            # Tauri signs the sidecar and the bundle with the hardened runtime:
+            # with the imported Developer ID when there is one, else ad hoc
+            # (tauri.bundle.conf.json's signingIdentity "-").
+            - name: Build RustCode.app
+              working-directory: apps/desktop
               run: |
-                  tar xzf engine/rustcode-macos-aarch64.tar.gz -C engine
-                  chmod +x engine/rustcode-macos-aarch64
-                  REQUIRE_COMPILED_ICON=1 scripts/package-swift-app.sh engine/rustcode-macos-aarch64 target/swift-release
+                  bun install --frozen-lockfile
+                  if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then export APPLE_SIGNING_IDENTITY="$MACOS_SIGN_IDENTITY"; fi
+                  bun run bundle:app --bundles app
 
-            - name: Notarize and staple SwiftUI app
+            - name: Verify app version
+              if: startsWith(github.ref, 'refs/tags/v')
+              env:
+                  RELEASE_TAG: ${{ github.ref_name }}
+              run: |
+                  version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' apps/desktop/src-tauri/target/release/bundle/macos/RustCode.app/Contents/Info.plist)
+                  test "$RELEASE_TAG" = "v$version"
+
+            - name: Notarize and staple RustCode.app
               if: steps.signing.outputs.enabled == 'true'
               env:
                   MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
@@ -128,10 +162,15 @@ jobs:
                   MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
                   MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
                   MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-              run: scripts/macos-release-signing.sh notarize target/swift-release/RustCode.app
+              run: scripts/macos-release-signing.sh notarize apps/desktop/src-tauri/target/release/bundle/macos/RustCode.app
 
-            - name: Zip SwiftUI app
-              run: ditto -c -k --sequesterRsrc --keepParent target/swift-release/RustCode.app rustcode-macos-aarch64-swift-app.zip
+            # RustCode-<ver>-macos-aarch64.app.zip, plus the same zip under the
+            # SwiftUI app's old asset name: the Swift app's updater downloads
+            # that name, so existing installs move to this app by themselves.
+            - name: Zip RustCode.app
+              run: |
+                  (cd apps/desktop && bun scripts/release-assets.ts ../../desktop-assets)
+                  cp desktop-assets/RustCode-*-macos-aarch64.app.zip desktop-assets/rustcode-macos-aarch64-swift-app.zip
 
             # Check the asset as a user gets it: unpacked from the zip, with
             # the quarantine flag a browser download sets.
@@ -140,7 +179,7 @@ jobs:
               run: |
                   check="$RUNNER_TEMP/gatekeeper-check"
                   rm -rf "$check" && mkdir -p "$check"
-                  ditto -x -k rustcode-macos-aarch64-swift-app.zip "$check"
+                  ditto -x -k desktop-assets/rustcode-macos-aarch64-swift-app.zip "$check"
                   xattr -w com.apple.quarantine "0083;$(printf '%x' "$(date +%s)");Safari;" "$check/RustCode.app"
                   xcrun stapler validate "$check/RustCode.app"
                   spctl --assess --type execute --verbose=4 "$check/RustCode.app"
@@ -153,8 +192,88 @@ jobs:
             - name: Upload app artifact
               uses: actions/upload-artifact@v7
               with:
-                  name: rustcode-macos-aarch64-swift-app
-                  path: rustcode-macos-aarch64-swift-app.zip
+                  name: rustcode-macos-aarch64-app
+                  path: desktop-assets/*.zip
+
+    # The desktop app's Windows installer and Linux packages, from the engine
+    # artifacts of the `build` job. Skipped for a beta, like `build`.
+    desktop:
+        needs: build
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && !(startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-'))
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os: windows-latest
+                      engine: rustcode-windows-x86_64
+                      triple: x86_64-pc-windows-msvc
+                      bundles: nsis
+                    - os: ubuntu-24.04
+                      engine: rustcode-linux-x86_64
+                      triple: x86_64-unknown-linux-gnu
+                      bundles: appimage,deb
+        env:
+            # linuxdeploy (the AppImage bundler) without FUSE, and without its
+            # strip, which cannot read Ubuntu 24.04's newer ELF sections.
+            APPIMAGE_EXTRACT_AND_RUN: "1"
+            NO_STRIP: "true"
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Install Linux build dependencies
+              if: runner.os == 'Linux'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
+
+            - name: Download engine archive
+              uses: actions/download-artifact@v8
+              with:
+                  name: ${{ matrix.engine }}
+                  path: engine
+
+            - name: Place the engine sidecar
+              shell: bash
+              run: |
+                  mkdir -p apps/desktop/src-tauri/binaries
+                  if [ "$RUNNER_OS" = Windows ]; then
+                      7z x -oengine engine/${{ matrix.engine }}.zip
+                      cp engine/${{ matrix.engine }}.exe apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}.exe
+                  else
+                      tar xzf engine/${{ matrix.engine }}.tar.gz -C engine
+                      install -m 755 engine/${{ matrix.engine }} apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}
+                  fi
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.3.14
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Cache the shell crate
+              uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: apps/desktop/src-tauri
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Build the installer
+              shell: bash
+              working-directory: apps/desktop
+              run: |
+                  bun install --frozen-lockfile
+                  bun run bundle:app --bundles ${{ matrix.bundles }}
+                  bun scripts/release-assets.ts ../../desktop-assets
+
+            - name: Upload installer artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: rustcode-desktop-${{ runner.os }}
+                  path: desktop-assets/*
 
     # The iOS app in ios/ ships under the same version. Its archive is unsigned:
     # ios/Scripts/install-on-iphone.sh re-signs it locally with the user's profile.
@@ -203,10 +322,10 @@ jobs:
                       rustcode-ios-unsigned.xcarchive.zip
 
     # Published as soon as the macOS CLI and app are ready: Homebrew and the
-    # updater need only those. release-rest attaches the other platforms.
+    # updaters need only those. release-rest attaches the other platforms.
     release:
         if: startsWith(github.ref, 'refs/tags/v')
-        needs: [build-macos, swift-app]
+        needs: [build-macos, desktop-macos]
         runs-on: ubuntu-latest
         steps:
             - name: Download macOS artifacts
@@ -221,7 +340,9 @@ jobs:
               run: |
                   set -euo pipefail
                   cd artifacts
+                  version="${GITHUB_REF_NAME#v}"
                   files=(
+                      "RustCode-${version}-macos-aarch64.app.zip"
                       rustcode-macos-aarch64.tar.gz
                       rustcode-macos-aarch64-swift-app.zip
                   )
@@ -291,7 +412,7 @@ jobs:
     # manifest rewritten to cover every asset.
     release-rest:
         if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-        needs: [release, build, ios-app]
+        needs: [release, build, ios-app, desktop]
         runs-on: ubuntu-latest
         steps:
             - name: Download artifacts
@@ -305,7 +426,12 @@ jobs:
               run: |
                   set -euo pipefail
                   cd artifacts
+                  version="${GITHUB_REF_NAME#v}"
                   files=(
+                      "RustCode-${version}-linux-x86_64.AppImage"
+                      "RustCode-${version}-linux-x86_64.deb"
+                      "RustCode-${version}-macos-aarch64.app.zip"
+                      "RustCode-${version}-windows-x64-setup.exe"
                       rustcode-linux-aarch64.tar.gz
                       rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
@@ -330,4 +456,6 @@ jobs:
                       SHA256SUMS \
                       rustcode-linux-aarch64.tar.gz rustcode-linux-x86_64.tar.gz \
                       rustcode-windows-x86_64.zip \
+                      "RustCode-${TAG#v}-windows-x64-setup.exe" \
+                      "RustCode-${TAG#v}-linux-x86_64.AppImage" "RustCode-${TAG#v}-linux-x86_64.deb" \
                       rustcode-ios-simulator.zip rustcode-ios-unsigned.xcarchive.zip

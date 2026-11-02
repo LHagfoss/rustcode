@@ -65,6 +65,17 @@ pub(crate) struct DefaultHarnessRequest {
     pub effort: Option<String>,
 }
 
+/// Keep the model and effort last chosen for new threads on a harness.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[request(method = "_rustcode/harnesses/remember", response = serde_json::Value)]
+pub(crate) struct RememberHarnessRequest {
+    pub harness: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
 /// Mark first-run onboarding done.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
 #[request(method = "_rustcode/onboarding/complete", response = serde_json::Value)]
@@ -111,6 +122,17 @@ pub(crate) async fn set_default(
     harness::set_default(request.harness, request.model, request.effort)
         .await
         .map_err(failure)
+}
+
+pub(crate) async fn remember(
+    request: RememberHarnessRequest,
+) -> Result<Value, agent_client_protocol::Error> {
+    tokio::task::spawn_blocking(move || {
+        harness::remember(request.harness.trim(), request.model, request.effort)
+    })
+    .await
+    .map_err(|error| agent_client_protocol::Error::internal_error().data(error.to_string()))?
+    .map_err(failure)
 }
 
 pub(crate) async fn complete_onboarding() -> Result<Value, agent_client_protocol::Error> {
@@ -173,15 +195,13 @@ pub(crate) async fn new_session(
     let (defaults, entries) = harness::config::load_in(&dir);
     let resolved = harness::resolve(&entries, &id)
         .ok_or_else(|| failure(format!("unknown harness '{id}'")))?;
-    let is_default = defaults.harness.as_deref() == Some(id.as_str());
-    let model = asked
-        .model
-        .clone()
-        .or_else(|| defaults.model.clone().filter(|_| is_default));
-    let effort = asked
-        .effort
-        .clone()
-        .or_else(|| defaults.effort.clone().filter(|_| is_default));
+    let (model, effort) = harness::starting_choice(
+        &id,
+        &asked,
+        &defaults,
+        &entries,
+        &harness::learned_for(&id).models.unwrap_or_default(),
+    );
 
     let session_id = crate::config::create_detached_session();
     if session_id.is_empty() {

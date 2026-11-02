@@ -4,7 +4,9 @@ import {
   capabilityRows,
   commandLine,
   controlDisabledReason,
+  defaultEffort,
   normalizeDefault,
+  restoreChoice,
   unavailableReason,
   usableHarnesses,
   validateDefault,
@@ -87,5 +89,62 @@ describe("harness logic", () => {
   test("quotes a login command for copying", () => {
     expect(commandLine(["claude", "/login"])).toBe("claude /login");
     expect(commandLine(["sh", "-c", "a b"])).toBe("sh -c 'a b'");
+  });
+
+  test("a harness's remembered choice is restored, and a stale one falls back quietly", () => {
+    const claude: Harness = {
+      ...base,
+      id: "claude-code",
+      name: "Claude Code",
+      models: [
+        { id: "opus", name: "Opus", efforts: ["low", "high"], default_effort: "low" },
+        { id: "sonnet", name: "Sonnet", efforts: ["low", "medium"], default_effort: "low" },
+      ],
+      last: { model: "opus", effort: "high" },
+    };
+    const snap = snapshot([base, claude]);
+    expect(restoreChoice(snap, "claude-code")).toEqual({
+      harness: "claude-code",
+      model: "opus",
+      effort: "high",
+    });
+    // Nothing remembered: the harness picks (no model, no effort).
+    expect(restoreChoice(snap, "codex")).toEqual({ harness: "codex", model: null, effort: null });
+    // The app's own record, for an engine that keeps none.
+    expect(restoreChoice(snap, "codex", { codex: { model: "gpt-6-luna", effort: "low" } })).toEqual({
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "low",
+    });
+    // A model the harness no longer lists, or an effort it does not offer, is dropped.
+    const stale = snapshot([{ ...claude, last: { model: "gone", effort: "max" } }]);
+    expect(restoreChoice(stale, "claude-code")).toEqual({
+      harness: "claude-code",
+      model: null,
+      effort: null,
+    });
+    const badEffort = snapshot([{ ...claude, last: { model: "sonnet", effort: "high" } }]);
+    expect(restoreChoice(badEffort, "claude-code")).toEqual({
+      harness: "claude-code",
+      model: "sonnet",
+      effort: null,
+    });
+    // The default applies to its own harness.
+    const withDefault = {
+      ...snapshot([base]),
+      default: { harness: "codex", model: "gpt-6-luna", effort: "low" },
+    };
+    expect(restoreChoice(withDefault, "codex")).toEqual({
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "low",
+    });
+  });
+
+  test("the default effort is the model's, else the provider default, else the first", () => {
+    expect(defaultEffort(base.models[0], ["low", "medium"])).toBe("medium");
+    expect(defaultEffort(undefined, ["low", "medium", "high", "default"])).toBe("default");
+    expect(defaultEffort(undefined, ["low", "high"])).toBe("low");
+    expect(defaultEffort(undefined, [])).toBeNull();
   });
 });

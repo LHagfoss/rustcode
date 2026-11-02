@@ -81,9 +81,9 @@
   color-scheme: light;
   --rc-bg: #ffffff;
   --rc-sidebar: #f7f7f8;
-  --rc-surface: #f4f4f5;
+  --rc-surface: #f0f0f1;
   --rc-surface-2: #ffffff;
-  --rc-surface-3: #e9e9eb;
+  --rc-surface-3: #e8e8ea;
   --rc-border: #0000000f;
   --rc-border-strong: #0000001f;
   --rc-text: #171717;
@@ -106,9 +106,9 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --rc-bg: #0b0b0c;
-    --rc-sidebar: #0e0e10;
-    --rc-surface: #141416;
-    --rc-surface-2: #1a1a1d;
+    --rc-sidebar: #131315;
+    --rc-surface: #18181a;
+    --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
     --rc-border: #ffffff0f;
     --rc-border-strong: #ffffff1c;
@@ -131,9 +131,9 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --rc-bg: #0b0b0c;
-  --rc-sidebar: #0e0e10;
-  --rc-surface: #141416;
-  --rc-surface-2: #1a1a1d;
+  --rc-sidebar: #131315;
+  --rc-surface: #18181a;
+  --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
   --rc-border: #ffffff0f;
   --rc-border-strong: #ffffff1c;
@@ -505,22 +505,6 @@
   animation: rc-in 160ms var(--ease-snappy);
 }
 
-/* A bar over the new-thread banner: frosted, its foot fading into the banner rather than a hard edge. */
-.rc-frost::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 -12px 0;
-  z-index: -1;
-  background: color-mix(in srgb, var(--rc-bg) 45%, transparent);
-  backdrop-filter: saturate(1.6) blur(20px);
-  -webkit-backdrop-filter: saturate(1.6) blur(20px);
-  /* design-lint: allow (mask alpha, not a colour) */
-  mask-image: linear-gradient(to bottom, #000 60%, transparent);
-  /* design-lint: allow (mask alpha, not a colour) */
-  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
-  pointer-events: none;
-}
-
 /*
  * Glass: the one translucency every floating surface shares (composer,
  * popovers, menus, dialogs, toasts, the right panel). `--rc-glass-bg` and
@@ -549,7 +533,8 @@
  * above and below. Focus makes the glass a little denser; there is no ring
  * or coloured edge. Its tray sits 6px under it, solid and borderless.
  */
-.rc-composer {
+.rc-composer,
+.rc-toast {
   background: var(--rc-glass-bg);
   backdrop-filter: var(--rc-glass-filter);
   -webkit-backdrop-filter: var(--rc-glass-filter);
@@ -559,8 +544,81 @@
     0 0 0 1px var(--rc-border);
   transition: background-color 160ms ease-out;
 }
-.rc-composer:focus-within {
+.rc-toast {
   background: var(--rc-glass-bg-strong);
+}
+/*
+ * The composer rests in the denser glass and steps denser still on focus,
+ * so its controls (fill-subtle pills) sit one step above it, not two.
+ */
+.rc-composer {
+  background: var(--rc-glass-bg-strong);
+}
+.rc-composer:focus-within {
+  background: color-mix(in srgb, var(--rc-surface-2) 90%, transparent);
+}
+.rc-toast-out {
+  animation: rc-out 120ms ease-in forwards;
+}
+
+/*
+ * Skeletons: a quiet block where content will appear, swept by a soft
+ * highlight (transform only, so it stays on the compositor). The sweep stops
+ * under reduced motion.
+ */
+@keyframes rc-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.rc-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--rc-fill-subtle);
+  border-radius: var(--rc-radius-sm);
+}
+.rc-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--rc-fill-subtle) 50%, transparent);
+  animation: rc-sweep 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-skeleton::after {
+    display: none;
+  }
+}
+
+/*
+ * Headers float over what they head (chat, Settings) in glass, so content
+ * scrolls under them, and fade out below their bottom edge the way the
+ * transcript fades above the composer. The glass is the same filter as
+ * every floating surface, tinted with the pane's own background.
+ */
+:root {
+  --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 72%, transparent);
+}
+.rc-header-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -24px 0;
+  z-index: -1;
+  background: var(--rc-glass-pane);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
+  /* design-lint: allow (mask alpha, not a colour) */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+  /* design-lint: allow (mask alpha, not a colour) */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+  pointer-events: none;
+}
+/* Over a new thread's banner the tint is lighter, so the picture shows through. */
+.rc-header-glass.rc-frost::before {
+  --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 45%, transparent);
 }
 .rc-composer-tray {
   background: var(--rc-surface-2);
@@ -601,10 +659,12 @@
     --rc-glass-bg-strong: var(--rc-surface-2);
     --rc-glass-filter: none;
   }
-  .rc-frost::before {
-    background: var(--rc-bg);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+  :root,
+  .rc-header-glass.rc-frost::before {
+    --rc-glass-pane: var(--rc-bg);
+  }
+  .rc-composer:focus-within {
+    background: var(--rc-surface-2);
   }
 }
 :root.reduce-transparency {
@@ -612,8 +672,24 @@
   --rc-glass-bg-strong: var(--rc-surface-2);
   --rc-glass-filter: none;
 }
-:root.reduce-transparency .rc-frost::before {
-  background: var(--rc-bg);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+:root.reduce-transparency .rc-composer:focus-within {
+  background: var(--rc-surface-2);
+}
+:root.reduce-transparency,
+:root.reduce-transparency .rc-header-glass.rc-frost::before {
+  --rc-glass-pane: var(--rc-bg);
+}
+
+/* Mermaid diagrams in replies (ui/MarkdownMedia.tsx): fit the column, flat like the rest of the chat. */
+.rc-mermaid svg {
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  display: block;
+}
+.rc-mermaid svg :is(.node, .cluster, .edgeLabel) :is(rect, polygon, circle, path) {
+  filter: none;
+}
+.rc-mermaid svg .node :is(rect, polygon) {
+  rx: 6px;
 }

@@ -679,7 +679,9 @@ async fn acp_load_session(
                 return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
             }
         }
-        return Ok(LoadSessionResponse::new().config_options(config_options));
+        return Ok(LoadSessionResponse::new()
+            .config_options(config_options)
+            .meta(crate::harness::builtin_session_meta()));
     }
 }
 
@@ -1328,9 +1330,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     // and its hard filesystem boundary, independent of the
                     // directory from which RustCode itself was launched.
                     state.workspace_root = Some(cwd.clone());
+                    // What the request asked for, else the built-in harness's
+                    // remembered choice (docs/harnesses.md).
                     apply_requested_model_and_effort(
                         &mut state,
-                        &crate::harness::requested(request.meta.as_ref()),
+                        &crate::harness::builtin_start(&crate::harness::requested(
+                            request.meta.as_ref(),
+                        )),
                     );
                     let config_options = build_session_config_options(&state);
                     let _ = crate::config::save_session_workspace(
@@ -1377,7 +1383,9 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         },
                     );
                     responder.respond(crate::worktrees::finish_new(
-                        NewSessionResponse::new(session_id.clone()).config_options(config_options),
+                        NewSessionResponse::new(session_id.clone())
+                            .config_options(config_options)
+                            .meta(crate::harness::builtin_session_meta()),
                         worktree.as_ref(),
                     ))?;
                     // Commands, then the session's opening usage, so the client
@@ -1641,6 +1649,18 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             async move |request: harnesses::DefaultHarnessRequest, responder, connection| {
                 connection.spawn(async move {
                     match harnesses::set_default(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: harnesses::RememberHarnessRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::remember(request).await {
                         Ok(value) => responder.respond(value)?,
                         Err(error) => responder.respond_with_error(error)?,
                     }
@@ -2101,9 +2121,21 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         // Setting an option may start the harness.
                         return _connection.spawn(async move {
                             let value = harnesses::config_value(&request.value);
-                            match external.set_config(request.config_id.0.as_ref(), value).await {
-                                Ok(options) => responder
-                                    .respond(SetSessionConfigOptionResponse::new(options))?,
+                            let config_id = request.config_id.0.to_string();
+                            match external.set_config(&config_id, value).await {
+                                Ok(options) => {
+                                    // A model or effort picked in a thread is also the
+                                    // harness's choice for the next new thread.
+                                    if matches!(config_id.as_str(), "model" | "effort") {
+                                        let record = external.record();
+                                        crate::harness::remember_later(
+                                            external.harness.id.clone(),
+                                            record.model,
+                                            record.effort,
+                                        );
+                                    }
+                                    responder.respond(SetSessionConfigOptionResponse::new(options))?
+                                }
                                 Err(message) => responder.respond_with_error(
                                     agent_client_protocol::Error::invalid_params().data(message),
                                 )?,
@@ -2125,6 +2157,14 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let mut state = state.lock().await;
                     let config_options =
                         handle_set_config_option(&mut state, &request.config_id, &request.value)?;
+                    if matches!(request.config_id.0.as_ref(), "model" | "effort") {
+                        let settings = crate::remote::projection::project_settings(&state);
+                        crate::harness::remember_later(
+                            crate::harness::BUILTIN_ID.to_owned(),
+                            Some(settings.selected_model).filter(|model| !model.is_empty()),
+                            Some(settings.reasoning_effort),
+                        );
+                    }
                     responder.respond(SetSessionConfigOptionResponse::new(config_options))
                 }
             },

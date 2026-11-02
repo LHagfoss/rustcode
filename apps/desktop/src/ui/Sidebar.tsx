@@ -60,7 +60,7 @@ import { AgentMark } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
-import { Cluster, ClusterButton, cx, Spinner, Tooltip } from "./primitives";
+import { Cluster, ClusterButton, cx, Skeleton, Spinner, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
 import { TitlebarRow } from "./Titlebar";
 
@@ -148,7 +148,7 @@ function ThreadMenuItems({
           <Item
             className={menuItem}
             disabled={!canFiles}
-            onSelect={() => void openTerminalAt(worktree.path).catch((e) => toast(String(e), "warning"))}
+            onSelect={() => void openTerminalAt(worktree.path).catch((e) => toast(String(e), "error"))}
           >
             <SquareTerminal size={13} /> Open in Terminal
           </Item>
@@ -560,6 +560,17 @@ export function Sidebar() {
   const marks = useApp((s) => s.statusMarks ?? NO_MARKS);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
+  // The slot collapses after the sidebar has slid out, and opens before it slides in: its width
+  // changes once per toggle, not every frame (docs/design.md › Motion).
+  const [collapsed, setCollapsed] = useState(hidden);
+  useEffect(() => {
+    if (!hidden) {
+      setCollapsed(false);
+      return;
+    }
+    const t = setTimeout(() => setCollapsed(true), 200);
+    return () => clearTimeout(t);
+  }, [hidden]);
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
   const [byProject, setByProject] = useStored("rustcode.sidebar.byProject", true);
@@ -678,11 +689,17 @@ export function Sidebar() {
   return (
     <aside
       aria-label="Threads"
-      className="relative flex shrink-0 flex-col overflow-hidden bg-sidebar transition-[width] duration-200 ease-snappy"
-      style={{ width: hidden ? 0 : width }}
+      className="relative flex shrink-0 flex-col overflow-hidden"
+      style={{ width: collapsed ? 0 : width }}
       aria-hidden={hidden}
     >
-      <div className="flex h-full flex-col" style={{ width, minWidth: width }}>
+      <div
+        className={cx(
+          "flex h-full flex-col bg-sidebar transition-[translate] duration-200 ease-snappy",
+          hidden ? "-translate-x-full" : "translate-x-0",
+        )}
+        style={{ width, minWidth: width }}
+      >
         <TitlebarRow className="justify-end pr-2.5">
           <Cluster>
             <ClusterButton label="Hide sidebar" tooltip="Hide sidebar (⌘B)" onClick={toggleSidebar}>
@@ -727,11 +744,7 @@ export function Sidebar() {
           className="min-h-0 flex-1 overflow-y-auto px-2 pb-6"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
-          {!sessionsLoaded && (
-            <div className="flex items-center gap-2 px-2.5 py-3 text-callout text-fg-muted">
-              <Spinner /> Loading threads…
-            </div>
-          )}
+          {!sessionsLoaded && <ThreadRowsSkeleton />}
           {sessionsLoaded && !filtered.length && (
             <div className="px-2.5 py-3 text-callout text-fg-muted">
               {query
@@ -781,5 +794,21 @@ export function Sidebar() {
         </div>
       )}
     </aside>
+  );
+}
+
+/** Where the thread list will be: a section header and rows of a title and a meta line. */
+const SKELETON_ROWS = [72, 56, 84, 64, 48, 76, 60];
+function ThreadRowsSkeleton() {
+  return (
+    <div className="flex flex-col pt-1" role="status" aria-label="Loading threads">
+      <Skeleton className="mx-2.5 mt-2 mb-3 h-2.5 w-16" />
+      {SKELETON_ROWS.map((w, i) => (
+        <div key={i} className="flex flex-col gap-1.5 px-2.5 py-[7px]">
+          <Skeleton className="h-3" style={{ width: `${w}%` }} />
+          <Skeleton className="h-2" style={{ width: `${Math.round(w * 0.55)}%` }} />
+        </div>
+      ))}
+    </div>
   );
 }

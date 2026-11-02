@@ -38,10 +38,10 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | Token | Use | Default dark | Default light |
 |---|---|---|---|
 | `bg` | The chat and main panes | `#0b0b0c` | `#ffffff` |
-| `sidebar` | The sidebar | `#0e0e10` | `#f7f7f8` |
-| `surface` | Resting cards: composer, settings groups, error cards | `#141416` | `#f4f4f5` |
-| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#1a1a1d` | `#ffffff` |
-| `surface-3` | Raised over raised: a selected segment, kbd | `#232327` | `#e9e9eb` |
+| `sidebar` | The sidebar | `#131315` | `#f7f7f8` |
+| `surface` | Resting cards: composer, settings groups, error cards | `#18181a` | `#f0f0f1` |
+| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#1e1e21` | `#ffffff` |
+| `surface-3` | Raised over raised: a selected segment, kbd | `#232327` | `#e8e8ea` |
 | `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0f` | `#0000000f` |
 | `border-strong` | Inputs, dividers that must read | `#ffffff1c` | `#0000001f` |
 | `text` | Primary text and icons | `#ededed` | `#171717` |
@@ -56,6 +56,12 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | `selection` | Selected text | `#5b8def4d` | `#2f6fe433` |
 | `code-bg` | Code blocks, diffs, terminal | `#111113` | `#f6f6f7` |
 | `scrollbar` | Scrollbar thumb | `#ffffff26` | `#00000026` |
+
+The surfaces step evenly in lightness (CIE L\*): dark `bg` 3.0, `sidebar`
+6.0, `surface` 8.3, `surface-2` 11.4, `surface-3` 13.9; light `bg` 100,
+`sidebar` 97.3, `surface` 94.8, `surface-3` 92.1, with light `surface-2`
+white (raised surfaces are lifted by their shadow there). A theme that
+changes them should keep the steps even.
 
 Derived values are computed from the tokens in `index.css` and are never
 set by a theme:
@@ -85,7 +91,7 @@ the accent marks state (on, selected, linked), it does not shout.
 | xs | 4 | `rounded-xs` | kbd, inline code, tiny badges, checkboxes |
 | sm | 6 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
 | md | 8 | `rounded-md` | Buttons that are not pills, sidebar rows, menu items, list rows, inputs, tooltips |
-| lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), popovers, menus, toasts |
+| lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), popovers, menus, toasts, pictures in replies |
 | xl | 16 | `rounded-xl` | The composer, dialogs, the command palette, large panels |
 | full | — | `rounded-full` | Pills, toolbar clusters, switches, segmented controls, avatars, dots |
 
@@ -119,8 +125,8 @@ inside a padded parent uses the step below the parent's.
 Two levels, both including the 1px edge ring:
 
 - `--rc-shadow-1` (`shadow-1`): things resting above the chat: the
-  jump-to-latest button, toasts, queued messages, error cards over the
-  transcript. (The composer has its own softer two-sided shadow.)
+  jump-to-latest button, queued messages, error cards over the
+  transcript. (The composer and toasts share a softer two-sided shadow.)
 - `--rc-shadow-2` (`shadow-2`): things that open over everything:
   popovers, menus, tooltips, dialogs, the command palette.
 
@@ -136,8 +142,16 @@ at 80% for popovers, menus and the focused composer) with
 `--rc-glass-filter` (`saturate(1.5) blur(22px)`). Use `.rc-glass` or the
 `elevated` utility, never a hand-made `backdrop-filter`. Reduce
 transparency (the media query, or the system setting the shell reads)
-turns the pair solid. The header over a new thread's banner (`.rc-frost`)
-is the one other blur. Panes, cards, rows and the sidebar stay opaque.
+turns the pair solid. Headers use the same filter tinted with the pane
+instead of a surface (`--rc-glass-pane`, `bg` at 72%; 45% with `.rc-frost`
+over a new thread's banner), through `.rc-header-glass`. Panes, cards,
+rows and the sidebar stay opaque.
+
+Glass is cheap where it is: WebKit draws `backdrop-filter` as a
+CoreAnimation backdrop layer, and turning every blur off changed no frame
+or CPU number measurably (docs/desktop.md › Native frame rate). Keep it
+to the one filter on floating surfaces and headers: no larger radius, no
+second blur stacked on the first, no blur on a pane or a scrolling row.
 
 ## Spacing
 
@@ -179,7 +193,18 @@ that change use `tabular`.
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
   sections.
-- `prefers-reduced-motion`: all durations collapse to ~0; shimmer stops.
+- Panels and sheets never animate a slot's `width`, `height`, `top` or
+  grid rows across the chat: every frame would reflow the transcript (40 ms
+  of work a frame for the right panel, so well under 120 fps). The slot
+  takes its size at once and the panel moves with `transform` and
+  `opacity` (`rc-drill` in, `translate`/`opacity` out). Animate only
+  `transform`, `opacity` and colour; never `filter` or `box-shadow` on
+  something that moves every frame.
+- Toasts come in with `rc-in` (200ms, fade + 4px) and leave in 120ms
+  `ease-in`; a swipe follows the pointer and snaps back in 160ms.
+- Skeletons sweep once every 1.6s (`transform` only, on the compositor).
+- `prefers-reduced-motion`: all durations collapse to ~0; shimmer and the
+  skeleton sweep stop.
 
 ## Tooltips
 
@@ -240,17 +265,67 @@ panels `rounded-xl`.
   highlighted `bg-fill` (not accent); destructive items `text-danger`,
   highlighted `bg-danger/12`.
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
-- **Toast:** `elevated rounded-full px-4 py-1.5 text-callout`.
+- **Toast:** `.rc-toast rounded-lg` (the composer's glass, denser, and its
+  two-sided shadow), 340px wide, `py-2 pl-3 pr-1.5 text-callout`: an icon
+  (info `text-fg-muted`, success `text-success`, error `text-danger`, a
+  spinner while it has progress), the text in `text-fg` (up to 4 lines,
+  selectable), at most one action as a secondary pill (`h-6 bg-fill`), and
+  a close button. Progress is a 2px accent bar along its foot. One stack
+  (`Toaster`), bottom right of the chat column, 12px above the composer
+  stack and 16px from the column's edge (the window's corner over
+  Settings); newest lowest, three at most. Info and success leave after
+  4s, errors stay; hover pauses; swipe right or close dismisses. Use a
+  toast for what is not tied to a message (copied, engine, worktree,
+  harness and theme events, errors of an action); an error about a
+  thread's turn stays an error card over the composer. No banners.
+- **Skeleton:** `Skeleton` (`.rc-skeleton`): `fill-subtle` blocks the shape
+  of what will appear (a text line `h-3`, a meta line `h-2`, a pill
+  `rounded-full`), radius `sm` unless the real thing is rounder, varied
+  widths so it does not read as a grid. Use it where content will appear
+  (thread rows, the model pill, a transcript, Settings lists), never a
+  spinner with "Loading…". A container of skeletons has `role="status"`
+  and a label. Long waits on something that is not content (the engine
+  starting) get a toast after 2s instead.
+- **Header:** `MainHeader`, 42px, `.rc-header-glass` floating over its
+  view (`absolute`, z 10): the view starts its content `HEADER_HEIGHT`
+  down and scrolls under it, and the glass fades out over 24px below the
+  header's edge, as the transcript fades above the composer. Every view
+  that has a header uses this one (the chat, new or open; Settings).
+- **Settings:** the whole window (the shell stays mounted underneath,
+  hidden). Header: Back (a ghost pill with a chevron) and the title, on
+  the traffic lights' line. Body: one centred column, `max-w-[760px]`, the
+  section list (164px, sticky, rows per the Row recipe) at its left, the
+  page (title2 heading, then groups) beside it.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
-- **Composer:** `.rc-composer rounded-xl p-2` in glass (`--rc-glass-bg`,
-  denser on focus), a soft shadow above and below plus the edge ring; no
-  ring or colour on focus. The **+** is a filled circle (`bg-fill`). Its
+- **Composer:** `.rc-composer rounded-xl p-2` in the denser glass
+  (`--rc-glass-bg-strong`, `surface-2` at 90% on focus), a soft shadow
+  above and below plus the edge ring; no ring or colour on focus. Its
+  controls rest one step above it: the **+** and the model pill are
+  `bg-fill-subtle`, `bg-fill` on hover, `bg-fill-strong` when open. Its
   tray (`.rc-composer-tray`) is tucked under the box as in the SwiftUI app:
   12px narrower each side, its top 18px hidden behind the box (which sits
   above it in z), only its rounded bottom showing; solid `surface-2`, no
-  border. The transcript scrolls under both (its bottom padding is the
+  border. The tray is `min-h-[58px]` with `px-1.5 pb-1.5`, so its 28px
+  buttons have the same 6px above them (to the box's edge) as at its
+  sides and foot. The transcript scrolls under both (its bottom padding is the
   stack's height) and fades out from 56px above the box.
+- **Turn fold:** while a turn runs, every step shows as it streams
+  (thoughts, tool calls with status and output, subagents). When it ends,
+  its work folds into one summary row where the work began, above the
+  final answer: `Worked for 1m 20s · 14 steps · 3 files changed · 1 failed`
+  (`text-callout text-fg-faint`, hover `text-fg-muted`, a chevron that
+  turns 90° when open, a `CircleX` in `danger` when a step failed). What
+  stays visible: the message sent, the final answer (the replies after the
+  last step), warnings and errors, and the footer (time, copy, Changes),
+  which then leaves out the duration. Opening it shows the steps in order,
+  each fading in with `rc-expand` (opacity and 4px, so nothing lays out
+  under a transition; Reduce motion makes it instant). A `<button
+  aria-expanded>`, so ⏎ and Space toggle it. Opened turns are kept per
+  thread while the app runs; an opened old thread starts with every turn
+  folded; find in thread opens them all while it searches. Folded steps are
+  not rows at all, so the virtualizer and the timeline rail have fewer.
+  Logic: `state/fold.ts` (`foldTurns`).
 - **Right panel:** one `RightPanel` for every side view (Changes, Agents,
   Pull requests): floating, inset 8px from the window's top, right and
   bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has

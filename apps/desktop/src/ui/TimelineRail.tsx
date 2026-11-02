@@ -44,6 +44,7 @@ export const TimelineRail = memo(function TimelineRail({
   current,
   width,
   visible,
+  offset = 0,
   onJump,
 }: {
   turns: Turn[];
@@ -52,6 +53,8 @@ export const TimelineRail = memo(function TimelineRail({
   /** The transcript's width and the height of its visible part (above the composer). */
   width: number;
   visible: number;
+  /** Where the visible part starts (under a floating header). */
+  offset?: number;
   onJump: (row: number) => void;
 }) {
   const place = railPlacement(width);
@@ -64,8 +67,8 @@ export const TimelineRail = memo(function TimelineRail({
   return (
     <nav
       aria-label="Thread timeline"
-      className="rc-fade-in pointer-events-none absolute top-0 z-10"
-      style={{ left: place.x, width: place.width, height: visible }}
+      className="rc-fade-in pointer-events-none absolute z-10"
+      style={{ top: offset, left: place.x, width: place.width, height: visible }}
     >
       {turns.slice(first, first + shown).map((turn, i) => {
         const index = first + i;

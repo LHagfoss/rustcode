@@ -4,6 +4,7 @@
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { Tooltip as RadixTooltip } from "radix-ui";
 import { type ButtonHTMLAttributes, forwardRef, type ReactNode } from "react";
+import { errorText, toast } from "../state/store";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
@@ -34,6 +35,15 @@ export function Spinner({ size = 12, className }: { size?: number; className?: s
       />
     </svg>
   );
+}
+
+/**
+ * A placeholder block where content will appear (docs/design.md, Loading):
+ * `fill-subtle`, swept by a soft highlight that stops under reduced motion.
+ * Size and radius come from the caller's classes.
+ */
+export function Skeleton({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return <span aria-hidden className={cx("rc-skeleton block", className)} style={style} />;
 }
 
 export function Tooltip({
@@ -225,8 +235,12 @@ export function Segments<T extends string>({
   );
 }
 
+/** Copies to the clipboard and says so in a toast; a failure says that instead. */
 export function copyText(text: string): Promise<void> {
-  return navigator.clipboard.writeText(text);
+  return navigator.clipboard.writeText(text).then(
+    () => void toast("Copied", "success"),
+    (error) => void toast(`Could not copy: ${errorText(error)}`, "error"),
+  );
 }
 
 /**

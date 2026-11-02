@@ -10,6 +10,8 @@ mod native;
 mod pty;
 mod smartui;
 mod threads;
+mod updater;
+mod webview;
 
 use engine::{Engine, EngineEvent};
 use std::sync::Arc;
@@ -59,6 +61,7 @@ pub fn run() {
             native::open_login_terminal,
             native::git_changes,
             native::read_image,
+            native::thread_image,
             native::open_terminal_at,
             native::reduce_transparency,
             native::open_path,
@@ -75,10 +78,15 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_close,
             smartui::smartui_page,
+            updater::update_check,
+            updater::update_install,
+            webview::display_info,
         ])
         .setup(|app| {
             // The engine starts with the app, in parallel with the webview loading the UI.
             app.state::<EngineState>().prestart();
+            // Built here, not from the config, so it renders at 120 Hz where the display does.
+            webview::build_main_window(app)?;
             Ok(())
         })
         .build(tauri::generate_context!())

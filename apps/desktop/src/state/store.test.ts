@@ -9,8 +9,11 @@ import {
   completeOnboarding,
   connect,
   editMessage,
+  ensureHarnessModels,
   fetchHarnessModels,
+  pickNewThreadChoice,
   refreshAgents,
+  refreshHarnesses,
   refreshSessions,
   renameThread,
   resetForTests,
@@ -25,6 +28,7 @@ import {
   setThreadStatus,
   statusOf,
   submit,
+  switchNewThreadHarness,
   togglePin,
   trashThread,
   useApp,
@@ -264,5 +268,131 @@ describe("engine controller with the mock engine", () => {
     await setThreadStatus(id, "idle");
     expect(statusOf(useApp.getState(), id)).toBe("idle");
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
+  });
+});
+
+describe("model picker", () => {
+  test("a new thread on an external harness lists its models once asked", async () => {
+    const { pickerModels } = await import("../ui/ModelPicker");
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    const codex = () => useApp.getState().harnesses!.harnesses.find((h) => h.id === "codex")!;
+    const choice = { harness: "codex", model: null, effort: null };
+    // `_rustcode/harnesses` leaves an external harness's models empty until asked.
+    expect(pickerModels(undefined, codex(), choice, []).models).toEqual([]);
+    await ensureHarnessModels("codex");
+    const picked = pickerModels(undefined, codex(), choice, []);
+    expect(picked.models.length).toBeGreaterThan(0);
+    expect(picked.model).toBe(picked.models[0]!.value);
+    expect(picked.efforts.length).toBeGreaterThan(1);
+  });
+
+  test("an existing thread offers its config options", async () => {
+    const { pickerModels } = await import("../ui/ModelPicker");
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    selectThread(useApp.getState().sessions[0]!.id);
+    await until(() => selected()?.loaded === true);
+    const picked = pickerModels(
+      selected(),
+      undefined,
+      { harness: "rustcode", model: null, effort: null },
+      [],
+    );
+    expect(picked.models.length).toBeGreaterThan(1);
+    expect(picked.model).toBeTruthy();
+    expect(picked.efforts.length).toBeGreaterThan(1);
+  });
+});
+
+describe("model memory per harness (#2797, #2798)", () => {
+  test("switching harness in the new-thread picker restores each one's last model and effort", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    expect(useApp.getState().harnesses?.remembers).toBe(true);
+    await ensureHarnessModels("codex");
+    pickNewThreadChoice({ harness: "codex", model: "gpt-6-astra", effort: "high" });
+    switchNewThreadHarness("rustcode");
+    expect(useApp.getState().newThread?.harness).toBe("rustcode");
+    switchNewThreadHarness("codex");
+    expect(useApp.getState().newThread).toEqual({ harness: "codex", model: "gpt-6-astra", effort: "high" });
+    // The engine kept it: a fresh snapshot (as after a restart) carries it.
+    const snapshot = await refreshHarnesses();
+    expect(snapshot?.harnesses.find((h) => h.id === "codex")?.last).toEqual({
+      model: "gpt-6-astra",
+      effort: "high",
+    });
+    // A new thread on it starts there.
+    setProjectCwd("/tmp/project");
+    const done = submit("yolo hello");
+    await until(() => selected() !== undefined);
+    expect(selected()!.harness?.id).toBe("codex");
+    expect(selected()!.configOptions.find((o) => o.id === "model")?.current).toBe("gpt-6-astra");
+    await done;
+  });
+
+  test("a restored external thread asks for its harness's models and offers them", async () => {
+    const { pickerModels } = await import("../ui/ModelPicker");
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    selectThread("mock-thread-2");
+    await until(() => selected()?.loaded === true);
+    expect(selected()!.harness?.id).toBe("codex");
+    expect(selected()!.configOptions.find((o) => o.id === "model")?.choices).toHaveLength(1);
+    const codex = () => useApp.getState().harnesses!.harnesses.find((h) => h.id === "codex")!;
+    await until(() => codex().models.length > 0);
+    const picked = pickerModels(selected(), codex(), { harness: "codex", model: null, effort: null }, []);
+    expect(picked.models.map((m) => m.value)).toEqual(["gpt-6-luna", "gpt-6-astra"]);
+    expect(picked.model).toBe("gpt-6-luna");
+    expect(picked.efforts).toEqual(["low", "medium", "high"]);
+    expect(picked.effort).toBe("medium");
+  });
+
+  test("a failed model listing is asked again, not cached", async () => {
+    const transport = new MockTransport({ delayMs: 0 });
+    let asked = 0;
+    const send = transport.send.bind(transport);
+    transport.send = (line: string) => {
+      if (line.includes("_rustcode/harnesses/models")) asked++;
+      return send(line);
+    };
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    // Claude Code needs a sign-in in the mock: the listing fails.
+    await ensureHarnessModels("claude-code");
+    await ensureHarnessModels("claude-code");
+    expect(asked).toBe(2);
+  });
+
+  test("the new-thread slider starts on the model's default effort", async () => {
+    const { pickerModels } = await import("../ui/ModelPicker");
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    const rustcode = useApp.getState().harnesses!.harnesses.find((h) => h.id === "rustcode")!;
+    const picked = pickerModels(undefined, rustcode, { harness: "rustcode", model: null, effort: null }, []);
+    expect(picked.efforts.length).toBeGreaterThan(1);
+    expect(picked.effort).toBe("medium");
+  });
+});
+
+describe("toasts", () => {
+  test("errors persist, a repeat restarts the shown one, an id replaces in place", async () => {
+    const { toast, dismissToast } = await import("./store");
+    toast("Copied", "success");
+    toast("Copied", "success");
+    expect(useApp.getState().toasts.length).toBe(1);
+    expect(useApp.getState().toasts[0]!.persist).toBe(false);
+    toast("Could not save", "error");
+    expect(useApp.getState().toasts.at(-1)!.persist).toBe(true);
+    toast("Starting engine…", "info", { id: "engine", persist: true, progress: 0.2 });
+    toast("The engine stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
+    const engine = useApp.getState().toasts.filter((t) => t.id === "engine");
+    expect(engine.length).toBe(1);
+    expect(engine[0]!.action?.label).toBe("Restart");
+    // Replacing a toast that is fading out keeps the new one.
+    dismissToast("engine");
+    toast("The engine restarted", "success", { id: "engine" });
+    await new Promise((r) => setTimeout(r, 160));
+    expect(useApp.getState().toasts.find((t) => t.id === "engine")?.text).toBe("The engine restarted");
   });
 });

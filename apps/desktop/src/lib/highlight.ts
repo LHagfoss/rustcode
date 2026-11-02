@@ -1,49 +1,9 @@
-// design-lint: allow-file (Shiki's syntax palette (Xcode's colours))
-// Syntax highlighting with Shiki, loaded lazily: the highlighter and each
-// language arrive on first use. Two small themes carry the Xcode colours the
-// SwiftUI app uses (CodeStyle.swift); CSS picks light or dark per token.
+// Syntax highlighting with Shiki, in a worker (lib/highlight.worker.ts): the
+// highlighter and each language load there on first use, so neither the
+// grammar compile nor a long block ever runs on the main thread. Highlighted
+// HTML is cached here, so a remounted block draws its colours in its first frame.
 
-import type { HighlighterGeneric, ThemeRegistration } from "shiki";
-
-const scopes = (light: string, dark: string, scope: string[]) => ({ light, dark, scope });
-
-const RULES = [
-  scopes("#9B2393", "#FC5FA3", [
-    "keyword",
-    "storage",
-    "storage.type",
-    "keyword.control",
-    "constant.language",
-    "variable.language",
-  ]),
-  scopes("#C41A16", "#FC6A5D", [
-    "string",
-    "string.quoted",
-    "string.template",
-    "punctuation.definition.string",
-  ]),
-  scopes("#5D6C79", "#7F8C98", ["comment", "punctuation.definition.comment"]),
-  scopes("#1C00CF", "#D0BF69", ["constant.numeric", "constant.character"]),
-  scopes("#0B4F79", "#5DD8FF", [
-    "entity.name.type",
-    "entity.name.class",
-    "support.type",
-    "support.class",
-    "entity.other.inherited-class",
-  ]),
-];
-
-function theme(name: string, mode: "light" | "dark"): ThemeRegistration {
-  return {
-    name,
-    type: mode,
-    colors: {
-      "editor.foreground": mode === "light" ? "#1f1f1f" : "#e6e6e6",
-      "editor.background": "#00000000",
-    },
-    tokenColors: RULES.map((r) => ({ scope: r.scope, settings: { foreground: r[mode] } })),
-  };
-}
+import type { HighlightRequest, HighlightResponse } from "./highlight.worker";
 
 const ALIASES: Record<string, string> = {
   sh: "bash",
@@ -62,23 +22,42 @@ const ALIASES: Record<string, string> = {
   plaintext: "text",
 };
 
-let highlighter: Promise<HighlighterGeneric<string, string>> | null = null;
-const loaded = new Set<string>(["text"]);
 const failed = new Set<string>();
 
-function getHighlighter() {
-  highlighter ??= (async () => {
-    const [{ createHighlighter }, { createJavaScriptRegexEngine }] = await Promise.all([
-      import("shiki"),
-      import("shiki/engine/javascript"),
-    ]);
-    return createHighlighter({
-      themes: [theme("rc-light", "light"), theme("rc-dark", "dark")],
-      langs: [],
-      engine: createJavaScriptRegexEngine(),
-    }) as Promise<HighlighterGeneric<string, string>>;
-  })();
-  return highlighter;
+let worker: Worker | null | undefined;
+let nextId = 0;
+const pending = new Map<number, (html: string | null) => void>();
+
+/** The highlighter worker; null where there is none (then code stays plain). */
+function getWorker(): Worker | null {
+  if (worker !== undefined) return worker;
+  try {
+    worker = new Worker(new URL("./highlight.worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (event: MessageEvent<HighlightResponse>) => {
+      pending.get(event.data.id)?.(event.data.html);
+      pending.delete(event.data.id);
+    };
+    worker.onerror = () => {
+      // A worker that failed to start or crashed: everything waiting, and later, renders plain.
+      worker?.terminate();
+      worker = null;
+      for (const done of pending.values()) done(null);
+      pending.clear();
+    };
+  } catch {
+    worker = null;
+  }
+  return worker;
+}
+
+function render(code: string, language: string): Promise<string | null> {
+  const w = getWorker();
+  if (!w) return Promise.resolve(null);
+  const id = ++nextId;
+  return new Promise((resolve) => {
+    pending.set(id, resolve);
+    w.postMessage({ id, code, language } satisfies HighlightRequest);
+  });
 }
 
 export function normalizeLang(lang: string | undefined): string {
@@ -114,21 +93,12 @@ export async function highlight(code: string, lang: string | undefined): Promise
   const cached = peekHighlight(code, lang);
   if (cached !== undefined) return cached;
   const language = normalizeLang(lang);
-  const h = await getHighlighter();
-  if (!loaded.has(language)) {
-    try {
-      await h.loadLanguage(language as never);
-      loaded.add(language);
-    } catch {
-      failed.add(language);
-      return null;
-    }
+  const html = await render(code, language);
+  if (html === null) {
+    // Unknown to Shiki, or no worker: plain from now on.
+    failed.add(language);
+    return null;
   }
-  const html = h.codeToHtml(code, {
-    lang: language,
-    themes: { light: "rc-light", dark: "rc-dark" },
-    defaultColor: false,
-  });
   remember(`${language}\u0000${code}`, html);
   return html;
 }

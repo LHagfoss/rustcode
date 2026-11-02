@@ -286,24 +286,26 @@ impl AcpAdapter {
             state,
             killed: AtomicBool::new(false),
         };
+        // Read before the thread's own choice is applied, so each model's
+        // default effort is the harness's and not this thread's.
+        let has_effort = adapter
+            .config_options()
+            .iter()
+            .any(|option| option.id.0.as_ref() == "effort");
+        let models = adapter.models();
         if let Some(model) = options.model {
             let _ = adapter.set_config("model", json!(model)).await;
         }
         if let Some(effort) = options.effort {
             let _ = adapter.set_config("effort", json!(effort)).await;
         }
-        let has_effort = adapter
-            .config_options()
-            .iter()
-            .any(|option| option.id.0.as_ref() == "effort");
-        let models = adapter.models();
         super::learn(&harness.id, |learned| {
             learned.resume = Some(load_session);
             learned.images = Some(images);
             learned.effort = Some(has_effort);
             learned.error = None;
             if !models.is_empty() {
-                learned.models = Some(models);
+                learned.listed(&harness.id, models);
             }
         });
         Ok(adapter)

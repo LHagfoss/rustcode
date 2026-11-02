@@ -14,6 +14,10 @@ export interface MockOptions {
   scenario?: string;
   /** Milliseconds between streamed chunks; 0 for tests. */
   delayMs?: number;
+  /** Milliseconds the engine takes to start (`?boot=`), to see the slow-start toast. */
+  bootMs?: number;
+  /** Crash this many ms after the first start (`?crash=`); it comes back after `bootMs`, as the shell restarts it. */
+  crashAfterMs?: number;
 }
 
 interface MockThread {
@@ -200,6 +204,11 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
   };
 }
 
+/** Each harness's remembered new-thread choice, as the engine's snapshot carries it (`last`). */
+function withLast(snapshot: HarnessSnapshot): HarnessSnapshot {
+  return { ...snapshot, harnesses: snapshot.harnesses.map((h) => ({ ...h, last: h.last ?? null })) };
+}
+
 const HARNESS_MODELS: Record<
   string,
   { id: string; name: string; efforts: string[]; default_effort?: string }[]
@@ -333,7 +342,7 @@ function seedThreads(): MockThread[] {
         update(b, {
           sessionUpdate: "agent_message_chunk",
           content: text(
-            "It doubles from 0.5 s up to 30 s, and resets after the engine stays up for a minute. See https://github.com/LHagfoss/rustcode/pull/2788 and the timer in https://docs.rs/tokio/latest/tokio/time/fn.sleep.html.",
+            "It doubles from 0.5 s up to 30 s, and resets after the engine stays up for a minute. See https://github.com/LHagfoss/rustcode/pull/2788 and the timer in https://docs.rs/tokio/latest/tokio/time/fn.sleep.html.\n\n```mermaid\nflowchart LR\n  A[Engine exits] --> B{Up for a minute?}\n  B -- yes --> C[Reset to 0.5 s]\n  B -- no --> D[Double the wait, max 30 s]\n  C --> E[Restart]\n  D --> E\n```\n\n![The backoff over time](docs/backoff.png)",
           ),
           ...turn(4_000),
         }),
@@ -516,7 +525,7 @@ export class MockEngine {
   ) {
     const scenario = options.scenario ?? "default";
     this.threads = scenario === "default" ? seedThreads() : [];
-    this.harnesses = initialHarnesses(scenario !== "onboarding");
+    this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
   }
 
   private get delay() {
@@ -651,11 +660,13 @@ export class MockEngine {
           harness,
           model:
             str(meta?.model) ??
+            h.last?.model ??
             (harness === this.harnesses.default.harness ? this.harnesses.default.model : null) ??
             (harness === "rustcode" ? "chatgpt/gpt-6-luna" : (HARNESS_MODELS[harness]?.[0]?.id ?? "default")),
           // Like the real engine, the built-in harness takes its effort from config, not from `session/new`.
           effort:
             (harness === "rustcode" ? undefined : str(meta?.effort)) ??
+            h.last?.effort ??
             this.harnesses.default.effort ??
             "medium",
           history: [],
@@ -692,8 +703,22 @@ export class MockEngine {
           }),
         );
         const h = this.harnesses.harnesses.find((x) => x.id === thread.harness);
+        // Like the engine before a harness ever listed its models: a restored external thread knows
+        // only its own model, until `_rustcode/harnesses/models` ran.
+        const unlisted = !!h && !h.builtin && !h.models.length;
         return {
-          configOptions: configOptions(thread, this.harnesses),
+          configOptions: unlisted
+            ? [
+                {
+                  id: "model",
+                  name: "Model",
+                  category: "model",
+                  type: "select",
+                  currentValue: thread.model,
+                  options: [{ value: thread.model, name: thread.model }],
+                },
+              ]
+            : configOptions(thread, this.harnesses),
           _meta: {
             rustcode: { harness: { id: thread.harness, capabilities: (h?.capabilities ?? {}) as Json } },
           },
@@ -706,6 +731,11 @@ export class MockEngine {
         const value = str(params.value);
         if (params.configId === "model" && value) thread.model = value;
         if (params.configId === "effort" && value) thread.effort = value;
+        // Like the engine: a thread's pick is also its harness's next new-thread choice.
+        const picked = this.harnesses.harnesses.find((x) => x.id === thread.harness);
+        if (picked && (params.configId === "model" || params.configId === "effort")) {
+          picked.last = { model: thread.model, effort: thread.effort };
+        }
         return { configOptions: configOptions(thread, this.harnesses) };
       }
       case "session/cancel": {
@@ -985,6 +1015,15 @@ export class MockEngine {
           effort: str(params.effort) ?? null,
         };
         return this.snapshot();
+      case "_rustcode/harnesses/remember": {
+        const id = str(params.harness) ?? "";
+        const h = this.harnesses.harnesses.find((x) => x.id === id);
+        if (!h) throw Object.assign(new Error(`unknown harness '${id}'`), { code: -32602 });
+        const model = str(params.model) ?? null;
+        const effort = str(params.effort) ?? null;
+        h.last = model || effort ? { model, effort } : null;
+        return { harness: id, last: (h.last ?? null) as unknown as Json };
+      }
       case "_rustcode/onboarding/complete":
         this.harnesses.onboarded = true;
         return this.snapshot();
@@ -1538,9 +1577,19 @@ export class MockTransport implements Transport {
       (line) => queueMicrotask(() => onEvent({ type: "line", line })),
       this.options,
     );
+    if (this.options.bootMs) await new Promise((r) => setTimeout(r, this.options.bootMs));
     onEvent({ type: "log", line: "mock engine started" });
     onEvent({ type: "open", engine: "mock" });
+    const crash = this.options.crashAfterMs;
+    if (crash && !this.crashed) {
+      this.crashed = true;
+      setTimeout(() => {
+        onEvent({ type: "closed", reason: "The engine exited unexpectedly (signal 9)." });
+        void this.start(onEvent);
+      }, crash);
+    }
   }
+  private crashed = false;
 
   async restart(): Promise<void> {
     const onEvent = this.onEvent;
@@ -1566,6 +1615,14 @@ export class MockTransport implements Transport {
       command === "open_in_editor"
     )
       return null;
+    if (command === "thread_image") {
+      // A drawn stand-in for any picture inside the thread's folder; the shell's rules decide the rest.
+      const path = String(args.path);
+      if (path.startsWith("/") && !path.startsWith(String((args.roots as string[])[0] ?? "")))
+        throw new Error("Pictures outside the thread's folder are not shown.");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#5b8def" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
+      return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
+    }
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
     throw new Error(`The mock does not run ${command}.`);
   }

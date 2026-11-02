@@ -29,6 +29,11 @@ tokio = { version = "1", features = ["net", "time"] }
 # The workspace terminal (src/pty.rs).
 portable-pty = "0.9"
 
+# The web view's frame-rate preference (src/webview.rs); the versions tauri/wry already use.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.5"
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 

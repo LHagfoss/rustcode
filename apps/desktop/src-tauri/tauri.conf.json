@@ -13,6 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
+        "create": false,
         "title": "RustCode",
         "width": 1280,
         "height": 820,

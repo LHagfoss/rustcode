@@ -9,6 +9,7 @@
 //! the thread.
 
 pub(crate) mod acp_child;
+pub(crate) mod cache;
 pub(crate) mod codex;
 pub mod config;
 pub(crate) mod detect;
@@ -250,7 +251,9 @@ pub(crate) fn resolve(entries: &[config::HarnessEntry], id: &str) -> Option<Reso
         .find(|harness| harness.id == id)
 }
 
-/// What the engine learned about a harness while running it.
+/// What the engine learned about a harness while running it. Kept in
+/// memory and in the config directory's model cache ([`cache`]), so a
+/// restarted engine still knows a harness's models and capabilities.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Learned {
     pub models: Option<Vec<HarnessModel>>,
@@ -258,6 +261,20 @@ pub(crate) struct Learned {
     pub resume: Option<bool>,
     pub images: Option<bool>,
     pub effort: Option<bool>,
+    /// Unix seconds of the last model listing.
+    pub fetched_at: Option<i64>,
+    /// The harness version that listing came from, when known.
+    pub version: Option<String>,
+}
+
+impl Learned {
+    /// The harness `id` just listed `models`.
+    pub(crate) fn listed(&mut self, id: &str, models: Vec<HarnessModel>) {
+        self.models = Some(models);
+        self.fetched_at = Some(cache::now());
+        self.version = detect::cached_version(id).or(self.version.take());
+        self.error = None;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,18 +292,45 @@ fn learned() -> &'static Mutex<HashMap<String, Learned>> {
     LEARNED.get_or_init(Default::default)
 }
 
+/// The entry of `id`, read from the model cache the first time.
+fn learned_slot<'a>(
+    learned: &'a mut HashMap<String, Learned>,
+    id: &str,
+    dir: Option<&std::path::Path>,
+) -> &'a mut Learned {
+    learned.entry(id.to_owned()).or_insert_with(|| {
+        dir.and_then(|dir| cache::load_in(dir, id))
+            .map(cache::to_learned)
+            .unwrap_or_default()
+    })
+}
+
 pub(crate) fn learn(id: &str, update: impl FnOnce(&mut Learned)) {
-    let mut learned = learned().lock().unwrap_or_else(|error| error.into_inner());
-    update(learned.entry(id.to_owned()).or_default());
+    let dir = config::config_dir().ok();
+    let keep = {
+        let mut learned = learned().lock().unwrap_or_else(|error| error.into_inner());
+        let slot = learned_slot(&mut learned, id, dir.as_deref());
+        update(slot);
+        cache::from_learned(slot)
+    };
+    if let (Some(dir), Some(entry)) = (dir, keep) {
+        cache::save_in(&dir, id, entry);
+    }
 }
 
 pub(crate) fn learned_for(id: &str) -> Learned {
+    let dir = config::config_dir().ok();
+    let mut learned = learned().lock().unwrap_or_else(|error| error.into_inner());
+    learned_slot(&mut learned, id, dir.as_deref()).clone()
+}
+
+/// Drop what memory holds for `id`, as an engine restart does (tests).
+#[cfg(test)]
+pub(crate) fn forget_learned(id: &str) {
     learned()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .get(id)
-        .cloned()
-        .unwrap_or_default()
+        .remove(id);
 }
 
 pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
@@ -304,7 +348,20 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
     if let Some(effort) = learned.effort {
         capabilities.effort = effort;
     }
+    // A model with efforts listed means the harness takes one.
+    if learned
+        .models
+        .as_ref()
+        .is_some_and(|models| models.iter().any(|model| !model.efforts.is_empty()))
+    {
+        capabilities.effort = true;
+    }
     capabilities
+}
+
+/// `session_meta` of a built-in thread.
+pub(crate) fn builtin_session_meta() -> serde_json::Map<String, Value> {
+    session_meta(&builtin_resolved(), true)
 }
 
 /// The thread metadata that names its harness, for `session/new` answers.
@@ -322,7 +379,11 @@ pub(crate) fn session_meta(
 }
 
 /// One `harnesses` row of the snapshot.
-fn snapshot_entry(harness: &ResolvedHarness, detection: &detect::Detection) -> Value {
+fn snapshot_entry(
+    harness: &ResolvedHarness,
+    detection: &detect::Detection,
+    entries: &[config::HarnessEntry],
+) -> Value {
     let learned = learned_for(&harness.id);
     let builtin = harness.kind == HarnessKind::Builtin;
     let models = if builtin {
@@ -330,6 +391,11 @@ fn snapshot_entry(harness: &ResolvedHarness, detection: &detect::Detection) -> V
     } else {
         learned.models.clone().unwrap_or_default()
     };
+    let last = entries
+        .iter()
+        .find(|entry| entry.id == harness.id)
+        .filter(|entry| entry.model.is_some() || entry.effort.is_some())
+        .map(|entry| json!({ "model": entry.model, "effort": entry.effort }));
     json!({
         "id": harness.id,
         "name": harness.name,
@@ -344,21 +410,43 @@ fn snapshot_entry(harness: &ResolvedHarness, detection: &detect::Detection) -> V
         "install_hint": harness.known.and_then(|known| known.install_hint),
         "capabilities": capabilities(harness),
         "models": models,
+        // The model and effort last chosen for a new thread on it.
+        "last": last,
         "error": learned.error.or_else(|| detection.error.clone()),
     })
 }
 
-/// The built-in harness's model profiles.
+/// The built-in harness's model profiles, each with the reasoning efforts
+/// its `effort` option offers (none when it offers no choice) and the one it
+/// starts on.
 fn builtin_models() -> Vec<HarnessModel> {
     let (_, _, config) = crate::config::load_config();
-    config
-        .models
+    profile_models(&config.models)
+}
+
+fn profile_models(profiles: &[crate::config::ModelProfile]) -> Vec<HarnessModel> {
+    profiles
         .iter()
-        .map(|profile| HarnessModel {
-            id: profile.name.clone(),
-            name: profile.name.clone(),
-            efforts: Vec::new(),
-            default_effort: None,
+        .map(|profile| {
+            let efforts = crate::remote::projection::reasoning_efforts(profile);
+            let efforts = if efforts.len() < 2 {
+                Vec::new()
+            } else {
+                efforts
+            };
+            let default_effort = (!efforts.is_empty()).then(|| {
+                profile
+                    .reasoning_effort
+                    .clone()
+                    .filter(|effort| efforts.contains(effort))
+                    .unwrap_or_else(|| "default".to_owned())
+            });
+            HarnessModel {
+                id: profile.name.clone(),
+                name: profile.name.clone(),
+                efforts,
+                default_effort,
+            }
         })
         .collect()
 }
@@ -377,7 +465,7 @@ pub(crate) async fn snapshot_in(dir: &std::path::Path) -> Result<Value, String> 
     let rows = harnesses
         .iter()
         .zip(detections.iter())
-        .map(|(harness, detection)| snapshot_entry(harness, detection))
+        .map(|(harness, detection)| snapshot_entry(harness, detection, &entries))
         .collect::<Vec<_>>();
     Ok(json!({
         "harnesses": rows,
@@ -431,13 +519,128 @@ pub(crate) async fn set_default(
     if resolve(&entries, &harness).is_none() {
         return Err(format!("unknown harness '{harness}'"));
     }
-    config::edit_in(&dir, |defaults, _| {
+    config::edit_in(&dir, |defaults, harnesses| {
+        let model = model.filter(|model| !model.trim().is_empty());
+        let effort = effort.filter(|effort| !effort.trim().is_empty());
+        // The default's model and effort are also that harness's last
+        // choice, so a new thread on it starts there.
+        if model.is_some() || effort.is_some() {
+            config::remember(harnesses, &harness, model.clone(), effort.clone())?;
+        }
         defaults.harness = (harness != BUILTIN_ID).then_some(harness);
-        defaults.model = model.filter(|model| !model.trim().is_empty());
-        defaults.effort = effort.filter(|effort| !effort.trim().is_empty());
+        defaults.model = model;
+        defaults.effort = effort;
         Ok(())
     })?;
     snapshot_in(&dir).await
+}
+
+/// `_rustcode/harnesses/remember`: keep `model` and `effort` as the last
+/// choice for new threads on `harness` (the `[[harnesses]]` entry's `model`
+/// and `effort`). Empty values clear it.
+pub(crate) fn remember(
+    harness: &str,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<Value, String> {
+    let dir = config::config_dir()?;
+    remember_in(&dir, harness, model, effort)
+}
+
+pub(crate) fn remember_in(
+    dir: &std::path::Path,
+    harness: &str,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<Value, String> {
+    let (_, entries) = config::load_in(dir);
+    if resolve(&entries, harness).is_none() {
+        return Err(format!("unknown harness '{harness}'"));
+    }
+    let last = config::edit_in(dir, |_, harnesses| {
+        config::remember(harnesses, harness, model, effort)?;
+        Ok(harnesses
+            .iter()
+            .find(|entry| entry.id == harness)
+            .filter(|entry| entry.model.is_some() || entry.effort.is_some())
+            .map(|entry| json!({ "model": entry.model, "effort": entry.effort })))
+    })?;
+    Ok(json!({ "harness": harness, "last": last }))
+}
+
+/// Remember a choice made inside a thread, off the caller's task; a failure
+/// only logs.
+pub(crate) fn remember_later(harness: String, model: Option<String>, effort: Option<String>) {
+    let write = move || {
+        if let Err(error) = remember(&harness, model, effort) {
+            crate::dbg_log!("could not remember the model of {harness}: {error}");
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            runtime.spawn_blocking(write);
+        }
+        Err(_) => write(),
+    }
+}
+
+/// The model and effort a new thread on `id` starts with: what `session/new`
+/// asked for, else the harness's remembered choice, else
+/// `[harness_defaults]` when it names this harness (the built-in one when it
+/// names none), else nothing (the harness's own default). A remembered or
+/// default model the harness no longer lists (when its list is known) is
+/// skipped, and so is an effort its model does not offer.
+pub(crate) fn starting_choice(
+    id: &str,
+    asked: &HarnessRequest,
+    defaults: &config::HarnessDefaults,
+    entries: &[config::HarnessEntry],
+    models: &[HarnessModel],
+) -> (Option<String>, Option<String>) {
+    let mut candidates = Vec::new();
+    if let Some(entry) = entries.iter().find(|entry| entry.id == id) {
+        candidates.push((entry.model.clone(), entry.effort.clone()));
+    }
+    if defaults.harness.as_deref().unwrap_or(BUILTIN_ID) == id {
+        candidates.push((defaults.model.clone(), defaults.effort.clone()));
+    }
+    let listed = |model: &str| models.is_empty() || models.iter().any(|known| known.id == model);
+    let model = asked.model.clone().or_else(|| {
+        candidates
+            .iter()
+            .filter_map(|(model, _)| model.clone())
+            .find(|model| listed(model))
+    });
+    let offers = |effort: &str| match model
+        .as_deref()
+        .and_then(|model| models.iter().find(|known| known.id == model))
+    {
+        Some(known) => known.efforts.iter().any(|offered| offered == effort),
+        None => true,
+    };
+    let effort = asked.effort.clone().or_else(|| {
+        candidates
+            .iter()
+            .filter(|(chosen, _)| chosen.is_none() || *chosen == model)
+            .filter_map(|(_, effort)| effort.clone())
+            .find(|effort| offers(effort))
+    });
+    (model, effort)
+}
+
+/// What a built-in `session/new` starts with, by [`starting_choice`].
+pub(crate) fn builtin_start(asked: &HarnessRequest) -> HarnessRequest {
+    let Ok(dir) = config::config_dir() else {
+        return asked.clone();
+    };
+    let (defaults, entries) = config::load_in(&dir);
+    let (model, effort) =
+        starting_choice(BUILTIN_ID, asked, &defaults, &entries, &builtin_models());
+    HarnessRequest {
+        harness: asked.harness.clone(),
+        model,
+        effort,
+    }
 }
 
 /// `_rustcode/onboarding/complete`.
@@ -450,8 +653,24 @@ pub(crate) async fn complete_onboarding() -> Result<Value, String> {
     snapshot_in(&dir).await
 }
 
-/// `_rustcode/harnesses/models`: start the harness briefly if its models are
-/// not known yet.
+/// One model listing of `id` at a time.
+fn fetch_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .entry(id.to_owned())
+        .or_default()
+        .clone()
+}
+
+/// `_rustcode/harnesses/models`: the harness's models, from memory or the
+/// model cache, else by starting it briefly. A cached list that is old or
+/// from another harness version is answered at once and listed again in the
+/// background. A failed listing is not remembered, so the next call tries
+/// again.
 pub(crate) async fn models(id: &str) -> Result<Vec<HarnessModel>, String> {
     let dir = config::config_dir()?;
     let (_, entries) = config::load_in(&dir);
@@ -460,22 +679,66 @@ pub(crate) async fn models(id: &str) -> Result<Vec<HarnessModel>, String> {
         return Ok(builtin_models());
     }
     if let Some(models) = learned_for(id).models {
+        refresh_if_stale(harness);
         return Ok(models);
     }
-    let listed = session::list_models(&harness).await;
-    match listed {
+    let lock = fetch_lock(id);
+    let _listing = lock.lock().await;
+    if let Some(models) = learned_for(id).models {
+        return Ok(models);
+    }
+    list_and_learn(&harness, true).await
+}
+
+/// List `harness`'s models and learn them. `report` keeps a failure as the
+/// harness's error; a background refresh that fails keeps the cached list
+/// quietly.
+async fn list_and_learn(
+    harness: &ResolvedHarness,
+    report: bool,
+) -> Result<Vec<HarnessModel>, String> {
+    let id = harness.id.as_str();
+    match session::list_models(harness).await {
         Ok(models) => {
-            learn(id, |learned| {
-                learned.models = Some(models.clone());
-                learned.error = None;
-            });
+            learn(id, |learned| learned.listed(id, models.clone()));
             Ok(models)
         }
         Err(error) => {
-            learn(id, |learned| learned.error = Some(error.clone()));
+            if report {
+                learn(id, |learned| learned.error = Some(error.clone()));
+            }
             Err(error)
         }
     }
+}
+
+/// List `harness`'s models again in the background when the cached list is
+/// stale; nothing when a listing already runs.
+fn refresh_if_stale(harness: ResolvedHarness) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn(async move {
+        let lock = fetch_lock(&harness.id);
+        let Ok(_listing) = lock.try_lock() else {
+            return;
+        };
+        let probed = harness.clone();
+        let version = tokio::task::spawn_blocking(move || detect::detect(&probed).version)
+            .await
+            .ok()
+            .flatten();
+        let learned = learned_for(&harness.id);
+        if cache::is_stale(
+            learned.fetched_at,
+            learned.version.as_deref(),
+            version.as_deref(),
+            cache::now(),
+        ) {
+            crate::dbg_log!("listing the models of {} again", harness.id);
+            let _ = list_and_learn(&harness, false).await;
+        }
+    });
 }
 
 /// The harness a `session/new` asked for in `_meta.rustcode`, with its model
@@ -629,5 +892,202 @@ mod tests {
         }
         assert_eq!(codex["kind"], "codex");
         assert_eq!(codex["command"], json!(["codex", "app-server"]));
+    }
+
+    fn listed(id: &str, efforts: &[&str], default_effort: Option<&str>) -> HarnessModel {
+        HarnessModel {
+            id: id.into(),
+            name: id.into(),
+            efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
+            default_effort: default_effort.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn builtin_models_carry_their_efforts() {
+        let reasoning = crate::config::ModelProfile {
+            name: "luna".into(),
+            reasoning_effort: Some("high".into()),
+            reasoning_efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
+            ..Default::default()
+        };
+        let plain = crate::config::ModelProfile {
+            name: "local".into(),
+            supports_reasoning_effort: Some(false),
+            ..Default::default()
+        };
+        let wire = crate::config::ModelProfile {
+            name: "wire".into(),
+            supports_reasoning_effort: Some(true),
+            ..Default::default()
+        };
+        let models = profile_models(&[reasoning, plain, wire]);
+        assert_eq!(models[0].efforts, ["default", "low", "medium", "high"]);
+        assert_eq!(models[0].default_effort.as_deref(), Some("high"));
+        assert!(models[1].efforts.is_empty(), "no choice, no effort list");
+        assert_eq!(models[1].default_effort, None);
+        assert_eq!(models[2].default_effort.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn a_new_thread_starts_on_the_asked_then_remembered_then_default_choice() {
+        let models = vec![
+            listed("opus", &["low", "high"], Some("low")),
+            listed("sonnet", &["low", "medium"], Some("low")),
+        ];
+        let remembered = vec![config::HarnessEntry {
+            id: "claude-code".into(),
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            ..Default::default()
+        }];
+        let defaults = config::HarnessDefaults {
+            harness: Some("claude-code".into()),
+            model: Some("sonnet".into()),
+            effort: Some("medium".into()),
+            onboarded: true,
+        };
+        let none = HarnessRequest::default();
+        let empty = config::HarnessDefaults::default();
+        let pick = |asked: &HarnessRequest,
+                    entries: &[config::HarnessEntry],
+                    defaults: &config::HarnessDefaults| {
+            starting_choice("claude-code", asked, defaults, entries, &models)
+        };
+        let some = |model: &str, effort: &str| (Some(model.to_owned()), Some(effort.to_owned()));
+        assert_eq!(pick(&none, &remembered, &defaults), some("opus", "high"));
+        assert_eq!(pick(&none, &[], &defaults), some("sonnet", "medium"));
+        assert_eq!(
+            pick(&none, &[], &empty),
+            (None, None),
+            "the harness's own default"
+        );
+        let asked = HarnessRequest {
+            harness: Some("claude-code".into()),
+            model: Some("sonnet".into()),
+            effort: None,
+        };
+        assert_eq!(
+            pick(&asked, &remembered, &defaults),
+            some("sonnet", "medium"),
+            "an effort remembered with another model is not carried over"
+        );
+        // A remembered model the harness no longer lists falls back quietly.
+        let stale = vec![config::HarnessEntry {
+            id: "claude-code".into(),
+            model: Some("gone".into()),
+            effort: Some("max".into()),
+            ..Default::default()
+        }];
+        assert_eq!(pick(&none, &stale, &defaults), some("sonnet", "medium"));
+        // The default of another harness does not apply.
+        let codex = config::HarnessDefaults {
+            harness: Some("codex".into()),
+            ..defaults.clone()
+        };
+        assert_eq!(pick(&none, &[], &codex), (None, None));
+        // Unknown models (nothing listed yet) are kept as remembered.
+        assert_eq!(
+            starting_choice("claude-code", &none, &codex, &stale, &[]),
+            some("gone", "max")
+        );
+    }
+
+    #[tokio::test]
+    async fn remembered_choices_show_in_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let answer = remember_in(
+            dir.path(),
+            "codex",
+            Some("gpt-6-luna".into()),
+            Some("high".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            answer,
+            json!({"harness": "codex", "last": {"model": "gpt-6-luna", "effort": "high"}})
+        );
+        assert!(remember_in(dir.path(), "nope", Some("x".into()), None).is_err());
+        let snapshot = snapshot_in(dir.path()).await.unwrap();
+        let rows = snapshot["harnesses"].as_array().unwrap();
+        let row = |id: &str| rows.iter().find(|row| row["id"] == id).unwrap().clone();
+        assert_eq!(
+            row("codex")["last"],
+            json!({"model": "gpt-6-luna", "effort": "high"})
+        );
+        assert_eq!(
+            row("codex")["enabled"],
+            false,
+            "remembering does not turn it on"
+        );
+        assert_eq!(row("opencode")["last"], Value::Null);
+        assert_eq!(snapshot["default"]["harness"], "rustcode");
+    }
+
+    /// #2797: after an engine restart a restored thread still offers every
+    /// model and the effort, from the model cache, before its harness starts.
+    #[tokio::test]
+    async fn a_restored_thread_offers_cached_models_after_a_restart() {
+        let id = "cached-acp-restart";
+        let dir = config::config_dir().unwrap();
+        learn(id, |learned| {
+            learned.listed(
+                id,
+                vec![
+                    listed(
+                        "deepseek/deepseek-v4-pro",
+                        &["low", "medium", "high", "default"],
+                        Some("default"),
+                    ),
+                    listed(
+                        "glm-5",
+                        &["low", "medium", "high", "default"],
+                        Some("default"),
+                    ),
+                ],
+            );
+            learned.effort = Some(true);
+        });
+        let cached = cache::load_in(&dir, id).expect("the listing is cached on disk");
+        assert_eq!(cached.models.len(), 2);
+        assert!(cached.fetched_at > 0);
+
+        forget_learned(id);
+        let harness = session::test_support::harness(id, HarnessKind::Acp);
+        assert!(
+            capabilities(&harness).effort,
+            "the effort capability survives too"
+        );
+        let mut record = store::HarnessRecord::new(id, std::env::temp_dir());
+        record.model = Some("deepseek/deepseek-v4-pro".into());
+        record.effort = Some("high".into());
+        let (updates, _) = tokio::sync::mpsc::unbounded_channel();
+        let (permissions, _) = tokio::sync::mpsc::unbounded_channel();
+        let sink = std::sync::Arc::new(session::test_support::ChannelSink {
+            updates,
+            permissions,
+            choice: None,
+        });
+        let thread = session::ExternalSession::new(
+            "restored".into(),
+            harness,
+            record,
+            Vec::new(),
+            sink,
+            false,
+        );
+        let options = serde_json::to_value(thread.config_options().await).unwrap();
+        let option = |id: &str| {
+            options
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|option| option["id"] == id)
+                .cloned()
+                .unwrap_or_else(|| panic!("no {id} option in {options}"))
+        };
+        assert_eq!(option("model")["options"].as_array().unwrap().len(), 2);
+        assert_eq!(option("effort")["currentValue"], "high");
+        assert_eq!(option("effort")["options"].as_array().unwrap().len(), 4);
     }
 }

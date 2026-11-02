@@ -15,6 +15,7 @@ import {
   type AgentInfo,
   byActivity,
   fallbackHarnessSnapshot,
+  type HarnessLast,
   type HarnessSnapshot,
   initializeParams,
   isReportUpdate,
@@ -23,6 +24,7 @@ import {
   type PermissionRequest,
   parseAgentInfo,
   parseConfigOptions,
+  parseHarnessLast,
   parseHarnessModels,
   parseHarnessSnapshot,
   parsePermissionRequest,
@@ -60,6 +62,7 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import { restoreChoice } from "./harness";
 import {
   answerOrchestration,
   linkFinished,
@@ -95,10 +98,22 @@ export type SettingsSection =
   | "appearance"
   | "engine";
 
+export type ToastTone = "info" | "success" | "error";
+
 export interface Toast {
   id: string;
   text: string;
-  tone: "info" | "success" | "warning";
+  tone: ToastTone;
+  /** One button at the right (Restart, Undo, Open…). */
+  action?: { label: string; run: () => void };
+  /** Stays until dismissed; errors do by default. */
+  persist: boolean;
+  /** 0–1 draws a progress bar along the foot. */
+  progress?: number;
+  /** Fading out; removed once the exit animation has run. */
+  leaving?: boolean;
+  /** When it was shown or last repeated: a change restarts its timer. */
+  at: number;
 }
 
 export interface NewThreadChoice {
@@ -208,6 +223,8 @@ const STORAGE = {
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
   statusMarks: "rustcode.statusMarks",
+  /** Each harness's last new-thread choice, for an engine that does not remember it. */
+  harnessChoices: "rustcode.harnessChoices",
 };
 
 function stored(key: string): string | null {
@@ -295,10 +312,65 @@ export function updateThread(id: string, fn: (thread: ThreadState) => ThreadStat
   });
 }
 
-export function toast(text: string, tone: Toast["tone"] = "info") {
-  const id = localId("toast");
-  set((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, tone }] }));
-  setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 3200);
+/** Exit animation of a toast (docs/design.md, Motion). */
+const TOAST_EXIT_MS = 120;
+
+/**
+ * Shows a toast (ui/Toaster.tsx). Info and success leave after 4 s, errors stay
+ * until dismissed. Passing an `id` replaces the toast with that id in place
+ * (the engine's toast moves from "Starting…" to an error this way); the same
+ * text and tone again restarts the shown one instead of stacking a copy.
+ * Returns the toast's id.
+ */
+export function toast(
+  text: string,
+  tone: ToastTone = "info",
+  options: { id?: string; action?: Toast["action"]; persist?: boolean; progress?: number } = {},
+): string {
+  const at = Date.now();
+  let id = options.id ?? localId("toast");
+  set((s) => {
+    const same = s.toasts.find(
+      (t) => !t.leaving && (t.id === options.id || (!options.id && t.text === text && t.tone === tone)),
+    );
+    if (same) id = same.id;
+    const next: Toast = {
+      id,
+      text,
+      tone,
+      action: options.action,
+      persist: options.persist ?? tone === "error",
+      progress: options.progress,
+      at,
+    };
+    return {
+      toasts: same
+        ? s.toasts.map((t) => (t === same ? next : t))
+        : // The Toaster shows the newest three; older ones wait behind them.
+          // A fading toast with the same id goes now, so the new one keeps its key.
+          [...s.toasts.filter((t) => !(t.leaving && t.id === id)).slice(-19), next],
+    };
+  });
+  return id;
+}
+
+/** Changes a shown toast in place (its progress), without restarting its timer. */
+export function updateToast(id: string, patch: Partial<Pick<Toast, "text" | "progress">>) {
+  set((s) =>
+    s.toasts.some((t) => t.id === id)
+      ? { toasts: s.toasts.map((t) => (t.id === id ? { ...t, ...patch } : t)) }
+      : s,
+  );
+}
+
+/** Fades a toast out, then drops it. */
+export function dismissToast(id: string) {
+  if (!get().toasts.some((t) => t.id === id && !t.leaving)) return;
+  set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) }));
+  setTimeout(
+    () => set((s) => ({ toasts: s.toasts.filter((t) => !(t.id === id && t.leaving)) })),
+    TOAST_EXIT_MS,
+  );
 }
 
 export function errorText(error: unknown): string {
@@ -337,12 +409,72 @@ const logs = frameQueue<string>((lines) =>
   set((s) => ({ engineLog: [...s.engineLog, ...lines].slice(-400) })),
 );
 
+// ---------------------------------------------------------------- engine toast
+
+/**
+ * The engine's state as one toast (docs/design.md, Loading): nothing while it
+ * starts fast, "Starting engine…" with progress once it takes over 2 s, an
+ * error with Restart when it stops or crashes, and a short note when it comes
+ * back on its own after a crash.
+ */
+const ENGINE_TOAST = "engine";
+const ENGINE_SLOW_MS = 2000;
+let bootProgress = 0;
+let slowTimer: ReturnType<typeof setTimeout> | undefined;
+let engineWatch: (() => void) | undefined;
+/** The engine stopped since it was last ready: its next start is a restart. */
+let crashed = false;
+
+function bootStep(progress: number) {
+  bootProgress = progress;
+  updateToast(ENGINE_TOAST, { progress });
+}
+
+function onEngineStatus(s: AppState, prev?: AppState) {
+  clearTimeout(slowTimer);
+  if (s.status === "ready") {
+    // Batched updates can go from closed straight to ready: this keys on `crashed` alone.
+    if (crashed && prev) toast("The engine restarted", "success", { id: ENGINE_TOAST });
+    else dismissToast(ENGINE_TOAST);
+    crashed = false;
+    return;
+  }
+  if (s.status === "closed") {
+    crashed = true;
+    toast(s.statusDetail ?? "The engine stopped.", "error", {
+      id: ENGINE_TOAST,
+      action: { label: "Restart", run: () => void restartEngine() },
+    });
+    return;
+  }
+  // Starting: an error toast from before goes at once; a slow start gets its own.
+  if (get().toasts.some((t) => t.id === ENGINE_TOAST && t.tone === "error")) dismissToast(ENGINE_TOAST);
+  slowTimer = setTimeout(() => {
+    if (get().status !== "connecting") return;
+    toast(crashed ? "Restarting engine…" : "Starting engine…", "info", {
+      id: ENGINE_TOAST,
+      persist: true,
+      progress: bootProgress,
+    });
+  }, ENGINE_SLOW_MS);
+}
+
+function watchEngine() {
+  if (engineWatch) return;
+  engineWatch = useApp.subscribe((s, prev) => {
+    if (s.status !== prev.status) onEngineStatus(s, prev);
+  });
+  onEngineStatus(get());
+}
+
 /** Start the transport once; every engine (re)start then gets a fresh ACP connection. */
 export async function connect(next: Transport): Promise<void> {
   transport = next;
   setShellTransport(next);
   startAgentPolling();
+  bootProgress = 0.15;
   set({ status: "connecting", transport: next.name, statusDetail: undefined });
+  watchEngine();
   try {
     await next.start((event) => {
       if (event.type === "line") inbound.push(event.line);
@@ -369,6 +501,8 @@ async function handshake(): Promise<void> {
     if (connection === conn) void handleInbound(message);
   });
   set({ status: "connecting", statusDetail: undefined });
+  modelsAsked.clear();
+  bootStep(0.5);
   try {
     const result = await conn.request(
       Method.initialize,
@@ -471,13 +605,16 @@ function adoptTheme(name: string) {
 
 /** Picks a theme: it applies at once, and the engine saves it when it has themes. */
 export async function setActiveTheme(name: string): Promise<void> {
+  const changed = name !== get().themeActive;
   adoptTheme(name);
+  const picked = (get().themes?.themes ?? BUILTIN_THEMES).find((t) => t.name === name);
+  if (changed && picked) toast(`Theme: ${picked.name}`, "success");
   if (!get().features.themes || !connection) return;
   try {
     const themes = parseThemes(await connection.request(ThemeMethod.set, { name, ...themeParams() }, 10_000));
     set({ themes });
   } catch (error) {
-    toast(`Could not save the theme: ${errorText(error)}`, "warning");
+    toast(`Could not save the theme: ${errorText(error)}`, "error");
   }
 }
 
@@ -555,6 +692,8 @@ export function featureMissing(feature: keyof AppState["features"]): string | nu
 
 export async function restartEngine(): Promise<void> {
   if (!transport) return;
+  crashed = true;
+  bootProgress = 0.15;
   set({ status: "connecting", statusDetail: "Restarting the engine…" });
   await transport.restart().catch((error) => set({ status: "closed", statusDetail: errorText(error) }));
 }
@@ -586,7 +725,7 @@ async function handleInbound(message: Inbound) {
         }
         updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
         if (request.sessionId !== get().selectedId) {
-          toast(request.question ? "A thread has a question" : "A thread needs approval", "warning");
+          toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
         return;
       }
@@ -658,7 +797,7 @@ export async function refreshSessions(): Promise<void> {
     });
   } catch (error) {
     set({ sessionsLoaded: true });
-    toast(`Could not list threads: ${errorText(error)}`, "warning");
+    toast(`Could not list threads: ${errorText(error)}`, "error");
   }
 }
 
@@ -705,6 +844,8 @@ export async function openThread(id: string) {
       configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
       harness: parseSessionHarness(result) ?? t.harness,
     }));
+    const opened = get().threads[id];
+    if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
     void refreshPlanUsage(id);
     void refreshCheckpoints(id);
   } catch (error) {
@@ -793,12 +934,31 @@ export async function createSession(options: NewSession): Promise<string> {
   return id;
 }
 
+/**
+ * A restored external thread whose harness has not started again offers only its own model (and
+ * maybe no effort) until the harness lists its models: ask for them.
+ */
+export function lacksModels(thread: ThreadState): boolean {
+  const id = thread.harness?.id;
+  if (!id || id === "rustcode") return false;
+  const model = thread.configOptions.find((o) => o.id === "model" && o.type === "select");
+  const effort = thread.configOptions.some((o) => o.id === "effort");
+  return (model?.choices.length ?? 0) <= 1 || (!effort && !!thread.harness?.capabilities.effort);
+}
+
+/** The new-thread choice: the picked one, else the default harness with its remembered model and effort. */
+export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): NewThreadChoice | null {
+  if (s.newThread) return s.newThread;
+  if (!s.harnesses) return null;
+  return restoreChoice(s.harnesses, s.harnesses.default.harness, appChoices(s.harnesses));
+}
+
 /** Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and selects it. */
 async function createThread(firstMessage = ""): Promise<string> {
   const s = get();
   const cwd = s.projectCwd;
   if (!cwd) throw new Error("Choose a project folder for this thread first.");
-  const choice = s.newThread;
+  const choice = newThreadChoice(s);
   const wt = s.newWorktree;
   const worktree =
     wt.on && s.features.worktrees
@@ -813,6 +973,10 @@ async function createThread(firstMessage = ""): Promise<string> {
     select: true,
   });
   set({ newWorktree: { on: wt.on, branch: "", edited: false } });
+  if (worktree) {
+    const branch = get().threads[id]?.worktree?.branch ?? worktree.branch;
+    toast(branch ? `Working in a new worktree on ${branch}` : "Working in a new worktree", "success");
+  }
   return id;
 }
 
@@ -839,7 +1003,7 @@ async function rewindTo(id: string, itemId: string, text: string): Promise<boole
   try {
     await engine().request(Method.rewind, { sessionId: id, userIndex, text }, 10_000);
   } catch (error) {
-    toast(`Could not rewind: ${errorText(error)}`, "warning");
+    toast(`Could not rewind: ${errorText(error)}`, "error");
     return false;
   }
   updateThread(id, (t) => truncateBefore(t, itemId));
@@ -903,7 +1067,7 @@ export function togglePin(id: string) {
   connection.request(V2Method.sessionPin, { session_id: id, pinned: on }, 10_000).catch((error) => {
     set({ pinned: before });
     store(STORAGE.pinned, JSON.stringify(before));
-    toast(`Could not ${on ? "pin" : "unpin"} the thread: ${errorText(error)}`, "warning");
+    toast(`Could not ${on ? "pin" : "unpin"} the thread: ${errorText(error)}`, "error");
   });
 }
 
@@ -911,7 +1075,7 @@ export function setArchived(id: string, on: boolean) {
   const archived = { ...get().archived };
   if (on) {
     if (get().threads[id]?.running) {
-      toast("Stop the running turn before archiving this thread.", "warning");
+      toast("Stop the running turn before archiving this thread.", "info");
       return;
     }
     archived[id] = Date.now();
@@ -929,7 +1093,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
     updateThread(id, (t) => ({ ...t, title: saved }));
     return true;
   } catch (error) {
-    toast(`Could not rename the thread: ${errorText(error)}`, "warning");
+    toast(`Could not rename the thread: ${errorText(error)}`, "error");
     return false;
   }
 }
@@ -937,14 +1101,14 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
 /** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
 export async function trashThread(id: string): Promise<boolean> {
   if (get().threads[id]?.running) {
-    toast("Stop the running turn before moving this thread to the Trash.", "warning");
+    toast("Stop the running turn before moving this thread to the Trash.", "info");
     return false;
   }
   if (get().threads[id] && get().agent?.closeSession) await closeThread(id);
   try {
     await shellCall("thread_trash", { id });
   } catch (error) {
-    toast(errorText(error), "warning");
+    toast(errorText(error), "error");
     return false;
   }
   const { [id]: _gone, ...threads } = get().threads;
@@ -999,7 +1163,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   try {
     if (!id) id = await createThread(trimmed);
   } catch (error) {
-    toast(`Could not start the thread: ${errorText(error)}`, "warning");
+    toast(`Could not start the thread: ${errorText(error)}`, "error");
     return false;
   }
   const thread = get().threads[id];
@@ -1193,7 +1357,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
     for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
     updateThread(id, (t) => ({ ...t, permissions: [] }));
   } catch (error) {
-    toast(errorText(error), "warning");
+    toast(errorText(error), "error");
   }
 }
 
@@ -1211,8 +1375,15 @@ export async function setConfigOption(id: string, configId: string, value: strin
     if (result?.configOptions) {
       updateThread(id, (t) => ({ ...t, configOptions: parseConfigOptions(result.configOptions) }));
     }
+    // A model or effort picked in a thread is also its harness's next new-thread choice; the
+    // engine keeps it (docs/harnesses.md), the app only mirrors it.
+    const thread = get().threads[id];
+    if (thread && (configId === "model" || configId === "effort")) {
+      const current = (option: string) => thread.configOptions.find((o) => o.id === option)?.current ?? null;
+      noteChoice(thread.harness?.id ?? "rustcode", { model: current("model"), effort: current("effort") });
+    }
   } catch (error) {
-    toast(`Could not change ${configId}: ${errorText(error)}`, "warning");
+    toast(`Could not change ${configId}: ${errorText(error)}`, "error");
   }
 }
 
@@ -1269,7 +1440,7 @@ export async function refreshHarnesses(): Promise<HarnessSnapshot | null> {
     // An engine without the harness layer: the built-in harness only, no onboarding.
     const snapshot = fallbackHarnessSnapshot();
     if (!(error instanceof RpcError && error.isMethodNotFound)) {
-      toast(`Could not read harnesses: ${errorText(error)}`, "warning");
+      toast(`Could not read harnesses: ${errorText(error)}`, "error");
     }
     set({ harnesses: snapshot });
     return snapshot;
@@ -1282,13 +1453,17 @@ async function harnessCall(method: string, params: JsonObject): Promise<HarnessS
     set({ harnesses: snapshot });
     return snapshot;
   } catch (error) {
-    toast(errorText(error), "warning");
+    toast(errorText(error), "error");
     return null;
   }
 }
 
-export const setHarnessEnabled = (id: string, enabled: boolean) =>
-  harnessCall(Method.harnessSet, { id, enabled });
+export async function setHarnessEnabled(id: string, enabled: boolean): Promise<HarnessSnapshot | null> {
+  const snapshot = await harnessCall(Method.harnessSet, { id, enabled });
+  const name = snapshot?.harnesses.find((h) => h.id === id)?.name ?? id;
+  if (snapshot) toast(`${name} ${enabled ? "is on" : "is off"}`, "success");
+  return snapshot;
+}
 export const addHarness = (id: string, name: string, command: string[]) =>
   harnessCall(Method.harnessSet, { id, name, kind: "acp", command, enabled: true });
 export const removeHarness = (id: string) => harnessCall(Method.harnessRemove, { id });
@@ -1319,8 +1494,95 @@ export async function fetchHarnessModels(id: string): Promise<void> {
   void refreshHarnesses();
 }
 
+/** Model listings in flight (ensureHarnessModels), one per harness. */
+const modelsAsked = new Map<string, Promise<void>>();
+
+/**
+ * An external harness lists its models only when asked (`_rustcode/harnesses/models`;
+ * the engine caches them across restarts, but a harness never listed has none
+ * yet). The model picker of a new thread on it, and a restored thread on it,
+ * ask, so the model list, effort and Fast mode are there before the harness
+ * runs. A failure stays quiet (the picker says the harness picks its default)
+ * and is not kept: the next ask, such as opening the picker, tries again.
+ */
+export function ensureHarnessModels(id: string): Promise<void> {
+  const harness = get().harnesses?.harnesses.find((h) => h.id === id);
+  if (!harness || harness.builtin || harness.models.length || get().status !== "ready")
+    return Promise.resolve();
+  let asked = modelsAsked.get(id);
+  if (!asked) {
+    asked = fetchHarnessModels(id)
+      .catch(() => undefined)
+      .finally(() => modelsAsked.delete(id));
+    modelsAsked.set(id, asked);
+  }
+  return asked;
+}
+
 export function setNewThreadChoice(choice: NewThreadChoice | null) {
   set({ newThread: choice });
+}
+
+/** What the app keeps per harness when the engine does not remember choices. */
+export function localChoices(): Record<string, HarnessLast> {
+  try {
+    const raw = obj(JSON.parse(stored(STORAGE.harnessChoices) ?? "{}")) ?? {};
+    const out: Record<string, HarnessLast> = {};
+    for (const [id, value] of Object.entries(raw)) {
+      const last = parseHarnessLast(value);
+      if (last) out[id] = last;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** The app's own record of choices, only for an engine that keeps none. */
+function appChoices(snapshot: HarnessSnapshot): Record<string, HarnessLast> | undefined {
+  return snapshot.remembers ? undefined : localChoices();
+}
+
+/** Mirror a harness's last choice: in the snapshot, and in app storage when the engine does not keep it. */
+function noteChoice(harness: string, last: HarnessLast) {
+  const value = last.model || last.effort ? last : null;
+  set((s) =>
+    s.harnesses
+      ? {
+          harnesses: {
+            ...s.harnesses,
+            harnesses: s.harnesses.harnesses.map((h) => (h.id === harness ? { ...h, last: value } : h)),
+          },
+        }
+      : s,
+  );
+  if (get().harnesses?.remembers) return;
+  const all = localChoices();
+  if (value) all[harness] = value;
+  else delete all[harness];
+  store(STORAGE.harnessChoices, JSON.stringify(all));
+}
+
+/**
+ * The user picked a model or effort in the new-thread picker: it is the choice, and the harness's
+ * remembered one (`_rustcode/harnesses/remember`, else app storage), so switching harness and back,
+ * or a restart, starts there again.
+ */
+export function pickNewThreadChoice(choice: NewThreadChoice) {
+  set({ newThread: choice });
+  const last = { model: choice.model, effort: choice.effort };
+  noteChoice(choice.harness, last);
+  if (!get().harnesses?.remembers || !connection) return;
+  void engine()
+    .request(Method.harnessRemember, { harness: choice.harness, ...last }, 15_000)
+    .catch(() => undefined);
+}
+
+/** Switch the new-thread picker to `harness`, on the model and effort it was last left on. */
+export function switchNewThreadHarness(harness: string) {
+  const snapshot = get().harnesses;
+  if (!snapshot) return;
+  set({ newThread: restoreChoice(snapshot, harness, appChoices(snapshot)) });
 }
 
 // ---------------------------------------------------------------- subagents and usage
@@ -1384,7 +1646,7 @@ export async function setThreadStatus(id: string, status: "review" | "done" | "i
     // The engine keeps it now; the app's mark only covers the gap until the list says so.
   } catch (error) {
     if (!(error instanceof RpcError && error.isMethodNotFound)) {
-      toast(`Could not save the status: ${errorText(error)}`, "warning");
+      toast(`Could not save the status: ${errorText(error)}`, "error");
     }
   }
 }
@@ -1407,7 +1669,7 @@ export async function removeWorktree(id: string): Promise<void> {
   const wt = worktreeOf(get(), id);
   if (!wt || !connection) return;
   if (get().threads[id]?.running) {
-    toast("Stop the running turn before removing its worktree.", "warning");
+    toast("Stop the running turn before removing its worktree.", "info");
     return;
   }
   let info: Worktree | undefined;
@@ -1439,7 +1701,7 @@ export async function removeWorktree(id: string): Promise<void> {
         });
         return;
       }
-      toast(`Could not remove the worktree: ${errorText(error)}`, "warning");
+      toast(`Could not remove the worktree: ${errorText(error)}`, "error");
       return;
     }
     set((s) => ({
@@ -1508,7 +1770,7 @@ export async function restoreCheckpoint(id: string, turn: number, rewind: boolea
     void refreshCheckpoints(id);
     return true;
   } catch (error) {
-    toast(`Could not restore: ${errorText(error)}`, "warning");
+    toast(`Could not restore: ${errorText(error)}`, "error");
     return false;
   }
 }
@@ -1597,7 +1859,7 @@ export async function sendToAgent(id: string, agentId: number, text: string): Pr
     void refreshAgents(id);
     return true;
   } catch (error) {
-    toast(`Could not send to the agent: ${errorText(error)}`, "warning");
+    toast(`Could not send to the agent: ${errorText(error)}`, "error");
     return false;
   }
 }
@@ -1606,7 +1868,7 @@ export async function cancelAgent(id: string, agentId: number) {
   try {
     await engine().request(Method.agents, { sessionId: id, action: "cancel", id: agentId }, 15_000);
   } catch (error) {
-    toast(`Could not stop the agent: ${errorText(error)}`, "warning");
+    toast(`Could not stop the agent: ${errorText(error)}`, "error");
   }
   void refreshAgents(id);
 }
@@ -1678,6 +1940,11 @@ export async function request<T = Json>(
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  clearTimeout(slowTimer);
+  engineWatch?.();
+  engineWatch = undefined;
+  crashed = false;
+  modelsAsked.clear();
   connection = null;
   transport = null;
   setShellTransport(null);

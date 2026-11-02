@@ -9,4 +9,6 @@ export default defineConfig({
   server: { port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
   envPrefix: ["VITE_", "TAURI_ENV_"],
   build: { target: "safari16", chunkSizeWarningLimit: 1200 },
+  // The highlighter worker (lib/highlight.worker.ts) loads Shiki's languages on demand.
+  worker: { format: "es" },
 });

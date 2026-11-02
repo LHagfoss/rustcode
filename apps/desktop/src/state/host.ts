@@ -106,7 +106,7 @@ let resolveAsk: ((choice: GrantChoice) => void) | null = null;
 /** Ask once; a second request while one waits is refused, and the agent can try again. */
 function ask(question: GrantAsk): Promise<GrantChoice> | Failure {
   if (useApp.getState().grant) return failure("busy", "another thread's request is waiting for the user");
-  toast(`“${question.callerTitle}” asks to ${verb(question)}`, "warning");
+  toast(`“${question.callerTitle}” asks to ${verb(question)}`, "info");
   return new Promise((resolve) => {
     resolveAsk = resolve;
     useApp.setState({ grant: { ...question, id: localId("grant") } });

@@ -4,6 +4,10 @@ The one-line installers and Homebrew are covered in the [README](../README.md#in
 This page covers supported platforms, building from source, the desktop app and
 updating.
 
+The installers put the `rustcode` CLI on your machine and, unless you pass
+`--no-app` (`-NoApp` on Windows), the RustCode desktop app as well: see
+[Native desktop app](#native-desktop-app).
+
 ## Supported platforms
 
 Official release binaries are published for Linux x86_64, Linux ARM64
@@ -34,13 +38,125 @@ first — otherwise the older binary keeps winning:
 rustcode --version   # check this resolves to the build you just made
 ```
 
-## Desktop app
+## Native desktop app
+
+The one-line installers install the RustCode desktop app (`apps/desktop`,
+Tauri) next to the CLI, natively per platform, and check every download
+against the release's `SHA256SUMS`:
+
+| Platform | Release asset | Installed as |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `RustCode-<ver>-macos-aarch64.app.zip` | `/Applications/RustCode.app` (`~/Applications` when `/Applications` is not writable) |
+| Windows x64 | `RustCode-<ver>-windows-x64-setup.exe` | per-user install in `%LOCALAPPDATA%\RustCode`, Start menu entry |
+| Linux x86_64 | `RustCode-<ver>-linux-x86_64.AppImage` | `~/Applications/RustCode.AppImage`, menu entry and icon in `~/.local/share` |
+| Linux x86_64 (`--deb`) | `RustCode-<ver>-linux-x86_64.deb` | system package via `apt-get`/`dpkg` (asks for sudo) |
+
+The app carries its own engine (`rustcode --acp`) inside the bundle, so it
+works without the CLI on `PATH`. Linux ARM64 and Intel macOS get the CLI
+only.
+
+On macOS the installer quits a running RustCode, moves an existing
+`/Applications/RustCode.app` (including the SwiftUI app it replaces) to the
+Trash rather than deleting it, unpacks the new one, checks its code signature
+and bundle id, clears the quarantine flag on that verified app only and
+registers it with Launch Services. The AppImage needs FUSE (`libfuse2`) to
+run; the `.deb` does not, and also installs the engine as `/usr/bin/rustcode`.
+
+Options (`curl … | bash -s -- <options>` on macOS and Linux):
+
+| `install.sh` | `install.ps1` | Effect |
+| --- | --- | --- |
+| `--no-app` | `-NoApp` or `$env:RUSTCODE_NO_APP = "1"` | CLI only, as before |
+| `--no-cli` | `-NoCli` or `$env:RUSTCODE_NO_CLI = "1"` | app only |
+| `--deb` | | Linux: the `.deb` instead of the AppImage |
+| `--bin-dir DIR` | | CLI to `DIR` instead of `/usr/local/bin` or `~/.local/bin` |
+
+```bash
+curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash -s -- --no-app
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://rustcode.lhagfoss.com/install.ps1))) -NoApp
+```
+
+### Testing the installers without a release
+
+Set `RUSTCODE_INSTALL_ARTIFACTS` to a directory holding release assets under
+their release names plus a `SHA256SUMS`; the installers read from it instead
+of GitHub. On a Mac:
+
+```bash
+cd apps/desktop && bun run bundle                      # release engine + RustCode.app
+mkdir -p /tmp/rc/art /tmp/rc/cli
+cp ../../target/release/rustcode /tmp/rc/cli/rustcode-macos-aarch64
+tar czf /tmp/rc/art/rustcode-macos-aarch64.tar.gz -C /tmp/rc/cli rustcode-macos-aarch64
+bun scripts/release-assets.ts /tmp/rc/art --sums       # app zip + SHA256SUMS
+RUSTCODE_INSTALL_ARTIFACTS=/tmp/rc/art bash ../../scripts/install.sh --bin-dir /tmp/rc/bin
+```
+
+`--bin-dir` keeps the test CLI away from the one you use; `--no-cli` skips it.
+
+### Updating the app
+
+- macOS: Settings › Engine › **Check for Updates**, then **Update to X**. The
+  app downloads the release's app zip, checks it against `SHA256SUMS`, its
+  code signature and bundle id, then quits, swaps `RustCode.app` and reopens.
+  It needs write access to the folder the app is in; otherwise the button
+  opens the release page. Running the installer again works too.
+- Windows and Linux: the button links to the release; run the installer
+  again to update (it replaces the app in place).
+
+### Uninstalling
+
+- macOS: quit RustCode and move `/Applications/RustCode.app` to the Trash.
+  Its data is in `~/Library/Application Support/com.lhagfoss.rustcode.desktop`,
+  `~/Library/Caches/com.lhagfoss.rustcode.desktop` and
+  `~/Library/WebKit/com.lhagfoss.rustcode.desktop`; threads and settings stay
+  in `~/.config/rustcode`, shared with the CLI.
+- Windows: Settings › Apps › Installed apps › RustCode › Uninstall (or
+  `%LOCALAPPDATA%\RustCode\uninstall.exe`).
+- Linux AppImage: delete `~/Applications/RustCode.AppImage`,
+  `~/.local/share/applications/rustcode.desktop` and
+  `~/.local/share/icons/hicolor/128x128/apps/rustcode.png`.
+- Linux `.deb`: `sudo apt remove rustcode` (the package name `dpkg -l | grep -i rustcode` shows).
+
+### Taking over from the SwiftUI app
+
+The Tauri app ships with the SwiftUI app's bundle id,
+`com.lhagfoss.rustcode.desktop`, so the Dock pin, Launch Services, Spotlight
+and notification permissions carry over. Their data does not clash: the
+SwiftUI app keeps its files in `~/Library/Application Support/RustCode` and
+its preferences in `com.lhagfoss.rustcode.desktop.plist`, which the Tauri app
+does not read; the Tauri app writes to
+`~/Library/Application Support/com.lhagfoss.rustcode.desktop`, and its web
+view's storage (origin `tauri://localhost`) is separate from the localhost
+pages the SwiftUI preview stored in the shared WebKit folder. Reinstalling
+the SwiftUI app later finds its own data untouched. A `tauri dev` build keeps
+the identifier `dev.rustcode.desktop` (`tauri.conf.json`); only the bundle
+(`tauri.bundle.conf.json`) takes the release identity, so development data
+stays apart from the installed app.
+
+Releases publish the macOS app zip a second time as
+`rustcode-macos-aarch64-swift-app.zip`, the name the SwiftUI app's updater
+downloads: an installed SwiftUI app offers the update and replaces itself
+with this app.
+
+Until releases are signed with a Developer ID and notarized
+([macOS release signing](macos-release-signing.md)), the app is ad-hoc
+signed. The installer's download is not quarantined, so it opens normally; a
+copy downloaded with a browser needs right-click › Open once, or
+`xattr -d com.apple.quarantine RustCode.app`.
+
+## Desktop app development
 
 The desktop app lives in `apps/desktop` (Tauri 2, React, Tailwind). Build
-and run it as described in [desktop.md](desktop.md). Releases still ship the
-SwiftUI macOS app below until the Tauri app replaces it.
+and run it as described in [desktop.md](desktop.md).
 
-### SwiftUI macOS app
+### SwiftUI macOS app (no longer released)
+
+The SwiftUI app in `macos/` is frozen: releases no longer ship it, and its
+CI (`macos-swift-ci.yml`) keeps running until it is archived. The rest of
+this section describes it for anyone building it from source.
 
 The native SwiftUI app is a separate front end to the Rust engine. It launches
 `rustcode --acp` as a child process; the reusable protocol client and process
@@ -64,14 +180,6 @@ scripts/package-swift-app.sh target/release/rustcode
 open target/swift-app/RustCode.app
 ```
 
-Tagged releases publish `rustcode-macos-aarch64-swift-app.zip` alongside the
-CLI archives. The bundle is ad-hoc signed but not notarized yet, so macOS
-Gatekeeper warns when opening a downloaded copy; right-click it and choose
-Open, or clear the quarantine flag with
-`xattr -d com.apple.quarantine RustCode.app`. The release workflow switches
-to Developer ID signing and notarization once its signing secrets are set
-(see [macOS release signing](macos-release-signing.md)); this workaround is
-removed from here with the first notarized release.
 
 ⌘K (File > Switch Chat…) opens a switcher over the window: type part of a
 chat's title, project or model, or something said in it, move with ↑↓ and
@@ -171,6 +279,7 @@ Native installations update from GitHub Releases; Homebrew installations use Hom
 - **In CLI:** Run `rustcode --update` (or `rustcode --upgrade`)
 - **Inside RustCode TUI:** Type `/update` (or accept the update modal on startup)
 - **Homebrew (macOS):** `brew upgrade rustcode`
+- **Desktop app:** see [Updating the app](#updating-the-app)
 
 ### Updating pre-v0.31.0 native installs
 

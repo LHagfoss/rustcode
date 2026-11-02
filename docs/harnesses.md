@@ -91,6 +91,7 @@ All methods are on the client's existing `rustcode --acp` connection.
     "capabilities": { /* see above */ },
     "models": [{ "id": "gpt-6-luna", "name": "gpt-6-luna",
                  "efforts": ["low", "medium", "high"], "default_effort": "medium" }],
+    "last": { "model": "gpt-6-luna", "effort": "high" },  // last new-thread choice, or null
     "error": null               // last detection/start error, if any
   }],
   "default": { "harness": "rustcode", "model": null, "effort": null },
@@ -99,9 +100,14 @@ All methods are on the client's existing `rustcode --acp` connection.
 ```
 
 `models` may be empty until `_rustcode/harnesses/models` ran for that harness
-(or a thread started it). For `rustcode` it lists the configured model
-profiles, `version` is the engine's and `auth` is `"ok"` (its providers have
-their own sign-in). `login_command` and `install_hint` are `null` for custom
+(or a thread started it) once; after that it comes from the model cache, also
+after an engine restart (see below). For `rustcode` it lists the configured
+model profiles, each with the efforts its `effort` option offers (`[]` when it
+offers no choice) and `default_effort` (the profile's `reasoning_effort`, else
+`"default"`); `version` is the engine's and `auth` is `"ok"` (its providers
+have their own sign-in). `last` is what `_rustcode/harnesses/remember` kept
+(always present, `null` when nothing is kept, so a client can tell an engine
+that remembers from an older one). `login_command` and `install_hint` are `null` for custom
 harnesses. Detection is cached for a minute; `set` and `remove` refresh it.
 
 | id | kind | command | version from | auth from |
@@ -119,11 +125,23 @@ Errors (an unknown id, an invalid command, removing a known harness) are
 
 ### `_rustcode/harnesses/models` `{ "harness": "codex" }` → `{ "models": [...] }`
 
-Starts the harness briefly if needed to list its models. Cached in memory.
-Codex answers from `model/list` (hidden models left out, efforts per model).
-An ACP harness is started in the system temp directory and one session is
-opened there to read its `model` and thought-level options; every model then
-shows the same efforts.
+Starts the harness briefly if needed to list its models. Codex answers from
+`model/list` (hidden models left out, efforts per model). An ACP harness is
+started in the system temp directory and one session is opened there to read
+its `model` and thought-level options; every model then shows the same
+efforts, and `default_effort` is the harness's own (read before a thread's
+choice is applied).
+
+**Model cache.** Every listing (this request, or a thread starting the
+harness) is kept in memory and in `~/.config/rustcode/harness-models.json`:
+per harness its models, `fetched_at` (Unix seconds), the harness `version`
+it came from, and the learned `effort`, `resume` and `images` capabilities. A
+restarted engine reads it, so the snapshot, the capabilities and the
+`session/load` answer of a restored thread (its `model` and `effort`
+options, before the harness starts again) are complete. A cached list older
+than 24 hours, or from another harness version, is answered at once and
+listed again in the background. A failed listing is not cached: the next
+request tries again (one listing per harness runs at a time).
 
 ### `_rustcode/harnesses/set` → `HarnessSnapshot`
 
@@ -144,6 +162,27 @@ Only custom harnesses can be removed; built-in entries can only be disabled.
 { "harness": "codex", "model": "gpt-6-luna", "effort": "low" }
 ```
 
+Sets `[harness_defaults]`, which harness a new thread starts on. A model or
+effort given here is also kept as that harness's last choice.
+
+### `_rustcode/harnesses/remember` → `{ "harness", "last" }`
+
+```jsonc
+{ "harness": "claude-code", "model": "opus", "effort": "high" }
+// → { "harness": "claude-code", "last": { "model": "opus", "effort": "high" } }
+```
+
+Keeps the model and effort last chosen for a new thread on that harness,
+as `model` and `effort` on its `[[harnesses]]` entry (empty values clear
+them). A client sends it when the user picks a model or effort in a
+new-thread picker. A model or effort changed inside a thread
+(`session/set_config_option` `model` or `effort`) changes that thread and is
+also kept as the harness's last choice, as most apps do: the next new thread
+starts where the user last left that harness. It never changes which harness
+new threads start on; that stays `[harness_defaults].harness`. A known
+harness without an entry gets one with `enabled = false` (as it was);
+`rustcode` gets an entry of its own. An unknown harness is `invalid_params`.
+
 ### `_rustcode/onboarding/complete` `{}` → `HarnessSnapshot`
 
 Marks first-run onboarding done (`onboarded: true`).
@@ -157,8 +196,13 @@ Marks first-run onboarding done (`onboarded: true`).
 ```
 
 No `harness` (or `"rustcode"`) starts a built-in thread, exactly as before.
-`model` and `effort` fall back to `[harness_defaults]` when that names the
-same harness, else to the harness's own defaults. Any configured harness can
+A missing `model` or `effort` falls back, in order, to the harness's last
+choice (`_rustcode/harnesses/remember`), to `[harness_defaults]` when that
+names the same harness (the built-in one when it names none), then to the
+harness's own default. A remembered or default model the harness no longer
+lists (when its list is known) is skipped, and so is an effort its model does
+not offer, without an error; a remembered effort is used only with the model
+it was kept with. Any configured harness can
 start a thread; `enabled` is what the app offers, not a gate. The engine
 starts the harness before it answers, so a harness that cannot start fails
 `session/new` with its reason (for example `codex not found on PATH`). The
@@ -168,7 +212,8 @@ response carries:
 "_meta": { "rustcode": { "harness": { "id": "codex", "capabilities": { … } } } }
 ```
 
-and the usual `configOptions` (`model`, `effort` when supported), so model
+(built-in threads carry it too, on `session/new` and `session/load`, with
+`id: "rustcode"`) and the usual `configOptions` (`model`, `effort` when supported), so model
 and effort switch with `session/set_config_option` for every harness. For an
 ACP harness the agent's own options are passed through: its `model` option
 (or category `model`) is `model`, its first `thought_level` option is
@@ -230,7 +275,9 @@ What each part does for an external thread:
   load starts a fresh session, without the earlier context, and its
   `resume` capability reads `false` once the engine has run it.
 - **Capabilities.** `images`, `effort` and `resume` of an ACP harness are
-  updated from its `initialize` answer and options the first time it runs.
+  updated from its `initialize` answer and options the first time it runs,
+  and kept in the model cache. A harness whose listed models offer efforts
+  has `effort: true`.
   `permission_modes` is empty for external harnesses: each applies its own
   configured approval rules.
 
@@ -248,6 +295,12 @@ onboarded = true
 [[harnesses]]
 id = "codex"
 enabled = true
+model = "gpt-6-luna"   # last new-thread choice (_rustcode/harnesses/remember)
+effort = "high"
+
+[[harnesses]]
+id = "rustcode"        # the built-in harness's last choice
+model = "chatgpt/gpt-6-luna"
 
 [[harnesses]]
 id = "my-agent"
@@ -259,9 +312,16 @@ enabled = true
 
 Known harnesses (`rustcode`, `codex`, `claude-code`, `gemini`, `opencode`)
 need only `id` and `enabled`; their commands are built in and can be
-overridden with `command`. An entry without `enabled` is on. Both sections
-are optional and only read from the user config: a project's
-`.rustcode/config.toml` cannot add a harness or change a command.
+overridden with `command`. An entry without `enabled` is on. `model` and
+`effort` are optional on any entry (older configs without them load
+unchanged). Both sections are optional and only read from the user config: a
+project's `.rustcode/config.toml` cannot add a harness or change a command.
+
+The terminal UI starts every thread on the built-in harness with its own
+`[default]` model and does not read the per-harness choice; it has no
+new-thread harness picker. The desktop app reads `last` from the snapshot
+and, against an engine without `_rustcode/harnesses/remember`, keeps the
+choices in its own storage instead.
 
 ## Process and safety rules
 

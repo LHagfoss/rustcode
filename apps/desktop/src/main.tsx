@@ -33,3 +33,6 @@ if (import.meta.env.DEV || new URLSearchParams(window.location.search).get("tran
   Object.assign(window, { __rustcode: store });
 
 void defaultTransport().then(store.connect);
+
+// ⌘⌥F: the frame-rate overlay (docs/desktop.md › Native frame rate). Dev builds only.
+if (import.meta.env.DEV) void import("./lib/perfOverlay").then((m) => m.installPerfOverlay());

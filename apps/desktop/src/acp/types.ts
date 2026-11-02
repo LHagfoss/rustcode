@@ -32,6 +32,7 @@ export const Method = {
   harnessSet: "_rustcode/harnesses/set",
   harnessRemove: "_rustcode/harnesses/remove",
   harnessDefault: "_rustcode/harnesses/default",
+  harnessRemember: "_rustcode/harnesses/remember",
   onboardingComplete: "_rustcode/onboarding/complete",
   capabilities: "_rustcode/capabilities",
   capabilitiesSet: "_rustcode/capabilities/set",
@@ -626,7 +627,14 @@ export interface Harness {
   install_hint?: string;
   capabilities: HarnessCapabilities;
   models: HarnessModel[];
+  /** The model and effort last chosen for a new thread on it (`[[harnesses]]` `model`/`effort`). */
+  last?: HarnessLast | null;
   error?: string | null;
+}
+
+export interface HarnessLast {
+  model: string | null;
+  effort: string | null;
 }
 
 export interface HarnessDefault {
@@ -641,6 +649,8 @@ export interface HarnessSnapshot {
   onboarded: boolean;
   /** Set by the client when the engine does not implement harnesses yet. */
   unsupported?: boolean;
+  /** The engine remembers each harness's last choice (`_rustcode/harnesses/remember`); else the app does. */
+  remembers?: boolean;
 }
 
 export const BUILTIN_CAPABILITIES: HarnessCapabilities = {
@@ -694,14 +704,25 @@ export function parseHarnessModels(value: Json | undefined): HarnessModel[] {
   });
 }
 
+export function parseHarnessLast(value: Json | undefined): HarnessLast | null {
+  const last = obj(value);
+  if (!last) return null;
+  const model = str(last.model) ?? null;
+  const effort = str(last.effort) ?? null;
+  return model || effort ? { model, effort } : null;
+}
+
 export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
   const root = obj(value) ?? {};
+  let remembers = false;
   const harnesses = arr(root.harnesses).flatMap((h): Harness[] => {
     const o = obj(h);
     const id = str(o?.id);
     if (!o || !id) return [];
     const kind = str(o.kind);
     const auth = str(o.auth);
+    // An engine that remembers choices sends `last` on every row, null when there is none.
+    if ("last" in o) remembers = true;
     return [
       {
         id,
@@ -719,6 +740,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         install_hint: str(o.install_hint),
         capabilities: parseCapabilities(o.capabilities),
         models: parseHarnessModels(o.models),
+        last: parseHarnessLast(o.last),
         error: str(o.error) ?? null,
       },
     ];
@@ -732,6 +754,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
       effort: str(d?.effort) ?? null,
     },
     onboarded: bool(root.onboarded) ?? false,
+    remembers,
   };
 }
 

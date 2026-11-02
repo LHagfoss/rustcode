@@ -50,6 +50,13 @@ jobs:
             - name: Build the UI
               run: bun run build
 
+            # The release bundle's version comes from the root Cargo.toml
+            # (scripts/bundle-version.ts); the build in build.yml relies on it.
+            - name: Check the release version config
+              run: |
+                  bun scripts/bundle-version.ts
+                  test "$(bun scripts/bundle-version.ts)" = "$(sed -n 's/^version = "\(.*\)"/\1/p' ../../Cargo.toml | head -1)"
+
             - name: Install Rust
               uses: dtolnay/rust-toolchain@stable
               with:
