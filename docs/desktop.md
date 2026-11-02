@@ -241,10 +241,35 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   the gap the SwiftUI app leaves (`src/ui/Titlebar.tsx`); in full screen,
   where the lights hide, the rows start at the edge.
 - **One shell.** The sidebar and the main header (`src/ui/MainHeader.tsx`)
-  stay mounted for every view. Settings covers only the main column and
-  the right panel, which stay mounted and laid out underneath (`inert`),
-  so ⌘, renders Settings in the first frame with nothing remounted; its
-  pages open with the last engine answers and refresh behind them.
+  stay mounted for every view. The header floats in glass over its view
+  (the chat, new or open, and Settings), with a soft fade at its foot, and
+  content scrolls under it; views leave `HEADER_HEIGHT` (42 px) at their
+  top.
+- **Settings** takes the whole window: the shell (sidebar, chat, right
+  panel) stays mounted and laid out underneath, hidden and `inert`, so the
+  thread comes back exactly where it was (scroll, drafts, open rows). Its
+  header has Back on the traffic lights' line; Back, Esc and ⌘, return.
+  The pages sit in one centred 760 px column, the section list at its left
+  (sticky) and the page beside it; they open with the last engine answers
+  and refresh behind them, with skeleton rows the first time.
+- **Loading.** Skeletons stand where content will appear: the sidebar's
+  thread rows, the model pill, an opening thread's transcript and Settings'
+  lists (`Skeleton` in `src/ui/primitives.tsx`; the sweep stops under
+  Reduce motion). The engine says nothing while it starts quickly; after
+  2 s a toast says "Starting engine…" with progress (spawned, then
+  initializing). When it stops or crashes, an error toast carries Restart;
+  when the shell brings it back, "The engine restarted" (`state/store.ts`,
+  `onEngineStatus`). The mock takes `?boot=<ms>` (a slow start) and
+  `?crash=<ms>` (a crash after the first start) to show these.
+- **Toasts** (`src/ui/Toaster.tsx`, `toast()` in `state/store.ts`): one
+  stack at the bottom right of the chat column, just above the composer
+  stack (the window's corner while Settings is open), frosted like the
+  composer. Info and success leave after 4 s, errors stay until closed;
+  the pointer over the stack pauses them; a swipe right or the close
+  button dismisses; at most three show. A toast may carry one action. The
+  same text again restarts the shown toast, and an `id` replaces one in
+  place (the engine's). Copying, errors not tied to a message, engine,
+  worktree, harness and theme events use them.
 - **Settings › Capabilities.** Skills and MCP servers in one page, through
   `_rustcode/capabilities*`: servers with their state, tool count and
   names, errors and the engine log lines that name them, on/off (servers
@@ -271,16 +296,37 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   to that turn, hover shows its first words. The current turn comes from
   the virtualizer's row offsets on scroll, and the rail re-renders only
   when it or the turns change (`src/ui/TimelineRail.tsx`).
-- **Harness marks.** `HarnessIcon` draws each harness's mark in the model
-  pill, the harness picker and list (onboarding, Settings), the tray, the
-  sidebar's rows and the thread's header: Claude, Gemini and OpenCode from
-  simple-icons 16.35.0 (CC0, three paths vendored, no dependency), the app
-  icon for RustCode, a letter in a rounded square for the rest (Codex: the
-  OpenAI mark is not in simple-icons). A harness `icon` URL is preferred
-  when the engine sends one.
+- **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
+  (no fetch, no dependency), in the model pill, the harness picker and list
+  (onboarding, Settings), the tray, the sidebar's rows and the thread's
+  header: the OpenAI blossom for Codex (currentColor), the Claude mark in
+  its orange, the Gemini spark with its gradient (all three from
+  `@lobehub/icons-static-svg` 1.102.0, MIT), OpenCode's own mark from
+  `anomalyco/opencode` `packages/identity/mark.svg` (MIT; its two greys as
+  currentColor at 100 % and 35 %), and the app icon for RustCode; any other
+  harness gets a letter. `mono` draws the coloured marks in currentColor.
+  The marks are their owners' trademarks, used only to identify the
+  integration (a NOTICE in the file says so). A harness `icon` URL is
+  preferred when the engine sends one.
+- **Model picker.** An external harness lists its models only when asked
+  (`_rustcode/harness/models`): a new thread on one asks once per engine
+  run (`ensureHarnessModels`), so the model list, effort and the rest are
+  there before the thread exists; a stale default model falls back to the
+  harness's first.
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
-  pictures, a click zooms, Esc or a click outside closes).
+  pictures, a click zooms, Esc or a click outside closes). A reply's
+  `![](path)` shows the picture when the path (absolute, `~/`, `file://`
+  or relative to the thread's folder) resolves inside the thread's folder
+  or its worktree: the shell's `thread_image` follows symlinks and refuses
+  anything else, and anything that is not a PNG, JPEG, GIF, WebP or SVG of
+  at most 20 MB. Web and `data:` pictures show as they are.
+- **Diagrams.** A ```` ```mermaid ```` block loads mermaid (12.2.0, its own
+  chunk) the first time one appears, themed from the tokens (`base` theme,
+  re-rendered on a theme change), rendered with `securityLevel: "strict"`,
+  200 ms after a streaming block stops changing. Over 12,000 characters or
+  300 lines, or when it does not parse, it stays code with a note. A click
+  opens the diagram in the lightbox.
 - **File references.** Inline code naming a file (`src/a.rs:12`,
   `src/a.rs:12:4`, `Cargo.toml`) and relative links (`[a](src/a.rs#L12)`)
   open the file in the editor at that line, resolved against the thread's
@@ -527,9 +573,8 @@ From the SwiftUI app, still missing or partial:
   (`_rustcode/session/move`), the retention sweep, swipe actions; loading
   the thread list page by page. Trash moves the folder into `~/.Trash`
   (macOS); Finder's Put Back does not know it.
-- Markdown pictures from local paths (an asset protocol scoped to the
-  thread's folder) and `mermaid` blocks; a file reference that is changed
-  in the turn does not open the Changes or Review diff yet.
+- A file reference that is changed in the turn does not open the Changes
+  or Review diff yet.
 - Turn folding ("Worked for … · N tool calls"), sticky
   turn bar, stream pacing, quote in reply.
 - The auto-approve (YOLO) toggle on approval cards.
