@@ -143,6 +143,8 @@ export interface AppState {
   extras: Record<string, ComposeExtras>;
   settings: SettingsSection | null;
   switcherOpen: boolean;
+  /** A report command's answer (`/status`, `/context`…), shown over the composer of its thread. */
+  report: { threadId: string; text: string } | null;
   /** Bumped to open the composer's model picker (`/model`). */
   modelPickerAsk: number;
   onboardingOpen: boolean;
@@ -295,6 +297,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   settings: null,
   switcherOpen: false,
   modelPickerAsk: 0,
+  report: null,
   onboardingOpen: false,
   sidebarHidden: stored(STORAGE.sidebar) === "1",
   toasts: [],
@@ -753,7 +756,14 @@ function onSessionUpdate(params: JsonObject) {
     return;
   }
   if (isReportUpdate(params) && update.kind === "agent") {
-    toast(update.text.trim().split("\n")[0] ?? "Done");
+    // A report streams in chunks: they gather in one panel over the thread's composer and stay
+    // out of the transcript (state/report.ts reads its shape).
+    set((s) => ({
+      report: {
+        threadId: sessionId,
+        text: s.report?.threadId === sessionId ? s.report.text + update.text : update.text,
+      },
+    }));
     return;
   }
   const status = statusInUpdate(params);
@@ -1373,6 +1383,8 @@ export async function runPrompt(
   });
   const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
   updateThread(id, (t) => beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView));
+  // A new prompt starts a new report, if it is one.
+  if (get().report?.threadId === id) set({ report: null });
   set((s) => ({
     sessions: byActivity(
       s.sessions.map((x) =>
@@ -1400,6 +1412,11 @@ export async function runPrompt(
     failure = errorText(error);
   }
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
+  // A report command that answered in the panel leaves no turn behind: its message and footer go.
+  const reported = get().report?.threadId === id;
+  if (reported && outcome === "completed" && isReportCommand(text, extras)) {
+    updateThread(id, (t) => ({ ...t, items: t.items.slice(0, startIndex) }));
+  }
   if (options.link)
     linkFinished(options.link, id, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
   void refreshSessions();
@@ -2070,4 +2087,18 @@ export function resetForTests() {
     checkpoints: {},
     newWorktree: { on: false, branch: "", edited: false },
   });
+}
+
+/** A command the engine marks as a report (`/status`, `/context`…), sent alone. */
+function isReportCommand(text: string, extras: ComposeExtras): boolean {
+  const name = extras.command?.name ?? text.trim().split(/\s/)[0];
+  return (
+    !extras.links.length &&
+    !extras.attachments.length &&
+    get().commands.some((c) => c.name === name && c.report)
+  );
+}
+
+export function closeReport() {
+  set({ report: null });
 }
