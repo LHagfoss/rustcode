@@ -259,7 +259,7 @@ export const Composer = memo(function Composer({
     if (!text.trim() && !hasExtras(sentExtras) && !(steer && running)) return;
     update("");
     change(() => emptyExtras);
-    const sending = steer && !hasExtras(sentExtras) ? steerOrSubmit(text) : submit(text, sentExtras);
+    const sending = steer ? steerOrSubmit(text, sentExtras) : submit(text, sentExtras);
     void sending.then((sent) => {
       // A thread that could not start keeps the message for another try.
       if (!sent && !useApp.getState().drafts[key]) {
@@ -644,12 +644,18 @@ function QueueStack({
           ) : (
             <button
               type="button"
-              onClick={() => !q.extras?.attachments.length && setEditing({ id: q.id, text: q.text })}
-              className="min-w-0 flex-1 cursor-text text-left"
+              onClick={() => setEditing({ id: q.id, text: q.text })}
+              className="flex min-w-0 flex-1 cursor-text items-center gap-1.5 text-left"
               aria-label="Edit queued message"
             >
-              <span className="line-clamp-2 text-callout">
-                {q.text || (q.extras?.attachments.length ? "Attachments" : "")}
+              {!!q.extras?.attachments.length && (
+                <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-fill px-1 text-caption text-fg-muted">
+                  <Paperclip size={10} />
+                  {q.extras.attachments.length}
+                </span>
+              )}
+              <span className={cx("line-clamp-2 text-callout", !q.text && "text-fg-faint")}>
+                {q.text || "Attachments only"}
               </span>
             </button>
           )}
@@ -666,18 +672,29 @@ function QueueStack({
                 </button>
               </Tooltip>
             )}
-            {steerable && !q.extras?.attachments.length && (
-              <Tooltip label="Send now: the turn reads it after its current step">
-                <button
-                  type="button"
-                  aria-label="Send now"
-                  onClick={() => void sendQueuedNow(thread.id, q.id)}
-                  className="text-fg-muted hover:text-fg"
-                >
-                  <ArrowUp size={13} />
-                </button>
-              </Tooltip>
-            )}
+            {steerable &&
+              (q.extras?.attachments.length ? (
+                <Tooltip label="Attachments go with the next turn: a running turn takes text only">
+                  <span
+                    role="img"
+                    aria-label="Send now is not available with attachments"
+                    className="text-fg-faint"
+                  >
+                    <ArrowUp size={13} />
+                  </span>
+                </Tooltip>
+              ) : (
+                <Tooltip label="Send now: the turn reads it after its current step">
+                  <button
+                    type="button"
+                    aria-label="Send now"
+                    onClick={() => void sendQueuedNow(thread.id, q.id)}
+                    className="text-fg-muted hover:text-fg"
+                  >
+                    <ArrowUp size={13} />
+                  </button>
+                </Tooltip>
+              ))}
             <Tooltip label="Remove">
               <button
                 type="button"
