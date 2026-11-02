@@ -442,8 +442,16 @@ const COMMANDS: Json[] = [
     description: "Review the working tree or a pull request",
     input: { hint: "what to review" },
   },
-  { name: "model", description: "Switch the model", input: { hint: "model id" } },
+  {
+    name: "model",
+    description: "Switch the model",
+    input: { hint: "model id" },
+    _meta: { rustcode: { action: "model_picker" } },
+  },
   { name: "skills", description: "List the skills this thread can load" },
+  { name: "clear", description: "Start a new thread", _meta: { rustcode: { action: "new_session" } } },
+  { name: "copy", description: "Copy the last reply", _meta: { rustcode: { action: "copy_response" } } },
+  { name: "resume", description: "Switch to another thread", _meta: { rustcode: { action: "session_picker" } } },
 ];
 
 function configOptions(thread: MockThread, harnesses: HarnessSnapshot): Json[] {

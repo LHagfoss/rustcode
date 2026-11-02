@@ -366,6 +366,14 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   // The first open thread's config options: stable while a reply streams, so the picker does not re-render per chunk.
   const knownConfig = useApp((s) => firstConfig(s.threads));
   const [open, setOpen] = useState(false);
+  // `/model` asks the picker to open (store.runCommandAction).
+  const ask = useApp((s) => s.modelPickerAsk);
+  const seenAsk = useRef(ask);
+  useEffect(() => {
+    if (ask === seenAsk.current) return;
+    seenAsk.current = ask;
+    setOpen(true);
+  }, [ask]);
   const [pane, setPane] = useState<"main" | "models" | "harness">("main");
   const [preview, setPreview] = useState<string | null>(null);
 

@@ -199,7 +199,13 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   project folder, *Worktree* (new threads), *Files*, agents working, and the
   harness only when it is not the default one. A slash command from `available_commands_update` that
   takes arguments becomes a token in front of the field (picked from the
-  popup or typed as `/name `). Images and files can be pasted, dropped or
+  popup or typed as `/name `). Commands the engine marks for the client
+  (`_meta.rustcode.action`) never go out as a prompt: `new_session`
+  (`/clear`) opens a new thread on the same project, harness, model and
+  effort; `model_picker` (`/model`) opens the model picker;
+  `session_picker` the thread switcher; `copy_response` copies the last
+  reply (`runCommandAction`). `/fork` leaves you in the thread, as the
+  engine does, and a toast offers *Open* on the fork. Images and files can be pasted, dropped or
   picked: images are ACP `image` blocks when the thread's harness takes
   them (`capabilities.images`, or `promptCapabilities.image` on the
   built-in one); files with a path go as an "Attached files" list on the
