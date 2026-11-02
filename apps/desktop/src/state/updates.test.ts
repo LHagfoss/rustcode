@@ -17,3 +17,11 @@ describe("updates", () => {
     expect(shouldShowWhatsNew("0.116.0", "0.115.0", true)).toBe(false);
   });
 });
+
+describe("What's New after an in-app install", () => {
+  test("shows when the install recorded where it came from, even with no version seen", () => {
+    expect(shouldShowWhatsNew("1.1.0", null, false, "1.0.0")).toBe(true);
+    expect(shouldShowWhatsNew("1.0.0", null, false, "1.0.0")).toBe(false);
+    expect(shouldShowWhatsNew("1.1.0", null, true, "1.0.0")).toBe(false);
+  });
+});

@@ -7,10 +7,20 @@
 import { create } from "zustand";
 import { openExternal } from "../lib/native";
 import { shellCall } from "../lib/shell";
-import { canUpdate, checkForUpdate, installUpdate, type UpdateInfo } from "../lib/updater";
+import {
+  appVersion,
+  canUpdate,
+  checkForUpdate,
+  type InstallProgress,
+  installUpdate,
+  isDevBuild,
+  type UpdateInfo,
+} from "../lib/updater";
 
 export const UPDATE_CHECK_MS = 30 * 60_000;
 const SEEN_KEY = "rustcode.seenVersion";
+/** Written just before an in-app install: the next launch shows What's New whatever else it knows. */
+const UPDATED_FROM_KEY = "rustcode.updatedFrom";
 
 interface UpdatesState {
   info: UpdateInfo | null;
@@ -18,6 +28,8 @@ interface UpdatesState {
   error: string | null;
   checkedAt: number | null;
   installing: boolean;
+  /** The install's progress, for the sidebar row's bar. */
+  progress: InstallProgress | null;
   /** The release notes to show once, after the app was updated. */
   whatsNew: { version: string; notes: string | null } | null;
 }
@@ -27,6 +39,7 @@ export const useUpdates = create<UpdatesState>(() => ({
   error: null,
   checkedAt: null,
   installing: false,
+  progress: null,
   whatsNew: null,
 }));
 
@@ -46,35 +59,59 @@ export function newerVersion(a: string, b: string): boolean {
 }
 
 /**
- * Whether What's New shows for `current`, given the version last seen: only
- * after an update, never on a first install and never for a dev build.
+ * Whether What's New shows for `current`, given the version last seen and the
+ * version an in-app install started from: only after an update, never on a
+ * first install and never for a dev build.
  */
-export function shouldShowWhatsNew(current: string, seen: string | null, development: boolean): boolean {
-  return !development && !!seen && newerVersion(current, seen);
+export function shouldShowWhatsNew(
+  current: string,
+  seen: string | null,
+  development: boolean,
+  updatedFrom: string | null = null,
+): boolean {
+  if (development) return false;
+  if (updatedFrom && newerVersion(current, updatedFrom)) return true;
+  return !!seen && newerVersion(current, seen);
 }
 
-function readSeen(): string | null {
+function read(key: string): string | null {
   try {
-    return localStorage.getItem(SEEN_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeSeen(version: string) {
+function write(key: string, value: string | null) {
   try {
-    localStorage.setItem(SEEN_KEY, version);
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
   } catch {
     // Not kept in a private window.
   }
 }
 
+/** On launch, from the app's own version (no network): What's New after an update. */
+async function whatsNewOnLaunch() {
+  const current = await appVersion();
+  if (!current) return;
+  const seen = read(SEEN_KEY);
+  const updatedFrom = read(UPDATED_FROM_KEY);
+  write(SEEN_KEY, current);
+  write(UPDATED_FROM_KEY, null);
+  if (!shouldShowWhatsNew(current, seen, isDevBuild(), updatedFrom)) return;
+  useUpdates.setState({ whatsNew: { version: current, notes: null } });
+  // The notes follow when GitHub answers; offline the dialog links the release page.
+  const notes = await shellCall<string | null>("release_notes", { version: current }).catch(() => null);
+  if (useUpdates.getState().whatsNew?.version === current)
+    useUpdates.setState({ whatsNew: { version: current, notes } });
+}
+
 /** A failed check tries again after this, not after the full interval. */
 const RETRY_MS = 60_000;
 let retry: ReturnType<typeof setTimeout> | undefined;
-let pendingWhatsNew = true;
 
-async function check(first: boolean) {
+async function check() {
   clearTimeout(retry);
   let info: UpdateInfo;
   try {
@@ -82,21 +119,10 @@ async function check(first: boolean) {
   } catch (error) {
     // Offline, GitHub busy, or the shell refused: say so in Settings and try again soon.
     useUpdates.setState({ error: error instanceof Error ? error.message : String(error) });
-    retry = setTimeout(() => void check(first), RETRY_MS);
+    retry = setTimeout(() => void check(), RETRY_MS);
     return;
   }
   useUpdates.setState({ info, error: null, checkedAt: Date.now() });
-  first = first && pendingWhatsNew;
-  pendingWhatsNew = false;
-  if (!first) return;
-  const seen = readSeen();
-  writeSeen(info.current);
-  if (shouldShowWhatsNew(info.current, seen, info.development)) {
-    const notes = await shellCall<string | null>("release_notes", { version: info.current }).catch(
-      () => null,
-    );
-    useUpdates.setState({ whatsNew: { version: info.current, notes } });
-  }
 }
 
 let started = false;
@@ -124,12 +150,13 @@ export function startUpdateChecks() {
   }
   if (started || !canUpdate()) return;
   started = true;
-  setTimeout(() => void check(true), 5_000);
-  setInterval(() => void check(false), UPDATE_CHECK_MS);
+  void whatsNewOnLaunch();
+  setTimeout(() => void check(), 5_000);
+  setInterval(() => void check(), UPDATE_CHECK_MS);
   // Back in front after a while away (a laptop that slept): check again.
   window.addEventListener("focus", () => {
     const last = useUpdates.getState().checkedAt;
-    if (!last || Date.now() - last > 10 * 60_000) void check(false);
+    if (!last || Date.now() - last > 10 * 60_000) void check();
   });
 }
 
@@ -141,12 +168,14 @@ export async function applyUpdate(): Promise<string | null> {
     if (info.page) openExternal(info.page);
     return null;
   }
-  useUpdates.setState({ installing: true });
+  useUpdates.setState({ installing: true, progress: null });
+  write(UPDATED_FROM_KEY, info.current);
   try {
-    await installUpdate();
+    await installUpdate((progress) => useUpdates.setState({ progress }));
     return null;
   } catch (error) {
-    useUpdates.setState({ installing: false });
+    write(UPDATED_FROM_KEY, null);
+    useUpdates.setState({ installing: false, progress: null });
     return error instanceof Error ? error.message : String(error);
   }
 }

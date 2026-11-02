@@ -8,12 +8,33 @@ import { openExternal } from "../lib/native";
 import { toast } from "../state/store";
 import { applyUpdate, closeWhatsNew, useUpdates } from "../state/updates";
 import { Markdown } from "./Markdown";
-import { Pill, Spinner } from "./primitives";
+import { cx, Pill, Spinner } from "./primitives";
+
+const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
 
 export function UpdateRow() {
   const info = useUpdates((s) => s.info);
   const installing = useUpdates((s) => s.installing);
+  const progress = useUpdates((s) => s.progress);
   if (!info?.available || !info.latest || info.development) return null;
+  const fraction =
+    progress?.phase === "downloading"
+      ? progress.total
+        ? progress.received / progress.total
+        : undefined
+      : progress
+        ? 1
+        : 0;
+  const step =
+    progress?.phase === "verifying"
+      ? "Verifying the download…"
+      : progress?.phase === "installing"
+        ? "Installing · RustCode reopens"
+        : progress?.phase === "downloading"
+          ? progress.total
+            ? `Downloading · ${Math.round((fraction ?? 0) * 100)}% of ${mb(progress.total)}`
+            : `Downloading · ${mb(progress.received)}`
+          : "Starting the download…";
   return (
     <div className="shrink-0 px-2 pb-2">
       <button
@@ -29,12 +50,26 @@ export function UpdateRow() {
           <span className="block font-medium">
             {installing ? `Updating to ${info.latest}…` : `Update to ${info.latest}`}
           </span>
-          <span className="block text-caption text-fg-muted">
-            {installing
-              ? "RustCode reopens when it is done"
-              : info.canInstall
-                ? "Installs and reopens RustCode"
-                : "Opens the release page"}
+          {installing && (
+            <span
+              role="progressbar"
+              aria-label="Update progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={fraction === undefined ? undefined : Math.round(fraction * 100)}
+              className="my-1 block h-[4px] overflow-hidden rounded-full bg-fill-strong"
+            >
+              <span
+                className={cx(
+                  "block h-full rounded-full bg-accent transition-[width] duration-200 ease-snappy",
+                  fraction === undefined && "w-1/3 animate-pulse",
+                )}
+                style={fraction === undefined ? undefined : { width: `max(4px, ${fraction * 100}%)` }}
+              />
+            </span>
+          )}
+          <span className="block text-caption text-fg-muted tabular">
+            {installing ? step : info.canInstall ? "Installs and reopens RustCode" : "Opens the release page"}
           </span>
         </span>
       </button>

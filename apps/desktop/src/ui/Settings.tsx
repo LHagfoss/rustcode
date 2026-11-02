@@ -26,7 +26,7 @@ import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
-import { canUpdate, checkForUpdate, installUpdate, type UpdateInfo } from "../lib/updater";
+import { canUpdate, checkForUpdate, type UpdateInfo } from "../lib/updater";
 import { validateDefault } from "../state/harness";
 import {
   APP_VERSION,
@@ -46,7 +46,7 @@ import {
   toast,
   useApp,
 } from "../state/store";
-import { showWhatsNew, useUpdates } from "../state/updates";
+import { applyUpdate, showWhatsNew, useUpdates } from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
@@ -614,10 +614,11 @@ function AppVersion() {
     }
     setBusy("installing");
     setError(null);
-    try {
-      await installUpdate();
-    } catch (e) {
-      setError(String(e));
+    // One install path: the sidebar row shows its progress and the next launch shows What's New.
+    useUpdates.setState({ info });
+    const failed = await applyUpdate();
+    if (failed) {
+      setError(failed);
       setBusy(null);
     }
   };
