@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
+import { haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
 import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
@@ -68,6 +69,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
 function General() {
   const defaultCwd = useApp((s) => s.defaultCwd);
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
+  const [haptics, setHapticsState] = useState(hapticsEnabled);
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
   const orchestration = useApp((s) => s.orchestration);
@@ -142,6 +144,20 @@ function General() {
             onChange={(v) => {
               setLinkPreviews(v);
               setLinkPreviewsState(v);
+            }}
+          />
+        </Row>
+        <Row
+          title="Trackpad haptics"
+          subtitle="A light tap on the Force Touch trackpad when you send, stop a turn, or rest on Send."
+        >
+          <Switch
+            label="Trackpad haptics"
+            checked={haptics}
+            onChange={(v) => {
+              setHaptics(v);
+              setHapticsState(v);
+              if (v) haptic("generic");
             }}
           />
         </Row>

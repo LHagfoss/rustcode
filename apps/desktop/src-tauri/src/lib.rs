@@ -67,6 +67,7 @@ pub fn run() {
             native::open_path,
             native::skill_create,
             native::open_in_editor,
+            native::haptic,
             banner::banner_save,
             banner::banner_read,
             banner::banner_remove,
