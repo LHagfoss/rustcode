@@ -239,7 +239,7 @@ function HarnessList({
                 h.id === current && "bg-fill",
               )}
             >
-              <HarnessIcon id={h.id} name={h.name} size={14} className="text-fg-muted" />
+              <HarnessIcon id={h.id} name={h.name} size={16} className="text-fg" />
               <span className="flex-1 text-body">{h.name}</span>
               <span className="text-caption text-fg-muted">
                 {reason ? "Unavailable" : h.builtin ? "Built in" : h.kind.toUpperCase()}
@@ -411,7 +411,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
             open ? "bg-fill-strong text-fg" : "bg-fill",
           )}
         >
-          <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={12} />
+          <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
           {fast?.currentBool && <Zap size={11} className="shrink-0 text-fg" fill="currentColor" />}
           <span className="truncate">{label.name}</span>
           {label.effort && <span className="text-fg-faint">{effortLabel(label.effort)}</span>}
@@ -490,7 +490,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                 >
                   <span className="text-callout text-fg-muted">Harness</span>
                   <span className="flex flex-1 items-center justify-end gap-1.5 truncate font-medium text-callout">
-                    <HarnessIcon id={harness?.id ?? "rustcode"} name={harnessName} size={12} />
+                    <HarnessIcon id={harness?.id ?? "rustcode"} name={harnessName} size={14} />
                     {harnessName}
                   </span>
                   {isNew ? (

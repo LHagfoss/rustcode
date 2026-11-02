@@ -572,7 +572,7 @@ export const Composer = memo(function Composer({
         {harness && !harness.builtin && harness.id !== defaultHarness && (
           <Tooltip side="bottom" label="Its own sign-in and tools; RustCode's sandbox does not apply">
             <span className="flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted">
-              <HarnessIcon id={harness.id} name={harness.name} size={12} />
+              <HarnessIcon id={harness.id} name={harness.name} size={14} />
               {harness.name}
             </span>
           </Tooltip>
