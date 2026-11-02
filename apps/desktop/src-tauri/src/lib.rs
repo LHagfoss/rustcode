@@ -4,6 +4,7 @@
 //! argument from the webview is validated here.
 
 mod engine;
+mod links;
 mod native;
 
 use engine::{Engine, EngineEvent};
@@ -38,6 +39,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(Engine::default()) as EngineState)
+        .manage(links::LinkCache::default())
         .invoke_handler(tauri::generate_handler![
             engine_start,
             engine_send,
@@ -48,6 +50,7 @@ pub fn run() {
             native::open_login_terminal,
             native::git_changes,
             native::read_image,
+            links::link_meta,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");

@@ -8,6 +8,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ServerWebSocket, Subprocess } from "bun";
+import { nativeCommands } from "./bridge-native";
 
 const PORT = Number(process.env.BRIDGE_PORT ?? 1421);
 const ALLOWED_ORIGINS = new Set(
@@ -31,7 +32,7 @@ interface Session {
 
 type Socket = ServerWebSocket<Session>;
 
-function send(ws: Socket, event: unknown) {
+export function send(ws: Socket, event: unknown) {
   if (!ws.data.closed) ws.send(JSON.stringify(event));
 }
 
@@ -100,6 +101,23 @@ if (import.meta.main) {
       open: start,
       message(ws, message) {
         const line = String(message);
+        if (line.startsWith('{"bridge":"call"')) {
+          const { id, command, args } = JSON.parse(line) as {
+            id: number;
+            command: string;
+            args: Record<string, unknown>;
+          };
+          const run = nativeCommands[command];
+          if (!run) {
+            send(ws, { type: "reply", id, ok: false, error: `Unknown command ${command}` });
+            return;
+          }
+          run({ ...args, __socket: ws }).then(
+            (value) => send(ws, { type: "reply", id, ok: true, value: value ?? null }),
+            (error) => send(ws, { type: "reply", id, ok: false, error: String(error?.message ?? error) }),
+          );
+          return;
+        }
         if (line.startsWith('{"bridge"')) {
           stop(ws);
           ws.data.backoffMs = 500;

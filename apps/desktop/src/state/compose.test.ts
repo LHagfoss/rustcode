@@ -1,12 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  composedText,
-  emptyExtras,
-  pastedUrl,
-  promptBlocks,
-  splitImageMarkers,
-  splitUrls,
-} from "./compose";
+import { composedText, emptyExtras, pastedUrl, promptBlocks, splitImageMarkers, splitUrls } from "./compose";
 
 const command = { name: "/review", description: "", takesArguments: true, report: false, action: "execute" };
 
@@ -55,7 +48,10 @@ describe("compose", () => {
   });
 
   test("a file without a path is inlined", () => {
-    const extras = { ...emptyExtras, attachments: [{ id: "1", kind: "file" as const, name: "n.txt", text: "x" }] };
+    const extras = {
+      ...emptyExtras,
+      attachments: [{ id: "1", kind: "file" as const, name: "n.txt", text: "x" }],
+    };
     expect(promptBlocks("", extras, { images: true, builtin: false, cwd: "" })).toEqual([
       { type: "text", text: "Attached file `n.txt`:\n```\nx\n```" },
     ]);

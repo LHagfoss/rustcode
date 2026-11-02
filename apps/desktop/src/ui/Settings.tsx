@@ -19,6 +19,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
+import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { pickFolder } from "../lib/native";
 import { validateDefault } from "../state/harness";
 import {
@@ -110,6 +111,7 @@ function Loading({ error }: { error: string | null }) {
 
 function General() {
   const projectCwd = useApp((s) => s.projectCwd);
+  const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   const shortcuts: [string, string][] = [
     ["New thread", "⌘N"],
     ["Switch thread", "⌘K"],
@@ -129,6 +131,21 @@ function General() {
         </Row>
         <Row title="Harness, model and effort" subtitle="Which agent runs a new thread by default.">
           <Pill onClick={() => openSettings("harnesses")}>Harnesses…</Pill>
+        </Row>
+      </Group>
+      <Group title="Chat">
+        <Row
+          title="Link previews"
+          subtitle="Links show as chips with the page's title, icon and colour. The app fetches them itself, with no cookies, from public hosts only."
+        >
+          <Switch
+            label="Link previews"
+            checked={linkPreviews}
+            onChange={(v) => {
+              setLinkPreviews(v);
+              setLinkPreviewsState(v);
+            }}
+          />
         </Row>
       </Group>
       <Group title="Keyboard">

@@ -256,7 +256,7 @@ function seedThreads(): MockThread[] {
         update(b, {
           sessionUpdate: "agent_message_chunk",
           content: text(
-            "It doubles from 0.5 s up to 30 s, and resets after the engine stays up for a minute.",
+            "It doubles from 0.5 s up to 30 s, and resets after the engine stays up for a minute. See https://github.com/LHagfoss/rustcode/pull/2788 and the timer in https://docs.rs/tokio/latest/tokio/time/fn.sleep.html.",
           ),
           ...turn(4_000),
         }),
@@ -285,10 +285,18 @@ function seedThreads(): MockThread[] {
   ];
 }
 
-const COMMANDS = [
+const COMMANDS: Json[] = [
   { name: "compact", description: "Summarize the conversation to free context" },
-  { name: "context", description: "Show what fills the context window", _meta: { rustcode: { report: true } } },
-  { name: "review", description: "Review the working tree or a pull request", input: { hint: "what to review" } },
+  {
+    name: "context",
+    description: "Show what fills the context window",
+    _meta: { rustcode: { report: true } },
+  },
+  {
+    name: "review",
+    description: "Review the working tree or a pull request",
+    input: { hint: "what to review" },
+  },
   { name: "model", description: "Switch the model", input: { hint: "model id" } },
   { name: "skills", description: "List the skills this thread can load" },
 ];
@@ -464,7 +472,9 @@ export class MockEngine {
       case "session/load": {
         const thread = this.thread(params.sessionId);
         for (const line of thread.history) this.notify(line);
-        this.notify(update(thread.id, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS }));
+        this.notify(
+          update(thread.id, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS }),
+        );
         this.notify(
           update(thread.id, {
             sessionUpdate: "usage_update",
@@ -819,6 +829,38 @@ export class MockEngine {
   }
 }
 
+const svgIcon = (fill: string, letter: string) =>
+  `data:image/svg+xml;base64,${btoa(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="4" fill="${fill}"/><text x="8" y="12" font-size="10" font-family="sans-serif" text-anchor="middle" fill="#fff">${letter}</text></svg>`,
+  )}`;
+
+/** Canned link metadata, as the shell's `link_meta` answers. */
+export function mockLinkMeta(url: string): JsonObject | null {
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return "";
+    }
+  })();
+  if (host.endsWith("github.com")) {
+    const path = new URL(url).pathname.split("/").filter(Boolean);
+    return {
+      title:
+        path.length >= 4
+          ? `${path[2] === "pull" ? "Pull request" : "Issue"} #${path[3]} · ${path[0]}/${path[1]}`
+          : `${path.join("/") || "GitHub"}`,
+      siteName: "GitHub",
+      color: "#1e2327",
+      icon: svgIcon("#1e2327", "G"),
+    };
+  }
+  if (host.endsWith("docs.rs"))
+    return { title: "tokio - Rust", color: "#e57300", icon: svgIcon("#e57300", "D") };
+  if (host.endsWith("example.com")) return null;
+  return { title: host, icon: svgIcon("#435c6e", host.charAt(0).toUpperCase() || "?") };
+}
+
 export class MockTransport implements Transport {
   readonly name = "mock";
   private engine: MockEngine | null = null;
@@ -845,6 +887,11 @@ export class MockTransport implements Transport {
 
   send(line: string): void {
     this.engine?.receive(line);
+  }
+
+  async call(command: string, args: Record<string, unknown>): Promise<unknown> {
+    if (command === "link_meta") return mockLinkMeta(String(args.url));
+    throw new Error(`The mock does not run ${command}.`);
   }
 
   async stop(): Promise<void> {
