@@ -262,8 +262,13 @@
     cursor: pointer;
   }
   button :where(*),
+  [role="button"] :where(*),
   [role="menuitem"] :where(*),
   [role="option"] :where(*) {
+    cursor: inherit;
+  }
+  /* Beats `.selectable *`, so a link's words never show the text cursor. */
+  a[href] :where(*) {
     cursor: inherit;
   }
   button:disabled {

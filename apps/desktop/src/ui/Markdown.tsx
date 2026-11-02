@@ -1,5 +1,5 @@
-// Reply Markdown, styled after MarkdownText.swift: 13px body, bold headings,
-// mono inline code without a box, code blocks on a quiet fill with a Copy
+// Reply Markdown, styled after MarkdownText.swift: body text, bold headings,
+// mono inline code on a quiet rounded fill, code blocks on a quiet fill with a Copy
 // button and Xcode colours, tables and quotes on rounded-xs fills.
 
 import { Check, Copy } from "lucide-react";
@@ -158,7 +158,7 @@ const components: Components = {
           if (ref) openRef(ref);
           else openExternal(href);
         }}
-        className="cursor-pointer text-accent underline decoration-accent/45 underline-offset-2"
+        className="cursor-pointer rounded-xs text-accent underline decoration-accent/40 underline-offset-2 hover:bg-accent/10 hover:decoration-accent"
       >
         {href ? shortUrl(href, children) : children}
       </a>
@@ -198,10 +198,14 @@ const components: Components = {
           onClick={() => openRef(ref)}
           className="inline rounded-xs text-accent decoration-accent/45 underline-offset-2 hover:underline"
         >
-          <code className="font-mono text-[0.95em]">{children}</code>
+          <code className="rounded-xs bg-accent/10 px-1 py-px font-mono text-[0.9em]">{children}</code>
         </button>
       );
-    return <code className="font-mono text-[0.95em]">{children}</code>;
+    return (
+      <code className="rounded-xs bg-fill px-1 py-px font-mono text-[0.9em] [box-decoration-break:clone]">
+        {children}
+      </code>
+    );
   },
 };
 
