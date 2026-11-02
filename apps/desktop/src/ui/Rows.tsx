@@ -139,7 +139,7 @@ export const UserRow = memo(function UserRow({
           <button
             type="button"
             onClick={() => setOpen(!open)}
-            className="mt-1 ml-auto flex items-center gap-1 rounded-md px-2 font-medium text-caption text-fg-muted hover:bg-fill"
+            className="mt-1.5 -mr-1 ml-auto flex h-[26px] items-center gap-1.5 rounded-md px-3 font-medium text-caption text-fg-muted hover:bg-fill hover:text-fg"
           >
             {open ? "Show less" : "Show more"}
             {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
@@ -190,15 +190,18 @@ export const AssistantRow = memo(function AssistantRow({
   item,
   streaming = false,
   threadId,
+  copyable = true,
 }: {
   item: Item<"assistant">;
   streaming?: boolean;
   threadId?: string;
+  /** False for the reply the turn's footer already copies: one copy button per reply. */
+  copyable?: boolean;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
   // Each reply block copies on its own, from the margin: faint until the row is hovered, and out of
   // the text's flow so a streaming block never moves.
-  const copy = item.text.trim() && (
+  const copy = copyable && item.text.trim() && (
     <span className="absolute top-0 -right-7 opacity-50 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100">
       <CopyButton text={item.text} iconOnly label="Copy this reply" />
     </span>
@@ -435,8 +438,10 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const running = item.status === "pending" || item.status === "in_progress";
   const failed = item.status === "failed";
   const detail = toolDetail(item, kind);
-  const shownDetail =
+  const trimmed =
     detail.text && cwd && detail.text.startsWith(`${cwd}/`) ? detail.text.slice(cwd.length + 1) : detail.text;
+  // A command whose title already is the command line shows it once.
+  const shownDetail = trimmed && !item.title.includes(trimmed) ? trimmed : undefined;
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
@@ -458,7 +463,9 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
             <Icon size={13} className="text-fg-muted" />
           )}
         </span>
-        <span className="shrink-0 font-medium text-callout">{item.title}</span>
+        <span className="min-w-0 max-w-full shrink truncate font-medium text-callout" title={item.title}>
+          {item.title}
+        </span>
         {item.summary && (
           <span className="min-w-0 shrink truncate text-callout text-fg-muted">{item.summary}</span>
         )}

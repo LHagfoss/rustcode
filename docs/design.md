@@ -88,7 +88,7 @@ the accent marks state (on, selected, linked), it does not shout.
 
 | Step | px | Tailwind | Used by |
 |---|---|---|---|
-| xs | 4 | `rounded-xs` | kbd, inline code, tiny badges, checkboxes |
+| xs | 4 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
 | sm | 6 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
 | md | 8 | `rounded-md` | Buttons that are not pills, sidebar rows, menu items, list rows, inputs, tooltips |
 | lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), popovers, menus, toasts, pictures in replies |

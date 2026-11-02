@@ -257,7 +257,10 @@
   [role="tab"] {
     cursor: pointer;
   }
+  /* Beats `.selectable *`, so a link's or button's words never show the text cursor. */
   button :where(*),
+  a[href] :where(*),
+  [role="button"] :where(*),
   [role="menuitem"] :where(*),
   [role="option"] :where(*) {
     cursor: inherit;

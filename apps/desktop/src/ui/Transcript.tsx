@@ -157,16 +157,20 @@ export function Transcript({
     return set;
   }, [rows]);
 
-  // The reply each turn footer copies: the last reply before it.
-  const replyBefore = useMemo(() => {
+  // The reply each turn footer copies: the last reply before it. That reply keeps no margin copy.
+  const { replyBefore, footerCopied } = useMemo(() => {
     const map: Record<string, string> = {};
-    let last: string | undefined;
+    const copied = new Set<string>();
+    let last: { id: string; text: string } | undefined;
     for (const item of thread.items) {
-      if (item.kind === "assistant") last = item.text;
+      if (item.kind === "assistant") last = { id: item.id, text: item.text };
       else if (item.kind === "user") last = undefined;
-      else if (item.kind === "turnEnd" && last) map[item.id] = last;
+      else if (item.kind === "turnEnd" && last) {
+        map[item.id] = last.text;
+        copied.add(last.id);
+      }
     }
-    return map;
+    return { replyBefore: map, footerCopied: copied };
   }, [thread.items]);
 
   const completions = useMemo(() => {
@@ -494,6 +498,7 @@ export function Transcript({
                       item={item}
                       threadId={thread.id}
                       streaming={thread.running && v.index === lastIndex}
+                      copyable={!footerCopied.has(item.id)}
                     />
                   ) : item?.kind === "thought" ? (
                     <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />

@@ -3,7 +3,7 @@
 // shell (never fetched by the webview); until it arrives, or without it, the
 // chip shows the host on a neutral fill.
 
-import { Globe, X } from "lucide-react";
+import { ArrowUpRight, Globe, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type LinkMeta, linkMetaCached, loadLinkMeta } from "../lib/links";
 import { openExternal } from "../lib/native";
@@ -47,15 +47,14 @@ export function LinkChip({
     <Tooltip label={<span className="break-all">{url}</span>}>
       <span
         className={cx(
-          "inline-flex h-[20px] max-w-[280px] shrink-0 items-center gap-1 rounded-full pr-2 pl-1 align-top text-callout leading-none",
-          !tint && "bg-fill-strong shadow-[inset_0_0_0_0.5px_var(--color-border)]",
-          onRemove && "pr-1",
+          "group/link inline-flex h-[22px] max-w-[340px] shrink-0 items-center gap-1 rounded-md pr-1.5 pl-1 align-[-5px] text-callout leading-none hover:brightness-125",
+          !tint && "bg-fill shadow-[inset_0_0_0_0.5px_var(--color-border)]",
           className,
         )}
         style={
           tint
             ? {
-                background: `color-mix(in srgb, ${tint} 18%, var(--color-fill-strong))`,
+                background: `color-mix(in srgb, ${tint} 14%, var(--color-fill))`,
                 boxShadow: `inset 0 0 0 0.5px color-mix(in srgb, ${tint} 35%, var(--color-border))`,
               }
             : undefined
@@ -67,16 +66,19 @@ export function LinkChip({
             e.preventDefault();
             openExternal(url);
           }}
-          className="inline-flex min-w-0 cursor-pointer items-center gap-1 text-fg no-underline"
+          className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 text-fg no-underline"
         >
           {meta?.icon ? (
-            <img src={meta.icon} alt="" className="size-[14px] shrink-0 rounded-xs" draggable={false} />
+            <img src={meta.icon} alt="" className="size-4 shrink-0 rounded-xs" draggable={false} />
           ) : (
-            <Globe size={12} className="ml-px shrink-0 text-fg-muted" />
+            <Globe size={13} className="ml-0.5 shrink-0 text-fg-muted" />
           )}
           <span className="truncate font-medium">{title}</span>
           {meta?.title && meta.title.trim() !== host && (
-            <span className="shrink-0 text-fg-muted">· {host}</span>
+            <span className="shrink-0 text-caption text-fg-faint">{host}</span>
+          )}
+          {!onRemove && (
+            <ArrowUpRight size={11} className="-ml-0.5 shrink-0 text-fg-faint group-hover/link:text-fg-muted" />
           )}
         </a>
         {onRemove && (
