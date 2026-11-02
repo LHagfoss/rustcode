@@ -12,6 +12,7 @@ import {
   foldingBatch,
   formatClock,
   formatDuration,
+  idleSettled,
   requeueSteers,
   shortAge,
   thoughtHeadings,
@@ -284,5 +285,14 @@ describe("compaction", () => {
       tone: "info",
       text: "Context compacted: Codex summarized the conversation.",
     });
+  });
+});
+
+describe("auto-settle", () => {
+  test("a thread untouched for three days settles", () => {
+    const now = 10 * 86_400_000;
+    expect(idleSettled(undefined, now)).toBe(false);
+    expect(idleSettled(now - 2 * 86_400_000, now)).toBe(false);
+    expect(idleSettled(now - 3 * 86_400_000, now)).toBe(true);
   });
 });
