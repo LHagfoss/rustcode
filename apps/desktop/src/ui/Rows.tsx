@@ -12,6 +12,7 @@ import {
   FilePlus,
   FileText,
   Globe,
+  Image as ImageIcon,
   MoveRight,
   OctagonAlert,
   Pencil,
@@ -25,7 +26,9 @@ import {
 import { memo, type ReactNode, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import type { FileDiff } from "../acp/types";
+import { splitImageMarkers, splitUrls } from "../state/compose";
 import { diffCounts, diffLines, formatDuration, type TranscriptItem, thoughtHeadings } from "../state/thread";
+import { LinkChip } from "./LinkChip";
 import { CopyButton, Markdown } from "./Markdown";
 import { cx, Spinner, Tooltip } from "./primitives";
 
@@ -34,12 +37,51 @@ type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K 
 const timeLabel = (at?: number) =>
   at ? new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
 
+function TextWithLinks({ text }: { text: string }) {
+  const parts = useMemo(() => splitUrls(text), [text]);
+  return <>{parts.map((p, i) => (p.url ? <LinkChip key={i} url={p.url} className="mx-px" /> : p.text))}</>;
+}
+
 export const UserRow = memo(function UserRow({ item }: { item: Item<"user"> }) {
   const [open, setOpen] = useState(false);
-  const long = item.text.length > 600 || item.text.split("\n").length > 12;
+  const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
+  const long = text.length > 600 || text.split("\n").length > 12;
+  const attachments = item.attachments ?? [];
+  const placeholders = attachments.some((a) => a.kind === "image") ? 0 : markers;
   return (
     <div className="group flex flex-col items-end pb-2.5 pl-20">
-      <div className="relative max-w-full rounded-[18px] bg-fill-2 px-3.5 py-[9px]">
+      {(attachments.length > 0 || placeholders > 0) && (
+        <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
+          {attachments.map((a, i) =>
+            a.kind === "image" && a.preview ? (
+              <img
+                key={i}
+                src={a.preview}
+                alt={a.name}
+                title={a.name}
+                className="max-h-[160px] max-w-[240px] rounded-[12px] border border-hairline object-cover"
+              />
+            ) : (
+              <span
+                key={i}
+                className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-3 px-2.5 text-callout"
+              >
+                {a.kind === "image" ? <ImageIcon size={12} /> : <FileText size={12} className="text-fg-2" />}
+                <span className="max-w-[200px] truncate">{a.name}</span>
+              </span>
+            ),
+          )}
+          {Array.from({ length: placeholders }, (_, i) => (
+            <span
+              key={`m${i}`}
+              className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-3 px-2.5 text-callout text-fg-2"
+            >
+              <ImageIcon size={12} /> Image
+            </span>
+          ))}
+        </div>
+      )}
+      <div className={cx("relative max-w-full rounded-[18px] bg-fill-2 px-3.5 py-[9px]", !text && "hidden")}>
         <div
           className={cx(
             "selectable text-body leading-[20px] whitespace-pre-wrap break-words",
@@ -48,7 +90,7 @@ export const UserRow = memo(function UserRow({ item }: { item: Item<"user"> }) {
               "max-h-[240px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
           )}
         >
-          {item.text}
+          <TextWithLinks text={text} />
         </div>
         {long && (
           <button
@@ -63,6 +105,7 @@ export const UserRow = memo(function UserRow({ item }: { item: Item<"user"> }) {
       </div>
       <div className="mt-1 flex h-[22px] items-center gap-1 text-caption text-fg-3">
         {item.steered && <span className="text-brand">Steered</span>}
+        {item.fromView && <span className="text-brand">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
           <span className="tabular">{timeLabel(item.at)}</span>
         </Tooltip>

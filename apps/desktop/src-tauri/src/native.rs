@@ -251,9 +251,69 @@ pub fn git_changes(cwd: String) -> Result<GitChanges, String> {
     })
 }
 
+/// The engine refuses larger images (`MAX_ENCODED_IMAGE_LEN`).
+const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
+/// An image file the composer attaches, as an ACP image block takes it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageFile {
+    pub name: String,
+    pub mime_type: String,
+    pub data: String,
+}
+
+/// The MIME type the engine accepts for an image path, if any.
+pub fn image_mime(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => return None,
+    })
+}
+
+/// Read a dropped or picked image for the composer: an absolute path to a
+/// PNG, JPEG, GIF or WebP file of at most 20 MB, nothing else.
+#[tauri::command(async)]
+pub fn read_image(path: String) -> Result<ImageFile, String> {
+    use base64::Engine as _;
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err("Not an absolute path.".into());
+    }
+    let mime = image_mime(&path).ok_or("Only PNG, JPEG, GIF and WebP images attach as images.")?;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("Not a file.".into());
+    }
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err("Images must be 20 MB or smaller.".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(ImageFile {
+        name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        mime_type: mime.into(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_only_images() {
+        assert!(read_image("relative.png".into()).is_err());
+        assert!(read_image("/etc/passwd".into()).is_err());
+        assert_eq!(image_mime(Path::new("/a/b.JPG")), Some("image/jpeg"));
+        assert_eq!(image_mime(Path::new("/a/b.txt")), None);
+    }
 
     #[test]
     fn quotes_shell_words() {

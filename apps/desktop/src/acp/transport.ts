@@ -17,6 +17,12 @@ export interface Transport {
   /** Stop the engine and start a fresh one; an `open` event follows. */
   restart(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * A native helper outside Tauri: the dev bridge runs the same commands as
+   * the shell (`src-tauri/src/*.rs`) so `dev:web` can show them, and the mock
+   * answers a few with canned data. Absent where nothing can answer.
+   */
+  call?(command: string, args: Record<string, unknown>): Promise<unknown>;
 }
 
 /** Tauri sidecar transport: lines and lifecycle events arrive on a Channel. */
@@ -50,6 +56,8 @@ export class WebSocketTransport implements Transport {
   readonly name = "websocket";
   private socket: WebSocket | null = null;
   private queue: string[] = [];
+  private calls = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private nextCall = 1;
 
   constructor(private readonly url: string) {}
 
@@ -64,11 +72,27 @@ export class WebSocketTransport implements Transport {
         resolve();
       };
       socket.onmessage = (message) => {
+        let event:
+          | TransportEvent
+          | PtyEvent
+          | { type: "reply"; id: number; ok: boolean; value?: unknown; error?: string };
         try {
-          onEvent(JSON.parse(String(message.data)) as TransportEvent);
+          event = JSON.parse(String(message.data));
         } catch {
-          // The bridge only sends JSON events.
+          return; // The bridge only sends JSON events.
         }
+        if (event.type === "reply") {
+          const call = this.calls.get(event.id);
+          this.calls.delete(event.id);
+          if (event.ok) call?.resolve(event.value);
+          else call?.reject(new Error(event.error ?? "The bridge could not run it."));
+          return;
+        }
+        if (event.type === "pty") {
+          for (const listener of ptyListeners) listener(event);
+          return;
+        }
+        onEvent(event);
       };
       socket.onclose = () => {
         onEvent({ type: "closed", reason: "The engine bridge disconnected." });
@@ -86,10 +110,29 @@ export class WebSocketTransport implements Transport {
     this.send(JSON.stringify({ bridge: "restart" }));
   }
 
+  call(command: string, args: Record<string, unknown>): Promise<unknown> {
+    const id = this.nextCall++;
+    return new Promise((resolve, reject) => {
+      this.calls.set(id, { resolve, reject });
+      this.send(JSON.stringify({ bridge: "call", id, command, args }));
+      setTimeout(() => {
+        if (this.calls.delete(id)) reject(new Error(`${command} timed out`));
+      }, 15_000);
+    });
+  }
+
   async stop(): Promise<void> {
     this.socket?.close();
     this.socket = null;
   }
+}
+
+/** Terminal output and exits the dev bridge streams for `pty_*` sessions. */
+export type PtyEvent = { type: "pty"; id: number; data?: string; exit?: number | null };
+const ptyListeners = new Set<(event: PtyEvent) => void>();
+export function onBridgePty(listener: (event: PtyEvent) => void): () => void {
+  ptyListeners.add(listener);
+  return () => ptyListeners.delete(listener);
 }
 
 export function isTauri(): boolean {

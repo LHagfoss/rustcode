@@ -12,9 +12,19 @@ import type {
   SessionUsage,
   ToolStatus,
 } from "../acp/types";
+import type { ComposeExtras, SentAttachment } from "./compose";
 
 export type TranscriptItem =
-  | { kind: "user"; id: string; text: string; at?: number; steered?: boolean }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      at?: number;
+      steered?: boolean;
+      attachments?: SentAttachment[];
+      /** Sent by a Smart UI view's button (`rustcode.send`). */
+      fromView?: boolean;
+    }
   | { kind: "assistant"; id: string; text: string; at?: number; turnId?: string }
   | {
       kind: "thought";
@@ -50,6 +60,7 @@ export type TranscriptItem =
 export interface QueuedPrompt {
   id: string;
   text: string;
+  extras?: ComposeExtras;
 }
 
 export interface ThreadState {
@@ -272,14 +283,30 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
   }
 }
 
-export function beginTurn(state: ThreadState, text: string, now = Date.now()): ThreadState {
+export function beginTurn(
+  state: ThreadState,
+  text: string,
+  now = Date.now(),
+  attachments?: SentAttachment[],
+  fromView?: boolean,
+): ThreadState {
   const closed = closePendingTurn(state);
   return {
     ...closed,
     running: true,
     turnStartedAt: now,
     error: undefined,
-    items: [...closed.items, { kind: "user", id: localId("user"), text, at: now }],
+    items: [
+      ...closed.items,
+      {
+        kind: "user",
+        id: localId("user"),
+        text,
+        at: now,
+        attachments: attachments?.length ? attachments : undefined,
+        fromView: fromView || undefined,
+      },
+    ],
   };
 }
 

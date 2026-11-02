@@ -2,10 +2,10 @@
 // `bun run dev:web` keeps working; the shell validates every argument.
 
 import { isTauri } from "../acp/transport";
+import { shellCall } from "./shell";
 
-async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(command, args);
+function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  return shellCall<T>(command, args);
 }
 
 export function openExternal(url: string): void {
@@ -59,4 +59,41 @@ export async function gitChanges(cwd: string): Promise<GitChanges | null> {
 
 export function revealPath(path: string): void {
   if (isTauri()) void invoke("reveal_path", { path });
+}
+
+/** Files and folders to attach, from the open panel. Null in the browser, where the composer uses a file input. */
+export async function pickFiles(start?: string): Promise<string[] | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ multiple: true, directory: false, defaultPath: start });
+  if (!picked) return [];
+  return Array.isArray(picked) ? picked : [picked];
+}
+
+export interface ImageFile {
+  name: string;
+  mimeType: string;
+  data: string;
+}
+
+/** An image file read by the shell (PNG, JPEG, GIF, WebP, at most 20 MB). */
+export async function readImage(path: string): Promise<ImageFile> {
+  return invoke<ImageFile>("read_image", { path });
+}
+
+/**
+ * Files dropped on the window. The Tauri webview takes file drops itself and
+ * reports paths; the browser delivers them as DOM drop events instead.
+ */
+export async function onFileDrop(
+  handler: (event: { type: "over" | "leave" | "drop"; paths: string[] }) => void,
+): Promise<() => void> {
+  if (!isTauri()) return () => undefined;
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((event) => {
+    const p = event.payload;
+    if (p.type === "drop") handler({ type: "drop", paths: p.paths });
+    else if (p.type === "leave") handler({ type: "leave", paths: [] });
+    else handler({ type: "over", paths: [] });
+  });
 }

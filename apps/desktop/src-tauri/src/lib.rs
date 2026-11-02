@@ -47,6 +47,7 @@ pub fn run() {
             native::reveal_path,
             native::open_login_terminal,
             native::git_changes,
+            native::read_image,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");

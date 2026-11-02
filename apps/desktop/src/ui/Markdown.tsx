@@ -8,6 +8,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { highlight } from "../lib/highlight";
 import { openExternal } from "../lib/native";
+import { LinkChip } from "./LinkChip";
 import { copyText, cx } from "./primitives";
 
 export function CopyButton({
@@ -106,18 +107,22 @@ const components: Components = {
   ul: ({ children }) => <ul className="ml-[1.1em] list-disc space-y-0.5 marker:text-fg-2">{children}</ul>,
   ol: ({ children }) => <ol className="ml-[1.4em] list-decimal space-y-0.5 marker:text-fg-2">{children}</ol>,
   li: ({ children }) => <li className="pl-0.5 leading-[20px] [&>ol]:mt-0.5 [&>ul]:mt-0.5">{children}</li>,
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      onClick={(e) => {
-        e.preventDefault();
-        if (href) openExternal(href);
-      }}
-      className="cursor-pointer text-brand underline decoration-brand/45 underline-offset-2"
-    >
-      {href ? shortUrl(href, children) : children}
-    </a>
-  ),
+  a: ({ href, children }) =>
+    // A bare link (autolinked, or `<url>`) reads as a chip; a link with its own words stays a link.
+    href && /^https?:\/\//i.test(href) && typeof children === "string" && children === href ? (
+      <LinkChip url={href} />
+    ) : (
+      <a
+        href={href}
+        onClick={(e) => {
+          e.preventDefault();
+          if (href) openExternal(href);
+        }}
+        className="cursor-pointer text-brand underline decoration-brand/45 underline-offset-2"
+      >
+        {href ? shortUrl(href, children) : children}
+      </a>
+    ),
   blockquote: ({ children }) => (
     <blockquote className="relative rounded-lg bg-fill-4 py-2 pr-3 pl-[21px] text-fg/80 before:absolute before:top-2 before:bottom-2 before:left-2 before:w-[3px] before:rounded-full before:bg-fg-2/45">
       {children}

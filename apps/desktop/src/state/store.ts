@@ -29,6 +29,8 @@ import {
   type SessionSummary,
   type SlashCommand,
 } from "../acp/types";
+import { setShellTransport } from "../lib/shell";
+import { type ComposeExtras, emptyExtras, hasExtras, promptBlocks, sentAttachments } from "./compose";
 import {
   appendSteer,
   applyUpdate,
@@ -81,6 +83,8 @@ export interface AppState {
   harnesses: HarnessSnapshot | null;
   commands: SlashCommand[];
   drafts: Record<string, string>;
+  /** Command token, link chips and attachments of each composer, by thread id (or "new"). */
+  extras: Record<string, ComposeExtras>;
   settings: SettingsSection | null;
   switcherOpen: boolean;
   onboardingOpen: boolean;
@@ -123,6 +127,7 @@ export const useApp = create<AppState>(() => ({
   harnesses: null,
   commands: [],
   drafts: {},
+  extras: {},
   settings: null,
   switcherOpen: false,
   onboardingOpen: false,
@@ -168,6 +173,7 @@ export function engine(): AcpConnection {
 /** Start the transport once; every engine (re)start then gets a fresh ACP connection. */
 export async function connect(next: Transport): Promise<void> {
   transport = next;
+  setShellTransport(next);
   set({ status: "connecting", transport: next.name, statusDetail: undefined });
   try {
     await next.start((event) => {
@@ -400,10 +406,30 @@ export function setDraft(key: string, text: string) {
   set((s) => ({ drafts: { ...s.drafts, [key]: text } }));
 }
 
+export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExtras) {
+  set((s) => ({ extras: { ...s.extras, [key]: fn(s.extras[key] ?? emptyExtras) } }));
+}
+
+/** The harness a thread runs on, or a new thread would start on. */
+export function threadHarness(thread?: ThreadState) {
+  const s = get();
+  const id = thread
+    ? (thread.harness?.id ?? "rustcode")
+    : (s.newThread?.harness ?? s.harnesses?.default.harness);
+  return s.harnesses?.harnesses.find((h) => h.id === id);
+}
+
+/** Whether the thread's harness takes image blocks. */
+export function acceptsImages(thread?: ThreadState): boolean {
+  const caps = thread?.harness?.capabilities ?? threadHarness(thread)?.capabilities;
+  if (caps && !(threadHarness(thread)?.builtin ?? false)) return caps.images;
+  return get().agent?.promptImages ?? true;
+}
+
 /** ⏎: send, or queue behind a running turn. False when no thread could start (the draft stays). */
-export async function submit(text: string): Promise<boolean> {
+export async function submit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
   const trimmed = text.trim();
-  if (!trimmed) return false;
+  if (!trimmed && !hasExtras(extras)) return false;
   let id = get().selectedId;
   try {
     if (!id) id = await createThread();
@@ -413,15 +439,21 @@ export async function submit(text: string): Promise<boolean> {
   }
   const thread = get().threads[id];
   if (!thread) return false;
-  if (trimmed === "/cancel") {
+  if (trimmed === "/cancel" && !hasExtras(extras)) {
     await cancel(id);
     return true;
   }
   if (thread.running) {
-    updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
+    updateThread(id, (t) => ({
+      ...t,
+      queue: [
+        ...t.queue,
+        { id: localId("queued"), text: trimmed, extras: hasExtras(extras) ? extras : undefined },
+      ],
+    }));
     return true;
   }
-  void runPrompt(id, trimmed);
+  void runPrompt(id, trimmed, extras);
   return true;
 }
 
@@ -466,6 +498,10 @@ async function steer(id: string, text: string): Promise<boolean> {
 export async function sendQueuedNow(id: string, queuedId: string) {
   const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
   if (!item) return;
+  if (item.extras?.attachments.length) {
+    toast("A message with attachments is sent when the turn ends");
+    return;
+  }
   if (await steer(id, item.text)) {
     removeQueued(id, queuedId);
   } else {
@@ -477,14 +513,27 @@ export function removeQueued(id: string, queuedId: string) {
   updateThread(id, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== queuedId) }));
 }
 
-async function runPrompt(id: string, text: string): Promise<void> {
+async function runPrompt(
+  id: string,
+  text: string,
+  extras: ComposeExtras = emptyExtras,
+  options: { fromView?: boolean } = {},
+): Promise<void> {
   const conn = engine();
-  updateThread(id, (t) => beginTurn(t, text));
+  const thread = get().threads[id];
+  const harness = threadHarness(thread);
+  const prompt = promptBlocks(text, extras, {
+    images: acceptsImages(thread),
+    builtin: harness?.builtin ?? true,
+    cwd: thread?.cwd ?? "",
+  });
+  const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
+  updateThread(id, (t) => beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView));
   set((s) => ({
     sessions: byActivity(
       s.sessions.map((x) =>
         x.id === id
-          ? { ...x, updatedAt: Date.now(), title: x.title ?? text.split("\n")[0]?.slice(0, 80) }
+          ? { ...x, updatedAt: Date.now(), title: x.title ?? (shown.split("\n")[0]?.slice(0, 80) || "Image") }
           : x,
       ),
     ),
@@ -495,7 +544,7 @@ async function runPrompt(id: string, text: string): Promise<void> {
   try {
     const result = (await conn.request(Method.sessionPrompt, {
       sessionId: id,
-      prompt: [{ type: "text", text }],
+      prompt,
     })) as JsonObject | null;
     if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
     const meta = (result?._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined;
@@ -513,7 +562,7 @@ async function runPrompt(id: string, text: string): Promise<void> {
   const next = get().threads[id]?.queue[0];
   if (outcome === "completed" && next) {
     removeQueued(id, next.id);
-    await runPrompt(id, next.text);
+    await runPrompt(id, next.text, next.extras);
   }
 }
 
@@ -684,6 +733,7 @@ export async function request<T = Json>(
 export function resetForTests() {
   connection = null;
   transport = null;
+  setShellTransport(null);
   loading.clear();
   set({
     status: "connecting",
@@ -697,6 +747,7 @@ export function resetForTests() {
     harnesses: null,
     commands: [],
     drafts: {},
+    extras: {},
     settings: null,
     switcherOpen: false,
     onboardingOpen: false,

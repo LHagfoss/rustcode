@@ -285,6 +285,14 @@ function seedThreads(): MockThread[] {
   ];
 }
 
+const COMMANDS = [
+  { name: "compact", description: "Summarize the conversation to free context" },
+  { name: "context", description: "Show what fills the context window", _meta: { rustcode: { report: true } } },
+  { name: "review", description: "Review the working tree or a pull request", input: { hint: "what to review" } },
+  { name: "model", description: "Switch the model", input: { hint: "model id" } },
+  { name: "skills", description: "List the skills this thread can load" },
+];
+
 function configOptions(thread: MockThread, harnesses: HarnessSnapshot): Json[] {
   const harness = harnesses.harnesses.find((h) => h.id === thread.harness);
   const models =
@@ -442,6 +450,11 @@ export class MockEngine {
           history: [],
         };
         this.threads.unshift(thread);
+        queueMicrotask(() =>
+          this.notify(
+            update(thread.id, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS }),
+          ),
+        );
         return {
           sessionId: thread.id,
           configOptions: configOptions(thread, this.harnesses),
@@ -451,6 +464,7 @@ export class MockEngine {
       case "session/load": {
         const thread = this.thread(params.sessionId);
         for (const line of thread.history) this.notify(line);
+        this.notify(update(thread.id, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS }));
         this.notify(
           update(thread.id, {
             sessionUpdate: "usage_update",
