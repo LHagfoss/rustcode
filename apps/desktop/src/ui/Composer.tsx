@@ -104,11 +104,11 @@ async function attachmentsFromFiles(
     const mime = Object.values(IMAGE_TYPES).includes(file.type) ? file.type : imageMime(file.name);
     if (mime) {
       if (!images) {
-        toast(`${harnessName} does not take images`, "warning");
+        toast(`${harnessName} does not take images`, "info");
         continue;
       }
       if (file.size > MAX_IMAGE_BYTES) {
-        toast(`${file.name || "The image"} is over 20 MB`, "warning");
+        toast(`${file.name || "The image"} is over 20 MB`, "info");
         continue;
       }
       out.push({
@@ -121,7 +121,7 @@ async function attachmentsFromFiles(
     } else if (file.size <= MAX_INLINE_FILE_BYTES) {
       out.push({ id: localId("file"), kind: "file", name: file.name, text: await readFileAs(file, "text") });
     } else {
-      toast(`${file.name} is too big to send inline here; the app attaches it by path`, "warning");
+      toast(`${file.name} is too big to send inline here; the app attaches it by path`, "info");
     }
   }
   return out;
@@ -141,10 +141,7 @@ async function attachmentsFromPaths(
         const image = await readImage(path);
         out.push({ id: localId("image"), kind: "image", ...image });
       } catch (error) {
-        toast(
-          `Could not attach ${name}: ${error instanceof Error ? error.message : String(error)}`,
-          "warning",
-        );
+        toast(`Could not attach ${name}: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
     } else {
       if (imageMime(name)) toast(`${harnessName} does not take images; ${name} goes as a path`);

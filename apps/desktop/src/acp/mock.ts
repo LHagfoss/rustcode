@@ -14,6 +14,10 @@ export interface MockOptions {
   scenario?: string;
   /** Milliseconds between streamed chunks; 0 for tests. */
   delayMs?: number;
+  /** Milliseconds the engine takes to start (`?boot=`), to see the slow-start toast. */
+  bootMs?: number;
+  /** Crash this many ms after the first start (`?crash=`); it comes back after `bootMs`, as the shell restarts it. */
+  crashAfterMs?: number;
 }
 
 interface MockThread {
@@ -1538,9 +1542,19 @@ export class MockTransport implements Transport {
       (line) => queueMicrotask(() => onEvent({ type: "line", line })),
       this.options,
     );
+    if (this.options.bootMs) await new Promise((r) => setTimeout(r, this.options.bootMs));
     onEvent({ type: "log", line: "mock engine started" });
     onEvent({ type: "open", engine: "mock" });
+    const crash = this.options.crashAfterMs;
+    if (crash && !this.crashed) {
+      this.crashed = true;
+      setTimeout(() => {
+        onEvent({ type: "closed", reason: "The engine exited unexpectedly (signal 9)." });
+        void this.start(onEvent);
+      }, crash);
+    }
   }
+  private crashed = false;
 
   async restart(): Promise<void> {
     const onEvent = this.onEvent;

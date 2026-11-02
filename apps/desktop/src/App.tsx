@@ -18,11 +18,12 @@ import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
-import { cx, Pill } from "./ui/primitives";
+import { Pill } from "./ui/primitives";
 import { RightPanel } from "./ui/RightPanel";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
 import { Settings } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
+import { Toaster } from "./ui/Toaster";
 
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
@@ -152,28 +153,6 @@ function ConfirmDialog() {
   );
 }
 
-function Toasts() {
-  const toasts = useApp((s) => s.toasts);
-  return (
-    <div
-      className="pointer-events-none fixed top-12 right-0 left-0 z-50 flex flex-col items-center gap-2"
-      aria-live="polite"
-    >
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={cx(
-            "rc-glass rc-glass-strong pointer-events-auto max-w-[480px] rounded-full px-4 py-1.5 text-callout shadow-1 rc-in",
-            t.tone === "warning" && "text-warning",
-          )}
-        >
-          {t.text}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function App() {
   useTheme();
   useShortcuts();
@@ -218,7 +197,7 @@ export function App() {
       <Suspense fallback={null}>{onboarding && <Onboarding onClose={() => setOnboarding(false)} />}</Suspense>
       <ConfirmDialog />
       <GrantDialog />
-      <Toasts />
+      <Toaster />
       <Lightbox />
     </Tooltip.Provider>
   );

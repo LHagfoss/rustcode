@@ -113,11 +113,11 @@ function openRef(ref: FileRef) {
   const s = useApp.getState();
   const cwd = (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
   if (!hasShell()) {
-    toast("Opening files needs the desktop app.", "warning");
+    toast("Opening files needs the desktop app.", "info");
     return;
   }
   openInEditor(resolveRef(ref, cwd), ref.line, ref.column).catch((e) =>
-    toast(e instanceof Error ? e.message : String(e), "warning"),
+    toast(e instanceof Error ? e.message : String(e), "error"),
   );
 }
 

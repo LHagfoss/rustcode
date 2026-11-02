@@ -301,3 +301,25 @@ describe("model picker", () => {
     expect(picked.efforts.length).toBeGreaterThan(1);
   });
 });
+
+describe("toasts", () => {
+  test("errors persist, a repeat restarts the shown one, an id replaces in place", async () => {
+    const { toast, dismissToast } = await import("./store");
+    toast("Copied", "success");
+    toast("Copied", "success");
+    expect(useApp.getState().toasts.length).toBe(1);
+    expect(useApp.getState().toasts[0]!.persist).toBe(false);
+    toast("Could not save", "error");
+    expect(useApp.getState().toasts.at(-1)!.persist).toBe(true);
+    toast("Starting engine…", "info", { id: "engine", persist: true, progress: 0.2 });
+    toast("The engine stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
+    const engine = useApp.getState().toasts.filter((t) => t.id === "engine");
+    expect(engine.length).toBe(1);
+    expect(engine[0]!.action?.label).toBe("Restart");
+    // Replacing a toast that is fading out keeps the new one.
+    dismissToast("engine");
+    toast("The engine restarted", "success", { id: "engine" });
+    await new Promise((r) => setTimeout(r, 160));
+    expect(useApp.getState().toasts.find((t) => t.id === "engine")?.text).toBe("The engine restarted");
+  });
+});

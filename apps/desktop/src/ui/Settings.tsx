@@ -356,7 +356,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
       toast(path ? `Created ${path}` : "Theme created", "success");
       onDone();
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "warning");
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
   return (
@@ -505,7 +505,7 @@ function BannerSetting() {
   const banner = useBanner();
   const choose = () =>
     void chooseBanner().catch((e) =>
-      toast(`Could not use that picture: ${e instanceof Error ? e.message : e}`, "warning"),
+      toast(`Could not use that picture: ${e instanceof Error ? e.message : e}`, "error"),
     );
   return (
     <div>

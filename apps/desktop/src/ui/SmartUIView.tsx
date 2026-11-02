@@ -147,7 +147,7 @@ export function SmartUIView({
           const text = viewMessage(data.text);
           if (!gesture || !text || !threadId) return;
           if (!gate.allow()) {
-            toast("The view can send one message every 2 seconds", "warning");
+            toast("The view can send one message every 2 seconds", "info");
             return;
           }
           sendFromView(threadId, text);
@@ -155,7 +155,7 @@ export function SmartUIView({
         }
         case "copy":
           if (typeof data.text === "string" && navigator.userActivation?.isActive !== false) {
-            void copyText(data.text).then(() => toast("Copied", "success"));
+            void copyText(data.text);
           }
           break;
       }

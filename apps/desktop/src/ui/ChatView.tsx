@@ -23,7 +23,6 @@ import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import {
   refreshSessions,
-  restartEngine,
   setPanel,
   setProjectCwd,
   setTerminalOpen,
@@ -40,7 +39,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
 import { MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { Callout, Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
+import { Callout, Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
 
@@ -152,7 +151,7 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
   return (
     <MainHeader
       // Over a new thread's banner: frosted, its foot fading into the banner.
-      className={overBanner ? "rc-frost" : "bg-bg"}
+      className={overBanner ? "rc-header-glass rc-frost" : "bg-bg"}
       title={
         <>
           {cwd && (
@@ -272,27 +271,24 @@ function ErrorBanner({
   );
 }
 
-function EngineBanner() {
-  const status = useApp((s) => s.status);
-  const detail = useApp((s) => s.statusDetail);
-  if (status === "ready") return null;
-  if (status === "connecting") {
-    return (
-      <div className="flex items-center justify-center gap-2 py-1 text-callout text-fg-muted">
-        <Spinner />
-        {detail ?? "Starting the engine…"}
-      </div>
-    );
-  }
+/** Where an opening thread's transcript will be: a sent message, then reply lines, twice. */
+function TranscriptSkeleton() {
+  const reply = [96, 88, 92, 54];
   return (
-    <ErrorBanner
-      text={detail ?? "The engine stopped."}
-      action={
-        <Pill prominent onClick={() => void restartEngine()}>
-          Restart Engine
-        </Pill>
-      }
-    />
+    <div className="min-h-0 flex-1 overflow-hidden" role="status" aria-label="Loading thread">
+      <div className="mx-auto flex w-full max-w-[1036px] flex-col gap-[18px] px-7 pt-5">
+        {[0, 1].map((turn) => (
+          <div key={turn} className="flex flex-col gap-[18px]">
+            <Skeleton className="h-9 w-[38%] self-end rounded-lg" />
+            <div className="flex flex-col gap-2">
+              {reply.map((w, i) => (
+                <Skeleton key={i} className="h-3" style={{ width: `${turn ? w * 0.8 : w}%` }} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -324,6 +320,18 @@ export function ChatView() {
   }, []);
 
   const isNew = !selectedId;
+
+  // Toasts stack at the chat column's bottom right, just above the composer stack (ui/Toaster.tsx).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-place when the column resizes
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const r = root.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom;
+    const doc = document.documentElement.style;
+    doc.setProperty("--rc-toast-right", `${Math.round(window.innerWidth - r.right + 16)}px`);
+    doc.setProperty("--rc-toast-bottom", `${Math.round(below + (isNew ? 16 : 16 + stackHeight + 12))}px`);
+  }, [isNew, stackHeight, width, height]);
   const request = thread?.permissions[0];
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   const side = width >= 600 ? 28 : width >= 360 ? 20 : 16;
@@ -345,10 +353,7 @@ export function ChatView() {
         // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
         <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} />
       ) : thread?.loading ? (
-        <div className="flex flex-1 items-center justify-center gap-2 text-callout text-fg-muted">
-          <Spinner />
-          Loading thread…
-        </div>
+        <TranscriptSkeleton />
       ) : (
         <div className="flex-1" />
       )}
@@ -373,7 +378,6 @@ export function ChatView() {
         style={{ paddingLeft: side, paddingRight: side }}
       >
         {isNew && <EmptyState banner={showsBanner} />}
-        <EngineBanner />
         {error && (
           <ErrorBanner
             text={error}

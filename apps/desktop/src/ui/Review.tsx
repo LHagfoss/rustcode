@@ -464,14 +464,14 @@ export function Review({ threadId }: { threadId: string }) {
         60_000,
       )) as JsonObject;
       const err = parsePullError(r);
-      if (err) toast(`${pullErrorTitle(err.code)}: ${err.message}`, "warning");
+      if (err) toast(`${pullErrorTitle(err.code)}: ${err.message}`, "error");
       else {
         toast("Review posted", "success");
         setComments([]);
         setNote("");
       }
     } catch (e) {
-      toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "warning");
+      toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       setPosting(false);
     }

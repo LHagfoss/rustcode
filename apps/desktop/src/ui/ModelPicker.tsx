@@ -24,7 +24,7 @@ import {
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
-import { cx, Tooltip } from "./primitives";
+import { cx, Skeleton, Tooltip } from "./primitives";
 
 interface Choice {
   value: string;
@@ -393,6 +393,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const listOnly = !hasEffort && !fast && !showHarness && !modelReason && models.length > 0;
   const shownPane = listOnly ? "models" : pane;
   const shownEffort = preview ?? (hasEffort ? effort : null);
+
+  // Nothing to show until the engine lists harnesses (or the thread its options): a placeholder pill.
+  if (!harnesses && !thread?.configOptions.length) {
+    return (
+      <span role="status" aria-label="Loading models" className="flex h-[30px] items-center">
+        <Skeleton className="h-[30px] w-[132px] rounded-full" />
+      </span>
+    );
+  }
 
   return (
     <Popover.Root

@@ -92,13 +92,13 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullDetail; onDo
         60_000,
       )) as JsonObject;
       const error = parsePullError(result);
-      if (error) toast(`${pullErrorTitle(error.code)}: ${error.message}`, "warning");
+      if (error) toast(`${pullErrorTitle(error.code)}: ${error.message}`, "error");
       else {
         toast("Review posted", "success");
         onDone();
       }
     } catch (e) {
-      toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "warning");
+      toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       setBusy(false);
     }

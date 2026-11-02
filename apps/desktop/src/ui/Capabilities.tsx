@@ -103,7 +103,7 @@ function useCapabilities() {
       state.setData(parseCapabilities(await request(method, params, timeout)));
       return true;
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "warning");
+      toast(e instanceof Error ? e.message : String(e), "error");
       return false;
     }
   };
@@ -504,7 +504,7 @@ function NewSkill({ onDone }: { onDone: () => void }) {
       toast("Skill created. The engine finds it on the next turn.", "success");
       onDone();
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "warning");
+      toast(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy(false);
     }
