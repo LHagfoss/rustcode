@@ -271,19 +271,19 @@ function PlanCard({ plan }: { plan: PlanUsage }) {
 }
 
 /** One window: its name and reset, a bar of what is used with quarter ticks, the numbers. */
-function PlanWindow({ window: w }: { window: UsageWindow }) {
+export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: string }) {
   const left = leftPercent(w);
   const used = 100 - left;
   const reset = resetLabel(w);
   return (
     <div className="flex flex-col gap-1.5 px-0.5">
       <div className="flex items-baseline justify-between gap-3 text-callout">
-        <span className="font-medium">{windowTitle(w)}</span>
+        <span className="font-medium">{title ?? windowTitle(w)}</span>
         {reset && <span className="text-caption text-fg-muted">{reset}</span>}
       </div>
       <div
         role="meter"
-        aria-label={`${windowTitle(w)} usage`}
+        aria-label={`${title ?? windowTitle(w)} usage`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={used}

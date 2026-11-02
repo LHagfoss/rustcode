@@ -876,6 +876,38 @@ export class MockEngine {
         if (action === "send") return { queued: false };
         throw Object.assign(new Error("bad action"), { code: -32602 });
       }
+      case "_rustcode/usage/plans": {
+        const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
+        const p = params as { claude?: boolean } | undefined;
+        return {
+          plans: [
+            p?.claude
+              ? {
+                  id: "claude",
+                  name: "Claude",
+                  via: "Claude Code",
+                  status: "ok",
+                  plan: "max",
+                  windows: [
+                    { label: "5-hour", usedPercent: 18, windowMinutes: 300, resetsAt: at(3) },
+                    { label: "Weekly", usedPercent: 46, windowMinutes: 10080, resetsAt: at(80) },
+                    { label: "Weekly · Opus", usedPercent: 83, windowMinutes: 10080, resetsAt: at(80) },
+                  ],
+                }
+              : { id: "claude", name: "Claude", via: "Claude Code", status: "notAsked", windows: [] },
+            {
+              id: "codex",
+              name: "ChatGPT",
+              via: "Codex CLI",
+              status: "ok",
+              windows: [
+                { label: "5-hour", usedPercent: 42, windowMinutes: 300, resetsAt: at(2) },
+                { label: "Weekly", usedPercent: 71, windowMinutes: 10080, resetsAt: at(72) },
+              ],
+            },
+          ],
+        };
+      }
       case "_rustcode/usage/limits":
         return {
           source: "codex",

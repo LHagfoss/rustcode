@@ -25,6 +25,7 @@ export const Method = {
   agents: "_rustcode/agents",
   rewind: "_rustcode/rewind",
   usageLimits: "_rustcode/usage/limits",
+  usagePlans: "_rustcode/usage/plans",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",

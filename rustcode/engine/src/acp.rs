@@ -1481,6 +1481,15 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: usage::UsagePlansRequest, responder, connection| {
+                connection.spawn(async move {
+                    responder.respond(usage::plans(request).await)?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             {
                 let server = server.clone();
                 async move |request: usage::UsageLimitsRequest, responder, connection| {
