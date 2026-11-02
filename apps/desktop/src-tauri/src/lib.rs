@@ -6,6 +6,7 @@
 mod engine;
 mod links;
 mod native;
+mod pty;
 mod threads;
 
 use engine::{Engine, EngineEvent};
@@ -41,6 +42,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(Engine::default()) as EngineState)
         .manage(links::LinkCache::default())
+        .manage(pty::Ptys::default())
         .invoke_handler(tauri::generate_handler![
             engine_start,
             engine_send,
@@ -54,6 +56,10 @@ pub fn run() {
             links::link_meta,
             threads::thread_rename,
             threads::thread_trash,
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");
@@ -61,6 +67,7 @@ pub fn run() {
         if let RunEvent::Exit = event {
             // The engine closes its sessions when its stdin closes.
             handle.state::<EngineState>().stop();
+            handle.state::<pty::Ptys>().close_all();
         }
     });
 }

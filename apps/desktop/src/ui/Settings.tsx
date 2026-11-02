@@ -117,6 +117,8 @@ function General() {
     ["Switch thread", "⌘K"],
     ["Settings", "⌘,"],
     ["Toggle sidebar", "⌘B"],
+    ["Find in thread", "⌘F"],
+    ["Terminal", "⌘J"],
     ["Stop the turn", "Esc / ⌘."],
     ["Send · queue while running", "⏎"],
     ["Steer the running turn", "⌘⏎"],

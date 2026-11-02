@@ -8,7 +8,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ServerWebSocket, Subprocess } from "bun";
-import { nativeCommands } from "./bridge-native";
+import { closePtys, nativeCommands } from "./bridge-native";
 
 const PORT = Number(process.env.BRIDGE_PORT ?? 1421);
 const ALLOWED_ORIGINS = new Set(
@@ -128,6 +128,7 @@ if (import.meta.main) {
         ws.data.engine?.stdin.flush();
       },
       close(ws) {
+        closePtys();
         ws.data.closed = true;
         stop(ws);
       },

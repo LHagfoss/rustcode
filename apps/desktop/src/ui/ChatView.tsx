@@ -12,6 +12,7 @@ import {
   ListChecks,
   PanelLeft,
   SquarePen,
+  SquareTerminal,
   TriangleAlert,
   Users,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import {
   restartEngine,
   setPanel,
   setProjectCwd,
+  setTerminalOpen,
   startNewThread,
   toggleSidebar,
   useApp,
@@ -179,6 +181,7 @@ function PlanButton({ thread }: { thread: ThreadState }) {
 
 function Header({ thread }: { thread?: ThreadState }) {
   const panel = useApp((s) => s.panel);
+  const terminalOpen = useApp((s) => s.terminalOpen);
   const agentsOn = useApp((s) => !!s.agent?.agents) && (thread?.harness?.capabilities.subagents ?? true);
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const working = useApp((s) => (thread ? (s.agents[thread.id] ?? []).filter(agentActive).length : 0));
@@ -245,6 +248,14 @@ function Header({ thread }: { thread?: ThreadState }) {
             <GitPullRequest size={14} />
           </ClusterButton>
         )}
+        <ClusterButton
+          label="Terminal"
+          tooltip="Terminal (⌘J)"
+          on={terminalOpen}
+          onClick={() => setTerminalOpen(!terminalOpen)}
+        >
+          <SquareTerminal size={14} />
+        </ClusterButton>
         <ClusterButton
           label="Changes"
           tooltip="Changes in the working tree"

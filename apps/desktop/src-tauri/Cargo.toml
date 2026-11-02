@@ -25,6 +25,8 @@ base64 = "0.22"
 # Link previews: fetched here, never by the webview (src/links.rs).
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["net", "time"] }
+# The workspace terminal (src/pty.rs).
+portable-pty = "0.9"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

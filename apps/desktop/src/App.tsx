@@ -7,10 +7,12 @@ import {
   setOnboarding,
   setPanel,
   setSwitcher,
+  setTerminalOpen,
   startNewThread,
   toggleSidebar,
   useApp,
 } from "./state/store";
+import { AgentsPanel } from "./ui/AgentViews";
 import { ChatView } from "./ui/ChatView";
 import { cx, Pill } from "./ui/primitives";
 import { Sidebar } from "./ui/Sidebar";
@@ -19,7 +21,7 @@ import { Switcher } from "./ui/Switcher";
 const Settings = lazy(() => import("./ui/Settings").then((m) => ({ default: m.Settings })));
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const ChangesPanel = lazy(() => import("./ui/ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
-const AgentsPanel = lazy(() => import("./ui/AgentViews").then((m) => ({ default: m.AgentsPanel })));
+const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 const PullsPanel = lazy(() => import("./ui/PullRequests").then((m) => ({ default: m.PullsPanel })));
 
 function useTheme() {
@@ -47,6 +49,9 @@ function useShortcuts() {
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleSidebar();
+      } else if (mod && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setTerminalOpen(!s.terminalOpen);
       } else if (mod && e.key === ".") {
         e.preventDefault();
         void cancel();
@@ -130,7 +135,12 @@ export function App() {
     <Tooltip.Provider delayDuration={600}>
       <div className="flex h-full w-full overflow-hidden">
         <Sidebar />
-        <ChatView />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ChatView />
+          <Suspense fallback={null}>
+            <TerminalPanel />
+          </Suspense>
+        </div>
         <Suspense fallback={null}>
           {panel === "changes" && <ChangesPanel onClose={() => setPanel(null)} />}
           {panel === "agents" && <AgentsPanel />}

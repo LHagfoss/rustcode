@@ -114,6 +114,8 @@ export interface AppState {
   archived: Record<string, number>;
   /** A sent message being edited in the composer: sending rewinds the thread to it first. */
   editing: Record<string, { itemId: string; userIndex: number; original: string }>;
+  /** The workspace terminal under the chat (⌘J). */
+  terminalOpen: boolean;
   /** The panel on the right of the chat. */
   panel: "changes" | "agents" | "pulls" | null;
   /** Each thread's subagents, as `_rustcode/agents` last listed them. */
@@ -164,6 +166,7 @@ export const useApp = create<AppState>(() => ({
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   editing: {},
   confirm: null,
+  terminalOpen: false,
   panel: null,
   agents: {},
   agentOpen: null,
@@ -905,6 +908,10 @@ export function setNewThreadChoice(choice: NewThreadChoice | null) {
 }
 
 // ---------------------------------------------------------------- subagents and usage
+
+export function setTerminalOpen(open: boolean) {
+  set({ terminalOpen: open });
+}
 
 export function setPanel(panel: AppState["panel"]) {
   set((s) => ({ panel: s.panel === panel ? null : panel }));

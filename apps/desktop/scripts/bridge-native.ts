@@ -137,6 +137,21 @@ function threadDir(id: unknown): string {
   return dir;
 }
 
+interface BridgeTerminal {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+}
+type Sender = { send(text: string): void };
+const ptys = new Map<number, { proc: ReturnType<typeof Bun.spawn>; terminal: BridgeTerminal }>();
+let nextPty = 1;
+const clamp = (n: unknown, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number(n) || lo));
+
+/** Kill a socket's terminals when it closes. */
+export function closePtys() {
+  for (const { proc } of ptys.values()) proc.kill();
+  ptys.clear();
+}
+
 export type Native = (command: string, args: Record<string, unknown>) => Promise<unknown>;
 
 export const nativeCommands: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {
@@ -144,6 +159,50 @@ export const nativeCommands: Record<string, (args: Record<string, unknown>) => P
     if (typeof url !== "string" || !/^https?:\/\//i.test(url) || url.length > 2048)
       throw new Error("Only web links.");
     return linkMeta(url);
+  },
+  pty_open: async ({ cwd, cols, rows, __socket }) => {
+    if (
+      typeof cwd !== "string" ||
+      !cwd.startsWith("/") ||
+      !statSync(cwd, { throwIfNoEntry: false })?.isDirectory()
+    ) {
+      throw new Error("The terminal needs an existing folder.");
+    }
+    if (ptys.size >= 8) throw new Error("Too many terminals are open.");
+    const id = nextPty++;
+    const socket = __socket as Sender;
+    const emit = (event: Record<string, unknown>) =>
+      socket.send(JSON.stringify({ type: "pty", id, ...event }));
+    const decoder = new TextDecoder();
+    const proc = Bun.spawn([process.env.SHELL || "/bin/zsh", "-l"], {
+      cwd,
+      env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", TERM_PROGRAM: "RustCode" },
+      terminal: {
+        cols: clamp(cols, 2, 1000),
+        rows: clamp(rows, 2, 500),
+        data: (_t: unknown, data: Uint8Array) => emit({ data: decoder.decode(data, { stream: true }) }),
+      },
+    } as never);
+    const terminal = (proc as unknown as { terminal: BridgeTerminal }).terminal;
+    ptys.set(id, { proc, terminal });
+    void proc.exited.then((code) => {
+      ptys.delete(id);
+      emit({ exit: code });
+    });
+    return id;
+  },
+  pty_write: async ({ id, data }) => {
+    ptys.get(Number(id))?.terminal.write(String(data));
+    return null;
+  },
+  pty_resize: async ({ id, cols, rows }) => {
+    ptys.get(Number(id))?.terminal.resize(clamp(cols, 2, 1000), clamp(rows, 2, 500));
+    return null;
+  },
+  pty_close: async ({ id }) => {
+    ptys.get(Number(id))?.proc.kill();
+    ptys.delete(Number(id));
+    return null;
   },
   thread_rename: async ({ id, title }) => {
     const clean = String(title ?? "")
