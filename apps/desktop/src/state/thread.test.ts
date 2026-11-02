@@ -15,6 +15,7 @@ import {
   requeueSteers,
   shortAge,
   thoughtHeadings,
+  workingLabel,
 } from "./thread";
 
 const apply = (updates: SessionUpdate[], state = emptyThread("s", "/p")) =>
@@ -222,5 +223,46 @@ describe("sidebar times", () => {
     expect(shortAge(now - 5 * 60_000, now)).toBe("5m");
     expect(shortAge(now - 3 * 3_600_000, now)).toBe("3h");
     expect(shortAge(now - 2 * 86_400_000, now)).toBe("2d");
+  });
+});
+
+describe("the working line", () => {
+  const user = { kind: "user", id: "u", text: "go" } as const;
+  test("says what the newest step of the turn does", () => {
+    expect(workingLabel([user])).toBe("Working");
+    expect(
+      workingLabel([
+        user,
+        {
+          kind: "thought",
+          id: "t",
+          text: "**Reading the code**\n…\n**Planning the fix**",
+          summary: false,
+          startedAt: 0,
+          done: false,
+        },
+      ]),
+    ).toBe("Thinking · Planning the fix");
+    expect(
+      workingLabel([
+        user,
+        {
+          kind: "tool",
+          id: "x",
+          title: "bash",
+          toolKind: "execute",
+          summary: "bun test",
+          status: "in_progress",
+          diffs: [],
+        },
+      ]),
+    ).toBe("Running bun test");
+    expect(workingLabel([user, { kind: "assistant", id: "a", text: "Here" }])).toBe("Writing the reply");
+    expect(
+      workingLabel([
+        user,
+        { kind: "thought", id: "t", text: "done", summary: false, startedAt: 0, done: true },
+      ]),
+    ).toBe("Working");
   });
 });
