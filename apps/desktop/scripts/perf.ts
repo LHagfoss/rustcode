@@ -404,12 +404,14 @@ const before = await metrics();
 await evaluate(`void window.__rustcode.runPrompt("perf-stream", "stream")`);
 await evaluate(`document.querySelector('textarea[aria-label="Message"]')?.focus()`);
 const streamStart = Date.now();
-while (Date.now() - streamStart < SECONDS * 1000) {
-  const key = "abcdefghij"[Math.floor(Math.random() * 10)]!;
-  await cdp("Input.dispatchKeyEvent", { type: "keyDown", key, text: key, code: `Key${key.toUpperCase()}` });
-  await cdp("Input.dispatchKeyEvent", { type: "keyUp", key, code: `Key${key.toUpperCase()}` });
-  await Bun.sleep(120);
-}
+await profiled("stream", async () => {
+  while (Date.now() - streamStart < SECONDS * 1000) {
+    const key = "abcdefghij"[Math.floor(Math.random() * 10)]!;
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key, text: key, code: `Key${key.toUpperCase()}` });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key, code: `Key${key.toUpperCase()}` });
+    await Bun.sleep(120);
+  }
+});
 {
   const after = await metrics();
   const p = await probe();

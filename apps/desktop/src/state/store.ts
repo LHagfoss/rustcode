@@ -1194,11 +1194,24 @@ export function setOrchestration(on: boolean) {
  * from the live turn, else review or done as the engine (or the app, on an
  * older engine) keeps it.
  */
+// The thread list by id, built once per list: selectors in every sidebar row run on each store
+// change (60 times a second while a reply streams), so a scan of 500 sessions per row adds up.
+const sessionIndex = new WeakMap<SessionSummary[], Map<string, SessionSummary>>();
+export function sessionById(s: AppState, id: string): SessionSummary | undefined {
+  let index = sessionIndex.get(s.sessions);
+  if (!index) {
+    index = new Map();
+    for (const x of s.sessions) if (!index.has(x.id)) index.set(x.id, x); // First wins, as `find` did.
+    sessionIndex.set(s.sessions, index);
+  }
+  return index.get(id);
+}
+
 export function statusOf(s: AppState, id: string): ThreadStatus {
   const t = s.threads[id];
   if (t?.permissions.length) return "needs_input";
   if (t?.running) return "running";
-  const listed = s.sessions.find((x) => x.id === id)?.status;
+  const listed = sessionById(s, id)?.status;
   const mark = s.statusMarks[id];
   if (listed === "done" || listed === "review") return mark ?? listed;
   return mark ?? "idle";
@@ -1236,7 +1249,7 @@ export function setView(view: AppState["view"]) {
 
 /** The worktree a thread runs in, from the thread or the list. */
 export function worktreeOf(s: AppState, id: string): Worktree | undefined {
-  return s.threads[id]?.worktree ?? s.sessions.find((x) => x.id === id)?.worktree;
+  return s.threads[id]?.worktree ?? sessionById(s, id)?.worktree;
 }
 
 /**
