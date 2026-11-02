@@ -10,7 +10,6 @@ frontend carries only its own rendering and input code.
 | --- | --- | --- |
 | Terminal UI | `rustcode/tui` (`rustcode-tui`, owns the `rustcode` binary) | `rustcode = { path = "../.." }` |
 | Desktop (Tauri, React) | `apps/desktop` | spawns `rustcode --acp` (ACP over stdio) |
-| macOS (SwiftUI, being replaced) | `macos/` | spawns `rustcode --acp` (ACP over stdio) |
 | ACP | in-tree (`engine/src/acp.rs`, driven by the CLI) | same crate |
 | Daemon / headless | in-tree (`engine/src/daemon.rs`, CLI flags) | same crate |
 | Mobile | remote only — see `docs/mobile.md` | JSON protocol, never links Rust |

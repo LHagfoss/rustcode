@@ -1,6 +1,5 @@
-// Compiles the Swift app's Icon Composer source (macos/Resources/AppIcon.icon)
-// into Assets.car, the layered Liquid Glass icon macOS 26 draws, the same way
-// scripts/package-swift-app.sh does. It also writes src-tauri/gen-icon/
+// Compiles the Icon Composer source (src-tauri/icons/AppIcon.icon) into
+// Assets.car, the layered Liquid Glass icon macOS 26 draws. It also writes src-tauri/gen-icon/
 // tauri.conf.json, which `bun run bundle` merges after tauri.bundle.conf.json:
 // it ships Assets.car at Contents/Resources/Assets.car, and Info.plist names it
 // with CFBundleIconName. Without macOS or Xcode 26's actool the merged config is
@@ -11,8 +10,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const repo = resolve(import.meta.dir, "../../..");
-const source = resolve(repo, "macos/Resources/AppIcon.icon");
+const source = resolve(import.meta.dir, "../src-tauri/icons/AppIcon.icon");
 const out = resolve(import.meta.dir, "../src-tauri/gen-icon");
 const compiled = resolve(out, "compiled");
 

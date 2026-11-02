@@ -58,15 +58,12 @@ instructions for work in this repository.
   - Desktop app (`apps/desktop`, Tauri + React, bun): `bun run check` in
     `apps/desktop`, and `cargo fmt --check`, `cargo clippy --all-targets --
     -D warnings`, `cargo test` in `apps/desktop/src-tauri` (its own Cargo
-    workspace). It replaces the frozen SwiftUI app: new desktop work goes
-    here. Start from `docs/desktop.md` › "Status and roadmap", follow
-    `docs/design.md`, and run it with `bun tauri dev` (it uses
-    `target/debug/rustcode`; rebuild that after engine changes).
-  - macOS app (`macos/`, frozen): `scripts/swift-test.sh [TestClass]`. It hides the
-    test host's Contacts noise and fails a filter that matches nothing
-    (filter by class or test name; `RustCodeTests.X` matches nothing).
-  - A Swift-only change needs no cargo run, and a Rust-only one no Swift run,
-    unless the change crosses the ACP boundary between them.
+    workspace). This is the product: the RustCode orchestrator app. Start
+    from `docs/desktop.md` › "Status and roadmap", follow `docs/design.md`,
+    and run it with `bun tauri dev` (it uses `target/debug/rustcode`;
+    rebuild that after engine changes).
+  - A UI-only change needs no cargo run, and a Rust-only one no `bun run
+    check`, unless the change crosses the ACP boundary between them.
 - Keep build output bounded; `target/` once grew to 500 GB. Cargo never
   prunes it, and every feature set, profile and stale dependency version
   leaves artifacts behind.
@@ -75,7 +72,7 @@ instructions for work in this repository.
   - Before a long cargo session and when you finish, check the size and clean
     above 50 GB:
     `[ "$(du -sk target 2>/dev/null | cut -f1)" -gt 52428800 ] && cargo clean`.
-  - Each worktree has its own `target/` and `macos/.build`. Removing the
+  - Each worktree has its own `target/`. Removing the
     worktree when its branch merges (see above) is what frees them; do not
     leave idle worktrees, and point a long-lived one at a shared
     `CARGO_TARGET_DIR` rather than building a second full tree.
@@ -121,33 +118,21 @@ instructions for work in this repository.
   physical device), say exactly what is needed and leave it open; do not
   re-investigate it on every pass.
 
-## Checking macOS app behavior
+## Checking desktop app behavior
 
-- Build with `swift build --package-path macos` and drive the debug app with
-  `DebugDriver` (`macos/Sources/RustCode/DebugDriver.swift`): start
-  `.build/debug/RustCode` with `RUSTCODE_DRIVE=<dir>`, write commands to
-  `<dir>/cmd`, read timings from `<dir>/time`. `snap <file.png>` captures the
-  window; `wheelstream`, `timescroll` and `stream` measure scrolling and
-  streaming. Run a measurement under `sample <pid> 3` to see where the main
-  thread goes.
+- Look at UI changes in the mock (`bun run dev:mock` in `apps/desktop`, or
+  `?transport=mock`): it needs no engine and no model turns. Drive it with
+  headless Chrome over the DevTools protocol, as `scripts/perf.ts` does, at
+  a MacBook-sized 1512×945 viewport with `deviceScaleFactor` 2, and read the
+  screenshots. Do not open browser panes in the user's terminal.
 - To test an engine change in the app, build the engine binary with
-  `cargo build -p rustcode-tui --bin rustcode` and start the app with
-  `RUSTCODE_ENGINE=target/debug/rustcode`. A plain `cargo build` does not
-  rebuild that binary, and the app then talks to the old engine.
-- Synthesized wheel, drag and pinch events do not reach SwiftUI views from the
-  driver. Say in the PR when real pointer input was not exercised.
-- `submit` holds the driver until the turn ends, so later commands wait.
-  During a turn, capture with `screencapture -x -o -l "$(cat <dir>/window)"`
-  and answer an approval with a real click (System Events `click at`).
-- To see a card without a running turn: `approval command|edit|write|other|clear`
-  for a tool approval, `completion [ship|failcmd]` for a turn summary.
+  `cargo build -p rustcode-tui --bin rustcode`, then `bun tauri dev`. A
+  plain `cargo build` does not rebuild that binary, and the app then talks
+  to the old engine.
 - Never copy `credentials.json` or `provider-accounts.json` into a scratch
   `RUSTCODE_CONFIG_DIR`. A token refresh there rotates the OpenAI refresh
   token, and the user's real sign-in then fails with "OpenAI token request
   failed (HTTP 400)" (#2765). For live model turns, ask the user first.
-- `snap` does not draw Liquid Glass; use `screencapture` to judge glass. A
-  window that is not key (`state` prints `key false`) draws switches and
-  controls grey, so check that before calling a colour wrong.
 
 ## Naming
 
@@ -175,7 +160,7 @@ PR titles:
 
 Accepted `type` values: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
 `chore`, `ci`, `build`. Keep `scope` to the area touched; reuse an existing
-scope (`tui`, `workspace`, `sandbox`, `engine`, `mcp`, `ci`, `macos`, `ios`) rather than
+scope (`desktop`, `tui`, `workspace`, `sandbox`, `engine`, `mcp`, `ci`, `ios`) rather than
 inventing near-duplicates. No period at the end. Write the summary in the
 imperative ("add", not "added"), under ~72 characters. Do not prefix with
 `wip:` on a PR; use a draft PR instead.
