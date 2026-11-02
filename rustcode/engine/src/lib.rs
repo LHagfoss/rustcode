@@ -50,6 +50,7 @@ pub mod storage_migrations;
 pub mod storage_report;
 mod symbols;
 pub mod themes;
+mod thread_index;
 mod thread_status;
 pub mod tools;
 pub mod update;
