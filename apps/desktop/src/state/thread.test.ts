@@ -10,8 +10,10 @@ import {
   finishLoad,
   finishTurn,
   foldingBatch,
+  formatClock,
   formatDuration,
   requeueSteers,
+  shortAge,
   thoughtHeadings,
 } from "./thread";
 
@@ -202,5 +204,23 @@ describe("folding a batch", () => {
     expect(s.items.filter((i) => i.kind === "thought").every((t) => t.kind === "thought" && t.done)).toBe(
       true,
     );
+  });
+});
+
+describe("sidebar times", () => {
+  test("a running turn's clock", () => {
+    expect(formatClock(0)).toBe("0:00");
+    expect(formatClock(42_900)).toBe("0:42");
+    expect(formatClock(12 * 60_000 + 3_000)).toBe("12:03");
+    expect(formatClock(3_723_000)).toBe("1:02:03");
+  });
+
+  test("a compact age", () => {
+    const now = 10 * 86_400_000;
+    expect(shortAge(undefined, now)).toBe("");
+    expect(shortAge(now - 30_000, now)).toBe("now");
+    expect(shortAge(now - 5 * 60_000, now)).toBe("5m");
+    expect(shortAge(now - 3 * 3_600_000, now)).toBe("3h");
+    expect(shortAge(now - 2 * 86_400_000, now)).toBe("2d");
   });
 });

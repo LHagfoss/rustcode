@@ -264,13 +264,21 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.
 - **Sidebar.** Threads by where they are in their life (after T3 Code):
-  Pinned (always shown), Needs You, Working, Threads (split by project when
-  there are several; a worktree thread under its repository, with its
-  branch), and Settled: done or archived threads, folded by default. Each
-  section folds with its chevron and remembers it; a search opens them all.
-  Settling is marking a thread Done; a new message brings it back. The
-  filter button by the search groups by project, keeps to the current
-  project, and opens the Board. Subagents nest under their thread (open one
+  Pinned (always shown), Needs You, Working, Threads, and Settled: done or
+  archived threads, folded by default and kept as a shelf at the foot of
+  the list. Each section folds with its chevron and remembers it; a folded
+  one shows a dot when a thread inside needs you (amber) or works (pulsing
+  accent), and a search opens them all. A row is the title and one meta
+  line (project when not grouped, worktree branch, harness, model) with a
+  single slot on the right: the age (`5m`, `3h`), a live clock while the
+  turn runs, or *Approval* / *Input* with the request on the meta line.
+  Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
+  Double-click or F2 renames. Settling is marking a thread Done, with an
+  Undo toast; a new message brings it back. The filter button by the
+  search groups Threads by project (off by default, as in T3 Code; each
+  project folds and has New thread on hover; a worktree thread sits under
+  its repository), keeps to the current project, and opens the Board.
+  Subagents nest under their thread (open one
   in the Agents panel), and threads another thread started nest under it.
   Settings is the gear in the top row, after Hide sidebar and New thread
   (in the header's cluster while the sidebar is hidden); the project is
