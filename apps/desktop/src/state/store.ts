@@ -50,6 +50,7 @@ import {
   type Worktree,
 } from "../acp/v2";
 import { setShellTransport, shellCall } from "../lib/shell";
+import { createBatcher, frameQueue } from "./batch";
 import {
   type ComposeExtras,
   emptyExtras,
@@ -74,6 +75,7 @@ import {
   emptyThread,
   finishLoad,
   finishTurn,
+  foldingBatch,
   localId,
   messagesAfter,
   requeueSteers,
@@ -219,7 +221,12 @@ function storedJson<T>(key: string, fallback: T): T {
   }
 }
 
-export const useApp = create<AppState>(() => ({
+// Engine lines are applied a frame at a time; see batch.ts.
+const batcher = createBatcher<AppState>();
+
+export const useApp = create<AppState>((_set, _get, api) => ({
+  // Lets `batcher.batch` defer subscribers (adds no state).
+  ...batcher.attach(api),
   pinned: storedJson<string[]>(STORAGE.pinned, []),
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   editing: {},
@@ -294,6 +301,26 @@ export function engine(): AcpConnection {
   return connection;
 }
 
+/** Engine lines, applied together once a frame: one store notification and one render per frame. */
+const inbound = frameQueue<string>((lines) =>
+  batcher.batch(() =>
+    foldingBatch(() => {
+      for (const line of lines) {
+        try {
+          connection?.receive(line);
+        } catch (error) {
+          // One bad line must not drop the rest of the frame's lines.
+          console.error("engine line failed", error);
+        }
+      }
+    }),
+  ),
+);
+/** Engine stderr, kept for Settings › Engine; appended once a frame, not per line. */
+const logs = frameQueue<string>((lines) =>
+  set((s) => ({ engineLog: [...s.engineLog, ...lines].slice(-400) })),
+);
+
 /** Start the transport once; every engine (re)start then gets a fresh ACP connection. */
 export async function connect(next: Transport): Promise<void> {
   transport = next;
@@ -302,9 +329,14 @@ export async function connect(next: Transport): Promise<void> {
   set({ status: "connecting", transport: next.name, statusDetail: undefined });
   try {
     await next.start((event) => {
-      if (event.type === "line") connection?.receive(event.line);
-      else if (event.type === "log") set((s) => ({ engineLog: [...s.engineLog.slice(-400), event.line] }));
-      else if (event.type === "closed") connection?.close(event.reason);
+      if (event.type === "line") inbound.push(event.line);
+      else if (event.type === "lines") for (const line of event.lines) inbound.push(line);
+      else if (event.type === "log") logs.push(event.line);
+      else if (event.type === "closed") {
+        // Every line the engine printed reaches the connection before it closes.
+        inbound.flush();
+        connection?.close(event.reason);
+      }
       // The shell (re)started the engine, after a crash too: initialize a fresh connection.
       else if (event.type === "open") void handshake();
     });

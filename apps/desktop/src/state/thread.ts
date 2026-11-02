@@ -125,8 +125,26 @@ function closePendingTurn(state: ThreadState): ThreadState {
   };
 }
 
-/** Marks every open thought as done, so its clock stops. */
+/**
+ * Marks open thoughts as done, so their clocks stop. Called per streamed chunk,
+ * so it looks back only to the last reply or tool call: adding either closed
+ * every thought before it. O(tail), not O(thread).
+ */
 function finishThoughts(items: TranscriptItem[], now: number): TranscriptItem[] {
+  let next: TranscriptItem[] | null = null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    if (item.kind === "assistant" || item.kind === "tool") break;
+    if (item.kind === "thought" && !item.done) {
+      next ??= writable(items, copyItems);
+      next[i] = { ...item, done: true, durationMs: item.durationMs ?? now - item.startedAt };
+    }
+  }
+  return next ?? items;
+}
+
+/** Marks every open thought in the thread as done (a load or a turn ends). */
+function finishAllThoughts(items: TranscriptItem[], now: number): TranscriptItem[] {
   let changed = false;
   const next = items.map((item) => {
     if (item.kind === "thought" && !item.done) {
@@ -138,10 +156,46 @@ function finishThoughts(items: TranscriptItem[], now: number): TranscriptItem[] 
   return changed ? next : items;
 }
 
-function replaceLast(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
-  const next = items.slice();
-  next[next.length - 1] = item;
+// Arrays made while folding a batch of engine lines (`foldingBatch`). Nothing
+// outside the batch has seen them yet, so later updates in the same batch may
+// change them in place: a replay of thousands of updates then copies the
+// transcript once, not once per update (that was O(updates × items)).
+let owned: WeakSet<object> | null = null;
+
+/** Run `fn` with in-place changes allowed on arrays and maps it creates; they are frozen in effect after. */
+export function foldingBatch(fn: () => void): void {
+  const outer = owned;
+  owned = outer ?? new WeakSet();
+  try {
+    fn();
+  } finally {
+    owned = outer;
+  }
+}
+
+function writable<T extends object>(value: T, copy: (v: T) => T): T {
+  if (owned?.has(value)) return value;
+  const next = copy(value);
+  owned?.add(next);
   return next;
+}
+
+const copyItems = (items: TranscriptItem[]) => items.slice();
+
+function append(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
+  const next = writable(items, copyItems);
+  next.push(item);
+  return next;
+}
+
+function replaceAt(items: TranscriptItem[], index: number, item: TranscriptItem): TranscriptItem[] {
+  const next = writable(items, copyItems);
+  next[index] = item;
+  return next;
+}
+
+function replaceLast(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
+  return replaceAt(items, items.length - 1, item);
 }
 
 /** Fold one update into the thread. Pure: returns the same object when nothing changed. */
@@ -153,7 +207,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       const items = finishThoughts(closed.items, now);
       return {
         ...closed,
-        items: [...items, { kind: "user", id: localId("user"), text: update.text, at: update.at }],
+        items: append(items, { kind: "user", id: localId("user"), text: update.text, at: update.at }),
       };
     }
     case "agent": {
@@ -178,15 +232,12 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       return {
         ...state,
         pendingTurn,
-        items: [
-          ...items,
-          {
-            kind: "assistant",
-            id: localId("reply"),
-            text: update.text.replace(/^\n+/, ""),
-            at: update.at ?? now,
-          },
-        ],
+        items: append(items, {
+          kind: "assistant",
+          id: localId("reply"),
+          text: update.text.replace(/^\n+/, ""),
+          at: update.at ?? now,
+        }),
       };
     }
     case "thought": {
@@ -202,19 +253,16 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       }
       return {
         ...state,
-        items: [
-          ...state.items,
-          {
-            kind: "thought",
-            id: localId("thought"),
-            text: update.text,
-            summary: update.summary,
-            startedAt: now,
-            durationMs: update.durationMs,
-            // A replayed thought carries its duration and is already over.
-            done: update.durationMs !== undefined && !state.running,
-          },
-        ],
+        items: append(state.items, {
+          kind: "thought",
+          id: localId("thought"),
+          text: update.text,
+          summary: update.summary,
+          startedAt: now,
+          durationMs: update.durationMs,
+          // A replayed thought carries its duration and is already over.
+          done: update.durationMs !== undefined && !state.running,
+        }),
       };
     }
     case "toolCall": {
@@ -233,21 +281,18 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         output: update.output,
       };
       if (existing !== undefined && items[existing]?.kind === "tool") {
-        const next = items.slice();
-        next[existing] = { ...(items[existing] as Extract<TranscriptItem, { kind: "tool" }>), ...tool };
-        return { ...state, items: next };
+        const merged = { ...(items[existing] as Extract<TranscriptItem, { kind: "tool" }>), ...tool };
+        return { ...state, items: replaceAt(items, existing, merged) };
       }
-      return {
-        ...state,
-        items: [...items, tool],
-        toolIndex: { ...state.toolIndex, [update.id]: items.length },
-      };
+      const toolIndex = writable(state.toolIndex, (index) => ({ ...index }));
+      toolIndex[update.id] = items.length;
+      return { ...state, items: append(items, tool), toolIndex };
     }
     case "toolCallUpdate": {
       const index = state.toolIndex[update.id];
       const item = index === undefined ? undefined : state.items[index];
       if (index === undefined || item?.kind !== "tool") return state;
-      const next = state.items.slice();
+      const next = writable(state.items, copyItems);
       next[index] = {
         ...item,
         title: update.title ?? item.title,
@@ -322,7 +367,7 @@ export function finishTurn(
   now = Date.now(),
   error?: string,
 ): ThreadState {
-  const items = finishThoughts(state.items, now).map((item) =>
+  const items = finishAllThoughts(state.items, now).map((item) =>
     item.kind === "tool" && (item.status === "pending" || item.status === "in_progress")
       ? { ...item, status: (outcome === "completed" ? "completed" : "failed") as ToolStatus }
       : item,
@@ -342,7 +387,7 @@ export function finishTurn(
 /** The replay of `session/load` finished. */
 export function finishLoad(state: ThreadState): ThreadState {
   const closed = closePendingTurn(state);
-  return { ...closed, loading: false, loaded: true, items: finishThoughts(closed.items, Date.now()) };
+  return { ...closed, loading: false, loaded: true, items: finishAllThoughts(closed.items, Date.now()) };
 }
 
 /** Add a steered message where the running turn will read it. */

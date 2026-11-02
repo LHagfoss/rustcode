@@ -5,6 +5,8 @@
 
 export type TransportEvent =
   | { type: "line"; line: string }
+  /** Several stdout lines read together (the shell batches what is already buffered). */
+  | { type: "lines"; lines: string[] }
   | { type: "open"; engine?: string }
   | { type: "closed"; reason: string }
   | { type: "log"; line: string };
@@ -31,13 +33,18 @@ export class TauriTransport implements Transport {
 
   async start(onEvent: (event: TransportEvent) => void): Promise<void> {
     const { Channel, invoke } = await import("@tauri-apps/api/core");
+    this.invoke = invoke;
     const channel = new Channel<TransportEvent>();
     channel.onmessage = onEvent;
     await invoke("engine_start", { onEvent: channel });
   }
 
+  private invoke: typeof import("@tauri-apps/api/core").invoke | null = null;
+
   send(line: string): void {
-    void import("@tauri-apps/api/core").then(({ invoke }) => invoke("engine_send", { line }));
+    // In order: once the module is loaded, every send goes straight to invoke.
+    if (this.invoke) void this.invoke("engine_send", { line });
+    else void import("@tauri-apps/api/core").then(({ invoke }) => invoke("engine_send", { line }));
   }
 
   async restart(): Promise<void> {
