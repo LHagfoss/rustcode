@@ -285,7 +285,11 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   1–9 still pick in the engine's order. The composer is a light frost
   (`--rc-composer-bg`: white glass in light mode, a pale tint of the text
   in dark), solid under Reduce transparency. Queued messages are rows above the composer that can be
-  edited in place, moved up, sent now as a steer, or removed.
+  edited in place, moved up, sent now as a steer, or removed. A steer
+  carries text only, so a message with images (or links, or a command
+  token) queues whole for the next turn, with a toast saying so; its row
+  shows a paperclip count, its text stays editable (the images stay), and
+  its send-now arrow is greyed with the reason on hover.
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.

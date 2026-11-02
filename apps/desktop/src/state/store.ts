@@ -1274,12 +1274,26 @@ async function forkThread(id: string): Promise<void> {
   });
 }
 
-/** ⌘⏎: hand the running turn a message to read after its current step, else send. */
-export async function steerOrSubmit(text: string): Promise<boolean> {
+/**
+ * ⌘⏎: hand the running turn a message to read after its current step, else
+ * send. A steer carries text only, so a message with attachments (or a
+ * command token, or links) queues whole for the next turn, and says so.
+ */
+export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
   const id = get().selectedId;
   const thread = id ? get().threads[id] : undefined;
   const trimmed = text.trim();
-  if (!id || !thread?.running || !canSteer(thread)) return submit(text);
+  if (!id || !thread?.running || !canSteer(thread)) return submit(text, extras);
+  if (hasExtras(extras)) {
+    const sent = await submit(text, extras);
+    if (sent)
+      toast(
+        extras.attachments.length
+          ? "Queued: attachments go with the next turn"
+          : "Queued: the turn takes plain text only",
+      );
+    return sent;
+  }
   if (!trimmed) {
     const next = thread.queue[0];
     if (next) await sendQueuedNow(id, next.id);
@@ -1316,7 +1330,7 @@ export async function sendQueuedNow(id: string, queuedId: string) {
   const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
   if (!item) return;
   if (item.extras?.attachments.length) {
-    toast("A message with attachments is sent when the turn ends");
+    toast("Attachments go with the next turn: a running turn takes text only");
     return;
   }
   if (await steer(id, item.text)) {
@@ -1337,9 +1351,12 @@ export function updateQueued(id: string, queuedId: string, text: string) {
   const trimmed = text.trim();
   updateThread(id, (t) => ({
     ...t,
+    // Its attachments stay; one with attachments survives an emptied text.
     queue: trimmed
       ? t.queue.map((q) => (q.id === queuedId ? { ...q, text: trimmed } : q))
-      : t.queue.filter((q) => q.id !== queuedId || q.extras?.attachments.length),
+      : t.queue
+          .filter((q) => q.id !== queuedId || q.extras?.attachments.length)
+          .map((q) => (q.id === queuedId ? { ...q, text: "" } : q)),
   }));
 }
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
+import { emptyExtras } from "./compose";
 import { resolveGrant } from "./host";
 import {
   agentHistory,
@@ -15,9 +16,11 @@ import {
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
+  removeQueued,
   renameThread,
   resetForTests,
   selectThread,
+  sendQueuedNow,
   setActiveTheme,
   setArchived,
   setDefaultHarness,
@@ -27,10 +30,12 @@ import {
   setProjectCwd,
   setThreadStatus,
   statusOf,
+  steerOrSubmit,
   submit,
   switchNewThreadHarness,
   togglePin,
   trashThread,
+  updateQueued,
   useApp,
 } from "./store";
 import { turnCompletion } from "./thread";
@@ -110,6 +115,53 @@ describe("engine controller with the mock engine", () => {
     expect(s.selectedId).toBeNull();
     expect(s.newThread?.harness).toBe(first.harness ?? "rustcode");
     expect(s.threads[first.id]!.items.length).toBe(items);
+  });
+
+  test("a message with images queues whole while a turn runs, and stays editable", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    const image = (n: number) => ({
+      id: `img${n}`,
+      kind: "image" as const,
+      name: `shot${n}.png`,
+      mimeType: "image/png",
+      data: "AAAA",
+    });
+    // ⌘⏎ with images: a steer takes text only, so the whole prompt queues, in order.
+    expect(await steerOrSubmit("look at this", { ...emptyExtras, attachments: [image(1), image(2)] })).toBe(
+      true,
+    );
+    expect(await submit("", { ...emptyExtras, attachments: [image(3)] })).toBe(true);
+    expect(await submit("then this")).toBe(true);
+    let queue = useApp.getState().threads[id]!.queue;
+    expect(queue.map((q) => [q.text, q.extras?.attachments.length ?? 0])).toEqual([
+      ["look at this", 2],
+      ["", 1],
+      ["then this", 0],
+    ]);
+    // Sending one with images now is refused, and it stays queued with them.
+    await sendQueuedNow(id, queue[0]!.id);
+    expect(useApp.getState().threads[id]!.queue.length).toBe(3);
+    // Its text can be edited or emptied; the images stay.
+    updateQueued(id, queue[0]!.id, "look at these two");
+    updateQueued(id, queue[1]!.id, "");
+    queue = useApp.getState().threads[id]!.queue;
+    expect(queue[0]).toMatchObject({
+      text: "look at these two",
+      extras: { attachments: [image(1), image(2)] },
+    });
+    expect(queue[1]).toMatchObject({ text: "", extras: { attachments: [image(3)] } });
+    removeQueued(id, queue[1]!.id);
+    expect(useApp.getState().threads[id]!.queue.map((q) => q.text)).toEqual([
+      "look at these two",
+      "then this",
+    ]);
+    await cancel();
+    await done;
   });
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {
