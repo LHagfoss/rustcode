@@ -469,8 +469,9 @@ export const Composer = memo(function Composer({
         )}
         <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-2 pt-1.5">
           {extras.command && (
+            // One line of the field's own height, so the command and its argument read as one entry.
             <Tooltip label={extras.command.description}>
-              <span className="flex h-[20px] shrink-0 items-center rounded-full bg-accent/15 px-2 font-semibold text-body text-accent">
+              <span className="flex h-[18px] shrink-0 items-center rounded-xs bg-accent/12 px-1 font-semibold text-body text-accent leading-[18px]">
                 {extras.command.name}
               </span>
             </Tooltip>
