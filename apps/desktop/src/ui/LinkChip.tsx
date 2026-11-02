@@ -78,7 +78,10 @@ export function LinkChip({
             <span className="shrink-0 text-caption text-fg-faint">{host}</span>
           )}
           {!onRemove && (
-            <ArrowUpRight size={11} className="-ml-0.5 shrink-0 text-fg-faint group-hover/link:text-fg-muted" />
+            <ArrowUpRight
+              size={11}
+              className="-ml-0.5 shrink-0 text-fg-faint group-hover/link:text-fg-muted"
+            />
           )}
         </a>
         {onRemove && (
