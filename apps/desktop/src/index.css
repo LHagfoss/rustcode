@@ -605,15 +605,15 @@
 .rc-header-glass::before {
   content: "";
   position: absolute;
-  inset: 0 0 -16px 0;
+  inset: 0 0 -24px 0;
   z-index: -1;
   background: var(--rc-glass-pane);
   backdrop-filter: var(--rc-glass-filter);
   -webkit-backdrop-filter: var(--rc-glass-filter);
   /* design-lint: allow (mask alpha, not a colour) */
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
   /* design-lint: allow (mask alpha, not a colour) */
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
   pointer-events: none;
 }
 /* Over a new thread's banner the tint is lighter, so the picture shows through. */

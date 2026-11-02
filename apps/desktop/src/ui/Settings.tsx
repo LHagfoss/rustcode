@@ -7,6 +7,7 @@
 import {
   Blocks,
   Check,
+  ChevronLeft,
   FolderOpen,
   Settings as Gear,
   Info,
@@ -15,7 +16,6 @@ import {
   Palette,
   Plus,
   TerminalSquare,
-  X,
 } from "lucide-react";
 import { useState } from "react";
 import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
@@ -45,7 +45,7 @@ import {
 } from "../state/store";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
-import { MainHeader } from "./MainHeader";
+import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { cx, Kbd, Pill, Segments, Switch, Tooltip } from "./primitives";
 import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
@@ -581,50 +581,66 @@ function Engine() {
   );
 }
 
-/** Settings in the main column: the section list beside the page, under the shared header. */
+/**
+ * Settings over the whole window: the shared glass header (Back, the title)
+ * clear of the traffic lights, and one calm centred column with the section
+ * list at its left and the page beside it. The page scrolls under the header.
+ * Back, Esc and ⌘, return to where you were; the thread underneath stayed
+ * mounted (App.tsx).
+ */
 export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
   return (
     <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg" aria-label="Settings">
       <MainHeader
-        title={<h1 className="min-w-0 truncate font-semibold text-body">Settings</h1>}
-        right={
-          <Tooltip label="Close (Esc)">
-            <button
-              type="button"
-              aria-label="Close Settings"
-              onClick={() => openSettings(null)}
-              className="flex size-7 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-            >
-              <X size={14} />
-            </button>
-          </Tooltip>
+        lights
+        title={
+          <>
+            <Tooltip label="Back (Esc)">
+              <button
+                type="button"
+                onClick={() => openSettings(null)}
+                className="flex h-7 items-center gap-1 rounded-full pr-2.5 pl-1.5 font-medium text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+              >
+                <ChevronLeft size={14} />
+                Back
+              </button>
+            </Tooltip>
+            <h1 className="min-w-0 truncate font-semibold text-body">Settings</h1>
+          </>
         }
       />
-      <div className="flex min-h-0 flex-1">
-        <nav className="flex w-[196px] shrink-0 flex-col gap-0.5 px-2.5 pt-3" aria-label="Settings sections">
-          {SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              aria-current={s.id === section ? "page" : undefined}
-              onClick={() => openSettings(s.id)}
-              className={cx(
-                "flex h-8 items-center gap-2 rounded-md px-2 text-left text-body",
-                s.id === section
-                  ? "bg-fill font-medium text-fg"
-                  : "text-fg-muted hover:bg-fill-subtle hover:text-fg",
-              )}
-            >
-              <s.icon size={14} className="shrink-0" />
-              {s.label}
-            </button>
-          ))}
-        </nav>
-        <div className="scroll-stable min-w-0 flex-1">
-          <div className="mx-auto max-w-[720px] px-[clamp(20px,5%,56px)] pb-16">
-            <h2 className="pt-4 pb-4 font-semibold text-title2">{current.label}</h2>
+      <div className="scroll-stable min-h-0 flex-1">
+        <div
+          className="mx-auto flex w-full max-w-[760px] gap-8 px-[clamp(16px,4%,32px)] pb-16"
+          style={{ paddingTop: HEADER_HEIGHT + 20 }}
+        >
+          <nav
+            className="sticky flex w-[164px] shrink-0 flex-col gap-0.5 self-start"
+            style={{ top: HEADER_HEIGHT + 20 }}
+            aria-label="Settings sections"
+          >
+            {SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                aria-current={s.id === section ? "page" : undefined}
+                onClick={() => openSettings(s.id)}
+                className={cx(
+                  "flex h-8 items-center gap-2 rounded-md px-2 text-left text-body",
+                  s.id === section
+                    ? "bg-fill font-medium text-fg"
+                    : "text-fg-muted hover:bg-fill-subtle hover:text-fg",
+                )}
+              >
+                <s.icon size={14} className="shrink-0" />
+                {s.label}
+              </button>
+            ))}
+          </nav>
+          <div className="min-w-0 flex-1">
+            <h2 className="pt-1 pb-4 font-semibold text-title2">{current.label}</h2>
             {section === "general" && <General />}
             {section === "harnesses" && <Harnesses />}
             {section === "connections" && <ConnectionsPage />}

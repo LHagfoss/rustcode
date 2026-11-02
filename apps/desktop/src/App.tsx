@@ -18,7 +18,7 @@ import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
-import { Pill } from "./ui/primitives";
+import { cx, Pill } from "./ui/primitives";
 import { RightPanel } from "./ui/RightPanel";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
 import { Settings } from "./ui/Settings";
@@ -162,36 +162,42 @@ export function App() {
   return (
     <Tooltip.Provider delayDuration={400} skipDelayDuration={300} disableHoverableContent>
       {/*
-        One shell: the sidebar never unmounts. Settings covers the main column
-        and the right panel, which stay mounted (and laid out) underneath, so
-        opening and closing it is one frame with nothing remounted.
+        One shell, never unmounted. Settings takes the whole window (sidebar and
+        chat): the shell stays mounted and laid out underneath, only hidden and
+        inert, so closing Settings shows the thread exactly where it was
+        (scroll, drafts, open rows) in one frame.
       */}
-      <div className="flex h-full w-full overflow-hidden bg-sidebar">
-        <Sidebar />
-        <div className="relative flex min-w-0 flex-1 bg-bg">
-          <div className="flex min-w-0 flex-1 flex-col" inert={settings}>
-            {view.kind === "chat" ? (
-              <ChatView />
-            ) : (
-              <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                {view.kind === "board" && <Board />}
-                {view.kind === "review" && <Review key={view.threadId} threadId={view.threadId} />}
-                {view.kind === "compare" && <Compare fanOut={view.fanOut} />}
+      <div className="relative h-full w-full overflow-hidden">
+        <div
+          className={cx("flex h-full w-full overflow-hidden bg-sidebar", settings && "invisible")}
+          inert={settings}
+        >
+          <Sidebar />
+          <div className="relative flex min-w-0 flex-1 bg-bg">
+            <div className="flex min-w-0 flex-1 flex-col">
+              {view.kind === "chat" ? (
+                <ChatView />
+              ) : (
+                <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                  {view.kind === "board" && <Board />}
+                  {view.kind === "review" && <Review key={view.threadId} threadId={view.threadId} />}
+                  {view.kind === "compare" && <Compare fanOut={view.fanOut} />}
+                </Suspense>
+              )}
+              <Suspense fallback={null}>
+                <TerminalPanel />
               </Suspense>
-            )}
-            <Suspense fallback={null}>
-              <TerminalPanel />
-            </Suspense>
-          </div>
-          <div className="flex" inert={settings}>
-            <RightPanel />
-          </div>
-          {settings && (
-            <div className="absolute inset-0 z-20 flex bg-bg">
-              <Settings />
             </div>
-          )}
+            <div className="flex">
+              <RightPanel />
+            </div>
+          </div>
         </div>
+        {settings && (
+          <div className="absolute inset-0 z-20 flex bg-bg">
+            <Settings />
+          </div>
+        )}
       </div>
       <CommandPalette />
       <Suspense fallback={null}>{onboarding && <Onboarding onClose={() => setOnboarding(false)} />}</Suspense>

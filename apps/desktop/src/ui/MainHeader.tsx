@@ -1,7 +1,8 @@
 // The main column's header, shared by the chat, Settings and the other
 // views, so switching between them keeps the bar where it is: the sidebar's
 // buttons when the sidebar is hidden (clear of the traffic lights), the
-// view's title and its own controls.
+// view's title and its own controls. It floats in glass over its view (the
+// view leaves HEADER_HEIGHT at its top), so content scrolls under it.
 
 import { Settings as Gear, PanelLeft, SquarePen } from "lucide-react";
 import type { ReactNode } from "react";
@@ -24,28 +25,36 @@ export function SettingsButton() {
   );
 }
 
+/** The header's height: a view under it starts its content this far down. */
+export const HEADER_HEIGHT = 42;
+
 export function MainHeader({
   title,
   right,
   className,
+  lights,
 }: {
   title: ReactNode;
   right?: ReactNode;
   className?: string;
+  /** Leave the traffic lights' room even with the sidebar shown (Settings covers the sidebar). */
+  lights?: boolean;
 }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
   const lightsInset = useLightsInset();
+  const underLights = lights || sidebarHidden;
   return (
     <header
       data-tauri-drag-region
       className={cx(
-        "relative z-10 flex h-[42px] shrink-0 items-center gap-2.5 pt-1.5 pb-2 pr-2.5",
-        !sidebarHidden && "pl-2.5",
+        // Glass over the content, which scrolls under it (docs/design.md, Header).
+        "rc-header-glass absolute inset-x-0 top-0 z-10 flex h-[42px] items-center gap-2.5 pt-1.5 pb-2 pr-2.5",
+        !underLights && "pl-2.5",
         className,
       )}
-      style={sidebarHidden ? { paddingLeft: lightsInset } : undefined}
+      style={underLights ? { paddingLeft: lightsInset } : undefined}
     >
-      {sidebarHidden && (
+      {sidebarHidden && !lights && (
         <Cluster>
           <ClusterButton label="Show sidebar" tooltip="Show sidebar (⌘B)" onClick={toggleSidebar}>
             <PanelLeft size={14} />

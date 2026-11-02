@@ -544,7 +544,7 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {/* The tray under the box: where the thread works and what it brings, after the SwiftUI footer. */}
-      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[54px] items-end gap-0.5 rounded-b-xl px-1.5 pt-[18px] pb-1.5">
+      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[58px] items-end gap-0.5 rounded-b-xl px-1.5 pt-[18px] pb-1.5">
         <FolderMenu thread={thread} cwd={cwd} />
         {!thread && <WorktreeToggle draft={draft} compact={compact} />}
         {thread?.worktree && (

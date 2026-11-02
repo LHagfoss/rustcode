@@ -37,7 +37,7 @@ import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
-import { MainHeader } from "./MainHeader";
+import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { Callout, Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
@@ -150,8 +150,8 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
   const cwd = thread?.cwd ?? projectCwd;
   return (
     <MainHeader
-      // Over a new thread's banner: frosted, its foot fading into the banner.
-      className={overBanner ? "rc-header-glass rc-frost" : "bg-bg"}
+      // Glass like every header; over a new thread's banner a lighter tint, so the picture shows.
+      className={overBanner ? "rc-frost" : undefined}
       title={
         <>
           {cwd && (
@@ -276,7 +276,10 @@ function TranscriptSkeleton() {
   const reply = [96, 88, 92, 54];
   return (
     <div className="min-h-0 flex-1 overflow-hidden" role="status" aria-label="Loading thread">
-      <div className="mx-auto flex w-full max-w-[1036px] flex-col gap-[18px] px-7 pt-5">
+      <div
+        className="mx-auto flex w-full max-w-[1036px] flex-col gap-[18px] px-7"
+        style={{ paddingTop: HEADER_HEIGHT + 20 }}
+      >
         {[0, 1].map((turn) => (
           <div key={turn} className="flex flex-col gap-[18px]">
             <Skeleton className="h-9 w-[38%] self-end rounded-lg" />
@@ -351,7 +354,7 @@ export function ChatView() {
       <Header thread={thread} overBanner={showsBanner} />
       {thread && !thread.loading ? (
         // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
-        <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} />
+        <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} topInset={HEADER_HEIGHT} />
       ) : thread?.loading ? (
         <TranscriptSkeleton />
       ) : (
