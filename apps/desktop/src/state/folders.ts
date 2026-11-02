@@ -1,0 +1,24 @@
+// ⌘O and ⌘⇧O: the folder a thread works in. ⌘O picks the folder of the
+// thread in front: a new one starts there, an open one moves there
+// (`moveThread`). ⌘⇧O picks where new threads start by default.
+
+import { projectName } from "../acp/types";
+import { pickFolder } from "../lib/native";
+import { moveThread, setDefaultCwd, setProjectCwd, toast, useApp } from "./store";
+
+export async function chooseFolder(asDefault: boolean): Promise<void> {
+  const s = useApp.getState();
+  if (asDefault) {
+    const picked = await pickFolder(s.defaultCwd || s.projectCwd);
+    if (picked) {
+      setDefaultCwd(picked);
+      toast(`New threads start in ${projectName(picked)}`, "success");
+    }
+    return;
+  }
+  const id = s.selectedId;
+  const picked = await pickFolder((id ? s.threads[id]?.cwd : undefined) ?? s.projectCwd);
+  if (!picked) return;
+  if (id) void moveThread(id, picked);
+  else setProjectCwd(picked);
+}

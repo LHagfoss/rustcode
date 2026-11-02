@@ -13,6 +13,7 @@ import {
   editMessage,
   ensureHarnessModels,
   fetchHarnessModels,
+  moveThread,
   pickNewThreadChoice,
   refreshAgents,
   refreshHarnesses,
@@ -24,12 +25,14 @@ import {
   sendQueuedNow,
   setActiveTheme,
   setArchived,
+  setDefaultCwd,
   setDefaultHarness,
   setHarnessEnabled,
   setNewThreadChoice,
   setOrchestration,
   setProjectCwd,
   setThreadStatus,
+  startNewThread,
   statusOf,
   steerOrSubmit,
   submit,
@@ -194,6 +197,27 @@ describe("engine controller with the mock engine", () => {
     const wrong = error(await start({ harness: "rustcode", model: "gpt-6" }));
     expect(wrong).toContain("has no model “gpt-6”");
     expect(wrong).toContain("chatgpt/gpt-6-");
+  });
+
+  test("a thread moves to another folder, and the default folder is separate", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const id = useApp.getState().sessions[0]!.id;
+    selectThread(id);
+    await until(() => selected()?.loaded === true);
+    expect(await moveThread(id, "/tmp/elsewhere")).toBe(true);
+    expect(useApp.getState().sessions.find((x) => x.id === id)?.cwd).toBe("/tmp/elsewhere");
+    await until(() => selected()?.loaded === true);
+    expect(selected()!.cwd).toBe("/tmp/elsewhere");
+
+    setDefaultCwd("/tmp/default");
+    startNewThread();
+    // A new thread from an open one starts in that thread's folder; picking another keeps the default.
+    expect(useApp.getState().projectCwd).toBe("/tmp/elsewhere");
+    setProjectCwd("/tmp/just-this-one");
+    expect(useApp.getState().defaultCwd).toBe("/tmp/default");
+    startNewThread();
+    expect(useApp.getState().projectCwd).toBe("/tmp/default");
   });
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {

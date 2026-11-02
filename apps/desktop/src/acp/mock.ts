@@ -676,7 +676,7 @@ export class MockEngine {
             loadSession: true,
             promptCapabilities: { image: true, audio: false, embeddedContext: false },
             sessionCapabilities: { list: {}, close: {} },
-            _meta: { rustcode: { steer: 1, agents: 2, rewind: 1, pullRequests: 3 } },
+            _meta: { rustcode: { steer: 1, agents: 2, rewind: 1, pullRequests: 3, sessionMove: 1 } },
           },
           authMethods: [],
         };
@@ -810,6 +810,13 @@ export class MockEngine {
       }
       case "session/close":
         return {};
+      case "_rustcode/session/move": {
+        const thread = this.thread(params.sessionId);
+        const cwd = str(params.cwd);
+        if (!cwd?.startsWith("/")) throw new Error("cwd must be absolute");
+        thread.cwd = cwd;
+        return { cwd };
+      }
       case "session/set_config_option": {
         const thread = this.thread(params.sessionId);
         const value = str(params.value);

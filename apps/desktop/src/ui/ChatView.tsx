@@ -21,6 +21,7 @@ import { agentActive } from "../acp/rustcode";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
+import { chooseFolder } from "../state/folders";
 import {
   refreshSessions,
   setPanel,
@@ -147,7 +148,7 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
   const working = useApp((s) => (thread ? (s.agents[thread.id] ?? []).filter(agentActive).length : 0));
   const projectCwd = useApp((s) => s.projectCwd);
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
-  const title = thread ? (thread.title ?? listed ?? "New thread") : "New Thread";
+  const title = thread ? (thread.title ?? listed ?? "New thread") : "New thread";
   const cwd = thread?.cwd ?? projectCwd;
   return (
     <MainHeader
@@ -156,13 +157,22 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
       title={
         <>
           {cwd && (
-            <Tooltip label={cwd}>
-              <span className="max-w-[260px] shrink-0 truncate px-2 text-callout text-fg-muted" dir="rtl">
+            <Tooltip label={`${cwd} · change folder (⌘O)`}>
+              <button
+                type="button"
+                onClick={() => void chooseFolder(false)}
+                className="-mx-1 max-w-[260px] shrink-0 truncate rounded-sm px-1 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                dir="rtl"
+              >
                 <bdi>{cwd.replace(/^\/Users\/[^/]+/, "~")}</bdi>
-              </span>
+              </button>
             </Tooltip>
           )}
-          {cwd && <span className="font-light text-fg-faint text-title3">/</span>}
+          {cwd && (
+            <span aria-hidden className="text-body text-fg-faint">
+              /
+            </span>
+          )}
           {thread?.harness && thread.harness.id !== "rustcode" && (
             <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
           )}

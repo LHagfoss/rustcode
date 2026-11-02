@@ -33,6 +33,7 @@ import {
   parseSessionUpdate,
   permissionCancelled,
   permissionSelected,
+  projectName,
   questionOptionsAnswer,
   questionTextAnswer,
   type SessionSummary,
@@ -134,7 +135,10 @@ export interface AppState {
   /** Null shows the new-thread screen. */
   selectedId: string | null;
   /** The folder a new thread starts in. */
+  /** The folder the next new thread starts in. */
   projectCwd: string;
+  /** Where new threads start by default (Settings › General, ⌘⇧O). */
+  defaultCwd: string;
   newThread: NewThreadChoice | null;
   harnesses: HarnessSnapshot | null;
   commands: SlashCommand[];
@@ -289,6 +293,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   threads: {},
   selectedId: null,
   projectCwd: stored(STORAGE.project) ?? "",
+  defaultCwd: stored(STORAGE.project) ?? "",
   newThread: null,
   harnesses: null,
   commands: [],
@@ -821,7 +826,9 @@ export function selectThread(id: string | null) {
 
 export function startNewThread(cwd?: string) {
   const s = get();
-  const projectCwd = cwd ?? (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
+  // The thread you were in, else the default folder; picking one here does not change the default.
+  const projectCwd =
+    cwd ?? (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? (s.defaultCwd || s.projectCwd);
   set({
     selectedId: null,
     projectCwd,
@@ -831,12 +838,52 @@ export function startNewThread(cwd?: string) {
     view: { kind: "chat" },
     newWorktree: { on: s.newWorktree.on, branch: "", edited: false },
   });
-  if (projectCwd) store(STORAGE.project, projectCwd);
 }
 
+/** The folder of the new thread being written (⌘O there, the tray's folder menu). */
 export function setProjectCwd(cwd: string) {
   set({ projectCwd: cwd });
+}
+
+/** Where new threads start by default (⌘⇧O, Settings › General); a new thread being written follows. */
+export function setDefaultCwd(cwd: string) {
+  set((s) => ({ defaultCwd: cwd, projectCwd: s.selectedId ? s.projectCwd : cwd }));
   store(STORAGE.project, cwd);
+}
+
+/**
+ * ⌘O on an open thread: it works in another folder from now on. The engine
+ * moves only a closed session, so the thread is closed, moved and loaded
+ * again; a running turn has to stop first.
+ */
+export async function moveThread(id: string, cwd: string): Promise<boolean> {
+  const thread = get().threads[id];
+  if (thread?.running) {
+    toast("Stop the running turn before moving this thread to another folder.");
+    return false;
+  }
+  if (!get().agent?.sessionMove || !connection) {
+    toast("This engine cannot move a thread to another folder. Update RustCode.", "error");
+    return false;
+  }
+  if (thread && get().agent?.closeSession) await closeThread(id);
+  try {
+    await connection.request(Method.sessionMove, { sessionId: id, cwd }, 10_000);
+  } catch (error) {
+    toast(`Could not move the thread: ${errorText(error)}`, "error");
+    if (thread) void openThread(id);
+    return false;
+  }
+  set((s) => {
+    const { [id]: _old, ...threads } = s.threads;
+    return {
+      threads,
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, cwd, worktree: undefined } : x)),
+    };
+  });
+  await openThread(id);
+  toast(`Moved to ${projectName(cwd)}`, "success");
+  return true;
 }
 
 /** Loads a thread's history (the replay) if it is not loaded yet. */

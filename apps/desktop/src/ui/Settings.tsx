@@ -15,9 +15,10 @@ import {
   Layers,
   Palette,
   Plus,
+  RefreshCw,
   TerminalSquare,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
@@ -32,13 +33,14 @@ import {
   createTheme,
   type NewThreadChoice,
   openSettings,
+  refreshHarnesses,
   restartEngine,
   type SettingsSection,
   setActiveTheme,
+  setDefaultCwd,
   setDefaultHarness,
   setOnboarding,
   setOrchestration,
-  setProjectCwd,
   setSmartUi,
   setTheme,
   toast,
@@ -63,7 +65,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
 // ---------------------------------------------------------------- pages
 
 function General() {
-  const projectCwd = useApp((s) => s.projectCwd);
+  const defaultCwd = useApp((s) => s.defaultCwd);
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
@@ -72,6 +74,8 @@ function General() {
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const shortcuts: [string, string][] = [
     ["New thread", "⌘N"],
+    ["Folder of this thread (a new one, or move this one)", "⌘O"],
+    ["Default folder for new threads", "⌘⇧O"],
     ["Command palette: threads, actions", "⌘K"],
     ["Settings", "⌘,"],
     ["Toggle sidebar", "⌘B"],
@@ -86,8 +90,8 @@ function General() {
   return (
     <>
       <Group title="New threads">
-        <Row title="Default project folder" subtitle={projectCwd || "None chosen"}>
-          <Pill onClick={() => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p))}>Choose…</Pill>
+        <Row title="Default project folder" subtitle={defaultCwd || "None chosen"}>
+          <Pill onClick={() => void pickFolder(defaultCwd).then((p) => p && setDefaultCwd(p))}>Choose…</Pill>
         </Row>
         <Row title="Harness, model and effort" subtitle="Which agent runs a new thread by default.">
           <Pill onClick={() => openSettings("harnesses")}>Harnesses…</Pill>
@@ -155,6 +159,17 @@ function General() {
 function Harnesses() {
   const snapshot = useApp((s) => s.harnesses);
   const [saved, setSaved] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
+  // Installed, signed in, versions: detected again each time the page opens, and on Refresh.
+  const recheck = async () => {
+    setRechecking(true);
+    await refreshHarnesses();
+    setRechecking(false);
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per visit to the page
+  useEffect(() => {
+    void recheck();
+  }, []);
   // An unsaved choice stays here while it is not valid yet (a harness that still lists models).
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
   if (!snapshot) return <Loading error={null} />;
@@ -195,6 +210,17 @@ function Harnesses() {
       )}
       <Group
         title="Coding agents"
+        action={
+          <button
+            type="button"
+            onClick={() => void recheck()}
+            disabled={rechecking}
+            className="flex items-center gap-1 text-caption text-fg-muted hover:text-fg disabled:opacity-60"
+          >
+            <RefreshCw size={11} className={rechecking ? "animate-spin" : undefined} />
+            {rechecking ? "Checking…" : "Refresh"}
+          </button>
+        }
         footer={
           <>
             Each agent signs in on its own; RustCode never stores its credentials.{" "}

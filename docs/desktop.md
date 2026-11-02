@@ -165,7 +165,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   Claude Code (`PREFERRED_HARNESS`) is listed first and suggested on a
   first run, and RustCode's own engine is listed last as the *Local*
   harness, kept for the TUI, testing and local models.
-- **Settings › Harnesses.** *New threads start on* comes first and saves as
+- **Settings › Harnesses.** Every harness is detected again (installed, signed in, version) each time the page opens, and on *Refresh*. *New threads start on* comes first and saves as
   it changes (no Save button); picking an external harness lists its
   models at once (`ensureHarnessModels`). Under it, *Coding agents*: one
   card per harness with its mark, status and version, *Sign in* only until
@@ -183,7 +183,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   up. Markdown is `react-markdown` + `remark-gfm`; code is highlighted lazily
   by Shiki with Xcode's colours.
 
-Keys: ⌘N new thread, ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⌥B right panel, ⌘F find
+Keys: ⌘N new thread, ⌘O the folder of the thread in front (a new thread starts there; an open one moves there through `_rustcode/session/move`, closed and reopened; also a click on the header's path), ⌘⇧O the default folder for new threads (also Settings › General; picking a folder for one new thread no longer changes it), ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⌥B right panel, ⌘F find
 in thread, ⌘J terminal, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the
 command token, Esc clears the draft and then stops the
