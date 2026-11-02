@@ -813,8 +813,13 @@ built for the CLI. Extra arguments go to `tauri build`, e.g.
 The app checks for an update 5 s after launch, every 30 minutes, when its window comes back after 10 minutes away, and a minute after a failed check
 (`src/state/updates.ts`). When a newer release is out, an *Update to X* row
 sits at the foot of the sidebar: it installs in place where the app can
-(below), else opens the release page. The first launch of a new version
-shows *What's New* with that release's notes, the GitHub release body that
+(below), else opens the release page; while it installs, the row shows a
+progress bar (`Downloading · 39% of 58.2 MB`, then Verifying and Installing)
+fed by the `update_install` command's progress channel. The first launch of a
+new version shows *What's New* with that release's notes. It decides from the
+app's own version (`getVersion`, no network) against the version seen last
+launch and the `rustcode.updatedFrom` marker an in-app install writes, so it
+shows even offline or after a failed check; the notes are  the GitHub release body that
 `scripts/release-notes.sh` writes from each PR's Changelog line, fetched by
 the shell's `release_notes` command. A first install and a dev build skip
 it; Settings › Engine opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser

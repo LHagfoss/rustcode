@@ -13,6 +13,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tauri::ipc::Channel;
 use tauri::AppHandle;
 
 const REPO: &str = "LHagfoss/rustcode";
@@ -205,10 +206,25 @@ pub async fn update_check(app: AppHandle) -> Result<UpdateInfo, String> {
     check(&app).await.map(|(info, _)| info)
 }
 
+/// Where an install is, for the sidebar's progress bar.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "phase")]
+pub enum InstallProgress {
+    /// Bytes of the app zip so far, and its size when the server said.
+    Downloading { received: u64, total: Option<u64> },
+    /// Checking the checksum and the code signature.
+    Verifying,
+    /// Swapping the bundle; the app quits next.
+    Installing,
+}
+
 /// Downloads, verifies and stages the update, then quits; the app reopens
 /// updated. An error leaves the running app as it was.
 #[tauri::command]
-pub async fn update_install(app: AppHandle) -> Result<(), String> {
+pub async fn update_install(
+    app: AppHandle,
+    on_progress: Channel<InstallProgress>,
+) -> Result<(), String> {
     let (info, tag) = check(&app).await?;
     if !info.available || !info.can_install {
         return Err("No update this app can install itself.".into());
@@ -227,12 +243,18 @@ pub async fn update_install(app: AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let zip = work.join(&asset);
     let result = async {
-        let body = fetch(&client, &download_url(&tag, &asset)).await?;
+        let body = download(&client, &download_url(&tag, &asset), |received, total| {
+            let _ = on_progress.send(InstallProgress::Downloading { received, total });
+        })
+        .await?;
         std::fs::write(&zip, &body).map_err(|e| e.to_string())?;
+        let _ = on_progress.send(InstallProgress::Verifying);
         let sums = fetch(&client, &download_url(&tag, "SHA256SUMS")).await?;
         let expected = checksum(&String::from_utf8_lossy(&sums), &asset)
             .ok_or("The release checksums do not list the app.")?;
-        stage(&app, &zip, &work, &expected)
+        let staged = stage(&app, &zip, &work, &expected)?;
+        let _ = on_progress.send(InstallProgress::Installing);
+        Ok(staged)
     }
     .await;
     match result {
@@ -242,6 +264,39 @@ pub async fn update_install(app: AppHandle) -> Result<(), String> {
             Err(e)
         }
     }
+}
+
+/// Like `fetch`, reporting progress at most every 64 KiB.
+async fn download(
+    client: &reqwest::Client,
+    url: &str,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<Vec<u8>, String> {
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("The download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("The download failed (HTTP {}).", response.status()));
+    }
+    let total = response.content_length();
+    let mut body = Vec::with_capacity(total.unwrap_or(0).min(512 << 20) as usize);
+    let mut reported = 0u64;
+    progress(0, total);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("The download failed: {e}"))?
+    {
+        body.extend_from_slice(&chunk);
+        let received = body.len() as u64;
+        if received - reported >= 64 * 1024 || Some(received) == total {
+            reported = received;
+            progress(received, total);
+        }
+    }
+    Ok(body)
 }
 
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
@@ -387,6 +442,42 @@ mod tests {
         assert_eq!(checksum(&format!("{hash}  {asset} extra\n"), asset), None);
         assert_eq!(checksum(&format!("xyz  {asset}\n"), asset), None);
         assert_eq!(checksum("", asset), None);
+    }
+
+    #[tokio::test]
+    async fn download_reports_progress_to_the_end() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body = vec![7u8; 300 * 1024];
+        let served = body.clone();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                served.len()
+            );
+            socket.write_all(head.as_bytes()).await.unwrap();
+            for part in served.chunks(16 * 1024) {
+                socket.write_all(part).await.unwrap();
+            }
+        });
+        let mut seen = Vec::new();
+        let got = download(
+            &client().unwrap(),
+            &format!("http://127.0.0.1:{port}/app.zip"),
+            |received, total| seen.push((received, total)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, body);
+        let total = Some(body.len() as u64);
+        assert_eq!(seen.first(), Some(&(0, total)));
+        assert_eq!(seen.last(), Some(&(body.len() as u64, total)));
+        assert!(seen.len() >= 3, "progress in steps: {seen:?}");
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0));
     }
 
     #[tokio::test]
