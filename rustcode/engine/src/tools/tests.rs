@@ -4149,6 +4149,10 @@ fn delegation_prompt_matches_tool_availability() {
     assert!(prompt.contains("Never run `cargo check` on a standalone `.rs` file"));
     assert!(prompt.contains("Prefer the smallest focused sequence"));
     assert!(prompt.contains("git-feature-workflow"));
+    // A fix is not a release: the publish workflow runs only on request (#2762).
+    assert!(prompt.contains(
+        "Do not branch, commit, push or open a PR unless the user or the project's instructions ask"
+    ));
     assert!(prompt.contains("Chained shell commands are fine"));
     assert!(prompt.contains("Tool results are authoritative: claim checks only"));
     assert!(prompt.contains("never use `git add .`"));
