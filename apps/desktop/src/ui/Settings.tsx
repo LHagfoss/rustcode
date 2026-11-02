@@ -424,7 +424,7 @@ function Appearance() {
               <button
                 type="button"
                 onClick={() => revealPath(userDir)}
-                className="flex h-6 items-center gap-1 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+                className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
               >
                 <FolderOpen size={12} /> Open themes folder
               </button>
@@ -433,7 +433,7 @@ function Appearance() {
               type="button"
               onClick={() => setCreating(!creating)}
               aria-expanded={creating}
-              className="flex h-6 items-center gap-1 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+              className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
             >
               <Plus size={12} /> New theme…
             </button>

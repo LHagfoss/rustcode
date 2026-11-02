@@ -373,9 +373,153 @@ pub fn read_image(path: String) -> Result<ImageFile, String> {
     })
 }
 
+/// `~/…` from the engine or the mock, against `$HOME`.
+fn expand_home(path: &str) -> PathBuf {
+    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => PathBuf::from(path),
+    }
+}
+
+/// Text files the app may open for editing: nothing that could run.
+const EDITABLE: &[&str] = &["md", "markdown", "toml", "json", "txt", "yaml", "yml"];
+
+/// What `open_path` would open: an existing folder, or an existing text file.
+fn open_target(path: &str) -> Result<(PathBuf, bool), String> {
+    let path = expand_home(path);
+    if !path.is_absolute() || !path.exists() {
+        return Err(format!("No such file: {}", path.display()));
+    }
+    if path.is_dir() {
+        return Ok((path, true));
+    }
+    let editable = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| EDITABLE.contains(&e.to_ascii_lowercase().as_str()));
+    if !editable {
+        return Err("Only text files (Markdown, TOML, JSON, YAML) open from here.".into());
+    }
+    Ok((path, false))
+}
+
+/// Opens a skill's SKILL.md, a config or theme file in its editor, or a folder
+/// in the file manager. Anything else is refused, so nothing here runs a program.
+#[tauri::command(async)]
+pub fn open_path(path: String) -> Result<(), String> {
+    let (path, dir) = open_target(&path)?;
+    #[cfg(target_os = "macos")]
+    {
+        let markdown = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
+        let mut command = Command::new("open");
+        // Markdown opens in its own app; other text in the default text editor.
+        if !dir && !markdown {
+            command.arg("-t");
+        }
+        command
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = dir;
+        open_with_system(&path.display().to_string())
+    }
+}
+
+const SKILL_TEMPLATE: &str = "---\nname: {name}\ndescription: What this skill does and when the agent should use it, in one sentence.\n---\n\n# {name}\n\nWhat the agent should know or do, step by step.\n\n## When to use\n\n- …\n\n## Steps\n\n1. …\n";
+
+fn valid_skill_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+}
+
+/// Where a new skill goes: the user's `<config>/skills`, or the project's `.rustcode/skills`.
+fn skill_root(scope: &str, cwd: &str, config: &Path) -> Result<PathBuf, String> {
+    match scope {
+        "user" => Ok(config.join("skills")),
+        "project" => Ok(absolute_dir(cwd)?.join(".rustcode/skills")),
+        _ => Err("scope must be user or project".into()),
+    }
+}
+
+fn config_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("RUSTCODE_CONFIG_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".config/rustcode"))
+        .ok_or_else(|| "No home folder.".into())
+}
+
+fn write_skill(root: &Path, name: &str) -> Result<PathBuf, String> {
+    if !valid_skill_name(name) {
+        return Err("Use lowercase letters, digits and dashes (at most 64).".into());
+    }
+    let dir = root.join(name);
+    if dir.exists() {
+        return Err(format!("A skill named {name} already exists there."));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let file = dir.join("SKILL.md");
+    std::fs::write(&file, SKILL_TEMPLATE.replace("{name}", name)).map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+/// Creates `<root>/<name>/SKILL.md` from the template and answers its path.
+#[tauri::command(async)]
+pub fn skill_create(name: String, scope: String, cwd: String) -> Result<String, String> {
+    let root = skill_root(&scope, &cwd, &config_dir()?)?;
+    write_skill(&root, &name).map(|file| file.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opens_only_folders_and_text_files() {
+        let dir = std::env::temp_dir().join(format!("rc-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let md = dir.join("SKILL.md");
+        let script = dir.join("run.sh");
+        std::fs::write(&md, "x").unwrap();
+        std::fs::write(&script, "x").unwrap();
+        assert!(open_target(dir.to_str().unwrap()).unwrap().1);
+        assert!(!open_target(md.to_str().unwrap()).unwrap().1);
+        assert!(open_target(script.to_str().unwrap()).is_err());
+        assert!(open_target("relative/SKILL.md").is_err());
+        assert!(open_target("/no/such/file.md").is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn creates_skills_from_the_template() {
+        let root = std::env::temp_dir().join(format!("rc-skill-{}", std::process::id()));
+        let file = write_skill(&root, "deploy-app").unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.starts_with("---\nname: deploy-app\n"));
+        assert!(
+            write_skill(&root, "deploy-app").is_err(),
+            "never overwrites"
+        );
+        for bad in ["", "Deploy", "../x", "a/b", "-x", &"a".repeat(65)] {
+            assert!(write_skill(&root, bad).is_err(), "{bad}");
+        }
+        assert!(skill_root("elsewhere", "/", &root).is_err());
+        assert!(skill_root("project", "relative", &root).is_err());
+        assert_eq!(skill_root("user", "", &root).unwrap(), root.join("skills"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn reads_only_images() {

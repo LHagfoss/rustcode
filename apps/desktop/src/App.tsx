@@ -19,9 +19,10 @@ import { CommandPalette } from "./ui/CommandPalette";
 import { GrantDialog } from "./ui/Links";
 import { cx, Pill } from "./ui/primitives";
 import { RightPanel } from "./ui/RightPanel";
+// Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
+import { Settings } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
 
-const Settings = lazy(() => loadSettings().then((m) => ({ default: m.Settings })));
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 const Board = lazy(() => import("./ui/Board").then((m) => ({ default: m.Board })));
@@ -172,13 +173,6 @@ function Toasts() {
   );
 }
 
-// Settings' code arrives while the app is idle, so the first ⌘, does not wait for it.
-const loadSettings = () => import("./ui/Settings");
-if (typeof window !== "undefined") {
-  const idle = window.requestIdleCallback ?? ((fn: () => void) => setTimeout(fn, 1500));
-  idle(() => void loadSettings());
-}
-
 export function App() {
   useTheme();
   useShortcuts();
@@ -214,9 +208,7 @@ export function App() {
           </div>
           {settings && (
             <div className="absolute inset-0 z-20 flex bg-bg">
-              <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                <Settings />
-              </Suspense>
+              <Settings />
             </div>
           )}
         </div>

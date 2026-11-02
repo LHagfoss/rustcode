@@ -442,7 +442,7 @@ export const Composer = memo(function Composer({
                 cancelEdit(key);
                 update("");
               }}
-              className="ml-auto rounded-sm px-1.5 text-fg-muted hover:bg-fill hover:text-fg"
+              className="ml-auto rounded-full px-2 text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
             >
               Cancel
             </button>
@@ -549,14 +549,17 @@ export const Composer = memo(function Composer({
         <FolderMenu thread={thread} cwd={cwd} />
         {!thread && <WorktreeToggle draft={draft} compact={compact} />}
         {thread?.worktree && (
-          <Tooltip label={thread.worktree.path}>
-            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted">
+          <Tooltip side="bottom" label={thread.worktree.path}>
+            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted">
               <GitBranch size={12} className="shrink-0" />
               <span className="truncate">{thread.worktree.branch}</span>
             </span>
           </Tooltip>
         )}
-        <Tooltip label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}>
+        <Tooltip
+          side="bottom"
+          label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}
+        >
           <button type="button" onClick={chooseFiles} className={trayButton}>
             <Paperclip size={12} />
             {!compact && <span>Files</span>}
@@ -565,8 +568,8 @@ export const Composer = memo(function Composer({
         <span className="flex-1" />
         <AgentPill thread={thread} />
         {harness && !harness.builtin && harness.id !== defaultHarness && (
-          <Tooltip label="Its own sign-in and tools; RustCode's sandbox does not apply">
-            <span className="flex h-[28px] items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted">
+          <Tooltip side="bottom" label="Its own sign-in and tools; RustCode's sandbox does not apply">
+            <span className="flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted">
               <span className="size-1.5 rounded-full bg-accent" />
               {harness.name}
             </span>
@@ -628,7 +631,7 @@ function QueueStack({
                 }
               }}
               aria-label="Edit queued message"
-              className="min-w-0 flex-1 resize-none rounded-sm bg-fill-subtle px-1.5 py-0.5 text-callout outline-none ring-2 ring-accent/40"
+              className="min-w-0 flex-1 resize-none rounded-sm bg-fill px-1.5 py-0.5 text-callout"
             />
           ) : (
             <button
@@ -700,7 +703,7 @@ function AttachmentStrip({
               src={`data:${a.mimeType};base64,${a.data}`}
               alt={a.name}
               title={a.name}
-              className="size-[52px] rounded-md border border-border object-cover"
+              className="size-[52px] rounded-md object-cover shadow-1"
             />
             <button
               type="button"
@@ -749,6 +752,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
   return (
     <div className="flex items-center gap-1">
       <Tooltip
+        side="bottom"
         label={
           missing ?? (wt.on ? "Runs on its own branch and folder" : "Run on a new branch, in its own folder")
         }
@@ -759,8 +763,10 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           disabled={!!missing}
           onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
           className={cx(
-            "flex h-[28px] items-center gap-1.5 rounded-md px-2 text-callout disabled:opacity-40",
-            wt.on ? "bg-accent/15 text-accent" : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
+            "flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40",
+            wt.on
+              ? "bg-fill-strong text-fg"
+              : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong",
           )}
         >
           <GitBranch size={12} />
@@ -777,8 +783,8 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           placeholder={suggested}
           size={Math.min(32, Math.max(12, wt.branch.length + 1))}
           className={cx(
-            "h-[24px] rounded-md bg-fill-subtle px-2 font-mono text-caption outline-none ring-1 rc-in",
-            valid ? "ring-border focus:ring-accent/50" : "ring-danger/60",
+            "h-[24px] rounded-full bg-fill px-2.5 font-mono text-caption rc-in",
+            valid ? "focus:bg-fill-strong" : "text-danger",
           )}
         />
       )}
@@ -796,7 +802,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
-      <Tooltip label={cwd || "Choose a folder"}>
+      <Tooltip side="bottom" label={cwd || "Choose a folder"}>
         <button
           type="button"
           disabled={!!thread}
@@ -854,7 +860,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
 }
 
 const trayButton =
-  "flex h-[28px] items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
+  "flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
 /** The + menu at the start of the composer's row, after the SwiftUI app's AddPanel. */
 function PlusMenu({

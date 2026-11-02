@@ -119,7 +119,8 @@ inside a padded parent uses the step below the parent's.
 Two levels, both including the 1px edge ring:
 
 - `--rc-shadow-1` (`shadow-1`): things resting above the chat: the
-  composer, the jump-to-latest button, toasts, queued messages.
+  jump-to-latest button, toasts, queued messages, error cards over the
+  transcript. (The composer has its own softer two-sided shadow.)
 - `--rc-shadow-2` (`shadow-2`): things that open over everything:
   popovers, menus, tooltips, dialogs, the command palette.
 
@@ -129,9 +130,11 @@ it for every popover and menu.
 ## Blur
 
 Opaque by default. `backdrop-filter` only on small surfaces fixed in
-place over moving content: the header over a new thread's banner
-(`.rc-frost`) and toasts. Never on popovers, menus, the composer or
-anything that scrolls. Reduce transparency drops it.
+place over moving content: the composer box floating over the transcript
+(`.rc-composer`), the header over a new thread's banner (`.rc-frost`),
+toasts and the jump-to-latest button (`.rc-glass`). Never on popovers,
+menus, panels or anything that scrolls. Reduce transparency (the media
+query, or the system setting the shell reads) makes them solid.
 
 ## Spacing
 
@@ -159,13 +162,38 @@ that change use `tabular`.
 
 ## Motion
 
-- Hover and press colour: 120–150ms `ease-out`. No `transform` on press
-  (no scale): text re-rasterizes and reads as a flash.
+- Hover: **in 60ms, out 120ms** (`--rc-hover-in`, `--rc-hover-out`),
+  colour only, set once in `index.css` for every button, link, row,
+  switch and menu item. Components never add `transition-colors` or their
+  own hover duration. Press: `active:bg-fill-strong`, no delay. No
+  `transform` on press (no scale): text re-rasterizes and reads as a flash.
+- Hover is pure CSS `:hover` (or Radix's `data-highlighted`). No hover
+  state in React (`onMouseEnter` setting an id); a keyboard-driven list may
+  keep a selected index, shown with the same `bg-fill`. Row menus are
+  `modal={false}`, so other rows keep answering the pointer while one is
+  open.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
   sections.
 - `prefers-reduced-motion`: all durations collapse to ~0; shimmer stops.
+
+## Tooltips
+
+One `Tooltip` (`ui/primitives.tsx`) under one `Tooltip.Provider`: 400ms
+for the first, then instant while the pointer moves between triggers
+(`skipDelayDuration` 300ms), closing at once. The tip takes no pointer
+events, opens on top by default, 8px from its trigger and 10px from the
+window's edges, and flips when there is no room. Controls in the composer
+tray open theirs below, clear of the box. Inside a popover, hints are
+secondary text, not tooltips.
+
+## Cursor
+
+A pointer on everything clickable (buttons, rows, chips, switches, radios,
+tabs, menu items, links), set on the control so its children inherit it;
+the default arrow on static text; the text cursor only in fields and
+`.selectable` text. Disabled controls show the arrow.
 
 ## Icons
 
@@ -182,6 +210,14 @@ hovered or scrolling, and `scrollbar-gutter: stable` on long scrollers so
 content never shifts when a classic scrollbar appears.
 
 ## Component recipes
+
+Shape rule: **labelled buttons are pills** (`rounded-full` with
+horizontal padding, never a circle): tray buttons, the model pill, chips,
+segmented items, header actions, Settings' "New…" and "Edit config".
+Circles only for icon-only round buttons (send, stop, close in a panel
+header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
+Rows and menu items are `rounded-md`, cards `rounded-lg`, popovers and
+panels `rounded-xl`.
 
 - **Button, primary:** `rounded-full h-[26px] px-3 bg-fg text-bg font-medium`;
   hover 90%. **Secondary:** `bg-fill text-fg`, hover `bg-fill-strong`.
@@ -202,9 +238,23 @@ content never shifts when a classic scrollbar appears.
   highlighted `bg-danger/12`.
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
 - **Toast:** `elevated rounded-full px-4 py-1.5 text-callout`.
-- **Tooltip:** `bg-surface-3 rounded-md px-2 py-1 text-callout shadow-2`,
-  side `top` by default, never over the control it describes or a control
-  in the same popover: inside a popover, put the hint in secondary text.
+- **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
+  (see Tooltips).
+- **Composer:** `.rc-composer rounded-xl p-2`: `surface` at 78% frosted,
+  a soft shadow above and below plus the edge ring; focus steps it to
+  `surface-2`. Its tray (`.rc-composer-tray`) is solid `surface-2`, no
+  border, tucked 18px under the box with `rounded-b-xl`. The transcript
+  scrolls under both (its bottom padding is the stack's height) and fades
+  out from 56px above the box.
+- **Right panel:** one `RightPanel` for every side view (Changes, Agents,
+  Pull requests): floating, inset 8px from the window's top, right and
+  bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has
+  a segmented switch between the views and a close button; views add a
+  slim toolbar (`h-9`) under it. The left edge drags (320–760px, kept);
+  it slides and fades in 200ms while its slot's width animates, so the
+  chat reflows with it. ⌘⌥B toggles it with the last view.
+- **Jump to latest:** `.rc-glass rounded-full shadow-1`, centred 12px
+  above the composer stack, above it in z.
 - **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`
   (or `warning` for notices), text `text-fg-muted`, actions at the right
   as secondary pills. No coloured border or tinted background.
@@ -221,7 +271,9 @@ content never shifts when a classic scrollbar appears.
 | Keep subtrees mounted; toggle visibility | Remount a view on open, or key it on hover |
 | Change colour or opacity on hover | Change size, padding or border width on hover |
 | Put hints in secondary text inside popovers | Let a tooltip cover a neighbouring control |
-| Blur only small fixed surfaces | Blur popovers, the composer or scrolling content |
+| Blur only small fixed surfaces | Blur popovers, panels or scrolling content |
+| Make a labelled button a pill | Make a labelled button a circle |
+| Let `index.css` time hover | Add `transition-colors duration-200` to a control |
 
 Retired class names (failing `design.test.ts`): `fg-2`, `fg-3`, `fg-4`,
 `fill-1`…`fill-4`, `hairline`, `brand`, `brand-fill`, `chat`, `field`,

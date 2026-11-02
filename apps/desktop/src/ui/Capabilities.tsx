@@ -188,7 +188,7 @@ function McpSection({
                 type="button"
                 aria-label="Edit the config file"
                 onClick={() => openPath(data.configPath!)}
-                className="flex h-6 items-center gap-1 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+                className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
               >
                 <SquarePen size={12} /> Edit config
               </button>
@@ -198,7 +198,7 @@ function McpSection({
             type="button"
             onClick={() => setAdding(!adding)}
             aria-expanded={adding}
-            className="flex h-6 items-center gap-1 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+            className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
           >
             <Plus size={12} /> Add server
           </button>
@@ -418,7 +418,7 @@ function SkillsSection({
             type="button"
             onClick={() => setCreating(!creating)}
             aria-expanded={creating}
-            className="flex h-6 items-center gap-1 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+            className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
           >
             <FilePlus2 size={12} /> New skill
           </button>

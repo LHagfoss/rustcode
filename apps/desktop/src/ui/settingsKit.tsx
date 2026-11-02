@@ -69,10 +69,20 @@ export function Loading({ error }: { error: string | null }) {
 export const inputClass =
   "h-8 rounded-md bg-fill-subtle px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill";
 
+/** The last answer per method: a page opens with it at once and refreshes behind it. */
+const cache = new Map<string, unknown>();
+
 export function useEngineData<T>(method: string, parse: (v: Json) => T) {
   const status = useApp((s) => s.status);
-  const [data, setData] = useState<T | null>(null);
+  const [data, setDataState] = useState<T | null>(() => (cache.get(method) as T | undefined) ?? null);
   const [error, setError] = useState<string | null>(null);
+  const setData = useCallback(
+    (value: T | null) => {
+      if (value !== null) cache.set(method, value);
+      setDataState(value);
+    },
+    [method],
+  );
   const load = useCallback(async () => {
     try {
       setData(parse(await request(method)));
@@ -80,7 +90,7 @@ export function useEngineData<T>(method: string, parse: (v: Json) => T) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [method, parse]);
+  }, [method, parse, setData]);
   useEffect(() => {
     if (status === "ready") void load();
   }, [status, load]);

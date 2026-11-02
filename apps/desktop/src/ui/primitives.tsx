@@ -54,8 +54,8 @@ export function Tooltip({
       <RadixTooltip.Portal>
         <RadixTooltip.Content
           side={side}
-          sideOffset={6}
-          collisionPadding={8}
+          sideOffset={8}
+          collisionPadding={10}
           className="pointer-events-none z-50 max-w-80 rounded-lg bg-surface-3 px-2.5 py-1 text-callout text-fg shadow-2"
         >
           {label}
