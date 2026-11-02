@@ -1,14 +1,14 @@
-//! Terminal rendering of the shared themes (`rustcode::themes`,
+//! Terminal rendering of the shared themes (`rustcode::controller::themes`,
 //! `docs/themes.md`): the files, built-ins and parsing live in the engine.
 
 use ratatui::style::Color;
-pub use rustcode::themes::{ColorSpec, DEFAULT_THEME_NAME, ThemeFile};
+pub use rustcode::controller::themes::{ColorSpec, DEFAULT_THEME_NAME, ThemeFile};
 use std::path::PathBuf;
 
 fn to_color(spec: &ColorSpec) -> Color {
     match spec.color() {
-        rustcode::themes::ThemeColor::Reset => Color::Reset,
-        rustcode::themes::ThemeColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
+        rustcode::controller::themes::ThemeColor::Reset => Color::Reset,
+        rustcode::controller::themes::ThemeColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
 
@@ -56,7 +56,7 @@ impl From<&ThemeFile> for ThemePalette {
 }
 
 pub fn ensure_themes_dir() -> Option<PathBuf> {
-    rustcode::themes::ensure_user_dir()
+    rustcode::controller::themes::ensure_user_dir()
 }
 
 /// Every theme (built-in, user, and the current project's), the default
@@ -65,7 +65,7 @@ pub fn ensure_themes_dir() -> Option<PathBuf> {
 pub fn load_available_themes() -> Vec<ThemePalette> {
     ensure_themes_dir();
     let workspace = std::env::current_dir().ok();
-    rustcode::themes::load_themes(workspace.as_deref())
+    rustcode::controller::themes::load_themes(workspace.as_deref())
         .iter()
         .map(|theme| ThemePalette::from(&theme.file))
         .collect()
@@ -85,9 +85,10 @@ pub fn get_palette(name: &str) -> ThemePalette {
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(name))
         .unwrap_or_else(|| {
-            if let Some(theme) =
-                rustcode::themes::find(&rustcode::themes::builtin_themes(), DEFAULT_THEME_NAME)
-            {
+            if let Some(theme) = rustcode::controller::themes::find(
+                &rustcode::controller::themes::builtin_themes(),
+                DEFAULT_THEME_NAME,
+            ) {
                 return ThemePalette::from(&theme.file);
             }
             ThemePalette {
@@ -233,7 +234,7 @@ pub fn color_diff_remove_fg() -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustcode::themes::BUILTIN_THEMES;
+    use rustcode::controller::themes::BUILTIN_THEMES;
 
     #[test]
     fn builtin_themes_define_visible_chat_surfaces() {

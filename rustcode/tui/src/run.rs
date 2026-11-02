@@ -395,7 +395,7 @@ fn run_mcp_command(
 /// `rustcode theme ...`: print the result, or the error and exit 1.
 fn run_theme_command(command: &crate::cli::ThemeCommands) {
     use crate::cli::ThemeCommands;
-    use rustcode::themes::cli;
+    use rustcode::controller::themes::cli;
     let workspace = std::env::current_dir().ok();
     let workspace = workspace.as_deref();
     let result = match command {
