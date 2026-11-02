@@ -176,12 +176,14 @@ export const AssistantRow = memo(function AssistantRow({
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
   if (segments.length === 1 && segments[0]!.kind === "markdown")
-    return <Markdown text={item.text} className={streaming ? "rc-stream" : undefined} />;
+    return (
+      <Markdown text={item.text} streaming={streaming} className={streaming ? "rc-stream" : undefined} />
+    );
   return (
     <div className="flex flex-col gap-2.5">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
-          <Markdown key={i} text={segment.text} />
+          <Markdown key={i} text={segment.text} streaming={streaming && i === segments.length - 1} />
         ) : segment.kind === "ui" ? (
           <SmartUIView
             key={`ui${segment.index}`}
@@ -229,7 +231,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
       </button>
       {(open || (live && tail)) && (
         <div className={cx("pt-2 text-fg-2", live && !open && "line-clamp-5")}>
-          <Markdown text={open ? item.text : tail} className="gap-1.5 text-callout" />
+          <Markdown text={open ? item.text : tail} streaming={live} className="gap-1.5 text-callout" />
         </div>
       )}
     </div>

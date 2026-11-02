@@ -3,10 +3,20 @@
 // button and Xcode colours, tables and quotes on rounded fills.
 
 import { Check, Copy } from "lucide-react";
-import { type ComponentProps, memo, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  memo,
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { highlight } from "../lib/highlight";
+import { highlight, peekHighlight } from "../lib/highlight";
+import { markdownBlocks } from "../lib/markdownBlocks";
 import { openExternal } from "../lib/native";
 import { LinkChip } from "./LinkChip";
 import { copyText, cx } from "./primitives";
@@ -43,9 +53,16 @@ export function CopyButton({
 }
 
 export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
-  const [html, setHtml] = useState<string | null>(null);
-  const highlighted = useRef(false);
+  // Highlighted before (the row remounted, or the same snippet): show it in the first frame.
+  const [html, setHtml] = useState<string | null>(() => peekHighlight(code, lang) ?? null);
+  const highlighted = useRef(html !== null);
   useEffect(() => {
+    const cached = peekHighlight(code, lang);
+    if (cached !== undefined) {
+      highlighted.current = cached !== null;
+      setHtml(cached);
+      return;
+    }
     let live = true;
     // Streaming code re-highlights at most a few times a second.
     const t = setTimeout(
@@ -150,12 +167,48 @@ const components: Components = {
 
 const plugins = [remarkGfm];
 
-export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
+// Rendered blocks by their source. react-markdown's `Markdown` is a plain
+// function (no hooks), so its element tree can be kept: a row scrolled back
+// into view, or a finished block above a streaming one, is not parsed again.
+const rendered = new Map<string, ReactElement>();
+const RENDERED_MAX = 800;
+
+export function renderBlock(text: string): ReactElement {
+  const hit = rendered.get(text);
+  if (hit) {
+    // Most recently used goes last; the oldest is evicted first.
+    rendered.delete(text);
+    rendered.set(text, hit);
+    return hit;
+  }
+  const element = ReactMarkdown({ children: text, remarkPlugins: plugins, components });
+  rendered.set(text, element);
+  if (rendered.size > RENDERED_MAX) rendered.delete(rendered.keys().next().value as string);
+  return element;
+}
+
+const Block = memo(function Block({ text }: { text: string }) {
+  return renderBlock(text);
+});
+
+export const Markdown = memo(function Markdown({
+  text,
+  className,
+  streaming,
+}: {
+  text: string;
+  className?: string;
+  /** Growing: parse it block by block, so a chunk re-parses only the last block. */
+  streaming?: boolean;
+}) {
+  // A finished text is one block (one parse, cached by its text); a streaming one is split so the
+  // blocks above the one being written keep their elements. Splitting costs a parser per block.
+  const blocks = useMemo(() => (streaming ? markdownBlocks(text) : [text]), [text, streaming]);
   return (
     <div className={cx("selectable flex flex-col gap-2.5 text-body break-words", className)}>
-      <ReactMarkdown remarkPlugins={plugins} components={components}>
-        {text}
-      </ReactMarkdown>
+      {blocks.map((block, i) => (
+        <Block key={i} text={block} />
+      ))}
     </div>
   );
 });
