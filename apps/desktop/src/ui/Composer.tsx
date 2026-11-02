@@ -811,17 +811,26 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
 function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   const sessions = useApp((s) => s.sessions);
   const projects = useMemo(
-    () => [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 12),
+    () => [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 30),
     [sessions],
   );
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  // At most 360px or half the window, and never over the header: the room above the trigger less the 42px header and gaps.
+  const [maxHeight, setMaxHeight] = useState(360);
+  const toggle = () => {
+    const top = trigger.current?.getBoundingClientRect().top ?? 600;
+    setMaxHeight(Math.max(140, Math.min(360, window.innerHeight * 0.5, top - 42 - 16)));
+    setOpen(!open);
+  };
   return (
     <div className="relative">
       <Tooltip side="bottom" label={cwd || "Choose a folder"}>
         <button
+          ref={trigger}
           type="button"
           disabled={!!thread}
-          onClick={() => setOpen(!open)}
+          onClick={toggle}
           aria-haspopup="menu"
           aria-expanded={open}
           className={cx(trayButton, "disabled:hover:bg-transparent")}
@@ -834,29 +843,34 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
       {open && (
         <div
           role="menu"
-          className="elevated absolute bottom-full left-0 z-30 mb-2 w-[300px] rounded-xl p-1.5 rc-in"
+          className="elevated absolute bottom-full left-0 z-30 mb-2 flex w-[300px] flex-col rounded-xl p-1.5 rc-in"
+          style={{ maxHeight }}
           onMouseLeave={() => setOpen(false)}
         >
-          {projects.map((p) => (
-            <button
-              key={p}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setProjectCwd(p);
-                setOpen(false);
-              }}
-              className={cx(
-                "flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left hover:bg-fill",
-                p === cwd && "bg-accent/15",
-              )}
-            >
-              <span className="text-body text-fg">{projectName(p)}</span>
-              <span className="truncate text-caption text-fg-muted" dir="rtl">
-                <bdi>{p}</bdi>
-              </span>
-            </button>
-          ))}
+          {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
+          <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
+            {projects.map((p) => (
+              <button
+                key={p}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setProjectCwd(p);
+                  setOpen(false);
+                }}
+                className={cx(
+                  "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left hover:bg-fill",
+                  p === cwd && "bg-fill",
+                )}
+              >
+                <span className="text-body text-fg">{projectName(p)}</span>
+                <span className="truncate text-caption text-fg-muted" dir="rtl">
+                  <bdi>{p}</bdi>
+                </span>
+              </button>
+            ))}
+          </div>
+          {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
           <button
             type="button"
             role="menuitem"
@@ -864,7 +878,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
               setOpen(false);
               void pickFolder(cwd).then((p) => p && setProjectCwd(p));
             }}
-            className="mt-0.5 flex w-full rounded-lg px-2.5 py-2 text-left text-body hover:bg-fill"
+            className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body hover:bg-fill"
           >
             Choose Folder…
           </button>
@@ -896,7 +910,7 @@ function PlusMenu({
           <button
             type="button"
             aria-label="Attach and more"
-            className="flex size-[30px] items-center justify-center rounded-full bg-fill text-fg hover:bg-fill-strong active:bg-fill-strong data-[state=open]:bg-fill-strong"
+            className="flex size-[30px] items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong"
           >
             <Plus size={16} strokeWidth={2} />
           </button>

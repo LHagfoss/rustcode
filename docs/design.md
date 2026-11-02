@@ -38,10 +38,10 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | Token | Use | Default dark | Default light |
 |---|---|---|---|
 | `bg` | The chat and main panes | `#0b0b0c` | `#ffffff` |
-| `sidebar` | The sidebar | `#0e0e10` | `#f7f7f8` |
-| `surface` | Resting cards: composer, settings groups, error cards | `#141416` | `#f4f4f5` |
-| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#1a1a1d` | `#ffffff` |
-| `surface-3` | Raised over raised: a selected segment, kbd | `#232327` | `#e9e9eb` |
+| `sidebar` | The sidebar | `#131315` | `#f7f7f8` |
+| `surface` | Resting cards: composer, settings groups, error cards | `#18181a` | `#f0f0f1` |
+| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#1e1e21` | `#ffffff` |
+| `surface-3` | Raised over raised: a selected segment, kbd | `#232327` | `#e8e8ea` |
 | `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0f` | `#0000000f` |
 | `border-strong` | Inputs, dividers that must read | `#ffffff1c` | `#0000001f` |
 | `text` | Primary text and icons | `#ededed` | `#171717` |

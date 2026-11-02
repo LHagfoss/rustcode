@@ -81,9 +81,9 @@
   color-scheme: light;
   --rc-bg: #ffffff;
   --rc-sidebar: #f7f7f8;
-  --rc-surface: #f4f4f5;
+  --rc-surface: #f0f0f1;
   --rc-surface-2: #ffffff;
-  --rc-surface-3: #e9e9eb;
+  --rc-surface-3: #e8e8ea;
   --rc-border: #0000000f;
   --rc-border-strong: #0000001f;
   --rc-text: #171717;
@@ -106,9 +106,9 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --rc-bg: #0b0b0c;
-    --rc-sidebar: #0e0e10;
-    --rc-surface: #141416;
-    --rc-surface-2: #1a1a1d;
+    --rc-sidebar: #131315;
+    --rc-surface: #18181a;
+    --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
     --rc-border: #ffffff0f;
     --rc-border-strong: #ffffff1c;
@@ -131,9 +131,9 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --rc-bg: #0b0b0c;
-  --rc-sidebar: #0e0e10;
-  --rc-surface: #141416;
-  --rc-surface-2: #1a1a1d;
+  --rc-sidebar: #131315;
+  --rc-surface: #18181a;
+  --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
   --rc-border: #ffffff0f;
   --rc-border-strong: #ffffff1c;
@@ -544,9 +544,18 @@
     0 0 0 1px var(--rc-border);
   transition: background-color 160ms ease-out;
 }
-.rc-composer:focus-within,
 .rc-toast {
   background: var(--rc-glass-bg-strong);
+}
+/*
+ * The composer rests in the denser glass and steps denser still on focus,
+ * so its controls (fill-subtle pills) sit one step above it, not two.
+ */
+.rc-composer {
+  background: var(--rc-glass-bg-strong);
+}
+.rc-composer:focus-within {
+  background: color-mix(in srgb, var(--rc-surface-2) 90%, transparent);
 }
 .rc-toast-out {
   animation: rc-out 120ms ease-in forwards;
@@ -654,11 +663,17 @@
   .rc-header-glass.rc-frost::before {
     --rc-glass-pane: var(--rc-bg);
   }
+  .rc-composer:focus-within {
+    background: var(--rc-surface-2);
+  }
 }
 :root.reduce-transparency {
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
   --rc-glass-filter: none;
+}
+:root.reduce-transparency .rc-composer:focus-within {
+  background: var(--rc-surface-2);
 }
 :root.reduce-transparency,
 :root.reduce-transparency .rc-header-glass.rc-frost::before {
