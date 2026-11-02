@@ -313,6 +313,20 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       return { ...state, configOptions: update.options };
     case "usage":
       return { ...state, usage: update.usage };
+    case "compaction":
+      // One quiet row, whichever harness compacted (as T3 Code shows it).
+      return {
+        ...state,
+        items: [
+          ...state.items,
+          {
+            kind: "notice",
+            id: localId("compaction"),
+            text: update.text.split("\n")[0] ?? update.text,
+            tone: "info",
+          },
+        ],
+      };
     case "notice":
       return {
         ...state,

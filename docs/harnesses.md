@@ -281,6 +281,18 @@ What each part does for an external thread:
   `permission_modes` is empty for external harnesses: each applies its own
   configured approval rules.
 
+## Compaction
+
+Each harness compacts its own context; RustCode does not compact on a
+threshold of its own (as T3 Code does). `/compact` on its own asks for a
+compaction now: the Codex adapter calls Codex's `thread/compact/start`
+instead of sending the text to the model, and an ACP harness (Claude Code,
+OpenCode) gets `/compact` as its prompt and runs its own command. Codex's
+`contextCompaction` item, whether asked for or automatic mid-turn, becomes
+the engine's compaction card (`_meta.rustcode.kind = "compaction"`), which
+the desktop app shows as one quiet "Context compacted" row. The context
+panel has *Compact now*, which sends `/compact`.
+
 ## Configuration
 
 `~/.config/rustcode/config.toml`:

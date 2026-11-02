@@ -18,9 +18,9 @@ import {
   windowTitle,
 } from "../acp/rustcode";
 import type { SessionUsage } from "../acp/types";
-import { refreshPlanUsage, useApp } from "../state/store";
+import { refreshPlanUsage, submit, useApp } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
-import { cx } from "./primitives";
+import { cx, Pill } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
 function contextTint(fraction: number) {
@@ -53,6 +53,7 @@ const percentOf = (part: number, whole: number) =>
 
 export function ContextRing({ threadId }: { threadId: string }) {
   const usage = useApp((s) => s.threads[threadId]?.usage);
+  const running = useApp((s) => s.threads[threadId]?.running ?? false);
   if (!usage?.size) return null;
   const fraction = Math.min(1, usage.used / usage.size);
   const r = 6.5;
@@ -90,7 +91,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
           collisionPadding={10}
           className="elevated z-40 w-[320px] rounded-xl p-3 rc-in"
         >
-          <ContextInspector usage={usage} />
+          <ContextInspector usage={usage} onCompact={running ? undefined : () => void submit("/compact")} />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -98,7 +99,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
 }
 
 /** What fills the context window: a stacked bar, then each category with its share. */
-export function ContextInspector({ usage }: { usage: SessionUsage }) {
+export function ContextInspector({ usage, onCompact }: { usage: SessionUsage; onCompact?: () => void }) {
   const detail = usage.context;
   const shown = detail?.categories.filter((c) => c.tokens > 0) ?? [];
   const free = Math.max(0, detail?.free ?? usage.size - usage.used);
@@ -160,6 +161,11 @@ export function ContextInspector({ usage }: { usage: SessionUsage }) {
         </ul>
       )}
       <ContextFooter usage={usage} />
+      {onCompact && (
+        <Pill onClick={onCompact} className="self-start">
+          Compact now
+        </Pill>
+      )}
     </div>
   );
 }

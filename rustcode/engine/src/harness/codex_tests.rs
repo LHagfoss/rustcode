@@ -20,6 +20,8 @@ enum Script {
     Usage,
     /// Ask the user two questions, then finish.
     AskUser,
+    /// Codex compacts on its own mid-turn, then answers.
+    AutoCompact,
 }
 
 /// A fake app-server. Every request it gets is reported on `seen`.
@@ -120,8 +122,24 @@ async fn fake_codex(
                         let _ = seen.send(("answer".into(), answer.unwrap_or_else(|error| json!(error.code))));
                         note("turn/completed", json!({"threadId": "thr_1", "turn": {"id": turn_id, "status": "completed", "items": []}}));
                     }
+                    Script::AutoCompact => {
+                        let base = json!({"threadId": "thr_1", "turnId": turn_id});
+                        let mut compacted = base.clone();
+                        compacted["item"] = json!({"type": "contextCompaction", "id": "c1"});
+                        note("item/completed", compacted);
+                        let mut message = base.clone();
+                        message["item"] = json!({"type": "agentMessage", "id": "m1", "text": "Answer"});
+                        note("item/completed", message);
+                        note("turn/completed", json!({"threadId": "thr_1", "turn": {"id": turn_id, "status": "completed", "items": []}}));
+                    }
                     Script::UntilInterrupted | Script::Stubborn => {}
                 }
+            }
+            "thread/compact/start" => {
+                peer.respond(id, Ok(json!({})));
+                // No turn/completed: the adapter must end the wait on the item itself.
+                peer.notify("item/started", json!({"threadId": "thr_1", "turnId": "turn_c", "item": {"type": "contextCompaction", "id": "c9"}}));
+                peer.notify("item/completed", json!({"threadId": "thr_1", "turnId": "turn_c", "item": {"type": "contextCompaction", "id": "c9"}}));
             }
             "turn/interrupt" => {
                 peer.respond(id, Ok(json!({})));
@@ -555,5 +573,47 @@ async fn the_orchestrator_is_added_to_the_codex_thread_config() {
     assert_eq!(
         started["developerInstructions"],
         crate::tools::schema::harness_output_style()
+    );
+}
+
+#[tokio::test]
+async fn compact_runs_codex_compaction_and_shows_a_compaction_card() {
+    let (mut thread, mut seen) = start(Script::Reply, None, StartOptions::default()).await;
+    let stop = thread.session.prompt(text("/compact")).await.unwrap();
+    assert_eq!(stop, StopReason::EndTurn);
+    let requests = requests(&mut seen);
+    assert!(
+        requests
+            .iter()
+            .any(|(method, _)| method == "thread/compact/start")
+    );
+    assert!(
+        !requests.iter().any(|(method, _)| method == "turn/start"),
+        "/compact is not sent to the model"
+    );
+    let updates = drain(&mut thread.updates);
+    let card = updates
+        .iter()
+        .find(|update| update["_meta"]["rustcode"]["kind"] == "compaction")
+        .expect("a compaction card");
+    assert_eq!(card["sessionUpdate"], "agent_message_chunk");
+}
+
+#[tokio::test]
+async fn codex_auto_compaction_inside_a_turn_does_not_end_the_turn() {
+    let (mut thread, _seen) = start(Script::AutoCompact, None, StartOptions::default()).await;
+    let stop = thread.session.prompt(text("go on")).await.unwrap();
+    assert_eq!(stop, StopReason::EndTurn);
+    let updates = drain(&mut thread.updates);
+    assert!(
+        updates
+            .iter()
+            .any(|update| update["_meta"]["rustcode"]["kind"] == "compaction")
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|update| update["content"]["text"] == "Answer"),
+        "the reply after the compaction still arrives in the same turn"
     );
 }

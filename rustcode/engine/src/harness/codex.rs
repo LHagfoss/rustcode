@@ -69,6 +69,9 @@ struct State {
     summarized: HashSet<String>,
     last_message_item: Option<String>,
     last_error: Option<String>,
+    /// A `/compact` is running: its completed `contextCompaction` item ends the
+    /// wait. Codex's own auto-compaction inside a turn does not.
+    compacting: bool,
 }
 
 fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
@@ -305,14 +308,24 @@ impl CodexAdapter {
             state.last_message_item = None;
             (state.model.clone(), state.effort.clone())
         };
-        let mut params = json!({"threadId": self.thread_id, "input": input_items(&prompt)});
-        if let Some(model) = model {
-            params["model"] = json!(model);
-        }
-        if let Some(effort) = effort {
-            params["effort"] = json!(effort);
-        }
-        let started = match self.peer.request("turn/start", params).await {
+        // `/compact` alone is Codex's own compaction, not a message for the model
+        // (`thread/compact/start`, as T3 Code routes it); its `contextCompaction`
+        // item becomes the chat's compaction card.
+        let compact = is_compact_command(&prompt);
+        lock(&self.state).compacting = compact;
+        let (method, params) = if compact {
+            ("thread/compact/start", json!({"threadId": self.thread_id}))
+        } else {
+            let mut params = json!({"threadId": self.thread_id, "input": input_items(&prompt)});
+            if let Some(model) = model {
+                params["model"] = json!(model);
+            }
+            if let Some(effort) = effort {
+                params["effort"] = json!(effort);
+            }
+            ("turn/start", params)
+        };
+        let started = match self.peer.request(method, params).await {
             Ok(started) => started,
             Err(error) => {
                 let mut state = lock(&self.state);
@@ -514,6 +527,21 @@ fn config_options(state: &State) -> Vec<SessionConfigOption> {
         );
     }
     options
+}
+
+/// Whether a prompt is exactly `/compact`: a request to compact the thread.
+fn is_compact_command(prompt: &[ContentBlock]) -> bool {
+    let text: String = prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    prompt
+        .iter()
+        .all(|block| matches!(block, ContentBlock::Text(_)))
+        && text.trim() == "/compact"
 }
 
 fn truncate(text: &str) -> String {
@@ -777,6 +805,23 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
             };
             let id = str_field(item, "id").unwrap_or_default().to_owned();
             match str_field(item, "type") {
+                Some("contextCompaction") => {
+                    // A compaction asked for with `/compact` runs no turn of its own
+                    // that ends the wait; its completed item does.
+                    let mut guard = lock(state);
+                    if guard.compacting {
+                        guard.compacting = false;
+                        if let Some(waiter) = guard.waiter.take() {
+                            let _ = waiter.send(TurnEnd::Completed);
+                        }
+                    }
+                    drop(guard);
+                    vec![crate::acp::usage::compaction_card(
+                        None,
+                        None,
+                        Some("Context compacted: Codex summarized the conversation to free the context window.".to_owned()),
+                    )]
+                }
                 Some("agentMessage") => {
                     let mut state = lock(state);
                     if state.streamed.contains(&id) {

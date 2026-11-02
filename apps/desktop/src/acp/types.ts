@@ -355,6 +355,8 @@ export type SessionUpdate =
   | { kind: "agent"; text: string; turn?: TurnTiming; at?: number }
   | { kind: "thought"; text: string; summary: boolean; durationMs?: number }
   | { kind: "notice"; text: string; resumable: boolean }
+  /** The harness compacted the conversation (`_meta.rustcode.kind == "compaction"`). */
+  | { kind: "compaction"; text: string }
   | {
       kind: "toolCall";
       id: string;
@@ -427,6 +429,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
     case "user_message_chunk":
       return { kind: "user", text: contentText(update.content), at: parseDate(meta?.at) };
     case "agent_message_chunk":
+      if (str(meta?.kind) === "compaction") return { kind: "compaction", text: contentText(update.content) };
       if (str(meta?.kind) === "notice") {
         return {
           kind: "notice",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SessionUpdate } from "../acp/types";
+import { parseSessionUpdate, type SessionUpdate } from "../acp/types";
 import {
   appendSteer,
   applyUpdate,
@@ -265,6 +265,26 @@ describe("the working line", () => {
         { kind: "thought", id: "t", text: "done", summary: false, startedAt: 0, done: true },
       ]),
     ).toBe("Working");
+  });
+});
+
+describe("compaction", () => {
+  test("a harness's compaction card becomes one quiet row", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Context compacted: Codex summarized the conversation.\n\nSummary…" },
+        _meta: { rustcode: { kind: "compaction" } },
+      },
+    });
+    expect(update.kind).toBe("compaction");
+    const state = applyUpdate(emptyThread("s", "/p"), update);
+    expect(state.items.at(-1)).toMatchObject({
+      kind: "notice",
+      tone: "info",
+      text: "Context compacted: Codex summarized the conversation.",
+    });
   });
 });
 
