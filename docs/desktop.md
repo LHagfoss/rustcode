@@ -12,6 +12,45 @@ approvals, attachments, link chips, Smart UI views, thread actions, find,
 rewind, subagents, pull requests, plan usage and a terminal. Parts of the
 SwiftUI app are not ported yet; see [Not yet ported](#not-yet-ported).
 
+## Status and roadmap
+
+Where the desktop work stands, so the next session (in any harness) can pick
+it up. Direction: this app replaces the SwiftUI app; external coding agents
+run threads as harnesses ([harnesses.md](harnesses.md)); agents can start
+and message other threads ([orchestrator.md](orchestrator.md)). The design
+rules are in [design.md](design.md), themes in [themes.md](themes.md), and
+reply formatting in [output-style.md](output-style.md).
+
+Shipped (#2788, #2790, #2791 and the PR after them):
+
+- Chat on any harness, approvals and questions, onboarding, settings,
+  Capabilities (skills + MCP), themes shared with the TUI, glass design.
+- Worktree threads, thread status and the sidebar sections, per-turn
+  checkpoints, review, fan-out compare, orchestration client.
+- Performance: virtualized transcript, batched updates, 120 Hz rendering,
+  highlighting in a worker.
+- Release bundles for macOS, Windows and Linux, native installers, an
+  in-app updater on macOS. The Swift app's updater moves existing installs
+  to this app.
+
+Next, in rough order:
+
+1. Run the Build workflow once by hand: the Windows and Linux bundle jobs
+   have never run. Then cut a beta (`scripts/release.sh --beta`).
+2. Signing and notarization once the Apple secrets exist (#2034).
+3. Open desktop issues: #2792 (queue/steer with images), #2793 (copy
+   actions), #2794 (report results, context inspector), #2795 (command
+   actions select their thread), #2796 (usage ring refresh), #2799
+   (cross-harness delegation, live test plan).
+4. The rest of [Not yet ported](#not-yet-ported), then archive `macos/` in
+   its own repository and drop its CI.
+
+How to continue: run the app with `bun tauri dev` in `apps/desktop` (it uses
+`target/debug/rustcode`; rebuild with `cargo build -p rustcode-tui --bin
+rustcode`), check with `bun run check`, and measure with `bun run perf` /
+`bun run perf:native`. Screenshots: `?transport=mock` in the browser dev
+mode gives a stable thread to capture.
+
 ## Run it
 
 Everything uses Bun from `apps/desktop`; nothing is installed globally.
@@ -747,12 +786,10 @@ From the SwiftUI app, still missing or partial:
 - Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
   `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as
   Text or VoiceOver summaries.
-- Orchestrator v2 against the real engine: as of this build the engine does
-  not answer `_rustcode/worktrees/*`, `_rustcode/checkpoints/*` or
-  `_rustcode/session/status`, so those features are hidden there and were
-  checked against the mock only. Pull request watches that auto-settle are
-  the engine's. A link's `cancel_session_turn` and the target's *Pause
-  messages* / *Detach* are not offered.
+- Orchestrator v2 was checked against the mock and the engine's own tests;
+  orchestration through a real external harness has not run end to end
+  (#2799). A link's `cancel_session_turn` and the target's *Pause messages*
+  / *Detach* are not offered.
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
