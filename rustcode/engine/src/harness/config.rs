@@ -1,6 +1,7 @@
 //! `[harness_defaults]` and `[[harnesses]]` in the user config
 //! (`docs/harnesses.md`). Both are optional: a config without them keeps
-//! working and starts every thread on the built-in harness.
+//! working and starts every thread on the built-in harness. A harness entry's
+//! optional `model` and `effort` are the last choice for a new thread on it.
 
 use super::HarnessKind;
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,12 @@ pub struct HarnessEntry {
     /// An entry that leaves it out is on: listing a harness means wanting it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// The model last chosen for a new thread on this harness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The effort last chosen with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 impl HarnessEntry {
@@ -133,8 +140,45 @@ pub(crate) fn apply_change(
                 },
                 command: change.command,
                 enabled: Some(change.enabled.unwrap_or(true)),
+                ..Default::default()
             });
         }
+    }
+    Ok(())
+}
+
+/// Keep `model` and `effort` as the last choice for new threads on `id`
+/// (blank values clear them). A known harness without an entry gets one that
+/// leaves it off, as it was; the built-in one gets an entry of its own.
+pub(crate) fn remember(
+    harnesses: &mut Vec<HarnessEntry>,
+    id: &str,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<(), String> {
+    let clean = |value: Option<String>| {
+        value
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let (model, effort) = (clean(model), clean(effort));
+    if let Some(entry) = harnesses.iter_mut().find(|entry| entry.id == id) {
+        entry.model = model;
+        entry.effort = effort;
+        return Ok(());
+    }
+    let builtin = id == super::BUILTIN_ID;
+    if !builtin && super::known(id).is_none() {
+        return Err(format!("unknown harness '{id}'"));
+    }
+    if model.is_some() || effort.is_some() {
+        harnesses.push(HarnessEntry {
+            id: id.to_owned(),
+            enabled: (!builtin).then_some(false),
+            model,
+            effort,
+            ..Default::default()
+        });
     }
     Ok(())
 }
@@ -232,6 +276,7 @@ mod tests {
                     kind: Some(HarnessKind::Acp),
                     command: Some(vec!["my-agent".into(), "--acp".into()]),
                     enabled: Some(true),
+                    ..Default::default()
                 },
             ]
         );
@@ -255,6 +300,12 @@ onboarded = true
 [[harnesses]]
 id = "codex"
 enabled = true
+model = "gpt-6-luna"
+effort = "high"
+
+[[harnesses]]
+id = "rustcode"
+model = "local"
 
 [[harnesses]]
 id = "my-agent"
@@ -267,8 +318,85 @@ enabled = true
         .unwrap();
         let (defaults, harnesses) = load_in(dir.path());
         assert!(defaults.onboarded);
-        assert_eq!(harnesses.len(), 2);
-        assert_eq!(harnesses[1].kind, Some(HarnessKind::Acp));
+        assert_eq!(harnesses.len(), 3);
+        assert_eq!(harnesses[0].effort.as_deref(), Some("high"));
+        assert_eq!(harnesses[1].model.as_deref(), Some("local"));
+        assert_eq!(harnesses[2].kind, Some(HarnessKind::Acp));
+        let ids = super::super::resolve_all(&harnesses)
+            .into_iter()
+            .map(|harness| harness.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids.iter().filter(|id| *id == "rustcode").count(), 1);
+    }
+
+    #[test]
+    fn last_choices_round_trip_per_harness() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[harness_defaults]\nharness = \"codex\"\n\n[[harnesses]]\nid = \"codex\"\nenabled = true\n",
+        )
+        .unwrap();
+        edit_in(dir.path(), |_, harnesses| {
+            remember(
+                harnesses,
+                "codex",
+                Some("gpt-6-luna".into()),
+                Some("high".into()),
+            )?;
+            remember(
+                harnesses,
+                "claude-code",
+                Some("opus".into()),
+                Some("high".into()),
+            )?;
+            remember(harnesses, "rustcode", Some("local".into()), None)?;
+            remember(harnesses, "gemini", None, Some(" ".into()))
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(text.contains("model = \"opus\""), "{text}");
+        let (defaults, harnesses) = load_in(dir.path());
+        assert_eq!(
+            defaults.harness.as_deref(),
+            Some("codex"),
+            "the default harness stays"
+        );
+        let entry = |id: &str| harnesses.iter().find(|entry| entry.id == id).cloned();
+        let codex = entry("codex").unwrap();
+        assert_eq!(codex.enabled, Some(true));
+        assert_eq!(
+            (codex.model.as_deref(), codex.effort.as_deref()),
+            (Some("gpt-6-luna"), Some("high"))
+        );
+        let claude = entry("claude-code").unwrap();
+        assert_eq!(
+            claude.enabled,
+            Some(false),
+            "remembering does not turn a harness on"
+        );
+        assert_eq!(claude.model.as_deref(), Some("opus"));
+        let builtin = entry("rustcode").unwrap();
+        assert_eq!(builtin.enabled, None);
+        assert_eq!(builtin.model.as_deref(), Some("local"));
+        assert!(
+            entry("gemini").is_none(),
+            "nothing to remember adds no entry"
+        );
+        assert!(super::super::resolve(&harnesses, "claude-code").is_some_and(|h| !h.enabled));
+
+        edit_in(dir.path(), |_, harnesses| {
+            remember(harnesses, "codex", None, None)
+        })
+        .unwrap();
+        let codex = load_in(dir.path())
+            .1
+            .into_iter()
+            .find(|e| e.id == "codex")
+            .unwrap();
+        assert_eq!((codex.model, codex.effort), (None, None));
+        let mut harnesses = Vec::new();
+        assert!(remember(&mut harnesses, "nope", Some("x".into()), None).is_err());
     }
 
     #[test]

@@ -279,7 +279,7 @@ impl CodexAdapter {
         super::learn(&harness.id, |learned| {
             learned.error = None;
             if !models.is_empty() {
-                learned.models = Some(models);
+                learned.listed(&harness.id, models);
             }
         });
         Ok(adapter)

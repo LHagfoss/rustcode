@@ -46,6 +46,15 @@ pub(crate) fn forget(id: &str) {
         .remove(id);
 }
 
+/// The version the last detection of `id` found, without running anything.
+pub(crate) fn cached_version(id: &str) -> Option<String> {
+    cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(id)
+        .and_then(|(_, _, detection)| detection.version.clone())
+}
+
 pub(crate) fn detect(harness: &ResolvedHarness) -> Detection {
     if harness.kind == HarnessKind::Builtin {
         return Detection {
