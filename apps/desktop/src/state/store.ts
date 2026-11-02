@@ -369,6 +369,7 @@ async function handshake(): Promise<void> {
     if (connection === conn) void handleInbound(message);
   });
   set({ status: "connecting", statusDetail: undefined });
+  modelsAsked.clear();
   try {
     const result = await conn.request(
       Method.initialize,
@@ -1319,6 +1320,28 @@ export async function fetchHarnessModels(id: string): Promise<void> {
   void refreshHarnesses();
 }
 
+/** Harnesses whose model list was asked for once this engine run (ensureHarnessModels). */
+const modelsAsked = new Map<string, Promise<void>>();
+
+/**
+ * An external harness lists its models only when asked (`_rustcode/harness/models`;
+ * `_rustcode/harnesses` leaves them empty until then). The model picker of a new
+ * thread on it asks once, so the model list, effort and Fast mode are there
+ * before the thread exists. A failure stays quiet: the picker says the
+ * harness picks its default.
+ */
+export function ensureHarnessModels(id: string): Promise<void> {
+  const harness = get().harnesses?.harnesses.find((h) => h.id === id);
+  if (!harness || harness.builtin || harness.models.length || get().status !== "ready")
+    return Promise.resolve();
+  let asked = modelsAsked.get(id);
+  if (!asked) {
+    asked = fetchHarnessModels(id).catch(() => undefined);
+    modelsAsked.set(id, asked);
+  }
+  return asked;
+}
+
 export function setNewThreadChoice(choice: NewThreadChoice | null) {
   set({ newThread: choice });
 }
@@ -1678,6 +1701,7 @@ export async function request<T = Json>(
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  modelsAsked.clear();
   connection = null;
   transport = null;
   setShellTransport(null);

@@ -15,7 +15,13 @@ import {
   unavailableReason,
   usableHarnesses,
 } from "../state/harness";
-import { type NewThreadChoice, setConfigOption, setNewThreadChoice, useApp } from "../state/store";
+import {
+  ensureHarnessModels,
+  type NewThreadChoice,
+  setConfigOption,
+  setNewThreadChoice,
+  useApp,
+} from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
 import { cx, Tooltip } from "./primitives";
@@ -286,6 +292,54 @@ function firstConfig(threads: Record<string, ThreadState>): ConfigOption[] {
   return NO_CONFIG;
 }
 
+/**
+ * What the picker offers: a thread's own config options, or for a new thread
+ * the harness's listed models (an external harness lists them once asked,
+ * see `ensureHarnessModels`), else the built-in list an open thread knows.
+ */
+export function pickerModels(
+  thread: ThreadState | undefined,
+  harness: Harness | undefined,
+  effective: NewThreadChoice,
+  knownConfig: ConfigOption[],
+): {
+  models: Choice[];
+  efforts: string[];
+  model: string | null | undefined;
+  effort: string | null | undefined;
+} {
+  if (thread) {
+    const m = selectOption(thread.configOptions, "model");
+    const e = selectOption(thread.configOptions, "effort");
+    return {
+      models: m?.choices ?? [],
+      model: m?.current,
+      efforts: e?.choices.map((c) => c.value) ?? [],
+      effort: e?.current,
+    };
+  }
+  if (harness?.models.length) {
+    // A stale default (a model the harness no longer lists) falls back to its first.
+    const listed = harness.models.some((m) => m.id === effective.model);
+    const model = listed ? effective.model : harness.models[0]?.id;
+    return {
+      models: harness.models.map((m) => ({ value: m.id, name: m.name })),
+      model,
+      efforts: harness.models.find((m) => m.id === model)?.efforts ?? [],
+      effort: effective.effort,
+    };
+  }
+  const m = selectOption(knownConfig, "model");
+  const e = selectOption(knownConfig, "effort");
+  const builtin = harness?.builtin !== false;
+  return {
+    models: builtin ? (m?.choices ?? []) : [],
+    model: effective.model ?? m?.current,
+    efforts: builtin ? (e?.choices.map((c) => c.value) ?? []) : [],
+    effort: effective.effort ?? e?.current,
+  };
+}
+
 export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
   const harnesses = useApp((s) => s.harnesses);
   const choice = useApp((s) => s.newThread);
@@ -302,33 +356,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     (h) => h.id === (isNew ? effective.harness : (thread?.harness?.id ?? "rustcode")),
   );
   const caps = isNew ? harness?.capabilities : thread?.harness?.capabilities;
+  // An external harness lists its models only when asked: ask once for a new thread on it.
+  const listsLater = isNew && !!harness && !harness.builtin && !harness.models.length;
+  const engineReady = useApp((s) => s.status === "ready");
+  useEffect(() => {
+    if (listsLater && engineReady && harness) void ensureHarnessModels(harness.id);
+  }, [listsLater, engineReady, harness]);
   const harnessName = harness?.name ?? "This harness";
 
-  // Model and effort come from the thread's config options, or for a new thread from the harness list.
-  let models: Choice[] = [];
-  let efforts: string[] = [];
-  let model: string | null | undefined;
-  let effort: string | null | undefined;
-  if (thread) {
-    const m = selectOption(thread.configOptions, "model");
-    const e = selectOption(thread.configOptions, "effort");
-    models = m?.choices ?? [];
-    model = m?.current;
-    efforts = e?.choices.map((c) => c.value) ?? [];
-    effort = e?.current;
-  } else if (harness?.models.length) {
-    models = harness.models.map((m) => ({ value: m.id, name: m.name }));
-    model = effective.model ?? harness.models[0]?.id;
-    efforts = harness.models.find((m) => m.id === model)?.efforts ?? [];
-    effort = effective.effort;
-  } else {
-    const m = selectOption(knownConfig, "model");
-    const e = selectOption(knownConfig, "effort");
-    models = harness?.builtin !== false ? (m?.choices ?? []) : [];
-    model = effective.model ?? m?.current;
-    efforts = harness?.builtin !== false ? (e?.choices.map((c) => c.value) ?? []) : [];
-    effort = effective.effort ?? e?.current;
-  }
+  const { models, efforts, model, effort } = pickerModels(thread, harness, effective, knownConfig);
   const fast = thread?.configOptions.find((o) => o.id === "fast" && o.type === "boolean");
 
   const setChoice = (next: Partial<NewThreadChoice>) => {

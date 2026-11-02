@@ -9,6 +9,7 @@ import {
   completeOnboarding,
   connect,
   editMessage,
+  ensureHarnessModels,
   fetchHarnessModels,
   refreshAgents,
   refreshSessions,
@@ -264,5 +265,39 @@ describe("engine controller with the mock engine", () => {
     await setThreadStatus(id, "idle");
     expect(statusOf(useApp.getState(), id)).toBe("idle");
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
+  });
+});
+
+describe("model picker", () => {
+  test("a new thread on an external harness lists its models once asked", async () => {
+    const { pickerModels } = await import("../ui/ModelPicker");
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    const codex = () => useApp.getState().harnesses!.harnesses.find((h) => h.id === "codex")!;
+    const choice = { harness: "codex", model: null, effort: null };
+    // `_rustcode/harnesses` leaves an external harness's models empty until asked.
+    expect(pickerModels(undefined, codex(), choice, []).models).toEqual([]);
+    await ensureHarnessModels("codex");
+    const picked = pickerModels(undefined, codex(), choice, []);
+    expect(picked.models.length).toBeGreaterThan(0);
+    expect(picked.model).toBe(picked.models[0]!.value);
+    expect(picked.efforts.length).toBeGreaterThan(1);
+  });
+
+  test("an existing thread offers its config options", async () => {
+    const { pickerModels } = await import("../ui/ModelPicker");
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    selectThread(useApp.getState().sessions[0]!.id);
+    await until(() => selected()?.loaded === true);
+    const picked = pickerModels(
+      selected(),
+      undefined,
+      { harness: "rustcode", model: null, effort: null },
+      [],
+    );
+    expect(picked.models.length).toBeGreaterThan(1);
+    expect(picked.model).toBeTruthy();
+    expect(picked.efforts.length).toBeGreaterThan(1);
   });
 });
