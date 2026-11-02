@@ -48,10 +48,7 @@ function useDigitKeys(count: number, pick: (index: number) => void) {
 
 function Shell({ children, label }: { children: React.ReactNode; label: string }) {
   return (
-    <section
-      aria-label={label}
-      className="surface flex flex-col gap-3 rounded-[20px] border border-fg/10 p-4 rc-in"
-    >
+    <section aria-label={label} className="elevated flex flex-col gap-3 rounded-xl p-4 rc-in">
       {children}
     </section>
   );
@@ -78,31 +75,34 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
   return (
     <section
       aria-label="Approval needed"
-      className="surface flex flex-col gap-2 rounded-[18px] border border-fg/10 px-2.5 py-2 rc-in"
+      className="elevated flex flex-col gap-2 rounded-xl px-2.5 py-2 rc-in"
     >
       <div className="flex min-h-[30px] items-center gap-2">
-        <Hand size={14} className="ml-1 shrink-0 text-attention" fill="currentColor" fillOpacity={0.2} />
+        <Hand size={14} className="ml-1 shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
         <button
           type="button"
           disabled={!expandable}
           aria-expanded={details}
           onClick={() => setDetails(!details)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left enabled:hover:bg-fill-3"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left enabled:hover:bg-fill-subtle"
         >
           <span className="shrink-0 font-semibold text-body">{request.title}</span>
           {(summary || command) && (
-            <span className={cx("min-w-0 truncate text-callout text-fg-2", !summary && "font-mono")}>
+            <span className={cx("min-w-0 truncate text-callout text-fg-muted", !summary && "font-mono")}>
               {summary ?? command}
             </span>
           )}
           {expandable && (
             <ChevronRight
               size={11}
-              className={cx("shrink-0 text-fg-3 transition-transform duration-200", details && "rotate-90")}
+              className={cx(
+                "shrink-0 text-fg-faint transition-transform duration-200",
+                details && "rotate-90",
+              )}
             />
           )}
         </button>
-        {pending > 1 && <span className="shrink-0 text-caption text-fg-2 tabular">1 of {pending}</span>}
+        {pending > 1 && <span className="shrink-0 text-caption text-fg-muted tabular">1 of {pending}</span>}
         <div className="flex shrink-0 items-center gap-1.5">
           {options.map((o, i) => {
             const backtick = o.kind === "allow_always" && o.name.includes("`");
@@ -127,12 +127,12 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
         <div className="flex flex-col gap-2 px-1 pb-1">
           {command && (
             <div>
-              <pre className="selectable m-0 max-h-[140px] overflow-auto rounded-lg bg-fill-3 p-2.5 font-mono text-callout whitespace-pre-wrap">
-                <span className="text-fg-2">$ </span>
+              <pre className="selectable m-0 max-h-[140px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-callout whitespace-pre-wrap">
+                <span className="text-fg-muted">$ </span>
                 {command}
               </pre>
               {cwd && (
-                <div className="mt-1 truncate text-caption text-fg-2" dir="rtl">
+                <div className="mt-1 truncate text-caption text-fg-muted" dir="rtl">
                   <bdi>{cwd}</bdi>
                 </div>
               )}
@@ -146,13 +146,13 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
             </div>
           )}
           {note && (
-            <div className="flex items-center gap-1.5 text-attention text-callout">
+            <div className="flex items-center gap-1.5 text-warning text-callout">
               <ShieldAlert size={13} />
               {note}
             </div>
           )}
           {!command && !request.diffs.length && request.input !== undefined && (
-            <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-lg bg-fill-3 p-2.5 font-mono text-caption">
+            <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption">
               {JSON.stringify(request.input, null, 2)}
             </pre>
           )}
@@ -174,7 +174,7 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
   });
   return (
     <Shell label="Question">
-      <div className="flex items-center gap-2 font-semibold text-body text-brand">
+      <div className="flex items-center gap-2 font-semibold text-body text-accent">
         <MessageCircleQuestion size={15} />
         {q.header || "RustCode has a question"}
       </div>
@@ -182,10 +182,10 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
       <div className={cx("flex flex-col", q.multiple ? "gap-1.5" : "gap-1")}>
         {answers.map((o, i) =>
           q.multiple ? (
-            <label key={o.id} className="flex items-start gap-2 rounded-xl px-1 py-0.5">
+            <label key={o.id} className="flex items-start gap-2 rounded-lg px-1 py-0.5">
               <input
                 type="checkbox"
-                className="mt-0.5 accent-[var(--rc-brand-fill)]"
+                className="mt-0.5 accent-[var(--rc-accent)]"
                 checked={ticked.includes(o.id)}
                 onChange={(e) =>
                   setTicked(e.target.checked ? [...ticked, o.id] : ticked.filter((x) => x !== o.id))
@@ -194,7 +194,7 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
               <span>
                 <span className="block text-body">{o.name}</span>
                 {q.descriptions[i] && (
-                  <span className="block text-caption text-fg-2">{q.descriptions[i]}</span>
+                  <span className="block text-caption text-fg-muted">{q.descriptions[i]}</span>
                 )}
               </span>
             </label>
@@ -203,18 +203,18 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
               key={o.id}
               type="button"
               onClick={() => answerQuestionOptions(request, [o])}
-              className="group flex w-full items-center gap-2 rounded-xl bg-fill-3 px-3 py-[9px] text-left transition-colors hover:bg-brand/14"
+              className="group flex w-full items-center gap-2 rounded-lg bg-fill-subtle px-3 py-[9px] text-left hover:bg-accent/14"
             >
               <Kbd>{i + 1}</Kbd>
               <span className="flex-1">
                 <span className="block text-body">{o.name}</span>
                 {q.descriptions[i] && (
-                  <span className="block text-caption text-fg-2">{q.descriptions[i]}</span>
+                  <span className="block text-caption text-fg-muted">{q.descriptions[i]}</span>
                 )}
               </span>
               <CircleArrowUp
                 size={16}
-                className="text-brand opacity-0 transition-opacity group-hover:opacity-100"
+                className="text-accent opacity-0 transition-opacity group-hover:opacity-100"
               />
             </button>
           ),
@@ -248,7 +248,7 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
           onChange={(e) => setText(e.target.value)}
           placeholder="Or write your own answer…"
           aria-label="Your own answer"
-          className="h-[30px] flex-1 rounded-full bg-field px-3.5 text-body outline-none ring-1 ring-hairline placeholder:text-fg-3 focus:ring-brand/50"
+          className="h-[30px] flex-1 rounded-full bg-fill-subtle px-3.5 text-body outline-none ring-1 ring-border placeholder:text-fg-faint focus:ring-accent/50"
         />
         <Pill prominent type="submit" disabled={!text.trim()}>
           Send

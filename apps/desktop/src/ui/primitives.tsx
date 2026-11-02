@@ -1,6 +1,7 @@
 // Small building blocks shared by every view, matching the SwiftUI app's
 // ChromeButton, ToolbarCluster, PillButtonStyle and mini spinner.
 
+import { CircleAlert, TriangleAlert } from "lucide-react";
 import { Tooltip as RadixTooltip } from "radix-ui";
 import { type ButtonHTMLAttributes, forwardRef, type ReactNode } from "react";
 
@@ -17,7 +18,7 @@ export function Spinner({ size = 12, className }: { size?: number; className?: s
       width={size}
       height={size}
       viewBox={`0 0 ${size} ${size}`}
-      className={cx("shrink-0 text-fg-2", className)}
+      className={cx("shrink-0 text-fg-muted", className)}
       style={{ animation: "rc-spin 1s linear infinite" }}
       aria-hidden
     >
@@ -38,7 +39,7 @@ export function Spinner({ size = 12, className }: { size?: number; className?: s
 export function Tooltip({
   label,
   children,
-  side = "bottom",
+  side = "top",
 }: {
   label?: ReactNode;
   children: ReactNode;
@@ -46,13 +47,16 @@ export function Tooltip({
 }) {
   if (!label) return <>{children}</>;
   return (
-    <RadixTooltip.Root delayDuration={600}>
+    // Delays come from the one Tooltip.Provider in App.tsx: 400 ms for the first, then
+    // none while the pointer moves between triggers. The tip never takes the pointer.
+    <RadixTooltip.Root>
       <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
         <RadixTooltip.Content
           side={side}
           sideOffset={6}
-          className="z-50 max-w-80 rounded-md surface px-2 py-1 text-callout text-fg shadow-float rc-in"
+          collisionPadding={8}
+          className="pointer-events-none z-50 max-w-80 rounded-lg bg-surface-3 px-2.5 py-1 text-callout text-fg shadow-2"
         >
           {label}
         </RadixTooltip.Content>
@@ -75,7 +79,7 @@ export const ChromeButton = forwardRef<HTMLButtonElement, ButtonProps>(function 
         type="button"
         aria-label={label}
         className={cx(
-          "inline-flex h-7 w-[30px] items-center justify-center rounded-[7px] text-fg-2 transition-colors duration-100 hover:bg-fill-2 hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent",
+          "inline-flex h-7 w-[30px] items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong disabled:opacity-40 disabled:hover:bg-transparent",
           className,
         )}
         {...rest}
@@ -89,7 +93,7 @@ export const ChromeButton = forwardRef<HTMLButtonElement, ButtonProps>(function 
 /** A capsule that groups icon buttons, as the toolbar does. */
 export function Cluster({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cx("inline-flex h-7 items-center rounded-full bg-fill-3 px-[3px]", className)}>
+    <div className={cx("inline-flex h-7 items-center rounded-full bg-fill-subtle px-[3px]", className)}>
       {children}
     </div>
   );
@@ -105,8 +109,8 @@ export const ClusterButton = forwardRef<HTMLButtonElement, ButtonProps & { on?: 
           aria-label={label}
           aria-pressed={on}
           className={cx(
-            "inline-flex h-6 w-8 items-center justify-center rounded-full text-fg-2 transition-colors duration-100 hover:bg-fill-1 disabled:opacity-40",
-            on && "bg-fill-1 text-brand",
+            "inline-flex h-6 w-8 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong disabled:opacity-40",
+            on && "bg-fill-strong text-fg",
             className,
           )}
           {...rest}
@@ -128,13 +132,13 @@ export const Pill = forwardRef<
       ref={ref}
       type="button"
       className={cx(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full px-3 font-medium text-callout whitespace-nowrap transition-[opacity,background-color] duration-100 active:opacity-70 disabled:opacity-45 disabled:active:opacity-45",
+        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full px-3 font-medium text-callout whitespace-nowrap disabled:opacity-40",
         size === "lg" ? "h-[30px] px-3.5" : "h-[26px]",
         prominent
-          ? "bg-brand-fill text-white hover:brightness-110"
+          ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
           : danger
-            ? "bg-danger/12 text-danger hover:bg-danger/18"
-            : "bg-fill-2 text-fg hover:bg-fill-1",
+            ? "bg-danger/12 text-danger enabled:hover:bg-danger/18 enabled:active:bg-danger/24"
+            : "bg-fill text-fg enabled:hover:bg-fill-strong enabled:active:bg-fill-strong",
         className,
       )}
       {...rest}
@@ -146,7 +150,7 @@ export const Pill = forwardRef<
 
 export function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="rounded-[4px] bg-fill-2 px-[5px] py-px font-mono font-semibold text-caption text-fg-2">
+    <kbd className="rounded-xs bg-surface-3 px-[5px] py-px font-mono font-semibold text-caption text-fg-muted">
       {children}
     </kbd>
   );
@@ -173,13 +177,13 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(
-        "relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full transition-colors duration-150 disabled:opacity-40",
-        checked ? "bg-brand-fill" : "bg-fill-1",
+        "relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full disabled:opacity-40",
+        checked ? "bg-accent" : "bg-fill-strong",
       )}
     >
       <span
         className={cx(
-          "absolute top-[2px] size-[14px] rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.3)] transition-transform duration-150 ease-snappy",
+          "absolute top-[2px] size-[14px] rounded-full bg-accent-fg shadow-1 transition-transform duration-150 ease-snappy",
           checked ? "translate-x-[16px]" : "translate-x-[2px]",
         )}
       />
@@ -200,7 +204,7 @@ export function Segments<T extends string>({
   label: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-full bg-fill-3 p-[2px]">
+    <div role="radiogroup" aria-label={label} className="inline-flex rounded-full bg-fill-subtle p-[2px]">
       {options.map((o) => (
         <button
           key={o.value}
@@ -210,8 +214,8 @@ export function Segments<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "h-5 rounded-full px-2.5 font-medium text-caption transition-colors duration-150 disabled:opacity-40",
-            o.value === value ? "bg-fill-1 text-fg" : "text-fg-2 hover:text-fg",
+            "h-5 rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
+            o.value === value ? "bg-surface-3 text-fg shadow-1" : "text-fg-muted hover:bg-fill hover:text-fg",
           )}
         >
           {o.label}
@@ -223,4 +227,39 @@ export function Segments<T extends string>({
 
 export function copyText(text: string): Promise<void> {
   return navigator.clipboard.writeText(text);
+}
+
+/**
+ * The error card (docs/design.md): a neutral surface, the icon in the tone's
+ * colour, the text muted, actions at the right. No coloured border or tint.
+ */
+export function Callout({
+  tone = "danger",
+  children,
+  action,
+  floating,
+  className,
+}: {
+  tone?: "danger" | "warning";
+  children: ReactNode;
+  action?: ReactNode;
+  /** Over the transcript (the composer stack): lifted with the first shadow. */
+  floating?: boolean;
+  className?: string;
+}) {
+  const Icon = tone === "danger" ? CircleAlert : TriangleAlert;
+  return (
+    <div
+      role="alert"
+      className={cx(
+        "flex items-start gap-2.5 rounded-lg bg-surface px-3.5 py-3",
+        floating && "shadow-1 rc-in",
+        className,
+      )}
+    >
+      <Icon size={14} className={cx("mt-px shrink-0", tone === "danger" ? "text-danger" : "text-warning")} />
+      <div className="selectable line-clamp-6 min-w-0 flex-1 text-callout text-fg-muted">{children}</div>
+      {action && <div className="-my-1 flex shrink-0 items-center gap-1.5">{action}</div>}
+    </div>
+  );
 }

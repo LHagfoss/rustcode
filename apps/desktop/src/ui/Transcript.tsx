@@ -173,6 +173,8 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
       return size;
     },
     overscan: 8,
+    // Row measurements land on the next frame, not inside the ResizeObserver's own delivery.
+    useAnimationFrameWithResizeObserver: true,
     paddingStart: 20,
     paddingEnd: bottomInset,
   });
@@ -290,8 +292,8 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
   return (
     <div className="relative min-h-0 flex-1">
       {find && (
-        <div className="surface absolute top-2 right-7 z-20 flex h-[32px] items-center gap-1 rounded-full border border-hairline pr-1 pl-3 rc-in">
-          <Search size={12} className="text-fg-2" />
+        <div className="elevated absolute top-2 right-7 z-20 flex h-[32px] items-center gap-1 rounded-full pr-1 pl-3 rc-in">
+          <Search size={12} className="text-fg-muted" />
           <input
             ref={findField}
             autoFocus
@@ -303,9 +305,9 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             }}
             placeholder="Find in thread"
             aria-label="Find in thread"
-            className="w-[180px] bg-transparent text-callout outline-none placeholder:text-fg-3"
+            className="w-[180px] bg-transparent text-callout outline-none placeholder:text-fg-faint"
           />
-          <span className="min-w-[52px] text-right text-caption text-fg-2 tabular" aria-live="polite">
+          <span className="min-w-[52px] text-right text-caption text-fg-muted tabular" aria-live="polite">
             {find.query.trim()
               ? matches.length
                 ? `${Math.min(find.index, matches.length - 1) + 1} of ${matches.length}`
@@ -316,7 +318,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             type="button"
             aria-label="Previous match"
             onClick={() => step(-1)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+            className="flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             <ChevronUp size={13} />
           </button>
@@ -324,7 +326,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             type="button"
             aria-label="Next match"
             onClick={() => step(1)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+            className="flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             <ChevronDown size={13} />
           </button>
@@ -332,7 +334,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             type="button"
             aria-label="Close find"
             onClick={() => setFind(null)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+            className="flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             <X size={12} />
           </button>
@@ -409,10 +411,11 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
         aria-hidden={!showLatest}
         tabIndex={showLatest ? 0 : -1}
         className={cx(
-          "surface absolute right-7 flex h-[30px] items-center gap-1.5 rounded-full px-3 font-medium text-callout transition-[opacity,transform] duration-200 ease-snappy",
-          showLatest ? "scale-100 opacity-100" : "pointer-events-none scale-90 opacity-0",
+          // Above the floating composer (its top is `bottomInset - 20` up) and over it in z.
+          "rc-glass absolute left-1/2 z-30 flex h-[30px] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,transform] duration-200 ease-snappy hover:bg-surface-3",
+          showLatest ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0",
         )}
-        style={{ bottom: bottomInset - 40 }}
+        style={{ bottom: bottomInset - 8 }}
       >
         <ArrowDown size={13} />
         Latest

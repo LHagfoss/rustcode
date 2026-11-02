@@ -53,27 +53,27 @@ function CompareCard({ link, fanOut, kept }: { link: Link; fanOut: string; kept?
   const isKept = kept === link.target;
   return (
     <article
-      className={`flex min-w-[260px] flex-1 flex-col self-start gap-2.5 rounded-[18px] border bg-fill-4 p-3.5 transition-[border-color,box-shadow] duration-150 rc-in ${
-        isKept ? "border-brand shadow-[0_0_0_1px_var(--rc-brand)]" : "border-hairline"
+      className={`flex min-w-[260px] flex-1 flex-col self-start gap-2.5 rounded-xl border bg-fill-subtle p-3.5 transition-[border-color,box-shadow] duration-150 rc-in ${
+        isKept ? "border-accent shadow-[0_0_0_1px_var(--rc-accent)]" : "border-border"
       }`}
     >
       <header className="flex items-center gap-2">
         <span className="font-semibold text-body">{harness}</span>
         <StatusChip status={status} />
         <span className="flex-1" />
-        <span className="flex items-center gap-1 text-caption text-fg-2">
+        <span className="flex items-center gap-1 text-caption text-fg-muted">
           {running && <Spinner size={10} />}
           {LINK_LABEL[state]}
         </span>
       </header>
       {wt && (
-        <span className="flex items-center gap-1 truncate font-mono text-caption text-fg-2">
+        <span className="flex items-center gap-1 truncate font-mono text-caption text-fg-muted">
           <GitBranch size={11} className="shrink-0" />
           {wt.branch}
         </span>
       )}
       <div className="flex items-center gap-2 text-callout">
-        <FileDiff size={13} className="text-fg-2" />
+        <FileDiff size={13} className="text-fg-muted" />
         {stat ? (
           <>
             <span>
@@ -86,14 +86,14 @@ function CompareCard({ link, fanOut, kept }: { link: Link; fanOut: string; kept?
             {link.filesChanged} file{link.filesChanged === 1 ? "" : "s"} changed
           </span>
         ) : (
-          <span className="text-fg-3">{running ? "Working…" : "No changes read yet"}</span>
+          <span className="text-fg-faint">{running ? "Working…" : "No changes read yet"}</span>
         )}
       </div>
-      <div className="max-h-[320px] min-h-[80px] flex-1 overflow-y-auto rounded-xl bg-fill-3 px-3 py-2">
+      <div className="max-h-[320px] min-h-[80px] flex-1 overflow-y-auto rounded-lg bg-fill-subtle px-3 py-2">
         {link.answer ? (
           <Markdown text={link.answer} className="text-callout" />
         ) : (
-          <span className="text-callout text-fg-3">
+          <span className="text-callout text-fg-faint">
             {running ? "The answer shows when the turn ends." : "No answer."}
           </span>
         )}
@@ -123,19 +123,19 @@ export function Compare({ fanOut }: { fanOut: string }) {
   const links = useApp((s) => s.links.links);
   if (!group) {
     return (
-      <main className="flex min-w-0 flex-1 flex-col bg-chat">
+      <main className="flex min-w-0 flex-1 flex-col bg-bg">
         <ViewHeader title="Compare" />
-        <p className="px-6 text-callout text-fg-2">This fan-out is no longer kept.</p>
+        <p className="px-6 text-callout text-fg-muted">This fan-out is no longer kept.</p>
       </main>
     );
   }
   const shown = group.links.flatMap((id) => links.find((l) => l.id === id) ?? []);
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-chat" aria-label="Compare">
+    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Compare">
       <ViewHeader title={`Compare · ${group.title}`}>
         <Pill onClick={() => selectThread(group.orchestrator)}>Back to the thread</Pill>
       </ViewHeader>
-      <p className="selectable mx-4 mb-3 line-clamp-2 text-callout text-fg-2">{group.prompt}</p>
+      <p className="selectable mx-4 mb-3 line-clamp-2 text-callout text-fg-muted">{group.prompt}</p>
       <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-4 pb-4">
         {shown.map((l) => (
           <CompareCard key={l.id} link={l} fanOut={group.id} kept={group.kept} />

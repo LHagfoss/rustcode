@@ -3,11 +3,14 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { defaultTransport, isTauri } from "./acp/transport";
 import "./index.css";
+import { applyCachedTheme } from "./lib/themes";
 import * as store from "./state/store";
 
-// The app's window on macOS is transparent over the sidebar material (index.css, `vibrant`).
+// The last theme, before the first render, so a custom theme does not flash the default.
+applyCachedTheme();
+
+// Surfaces are opaque (docs/design.md); the few frosted ones go solid under Reduce transparency.
 if (isTauri() && /Mac/i.test(navigator.userAgent)) {
-  document.documentElement.classList.add("vibrant");
   void import("./lib/shell")
     .then(({ shellCall }) => shellCall<boolean>("reduce_transparency"))
     .then((reduce) => document.documentElement.classList.toggle("reduce-transparency", reduce))

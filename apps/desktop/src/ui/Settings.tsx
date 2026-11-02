@@ -1,35 +1,38 @@
-// Settings, full window, after SettingsView.swift: a section list on the
-// left and grouped rows on the right. Engine-backed pages (Harnesses,
-// Connections, Skills, MCP) read and write through `_rustcode/*` requests.
+// Settings, inside the app's shell: the sidebar stays as it is and the main
+// column shows a section list beside the page, so opening Settings remounts
+// nothing and does not flash. After SettingsView.swift. Engine-backed pages
+// (Harnesses, Connections, Capabilities, Appearance's themes) read and
+// write through `_rustcode/*` requests.
 
 import {
   Blocks,
-  ChevronLeft,
+  Check,
+  FolderOpen,
   Settings as Gear,
   Info,
   KeyRound,
   Layers,
-  Monitor,
-  Moon,
   Palette,
-  Sparkles,
-  Sun,
+  Plus,
   TerminalSquare,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
+import { useState } from "react";
+import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
 import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
-import { pickFolder } from "../lib/native";
+import { pickFolder, revealPath } from "../lib/native";
+import { hasShell } from "../lib/shell";
+import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { validateDefault } from "../state/harness";
 import {
   APP_VERSION,
+  createTheme,
   type NewThreadChoice,
   openSettings,
-  request,
   restartEngine,
   type SettingsSection,
+  setActiveTheme,
   setDefaultHarness,
   setOnboarding,
   setOrchestration,
@@ -39,78 +42,21 @@ import {
   toast,
   useApp,
 } from "../state/store";
+import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
+import { MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { ChromeButton, cx, Kbd, Pill, Spinner, Switch } from "./primitives";
-import { TitlebarRow } from "./Titlebar";
+import { cx, Kbd, Pill, Segments, Switch } from "./primitives";
+import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
   { id: "general", label: "General", icon: Gear },
   { id: "harnesses", label: "Harnesses", icon: Layers },
   { id: "connections", label: "Connections", icon: KeyRound },
-  { id: "skills", label: "Skills", icon: Sparkles },
-  { id: "mcp", label: "MCP Servers", icon: Blocks },
+  { id: "capabilities", label: "Capabilities", icon: Blocks },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "engine", label: "Engine", icon: TerminalSquare },
 ];
-
-function Group({ title, children, footer }: { title?: string; children: ReactNode; footer?: ReactNode }) {
-  return (
-    <section className="mb-[18px]">
-      {title && <h3 className="mb-1.5 px-1 font-semibold text-callout text-fg-2">{title}</h3>}
-      <div className="divide-y divide-hairline overflow-hidden rounded-xl bg-fg/[0.045]">{children}</div>
-      {footer && <p className="mt-1.5 px-1 text-caption text-fg-2">{footer}</p>}
-    </section>
-  );
-}
-
-function Row({
-  title,
-  subtitle,
-  children,
-}: {
-  title: ReactNode;
-  subtitle?: ReactNode;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-11 items-center gap-4 px-3.5 py-[11px]">
-      <div className="min-w-0 flex-1">
-        <div className="text-body">{title}</div>
-        {subtitle && <div className="line-clamp-3 text-caption text-fg-2">{subtitle}</div>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function useEngineData<T>(method: string, parse: (v: Json) => T) {
-  const status = useApp((s) => s.status);
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    try {
-      setData(parse(await request(method)));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [method, parse]);
-  useEffect(() => {
-    if (status === "ready") void load();
-  }, [status, load]);
-  return { data, error, setData, reload: load };
-}
-
-function Loading({ error }: { error: string | null }) {
-  return error ? (
-    <p className="text-attention text-callout">{error}</p>
-  ) : (
-    <div className="flex items-center gap-2 text-callout text-fg-2">
-      <Spinner /> Loading…
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------- pages
 
@@ -213,7 +159,7 @@ function Harnesses() {
   return (
     <>
       {snapshot.unsupported && (
-        <p className="mb-4 rounded-xl bg-attention/10 px-3.5 py-2.5 text-callout">
+        <p className="mb-4 rounded-lg bg-warning/10 px-3.5 py-2.5 text-callout">
           This engine does not run other harnesses yet (no{" "}
           <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's built-in harness.
           Update RustCode to add Codex, Claude Code, Gemini and others.
@@ -227,7 +173,7 @@ function Harnesses() {
       </Group>
       {!snapshot.unsupported && (
         <section className="mb-[18px]">
-          <h3 className="mb-1.5 px-1 font-semibold text-callout text-fg-2">Default for new threads</h3>
+          <h3 className="mb-1.5 px-1 font-semibold text-callout text-fg-muted">Default for new threads</h3>
           <DefaultsForm snapshot={snapshot} value={value} onChange={setChoice} />
           <div className="mt-2.5 flex gap-2">
             <Pill
@@ -331,235 +277,225 @@ function ConnectionsPage() {
   );
 }
 
-interface Capabilities {
-  skills: { name: string; description: string; source: string; enabled: boolean }[];
-  mcpServers: {
-    name: string;
-    transport: string;
-    target: string;
-    enabled: boolean;
-    connection: string;
-    tools: number;
-    error?: string;
-  }[];
-  configPath?: string;
-}
+// ---------------------------------------------------------------- appearance
 
-const parseCapabilities = (v: Json): Capabilities => {
-  const root = obj(v) ?? {};
-  return {
-    configPath: str(root.configPath),
-    skills: arr(root.skills).map((s) => {
-      const o = obj(s) ?? {};
-      return {
-        name: str(o.name) ?? "",
-        description: str(o.description) ?? "",
-        source: str(o.source) ?? "",
-        enabled: bool(o.enabled) ?? false,
-      };
-    }),
-    mcpServers: arr(root.mcpServers).map((s) => {
-      const o = obj(s) ?? {};
-      return {
-        name: str(o.name) ?? "",
-        transport: str(o.transport) ?? "",
-        target: str(o.target) ?? "",
-        enabled: bool(o.enabled) ?? false,
-        connection: str(o.connection) ?? "",
-        tools: num(o.tools) ?? 0,
-        error: str(o.error),
-      };
-    }),
-  };
-};
-
-function useCapabilities() {
-  const state = useEngineData(Method.capabilities, parseCapabilities);
-  const set = async (kind: "skill" | "mcp", name: string, enabled: boolean) => {
-    try {
-      state.setData(
-        parseCapabilities(await request(Method.capabilitiesSet, { kind, name, enabled }, 30_000)),
-      );
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "warning");
-    }
-  };
-  return { ...state, set };
-}
-
-function SkillsPage() {
-  const { data, error, set } = useCapabilities();
-  const [filter, setFilter] = useState("");
-  if (!data) return <Loading error={error} />;
-  const on = data.skills.filter((s) => s.enabled).length;
-  const shown = data.skills.filter((s) =>
-    `${s.name} ${s.description}`.toLowerCase().includes(filter.toLowerCase()),
-  );
+/** A small picture of the app in a theme's own colours: sidebar, rows, a reply and the composer. */
+function ThemePreview({ theme }: { theme: Theme }) {
+  const t = theme.tokens;
+  const r = theme.radius === "sharp" ? 2 : theme.radius === "round" ? 7 : 4;
   return (
-    <>
-      <input
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-        placeholder="Filter skills"
-        aria-label="Filter skills"
-        className="mb-3 h-[30px] w-full rounded-full bg-fill-3 px-3.5 text-callout outline-none placeholder:text-fg-3"
-      />
-      <Group title={`${on} of ${data.skills.length} on`}>
-        {shown.map((s) => (
-          <Row key={`${s.source}/${s.name}`} title={s.name} subtitle={`${s.source} · ${s.description}`}>
-            <Switch
-              label={`Use ${s.name}`}
-              checked={s.enabled}
-              onChange={(v) => void set("skill", s.name, v)}
-            />
-          </Row>
-        ))}
-      </Group>
-    </>
-  );
-}
-
-function McpPage() {
-  const { data, error, set, setData } = useCapabilities();
-  const [name, setName] = useState("");
-  const [target, setTarget] = useState("");
-  const [adding, setAdding] = useState(false);
-  if (!data) return <Loading error={error} />;
-  const connected = data.mcpServers.filter((s) => s.connection === "connected").length;
-  const add = async () => {
-    setAdding(true);
-    try {
-      const isHttp = /^https?:\/\//.test(target.trim());
-      const params: JsonObject = {
-        name: name.trim(),
-        target: isHttp ? [target.trim()] : target.trim().split(/\s+/),
-        transport: isHttp ? "http" : "stdio",
-      };
-      setData(parseCapabilities(await request(Method.mcpAdd, params, 30_000)));
-      setName("");
-      setTarget("");
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "warning");
-    } finally {
-      setAdding(false);
-    }
-  };
-  const remove = async (server: string) => {
-    try {
-      setData(parseCapabilities(await request(Method.mcpRemove, { name: server }, 15_000)));
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "warning");
-    }
-  };
-  return (
-    <>
-      <Group
-        title={`${connected} of ${data.mcpServers.length} connected`}
-        footer={data.configPath ? `Saved in ${data.configPath}` : undefined}
-      >
-        {data.mcpServers.map((s) => (
-          <Row
-            key={s.name}
-            title={
-              <span className="flex items-center gap-2">
-                <span
-                  className={cx(
-                    "size-[7px] rounded-full",
-                    s.connection === "connected"
-                      ? "bg-success"
-                      : s.connection === "failed"
-                        ? "bg-danger"
-                        : "bg-fg-4",
-                  )}
-                />
-                {s.name}
-              </span>
-            }
-            subtitle={s.error ?? `${s.transport} · ${s.target}${s.tools ? ` · ${s.tools} tools` : ""}`}
-          >
-            <button
-              type="button"
-              onClick={() => void remove(s.name)}
-              className="text-caption text-fg-2 hover:text-danger"
-            >
-              Remove
-            </button>
-            <Switch
-              label={`Use ${s.name}`}
-              checked={s.enabled}
-              onChange={(v) => void set("mcp", s.name, v)}
-            />
-          </Row>
-        ))}
-      </Group>
-      <Group title="Add a server">
-        <div className="flex flex-col gap-2 p-3.5">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Name"
-            aria-label="Server name"
-            className="h-[30px] rounded-lg bg-field px-3 text-callout outline-none ring-1 ring-hairline"
-          />
-          <input
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            placeholder="Command (npx some-server) or https:// URL"
-            aria-label="Server command or URL"
-            className="h-[30px] rounded-lg bg-field px-3 font-mono text-callout outline-none ring-1 ring-hairline"
-          />
-          <Pill
-            prominent
-            className="self-end"
-            disabled={!name.trim() || !target.trim() || adding}
-            onClick={() => void add()}
-          >
-            Add Server
-          </Pill>
+    <div className="flex h-[74px] w-full overflow-hidden" style={{ background: t.bg }} aria-hidden>
+      <div className="flex w-[34%] flex-col gap-1 p-1.5" style={{ background: t.sidebar }}>
+        <div className="h-2.5" style={{ background: t.surface_2, borderRadius: r }} />
+        <div className="h-1.5 w-4/5" style={{ background: t.text_muted, opacity: 0.5, borderRadius: 2 }} />
+        <div className="h-1.5 w-3/5" style={{ background: t.text_faint, opacity: 0.5, borderRadius: 2 }} />
+      </div>
+      <div className="flex flex-1 flex-col justify-between p-1.5">
+        <div className="flex flex-col gap-1">
+          <div className="ml-auto h-2.5 w-1/2" style={{ background: t.surface_2, borderRadius: r }} />
+          <div className="h-1.5 w-4/5" style={{ background: t.text, opacity: 0.7, borderRadius: 2 }} />
+          <div className="h-1.5 w-2/3" style={{ background: t.text_muted, opacity: 0.6, borderRadius: 2 }} />
         </div>
-      </Group>
-    </>
+        <div
+          className="flex h-4 items-center justify-end px-1"
+          style={{ background: t.surface, borderRadius: r + 2, boxShadow: `0 0 0 1px ${t.border}` }}
+        >
+          <div className="size-2 rounded-full" style={{ background: t.accent }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThemeCard({ theme, active, onPick }: { theme: Theme; active: boolean; onPick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onPick}
+      className="group flex flex-col gap-1.5 text-left"
+    >
+      <span
+        className={cx(
+          "relative block overflow-hidden rounded-md shadow-1 transition-shadow duration-150",
+          active ? "outline-2 outline-offset-2 outline-fg" : "group-hover:shadow-2",
+        )}
+      >
+        <ThemePreview theme={theme} />
+        {active && (
+          <span className="absolute top-1 right-1 flex size-4 items-center justify-center rounded-full bg-fg text-bg">
+            <Check size={10} strokeWidth={3} />
+          </span>
+        )}
+      </span>
+      <span className="flex items-baseline gap-1.5 px-0.5">
+        <span className={cx("truncate text-callout", active ? "font-medium text-fg" : "text-fg-muted")}>
+          {theme.name}
+        </span>
+        <span className="shrink-0 text-caption text-fg-faint">
+          {theme.source === "builtin" ? theme.mode : theme.source}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
+  const [name, setName] = useState("");
+  const [cli, setCli] = useState<string | null>(null);
+  const valid = /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
+  const create = async () => {
+    try {
+      const path = await createTheme(name, base);
+      if (path === null) {
+        setCli(`rustcode theme new ${name} --from ${base}`);
+        return;
+      }
+      toast(path ? `Created ${path}` : "Theme created", "success");
+      onDone();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "warning");
+    }
+  };
+  return (
+    <div className="rc-expand flex flex-col gap-2 border-border border-t p-3.5">
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value.toLowerCase());
+            setCli(null);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && valid && void create()}
+          placeholder="theme-name"
+          aria-label="Theme name"
+          className={cx(inputClass, "flex-1 font-mono")}
+        />
+        <Pill onClick={onDone}>Cancel</Pill>
+        <Pill prominent disabled={!valid} onClick={() => void create()}>
+          Create
+        </Pill>
+      </div>
+      {cli ? (
+        <p className="m-0 text-caption text-fg-muted">
+          This engine cannot create themes from the app. In a terminal:{" "}
+          <code className="selectable rounded-xs bg-fill px-1 py-px font-mono text-fg">{cli}</code>
+        </p>
+      ) : (
+        <p className="m-0 text-caption text-fg-faint">A copy of {base} in your themes folder, to edit.</p>
+      )}
+    </div>
   );
 }
 
 function Appearance() {
-  const theme = useApp((s) => s.theme);
-  const tiles: { id: typeof theme; label: string; icon: typeof Sun }[] = [
-    { id: "system", label: "System", icon: Monitor },
-    { id: "light", label: "Light", icon: Sun },
-    { id: "dark", label: "Dark", icon: Moon },
-  ];
+  const mode = useApp((s) => s.theme);
+  const active = useApp((s) => s.themeActive);
+  const snapshot = useApp((s) => s.themes);
+  const supported = useApp((s) => s.features.themes);
+  const [creating, setCreating] = useState(false);
+  const themes = snapshot?.themes.length ? snapshot.themes : BUILTIN_THEMES;
+  const userDir =
+    themes.find((t) => t.source === "user" && t.path)?.path?.replace(/\/[^/]+$/, "") ??
+    "~/.config/rustcode/themes";
   return (
-    <Group title="Appearance">
-      <div className="flex gap-3 p-3.5" role="radiogroup" aria-label="Appearance">
-        {tiles.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="radio"
-            aria-checked={theme === t.id}
-            onClick={() => setTheme(t.id)}
-            className="flex flex-col items-center gap-1.5"
-          >
-            <span
-              className={cx(
-                "flex h-[62px] w-24 items-center justify-center rounded-lg ring-2",
-                t.id === "dark"
-                  ? "bg-[#1e1e20] text-white/80"
-                  : t.id === "light"
-                    ? "bg-white text-black/70"
-                    : "bg-gradient-to-r from-white from-50% to-[#1e1e20] to-50% text-fg-2",
-                theme === t.id ? "ring-brand" : "ring-hairline",
-              )}
+    <>
+      <Group title="Mode">
+        <Row title="Light or dark" subtitle="System follows macOS. Picking a theme sets its mode.">
+          <Segments
+            label="Appearance"
+            value={mode}
+            onChange={setTheme}
+            options={[
+              { value: "system", label: "System" },
+              { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
+            ]}
+          />
+        </Row>
+      </Group>
+      <Group
+        title="Theme"
+        action={
+          <div className="flex items-center gap-1">
+            {hasShell() && (
+              <button
+                type="button"
+                onClick={() => revealPath(userDir)}
+                className="flex h-6 items-center gap-1 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+              >
+                <FolderOpen size={12} /> Open themes folder
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setCreating(!creating)}
+              aria-expanded={creating}
+              className="flex h-6 items-center gap-1 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
             >
-              <t.icon size={18} />
-            </span>
-            <span className={cx("text-callout", theme === t.id ? "text-fg" : "text-fg-2")}>{t.label}</span>
-          </button>
-        ))}
-      </div>
-      <BannerSetting />
-    </Group>
+              <Plus size={12} /> New theme…
+            </button>
+          </div>
+        }
+        footer={
+          supported === false
+            ? "This engine has no themes yet, so only the built-in ones show. Update RustCode for theme files."
+            : `Theme files live in ${userDir} and a project's .rustcode/themes; edits apply live. See docs/themes.md.`
+        }
+      >
+        <div
+          role="radiogroup"
+          aria-label="Theme"
+          className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4 p-3.5"
+        >
+          {themes.map((t) => (
+            <ThemeCard
+              key={`${t.source}/${t.name}`}
+              theme={t}
+              active={t.name === active && (mode === "system" ? true : t.mode === mode)}
+              onPick={() => void setActiveTheme(t.name)}
+            />
+          ))}
+        </div>
+        {creating && <NewTheme base={active} onDone={() => setCreating(false)} />}
+      </Group>
+      <Group title="New threads">
+        <BannerSetting />
+      </Group>
+      <TokenList />
+    </>
+  );
+}
+
+/** The live tokens, for theme authors: what each variable resolves to now. */
+function TokenList() {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="mb-6">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="-mx-1 mb-2 rounded-md px-2 py-0.5 font-semibold text-callout text-fg-muted hover:bg-fill-subtle"
+      >
+        {open ? "Hide" : "Show"} tokens
+      </button>
+      {open && (
+        <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2">
+          {TOKENS.map((t) => (
+            <div key={t} className="flex items-center gap-2 rounded-md bg-surface px-2 py-1.5">
+              <span
+                className="size-4 shrink-0 rounded-xs shadow-1"
+                style={{ background: `var(${cssName(t)})` }}
+              />
+              <span className="truncate font-mono text-caption text-fg-muted">{t}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -583,27 +519,15 @@ function BannerSetting() {
         <div className="flex shrink-0 items-center gap-2">
           {banner.name && (
             <>
-              <div
-                role="radiogroup"
-                aria-label="Banner style"
-                className="flex h-7 rounded-full bg-fill-3 p-0.5"
-              >
-                {(["ascii", "picture"] as const).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    role="radio"
-                    aria-checked={banner.style === v}
-                    onClick={() => setBannerStyle(v)}
-                    className={cx(
-                      "rounded-full px-3 font-medium text-callout",
-                      banner.style === v ? "bg-fill-1 text-fg" : "text-fg-2 hover:text-fg",
-                    )}
-                  >
-                    {v === "ascii" ? "Text" : "Picture"}
-                  </button>
-                ))}
-              </div>
+              <Segments
+                label="Banner style"
+                value={banner.style}
+                onChange={setBannerStyle}
+                options={[
+                  { value: "ascii", label: "Text" },
+                  { value: "picture", label: "Picture" },
+                ]}
+              />
               <Pill onClick={() => void removeBanner()}>Remove</Pill>
             </>
           )}
@@ -613,7 +537,7 @@ function BannerSetting() {
       {banner.name && (
         // As a new thread shows it, at a size that reads.
         <div className="px-3.5 pb-3.5">
-          <div className="overflow-hidden rounded-xl bg-chat">
+          <div className="overflow-hidden rounded-md bg-bg">
             <NewThreadBanner key={banner.style} name={banner.name} style={banner.style} height={240} />
           </div>
         </div>
@@ -644,11 +568,11 @@ function Engine() {
           <Pill onClick={() => void restartEngine()}>Restart</Pill>
         </Row>
         <Row title="App version" subtitle={`RustCode desktop ${APP_VERSION}`}>
-          <Info size={14} className="text-fg-3" />
+          <Info size={14} className="text-fg-faint" />
         </Row>
       </Group>
       <Group title="Engine log" footer="The engine's stderr; turns log to each thread's logs/debug.log.">
-        <pre className="selectable m-0 max-h-[320px] overflow-auto p-3 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-2">
+        <pre className="selectable m-0 max-h-[320px] overflow-auto p-3 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
           {log.length ? log.slice(-200).join("\n") : "Nothing yet."}
         </pre>
       </Group>
@@ -656,19 +580,15 @@ function Engine() {
   );
 }
 
+/** Settings in the main column: the section list beside the page, under the shared header. */
 export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
   return (
-    <div className="fixed inset-0 z-30 flex" role="dialog" aria-label="Settings">
-      <nav className="flex w-[240px] shrink-0 flex-col bg-sidebar" aria-label="Settings sections">
-        <TitlebarRow className="pr-2.5">
-          <ChromeButton label="Back to chat" tooltip="Back (Esc)" onClick={() => openSettings(null)}>
-            <ChevronLeft size={16} />
-          </ChromeButton>
-        </TitlebarRow>
-        <div className="px-5 pt-4 pb-1 font-semibold text-caption text-fg-2">Settings</div>
-        <div className="flex flex-col gap-0.5 px-2.5">
+    <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg" aria-label="Settings">
+      <MainHeader title={<h1 className="min-w-0 truncate font-semibold text-body">Settings</h1>} />
+      <div className="flex min-h-0 flex-1">
+        <nav className="flex w-[196px] shrink-0 flex-col gap-0.5 px-2.5 pt-3" aria-label="Settings sections">
           {SECTIONS.map((s) => (
             <button
               key={s.id}
@@ -676,30 +596,29 @@ export function Settings() {
               aria-current={s.id === section ? "page" : undefined}
               onClick={() => openSettings(s.id)}
               className={cx(
-                "flex items-center gap-2 rounded-[9px] px-2 py-1.5 text-left text-body",
-                s.id === section ? "bg-fg/10" : "hover:bg-fg/[0.035]",
+                "flex h-8 items-center gap-2 rounded-md px-2 text-left text-body",
+                s.id === section
+                  ? "bg-fill font-medium text-fg"
+                  : "text-fg-muted hover:bg-fill-subtle hover:text-fg",
               )}
             >
-              <span className="flex w-[22px] justify-center">
-                <s.icon size={14} className={s.id === section ? "text-brand" : "text-fg-2"} />
-              </span>
+              <s.icon size={14} className="shrink-0" />
               {s.label}
             </button>
           ))}
-        </div>
-      </nav>
-      <div className="min-w-0 flex-1 overflow-y-auto bg-chat">
-        <div className="mx-auto max-w-[720px] px-[clamp(24px,5%,64px)] pb-16">
-          <h2 className="pt-10 pb-3 font-semibold text-title2">{current.label}</h2>
-          {section === "general" && <General />}
-          {section === "harnesses" && <Harnesses />}
-          {section === "connections" && <ConnectionsPage />}
-          {section === "skills" && <SkillsPage />}
-          {section === "mcp" && <McpPage />}
-          {section === "appearance" && <Appearance />}
-          {section === "engine" && <Engine />}
+        </nav>
+        <div className="scroll-stable min-w-0 flex-1">
+          <div className="mx-auto max-w-[720px] px-[clamp(20px,5%,56px)] pb-16">
+            <h2 className="pt-4 pb-4 font-semibold text-title2">{current.label}</h2>
+            {section === "general" && <General />}
+            {section === "harnesses" && <Harnesses />}
+            {section === "connections" && <ConnectionsPage />}
+            {section === "capabilities" && <CapabilitiesPage />}
+            {section === "appearance" && <Appearance />}
+            {section === "engine" && <Engine />}
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

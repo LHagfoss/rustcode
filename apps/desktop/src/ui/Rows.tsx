@@ -15,7 +15,6 @@ import {
   Globe,
   Image as ImageIcon,
   MoveRight,
-  OctagonAlert,
   Pencil,
   RotateCcw,
   Search,
@@ -41,7 +40,7 @@ import {
 } from "../state/thread";
 import { LinkChip } from "./LinkChip";
 import { CopyButton, Markdown } from "./Markdown";
-import { cx, Spinner, Tooltip } from "./primitives";
+import { Callout, cx, Spinner, Tooltip } from "./primitives";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 
@@ -81,14 +80,18 @@ export const UserRow = memo(function UserRow({
                 src={a.preview}
                 alt={a.name}
                 title={a.name}
-                className="max-h-[160px] max-w-[240px] rounded-[12px] border border-hairline object-cover"
+                className="max-h-[160px] max-w-[240px] rounded-lg border border-border object-cover"
               />
             ) : (
               <span
                 key={i}
-                className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-3 px-2.5 text-callout"
+                className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout"
               >
-                {a.kind === "image" ? <ImageIcon size={12} /> : <FileText size={12} className="text-fg-2" />}
+                {a.kind === "image" ? (
+                  <ImageIcon size={12} />
+                ) : (
+                  <FileText size={12} className="text-fg-muted" />
+                )}
                 <span className="max-w-[200px] truncate">{a.name}</span>
               </span>
             ),
@@ -96,14 +99,14 @@ export const UserRow = memo(function UserRow({
           {Array.from({ length: placeholders }, (_, i) => (
             <span
               key={`m${i}`}
-              className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-3 px-2.5 text-callout text-fg-2"
+              className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout text-fg-muted"
             >
               <ImageIcon size={12} /> Image
             </span>
           ))}
         </div>
       )}
-      <div className={cx("relative max-w-full rounded-[18px] bg-fill-2 px-3.5 py-[9px]", !text && "hidden")}>
+      <div className={cx("relative max-w-full rounded-xl bg-fill px-3.5 py-[9px]", !text && "hidden")}>
         <div
           className={cx(
             "selectable text-body leading-[20px] whitespace-pre-wrap break-words",
@@ -118,16 +121,16 @@ export const UserRow = memo(function UserRow({
           <button
             type="button"
             onClick={() => setOpen(!open)}
-            className="mt-1 ml-auto flex items-center gap-1 rounded-[7px] px-2 font-medium text-caption text-fg-2 hover:bg-fill-2"
+            className="mt-1 ml-auto flex items-center gap-1 rounded-md px-2 font-medium text-caption text-fg-muted hover:bg-fill"
           >
             {open ? "Show less" : "Show more"}
             {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
         )}
       </div>
-      <div className="mt-1 flex h-[22px] items-center gap-1 text-caption text-fg-3">
-        {item.steered && <span className="text-brand">Steered</span>}
-        {item.fromView && <span className="text-brand">From view</span>}
+      <div className="mt-1 flex h-[22px] items-center gap-1 text-caption text-fg-faint">
+        {item.steered && <span className="text-accent">Steered</span>}
+        {item.fromView && <span className="text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
           <span className="tabular">{timeLabel(item.at)}</span>
         </Tooltip>
@@ -143,7 +146,7 @@ export const UserRow = memo(function UserRow({
                 type="button"
                 aria-label="Edit message"
                 onClick={() => editMessage(threadId, item.id)}
-                className="inline-flex size-[22px] items-center justify-center rounded-[7px] text-fg-2 opacity-0 transition-opacity hover:bg-fill-2 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
               >
                 <Pencil size={12} />
               </button>
@@ -153,7 +156,7 @@ export const UserRow = memo(function UserRow({
                 type="button"
                 aria-label="Retry message"
                 onClick={() => retryMessage(threadId, item.id)}
-                className="inline-flex size-[22px] items-center justify-center rounded-[7px] text-fg-2 opacity-0 transition-opacity hover:bg-fill-2 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
               >
                 <RotateCcw size={12} />
               </button>
@@ -217,7 +220,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="-mx-1 flex max-w-full items-center gap-1.5 rounded-md px-1 text-fg-3 hover:text-fg-2"
+        className="-mx-1 flex max-w-full items-center gap-1.5 rounded-sm px-1 text-fg-faint hover:text-fg-muted"
       >
         {live && <Spinner size={10} />}
         <span className="shrink-0">{label}</span>
@@ -230,7 +233,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
         />
       </button>
       {(open || (live && tail)) && (
-        <div className={cx("pt-2 text-fg-2", live && !open && "line-clamp-5")}>
+        <div className={cx("pt-2 text-fg-muted", live && !open && "line-clamp-5")}>
           <Markdown text={open ? item.text : tail} streaming={live} className="gap-1.5 text-callout" />
         </div>
       )}
@@ -301,15 +304,15 @@ function TextBox({ text, label }: { text: string; label: string }) {
   const shown = all || lines.length <= 14 ? lines : lines.slice(0, 14);
   return (
     <div>
-      <div className="mb-1 font-semibold text-caption text-fg-2">{label}</div>
-      <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-lg bg-fill-3 p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
+      <div className="mb-1 font-semibold text-caption text-fg-muted">{label}</div>
+      <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
         {shown.join("\n")}
       </pre>
       {lines.length > 14 && (
         <button
           type="button"
           onClick={() => setAll(!all)}
-          className="mt-1 text-caption text-brand hover:underline"
+          className="mt-1 text-caption text-accent hover:underline"
         >
           {all ? "Show less" : `Show all ${lines.length} lines`}
         </button>
@@ -331,15 +334,15 @@ export function DiffView({ diff, header = true }: { diff: FileDiff; header?: boo
       {header && (
         <div className="mb-1 flex items-center gap-1.5 text-caption">
           {diff.oldText === undefined ? (
-            <FilePlus size={12} className="text-fg-2" />
+            <FilePlus size={12} className="text-fg-muted" />
           ) : (
-            <FileText size={12} className="text-fg-2" />
+            <FileText size={12} className="text-fg-muted" />
           )}
           <span className="truncate font-mono">{diff.path}</span>
           <DiffCount {...counts} />
         </div>
       )}
-      <div className="selectable overflow-x-auto rounded-lg bg-fill-3 py-1 font-mono text-caption leading-[16px]">
+      <div className="selectable overflow-x-auto rounded-md bg-fill-subtle py-1 font-mono text-caption leading-[16px]">
         <div className="min-w-fit">
           {shown.map((line, i) => (
             <div
@@ -351,7 +354,7 @@ export function DiffView({ diff, header = true }: { diff: FileDiff; header?: boo
               )}
             >
               <span
-                className="shrink-0 pr-1.5 pl-2 text-right text-fg-2/60 tabular"
+                className="shrink-0 pr-1.5 pl-2 text-right text-fg-muted/60 tabular"
                 style={{ width: `${width + 2}ch` }}
               >
                 {(line.kind === "removed" ? line.oldNumber : line.newNumber) ?? ""}
@@ -374,7 +377,7 @@ export function DiffView({ diff, header = true }: { diff: FileDiff; header?: boo
         <button
           type="button"
           onClick={() => setAll(!all)}
-          className="mt-1 text-caption text-brand hover:underline"
+          className="mt-1 text-caption text-accent hover:underline"
         >
           {all ? "Show less" : `Show all ${lines.length} lines`}
         </button>
@@ -409,7 +412,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="group -mx-1 flex min-h-6 w-[calc(100%+8px)] items-center gap-2 rounded-md px-1 text-left hover:bg-fill-3"
+        className="group -mx-1 flex min-h-6 w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
           {running ? (
@@ -417,16 +420,16 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           ) : failed ? (
             <CircleX size={13} className="text-danger" />
           ) : (
-            <Icon size={13} className="text-fg-2" />
+            <Icon size={13} className="text-fg-muted" />
           )}
         </span>
         <span className="shrink-0 font-medium text-callout">{item.title}</span>
         {item.summary && (
-          <span className="min-w-0 shrink truncate text-callout text-fg-2">{item.summary}</span>
+          <span className="min-w-0 shrink truncate text-callout text-fg-muted">{item.summary}</span>
         )}
         {shownDetail && (
           <span
-            className={cx("min-w-0 flex-1 truncate text-caption text-fg-3", detail.mono && "font-mono")}
+            className={cx("min-w-0 flex-1 truncate text-caption text-fg-faint", detail.mono && "font-mono")}
             dir="auto"
           >
             {shownDetail}
@@ -439,11 +442,11 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         )}
         <ChevronRight
           size={11}
-          className={cx("shrink-0 text-fg-3 transition-transform duration-200", open && "rotate-90")}
+          className={cx("shrink-0 text-fg-faint transition-transform duration-200", open && "rotate-90")}
         />
       </button>
       {tailLines.length > 0 && !open && (
-        <pre className="m-0 mt-0.5 ml-[26px] overflow-hidden font-mono text-caption text-fg-2 leading-[15px] whitespace-pre-wrap">
+        <pre className="m-0 mt-0.5 ml-[26px] overflow-hidden font-mono text-caption text-fg-muted leading-[15px] whitespace-pre-wrap">
           {tailLines.join("\n")}
         </pre>
       )}
@@ -455,7 +458,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
             <>
               {input && <TextBox label="Input" text={input} />}
               {item.output && <TextBox label="Output" text={item.output} />}
-              {!input && !item.output && <span className="text-caption text-fg-3">No output</span>}
+              {!input && !item.output && <span className="text-caption text-fg-faint">No output</span>}
             </>
           )}
         </div>
@@ -466,11 +469,9 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
 
 export function NoticeRow({ item, action }: { item: Item<"notice">; action?: ReactNode }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-xl border border-warning/30 bg-warning/8 px-3.5 py-2.5">
-      <OctagonAlert size={14} className="shrink-0 text-warning" />
-      <span className="selectable flex-1 text-callout text-fg-2">{item.text}</span>
-      {action}
-    </div>
+    <Callout tone="warning" action={action}>
+      {item.text}
+    </Callout>
   );
 }
 
@@ -480,14 +481,14 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
   const failed = completion.checks.filter((c) => c.outcome === "failed");
   const passed = completion.checks.length > 0 && completion.checks.every((c) => c.outcome === "passed");
   return (
-    <div className="mb-2 rounded-[10px] bg-fill-4 font-rounded text-callout">
+    <div className="mb-2 rounded-md bg-fill-subtle font-rounded text-callout">
       <div className="flex min-h-8 items-center gap-2 px-2.5">
         {completion.files.length ? (
           <button
             type="button"
             aria-expanded={open}
             onClick={() => setOpen(!open)}
-            className="-mx-1 flex items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-fill-3"
+            className="-mx-1 flex items-center gap-1.5 rounded-sm px-1 py-0.5 hover:bg-fill-subtle"
           >
             <span className="font-medium">
               {completion.files.length} file{completion.files.length === 1 ? "" : "s"} changed
@@ -495,11 +496,11 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
             <DiffCount added={completion.added} removed={completion.removed} />
             <ChevronRight
               size={11}
-              className={cx("text-fg-3 transition-transform duration-200", open && "rotate-90")}
+              className={cx("text-fg-faint transition-transform duration-200", open && "rotate-90")}
             />
           </button>
         ) : (
-          <span className="text-fg-2">No files changed</span>
+          <span className="text-fg-muted">No files changed</span>
         )}
         <span className="flex-1" />
         {failed.length > 0 ? (
@@ -521,7 +522,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
         <div className="px-2.5 pb-2">
           {completion.files.map((f) => (
             <div key={f.path} className="flex h-[22px] items-center gap-2 text-caption">
-              <FileText size={11} className="shrink-0 text-fg-2" />
+              <FileText size={11} className="shrink-0 text-fg-muted" />
               <span className="min-w-0 flex-1 truncate text-left font-mono" dir="rtl">
                 <bdi>{f.path}</bdi>
               </span>
@@ -559,7 +560,7 @@ export function TurnEndRow({
   return (
     <div className="-mt-2">
       {completion && <CompletionCard completion={completion} />}
-      <div className="flex h-[22px] items-center gap-1.5 text-caption text-fg-3">
+      <div className="flex h-[22px] items-center gap-1.5 text-caption text-fg-faint">
         {reply && <CopyButton text={reply} iconOnly label="Copy reply" />}
         {item.outcome === "cancelled" && <SquareStop size={11} />}
         <span className="tabular">{parts.join(" · ")}</span>
@@ -576,7 +577,7 @@ export function WorkingRow({ label, startedAt, now }: { label: string; startedAt
   return (
     <div className="flex items-center gap-1.5 text-callout" role="status" aria-live="polite">
       <span className="rc-shimmer truncate">{label}</span>
-      <span className="text-fg-3 tabular">· {clock}</span>
+      <span className="text-fg-faint tabular">· {clock}</span>
     </div>
   );
 }

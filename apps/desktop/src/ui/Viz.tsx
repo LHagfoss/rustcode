@@ -205,12 +205,12 @@ export function parseViz(source: string): ParsedViz | { problem: string } {
   }
 }
 
-const SERIES = ["var(--rc-brand)", "var(--rc-orange)", "var(--rc-green)", "var(--rc-blue)"];
+const SERIES = ["var(--rc-accent)", "var(--rc-warning)", "var(--rc-success)", "var(--rc-accent)"];
 const fmt = (v: number, unit?: string) =>
   `${Number.isInteger(v) ? v : v.toFixed(Math.abs(v) < 10 ? 2 : 1)}${unit ? ` ${unit}` : ""}`;
 const More = ({ n, what }: { n: number; what: string }) =>
   n > 0 ? (
-    <div className="mt-1 text-caption text-fg-3">
+    <div className="mt-1 text-caption text-fg-faint">
       … {n} more {what} not shown
     </div>
   ) : null;
@@ -221,13 +221,13 @@ function Bars({ viz }: { viz: Extract<Viz, { type: "bar_chart" }> }) {
     <div className="grid grid-cols-[minmax(60px,max-content)_1fr_auto] items-center gap-x-2.5 gap-y-1">
       {viz.items.map((it, i) => (
         <div key={i} className="contents" title={`${it.label}: ${fmt(it.value, viz.unit)}`}>
-          <span className="truncate text-callout text-fg-2">{it.label}</span>
-          <span className="h-[10px] overflow-hidden rounded-full bg-fill-3">
+          <span className="truncate text-callout text-fg-muted">{it.label}</span>
+          <span className="h-[10px] overflow-hidden rounded-full bg-fill-subtle">
             <span
               className="block h-full rounded-full transition-[width] duration-300 ease-out"
               style={{
                 width: `${(Math.abs(it.value) / max) * 100}%`,
-                background: it.value < 0 ? "var(--rc-red)" : "var(--rc-brand)",
+                background: it.value < 0 ? "var(--rc-danger)" : "var(--rc-accent)",
               }}
             />
           </span>
@@ -263,7 +263,7 @@ function Table({ viz }: { viz: Extract<Viz, { type: "table" }> }) {
             {viz.columns.map((c, i) => (
               <th
                 key={i}
-                className={cx("border-hairline border-b px-2 py-1 font-semibold", numeric[i] && "text-right")}
+                className={cx("border-border border-b px-2 py-1 font-semibold", numeric[i] && "text-right")}
               >
                 <button
                   type="button"
@@ -274,7 +274,7 @@ function Table({ viz }: { viz: Extract<Viz, { type: "table" }> }) {
                         : { column: i, descending: false },
                     )
                   }
-                  className="hover:text-brand"
+                  className="hover:text-accent"
                 >
                   {c}
                   {sort?.column === i ? (sort.descending ? " ↓" : " ↑") : ""}
@@ -285,7 +285,7 @@ function Table({ viz }: { viz: Extract<Viz, { type: "table" }> }) {
         </thead>
         <tbody>
           {rows.slice(0, 50).map((r, i) => (
-            <tr key={i} className="hover:bg-fill-4">
+            <tr key={i} className="hover:bg-fill-subtle">
               {viz.columns.map((_, j) => (
                 <td key={j} className={cx("px-2 py-1", numeric[j] && "text-right font-mono tabular")}>
                   {r[j] === null || r[j] === undefined ? "" : String(r[j])}
@@ -309,21 +309,21 @@ function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
         type="button"
         disabled={!node.children.length}
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 rounded px-1 text-left text-callout enabled:hover:bg-fill-3"
+        className="flex items-center gap-1 rounded-xs px-1 text-left text-callout enabled:hover:bg-fill-subtle"
       >
         <ChevronRight
           size={11}
           className={cx(
-            "text-fg-3 transition-transform",
+            "text-fg-faint transition-transform",
             open && "rotate-90",
             !node.children.length && "invisible",
           )}
         />
         {node.label}
-        {node.note && <span className="text-fg-2">{node.note}</span>}
+        {node.note && <span className="text-fg-muted">{node.note}</span>}
       </button>
       {open && node.children.length > 0 && (
-        <ul className="ml-[11px] border-hairline border-l pl-2">
+        <ul className="ml-[11px] border-border border-l pl-2">
           {node.children.map((c, i) => (
             <TreeItem key={i} node={c} depth={depth + 1} />
           ))}
@@ -362,7 +362,7 @@ function Lines({ viz }: { viz: Extract<Viz, { type: "line_chart" }> }) {
           );
         }}
       >
-        <line x1={0} x2={W} y1={H - 14} y2={H - 14} stroke="var(--rc-hairline)" />
+        <line x1={0} x2={W} y1={H - 14} y2={H - 14} stroke="var(--rc-border)" />
         {viz.series.map((s, k) => {
           let d = "";
           s.values.forEach((v, i) => {
@@ -377,12 +377,12 @@ function Lines({ viz }: { viz: Extract<Viz, { type: "line_chart" }> }) {
             x2={x(hover)}
             y1={4}
             y2={H - 14}
-            stroke="var(--rc-fg-3)"
+            stroke="var(--rc-text-faint)"
             strokeDasharray="3 3"
           />
         )}
       </svg>
-      <div className="flex flex-wrap items-center gap-3 text-caption text-fg-2">
+      <div className="flex flex-wrap items-center gap-3 text-caption text-fg-muted">
         {hover !== null ? (
           <>
             <b className="text-fg">{viz.labels[hover]}</b>
@@ -415,17 +415,17 @@ function Lines({ viz }: { viz: Extract<Viz, { type: "line_chart" }> }) {
 const CHECK: Record<Status, string> = { done: "✓", todo: "○", in_progress: "◐", failed: "✕", skipped: "–" };
 const CHECK_TINT: Record<Status, string> = {
   done: "text-success",
-  todo: "text-fg-3",
-  in_progress: "text-info",
+  todo: "text-fg-faint",
+  in_progress: "text-accent",
   failed: "text-danger",
-  skipped: "text-fg-3",
+  skipped: "text-fg-faint",
 };
 
 export function VizView({ source, complete }: { source: string; complete: boolean }) {
   const parsed = useMemo(() => (complete ? parseViz(source) : null), [source, complete]);
   if (!complete) {
     return (
-      <div className="rounded-xl bg-fill-4 px-3 py-2.5 text-callout text-fg-2 rc-shimmer">
+      <div className="rounded-lg bg-fill-subtle px-3 py-2.5 text-callout text-fg-muted rc-shimmer">
         Building visualization…
       </div>
     );
@@ -433,7 +433,7 @@ export function VizView({ source, complete }: { source: string; complete: boolea
   if (!parsed || "problem" in parsed) {
     return (
       <div className="flex flex-col gap-1">
-        <span className="text-caption text-fg-3">
+        <span className="text-caption text-fg-faint">
           ◇ Couldn't draw this visualization ({parsed?.problem}), showing its source.
         </span>
         <CodeBlock code={source} lang="json" />
@@ -443,7 +443,7 @@ export function VizView({ source, complete }: { source: string; complete: boolea
   const { viz } = parsed;
   return (
     <figure
-      className="group relative m-0 rounded-[14px] border border-hairline bg-fill-4 p-3 rc-in"
+      className="group relative m-0 rounded-lg border border-border bg-fill-subtle p-3 rc-in"
       aria-label={parsed.title}
     >
       <div className="absolute top-2 right-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
@@ -451,7 +451,7 @@ export function VizView({ source, complete }: { source: string; complete: boolea
       </div>
       <figcaption className="mb-2 pr-8">
         <div className="font-semibold text-body">{parsed.title}</div>
-        {parsed.summary && <div className="text-callout text-fg-2">{parsed.summary}</div>}
+        {parsed.summary && <div className="text-callout text-fg-muted">{parsed.summary}</div>}
       </figcaption>
       {viz.type === "bar_chart" && <Bars viz={viz} />}
       {viz.type === "table" && <Table viz={viz} />}
@@ -469,13 +469,13 @@ export function VizView({ source, complete }: { source: string; complete: boolea
       {viz.type === "stat_list" && (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-2">
           {viz.items.map((it, i) => (
-            <div key={i} className="rounded-xl bg-fill-3 px-3 py-2">
-              <div className="truncate text-caption text-fg-2">{it.label}</div>
+            <div key={i} className="rounded-lg bg-fill-subtle px-3 py-2">
+              <div className="truncate text-caption text-fg-muted">{it.label}</div>
               <div className="font-semibold text-title3 tabular">
                 {it.value}
-                {it.unit && <span className="ml-1 font-normal text-callout text-fg-2">{it.unit}</span>}
+                {it.unit && <span className="ml-1 font-normal text-callout text-fg-muted">{it.unit}</span>}
               </div>
-              {it.note && <div className="truncate text-caption text-fg-3">{it.note}</div>}
+              {it.note && <div className="truncate text-caption text-fg-faint">{it.note}</div>}
             </div>
           ))}
           <More n={viz.more} what="items" />
@@ -483,8 +483,8 @@ export function VizView({ source, complete }: { source: string; complete: boolea
       )}
       {viz.type === "checklist" && (
         <div>
-          <div className="mb-2 flex items-center gap-2 text-caption text-fg-2">
-            <span className="h-[6px] flex-1 overflow-hidden rounded-full bg-fill-3">
+          <div className="mb-2 flex items-center gap-2 text-caption text-fg-muted">
+            <span className="h-[6px] flex-1 overflow-hidden rounded-full bg-fill-subtle">
               <span
                 className="block h-full rounded-full bg-success transition-[width] duration-300"
                 style={{ width: `${(viz.done / Math.max(1, viz.total)) * 100}%` }}
@@ -498,8 +498,10 @@ export function VizView({ source, complete }: { source: string; complete: boolea
                 <span className={cx("w-3 shrink-0 text-center font-semibold", CHECK_TINT[it.status])}>
                   {CHECK[it.status]}
                 </span>
-                <span className={cx(it.status === "skipped" && "text-fg-3 line-through")}>{it.label}</span>
-                {it.note && <span className="text-caption text-fg-2">{it.note}</span>}
+                <span className={cx(it.status === "skipped" && "text-fg-faint line-through")}>
+                  {it.label}
+                </span>
+                {it.note && <span className="text-caption text-fg-muted">{it.note}</span>}
               </li>
             ))}
           </ul>

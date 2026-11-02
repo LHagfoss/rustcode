@@ -8,14 +8,14 @@ import { cx, Spinner } from "./primitives";
 
 const TONE: Record<ThreadStatus, string> = {
   idle: "",
-  running: "bg-info/12 text-info",
-  needs_input: "bg-attention/14 text-attention",
-  review: "bg-brand/16 text-brand",
+  running: "bg-accent/12 text-accent",
+  needs_input: "bg-warning/14 text-warning",
+  review: "bg-accent/16 text-accent",
   done: "bg-success/12 text-success",
 };
 
 export function StatusIcon({ status, size = 11 }: { status: ThreadStatus; size?: number }) {
-  if (status === "running") return <Spinner size={size} className="text-info" />;
+  if (status === "running") return <Spinner size={size} className="text-accent" />;
   if (status === "needs_input") return <Hand size={size} />;
   if (status === "review") return <Eye size={size} />;
   if (status === "done") return <CircleCheck size={size} />;
@@ -35,7 +35,7 @@ export function StatusChip({
   return (
     <span
       className={cx(
-        "inline-flex h-[18px] shrink-0 items-center gap-1 rounded-full font-medium text-caption transition-colors duration-150",
+        "inline-flex h-[18px] shrink-0 items-center gap-1 rounded-full font-medium text-caption",
         compact ? "w-[18px] justify-center" : "px-1.5",
         TONE[status],
         className,

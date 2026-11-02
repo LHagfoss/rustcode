@@ -74,6 +74,19 @@ export function revealPath(path: string): void {
   if (isTauri()) void invoke("reveal_path", { path });
 }
 
+/**
+ * Opens a text file (Markdown, TOML, JSON) in its editor, or a folder in
+ * Finder. The shell accepts nothing else, so nothing here can run a program.
+ */
+export function openPath(path: string): void {
+  if (hasShell()) void invoke("open_path", { path }).catch((e) => console.warn("open_path", e));
+}
+
+/** Writes a new skill's SKILL.md from the template and answers its path. */
+export function createSkill(name: string, scope: "user" | "project", cwd: string): Promise<string> {
+  return invoke<string>("skill_create", { name, scope, cwd });
+}
+
 /** Files and folders to attach, from the open panel. Null in the browser, where the composer uses a file input. */
 export async function pickFiles(start?: string): Promise<string[] | null> {
   if (!isTauri()) return null;

@@ -31,7 +31,7 @@ function StatusDot({ tone }: { tone: "ok" | "warn" | "off" }) {
     <span
       className={cx(
         "inline-block size-[7px] shrink-0 rounded-full",
-        tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-fg-4",
+        tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-fg-faint",
       )}
     />
   );
@@ -52,13 +52,13 @@ function SignIn({ harness }: { harness: Harness }) {
         <Popover.Content
           align="end"
           sideOffset={6}
-          className="surface z-[60] flex w-[340px] flex-col gap-2.5 rounded-[20px] border border-hairline p-3.5 rc-in"
+          className="elevated z-[60] flex w-[340px] flex-col gap-2.5 rounded-xl p-3.5 rc-in"
         >
-          <p className="text-callout text-fg-2">
+          <p className="text-callout text-fg-muted">
             {harness.name} signs in with its own login. Run this in a terminal; RustCode never sees the
             credentials.
           </p>
-          <div className="flex items-center gap-2 rounded-lg bg-fill-3 py-1 pr-1 pl-2.5">
+          <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
             <code className="selectable flex-1 truncate font-mono text-callout">{line}</code>
             <CopyButton text={line} />
           </div>
@@ -101,15 +101,15 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-body">{harness.name}</span>
-            <span className="rounded-full bg-fill-2 px-1.5 font-medium font-mono text-[9px] text-fg-2 uppercase leading-[15px]">
+            <span className="rounded-full bg-fill px-1.5 font-medium font-mono text-[9px] text-fg-muted uppercase leading-[15px]">
               {harness.builtin ? "built in" : harness.kind}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 text-caption text-fg-2">
+          <div className="flex items-center gap-1.5 text-caption text-fg-muted">
             <StatusDot tone={status.tone} />
             {status.label}
             {!harness.builtin && harness.command.length > 0 && (
-              <span className="truncate font-mono text-fg-3">· {commandLine(harness.command)}</span>
+              <span className="truncate font-mono text-fg-faint">· {commandLine(harness.command)}</span>
             )}
           </div>
         </div>
@@ -140,14 +140,14 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         </Tooltip>
       </div>
       {!harness.installed && harness.install_hint && (
-        <div className="flex items-center gap-2 rounded-lg bg-fill-3 py-1 pr-1 pl-2.5">
-          <span className="text-caption text-fg-2">Install:</span>
+        <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
+          <span className="text-caption text-fg-muted">Install:</span>
           <code className="selectable flex-1 truncate font-mono text-callout">{harness.install_hint}</code>
           <CopyButton text={harness.install_hint} />
         </div>
       )}
       {(result || harness.error) && (
-        <div className={cx("selectable text-callout", result?.ok ? "text-success" : "text-attention")}>
+        <div className={cx("selectable text-callout", result?.ok ? "text-success" : "text-warning")}>
           {result ? (result.ok ? `✓ ${result.text}` : result.text) : harness.error}
         </div>
       )}
@@ -156,7 +156,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           type="button"
           onClick={() => setShowCaps(!showCaps)}
           aria-expanded={showCaps}
-          className="flex items-center gap-1 text-caption text-fg-2 hover:text-fg"
+          className="flex items-center gap-1 text-caption text-fg-muted hover:text-fg"
         >
           <ChevronRight size={11} className={cx("transition-transform", showCaps && "rotate-90")} />
           What it supports
@@ -166,7 +166,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
             {capabilityRows(harness.capabilities).map((row) => (
               <li
                 key={row.key}
-                className={cx("flex items-start gap-1.5 text-caption", !row.available && "text-fg-3")}
+                className={cx("flex items-start gap-1.5 text-caption", !row.available && "text-fg-faint")}
               >
                 {row.available ? (
                   <Check size={11} className="mt-px text-success" />
@@ -175,12 +175,12 @@ export function HarnessCard({ harness }: { harness: Harness }) {
                 )}
                 <span>
                   {row.label}
-                  {row.detail && <span className="block text-fg-3">{row.detail}</span>}
+                  {row.detail && <span className="block text-fg-faint">{row.detail}</span>}
                 </span>
               </li>
             ))}
             {!harness.builtin && (
-              <li className="col-span-2 text-caption text-fg-3">
+              <li className="col-span-2 text-caption text-fg-faint">
                 Runs with its own tools and permission rules; RustCode's sandbox does not apply.
               </li>
             )}
@@ -202,7 +202,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
 
 export function HarnessList({ snapshot }: { snapshot: HarnessSnapshot }) {
   return (
-    <div className="divide-y divide-hairline overflow-hidden rounded-xl bg-fg/[0.045]">
+    <div className="divide-y divide-border overflow-hidden rounded-lg bg-fill-subtle">
       {snapshot.harnesses.map((h) => (
         <HarnessCard key={h.id} harness={h} />
       ))}
@@ -230,7 +230,7 @@ function Select({
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className="h-[26px] max-w-[260px] rounded-full bg-fill-2 px-3 text-callout outline-none disabled:opacity-45"
+        className="h-[26px] max-w-[260px] rounded-full bg-fill px-3 text-callout outline-none disabled:opacity-45"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value} disabled={o.disabled}>
@@ -276,7 +276,7 @@ export function DefaultsForm({
   };
   return (
     <div className="flex flex-col">
-      <div className="divide-y divide-hairline overflow-hidden rounded-xl bg-fg/[0.045]">
+      <div className="divide-y divide-border overflow-hidden rounded-lg bg-fill-subtle">
         <Select
           label="Harness"
           value={value.harness}
@@ -306,9 +306,9 @@ export function DefaultsForm({
         <div className="flex items-center justify-between gap-4 px-3.5 py-[11px]">
           <span className="text-body">Effort</span>
           {harness && !harness.capabilities.effort ? (
-            <span className="text-callout text-fg-3">{harness.name} has no effort setting</span>
+            <span className="text-callout text-fg-faint">{harness.name} has no effort setting</span>
           ) : efforts.length ? (
-            <div className="flex rounded-full bg-fill-3 p-0.5">
+            <div className="flex rounded-full bg-fill-subtle p-0.5">
               {efforts.map((e) => (
                 <button
                   key={e}
@@ -317,7 +317,7 @@ export function DefaultsForm({
                   onClick={() => set({ effort: e })}
                   className={cx(
                     "h-[22px] rounded-full px-3 font-medium text-callout",
-                    e === value.effort ? "bg-brand-fill text-white" : "text-fg-2 hover:text-fg",
+                    e === value.effort ? "bg-surface-3 text-fg" : "text-fg-muted hover:text-fg",
                   )}
                 >
                   {effortLabel(e)}
@@ -325,11 +325,11 @@ export function DefaultsForm({
               ))}
             </div>
           ) : (
-            <span className="text-callout text-fg-3">Model default</span>
+            <span className="text-callout text-fg-faint">Model default</span>
           )}
         </div>
       </div>
-      {problem && <p className="mt-2 px-1 text-attention text-callout">{problem}</p>}
+      {problem && <p className="mt-2 px-1 text-warning text-callout">{problem}</p>}
     </div>
   );
 }

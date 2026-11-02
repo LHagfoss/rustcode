@@ -1,40 +1,58 @@
 import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect } from "react";
+import { applyTheme, resolveTheme } from "./lib/themes";
 import {
   cancel,
   closeConfirm,
   openSettings,
   setOnboarding,
-  setPanel,
   setSwitcher,
   setTerminalOpen,
   setView,
   startNewThread,
+  toggleRightPanel,
   toggleSidebar,
   useApp,
 } from "./state/store";
-import { AgentsPanel } from "./ui/AgentViews";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
 import { GrantDialog } from "./ui/Links";
 import { cx, Pill } from "./ui/primitives";
+import { RightPanel } from "./ui/RightPanel";
 import { Sidebar } from "./ui/Sidebar";
 
-const Settings = lazy(() => import("./ui/Settings").then((m) => ({ default: m.Settings })));
+const Settings = lazy(() => loadSettings().then((m) => ({ default: m.Settings })));
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
-const ChangesPanel = lazy(() => import("./ui/ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 const Board = lazy(() => import("./ui/Board").then((m) => ({ default: m.Board })));
 const Review = lazy(() => import("./ui/Review").then((m) => ({ default: m.Review })));
 const Compare = lazy(() => import("./ui/Compare").then((m) => ({ default: m.Compare })));
-const PullsPanel = lazy(() => import("./ui/PullRequests").then((m) => ({ default: m.PullsPanel })));
 
+/**
+ * Paints the theme on :root (lib/themes.ts) whenever the mode, the picked
+ * theme, the engine's themes or the system appearance change. It subscribes
+ * outside React, so a theme change re-renders nothing.
+ */
 function useTheme() {
-  const theme = useApp((s) => s.theme);
   useEffect(() => {
-    if (theme === "system") delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const paint = () => {
+      const s = useApp.getState();
+      const mode = s.theme === "system" ? (media.matches ? "dark" : "light") : s.theme;
+      const theme = resolveTheme(s.themes, s.themeActive, mode);
+      applyTheme(theme);
+      document.documentElement.dataset.theme = mode;
+    };
+    paint();
+    media.addEventListener("change", paint);
+    const unsubscribe = useApp.subscribe((s, prev) => {
+      if (s.theme !== prev.theme || s.themeActive !== prev.themeActive || s.themes !== prev.themes) paint();
+    });
+    return () => {
+      media.removeEventListener("change", paint);
+      unsubscribe();
+    };
+  }, []);
 }
 
 function useShortcuts() {
@@ -51,6 +69,9 @@ function useShortcuts() {
       } else if (mod && e.key === ",") {
         e.preventDefault();
         openSettings(s.settings ? null : "general");
+      } else if (mod && e.altKey && e.code === "KeyB") {
+        e.preventDefault();
+        toggleRightPanel();
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleSidebar();
@@ -85,20 +106,20 @@ function ConfirmDialog() {
   if (!confirm) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25"
+      className="rc-overlay fixed inset-0 z-50 flex items-center justify-center bg-bg/60"
       onMouseDown={(e) => e.target === e.currentTarget && closeConfirm()}
     >
       <div
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="rc-confirm-title"
-        className="surface w-[min(420px,calc(100vw-48px))] rounded-[18px] border border-hairline p-5 shadow-panel rc-in"
+        className="elevated w-[min(420px,calc(100vw-48px))] rounded-xl p-5 rc-in"
         onKeyDown={(e) => e.key === "Escape" && closeConfirm()}
       >
         <h2 id="rc-confirm-title" className="font-semibold text-body">
           {confirm.title}
         </h2>
-        <p className="mt-1.5 text-callout text-fg-2">{confirm.message}</p>
+        <p className="mt-1.5 text-callout text-fg-muted">{confirm.message}</p>
         <div className="mt-4 flex justify-end gap-2">
           <Pill onClick={closeConfirm}>Cancel</Pill>
           {confirm.alt && (
@@ -140,8 +161,8 @@ function Toasts() {
         <div
           key={t.id}
           className={cx(
-            "surface pointer-events-auto max-w-[480px] rounded-full px-4 py-1.5 text-callout rc-in",
-            t.tone === "warning" && "text-attention",
+            "rc-glass pointer-events-auto max-w-[480px] rounded-full px-4 py-1.5 text-callout shadow-1 rc-in",
+            t.tone === "warning" && "text-warning",
           )}
         >
           {t.text}
@@ -151,43 +172,57 @@ function Toasts() {
   );
 }
 
+// Settings' code arrives while the app is idle, so the first ⌘, does not wait for it.
+const loadSettings = () => import("./ui/Settings");
+if (typeof window !== "undefined") {
+  const idle = window.requestIdleCallback ?? ((fn: () => void) => setTimeout(fn, 1500));
+  idle(() => void loadSettings());
+}
+
 export function App() {
   useTheme();
   useShortcuts();
-  const settings = useApp((s) => s.settings);
+  const settings = useApp((s) => s.settings !== null);
   const onboarding = useApp((s) => s.onboardingOpen);
-  const panel = useApp((s) => s.panel);
   const view = useApp((s) => s.view);
   return (
-    <Tooltip.Provider delayDuration={600}>
-      {/* Hidden, not unmounted, under Settings: its sidebar shows the window's material through. */}
-      <div className={cx("flex h-full w-full overflow-hidden", settings && "invisible")}>
+    <Tooltip.Provider delayDuration={400} skipDelayDuration={300} disableHoverableContent>
+      {/*
+        One shell: the sidebar never unmounts. Settings covers the main column
+        and the right panel, which stay mounted (and laid out) underneath, so
+        opening and closing it is one frame with nothing remounted.
+      */}
+      <div className="flex h-full w-full overflow-hidden bg-sidebar">
         <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
-          {view.kind === "chat" ? (
-            <ChatView />
-          ) : (
-            <Suspense fallback={<div className="flex-1 bg-chat" />}>
-              {view.kind === "board" && <Board />}
-              {view.kind === "review" && <Review key={view.threadId} threadId={view.threadId} />}
-              {view.kind === "compare" && <Compare fanOut={view.fanOut} />}
+        <div className="relative flex min-w-0 flex-1 bg-bg">
+          <div className="flex min-w-0 flex-1 flex-col" inert={settings}>
+            {view.kind === "chat" ? (
+              <ChatView />
+            ) : (
+              <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                {view.kind === "board" && <Board />}
+                {view.kind === "review" && <Review key={view.threadId} threadId={view.threadId} />}
+                {view.kind === "compare" && <Compare fanOut={view.fanOut} />}
+              </Suspense>
+            )}
+            <Suspense fallback={null}>
+              <TerminalPanel />
             </Suspense>
+          </div>
+          <div className="flex" inert={settings}>
+            <RightPanel />
+          </div>
+          {settings && (
+            <div className="absolute inset-0 z-20 flex bg-bg">
+              <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                <Settings />
+              </Suspense>
+            </div>
           )}
-          <Suspense fallback={null}>
-            <TerminalPanel />
-          </Suspense>
         </div>
-        <Suspense fallback={null}>
-          {panel === "changes" && <ChangesPanel onClose={() => setPanel(null)} />}
-          {panel === "agents" && <AgentsPanel />}
-          {panel === "pulls" && <PullsPanel />}
-        </Suspense>
       </div>
       <CommandPalette />
-      <Suspense fallback={null}>
-        {settings && <Settings />}
-        {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
-      </Suspense>
+      <Suspense fallback={null}>{onboarding && <Onboarding onClose={() => setOnboarding(false)} />}</Suspense>
       <ConfirmDialog />
       <GrantDialog />
       <Toasts />

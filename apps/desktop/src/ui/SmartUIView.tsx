@@ -47,7 +47,7 @@ function IconButton({
         type="button"
         aria-label={label}
         onClick={onClick}
-        className="flex size-[22px] items-center justify-center rounded-[7px] bg-chat/80 text-fg-2 backdrop-blur hover:bg-fill-2 hover:text-fg"
+        className="flex size-[22px] items-center justify-center rounded-md bg-bg/80 text-fg-muted backdrop-blur hover:bg-fill hover:text-fg"
       >
         {children}
       </button>
@@ -217,11 +217,11 @@ export function SmartUIView({
   if (problem) return <Fallback source={source} reason={problem} />;
   if (!enabled) {
     return (
-      <div className="flex h-[36px] items-center gap-2 text-callout text-fg-2">
+      <div className="flex h-[36px] items-center gap-2 text-callout text-fg-muted">
         <Code size={13} />
         <span className="truncate">{title}</span>
-        <span className="text-fg-3">· Smart UI is off</span>
-        <button type="button" onClick={() => setSmartUi(true)} className="text-brand hover:underline">
+        <span className="text-fg-faint">· Smart UI is off</span>
+        <button type="button" onClick={() => setSmartUi(true)} className="text-accent hover:underline">
           Turn on Smart UI
         </button>
       </div>
@@ -248,11 +248,11 @@ export function SmartUIView({
             type="button"
             disabled={!threadId}
             onClick={() => void run()}
-            className="flex h-[28px] items-center gap-1.5 rounded-full bg-fill-2 px-3 font-medium hover:bg-fill-1"
+            className="flex h-[28px] items-center gap-1.5 rounded-full bg-fill px-3 font-medium hover:bg-fill-strong"
           >
             <Play size={11} fill="currentColor" /> Run interactive view
           </button>
-          <span className="truncate text-fg-2">{title}</span>
+          <span className="truncate text-fg-muted">{title}</span>
         </div>
       )}
       {state.kind === "failed" && <p className="mt-1 text-caption text-danger">{state.reason}</p>}
@@ -295,7 +295,7 @@ export function SmartUIView({
 function Fallback({ source, reason }: { source: string; reason: string }) {
   return (
     <div>
-      <p className="mb-1 text-caption text-fg-2">{reason} Its source:</p>
+      <p className="mb-1 text-caption text-fg-muted">{reason} Its source:</p>
       <CodeBlock code={source} lang="html" />
     </div>
   );

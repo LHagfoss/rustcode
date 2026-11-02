@@ -62,8 +62,7 @@ const SETTINGS: [SettingsSection, string][] = [
   ["general", "General"],
   ["harnesses", "Harnesses"],
   ["connections", "Connections"],
-  ["skills", "Skills"],
-  ["mcp", "MCP servers"],
+  ["capabilities", "Capabilities: skills and MCP servers"],
   ["appearance", "Appearance"],
   ["engine", "Engine"],
 ];
@@ -280,10 +279,10 @@ export function CommandPalette() {
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="rc-overlay fixed inset-0 z-40 bg-black/12" />
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-40 bg-bg/60" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="surface fixed top-[max(72px,14vh)] left-1/2 z-50 flex w-[min(620px,calc(100vw-56px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] shadow-[0_14px_30px_rgb(0_0_0/0.18)] rc-in"
+          className="elevated fixed top-[max(72px,14vh)] left-1/2 z-50 flex w-[min(620px,calc(100vw-56px))] -translate-x-1/2 flex-col overflow-hidden rounded-xl shadow-[0_14px_30px_rgb(0_0_0/0.18)] rc-in"
           onKeyDown={(e) => {
             if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();
@@ -301,7 +300,7 @@ export function CommandPalette() {
         >
           <Dialog.Title className="sr-only">Command palette</Dialog.Title>
           <div className="flex h-[52px] items-center gap-3 px-4">
-            <Search size={17} className="text-fg-2" />
+            <Search size={17} className="text-fg-muted" />
             <input
               autoFocus
               value={query}
@@ -311,20 +310,20 @@ export function CommandPalette() {
               }}
               placeholder="Search threads, or > for actions…"
               aria-label="Search threads and actions"
-              className="flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-3"
+              className="flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-faint"
             />
           </div>
           <div className="max-h-[440px] overflow-y-auto p-2" role="listbox" aria-label="Results">
             {!results.length && (
-              <div className="px-3 py-4 text-center text-callout text-fg-2">Nothing matches “{q}”.</div>
+              <div className="px-3 py-4 text-center text-callout text-fg-muted">Nothing matches “{q}”.</div>
             )}
             {results.map((r, i) => (
               <div key={r.kind === "thread" ? r.id : r.action.id}>
                 {i === firstAction && (
-                  <div className="px-3 pt-2 pb-1 font-semibold text-caption text-fg-2">Actions</div>
+                  <div className="px-3 pt-2 pb-1 font-semibold text-caption text-fg-muted">Actions</div>
                 )}
                 {i === 0 && r.kind === "thread" && (
-                  <div className="px-3 pt-1 pb-1 font-semibold text-caption text-fg-2">
+                  <div className="px-3 pt-1 pb-1 font-semibold text-caption text-fg-muted">
                     {q ? "Threads" : "Recent threads"}
                   </div>
                 )}
@@ -336,44 +335,44 @@ export function CommandPalette() {
                   onMouseMove={() => setIndex(i)}
                   onClick={() => choose(i)}
                   className={cx(
-                    "flex w-full items-center gap-3 rounded-[14px] px-3 text-left",
+                    "flex w-full items-center gap-3 rounded-lg px-3 text-left",
                     r.kind === "thread" ? "min-h-[48px] py-2" : "min-h-[36px] py-1.5",
-                    i === index && "bg-brand/16",
+                    i === index && "bg-accent/16",
                     r.kind === "action" && r.action.disabled && "opacity-45",
                   )}
                 >
                   {r.kind === "thread" ? (
                     <>
-                      <MessageSquare size={13} className={i === index ? "text-brand" : "text-fg-2"} />
+                      <MessageSquare size={13} className={i === index ? "text-accent" : "text-fg-muted"} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-body">{highlight(r.title, q)}</span>
-                        <span className="block truncate text-caption text-fg-2">{r.detail}</span>
+                        <span className="block truncate text-caption text-fg-muted">{r.detail}</span>
                       </span>
                       {r.open && (
-                        <span className="rounded-full bg-fg/7 px-[7px] py-0.5 font-medium text-caption text-fg-2">
+                        <span className="rounded-full bg-fg/7 px-[7px] py-0.5 font-medium text-caption text-fg-muted">
                           Open
                         </span>
                       )}
                     </>
                   ) : (
                     <>
-                      <r.action.icon size={13} className={i === index ? "text-brand" : "text-fg-2"} />
+                      <r.action.icon size={13} className={i === index ? "text-accent" : "text-fg-muted"} />
                       <span className="min-w-0 flex-1 truncate text-body">
                         {highlight(r.action.label, q)}
                       </span>
                       {r.action.disabled ? (
-                        <span className="truncate text-caption text-fg-3">{r.action.disabled}</span>
+                        <span className="truncate text-caption text-fg-faint">{r.action.disabled}</span>
                       ) : (
                         r.action.keys && <Kbd>{r.action.keys}</Kbd>
                       )}
                     </>
                   )}
-                  {i === index && <CornerDownLeft size={12} className="shrink-0 text-fg-3" />}
+                  {i === index && <CornerDownLeft size={12} className="shrink-0 text-fg-faint" />}
                 </button>
               </div>
             ))}
           </div>
-          <div className="flex h-[34px] items-center gap-3 bg-fg/[0.03] px-[18px] text-caption text-fg-2">
+          <div className="flex h-[34px] items-center gap-3 bg-fill-subtle px-[18px] text-caption text-fg-muted">
             <span className="flex items-center gap-1">
               <Kbd>↑↓</Kbd> move
             </span>

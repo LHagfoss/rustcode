@@ -1,8 +1,10 @@
+// design-lint: allow-file (fake link colours in canned data)
 // A fake `rustcode --acp` engine with canned traffic, for tests and for
 // running the UI without an engine (`bun run dev:mock`, or `?transport=mock`).
 // It speaks the same JSON-RPC lines as the real engine, including the
 // harness contract in docs/harnesses.md, so the UI works before that lands.
 
+import { BUILTIN_THEMES } from "../lib/themes";
 import { arr, type Json, type JsonObject, obj, str } from "./jsonrpc";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
@@ -25,6 +27,7 @@ interface MockThread {
   history: JsonObject[];
   worktree?: MockWorktree;
   status?: string;
+  pinned?: boolean;
   checkpoints: MockCheckpoint[];
 }
 
@@ -478,6 +481,34 @@ export class MockEngine {
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
   private removedWorktrees = new Set<string>();
+  /** The engine's themes: the app's built-ins plus one user theme, as `_rustcode/themes` lists them. */
+  private themes: JsonObject[] = [
+    ...BUILTIN_THEMES.map((t) => ({ ...t, tokens: { ...t.tokens } }) as unknown as JsonObject),
+    {
+      name: "graphite",
+      description: "Graphite: lighter greys, round corners",
+      source: "user",
+      path: "~/.config/rustcode/themes/graphite.toml",
+      mode: "dark",
+      radius: "round",
+      tokens: {
+        ...BUILTIN_THEMES[0]!.tokens,
+        bg: "#101012",
+        sidebar: "#141416",
+        surface: "#1a1a1d",
+        surface_2: "#212125",
+        surface_3: "#2a2a2f",
+        accent: "#8b8bf5",
+        focus: "#8b8bf5",
+        selection: "#8b8bf54d",
+      },
+    },
+  ];
+  private activeTheme = "rustcode";
+
+  private themesSnapshot(): JsonObject {
+    return { active: this.activeTheme, themes: this.themes as unknown as Json };
+  }
 
   constructor(
     private readonly emit: (line: string) => void,
@@ -594,6 +625,7 @@ export class MockEngine {
                 rustcode: {
                   harness: t.harness,
                   ...(t.status ? { status: t.status } : {}),
+                  ...(t.pinned ? { pinned: true } : {}),
                   ...(t.worktree ? { worktree: t.worktree as unknown as Json } : {}),
                 },
               },
@@ -998,6 +1030,33 @@ export class MockEngine {
             },
           ],
         };
+      case "_rustcode/themes":
+        return this.themesSnapshot();
+      case "_rustcode/themes/set": {
+        const name = str(params.name);
+        if (!name || !this.themes.some((t) => t.name === name))
+          throw Object.assign(new Error(`no theme named '${name}'`), { code: -32602 });
+        this.activeTheme = name;
+        const snapshot = this.themesSnapshot();
+        queueMicrotask(() => this.send({ method: "_rustcode/themes/changed", params: snapshot }));
+        return snapshot;
+      }
+      case "_rustcode/themes/new": {
+        const name = str(params.name) ?? "";
+        const from = this.themes.find((t) => t.name === (str(params.from) ?? "rustcode")) ?? this.themes[0]!;
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || this.themes.some((t) => t.name === name))
+          throw Object.assign(new Error(`cannot create '${name}'`), { code: -32602 });
+        const path = `~/.config/rustcode/themes/${name}.toml`;
+        this.themes.push({ ...from, name, description: name, source: "user", path });
+        return { path };
+      }
+      case "_rustcode/session/pin": {
+        const thread = this.thread(params.session_id);
+        if (typeof params.pinned !== "boolean")
+          throw Object.assign(new Error("pinned must be a boolean"), { code: -32602 });
+        thread.pinned = params.pinned;
+        return {};
+      }
       case "_rustcode/capabilities/set":
         return this.handle("_rustcode/capabilities", {});
       case "_rustcode/connections":
@@ -1500,7 +1559,8 @@ export class MockTransport implements Transport {
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     if (command === "git_changes")
       return mockGitChanges(String(args.cwd), args.base ? String(args.base) : undefined);
-    if (command === "reveal_path" || command === "open_terminal_at") return null;
+    if (command === "reveal_path" || command === "open_terminal_at" || command === "open_path") return null;
+    if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
     throw new Error(`The mock does not run ${command}.`);
   }
 

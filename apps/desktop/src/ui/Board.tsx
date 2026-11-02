@@ -74,18 +74,18 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
         e.dataTransfer.setData("text/rustcode-thread", session.id);
         e.dataTransfer.effectAllowed = "move";
       }}
-      className="group rounded-[14px] border border-hairline bg-fill-4 p-2.5 transition-[background-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:bg-fill-3 hover:shadow-float rc-in"
+      className="group rounded-lg border border-border bg-fill-subtle p-2.5 transition-[background-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:bg-fill-subtle hover:shadow-1 rc-in"
     >
       <button type="button" onClick={() => selectThread(session.id)} className="block w-full text-left">
         <span className="line-clamp-2 text-body">{session.title || "New thread"}</span>
         {request && (
-          <span className="mt-0.5 block truncate text-attention text-caption">
+          <span className="mt-0.5 block truncate text-warning text-caption">
             {request.question ? `Asks: ${request.question.text}` : `Approve: ${request.title}`}
           </span>
         )}
-        <span className="mt-1.5 flex flex-wrap items-center gap-1 text-caption text-fg-2">
+        <span className="mt-1.5 flex flex-wrap items-center gap-1 text-caption text-fg-muted">
           {wt ? (
-            <span className="flex max-w-full items-center gap-0.5 rounded-[5px] bg-fill-3 px-1 font-mono text-[10px]">
+            <span className="flex max-w-full items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
               <GitBranch size={9} className="shrink-0" />
               <span className="truncate">{wt.branch}</span>
             </span>
@@ -104,7 +104,7 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
                 type="button"
                 aria-label="Mark done"
                 onClick={() => void setThreadStatus(session.id, "done")}
-                className="flex h-6 items-center gap-1 rounded-full bg-fill-2 px-2 text-caption hover:bg-fill-1"
+                className="flex h-6 items-center gap-1 rounded-full bg-fill px-2 text-caption hover:bg-fill-strong"
               >
                 <CircleCheck size={11} /> Done
               </button>
@@ -115,7 +115,7 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
                 type="button"
                 aria-label="Back to review"
                 onClick={() => void setThreadStatus(session.id, "review")}
-                className="flex h-6 items-center gap-1 rounded-full bg-fill-2 px-2 text-caption hover:bg-fill-1"
+                className="flex h-6 items-center gap-1 rounded-full bg-fill px-2 text-caption hover:bg-fill-strong"
               >
                 <Eye size={11} /> Review
               </button>
@@ -126,7 +126,7 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
               type="button"
               aria-label="Clear the status"
               onClick={() => void setThreadStatus(session.id, "idle")}
-              className="flex size-6 items-center justify-center rounded-full bg-fill-2 hover:bg-fill-1"
+              className="flex size-6 items-center justify-center rounded-full bg-fill hover:bg-fill-strong"
             >
               <Undo2 size={11} />
             </button>
@@ -157,9 +157,9 @@ export function Board() {
   );
   const idle = sessions.filter((x) => !(x.id in archived) && statuses[x.id] === "idle").length;
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-chat" aria-label="Board">
+    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Board">
       <ViewHeader title="Board">
-        <span className="text-caption text-fg-2">{idle} idle in the list</span>
+        <span className="text-caption text-fg-muted">{idle} idle in the list</span>
       </ViewHeader>
       <div className="grid min-h-0 flex-1 grid-cols-4 gap-3 overflow-x-auto px-4 pb-4">
         {columns.map((c) => {
@@ -180,15 +180,15 @@ export function Board() {
                 if (id && droppable) void setThreadStatus(id, c.status as "review" | "done");
               }}
               className={cx(
-                "flex min-h-0 min-w-[200px] flex-col rounded-[18px] bg-fill-4 transition-[background-color,box-shadow] duration-150",
-                over === c.status && "bg-brand/10 shadow-[inset_0_0_0_1.5px_var(--rc-brand)]",
+                "flex min-h-0 min-w-[200px] flex-col rounded-xl bg-fill-subtle transition-[background-color,box-shadow] duration-150",
+                over === c.status && "bg-accent/10 shadow-[inset_0_0_0_1.5px_var(--rc-accent)]",
               )}
             >
               <Tooltip label={c.hint}>
                 <div className="flex items-center gap-1.5 px-3 pt-3 pb-2 font-semibold text-callout">
                   <StatusIcon status={c.status} size={12} />
                   {STATUS_LABEL[c.status]}
-                  <span className="font-normal text-fg-3 tabular">{c.items.length}</span>
+                  <span className="font-normal text-fg-faint tabular">{c.items.length}</span>
                 </div>
               </Tooltip>
               <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
@@ -196,7 +196,7 @@ export function Board() {
                   <Card key={x.id} session={x} status={c.status} />
                 ))}
                 {!c.items.length && (
-                  <div className="px-2 py-6 text-center text-caption text-fg-3">
+                  <div className="px-2 py-6 text-center text-caption text-fg-faint">
                     {droppable ? "Drop a thread here" : "Nothing here"}
                   </div>
                 )}

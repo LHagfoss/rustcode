@@ -1,4 +1,4 @@
-// The composer, after ContentView.swift's Composer: one floating rounded
+// The composer, after ContentView.swift's Composer: one floating rounded-xs
 // box with the queue, attachments, the field (with a slash-command token and
 // pasted link chips in front of it) and a button row: the folder, Files, the
 // harness, the model pill and send/queue/stop. Keys follow the SwiftUI app:
@@ -377,7 +377,7 @@ export const Composer = memo(function Composer({
     <div className="relative">
       {list.length > 0 && (
         <div
-          className="surface absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto rounded-[20px] border border-hairline p-1.5 rc-in"
+          className="elevated absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto rounded-xl p-1.5 rc-in"
           role="listbox"
           aria-label="Commands"
         >
@@ -391,13 +391,13 @@ export const Composer = memo(function Composer({
               onClick={() => complete(c, true)}
               onMouseEnter={() => setSelected(i)}
               className={cx(
-                "flex w-full items-baseline gap-3 rounded-[14px] px-3 py-[7px] text-left",
-                i === selected && "bg-brand/18",
+                "flex w-full items-baseline gap-3 rounded-lg px-3 py-[7px] text-left",
+                i === selected && "bg-fill",
               )}
             >
-              <span className="min-w-[110px] font-semibold text-brand text-callout">{c.name}</span>
-              <span className="truncate text-callout text-fg-2">{c.description}</span>
-              {c.takesArguments && <span className="ml-auto shrink-0 text-caption text-fg-3">…</span>}
+              <span className="min-w-[110px] font-semibold text-accent text-callout">{c.name}</span>
+              <span className="truncate text-callout text-fg-muted">{c.description}</span>
+              {c.takesArguments && <span className="ml-auto shrink-0 text-caption text-fg-faint">…</span>}
             </button>
           ))}
         </div>
@@ -407,9 +407,9 @@ export const Composer = memo(function Composer({
       )}
       <div
         className={cx(
-          "surface relative z-10 flex flex-col gap-1.5 rounded-[22px] p-2 transition-shadow duration-200 ease-out",
-          "focus-within:shadow-[var(--shadow-float),inset_0_0_0_0.5px_var(--rc-hairline),0_0_0_3px_color-mix(in_srgb,var(--rc-brand)_14%,transparent)]",
-          dropping && "outline-2 outline-brand outline-dashed",
+          // Frosted and floating over the transcript; focus steps the surface, no ring or colour.
+          "rc-composer relative z-10 flex flex-col gap-1.5 rounded-xl p-2",
+          dropping && "outline-2 outline-accent outline-dashed",
         )}
         onMouseDown={(e) => {
           if (e.target === e.currentTarget) {
@@ -432,17 +432,17 @@ export const Composer = memo(function Composer({
         }}
       >
         {editing && (
-          <div className="flex items-center gap-1.5 px-2 pt-1 text-caption text-brand">
+          <div className="flex items-center gap-1.5 px-2 pt-1 text-caption text-accent">
             <Pencil size={11} />
             <b>Editing a sent message</b>
-            <span className="text-fg-2">· sending takes the thread back to it</span>
+            <span className="text-fg-muted">· sending takes the thread back to it</span>
             <button
               type="button"
               onClick={() => {
                 cancelEdit(key);
                 update("");
               }}
-              className="ml-auto rounded-md px-1.5 text-fg-2 hover:bg-fill-2 hover:text-fg"
+              className="ml-auto rounded-sm px-1.5 text-fg-muted hover:bg-fill hover:text-fg"
             >
               Cancel
             </button>
@@ -459,7 +459,7 @@ export const Composer = memo(function Composer({
         <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-2 pt-1.5">
           {extras.command && (
             <Tooltip label={extras.command.description}>
-              <span className="flex h-[20px] shrink-0 items-center rounded-full bg-brand/15 px-2 font-semibold text-body text-brand">
+              <span className="flex h-[20px] shrink-0 items-center rounded-full bg-accent/15 px-2 font-semibold text-body text-accent">
                 {extras.command.name}
               </span>
             </Tooltip>
@@ -481,7 +481,7 @@ export const Composer = memo(function Composer({
             placeholder={placeholder}
             aria-label="Message"
             spellCheck
-            className="min-w-[160px] flex-1 basis-[160px] resize-none bg-transparent text-body leading-[18px] outline-none placeholder:text-fg-3"
+            className="min-w-[160px] flex-1 basis-[160px] resize-none bg-transparent text-body leading-[18px] outline-none placeholder:text-fg-faint"
           />
         </div>
         <div className="flex items-center gap-0.5">
@@ -511,7 +511,7 @@ export const Composer = memo(function Composer({
                 type="button"
                 aria-label="Queue message"
                 onClick={() => send(false)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white hover:brightness-110"
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85"
               >
                 <ListEnd size={13} strokeWidth={2.5} />
               </button>
@@ -524,7 +524,7 @@ export const Composer = memo(function Composer({
                 aria-label="Stop turn"
                 disabled={!!cancelReason}
                 onClick={() => void cancel(thread?.id)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-gradient-to-b from-[#ff5f57] to-[#e0352b] text-white hover:brightness-110 disabled:opacity-40"
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85 disabled:opacity-40"
               >
                 <Square size={10} fill="currentColor" strokeWidth={0} />
               </button>
@@ -536,7 +536,7 @@ export const Composer = memo(function Composer({
                 aria-label="Send"
                 disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
                 onClick={() => send(false)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white transition-[background-color,filter,transform] duration-150 enabled:hover:brightness-110 disabled:bg-fg-2/25"
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fg-muted/25"
               >
                 <ArrowUp size={14} strokeWidth={2.75} />
               </button>
@@ -545,12 +545,12 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {/* The tray under the box: where the thread works and what it brings, after the SwiftUI footer. */}
-      <div className="rc-tray mx-3 -mt-[18px] flex min-h-[52px] items-end gap-0.5 rounded-b-[18px] px-1.5 pt-[18px] pb-1">
+      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[52px] items-end gap-0.5 rounded-b-xl px-1.5 pt-[18px] pb-1">
         <FolderMenu thread={thread} cwd={cwd} />
         {!thread && <WorktreeToggle draft={draft} compact={compact} />}
         {thread?.worktree && (
           <Tooltip label={thread.worktree.path}>
-            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-[10px] px-2 text-callout text-fg-2">
+            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted">
               <GitBranch size={12} className="shrink-0" />
               <span className="truncate">{thread.worktree.branch}</span>
             </span>
@@ -566,8 +566,8 @@ export const Composer = memo(function Composer({
         <AgentPill thread={thread} />
         {harness && !harness.builtin && harness.id !== defaultHarness && (
           <Tooltip label="Its own sign-in and tools; RustCode's sandbox does not apply">
-            <span className="flex h-[28px] items-center gap-1.5 rounded-[10px] px-2 text-callout text-fg-2">
-              <span className="size-1.5 rounded-full bg-brand" />
+            <span className="flex h-[28px] items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted">
+              <span className="size-1.5 rounded-full bg-accent" />
               {harness.name}
             </span>
           </Tooltip>
@@ -599,17 +599,17 @@ function QueueStack({
   };
   return (
     <section className="mb-2 flex flex-col gap-1 px-2" aria-label="Queued messages">
-      <div className="flex items-center gap-1.5 px-1 text-caption text-brand">
+      <div className="flex items-center gap-1.5 px-1 text-caption text-accent">
         <ListEnd size={12} />
         <b>Queued</b>
-        <span className="text-fg-2">· sent when this turn ends{steerable ? ", or now with ⌘⏎" : ""}</span>
+        <span className="text-fg-muted">· sent when this turn ends{steerable ? ", or now with ⌘⏎" : ""}</span>
       </div>
       {thread.queue.map((q, i) => (
         <div
           key={q.id}
-          className="surface group flex min-h-[34px] items-center gap-2 rounded-[14px] px-2.5 py-1.5 rc-in"
+          className="elevated group flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 rc-in"
         >
-          <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-3">{i + 1}</span>
+          <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-faint">{i + 1}</span>
           {editing?.id === q.id ? (
             <textarea
               autoFocus
@@ -628,7 +628,7 @@ function QueueStack({
                 }
               }}
               aria-label="Edit queued message"
-              className="min-w-0 flex-1 resize-none rounded-md bg-field px-1.5 py-0.5 text-callout outline-none ring-2 ring-info/40"
+              className="min-w-0 flex-1 resize-none rounded-sm bg-fill-subtle px-1.5 py-0.5 text-callout outline-none ring-2 ring-accent/40"
             />
           ) : (
             <button
@@ -649,7 +649,7 @@ function QueueStack({
                   type="button"
                   aria-label="Move up"
                   onClick={() => moveQueued(thread.id, q.id, -1)}
-                  className="text-fg-2 hover:text-fg"
+                  className="text-fg-muted hover:text-fg"
                 >
                   <ChevronUp size={13} />
                 </button>
@@ -661,7 +661,7 @@ function QueueStack({
                   type="button"
                   aria-label="Send now"
                   onClick={() => void sendQueuedNow(thread.id, q.id)}
-                  className="text-fg-2 hover:text-fg"
+                  className="text-fg-muted hover:text-fg"
                 >
                   <ArrowUp size={13} />
                 </button>
@@ -672,7 +672,7 @@ function QueueStack({
                 type="button"
                 aria-label="Remove queued message"
                 onClick={() => removeQueued(thread.id, q.id)}
-                className="text-fg-3 hover:text-fg"
+                className="text-fg-faint hover:text-fg"
               >
                 <X size={13} />
               </button>
@@ -700,27 +700,27 @@ function AttachmentStrip({
               src={`data:${a.mimeType};base64,${a.data}`}
               alt={a.name}
               title={a.name}
-              className="size-[52px] rounded-[10px] border border-hairline object-cover"
+              className="size-[52px] rounded-md border border-border object-cover"
             />
             <button
               type="button"
               aria-label={`Remove ${a.name}`}
               onClick={() => onRemove(a.id)}
-              className="absolute -top-1 -right-1 flex size-[18px] items-center justify-center rounded-full bg-fg/70 text-chat opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="absolute -top-1 -right-1 flex size-[18px] items-center justify-center rounded-full bg-fg/70 text-bg opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             >
               <X size={11} strokeWidth={2.5} />
             </button>
           </div>
         ) : (
           <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
-            <span className="flex h-[28px] shrink-0 items-center gap-1.5 rounded-full bg-fill-3 pr-1.5 pl-2.5 text-callout">
-              <FileText size={12} className="text-fg-2" />
+            <span className="flex h-[28px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2.5 text-callout">
+              <FileText size={12} className="text-fg-muted" />
               <span className="max-w-[200px] truncate">{a.name}</span>
               <button
                 type="button"
                 aria-label={`Remove ${a.name}`}
                 onClick={() => onRemove(a.id)}
-                className="text-fg-3 hover:text-fg"
+                className="text-fg-faint hover:text-fg"
               >
                 <X size={12} />
               </button>
@@ -759,8 +759,8 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           disabled={!!missing}
           onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
           className={cx(
-            "flex h-[28px] items-center gap-1.5 rounded-[10px] px-2 text-callout disabled:opacity-40",
-            wt.on ? "bg-brand/15 text-brand" : "text-fg-2 enabled:hover:bg-fill-2 enabled:hover:text-fg",
+            "flex h-[28px] items-center gap-1.5 rounded-md px-2 text-callout disabled:opacity-40",
+            wt.on ? "bg-accent/15 text-accent" : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
           )}
         >
           <GitBranch size={12} />
@@ -777,8 +777,8 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           placeholder={suggested}
           size={Math.min(32, Math.max(12, wt.branch.length + 1))}
           className={cx(
-            "h-[24px] rounded-lg bg-field px-2 font-mono text-caption outline-none ring-1 rc-in",
-            valid ? "ring-hairline focus:ring-brand/50" : "ring-danger/60",
+            "h-[24px] rounded-md bg-fill-subtle px-2 font-mono text-caption outline-none ring-1 rc-in",
+            valid ? "ring-border focus:ring-accent/50" : "ring-danger/60",
           )}
         />
       )}
@@ -807,13 +807,13 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         >
           <Folder size={12} />
           <span className="max-w-[220px] truncate">{cwd ? projectName(cwd) : "Choose a folder"}</span>
-          {!thread && <ChevronDown size={11} className="text-fg-3" />}
+          {!thread && <ChevronDown size={11} className="text-fg-faint" />}
         </button>
       </Tooltip>
       {open && (
         <div
           role="menu"
-          className="surface absolute bottom-full left-0 z-30 mb-2 w-[300px] rounded-[20px] border border-hairline p-1.5 rc-in"
+          className="elevated absolute bottom-full left-0 z-30 mb-2 w-[300px] rounded-xl p-1.5 rc-in"
           onMouseLeave={() => setOpen(false)}
         >
           {projects.map((p) => (
@@ -826,12 +826,12 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
                 setOpen(false);
               }}
               className={cx(
-                "flex w-full flex-col rounded-[14px] px-2.5 py-1.5 text-left hover:bg-fill-2",
-                p === cwd && "bg-brand/15",
+                "flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left hover:bg-fill",
+                p === cwd && "bg-accent/15",
               )}
             >
               <span className="text-body text-fg">{projectName(p)}</span>
-              <span className="truncate text-caption text-fg-2" dir="rtl">
+              <span className="truncate text-caption text-fg-muted" dir="rtl">
                 <bdi>{p}</bdi>
               </span>
             </button>
@@ -843,7 +843,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
               setOpen(false);
               void pickFolder(cwd).then((p) => p && setProjectCwd(p));
             }}
-            className="mt-0.5 flex w-full rounded-[14px] px-2.5 py-2 text-left text-body hover:bg-fill-2"
+            className="mt-0.5 flex w-full rounded-lg px-2.5 py-2 text-left text-body hover:bg-fill"
           >
             Choose Folder…
           </button>
@@ -854,7 +854,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
 }
 
 const trayButton =
-  "flex h-[28px] items-center gap-1.5 rounded-[10px] px-2 text-callout text-fg-2 hover:bg-fill-2 hover:text-fg";
+  "flex h-[28px] items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
 /** The + menu at the start of the composer's row, after the SwiftUI app's AddPanel. */
 function PlusMenu({
@@ -867,7 +867,7 @@ function PlusMenu({
   cwd: string;
 }) {
   const item =
-    "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-[6px] text-body outline-none data-[highlighted]:bg-brand-fill data-[highlighted]:text-white";
+    "flex w-full items-center gap-2 rounded-md px-2.5 py-[6px] text-body outline-none data-[highlighted]:bg-fill";
   return (
     <DropdownMenu.Root>
       <Tooltip label="Attach and more">
@@ -875,7 +875,7 @@ function PlusMenu({
           <button
             type="button"
             aria-label="Attach and more"
-            className="flex size-[30px] items-center justify-center rounded-full text-fg-2 hover:bg-fill-2 hover:text-fg data-[state=open]:bg-fill-2"
+            className="flex size-[30px] items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong data-[state=open]:bg-fill"
           >
             <Plus size={16} strokeWidth={2} />
           </button>
@@ -886,12 +886,12 @@ function PlusMenu({
           side="top"
           align="start"
           sideOffset={8}
-          className="surface z-50 min-w-[220px] rounded-[14px] border border-hairline p-1"
+          className="elevated z-50 min-w-[220px] rounded-lg p-1"
         >
           <DropdownMenu.Item className={item} onSelect={onAttach}>
             <Paperclip size={13} /> {attachLabel}
           </DropdownMenu.Item>
-          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-hairline" />
+          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-border" />
           <DropdownMenu.Item className={item} onSelect={() => startNewThread()}>
             <SquarePen size={13} /> New Thread
           </DropdownMenu.Item>

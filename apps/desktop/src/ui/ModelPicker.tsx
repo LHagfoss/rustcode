@@ -119,11 +119,11 @@ function EffortSlider({
           commit(count - 1);
         }
       }}
-      className="relative h-7 touch-none rounded-full bg-fill-3 outline-none focus-visible:ring-2 focus-visible:ring-info/50"
+      className="relative h-7 touch-none rounded-full bg-fill-subtle"
     >
       <div
         className={cx(
-          "absolute top-0 bottom-0 left-0 rounded-full bg-brand-fill",
+          "absolute top-0 bottom-0 left-0 rounded-full bg-fill-strong",
           drag === null && "transition-[width] duration-300 ease-snappy",
         )}
         style={{ width: `calc(${INSET * 2 + KNOB}px + (100% - ${KNOB + INSET * 2}px) * ${fraction})` }}
@@ -132,15 +132,15 @@ function EffortSlider({
         <span
           key={effort}
           className={cx(
-            "absolute top-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-150",
-            i <= shown ? "bg-white/55" : "bg-fg-3",
+            "absolute top-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full",
+            i <= shown ? "bg-fg/45" : "bg-fg-faint",
           )}
           style={{ left: `calc(${INSET + KNOB / 2}px + (100% - ${KNOB + INSET * 2}px) * ${fractionOf(i)})` }}
         />
       ))}
       <span
         className={cx(
-          "absolute top-[2px] size-6 rounded-full bg-white shadow-[0_1px_3px_rgb(0_0_0/0.3)]",
+          "absolute top-[2px] size-6 rounded-full bg-fg shadow-1",
           drag === null ? "transition-[left,transform] duration-300 ease-snappy" : "scale-105",
         )}
         style={{ left: `calc(${INSET}px + (100% - ${KNOB + INSET * 2}px) * ${fraction})` }}
@@ -172,7 +172,7 @@ function ModelList({
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter models"
           aria-label="Filter models"
-          className="mb-1 h-[34px] rounded-full bg-fill-3 px-3.5 text-body outline-none placeholder:text-fg-3"
+          className="mb-1 h-[34px] rounded-full bg-fill-subtle px-3.5 text-body outline-none placeholder:text-fg-faint"
         />
       )}
       <div className="max-h-[260px] overflow-y-auto" role="listbox" aria-label="Models">
@@ -184,21 +184,21 @@ function ModelList({
             aria-selected={c.value === current}
             onClick={() => onPick(c.value)}
             className={cx(
-              "flex w-full items-center gap-2 rounded-[14px] px-2.5 py-2 text-left hover:bg-fill-2",
-              c.value === current && "bg-brand/15",
+              "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-fill",
+              c.value === current && "bg-accent/15",
             )}
           >
             <span className="min-w-0 flex-1">
               <span className="block truncate text-body">{modelName(c.name)}</span>
               {c.description && c.description !== modelName(c.name) && (
-                <span className="block truncate text-caption text-fg-2">{c.description}</span>
+                <span className="block truncate text-caption text-fg-muted">{c.description}</span>
               )}
             </span>
-            {c.value === current && <span className="text-brand">✓</span>}
+            {c.value === current && <span className="text-accent">✓</span>}
           </button>
         ))}
         {!shown.length && (
-          <div className="px-2.5 py-3 text-center text-callout text-fg-2">No matching models</div>
+          <div className="px-2.5 py-3 text-center text-callout text-fg-muted">No matching models</div>
         )}
       </div>
     </div>
@@ -227,13 +227,13 @@ function HarnessList({
               aria-disabled={!!reason}
               onClick={() => !reason && onPick(h.id)}
               className={cx(
-                "flex w-full items-center gap-2 rounded-[14px] px-2.5 py-2 text-left",
-                reason ? "opacity-45" : "hover:bg-fill-2",
-                h.id === current && "bg-brand/15",
+                "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left",
+                reason ? "opacity-45" : "hover:bg-fill",
+                h.id === current && "bg-accent/15",
               )}
             >
               <span className="flex-1 text-body">{h.name}</span>
-              <span className="text-caption text-fg-2">
+              <span className="text-caption text-fg-muted">
                 {reason ? "Unavailable" : h.builtin ? "Built in" : h.kind.toUpperCase()}
               </span>
             </button>
@@ -256,37 +256,42 @@ function pillLabel(model?: string | null, effort?: string | null, compact = fals
 /** Fast mode as a labelled toggle, offered only when the model has it. */
 function FastToggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
   return (
-    <Tooltip label="Faster replies; uses more of your plan">
-      <button
-        type="button"
-        role="switch"
-        aria-checked={on}
-        onClick={() => onChange(!on)}
-        className={cx(
-          "flex h-7 items-center gap-1.5 rounded-full px-2.5 font-medium text-callout",
-          on ? "bg-brand/15 text-brand" : "text-fg-2 hover:bg-fill-2 hover:text-fg",
-        )}
-      >
-        <Zap size={13} fill={on ? "currentColor" : "none"} />
-        Fast mode
-      </button>
-    </Tooltip>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-description="Faster replies; uses more of your plan"
+      onClick={() => onChange(!on)}
+      className={cx(
+        "flex h-7 items-center gap-1.5 rounded-full px-2.5 font-medium text-callout",
+        on ? "bg-fill-strong text-fg" : "text-fg-muted hover:bg-fill hover:text-fg",
+      )}
+    >
+      <Zap size={13} fill={on ? "currentColor" : "none"} />
+      Fast mode
+    </button>
   );
+}
+
+const NO_CONFIG: ConfigOption[] = [];
+
+/** A built-in model list known from any open thread, for a new thread before it exists. */
+function firstConfig(threads: Record<string, ThreadState>): ConfigOption[] {
+  for (const id in threads) {
+    const options = threads[id]!.configOptions;
+    if (options.length) return options;
+  }
+  return NO_CONFIG;
 }
 
 export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
   const harnesses = useApp((s) => s.harnesses);
   const choice = useApp((s) => s.newThread);
-  const threads = useApp((s) => s.threads);
+  // The first open thread's config options: stable while a reply streams, so the picker does not re-render per chunk.
+  const knownConfig = useApp((s) => firstConfig(s.threads));
   const [open, setOpen] = useState(false);
   const [pane, setPane] = useState<"main" | "models" | "harness">("main");
   const [preview, setPreview] = useState<string | null>(null);
-
-  // A built-in model list known from any open thread, for a new thread before it exists.
-  const knownConfig: ConfigOption[] = useMemo(
-    () => Object.values(threads).find((t) => t.configOptions.length > 0)?.configOptions ?? [],
-    [threads],
-  );
 
   const isNew = !thread;
   const effective: NewThreadChoice = choice ??
@@ -364,13 +369,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           type="button"
           aria-label="Model and effort"
           className={cx(
-            "flex h-[30px] max-w-[260px] items-center gap-1.5 rounded-full px-3 text-callout text-fg-2 transition-colors hover:bg-fill-1 hover:text-fg",
-            open ? "bg-fill-1 text-fg" : "bg-fill-2",
+            "flex h-[30px] max-w-[260px] items-center gap-1.5 rounded-full px-3 text-callout text-fg-muted hover:bg-fill-strong hover:text-fg",
+            open ? "bg-fill-strong text-fg" : "bg-fill",
           )}
         >
-          {fast?.currentBool && <Zap size={11} className="shrink-0 text-brand" fill="currentColor" />}
+          {fast?.currentBool && <Zap size={11} className="shrink-0 text-accent" fill="currentColor" />}
           <span className="truncate">{label.name}</span>
-          {label.effort && <span className="text-fg-3">{effortLabel(label.effort)}</span>}
+          {label.effort && <span className="text-fg-faint">{effortLabel(label.effort)}</span>}
           <ChevronUp
             size={11}
             strokeWidth={2.5}
@@ -384,7 +389,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="surface z-40 w-[min(340px,calc(100vw-40px))] overflow-hidden rounded-[20px] border border-hairline p-2"
+          className="elevated z-40 w-[min(340px,calc(100vw-40px))] overflow-hidden rounded-xl p-2"
         >
           {shownPane === "main" && (
             <div key="main" className="flex flex-col gap-2 rc-drill-back">
@@ -402,18 +407,27 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                     disabled={!!modelReason || !models.length}
                     onClick={() => setPane("models")}
                     aria-label={`Model ${modelName(model ?? undefined) ?? "default"}`}
-                    className="flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2.5 font-medium text-callout hover:bg-fill-2 disabled:hover:bg-transparent"
+                    className="flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2.5 font-medium text-callout hover:bg-fill disabled:hover:bg-transparent"
                   >
                     <span className="truncate">
                       {modelName(model ?? undefined) ?? (models.length ? "Default" : "Harness default")}
                     </span>
-                    {shownEffort && <span className="shrink-0 text-fg-3">{effortLabel(shownEffort)}</span>}
+                    {shownEffort && (
+                      <span className="shrink-0 text-fg-faint">{effortLabel(shownEffort)}</span>
+                    )}
                     {!modelReason && models.length > 0 && (
-                      <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-3" />
+                      <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
                     )}
                   </button>
                 </Tooltip>
               </div>
+              {fast && (
+                <p className="-mt-1 px-2.5 text-caption text-fg-faint">
+                  {fast.currentBool
+                    ? "Fast mode: faster replies, more of your plan"
+                    : "Fast mode answers faster and uses more of your plan"}
+                </p>
+              )}
               {hasEffort && (
                 <EffortSlider
                   efforts={efforts}
@@ -423,7 +437,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                 />
               )}
               {effortReason && efforts.length > 0 && (
-                <div className="flex items-center gap-1.5 px-2.5 text-caption text-fg-3">
+                <div className="flex items-center gap-1.5 px-2.5 text-caption text-fg-faint">
                   <Lock size={10} />
                   {effortReason}
                 </div>
@@ -433,15 +447,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                   type="button"
                   disabled={!isNew}
                   onClick={() => setPane("harness")}
-                  className="flex h-8 items-center gap-2 rounded-[12px] px-2.5 text-left hover:bg-fill-2 disabled:hover:bg-transparent"
+                  className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-left hover:bg-fill disabled:hover:bg-transparent"
                 >
-                  <span className="text-callout text-fg-2">Harness</span>
+                  <span className="text-callout text-fg-muted">Harness</span>
                   <span className="flex-1 truncate text-right font-medium text-callout">{harnessName}</span>
                   {isNew ? (
-                    <ChevronRight size={12} strokeWidth={2.5} className="text-fg-3" />
+                    <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
                   ) : (
                     <Tooltip label="A thread keeps its harness">
-                      <Lock size={11} className="text-fg-3" />
+                      <Lock size={11} className="text-fg-faint" />
                     </Tooltip>
                   )}
                 </button>
@@ -454,7 +468,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                 <button
                   type="button"
                   onClick={() => setPane("main")}
-                  className="flex h-7 items-center gap-1 self-start rounded-full px-2 font-semibold text-callout text-fg-2 hover:bg-fill-2"
+                  className="flex h-7 items-center gap-1 self-start rounded-full px-2 font-semibold text-callout text-fg-muted hover:bg-fill"
                 >
                   <ChevronLeft size={13} />
                   {shownPane === "models" ? "Models" : "Harness"}

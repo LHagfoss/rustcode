@@ -127,6 +127,8 @@ export interface SessionSummary {
   worktree?: Worktree;
   /** Engine-reported status (`_meta.rustcode.status`). */
   status?: ThreadStatus;
+  /** Pinned in the engine (`_meta.rustcode.pinned`). */
+  pinned?: boolean;
 }
 
 export function parseSessionList(result: Json): { sessions: SessionSummary[]; nextCursor?: string } {
@@ -143,6 +145,7 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
     sessions.push({
       worktree: parseWorktree(rc?.worktree),
       status: parseStatus(rc?.status),
+      pinned: bool(rc?.pinned),
       id,
       cwd: str(e?.cwd) ?? "",
       title: str(e?.title),
