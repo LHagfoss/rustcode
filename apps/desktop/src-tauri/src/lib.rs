@@ -63,6 +63,7 @@ pub fn run() {
             native::reduce_transparency,
             native::open_path,
             native::skill_create,
+            native::open_in_editor,
             banner::banner_save,
             banner::banner_read,
             banner::banner_remove,

@@ -163,7 +163,7 @@ function Toasts() {
         <div
           key={t.id}
           className={cx(
-            "rc-glass pointer-events-auto max-w-[480px] rounded-full px-4 py-1.5 text-callout shadow-1 rc-in",
+            "rc-glass rc-glass-strong pointer-events-auto max-w-[480px] rounded-full px-4 py-1.5 text-callout shadow-1 rc-in",
             t.tone === "warning" && "text-warning",
           )}
         >

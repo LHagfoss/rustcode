@@ -74,7 +74,8 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
     harness's own login in Terminal and accepts only known harness tools,
     `open_path` (an existing folder, or a Markdown, TOML, JSON, YAML or
     text file, in its editor; nothing that runs) and `skill_create` (a
-    valid skill name, user or project root, never overwriting).
+    valid skill name, user or project root, never overwriting) and
+    `open_in_editor` (an existing file, at a line).
   - `links.rs`: `link_meta`, a page's title, favicon (as a `data:` URL) and
     `theme-color` for link chips. http(s) only; the host must resolve to
     public addresses only (checked after DNS and pinned, so neither a
@@ -209,9 +210,9 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Look.** Neutral and opaque, after [design.md](design.md): the
   sidebar and every surface paint solid token colours, so greys no longer
   pick up the wallpaper through the window's material (`windowEffects` is
-  still set in `tauri.conf.json` but nothing shows it). Only the composer,
-  toasts, the jump-to-latest button and the header over a banner are
-  frosted; Reduce transparency (the media query, or the system setting
+  still set in `tauri.conf.json` but nothing shows it). What floats (the
+  composer, popovers, menus, tooltips, dialogs, toasts, the right panel,
+  the lightbox) shares one glass, `--rc-glass-bg` + `--rc-glass-filter`; Reduce transparency (the media query, or the system setting
   read by the shell's `reduce_transparency`) makes them solid. Hover is
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
@@ -232,7 +233,8 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   filter button by the search groups by project, keeps to the current
   project, and opens the Board. Subagents nest under their thread (open one
   in the Agents panel), and threads another thread started nest under it.
-  Settings is the gear at the right of the main header; the project is
+  Settings is the gear in the top row, after Hide sidebar and New thread
+  (in the header's cluster while the sidebar is hidden); the project is
   chosen per thread in the composer's tray.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
   lights' line, 14 px past the zoom button (x 92; the button ends at x 78),
@@ -263,6 +265,27 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   the last theme is cached so a restart does not flash the default.
   Without the methods the app shows its two built-in themes. Theme files
   are described in [themes.md](themes.md).
+- **Timeline rail.** After the SwiftUI app's `TimelineRail`: a tick per
+  message you sent, in the gutter left of the chat, the turn being read
+  widest and in the accent, the rest narrowing with distance; a click goes
+  to that turn, hover shows its first words. The current turn comes from
+  the virtualizer's row offsets on scroll, and the rail re-renders only
+  when it or the turns change (`src/ui/TimelineRail.tsx`).
+- **Harness marks.** `HarnessIcon` draws each harness's mark in the model
+  pill, the harness picker and list (onboarding, Settings), the tray, the
+  sidebar's rows and the thread's header: Claude, Gemini and OpenCode from
+  simple-icons 16.35.0 (CC0, three paths vendored, no dependency), the app
+  icon for RustCode, a letter in a rounded square for the rest (Codex: the
+  OpenAI mark is not in simple-icons). A harness `icon` URL is preferred
+  when the engine sends one.
+- **Pictures.** A pasted picture's thumbnail and a sent message's pictures
+  open in a lightbox (fit to the window, ←→ between the message's
+  pictures, a click zooms, Esc or a click outside closes).
+- **File references.** Inline code naming a file (`src/a.rs:12`,
+  `src/a.rs:12:4`, `Cargo.toml`) and relative links (`[a](src/a.rs#L12)`)
+  open the file in the editor at that line, resolved against the thread's
+  folder (`open_in_editor`: VS Code, Cursor or Zed when installed, else
+  the default text editor).
 - **Right panel.** Changes, Agents and Pull requests share one floating
   panel (`src/ui/RightPanel.tsx`): tabs between them, a close button, a
   draggable left edge (kept), ⌘⌥B to toggle it.
@@ -504,7 +527,10 @@ From the SwiftUI app, still missing or partial:
   (`_rustcode/session/move`), the retention sweep, swipe actions; loading
   the thread list page by page. Trash moves the folder into `~/.Trash`
   (macOS); Finder's Put Back does not know it.
-- The timeline rail, turn folding ("Worked for … · N tool calls"), sticky
+- Markdown pictures from local paths (an asset protocol scoped to the
+  thread's folder) and `mermaid` blocks; a file reference that is changed
+  in the turn does not open the Changes or Review diff yet.
+- Turn folding ("Worked for … · N tool calls"), sticky
   turn bar, stream pacing, quote in reply.
 - The auto-approve (YOLO) toggle on approval cards.
 - Subagents' verification status and background agents of threads off

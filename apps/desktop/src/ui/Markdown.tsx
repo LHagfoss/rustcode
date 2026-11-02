@@ -15,9 +15,12 @@ import {
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/fileRefs";
 import { highlight, peekHighlight } from "../lib/highlight";
 import { markdownBlocks } from "../lib/markdownBlocks";
-import { openExternal } from "../lib/native";
+import { openExternal, openInEditor } from "../lib/native";
+import { hasShell } from "../lib/shell";
+import { toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
 import { copyText, cx } from "./primitives";
 
@@ -105,6 +108,19 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   );
 }
 
+/** Opens a file a reply names, resolved against the open thread's folder. */
+function openRef(ref: FileRef) {
+  const s = useApp.getState();
+  const cwd = (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
+  if (!hasShell()) {
+    toast("Opening files needs the desktop app.", "warning");
+    return;
+  }
+  openInEditor(resolveRef(ref, cwd), ref.line, ref.column).catch((e) =>
+    toast(e instanceof Error ? e.message : String(e), "warning"),
+  );
+}
+
 function shortUrl(href: string, children: ReactNode): ReactNode {
   if (typeof children !== "string" || children !== href) return children;
   try {
@@ -135,7 +151,11 @@ const components: Components = {
         href={href}
         onClick={(e) => {
           e.preventDefault();
-          if (href) openExternal(href);
+          if (!href) return;
+          // A relative link names a file in the thread's folder, not a page.
+          const ref = parseLinkRef(href);
+          if (ref) openRef(ref);
+          else openExternal(href);
         }}
         className="cursor-pointer text-accent underline decoration-accent/45 underline-offset-2"
       >
@@ -163,6 +183,18 @@ const components: Components = {
     const block = lang !== undefined || text.includes("\n");
     void node;
     if (block) return <CodeBlock code={text.replace(/\n$/, "")} lang={lang} />;
+    const ref = parseInlineRef(text);
+    if (ref)
+      return (
+        <button
+          type="button"
+          title={`Open ${ref.path}${ref.line ? ` at line ${ref.line}` : ""}`}
+          onClick={() => openRef(ref)}
+          className="inline rounded-xs text-accent decoration-accent/45 underline-offset-2 hover:underline"
+        >
+          <code className="font-mono text-[0.95em]">{children}</code>
+        </button>
+      );
     return <code className="font-mono text-[0.95em]">{children}</code>;
   },
 };

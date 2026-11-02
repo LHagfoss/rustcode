@@ -1559,7 +1559,13 @@ export class MockTransport implements Transport {
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     if (command === "git_changes")
       return mockGitChanges(String(args.cwd), args.base ? String(args.base) : undefined);
-    if (command === "reveal_path" || command === "open_terminal_at" || command === "open_path") return null;
+    if (
+      command === "reveal_path" ||
+      command === "open_terminal_at" ||
+      command === "open_path" ||
+      command === "open_in_editor"
+    )
+      return null;
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
     throw new Error(`The mock does not run ${command}.`);
   }

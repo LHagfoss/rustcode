@@ -82,6 +82,11 @@ export function openPath(path: string): void {
   if (hasShell()) void invoke("open_path", { path }).catch((e) => console.warn("open_path", e));
 }
 
+/** Opens a file a reply names in the user's editor, at its line when the editor takes one. */
+export function openInEditor(path: string, line?: number, column?: number): Promise<void> {
+  return invoke<void>("open_in_editor", { path, line: line ?? null, column: column ?? null });
+}
+
 /** Writes a new skill's SKILL.md from the template and answers its path. */
 export function createSkill(name: string, scope: "user" | "project", cwd: string): Promise<string> {
   return invoke<string>("skill_create", { name, scope, cwd });

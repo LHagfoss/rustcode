@@ -539,6 +539,11 @@
   -webkit-backdrop-filter: var(--rc-glass-filter);
 }
 
+/* Small pills over text (jump to latest, toasts): the denser glass, so their label reads. */
+.rc-glass-strong {
+  background: var(--rc-glass-bg-strong);
+}
+
 /*
  * The composer floats over the transcript in glass, with a soft shadow
  * above and below. Focus makes the glass a little denser; there is no ring

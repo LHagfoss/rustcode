@@ -482,9 +482,90 @@ pub fn skill_create(name: String, scope: String, cwd: String) -> Result<String, 
     write_skill(&root, &name).map(|file| file.display().to_string())
 }
 
+/// Editors that take `path:line:col`, by their command-line tool, where a
+/// GUI app finds them (its PATH is minimal).
+const EDITOR_TOOLS: &[(&str, &[&str])] = &[
+    (
+        "code",
+        &[
+            "/opt/homebrew/bin/code",
+            "/usr/local/bin/code",
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        ],
+    ),
+    (
+        "cursor",
+        &[
+            "/opt/homebrew/bin/cursor",
+            "/usr/local/bin/cursor",
+            "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        ],
+    ),
+    ("zed", &["/opt/homebrew/bin/zed", "/usr/local/bin/zed"]),
+];
+
+/// The file a reference in a reply names: an existing regular file, by absolute path.
+fn editor_target(path: &str) -> Result<PathBuf, String> {
+    let path = expand_home(path);
+    if !path.is_absolute() || !path.is_file() {
+        return Err(format!("No such file: {}", path.display()));
+    }
+    Ok(path)
+}
+
+/// Opens a file a reply names, at its line when an editor that takes one is
+/// installed (VS Code, Cursor, Zed), else in the default text editor. It
+/// only ever opens the file for editing; nothing runs it.
+#[tauri::command(async)]
+pub fn open_in_editor(path: String, line: Option<u32>, column: Option<u32>) -> Result<(), String> {
+    let path = editor_target(&path)?;
+    let at = match (line, column) {
+        (Some(l), Some(c)) => format!("{}:{l}:{c}", path.display()),
+        (Some(l), None) => format!("{}:{l}", path.display()),
+        _ => path.display().to_string(),
+    };
+    for (tool, places) in EDITOR_TOOLS {
+        if let Some(bin) = places.iter().map(Path::new).find(|p| p.is_file()) {
+            let mut command = Command::new(bin);
+            if *tool != "zed" {
+                command.arg("-g");
+            }
+            return command
+                .arg(&at)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-t")
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        open_with_system(&path.display().to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opens_only_existing_files_in_the_editor() {
+        assert!(editor_target("relative.rs").is_err());
+        assert!(editor_target("/no/such/file.rs").is_err());
+        assert!(editor_target("/tmp").is_err(), "a folder is not a file");
+        let file = std::env::temp_dir().join(format!("rc-editor-{}.rs", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(editor_target(file.to_str().unwrap()).unwrap(), file);
+        std::fs::remove_file(&file).unwrap();
+    }
 
     #[test]
     fn opens_only_folders_and_text_files() {

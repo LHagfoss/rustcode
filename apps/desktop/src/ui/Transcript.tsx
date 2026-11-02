@@ -6,11 +6,13 @@ import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { checkpointsByTurn } from "../acp/v2";
+import { observeSize } from "../lib/resize";
 import { useApp } from "../state/store";
 import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
 import { AgentSpawnRow } from "./AgentViews";
 import { cx } from "./primitives";
 import { AssistantRow, NoticeRow, ThoughtRow, ToolRow, TurnEndRow, UserRow, WorkingRow } from "./Rows";
+import { TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
 type Row = { key: string; item?: TranscriptItem; working?: true };
@@ -231,13 +233,55 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
     if (pinned.current) toBottom();
   }, [rows, toBottom, bottomInset]);
 
+  // The timeline's turns: one per user message. Kept as the same array while they do not change,
+  // so a streamed chunk does not redraw the rail.
+  const turnsKey = useRef<{ sig: string; turns: Turn[] }>({ sig: "", turns: [] });
+  let sig = "";
+  for (let i = 0; i < rows.length; i++) if (rows[i]!.item?.kind === "user") sig += `${i},`;
+  if (sig !== turnsKey.current.sig) {
+    turnsKey.current = {
+      sig,
+      turns: rows.flatMap((row, i) =>
+        row.item?.kind === "user" ? [{ row: i, title: turnTitle(row.item.text) }] : [],
+      ),
+    };
+  }
+  const turns = turnsKey.current.turns;
+  const [readTurn, setReadTurn] = useState(0);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setSize({ width: el.clientWidth, height: el.clientHeight });
+    return observeSize(el, () => setSize({ width: el.clientWidth, height: el.clientHeight }));
+  }, []);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
     pinned.current = atBottom;
     setShowLatest(!atBottom);
+    // The turn being read: the last one whose first line is above 30% of the visible part.
+    const reading = el.scrollTop + (el.clientHeight - bottomInset) * 0.3;
+    const starts = virtualizer.measurementsCache;
+    let at = 0;
+    for (let t = 0; t < turns.length; t++) {
+      const start = starts[turns[t]!.row]?.start;
+      if (start !== undefined && start + 16 <= reading) at = t;
+      else if (start !== undefined) break;
+    }
+    setReadTurn(at);
   };
+
+  const jumpToTurn = useCallback(
+    (row: number) => {
+      pinned.current = false;
+      setShowLatest(true);
+      virtualizer.scrollToIndex(row, { align: "start" });
+    },
+    [virtualizer],
+  );
 
   const onWheel = (e: React.WheelEvent) => {
     // Scrolling up during a stream unpins at once, before the next chunk pulls the view down.
@@ -401,6 +445,13 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
           })}
         </div>
       </div>
+      <TimelineRail
+        turns={turns}
+        current={showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1}
+        width={size.width}
+        visible={size.height - bottomInset + 20}
+        onJump={jumpToTurn}
+      />
       <button
         type="button"
         onClick={() => {
@@ -412,7 +463,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
         tabIndex={showLatest ? 0 : -1}
         className={cx(
           // Above the floating composer (its top is `bottomInset - 20` up) and over it in z.
-          "rc-glass absolute left-1/2 z-30 flex h-[30px] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,transform] duration-200 ease-snappy hover:bg-surface-3",
+          "rc-glass rc-glass-strong absolute left-1/2 z-30 flex h-[30px] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,transform] duration-200 ease-snappy hover:bg-surface-3",
           showLatest ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0",
         )}
         style={{ bottom: bottomInset - 8 }}
