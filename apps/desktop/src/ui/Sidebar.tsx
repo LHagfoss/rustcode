@@ -6,6 +6,7 @@
 
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleDashed,
@@ -55,7 +56,7 @@ import {
   useApp,
   worktreeOf,
 } from "../state/store";
-import { formatClock, shortAge } from "../state/thread";
+import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { AgentMark } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
@@ -732,6 +733,8 @@ export function Sidebar() {
   const [width, setWidth] = useSidebarWidth();
   const dragging = useRef(false);
   const now = useNow();
+  // Settled lists 10 threads, then 25 more at a time, as T3 Code does.
+  const [settledShown, setSettledShown] = useState(10);
   // design-lint: allow (mask alpha, not a colour)
   const fade = "linear-gradient(to bottom, #000 calc(100% - 28px), transparent)";
 
@@ -771,8 +774,10 @@ export function Sidebar() {
     for (const s of filtered) {
       if (parentOf[s.id]) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
-      // Settled is exactly the threads marked Done (by the user, or the engine for a merged branch).
-      const done = (marks[s.id] ?? listed) === "done";
+      // Settled: threads marked Done (by the user, or the engine for a merged branch), and, as in
+      // T3 Code, threads untouched for three days unless they wait for review.
+      const status = marks[s.id] ?? listed;
+      const done = status === "done" || (status !== "review" && idleSettled(s.updatedAt, now));
       // A pinned thread always shows, whatever it is doing.
       if (pinned.includes(s.id)) pins.push(s);
       else if (flagged.has(`${s.id}:n`)) needs.push(s);
@@ -810,7 +815,7 @@ export function Sidebar() {
           : undefined;
     }
     return all.filter((g) => g.items.length);
-  }, [filtered, flags, marks, pinned, parentOf, byProject]);
+  }, [filtered, flags, marks, pinned, parentOf, byProject, now]);
 
   // A search shows every match, folded sections too.
   const isOpen = (id: string) => !!query.trim() || !folded.includes(id);
@@ -941,10 +946,25 @@ export function Sidebar() {
                             </div>
                           );
                         })
-                      : rows(section.items, !byProject || section.id !== "threads")}
+                      : rows(
+                          section.id === "settled" && !query.trim()
+                            ? section.items.slice(0, settledShown)
+                            : section.items,
+                          !byProject || section.id !== "threads",
+                        )}
+                    {section.id === "settled" && !query.trim() && section.items.length > settledShown && (
+                      <button
+                        type="button"
+                        onClick={() => setSettledShown((n) => n + 25)}
+                        className="flex h-7 w-full items-center gap-1 rounded-md px-2.5 text-left text-fg-muted text-sub hover:bg-fill-subtle hover:text-fg"
+                      >
+                        <ChevronDown size={11} />
+                        Show {Math.min(25, section.items.length - settledShown)} more
+                      </button>
+                    )}
                     {section.id === "settled" && (
                       <p className="px-2.5 pt-1 pb-1.5 text-fg-faint text-sub">
-                        Threads marked Done. A new message brings one back.
+                        Done, or untouched for 3 days. A new message brings one back.
                       </p>
                     )}
                   </Fold>

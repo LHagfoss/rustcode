@@ -299,9 +299,10 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.
 - **Sidebar.** Threads by where they are in their life (after T3 Code):
-  Pinned (always shown), Needs You, Working, Threads, and Settled: done or
-  archived threads, folded by default and kept as a shelf at the foot of
-  the list. Each section folds with its chevron and remembers it; a folded
+  Pinned (always shown), Needs You, Working, Threads, and Settled: threads
+  marked Done and, as in T3 Code, threads untouched for three days unless
+  they wait for review (`idleSettled`), folded by default and kept as a
+  shelf at the foot of the list, 10 at a time then *Show 25 more*. Each section folds with its chevron and remembers it; a folded
   one shows a dot when a thread inside needs you (amber) or works (pulsing
   accent), and a search opens them all. A row is the title and one meta
   line (project when not grouped, worktree branch, harness, model) with a

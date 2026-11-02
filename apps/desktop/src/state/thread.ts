@@ -511,6 +511,14 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/** How long a thread rests untouched before the sidebar settles it on its own, as T3 Code does. */
+export const SETTLE_AFTER_MS = 3 * 86_400_000;
+
+/** Whether a thread last active at `at` has been idle long enough to settle. */
+export function idleSettled(at: number | undefined, now = Date.now()): boolean {
+  return at !== undefined && now - at >= SETTLE_AFTER_MS;
+}
+
 /** A running turn's clock: `0:42`, `12:03`, `1:02:03`. */
 export function formatClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
