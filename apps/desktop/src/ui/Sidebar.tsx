@@ -55,7 +55,7 @@ import {
   useApp,
   worktreeOf,
 } from "../state/store";
-import { relativeAge } from "../state/thread";
+import { formatClock, shortAge } from "../state/thread";
 import { AgentMark } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
@@ -113,8 +113,8 @@ function ThreadMenuItems({
         </Item>
       )}
       {status !== "done" && (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "done")}>
-          <CircleCheck size={13} /> Mark Done
+        <Item className={menuItem} onSelect={() => settleThread(session, status)}>
+          <CircleCheck size={13} /> Settle
         </Item>
       )}
       {(status === "review" || status === "done") && (
@@ -180,7 +180,58 @@ function ThreadMenuItems({
   );
 }
 
+/** A running turn's clock, ticking on its own so the row does not re-render every second. */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <>{formatClock(now - since)}</>;
+}
+
+/** A small icon button in a row's hover slot. */
+function RowAction({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip label={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick();
+        }}
+        className="flex size-[22px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+      >
+        {children}
+      </button>
+    </Tooltip>
+  );
+}
+
+/** Marks a thread Done, with an Undo that puts back the status it had. */
+function settleThread(session: SessionSummary, before: ThreadStatus | undefined) {
+  void setThreadStatus(session.id, "done");
+  toast(`Settled "${session.title || "New thread"}"`, "info", {
+    action: {
+      label: "Undo",
+      run: () => void setThreadStatus(session.id, before === "review" ? "review" : "idle"),
+    },
+  });
+}
+
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
+// After T3 Code's rows: the title and one meta line, and a single slot on the right that shows the
+// age, a live clock while the turn runs, or what the thread waits for; hovering swaps it for the
+// row's actions, so nothing shifts.
 const ThreadRow = memo(function ThreadRow({
   session,
   selected,
@@ -194,21 +245,19 @@ const ThreadRow = memo(function ThreadRow({
 }) {
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
+  const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
-  const harness =
-    session.harness && session.harness !== "rustcode"
-      ? harnesses?.harnesses.find((h) => h.id === session.harness)
-      : undefined;
-  const detail = [
+  const external = !!session.harness && session.harness !== "rustcode";
+  const harness = external ? harnesses?.harnesses.find((h) => h.id === session.harness) : undefined;
+  const meta = [
     worktree ? undefined : scopeAll && session.cwd ? projectName(session.cwd) : undefined,
-    harness?.name ?? (session.harness && session.harness !== "rustcode" ? session.harness : undefined),
+    harness?.name ?? (external ? session.harness : undefined),
     modelName(session.model),
-    relativeAge(session.updatedAt, now),
   ].filter(Boolean);
   const startRename = () => {
     setTitle(session.title ?? "");
@@ -225,6 +274,7 @@ const ThreadRow = memo(function ThreadRow({
         <input
           autoFocus
           value={title}
+          onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {
@@ -237,6 +287,7 @@ const ThreadRow = memo(function ThreadRow({
       </div>
     );
   }
+  const done = status === "done";
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
@@ -244,80 +295,110 @@ const ThreadRow = memo(function ThreadRow({
           <button
             type="button"
             onClick={() => selectThread(session.id)}
+            onDoubleClick={startRename}
+            onKeyDown={(e) => {
+              if (e.key === "F2") {
+                e.preventDefault();
+                startRename();
+              }
+            }}
             aria-current={selected ? "page" : undefined}
             className={cx(
-              "flex w-full flex-col rounded-md px-2.5 py-1 text-left",
+              "flex w-full flex-col gap-px rounded-md px-2.5 py-[5px] text-left",
               selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
             )}
           >
-            <span className="flex w-full items-center gap-2">
+            <span className="flex w-full items-center gap-1.5 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
               {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-muted" />}
               <span
                 className={cx(
                   "min-w-0 flex-1 truncate text-body",
-                  selected ? "font-medium text-fg" : status === "done" ? "text-fg-muted" : "text-fg",
+                  selected ? "font-medium text-fg" : done ? "text-fg-muted" : "text-fg",
                 )}
               >
                 {session.title || "New thread"}
               </span>
               <LinkBadge threadId={session.id} />
-              <span className="flex h-3.5 w-4 shrink-0 items-center justify-center group-hover:invisible">
+              <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
                 {request ? (
-                  <MessageCircleQuestion size={12} className="text-warning" />
+                  <>
+                    <MessageCircleQuestion size={12} className="text-warning" />
+                    <span className="font-medium text-warning">
+                      {request.question ? "Input" : "Approval"}
+                    </span>
+                  </>
                 ) : running ? (
-                  <Spinner size={12} />
+                  <>
+                    <Spinner size={11} />
+                    <span className="text-accent">
+                      {startedAt ? <Elapsed since={startedAt} /> : "Working"}
+                    </span>
+                  </>
                 ) : (
-                  <StatusChip status={status} compact />
+                  <>
+                    {status === "review" && <StatusChip status={status} compact />}
+                    <span className="text-fg-faint">{shortAge(session.updatedAt, now)}</span>
+                  </>
                 )}
               </span>
             </span>
             {request ? (
-              <span className="truncate font-medium text-warning text-sub">
-                {request.question ? `Asks: ${request.question.text}` : `Approve: ${request.title}`}
+              <span className="truncate text-fg-muted text-sub">
+                {request.question ? request.question.text : request.title}
               </span>
             ) : (
-              <span className="flex items-center gap-1 truncate text-fg-faint text-sub">
-                {worktree ? (
-                  <span className="flex min-w-0 shrink items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
-                    <GitBranch size={9} className="shrink-0" />
-                    <span className="truncate">{worktree.branch}</span>
-                  </span>
-                ) : (
-                  scopeAll && session.cwd && <Folder size={9} className="shrink-0" />
-                )}
-                {session.harness && session.harness !== "rustcode" && (
-                  <HarnessIcon
-                    id={session.harness}
-                    name={harness?.name}
-                    size={10}
-                    className="text-fg-muted"
-                  />
-                )}
-                <span className="truncate">{detail.join(" · ")}</span>
-              </span>
+              (meta.length > 0 || worktree || external) && (
+                <span className="flex items-center gap-1 truncate text-fg-faint text-sub">
+                  {worktree && (
+                    <span className="flex min-w-0 shrink items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
+                      <GitBranch size={9} className="shrink-0" />
+                      <span className="truncate">{worktree.branch}</span>
+                    </span>
+                  )}
+                  {external && (
+                    <HarnessIcon
+                      id={session.harness!}
+                      name={harness?.name}
+                      size={10}
+                      className="text-fg-muted"
+                    />
+                  )}
+                  <span className="truncate">{meta.join(" · ")}</span>
+                </span>
+              )
             )}
           </button>
-          <DropdownMenu.Root modal={false}>
-            <DropdownMenu.Trigger asChild>
-              <button
-                type="button"
-                aria-label={`Actions for ${session.title || "thread"}`}
-                className="absolute top-[4px] right-1.5 flex size-[22px] items-center justify-center rounded-sm text-fg-muted opacity-0 hover:bg-fill focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-              >
-                <Ellipsis size={13} />
-              </button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content align="start" sideOffset={4} className={menuSurface}>
-                <ThreadMenuItems
-                  session={session}
-                  Item={DropdownMenu.Item}
-                  Separator={DropdownMenu.Separator}
-                  onRename={startRename}
-                />
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+          <div className="absolute top-[3px] right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
+            <RowAction label={pinned ? "Unpin" : "Pin"} onClick={() => togglePin(session.id)}>
+              {pinned ? <PinOff size={12} /> : <Pin size={12} />}
+            </RowAction>
+            {!done && (
+              <RowAction label="Settle" onClick={() => settleThread(session, status)}>
+                <Check size={13} />
+              </RowAction>
+            )}
+            <DropdownMenu.Root modal={false}>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Actions for ${session.title || "thread"}`}
+                  className="flex size-[22px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+                >
+                  <Ellipsis size={13} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content align="start" sideOffset={4} className={menuSurface}>
+                  <ThreadMenuItems
+                    session={session}
+                    Item={DropdownMenu.Item}
+                    Separator={DropdownMenu.Separator}
+                    onRename={startRename}
+                  />
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
           <AgentChildren threadId={session.id} />
         </div>
       </ContextMenu.Trigger>
@@ -416,6 +497,8 @@ interface Section {
   id: SectionId;
   label: string;
   items: SessionSummary[];
+  /** What a folded section hides: a thread that needs you, else one that works. */
+  hidden?: "needs" | "working";
   /** Threads, split by project when there are several. */
   projects?: { key: string; label: string; items: SessionSummary[] }[];
 }
@@ -451,6 +534,21 @@ function Fold({ open, children }: { open: boolean; children: React.ReactNode }) 
   );
 }
 
+/** The dot a folded group shows for what it hides. */
+function HiddenDot({ kind }: { kind?: "needs" | "working" }) {
+  if (!kind) return null;
+  return (
+    <span
+      role="img"
+      aria-label={kind === "needs" ? "A thread here needs you" : "A thread here is working"}
+      className={cx(
+        "size-1.5 shrink-0 rounded-full",
+        kind === "needs" ? "bg-warning" : "bg-accent animate-pulse",
+      )}
+    />
+  );
+}
+
 function SectionHeader({
   section,
   open,
@@ -471,6 +569,7 @@ function SectionHeader({
       )}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
+      {!open && <HiddenDot kind={section.hidden} />}
       <span className="font-normal text-fg-faint tabular">{section.items.length}</span>
       <ChevronRight
         size={11}
@@ -483,6 +582,58 @@ function SectionHeader({
         )}
       />
     </button>
+  );
+}
+
+/** A project's folder inside Threads: folds, counts, and starts a thread there on hover. */
+function ProjectHeader({
+  label,
+  count,
+  open,
+  onToggle,
+  onNew,
+}: {
+  label: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  onNew?: () => void;
+}) {
+  return (
+    <div className="group/p relative flex h-7 items-center">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5 text-left text-fg-muted text-sub hover:bg-fill-subtle"
+      >
+        <ChevronRight
+          size={11}
+          strokeWidth={2.5}
+          className={cx(
+            "shrink-0 text-fg-faint transition-transform duration-200 ease-snappy",
+            open && "rotate-90",
+          )}
+        />
+        {open ? <FolderOpen size={12} className="shrink-0" /> : <Folder size={12} className="shrink-0" />}
+        <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+        <span
+          className={cx(
+            "text-fg-faint tabular",
+            onNew && "group-hover/p:invisible group-has-[:focus-visible]/p:invisible",
+          )}
+        >
+          {count}
+        </span>
+      </button>
+      {onNew && (
+        <span className="absolute right-1.5 hidden group-hover/p:flex group-has-[:focus-visible]/p:flex">
+          <RowAction label={`New thread in ${label}`} onClick={onNew}>
+            <SquarePen size={12} />
+          </RowAction>
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -573,9 +724,10 @@ export function Sidebar() {
   }, [hidden]);
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
-  const [byProject, setByProject] = useStored("rustcode.sidebar.byProject", true);
+  // By state, as T3 Code's sidebar, with the project on each row; grouping by project is an option.
+  const [byProject, setByProject] = useStored("rustcode.sidebar.groupByProject", false);
   const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
-  const [folded, setFolded] = useStored<SectionId[]>("rustcode.sidebar.folded", FOLDED_BY_DEFAULT);
+  const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", FOLDED_BY_DEFAULT);
   const [width, setWidth] = useSidebarWidth();
   const dragging = useRef(false);
   const now = useNow();
@@ -649,13 +801,19 @@ export function Sidebar() {
       { id: "threads", label: "Threads", items: active, projects },
       { id: "settled", label: "Settled", items: settled },
     ];
+    for (const g of all) {
+      g.hidden = g.items.some((x) => flagged.has(`${x.id}:n`))
+        ? "needs"
+        : g.items.some((x) => flagged.has(`${x.id}:w`))
+          ? "working"
+          : undefined;
+    }
     return all.filter((g) => g.items.length);
   }, [filtered, flags, marks, pinned, parentOf, byProject]);
 
   // A search shows every match, folded sections too.
-  const isOpen = (id: SectionId) => !!query.trim() || !folded.includes(id);
-  const toggle = (id: SectionId) =>
-    setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
+  const isOpen = (id: string) => !!query.trim() || !folded.includes(id);
+  const toggle = (id: string) => setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
 
   const onResize = (e: React.PointerEvent) => {
     dragging.current = true;
@@ -754,32 +912,45 @@ export function Sidebar() {
                   : "No threads yet."}
             </div>
           )}
-          {sections.map((section) => {
-            const open = isOpen(section.id);
-            return (
-              <section key={section.id} className="mt-1.5 first:mt-0" aria-label={section.label}>
-                <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
-                <Fold open={open}>
-                  {section.projects
-                    ? section.projects.map((p) => (
-                        <div key={p.key} className="mb-1">
-                          <div className="flex h-6 items-center gap-1.5 px-2.5 text-fg-faint text-sub">
-                            <Folder size={11} className="shrink-0" />
-                            <span className="truncate">{p.label}</span>
-                          </div>
-                          {rows(p.items, false)}
-                        </div>
-                      ))
-                    : rows(section.items, !byProject || section.id !== "threads")}
-                  {section.id === "settled" && (
-                    <p className="px-2.5 pt-1 pb-1.5 text-fg-faint text-sub">
-                      Threads marked Done. A new message brings one back.
-                    </p>
-                  )}
-                </Fold>
-              </section>
-            );
-          })}
+          <div className="flex min-h-full flex-col">
+            {sections.map((section) => {
+              const open = isOpen(section.id);
+              return (
+                <section
+                  key={section.id}
+                  // Settled is a shelf at the foot of the list, as in T3 Code.
+                  className={cx("mt-1.5 first:mt-0", section.id === "settled" && "mt-auto pt-3")}
+                  aria-label={section.label}
+                >
+                  <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
+                  <Fold open={open}>
+                    {section.projects
+                      ? section.projects.map((p) => {
+                          const projectOpen = isOpen(`project:${p.key}`);
+                          return (
+                            <div key={p.key} className="mb-1">
+                              <ProjectHeader
+                                label={p.label}
+                                count={p.items.length}
+                                open={projectOpen}
+                                onToggle={() => toggle(`project:${p.key}`)}
+                                onNew={p.key ? () => startNewThread(p.key) : undefined}
+                              />
+                              <Fold open={projectOpen}>{rows(p.items, false)}</Fold>
+                            </div>
+                          );
+                        })
+                      : rows(section.items, !byProject || section.id !== "threads")}
+                    {section.id === "settled" && (
+                      <p className="px-2.5 pt-1 pb-1.5 text-fg-faint text-sub">
+                        Threads marked Done. A new message brings one back.
+                      </p>
+                    )}
+                  </Fold>
+                </section>
+              );
+            })}
+          </div>
         </nav>
       </div>
       {!hidden && (
