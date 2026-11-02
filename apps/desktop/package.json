@@ -17,7 +17,8 @@
     "bundle:engine": "bun scripts/bundle-engine.ts",
     "bundle": "bun scripts/bundle-engine.ts --release && tauri build --config src-tauri/tauri.bundle.conf.json",
     "bundle:debug": "bun scripts/bundle-engine.ts && tauri build --debug --config src-tauri/tauri.bundle.conf.json",
-    "check": "bun run typecheck && bun run lint && bun run test && bun run build"
+    "check": "bun run typecheck && bun run lint && bun run test && bun run build",
+    "perf": "bun scripts/perf.ts"
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.25",
