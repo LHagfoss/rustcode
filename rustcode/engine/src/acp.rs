@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod connections;
 mod edit_diff;
+mod harnesses;
 mod permissions;
 mod presence;
 mod preview;
@@ -194,6 +195,13 @@ fn session_info(
     }
     // The last message's time, not the file's: opening or re-saving a chat
     // rewrites its history, which made every opened chat read "now".
+    // A thread on an external harness names it (`docs/harnesses.md`).
+    if let Some((rustcode, model)) = harnesses::list_meta(&session_id) {
+        extra.insert("rustcode".into(), rustcode);
+        if let Some(model) = model {
+            extra.insert("model".into(), serde_json::json!(model));
+        }
+    }
     if let Some(timestamp) = session_updated_at(meta) {
         info = info.updated_at(timestamp.to_rfc3339());
     }
@@ -498,6 +506,14 @@ async fn acp_load_session(
     let session_id = request.session_id.to_string();
     if !valid_acp_session_id(&session_id) {
         return Err(agent_client_protocol::Error::invalid_params().data("invalid session id"));
+    }
+    if let Some(record) = crate::harness::store::load(&session_id) {
+        if session_id_is_active(&*server.sessions.lock().await, &session_id) {
+            return Err(
+                agent_client_protocol::Error::invalid_params().data("session is already active")
+            );
+        }
+        return harnesses::load_session(&server.external, &request, record, connection).await;
     }
     let cwd = canonical_acp_cwd(&request.cwd, "session/load")?;
     let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
@@ -861,6 +877,8 @@ struct AcpServer {
     presence: presence::Presence,
     /// `/remote` shares and their pairing offers.
     remote: remote::RemoteManager,
+    /// Threads running on an external harness (`docs/harnesses.md`).
+    external: harnesses::ExternalSessions,
 }
 
 fn unknown_session(session_id: &str) -> agent_client_protocol::Error {
@@ -914,6 +932,7 @@ impl AcpServer {
             client_has_orchestration: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
+            external: harnesses::ExternalSessions::default(),
         })
     }
 }
@@ -1133,6 +1152,14 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
     crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
 
     let server = AcpServer::new(auto_approve)?;
+    // However the connection ends, no harness process outlives the engine.
+    struct KillHarnesses;
+    impl Drop for KillHarnesses {
+        fn drop(&mut self) {
+            crate::harness::process::kill_all();
+        }
+    }
+    let _kill_harnesses = KillHarnesses;
     Agent
         .builder()
         .name("rustcode")
@@ -1181,6 +1208,21 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             {
                 let server = server.clone();
                 async move |request: NewSessionRequest, responder, _connection| {
+                    // An external harness starts a process, which can take a
+                    // while; it does not hold the dispatch loop.
+                    if let Some(asked) = harnesses::external_request(&request) {
+                        let external = server.external.clone();
+                        let connection = _connection.clone();
+                        return _connection.spawn(async move {
+                            match harnesses::new_session(&external, request, asked, &connection)
+                                .await
+                            {
+                                Ok(response) => responder.respond(response)?,
+                                Err(error) => responder.respond_with_error(error)?,
+                            }
+                            Ok(())
+                        });
+                    }
                     let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
                     let mut state = new_session_state(&cwd);
                     state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
@@ -1386,7 +1428,16 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             {
                 let server = server.clone();
-                async move |request: steer::SteerRequest, responder, _connection| {
+                async move |request: steer::SteerRequest, responder, connection| {
+                    if let Some(external) =
+                        harnesses::get(&server.external, &request.session_id).await
+                    {
+                        return connection.spawn(async move {
+                            let accepted = external.steer(&request.text).await;
+                            responder.respond(serde_json::json!({ "accepted": accepted }))?;
+                            Ok(())
+                        });
+                    }
                     let state = server
                         .sessions
                         .lock()
@@ -1456,6 +1507,80 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 async move |request: remote::RemoteStopRequest, responder, _connection| {
                     responder.respond(server.remote.stop(&request.session_id).await?)
                 }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // Harness detection runs commands and a model listing may start
+        // one, so none of these holds the dispatch loop.
+        .on_receive_request(
+            async move |_request: harnesses::HarnessesRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::snapshot().await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: harnesses::HarnessModelsRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::models(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: harnesses::SetHarnessRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::set(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: harnesses::RemoveHarnessRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::remove(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: harnesses::DefaultHarnessRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::set_default(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: harnesses::OnboardingCompleteRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::complete_onboarding().await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -1724,6 +1849,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: CloseSessionRequest, responder, _connection| {
                     let session_id = request.session_id.to_string();
+                    if harnesses::close(&server.external, &session_id).await {
+                        server.presence.session_closed(&session_id);
+                        return responder.respond(CloseSessionResponse::new());
+                    }
                     server
                         .remote
                         .stop_session(
@@ -1754,6 +1883,20 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: SetSessionConfigOptionRequest, responder, _connection| {
                     let session_id = request.session_id.to_string();
+                    if let Some(external) = harnesses::get(&server.external, &session_id).await {
+                        // Setting an option may start the harness.
+                        return _connection.spawn(async move {
+                            let value = harnesses::config_value(&request.value);
+                            match external.set_config(request.config_id.0.as_ref(), value).await {
+                                Ok(options) => responder
+                                    .respond(SetSessionConfigOptionResponse::new(options))?,
+                                Err(message) => responder.respond_with_error(
+                                    agent_client_protocol::Error::invalid_params().data(message),
+                                )?,
+                            }
+                            Ok(())
+                        });
+                    }
                     let state = server
                         .sessions
                         .lock()
@@ -1777,6 +1920,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             {
                 let server = server.clone();
                 async move |notification: CancelNotification, _connection| {
+                    if let Some(external) =
+                        harnesses::get(&server.external, notification.session_id.0.as_ref()).await
+                    {
+                        external.cancel();
+                        return Ok(());
+                    }
                     let turns = server
                         .sessions
                         .lock()
@@ -1797,6 +1946,19 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
+                    if let Some(external) = harnesses::get(&server.external, &session_id).await {
+                        return connection.spawn(async move {
+                            match external.prompt(request.prompt).await {
+                                Ok(stop_reason) => {
+                                    responder.respond(PromptResponse::new(stop_reason))?
+                                }
+                                Err(message) => responder.respond_with_error(
+                                    agent_client_protocol::Error::internal_error().data(message),
+                                )?,
+                            }
+                            Ok(())
+                        });
+                    }
                     let session = server
                         .sessions
                         .lock()
@@ -1916,6 +2078,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             let server = server.clone();
             async move |_connection| {
                 server.remote.shutdown().await;
+                harnesses::close_all(&server.external).await;
                 let route_ids = server
                     .task_routes
                     .lock()
@@ -2198,6 +2361,7 @@ mod tests {
             client_has_orchestration: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
+            external: harnesses::ExternalSessions::default(),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));

@@ -1420,6 +1420,14 @@ pub struct AppConfig {
     /// config only, so the choice applies to every project.
     #[serde(default)]
     pub disabled_skills: Vec<String>,
+    /// Which harness, model and effort new threads start with, and whether
+    /// first-run onboarding finished (`docs/harnesses.md`). Global only.
+    #[serde(default)]
+    pub harness_defaults: crate::harness::config::HarnessDefaults,
+    /// External coding-agent harnesses the user turned on or added. Global
+    /// only: a checked-out project must not choose a command to run.
+    #[serde(default)]
+    pub harnesses: Vec<crate::harness::config::HarnessEntry>,
     #[serde(default)]
     #[serde(with = "serde_millis")]
     pub start_time: Option<std::time::SystemTime>,
@@ -1664,6 +1672,10 @@ struct TomlConfig {
         with = "serde_millis"
     )]
     start_time: Option<std::time::SystemTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    harness_defaults: Option<crate::harness::config::HarnessDefaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    harnesses: Option<Vec<crate::harness::config::HarnessEntry>>,
 }
 
 fn default_false() -> bool {
@@ -1810,6 +1822,8 @@ impl Default for AppConfig {
             theme: default_theme(),
             extra_skill_dirs: Vec::new(),
             disabled_skills: Vec::new(),
+            harness_defaults: crate::harness::config::HarnessDefaults::default(),
+            harnesses: Vec::new(),
             start_time: None,
             is_valid: true,
             session_model: SessionModelScope::default(),
@@ -2226,6 +2240,10 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         disabled_skills: (!config.disabled_skills.is_empty())
             .then(|| config.disabled_skills.clone()),
         start_time: config.start_time,
+        harness_defaults: (config.harness_defaults
+            != crate::harness::config::HarnessDefaults::default())
+        .then(|| config.harness_defaults.clone()),
+        harnesses: (!config.harnesses.is_empty()).then(|| config.harnesses.clone()),
     };
 
     let path = dir.join(CONFIG_TOML_FILE);
@@ -2233,6 +2251,24 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         .map_err(|error| format!("failed to serialize {}: {error}", path.display()))?;
     write_config_file(&path, &contents)
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+/// Load the user config in `dir`, apply `edit`, and save it. Refuses an
+/// unreadable file rather than overwriting it with defaults.
+pub(crate) fn edit_user_config_in<T>(
+    dir: &Path,
+    edit: impl FnOnce(&mut AppConfig) -> Result<T, String>,
+) -> Result<T, String> {
+    let (_, _, mut config) = load_config_from(dir);
+    if !config.is_valid {
+        return Err(format!(
+            "the config in {} could not be read; fix it first",
+            dir.display()
+        ));
+    }
+    let value = edit(&mut config)?;
+    save_config_to_result(dir, &config)?;
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -2372,6 +2408,12 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(names) = file.disabled_skills {
         config.disabled_skills = names;
     }
+    if let Some(defaults) = file.harness_defaults {
+        config.harness_defaults = defaults;
+    }
+    if let Some(harnesses) = file.harnesses {
+        config.harnesses = harnesses;
+    }
     if file.start_time.is_some() {
         config.start_time = file.start_time;
     }
@@ -2420,6 +2462,9 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     file.extra_skill_dirs = None;
     // Skill toggles are user-scoped (#2165): one explicit place to look.
     file.disabled_skills = None;
+    // A harness entry names a command to run; only the user may choose one.
+    file.harness_defaults = None;
+    file.harnesses = None;
     // Provider definitions and OS credential bindings are user-owned. Keep
     // project model profiles selectable, but never let the checkout create or
     // redirect a binding to a machine's credential-store entry.
@@ -2548,6 +2593,8 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         extra_skill_dirs: None,
         disabled_skills: None,
         start_time: None,
+        harness_defaults: None,
+        harnesses: None,
     };
     let contents = toml::to_string_pretty(&file)
         .map_err(|error| format!("could not serialize project config: {error}"))?;
