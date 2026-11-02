@@ -562,19 +562,72 @@ does not show.
 
 `bun run bundle` builds the engine in release mode and copies it to
 `src-tauri/binaries/rustcode-<target triple>` (`scripts/bundle-engine.ts`),
-then runs `tauri build` with `src-tauri/tauri.bundle.conf.json`, which adds
-`"externalBin": ["binaries/rustcode"]`. Keeping that out of
-`tauri.conf.json` means `tauri dev`, clippy and CI never need the engine
-built. The shell finds the sidecar next to its binary (a debug build still
-prefers the workspace's `target/debug/rustcode`). The bundle carries the
-SwiftUI app's layered macOS 26 icon: `scripts/app-icon.ts` compiles
-`macos/Resources/AppIcon.icon` with `xcrun actool` into `Assets.car`
-(mapped into `Contents/Resources` by a generated
-`src-tauri/gen-icon/tauri.conf.json`), and `src-tauri/Info.plist` sets
-`CFBundleIconName = AppIcon`, with `icons/icon.icns` as the fallback when
-actool is missing. `tauri dev` runs the bare binary, so the Dock shows the
-flat icon there; only the bundled app shows the layered one. Signing, notarization and
-an updater are not set up.
+then runs `bun run bundle:app`: `tauri build` with
+`src-tauri/tauri.bundle.conf.json`, a generated
+`src-tauri/gen-version/tauri.conf.json` and a generated
+`src-tauri/gen-icon/tauri.conf.json`. `bundle:app` alone bundles whatever
+sidecar is already in `binaries/`, which is how CI reuses the engine it
+built for the CLI. Extra arguments go to `tauri build`, e.g.
+`bun run bundle:app --bundles app`.
+
+- **Identity.** `tauri.bundle.conf.json` gives the bundle the SwiftUI app's
+  identifier, `com.lhagfoss.rustcode.desktop`, so the released app replaces
+  it in place (Dock pin, Launch Services, notification permissions); why that
+  is safe for both apps' data is in
+  [install.md](install.md#taking-over-from-the-swiftui-app). `tauri.conf.json`
+  keeps `dev.rustcode.desktop`, so `tauri dev` never shares data with the
+  installed app. It also adds `"externalBin": ["binaries/rustcode"]`, so
+  `tauri dev`, clippy and CI never need the engine built, and the targets
+  (`app`, `nsis` per-user, `appimage`, `deb`; each platform builds its own).
+- **Version.** `scripts/bundle-version.ts` writes the root `Cargo.toml`
+  version (the engine's, the release tag's) into `gen-version`, so the
+  bundle, the installer and the engine agree. `tauri.conf.json`'s `0.1.0` is
+  only the dev build's.
+- **Icon.** The bundle carries the SwiftUI app's layered macOS 26 icon:
+  `scripts/app-icon.ts` compiles `macos/Resources/AppIcon.icon` with `xcrun
+  actool` into `Assets.car` (mapped into `Contents/Resources` by `gen-icon`),
+  and `src-tauri/Info.plist` sets `CFBundleIconName = AppIcon`, with
+  `icons/icon.icns` as the fallback when actool is missing. `tauri dev` runs
+  the bare binary, so the Dock shows the flat icon there.
+- **Sidecar.** The shell finds the engine next to its binary
+  (`Contents/MacOS/rustcode`; a debug build still prefers the workspace's
+  `target/debug/rustcode`).
+- **Assets.** `scripts/release-assets.ts <dir> [--sums]` copies the bundles
+  under their release names: `RustCode-<ver>-macos-aarch64.app.zip`,
+  `RustCode-<ver>-windows-x64-setup.exe`,
+  `RustCode-<ver>-linux-x86_64.AppImage` and `.deb`; `--sums` writes a
+  `SHA256SUMS` for a local installer test (see
+  [install.md](install.md#testing-the-installers-without-a-release)).
+- **CI.** `build.yml`'s `desktop-macos` job (also for a beta) and `desktop`
+  job (Windows, Linux) build these from the CLI jobs' engine artifacts, and
+  the release lists them in `SHA256SUMS`. The macOS zip is also published as
+  `rustcode-macos-aarch64-swift-app.zip`, the name the SwiftUI app's updater
+  downloads, so existing SwiftUI installs update into this app.
+- **Signing.** The macOS bundle is ad-hoc signed (`signingIdentity: "-"`);
+  with the `MACOS_*` secrets (docs/macos-release-signing.md) the job passes
+  the Developer ID as `APPLE_SIGNING_IDENTITY` and notarizes and staples the
+  app. Windows and Linux packages are unsigned.
+
+### Updater
+
+`src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›
+Engine shows the version with **Check for Updates**. It reads the tag that
+`github.com/LHagfoss/rustcode/releases/latest` redirects to (betas are
+prereleases, never latest) and offers the update when it is newer and its
+app zip is uploaded. On macOS **Update to X** downloads
+`RustCode-<ver>-macos-<arch>.app.zip`, checks it against the release's
+`SHA256SUMS`, unpacks it with `ditto`, requires `codesign --verify --deep
+--strict` and this app's bundle id, then a detached shell waits for the app
+to quit, swaps the bundle, re-registers it with Launch Services and opens
+it. It installs in place only from a release bundle in a folder it can write;
+otherwise, and on Windows and Linux, the button opens the release page and
+the installer does the update. A `tauri dev` build always sees an update
+but never installs it.
+
+It does not use `tauri-plugin-updater`: that plugin requires its own
+signing key pair, and a release without the private key in CI would fail.
+`SHA256SUMS` over HTTPS from the release is what the installers and the
+SwiftUI updater already trust; Developer ID signing adds to it once set up.
 
 ## Not yet ported
 
@@ -610,8 +663,10 @@ From the SwiftUI app, still missing or partial:
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
   keybinding editor, Discord presence, remote pairing, notifications,
-  updater, What's New.
+  What's New; a background update check (the SwiftUI app polls every five
+  minutes and shows a sidebar row; this one checks from Settings).
 - Terminal tabs (one terminal per folder).
-- An E2E driver for the native window; signing and notarization. The
+- An E2E driver for the native window; Developer ID signing and
+  notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in
   Chrome; a click in a view inside the native window was not exercised.

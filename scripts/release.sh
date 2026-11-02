@@ -1106,11 +1106,18 @@ phase_verify_release() {
         return
     fi
 
+    # The desktop app (apps/desktop) ships as RustCode-<ver>-*; the macOS zip
+    # is also published under the SwiftUI app's old name, which that app's
+    # updater downloads, so existing installs move to the new app.
     local expected_assets=(
         "rustcode-linux-x86_64.tar.gz"
         "rustcode-linux-aarch64.tar.gz"
         "rustcode-macos-aarch64.tar.gz"
+        "RustCode-$VERSION-macos-aarch64.app.zip"
         "rustcode-macos-aarch64-swift-app.zip"
+        "RustCode-$VERSION-windows-x64-setup.exe"
+        "RustCode-$VERSION-linux-x86_64.AppImage"
+        "RustCode-$VERSION-linux-x86_64.deb"
         "rustcode-ios-unsigned.xcarchive.zip"
         "rustcode-ios-simulator.zip"
         "rustcode-windows-x86_64.zip"
@@ -1120,6 +1127,7 @@ phase_verify_release() {
     if is_prerelease; then
         expected_assets=(
             "rustcode-macos-aarch64.tar.gz"
+            "RustCode-$VERSION-macos-aarch64.app.zip"
             "rustcode-macos-aarch64-swift-app.zip"
             "SHA256SUMS"
         )

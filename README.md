@@ -24,10 +24,12 @@
 ```bash
 curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash        # macOS, Linux
 irm https://rustcode.lhagfoss.com/install.ps1 | iex               # Windows
-brew tap lhagfoss/tap && brew trust lhagfoss/tap && brew install rustcode
+brew tap lhagfoss/tap && brew trust lhagfoss/tap && brew install rustcode   # CLI only
 ```
 
-From source: `cargo install --path rustcode/tui`. More in the
+The installers add the desktop app too (`RustCode.app`, a Windows Start menu
+entry, a Linux AppImage); pass `--no-app` (`-NoApp`) for the CLI only. From
+source: `cargo install --path rustcode/tui`. More in the
 [install guide](docs/install.md).
 
 ## Use
