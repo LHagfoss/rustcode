@@ -55,7 +55,14 @@ instructions for work in this repository.
     `cargo test --workspace`. Without `--workspace` only the engine package is
     built, and a TUI change passes unchecked. CI also runs
     `cargo fmt --all -- --check`.
-  - macOS app (`macos/`): `scripts/swift-test.sh [TestClass]`. It hides the
+  - Desktop app (`apps/desktop`, Tauri + React, bun): `bun run check` in
+    `apps/desktop`, and `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test` in `apps/desktop/src-tauri` (its own Cargo
+    workspace). It replaces the frozen SwiftUI app: new desktop work goes
+    here. Start from `docs/desktop.md` › "Status and roadmap", follow
+    `docs/design.md`, and run it with `bun tauri dev` (it uses
+    `target/debug/rustcode`; rebuild that after engine changes).
+  - macOS app (`macos/`, frozen): `scripts/swift-test.sh [TestClass]`. It hides the
     test host's Contacts noise and fails a filter that matches nothing
     (filter by class or test name; `RustCodeTests.X` matches nothing).
   - A Swift-only change needs no cargo run, and a Rust-only one no Swift run,
