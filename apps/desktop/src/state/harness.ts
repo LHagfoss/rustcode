@@ -32,6 +32,32 @@ export function unavailableReason(h: Harness): string | undefined {
   return undefined;
 }
 
+/** The harness new threads should start on when nobody chose one yet. */
+export const PREFERRED_HARNESS = "claude-code";
+
+/**
+ * The order harnesses are listed in: Claude Code first, the other coding
+ * agents as the engine lists them, and RustCode's own engine last. It runs
+ * the TUI, tests and local models, and is not the desktop app's main harness.
+ */
+export function orderHarnesses(list: Harness[]): Harness[] {
+  const rank = (h: Harness) => (h.id === PREFERRED_HARNESS ? 0 : h.builtin ? 2 : 1);
+  return [...list].sort((a, b) => rank(a) - rank(b));
+}
+
+/** First-run default: Claude Code when it can run, else the first agent that can, else RustCode. */
+export function preferredDefault(snapshot: HarnessSnapshot): {
+  harness: string;
+  model: string | null;
+  effort: string | null;
+} {
+  const installed = (h: Harness) => h.installed && h.auth !== "needs_login" && !h.error;
+  const pick =
+    orderHarnesses(snapshot.harnesses).find((h) => !h.builtin && installed(h)) ??
+    snapshot.harnesses.find((h) => h.builtin);
+  return { harness: pick?.id ?? "rustcode", model: null, effort: null };
+}
+
 export function usableHarnesses(snapshot: HarnessSnapshot): Harness[] {
   return snapshot.harnesses.filter((h) => unavailableReason(h) === undefined);
 }
