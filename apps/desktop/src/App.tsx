@@ -15,6 +15,7 @@ import {
   toggleSidebar,
   useApp,
 } from "./state/store";
+import { startUpdateChecks } from "./state/updates";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
 import { Lightbox } from "./ui/Lightbox";
@@ -25,6 +26,7 @@ import { RightPanel } from "./ui/RightPanel";
 import { Settings } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
 import { Toaster } from "./ui/Toaster";
+import { WhatsNewDialog } from "./ui/Updates";
 
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
@@ -161,6 +163,7 @@ function ConfirmDialog() {
 export function App() {
   useTheme();
   useShortcuts();
+  useEffect(() => startUpdateChecks(), []);
   const settings = useApp((s) => s.settings !== null);
   const onboarding = useApp((s) => s.onboardingOpen);
   const view = useApp((s) => s.view);
@@ -209,6 +212,7 @@ export function App() {
       <ConfirmDialog />
       <GrantDialog />
       <Toaster />
+      <WhatsNewDialog />
       <Lightbox />
     </Tooltip.Provider>
   );

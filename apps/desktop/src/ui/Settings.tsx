@@ -46,6 +46,7 @@ import {
   toast,
   useApp,
 } from "../state/store";
+import { showWhatsNew } from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
@@ -634,6 +635,7 @@ function AppVersion() {
       title={`RustCode ${version}`}
       subtitle={<span className={error ? "text-warning" : undefined}>{subtitle ?? "App version"}</span>}
     >
+      {canUpdate() && <Pill onClick={() => void showWhatsNew(version)}>What's New</Pill>}
       {!canUpdate() ? (
         <Info size={14} className="text-fg-faint" />
       ) : info?.available && info.latest ? (

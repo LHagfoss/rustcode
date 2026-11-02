@@ -792,6 +792,16 @@ built for the CLI. Extra arguments go to `tauri build`, e.g.
 
 ### Updater
 
+The app checks for an update 5 s after launch and every 30 minutes
+(`src/state/updates.ts`). When a newer release is out, an *Update to X* row
+sits at the foot of the sidebar: it installs in place where the app can
+(below), else opens the release page. The first launch of a new version
+shows *What's New* with that release's notes, the GitHub release body that
+`scripts/release-notes.sh` writes from each PR's Changelog line, fetched by
+the shell's `release_notes` command. A first install and a dev build skip
+it; Settings › Engine opens it on demand. `?updatePreview` in the dev browser
+shows both with sample data.
+
 `src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›
 Engine shows the version with **Check for Updates**. It reads the tag that
 `github.com/LHagfoss/rustcode/releases/latest` redirects to (betas are
@@ -842,9 +852,7 @@ From the SwiftUI app, still missing or partial:
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, remote pairing, notifications,
-  What's New; a background update check (the SwiftUI app polls every five
-  minutes and shows a sidebar row; this one checks from Settings).
+  keybinding editor, Discord presence, remote pairing, notifications.
 - Terminal tabs (one terminal per folder).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
