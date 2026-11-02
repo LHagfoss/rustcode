@@ -58,6 +58,7 @@ describe("engine controller with the mock engine", () => {
     expect(thread.permissions[0]?.diffs[0]?.path).toBe("src/app.ts");
     answerPermission(thread.permissions[0]!, thread.permissions[0]!.options[0]!);
     await done;
+    await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
     const after = selected()!;
     expect(after.running).toBe(false);
     expect(after.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "completed" });
@@ -83,6 +84,7 @@ describe("engine controller with the mock engine", () => {
     );
     await cancel();
     await done;
+    await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
     expect(selected()!.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "cancelled" });
   });
 
@@ -107,7 +109,8 @@ describe("engine controller with the mock engine", () => {
     const done = submit("yolo hello");
     await until(() => selected() !== undefined);
     expect(selected()!.harness?.id).toBe("codex");
-    expect(selected()!.harness?.capabilities.steer).toBe("next_turn");
+    expect(selected()!.harness?.capabilities.steer).toBe("live");
     await done;
+    await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
   });
 });

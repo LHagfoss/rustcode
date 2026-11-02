@@ -39,7 +39,6 @@ function UnifiedDiff({ lines }: { lines: string[] }) {
       <div className="min-w-fit">
         {lines.map((line, i) => (
           <div
-            // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are positional
             key={i}
             className={cx(
               "px-2.5 whitespace-pre",
@@ -84,7 +83,7 @@ export function ChangesPanel({ onClose }: { onClose: () => void }) {
   }, [cwd]);
 
   // Reload on open, on a folder change, and when a turn ends.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `running` flipping off is the trigger
+  // Runs again when `running` flips, so a finished turn reloads.
   useEffect(() => {
     if (!running) void load();
   }, [load, running]);

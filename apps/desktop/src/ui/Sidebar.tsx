@@ -289,7 +289,6 @@ export function Sidebar() {
         </div>
       </div>
       {!hidden && (
-        // biome-ignore lint/a11y/useSemanticElements: a pointer-only resize grip; the width also persists
         <div
           role="separator"
           aria-orientation="vertical"

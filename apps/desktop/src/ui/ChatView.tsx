@@ -99,7 +99,6 @@ function PlanButton({ thread }: { thread: ThreadState }) {
           <p className="mb-2 px-1 text-caption text-fg-3">As the agent marked each step.</p>
           <ol className="flex flex-col">
             {thread.plan.map((entry, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: plan entries are positional
               <li key={i} className="flex items-start gap-2 rounded-lg px-2 py-[7px]">
                 {entry.status === "completed" ? (
                   <CircleCheck size={14} className="mt-px shrink-0 text-success" />
@@ -131,7 +130,8 @@ function Header({
 }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
   const projectCwd = useApp((s) => s.projectCwd);
-  const title = thread ? (thread.title ?? "New thread") : "New Thread";
+  const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
+  const title = thread ? (thread.title ?? listed ?? "New thread") : "New Thread";
   const cwd = thread?.cwd ?? projectCwd;
   return (
     <header

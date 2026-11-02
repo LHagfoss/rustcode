@@ -400,28 +400,29 @@ export function setDraft(key: string, text: string) {
   set((s) => ({ drafts: { ...s.drafts, [key]: text } }));
 }
 
-/** ⏎: send, or queue behind a running turn. */
-export async function submit(text: string): Promise<void> {
+/** ⏎: send, or queue behind a running turn. False when no thread could start (the draft stays). */
+export async function submit(text: string): Promise<boolean> {
   const trimmed = text.trim();
-  if (!trimmed) return;
+  if (!trimmed) return false;
   let id = get().selectedId;
   try {
     if (!id) id = await createThread();
   } catch (error) {
-    toast(errorText(error), "warning");
-    return;
+    toast(`Could not start the thread: ${errorText(error)}`, "warning");
+    return false;
   }
   const thread = get().threads[id];
-  if (!thread) return;
+  if (!thread) return false;
   if (trimmed === "/cancel") {
     await cancel(id);
-    return;
+    return true;
   }
   if (thread.running) {
     updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
-    return;
+    return true;
   }
-  await runPrompt(id, trimmed);
+  void runPrompt(id, trimmed);
+  return true;
 }
 
 /** ⌘⏎: hand the running turn a message to read after its current step, else send. */
@@ -429,10 +430,7 @@ export async function steerOrSubmit(text: string): Promise<boolean> {
   const id = get().selectedId;
   const thread = id ? get().threads[id] : undefined;
   const trimmed = text.trim();
-  if (!id || !thread?.running || !canSteer(thread)) {
-    await submit(text);
-    return true;
-  }
+  if (!id || !thread?.running || !canSteer(thread)) return submit(text);
   if (!trimmed) {
     const next = thread.queue[0];
     if (next) await sendQueuedNow(id, next.id);

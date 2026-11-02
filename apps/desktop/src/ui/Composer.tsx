@@ -79,7 +79,10 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
     const text = draft;
     if (!text.trim() && !(steer && running)) return;
     update("");
-    void (steer ? steerOrSubmit(text) : submit(text));
+    void (steer ? steerOrSubmit(text) : submit(text)).then((sent) => {
+      // A thread that could not start keeps the message for another try.
+      if (!sent && !useApp.getState().drafts[key]) update(text);
+    });
   };
 
   const complete = (command: SlashCommand, run: boolean) => {

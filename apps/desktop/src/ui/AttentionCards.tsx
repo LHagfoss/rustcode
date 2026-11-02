@@ -97,7 +97,6 @@ export function PermissionCard({ request }: { request: PermissionRequest }) {
       {request.diffs.length > 0 && (
         <div className="flex max-h-[260px] flex-col gap-2 overflow-y-auto">
           {request.diffs.map((d, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: hunks are ordered
             <DiffView key={i} diff={d} />
           ))}
         </div>

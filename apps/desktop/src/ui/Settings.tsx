@@ -253,7 +253,6 @@ function ConnectionsPage() {
       <Group title="Model accounts" footer="Sign in or switch accounts with `rustcode auth` in a terminal.">
         {data.accounts.length ? (
           data.accounts.map((a, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: accounts can repeat a provider
             <Row
               key={i}
               title={a.display || a.provider}

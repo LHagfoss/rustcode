@@ -34,9 +34,9 @@ const EFFORTS = ["low", "medium", "high", "xhigh"];
 
 const CODEX_CAPS: HarnessCapabilities = {
   ...BUILTIN_CAPABILITIES,
-  steer: "next_turn",
+  steer: "live",
   rewind: false,
-  permission_modes: ["default", "full_access"],
+  permission_modes: [],
   subagents: false,
   smart_ui: false,
   rustcode_extensions: false,
@@ -47,7 +47,7 @@ const ACP_CAPS: HarnessCapabilities = {
   models: "static",
   effort: false,
   resume: false,
-  permission_modes: ["default"],
+  permission_modes: [],
 };
 
 function initialHarnesses(onboarded: boolean): HarnessSnapshot {

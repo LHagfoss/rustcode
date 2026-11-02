@@ -219,7 +219,6 @@ export function DiffView({ diff, header = true }: { diff: FileDiff; header?: boo
         <div className="min-w-fit">
           {shown.map((line, i) => (
             <div
-              // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity beyond their position
               key={i}
               className={cx(
                 "flex pr-3",
@@ -327,10 +326,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
       {open && (
         <div className="mt-1.5 mb-1 ml-[26px] flex flex-col gap-2.5">
           {item.diffs.length > 0 ? (
-            item.diffs.map((diff, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: hunks of one call are ordered and fixed
-              <DiffView key={i} diff={diff} />
-            ))
+            item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
           ) : (
             <>
               {input && <TextBox label="Input" text={input} />}
