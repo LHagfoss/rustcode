@@ -51,7 +51,10 @@ pub fn discover_all_skills() -> Vec<SkillMetadata> {
 
 /// Skills compiled into RustCode, so they ship and update with it (#2625).
 /// A skill of the same name in any root overrides one of these.
-const BUILTIN_SKILLS: &[&str] = &[include_str!("skills_builtin/smart-ui.md")];
+const BUILTIN_SKILLS: &[&str] = &[
+    include_str!("skills_builtin/smart-ui.md"),
+    include_str!("skills_builtin/rustcode-themes.md"),
+];
 
 /// The directory a built-in skill reports: not on disk, named so `/skills`
 /// and `rustcode doctor` show where it came from.
@@ -853,6 +856,26 @@ mod tests {
             triggers: Vec::new(),
             keywords: Vec::new(),
             priority: 0,
+        }
+    }
+
+    #[test]
+    fn builtin_themes_skill_is_listed_and_short() {
+        let skills = with_builtin_skills(Vec::new());
+        let themes = skills
+            .iter()
+            .find(|skill| skill.name == "rustcode-themes")
+            .unwrap();
+        assert_eq!(themes.path, builtin_skill_path("rustcode-themes"));
+        let content = builtin_skill_content("rustcode-themes").unwrap();
+        let tokens = crate::network::compaction::estimate_tokens(&content);
+        assert!(tokens < 950, "the rustcode-themes skill is {tokens} tokens");
+        // Every desktop token and CLI command is named.
+        for (token, _) in crate::themes::TOKENS {
+            assert!(content.contains(token), "{token}");
+        }
+        for command in ["theme new", "theme show", "theme validate", "theme set"] {
+            assert!(content.contains(command), "{command}");
         }
     }
 

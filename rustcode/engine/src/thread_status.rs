@@ -8,6 +8,10 @@
 //! in the thread's directory as `status.json`. Each change is told to the
 //! client as `session/update` `session_info_update` carrying
 //! `_meta.rustcode.status`.
+//!
+//! Pins are stored the same way (`pin.json`), set with
+//! `_rustcode/session/pin` and carried as `_meta.rustcode.pinned`, so the
+//! terminal UI and the apps agree on them. Archiving a thread is `done`.
 
 use agent_client_protocol::schema::v1::{SessionInfoUpdate, SessionUpdate};
 use serde_json::{Value, json};
@@ -15,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 const STATUS_FILE: &str = "status.json";
+const PIN_FILE: &str = "pin.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Status {
@@ -206,6 +211,57 @@ pub(crate) struct SetStatusRequest {
     pub status: String,
 }
 
+/// Whether the thread is pinned.
+pub(crate) fn pinned(session_id: &str) -> bool {
+    crate::config::get_active_session_dir(session_id)
+        .is_some_and(|dir| dir.join(PIN_FILE).is_file())
+}
+
+/// Pin or unpin a thread and tell the client.
+pub(crate) fn set_pinned(session_id: &str, pinned: bool) -> Result<(), String> {
+    if !rustcode_session::valid_session_id(session_id) {
+        return Err("invalid session id".to_owned());
+    }
+    let dir = crate::config::get_active_session_dir(session_id)
+        .ok_or_else(|| "session storage is unavailable".to_owned())?;
+    let path = dir.join(PIN_FILE);
+    if pinned {
+        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let text = json!({ "pinned": true, "at": chrono::Utc::now().to_rfc3339() });
+        crate::worktrees::write_atomic(&path, text.to_string().as_bytes())
+            .map_err(|error| error.to_string())?;
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Some(notify) = notifier()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+    {
+        notify(session_id.to_owned(), pin_update(pinned));
+    }
+    Ok(())
+}
+
+/// The `session_info_update` that tells the client a pin changed.
+pub(crate) fn pin_update(pinned: bool) -> SessionUpdate {
+    SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().meta(serde_json::Map::from_iter([(
+        "rustcode".to_owned(),
+        json!({ "pinned": pinned }),
+    )])))
+}
+
+/// `_rustcode/session/pin`.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/session/pin", response = serde_json::Value)]
+pub(crate) struct PinRequest {
+    #[serde(alias = "sessionId")]
+    pub session_id: String,
+    pub pinned: bool,
+}
+
 /// Whether a pull request watch of a thread says the thread is done: its
 /// pull request merged, and the thread runs in a worktree (whose branch the
 /// pull request carries).
@@ -255,6 +311,26 @@ mod tests {
         assert_eq!(current(&id), Status::Done);
         set(&id, "idle").unwrap();
         assert_eq!(current(&id), Status::Idle);
+    }
+
+    #[test]
+    fn a_pin_round_trips_with_the_thread() {
+        use agent_client_protocol::JsonRpcMessage;
+        let id = crate::config::create_detached_session();
+        assert!(!pinned(&id));
+        set_pinned(&id, true).unwrap();
+        assert!(pinned(&id));
+        set_pinned(&id, true).unwrap();
+        assert!(pinned(&id), "pinning twice keeps it pinned");
+        set_pinned(&id, false).unwrap();
+        assert!(!pinned(&id));
+        assert!(set_pinned("../escape", true).is_err());
+        let value = serde_json::to_value(pin_update(true)).unwrap();
+        assert_eq!(value["_meta"]["rustcode"]["pinned"], true);
+        assert!(PinRequest::matches_method("_rustcode/session/pin"));
+        let request: PinRequest =
+            serde_json::from_value(json!({ "sessionId": id, "pinned": true })).unwrap();
+        assert!(request.pinned);
     }
 
     #[test]

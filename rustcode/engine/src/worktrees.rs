@@ -662,6 +662,8 @@ fn thread_meta(
     }
     let status = crate::thread_status::current(session_id).as_str();
     let mut meta = merge_rustcode_meta(meta, "status", json!(status));
+    let pinned = crate::thread_status::pinned(session_id);
+    meta = merge_rustcode_meta(Some(meta), "pinned", json!(pinned));
     if let Some(cwd) = crate::checkpoints::thread_cwd(session_id) {
         let available = crate::checkpoints::available(&cwd);
         meta = merge_rustcode_meta(Some(meta), "checkpoints", json!(available));

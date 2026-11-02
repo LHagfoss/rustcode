@@ -1,60 +1,15 @@
+//! Terminal rendering of the shared themes (`rustcode::themes`,
+//! `docs/themes.md`): the files, built-ins and parsing live in the engine.
+
 use ratatui::style::Color;
-use serde::{Deserialize, Serialize};
-use std::fs;
+pub use rustcode::themes::{ColorSpec, DEFAULT_THEME_NAME, ThemeFile};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ColorSpec {
-    Hex(String),
-    Rgb([u8; 3]),
-}
-
-impl ColorSpec {
-    pub fn to_color(&self) -> Color {
-        match self {
-            ColorSpec::Rgb([r, g, b]) => Color::Rgb(*r, *g, *b),
-            ColorSpec::Hex(hex) => parse_hex_color(hex).unwrap_or(Color::Reset),
-        }
+fn to_color(spec: &ColorSpec) -> Color {
+    match spec.color() {
+        rustcode::themes::ThemeColor::Reset => Color::Reset,
+        rustcode::themes::ThemeColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
-}
-
-fn parse_hex_color(hex: &str) -> Option<Color> {
-    let s = hex.trim_start_matches('#');
-    if s.eq_ignore_ascii_case("reset")
-        || s.eq_ignore_ascii_case("none")
-        || s.eq_ignore_ascii_case("transparent")
-    {
-        return Some(Color::Reset);
-    }
-    if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        Some(Color::Rgb(r, g, b))
-    } else {
-        None
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThemeFile {
-    pub name: String,
-    pub description: Option<String>,
-    pub bg: ColorSpec,
-    pub panel: ColorSpec,
-    pub element: ColorSpec,
-    pub text: ColorSpec,
-    pub muted: ColorSpec,
-    pub primary: ColorSpec,
-    pub secondary: ColorSpec,
-    pub green: ColorSpec,
-    pub selection: ColorSpec,
-    pub tip: ColorSpec,
-    pub status_border: ColorSpec,
-    pub turn_separator: ColorSpec,
-    pub notice_bg: ColorSpec,
-    pub hover_bg: ColorSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,275 +37,38 @@ impl From<&ThemeFile> for ThemePalette {
         Self {
             name: f.name.clone(),
             description: f.description.clone().unwrap_or_else(|| f.name.clone()),
-            bg: f.bg.to_color(),
-            panel: f.panel.to_color(),
-            element: f.element.to_color(),
-            text: f.text.to_color(),
-            muted: f.muted.to_color(),
-            primary: f.primary.to_color(),
-            secondary: f.secondary.to_color(),
-            green: f.green.to_color(),
-            selection: f.selection.to_color(),
-            tip: f.tip.to_color(),
-            status_border: f.status_border.to_color(),
-            turn_separator: f.turn_separator.to_color(),
-            notice_bg: f.notice_bg.to_color(),
-            hover_bg: f.hover_bg.to_color(),
+            bg: to_color(&f.bg),
+            panel: to_color(&f.panel),
+            element: to_color(&f.element),
+            text: to_color(&f.text),
+            muted: to_color(&f.muted),
+            primary: to_color(&f.primary),
+            secondary: to_color(&f.secondary),
+            green: to_color(&f.green),
+            selection: to_color(&f.selection),
+            tip: to_color(&f.tip),
+            status_border: to_color(&f.status_border),
+            turn_separator: to_color(&f.turn_separator),
+            notice_bg: to_color(&f.notice_bg),
+            hover_bg: to_color(&f.hover_bg),
         }
     }
-}
-
-/// Theme used when the config names none, and the fallback for a missing one.
-pub const DEFAULT_THEME_NAME: &str = "catppuccin-mocha";
-
-static BUILTIN_THEMES: &[(&str, &str)] = &[
-    (
-        "catppuccin-mocha.toml",
-        r##"name = "catppuccin-mocha"
-description = "Catppuccin Mocha soft dark palette"
-bg = "reset"
-panel = "#181825"
-element = "#313244"
-text = "#cdd6f4"
-muted = "#9399b2"
-primary = "#89b4fa"
-secondary = "#74c7ec"
-green = "#a6e3a1"
-selection = "#cdd6f4"
-tip = "#f9e2af"
-status_border = "#45475a"
-turn_separator = "#585b70"
-notice_bg = "reset"
-hover_bg = "#313244"
-"##,
-    ),
-    (
-        "default.toml",
-        r##"name = "default"
-description = "Cozy Rain palette on the terminal background"
-bg = "reset"
-panel = "#15171a"
-element = "#22262a"
-text = "#f0e5de"
-muted = "#88929a"
-primary = "#ec6e5d"
-secondary = "#3c5865"
-green = "#a6e3a1"
-selection = "#f0e5de"
-tip = "#e0a96d"
-status_border = "#3c5865"
-turn_separator = "#5a707e"
-notice_bg = "reset"
-hover_bg = "#2b3035"
-"##,
-    ),
-    (
-        "rain.toml",
-        r##"name = "rain"
-description = "Cozy Rain warm dark palette"
-bg = "#15171a"
-panel = "#1a1d20"
-element = "#22262a"
-text = "#f0e5de"
-muted = "#88929a"
-primary = "#ec6e5d"
-secondary = "#3c5865"
-green = "#a6e3a1"
-selection = "#f0e5de"
-tip = "#e0a96d"
-status_border = "#3c5865"
-turn_separator = "#5a707e"
-notice_bg = "reset"
-hover_bg = "#2b3035"
-"##,
-    ),
-    (
-        "cozy-rain.toml",
-        r##"name = "cozy-rain"
-description = "Cozy Rain warm dark palette"
-bg = "#15171a"
-panel = "#1a1d20"
-element = "#22262a"
-text = "#f0e5de"
-muted = "#88929a"
-primary = "#ec6e5d"
-secondary = "#3c5865"
-green = "#a6e3a1"
-selection = "#f0e5de"
-tip = "#e0a96d"
-status_border = "#3c5865"
-turn_separator = "#5a707e"
-notice_bg = "reset"
-hover_bg = "#2b3035"
-"##,
-    ),
-    (
-        "light.toml",
-        r##"name = "light"
-description = "Clean light mode text and border palette"
-bg = "#f5f7fa"
-panel = "#e6eaf0"
-element = "#d7dde4"
-text = "#1e232a"
-muted = "#5e6872"
-primary = "#d74130"
-secondary = "#2d6e91"
-green = "#239b41"
-selection = "#1e1e1e"
-tip = "#be781e"
-status_border = "#aab3bc"
-turn_separator = "#b9bec3"
-notice_bg = "reset"
-hover_bg = "#d2d8e0"
-"##,
-    ),
-    (
-        "nord.toml",
-        r##"name = "nord"
-description = "Arctic nord text and border palette"
-bg = "#2e3440"
-panel = "#3b4252"
-element = "#434c5e"
-text = "#eceff4"
-muted = "#d8dee9"
-primary = "#88c0d0"
-secondary = "#81a1c1"
-green = "#a3be8c"
-selection = "#eceff4"
-tip = "#ebcb8b"
-status_border = "#4c566a"
-turn_separator = "#5e6b84"
-notice_bg = "reset"
-hover_bg = "#4c566a"
-"##,
-    ),
-    (
-        "dracula.toml",
-        r##"name = "dracula"
-description = "Vibrant dracula text and border palette"
-bg = "#282a36"
-panel = "#44475a"
-element = "#6272a4"
-text = "#f8f8f2"
-muted = "#6272a4"
-primary = "#ff79c6"
-secondary = "#bd93f9"
-green = "#50fa7b"
-selection = "#f8f8f2"
-tip = "#f1fa8c"
-status_border = "#6272a4"
-turn_separator = "#6272a4"
-notice_bg = "reset"
-hover_bg = "#44475a"
-"##,
-    ),
-    (
-        "tokyo-night.toml",
-        r##"name = "tokyo-night"
-description = "Tokyo night text and border palette"
-bg = "#1a1b26"
-panel = "#24283b"
-element = "#292e42"
-text = "#c0caf5"
-muted = "#565f89"
-primary = "#f7768e"
-secondary = "#7aa2f7"
-green = "#9ece6a"
-selection = "#c0caf5"
-tip = "#e0af68"
-status_border = "#414868"
-turn_separator = "#565f89"
-notice_bg = "reset"
-hover_bg = "#292e42"
-"##,
-    ),
-    (
-        "sky.toml",
-        r##"name = "sky"
-description = "Summer sky azure and meadow green palette"
-bg = "reset"
-panel = "#162032"
-element = "#1e2c44"
-text = "#f0f6fc"
-muted = "#7890a8"
-primary = "#3894f0"
-secondary = "#88c438"
-green = "#88c438"
-selection = "#f0f6fc"
-tip = "#ffd152"
-status_border = "#2a3d5c"
-turn_separator = "#48658a"
-notice_bg = "reset"
-hover_bg = "#253754"
-"##,
-    ),
-];
-
-pub fn get_themes_dir() -> Option<PathBuf> {
-    let config_dir = rustcode::controller::config_dir()?;
-    Some(config_dir.join("themes"))
 }
 
 pub fn ensure_themes_dir() -> Option<PathBuf> {
-    let themes_dir = get_themes_dir()?;
-    if !themes_dir.exists() {
-        let _ = fs::create_dir_all(&themes_dir);
-    }
-
-    for (filename, content) in BUILTIN_THEMES {
-        let file_path = themes_dir.join(filename);
-        if !file_path.exists() {
-            let _ = fs::write(file_path, content);
-        }
-    }
-
-    Some(themes_dir)
+    rustcode::themes::ensure_user_dir()
 }
 
+/// Every theme (built-in, user, and the current project's), the default
+/// first. Writes the built-ins to the user themes directory first, as the
+/// terminal UI always has.
 pub fn load_available_themes() -> Vec<ThemePalette> {
-    let mut themes = Vec::new();
-    let themes_dir = ensure_themes_dir();
-
-    if let Some(dir) = themes_dir {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        if let Ok(file_struct) = toml::from_str::<ThemeFile>(&content) {
-                            themes.push(ThemePalette::from(&file_struct));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Always ensure all builtin themes are available even if disk read is partial or failed
-    for (_, content) in BUILTIN_THEMES {
-        if let Ok(file_struct) = toml::from_str::<ThemeFile>(content) {
-            if !themes
-                .iter()
-                .any(|t| t.name.eq_ignore_ascii_case(&file_struct.name))
-            {
-                themes.push(ThemePalette::from(&file_struct));
-            }
-        }
-    }
-
-    themes.sort_by(|a, b| {
-        if a.name == b.name {
-            std::cmp::Ordering::Equal
-        } else if a.name == DEFAULT_THEME_NAME {
-            std::cmp::Ordering::Less
-        } else if b.name == DEFAULT_THEME_NAME {
-            std::cmp::Ordering::Greater
-        } else {
-            a.name.cmp(&b.name)
-        }
-    });
-
-    themes
+    ensure_themes_dir();
+    let workspace = std::env::current_dir().ok();
+    rustcode::themes::load_themes(workspace.as_deref())
+        .iter()
+        .map(|theme| ThemePalette::from(&theme.file))
+        .collect()
 }
 
 pub fn get_palette(name: &str) -> ThemePalette {
@@ -367,16 +85,14 @@ pub fn get_palette(name: &str) -> ThemePalette {
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(name))
         .unwrap_or_else(|| {
-            for (_, content) in BUILTIN_THEMES {
-                if let Ok(file_struct) = toml::from_str::<ThemeFile>(content) {
-                    if file_struct.name == DEFAULT_THEME_NAME {
-                        return ThemePalette::from(&file_struct);
-                    }
-                }
+            if let Some(theme) =
+                rustcode::themes::find(&rustcode::themes::builtin_themes(), DEFAULT_THEME_NAME)
+            {
+                return ThemePalette::from(&theme.file);
             }
             ThemePalette {
                 name: DEFAULT_THEME_NAME.to_string(),
-                description: "Catppuccin Mocha soft dark palette".to_string(),
+                description: "Built-in fallback palette".to_string(),
                 bg: Color::Reset,
                 panel: Color::Rgb(24, 24, 37),
                 element: Color::Rgb(49, 50, 68),
@@ -517,6 +233,7 @@ pub fn color_diff_remove_fg() -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustcode::themes::BUILTIN_THEMES;
 
     #[test]
     fn builtin_themes_define_visible_chat_surfaces() {
@@ -528,12 +245,44 @@ mod tests {
     }
 
     #[test]
-    fn default_theme_is_a_builtin_catppuccin_mocha() {
+    fn default_theme_is_the_builtin_rustcode_theme() {
         let names = BUILTIN_THEMES
             .iter()
             .map(|(_, content)| toml::from_str::<ThemeFile>(content).unwrap().name)
             .collect::<Vec<_>>();
         assert!(names.iter().any(|name| name == DEFAULT_THEME_NAME));
-        assert_eq!(DEFAULT_THEME_NAME, "catppuccin-mocha");
+        assert_eq!(DEFAULT_THEME_NAME, "rustcode");
+        assert!(names.iter().any(|name| name == "catppuccin-mocha"));
+    }
+
+    #[test]
+    fn existing_theme_files_render_as_before() {
+        // A file from before the desktop table, with its exact colours.
+        let file: ThemeFile = toml::from_str(
+            r##"name = "mine"
+bg = "reset"
+panel = "#181825"
+element = [49, 50, 68]
+text = "#cdd6f4"
+muted = "#9399b2"
+primary = "#89b4fa"
+secondary = "#74c7ec"
+green = "#a6e3a1"
+selection = "#cdd6f4"
+tip = "#f9e2af"
+status_border = "#45475a"
+turn_separator = "bad"
+notice_bg = "none"
+hover_bg = "#313244"
+"##,
+        )
+        .unwrap();
+        let palette = ThemePalette::from(&file);
+        assert_eq!(palette.description, "mine");
+        assert_eq!(palette.bg, Color::Reset);
+        assert_eq!(palette.panel, Color::Rgb(24, 24, 37));
+        assert_eq!(palette.element, Color::Rgb(49, 50, 68));
+        assert_eq!(palette.turn_separator, Color::Reset, "a bad value");
+        assert_eq!(palette.notice_bg, Color::Reset);
     }
 }

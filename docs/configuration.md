@@ -456,6 +456,16 @@ or shell piping, and accept that it is a copy rather than the live transcript.
 Use the mouse wheel, `PageUp`/`PageDown`, or `Esc` to read the transcript while
 a response streams; the transcript never leaves the view (#1595).
 
+## Themes
+
+`theme` names the active theme for both the terminal UI and the desktop app
+(default `rustcode` for new configs). Themes are TOML files in
+`<config>/themes/` (or a project's `.rustcode/themes/`); each has the terminal
+keys and an optional `[desktop]` table of app tokens derived from them when
+left out. Manage them with `rustcode theme list | show | new | set | validate |
+path`; [themes.md](themes.md) has the format, the token table and derivation,
+validation, and the ACP methods.
+
 ## Syncing config, skills, and themes
 
 Initialize a config sync repository with a remote Git URL, then choose a
