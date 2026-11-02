@@ -11,7 +11,7 @@ Terms (see [terminology.md](terminology.md)):
 - **Provider**: a model API the built-in harness calls (OpenAI, Anthropic,
   Copilot, an OpenAI-compatible server). Unchanged by harnesses.
 - **Harness**: what runs a thread's turns. Chosen when the thread starts.
-- **Agent**: a running thread or subagent.
+- **Agent**: a subagent a thread starts (see terminology.md).
 
 ## Where it lives
 
@@ -97,11 +97,32 @@ All methods are on the client's existing `rustcode --acp` connection.
 }
 ```
 
-`models` may be empty until `_rustcode/harnesses/models` ran for that harness.
+`models` may be empty until `_rustcode/harnesses/models` ran for that harness
+(or a thread started it). For `rustcode` it lists the configured model
+profiles, `version` is the engine's and `auth` is `"ok"` (its providers have
+their own sign-in). `login_command` and `install_hint` are `null` for custom
+harnesses. Detection is cached for a minute; `set` and `remove` refresh it.
+
+| id | kind | command | version from | auth from |
+| --- | --- | --- | --- | --- |
+| `codex` | `codex` | `codex app-server` | `codex --version` | `codex login status` |
+| `claude-code` | `acp` | `npx -y @agentclientprotocol/claude-agent-acp` | `claude --version` | `unknown` |
+| `gemini` | `acp` | `gemini --experimental-acp` | `gemini --version` | `unknown` |
+| `opencode` | `acp` | `opencode acp` | `opencode --version` | `unknown` |
+
+Commands are looked up on the engine's `PATH` and then the login shell's, so
+an app started from the Dock finds what the terminal finds.
+
+Errors (an unknown id, an invalid command, removing a known harness) are
+`invalid_params` with a message for the user.
 
 ### `_rustcode/harnesses/models` `{ "harness": "codex" }` → `{ "models": [...] }`
 
 Starts the harness briefly if needed to list its models. Cached in memory.
+Codex answers from `model/list` (hidden models left out, efforts per model).
+An ACP harness is started in the system temp directory and one session is
+opened there to read its `model` and thought-level options; every model then
+shows the same efforts.
 
 ### `_rustcode/harnesses/set` → `HarnessSnapshot`
 
@@ -134,21 +155,63 @@ Marks first-run onboarding done (`onboarded: true`).
 "_meta": { "rustcode": { "harness": "codex", "model": "gpt-6-luna", "effort": "low" } }
 ```
 
-No `harness` (or `"rustcode"`) starts a built-in thread. `model` and `effort`
-fall back to the harness defaults. The response carries:
+No `harness` (or `"rustcode"`) starts a built-in thread, exactly as before.
+`model` and `effort` fall back to `[harness_defaults]` when that names the
+same harness, else to the harness's own defaults. Any configured harness can
+start a thread; `enabled` is what the app offers, not a gate. The engine
+starts the harness before it answers, so a harness that cannot start fails
+`session/new` with its reason (for example `codex not found on PATH`). The
+response carries:
 
 ```jsonc
 "_meta": { "rustcode": { "harness": { "id": "codex", "capabilities": { … } } } }
 ```
 
 and the usual `configOptions` (`model`, `effort` when supported), so model
-and effort switch with `session/set_config_option` for every harness.
+and effort switch with `session/set_config_option` for every harness. For an
+ACP harness the agent's own options are passed through: its `model` option
+(or category `model`) is `model`, its first `thought_level` option is
+`effort`, any other keeps its own id. Codex's `model` and `effort` apply from
+the next `turn/start`.
 
 After that the thread uses standard ACP: `session/prompt`, `session/cancel`,
 `session/update` (agent text, thoughts, tool calls and their output, plans,
 usage), `session/request_permission`. `session/list` returns external threads
-too, each with `_meta.rustcode.harness`. `session/load` resumes one when the
-harness supports `resume`.
+too, each with `_meta.rustcode.harness` = `{ "id": "codex" }` (and
+`_meta.model`). `session/load` resumes one when the harness supports
+`resume`.
+
+What each part does for an external thread:
+
+- **Prompt.** An ACP harness gets the prompt blocks unchanged. Codex gets
+  text, images (as `data:` URLs) and file links as paths. A turn that fails
+  (Codex `turn/completed` with `failed`, an ACP error, the process exiting)
+  fails `session/prompt` with the harness's message. A harness that exited is
+  started again by the next prompt.
+- **Codex events.** Message deltas are `agent_message_chunk`, reasoning
+  summaries `agent_thought_chunk`, command, file-change, MCP and web-search
+  items `tool_call`/`tool_call_update` (command output and diffs as text
+  content), `turn/plan/updated` a `plan`. Command and file approvals are
+  `session/request_permission` with Allow / Allow for this thread / Deny
+  (`accept`, `acceptForSession`, `decline`); a cancelled request answers
+  `cancel`. Other Codex requests (user input, elicitations, dynamic tools)
+  are refused.
+- **ACP events.** The agent's `session/update`s are relayed under the
+  thread's id. RustCode advertises no `fs` or `terminal` client capability,
+  and refuses those requests, so the agent uses its own tools.
+- **Steer.** `_rustcode/steer` on a Codex thread sends `turn/steer` while a
+  turn runs (`steer: "live"`). ACP has no equivalent (`steer: "none"`): the
+  client sends the message as the next prompt.
+- **Load.** `session/load` replays the recorded transcript; the harness
+  starts with the next prompt and resumes its own session: Codex with
+  `thread/resume`, an ACP agent with `session/load` when it advertises
+  `loadSession` (its own replay is not sent again). An agent that cannot
+  load starts a fresh session, without the earlier context, and its
+  `resume` capability reads `false` once the engine has run it.
+- **Capabilities.** `images`, `effort` and `resume` of an ACP harness are
+  updated from its `initialize` answer and options the first time it runs.
+  `permission_modes` is empty for external harnesses: each applies its own
+  configured approval rules.
 
 ## Configuration
 
@@ -175,7 +238,9 @@ enabled = true
 
 Known harnesses (`rustcode`, `codex`, `claude-code`, `gemini`, `opencode`)
 need only `id` and `enabled`; their commands are built in and can be
-overridden with `command`.
+overridden with `command`. An entry without `enabled` is on. Both sections
+are optional and only read from the user config: a project's
+`.rustcode/config.toml` cannot add a harness or change a command.
 
 ## Process and safety rules
 
@@ -184,15 +249,19 @@ overridden with `command`.
   the engine exiting kills the group.
 - `session/cancel` asks the harness to stop; a harness that does not stop in
   5 s is killed and the turn ends as cancelled.
-- The child's stderr goes to the thread's `logs/debug.log`, never to the
-  transcript.
+- The child's stderr goes to the thread's `logs/debug.log` (lines prefixed
+  `[harness <id>]`), never to the transcript.
 - The engine passes no RustCode credentials, provider keys or tokens to a
-  child. The child inherits the user's environment and uses its own sign-in.
+  child. The child inherits the user's environment (without the engine's own
+  `RUSTCODE_*` variables) and uses its own sign-in.
 - RustCode's sandbox applies to the built-in harness only. An external
   harness enforces its own rules, and the client says so.
 - Permission requests from a harness go to the client unchanged; nothing is
   auto-approved unless the user picked a mode the harness enforces.
-- Thread metadata (harness id, native session id, cwd, title, timestamps)
-  is stored with the thread in `~/.config/rustcode/threads/…`. The transcript
-  itself is recorded too, so the thread list and history work even when the
-  harness cannot resume.
+- Thread metadata (harness id, native session id, cwd, title, model,
+  effort, timestamps) is stored with the thread in
+  `~/.config/rustcode/threads/…/harness.json`. The transcript is recorded in
+  the thread's `history.json` too (the user's messages and the harness's
+  replies, with its thoughts), so the thread list, search and history work
+  even when the harness cannot resume. Tool calls are shown live but not
+  recorded.
