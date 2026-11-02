@@ -386,6 +386,12 @@ pub(crate) fn is_explicit_verification_command(prompt: &str, command: &str) -> b
         }
     }
 
+    // "Run the file to verify": running the program itself is the check the
+    // user asked for (#2826).
+    if runs_a_program(&normalized_command) {
+        return true;
+    }
+
     // A generic request such as "run the repository check" may not contain
     // the eventual executable name. Treat only command names that clearly
     // identify a verification action as authoritative in that case.
@@ -419,6 +425,34 @@ pub(crate) fn is_explicit_verification_command(prompt: &str, command: &str) -> b
             | "build"
             | "build.sh"
     )
+}
+
+/// A command that runs a program on a file or project: `python3 calc.py`,
+/// `node app.js`, `bun run x.ts`, `cargo run`, `go run .`, `./script.sh`. A
+/// version probe (`node -v`, `python3 --version`) is not one.
+fn runs_a_program(command: &str) -> bool {
+    command.split(['&', '|', ';', '\n']).any(|segment| {
+        let words: Vec<&str> = segment.split_whitespace().collect();
+        let Some((first, rest)) = words.split_first() else {
+            return false;
+        };
+        let target = |args: &[&str]| {
+            args.iter()
+                .find(|arg| !arg.starts_with('-'))
+                .is_some_and(|arg| arg.contains('.') || arg.contains('/'))
+        };
+        let program = first.rsplit('/').next().unwrap_or(first);
+        match program {
+            "python" | "python3" | "node" | "ruby" | "perl" | "php" | "sh" | "bash" | "zsh"
+            | "lua" | "elixir" | "julia" | "rscript" => target(rest),
+            "bun" | "deno" | "uv" | "poetry" => match rest {
+                ["run", args @ ..] => target(args),
+                args => target(args),
+            },
+            "cargo" | "go" | "dotnet" | "swift" => rest.first() == Some(&"run"),
+            _ => first.starts_with("./") && first.len() > 2,
+        }
+    })
 }
 
 pub(crate) fn is_explicit_verification_request(prompt: &str) -> bool {
@@ -595,6 +629,37 @@ mod tests {
         assert!(super::is_explicit_verification_command(
             prompt,
             "cargo test --all"
+        ));
+    }
+
+    #[test]
+    fn running_the_program_counts_when_the_user_asked_to_run_it() {
+        let prompt = "calc.py has a bug. Find it, fix it, and run the file to verify.";
+        assert!(is_explicit_verification_request(prompt));
+        for command in [
+            "python3 calc.py",
+            "cd /tmp/x && python3 calc.py",
+            "node app.js",
+            "bun run scripts/x.ts",
+            "cargo run",
+            "go run .",
+            "./check-things",
+        ] {
+            assert!(
+                super::is_explicit_verification_command(prompt, command),
+                "{command}"
+            );
+        }
+        for command in ["node -v", "python3 --version", "git diff", "ls ./src"] {
+            assert!(
+                !super::is_explicit_verification_command(prompt, command),
+                "{command}"
+            );
+        }
+        // Without a request to run or check anything, running a script is not a verification.
+        assert!(!super::is_explicit_verification_command(
+            "Explain calc.py",
+            "python3 calc.py"
         ));
     }
 
