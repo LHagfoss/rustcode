@@ -47,16 +47,16 @@ export function LinkChip({
     <Tooltip label={<span className="break-all">{url}</span>}>
       <span
         className={cx(
-          "inline-flex h-[20px] max-w-[280px] shrink-0 items-center gap-1 rounded-full pr-2 pl-1 align-[-4px] text-callout leading-none",
-          !tint && "bg-fill",
+          "inline-flex h-[20px] max-w-[280px] shrink-0 items-center gap-1 rounded-full pr-2 pl-1 align-[-1px] text-callout leading-none",
+          !tint && "bg-fill-strong shadow-[inset_0_0_0_0.5px_var(--color-border)]",
           onRemove && "pr-1",
           className,
         )}
         style={
           tint
             ? {
-                background: `color-mix(in srgb, ${tint} 18%, transparent)`,
-                boxShadow: `inset 0 0 0 0.5px color-mix(in srgb, ${tint} 35%, transparent)`,
+                background: `color-mix(in srgb, ${tint} 18%, var(--color-fill-strong))`,
+                boxShadow: `inset 0 0 0 0.5px color-mix(in srgb, ${tint} 35%, var(--color-border))`,
               }
             : undefined
         }

@@ -177,8 +177,8 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
 
 Keys: ⌘N new thread, ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⌥B right panel, ⌘F find
 in thread, ⌘J terminal, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
-running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the last
-link chip or the command token, Esc clears the draft and then stops the
+running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the
+command token, Esc clears the draft and then stops the
 turn (⌘. stops it too), 1–9 answer the visible approval or question.
 
 ## Features

@@ -1,6 +1,6 @@
 // The composer, after ContentView.swift's Composer: one floating rounded-xs
-// box with the queue, attachments, the field (with a slash-command token and
-// pasted link chips in front of it) and a button row: the folder, Files, the
+// box with the queue, attachments, the field (with a slash-command token in
+// front of it; pasted links stay inline as text) and a button row: the folder, Files, the
 // harness, the model pill and send/queue/stop. Keys follow the SwiftUI app:
 // ⏎ send (or queue while running), ⇧⏎ newline, ⌘⏎ steer, Esc closes
 // suggestions, then clears the draft, then stops the turn.
@@ -34,7 +34,6 @@ import {
   imageMime,
   MAX_IMAGE_BYTES,
   MAX_INLINE_FILE_BYTES,
-  pastedUrl,
 } from "../state/compose";
 import { controlDisabledReason } from "../state/harness";
 import {
@@ -290,12 +289,7 @@ export const Composer = memo(function Composer({
       void attachmentsFromFiles(files, images, harnessName).then(attach);
       return;
     }
-    const url = pastedUrl(e.clipboardData.getData("text/plain"));
-    if (url) {
-      // A pasted link becomes a chip in front of the field; the prompt still carries the URL.
-      e.preventDefault();
-      change((x) => (x.links.includes(url) ? x : { ...x, links: [...x.links, url] }));
-    }
+    // A pasted link stays where it was pasted, as text; the sent message shows it as a chip.
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
