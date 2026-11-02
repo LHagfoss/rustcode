@@ -554,9 +554,103 @@ only after 200 ms, so a fast open never draws it.
 
 Still open: the sidebar's 500 rows are not virtualized, so every store
 notification runs their selectors (about 3 % of the main thread while
-streaming) and filtering re-renders them; the window's vibrancy and
-`backdrop-filter` surfaces cost compositor time that a headless browser
-does not show.
+streaming) and filtering re-renders them. (The vibrancy and
+`backdrop-filter` cost this paragraph used to suspect was measured
+natively; see below: it is not measurable.)
+
+### Native frame rate
+
+`bun run perf:native [prod|dev] [--near60]` runs the same kind of scenarios
+in a real WKWebView (`scripts/perf-native.swift`,
+`scripts/perf-native-scenario.js`): a floating 1440×900 window set up like
+the app's (transparent web view over sidebar vibrancy), against
+`?transport=perf`. Per phase it prints the rAF rate, frame-interval p95,
+late frames (over 1.5× the display's interval), the main thread's
+rendering work after each rAF, long tasks (gaps in a 10 ms heartbeat:
+WebKit has no Long Tasks API) and the CPU of the WebContent, GPU and
+WindowServer processes. Scrolling is scripted (`scrollTop` per frame): a
+proxy, since WebKit scrolls wheel and trackpad input off the main thread
+and that input cannot be synthesized here. `sample` cannot attach to the
+system WebContent process (SIP), so causes come from this split, a
+CDP profile of the same build in Chrome, and A/B runs. In the dev app,
+⌘⌥F toggles an overlay (`src/lib/perfOverlay.ts`) with the rAF rate,
+frame p95, late frames, long tasks, the display's refresh rate, Low Power
+Mode and WebKit's 60 fps preference, and logs them to the console every
+5 s.
+
+What held the app below 120 fps, and what changed:
+
+- **WebKit renders near 60 fps by default.** Its "Prefer Page Rendering
+  Updates near 60fps" feature (on in every WKWebView) runs rAF, CSS
+  animations and rendering updates at 60 on a 120 Hz display. The main
+  window is now built in `src-tauri/src/webview.rs` (`"create": false` in
+  `tauri.conf.json`) on a `WKWebViewConfiguration` with the feature off,
+  through the private `_WKFeature` list; every selector is checked first,
+  so a WebKit without it leaves the default. WebKit reads it when the page
+  is created: set on a live web view it does nothing, so it cannot be
+  applied in `setup` to the config-built window.
+- **Low Power Mode caps WebKit at 30 fps**, whatever the preference says.
+  This Mac had it on for AC power only (`pmset -g custom`: `powermode 1`
+  under AC Power), so the app ran at 30 fps whenever it was plugged in.
+  The overlay says when it is on; it is the user's setting, not the app's.
+- **Shiki's JavaScript regex engine stalled scrolling.** The first
+  TypeScript block took 976 ms to highlight in JavaScriptCore (68 ms in
+  Chrome, which is why `bun run perf` never showed it), in one main-thread
+  task, as a code block scrolled into view; each 200-line block then took
+  60 ms. Highlighting now runs in a module worker
+  (`src/lib/highlight.worker.ts`) on the Oniguruma WebAssembly engine
+  (73 ms first block, 13 ms per 200 lines, none of it on the main thread);
+  the main thread keeps the HTML cache, so a remounted block is coloured
+  in its first frame. The app's CSP needs no change: Tauri sends it only
+  with HTML, and the worker compiles the WebAssembly under the app's
+  policy too (checked with it as a meta tag).
+- **The right panel animated its slot's width**, so the chat column
+  reflowed, every visible row re-measured and the transcript re-rendered
+  on each frame for 200 ms (about 40 ms of rendering work per frame). The
+  slot now takes its width at once and the frame slides and fades in on
+  the compositor (`rc-drill`, then `translate`/`opacity` out): one reflow
+  per toggle, a quarter of the main-thread work. (Its slide had never run:
+  Tailwind 4's `translate-x-*` sets `translate`, which
+  `transition-[opacity,transform]` did not list.) The sidebar did the same
+  with its own width; at the default 1280 px window the chat column is
+  narrower than its 1,036 px maximum, so each frame rewrapped the
+  transcript. It now slides out on `translate` and its slot collapses
+  after 200 ms (and opens before it slides in).
+- **Glass costs nothing measurable.** With `--rc-glass-filter: none` and
+  the header glass off, frames, WebContent, GPU-process and WindowServer
+  CPU stayed within run-to-run noise in every phase, so the blur stays.
+
+`perf:native prod`, built-in 120 Hz display, Low Power Mode off, before
+(near-60 preference on, as the app shipped) and after the preference fix:
+
+| | near-60 on | near-60 off | blur off |
+|---|---|---|---|
+| Idle rAF | 60 fps | 121 fps | 121 fps |
+| Streaming 100 chunks/s, composer focused | 59 fps, p95 18 ms | 118 fps, p95 9 ms | 119 fps |
+| Scripted scroll of `perf-long` (incl. the Shiki stall) | 45 fps, one 1,010 ms frame | 91 fps, one 979 ms frame | 91 fps |
+| ⌘K switcher open/close ×3 | 59 fps, max frame 59 ms | 114 fps, max 57 ms | 114 fps |
+| Settings open/close ×2 | 60 fps, max 37 ms | 117 fps, max 34 ms | 117 fps |
+| Right panel ×4 | 49 fps, p95 45 ms | 80 fps, p95 41 ms, work p95 39 ms | 79 fps |
+| Sidebar ×4 (1440 wide) | 60 fps | 121 fps, p95 10 ms | 121 fps |
+| CPU while streaming: WebContent / GPU / WindowServer | 34 / 14 / 54 % | 46 / 21 / 52 % | 46 / 19 / 50 % |
+
+Twice the frames cost the WebContent and GPU processes about a third more
+CPU while streaming. The Shiki stall and the panel's per-frame reflow are
+fixed after these runs: in WebKit the scroll no longer has a long task
+when a code block mounts, and four panel toggles take 77 ms of rendering
+work instead of 262 ms (one reflow per toggle, about 56 ms, instead of
+one per frame).
+
+Dev mode (`bun tauri dev`) adds React's development build on top: in
+Chrome, streaming keeps the main thread 31 % busy in dev against 22 % in
+a production build (table above). Native dev and bundled runs on the same display are still to be
+recorded with `perf:native dev` and `perf:native prod`.
+
+Still not 120: opening the ⌘K switcher (a 57 ms frame) and Settings
+(34 ms) each drop a few frames in one long React render, and the one
+reflow when the right panel or (at narrow widths) the sidebar opens or
+closes, about 56 ms of re-measuring the visible transcript rows, is a
+visible hitch.
 
 ## Release
 

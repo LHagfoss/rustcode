@@ -147,6 +147,12 @@ instead of a surface (`--rc-glass-pane`, `bg` at 72%; 45% with `.rc-frost`
 over a new thread's banner), through `.rc-header-glass`. Panes, cards,
 rows and the sidebar stay opaque.
 
+Glass is cheap where it is: WebKit draws `backdrop-filter` as a
+CoreAnimation backdrop layer, and turning every blur off changed no frame
+or CPU number measurably (docs/desktop.md › Native frame rate). Keep it
+to the one filter on floating surfaces and headers: no larger radius, no
+second blur stacked on the first, no blur on a pane or a scrolling row.
+
 ## Spacing
 
 Tailwind's 4px grid. Common steps: 4 (icon to label), 8 (between controls
@@ -187,6 +193,13 @@ that change use `tabular`.
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
   sections.
+- Panels and sheets never animate a slot's `width`, `height`, `top` or
+  grid rows across the chat: every frame would reflow the transcript (40 ms
+  of work a frame for the right panel, so well under 120 fps). The slot
+  takes its size at once and the panel moves with `transform` and
+  `opacity` (`rc-drill` in, `translate`/`opacity` out). Animate only
+  `transform`, `opacity` and colour; never `filter` or `box-shadow` on
+  something that moves every frame.
 - Toasts come in with `rc-in` (200ms, fade + 4px) and leave in 120ms
   `ease-in`; a swipe follows the pointer and snaps back in 160ms.
 - Skeletons sweep once every 1.6s (`transform` only, on the compositor).
