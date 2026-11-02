@@ -11,6 +11,7 @@
 import type { JsonObject } from "../acp/jsonrpc";
 import { projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
+import { selectOption, unavailableReason, usableHarnesses } from "./harness";
 import {
   capped,
   checkMessage,
@@ -47,6 +48,7 @@ import {
   type AppState,
   cancel,
   createSession,
+  ensureHarnessModels,
   errorText,
   openThread,
   runPrompt,
@@ -296,20 +298,76 @@ type StartCall = Extract<ReturnType<typeof parseCall>, { tool: "start_session" }
 type FanOutCall = Extract<ReturnType<typeof parseCall>, { tool: "fan_out" }>;
 
 /** Checks a harness id against the engine's list; the default when none is named. */
+/**
+ * The harness a delegated thread runs on: it must be installed, turned on and
+ * signed in (the same rule as the picker), else the error names the ones that
+ * can run now, so the agent can pick again (issue 2799).
+ */
 function harnessFor(name: string | undefined): { id: string; name: string } | Failure {
   const snapshot = useApp.getState().harnesses;
   const id = name ?? snapshot?.default.harness ?? "rustcode";
   const h = snapshot?.harnesses.find((x) => x.id === id || x.name.toLowerCase() === id.toLowerCase());
-  if (!h) return failure("invalid", `no harness “${id}”; the enabled ones are ${enabledHarnesses()}`);
-  if (!h.enabled) return failure("not_allowed", `${h.name} is not enabled in Settings › Harnesses`);
+  if (!h) return failure("invalid", `no harness “${id}”; the ones that can run now are ${usableIds()}`);
+  const reason = unavailableReason(h);
+  if (reason)
+    return failure("not_allowed", `${h.name} cannot run a thread: ${reason}. Usable now: ${usableIds()}`);
   return { id: h.id, name: h.name };
 }
 
-const enabledHarnesses = () =>
-  (useApp.getState().harnesses?.harnesses ?? [])
-    .filter((h) => h.enabled)
-    .map((h) => h.id)
-    .join(", ") || "rustcode";
+const usableIds = () => {
+  const snapshot = useApp.getState().harnesses;
+  return (
+    (snapshot
+      ? usableHarnesses(snapshot)
+          .map((h) => h.id)
+          .join(", ")
+      : "") || "rustcode"
+  );
+};
+
+/**
+ * The model a delegated thread asks for, checked against what the harness
+ * lists (asked for once if it has not listed them yet). An unknown id would
+ * be ignored by the harness and the child would quietly run on its default,
+ * so it is refused with the closest matches instead.
+ */
+async function modelFor(harness: string, model: string | undefined): Promise<string | undefined | Failure> {
+  if (!model) return undefined;
+  await ensureHarnessModels(harness);
+  const h = useApp.getState().harnesses?.harnesses.find((x) => x.id === harness);
+  const models = h?.models ?? [];
+  if (!models.length) return model;
+  const wanted = model.toLowerCase();
+  const exact = models.find((m) => m.id.toLowerCase() === wanted || m.name.toLowerCase() === wanted);
+  if (exact) return exact.id;
+  // "deepseek-v4-pro" for "deepseek/deepseek-v4-pro": a provider prefix left off, when only one fits.
+  const suffixed = models.filter((m) => m.id.toLowerCase().endsWith(`/${wanted}`));
+  if (suffixed.length === 1) return suffixed[0]!.id;
+  const close = models
+    .filter(
+      (m) =>
+        m.id.toLowerCase().includes(wanted) || wanted.includes(m.id.toLowerCase().split("/").pop() ?? ""),
+    )
+    .slice(0, 5)
+    .map((m) => m.id);
+  const offer = (close.length ? close : models.slice(0, 8).map((m) => m.id)).join(", ");
+  return failure(
+    "invalid",
+    `${h?.name ?? harness} has no model “${model}”; ${close.length ? "closest" : "some it lists"}: ${offer}`,
+  );
+}
+
+/** "Claude Code · opus · high" for the approval card: what will actually run. */
+const choiceLabel = (name: string, model?: string, effort?: string) =>
+  [name, model, effort].filter(Boolean).join(" · ");
+
+/** The model and effort the new thread reports it runs on, for the caller's answer. */
+function ranWith(id: string): JsonObject {
+  const options = useApp.getState().threads[id]?.configOptions ?? [];
+  const model = selectOption(options, "model")?.current;
+  const effort = selectOption(options, "effort")?.current;
+  return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+}
 
 /** The project a new thread starts in: the caller's, or one the user has opened before. */
 function projectFor(caller: RuleThread, asked: string | undefined): string | Failure {
@@ -369,6 +427,8 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   if (isFailure(project)) return failureJson(project);
   const harness = harnessFor(call.harness);
   if (isFailure(harness)) return failureJson(harness);
+  const model = await modelFor(harness.id, call.model);
+  if (isFailure(model)) return failureJson(model);
   const title = call.title ?? call.prompt.split("\n")[0]!.slice(0, 60);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, other ? `start:${project}` : "start", {
@@ -378,7 +438,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     target: title,
     detail: call.prompt,
     project: other ? project : undefined,
-    harnesses: [harness.name],
+    harnesses: [choiceLabel(harness.name, model, call.effort)],
     worktree: call.worktree ?? true,
   });
   if (no) return failureJson(no);
@@ -386,7 +446,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   if (again) return failureJson(again);
   let id: string;
   try {
-    id = await newThread(project, harness.id, { ...call, title });
+    id = await newThread(project, harness.id, { ...call, model, title });
   } catch (error) {
     return failureJson(failure("failed", `the thread could not start: ${errorText(error)}`));
   }
@@ -401,7 +461,14 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     harness: harness.id,
   });
   deliver(id, delivered(call.prompt, caller.title), link);
-  return { session_id: id, link_id: link, receipt: "started", title, harness: harness.id };
+  return {
+    session_id: id,
+    link_id: link,
+    receipt: "started",
+    title,
+    harness: harness.id,
+    ...ranWith(id),
+  };
 }
 
 async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
@@ -411,7 +478,9 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
   for (const entry of call.harnesses) {
     const h = harnessFor(entry.harness);
     if (isFailure(h)) return failureJson(h);
-    chosen.push({ ...h, model: entry.model, effort: entry.effort });
+    const model = await modelFor(h.id, entry.model);
+    if (isFailure(model)) return failureJson(model);
+    chosen.push({ ...h, model, effort: entry.effort });
   }
   const project = projectOf(caller);
   const title = call.title ?? call.prompt.split("\n")[0]!.slice(0, 60);
@@ -421,7 +490,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     callerTitle: caller.title,
     target: title,
     detail: call.prompt,
-    harnesses: chosen.map((h) => h.name + (h.model ? ` · ${h.model}` : "")),
+    harnesses: chosen.map((h) => choiceLabel(h.name, h.model, h.effort)),
     worktree: true,
   });
   if (no) return failureJson(no);
@@ -446,7 +515,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
         fanOut: fanId,
       });
       linkIds.push(link);
-      out.push({ session_id: id, link_id: link, harness: h.id });
+      out.push({ session_id: id, link_id: link, harness: h.id, ...ranWith(id) });
       deliver(id, delivered(call.prompt, caller.title), link);
     } catch (error) {
       out.push({ harness: h.id, error: { code: "failed", message: errorText(error) } });
