@@ -195,12 +195,23 @@ export const AssistantRow = memo(function AssistantRow({
   threadId?: string;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
+  // Each reply block copies on its own, from the margin: faint until the row is hovered, and out of
+  // the text's flow so a streaming block never moves.
+  const copy = item.text.trim() && (
+    <span className="absolute top-0 -right-7 opacity-50 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100">
+      <CopyButton text={item.text} iconOnly label="Copy this reply" />
+    </span>
+  );
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <Markdown text={item.text} streaming={streaming} className={streaming ? "rc-stream" : undefined} />
+      <div className="group/reply relative">
+        <Markdown text={item.text} streaming={streaming} className={streaming ? "rc-stream" : undefined} />
+        {copy}
+      </div>
     );
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="group/reply relative flex flex-col gap-2.5">
+      {copy}
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown key={i} text={segment.text} streaming={streaming && i === segments.length - 1} />
@@ -233,22 +244,25 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
   const tail = live ? item.text.split("\n").filter(Boolean).slice(-5).join("\n") : "";
   return (
     <div className="text-callout">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="-mx-1 flex max-w-full items-center gap-1.5 rounded-sm px-1 text-fg-faint hover:text-fg-muted"
-      >
-        {live && <Spinner size={10} />}
-        <span className="shrink-0">{label}</span>
-        {!open && !live && headings.length > 0 && (
-          <span className="truncate italic">· {headings.join(" · ")}</span>
-        )}
-        <ChevronRight
-          size={11}
-          className={cx("shrink-0 transition-transform duration-200", open && "rotate-90")}
-        />
-      </button>
+      <div className="flex max-w-full items-center gap-1">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="-mx-1 flex min-w-0 max-w-full items-center gap-1.5 rounded-sm px-1 text-fg-faint hover:text-fg-muted"
+        >
+          {live && <Spinner size={10} />}
+          <span className="shrink-0">{label}</span>
+          {!open && !live && headings.length > 0 && (
+            <span className="truncate italic">· {headings.join(" · ")}</span>
+          )}
+          <ChevronRight
+            size={11}
+            className={cx("shrink-0 transition-transform duration-200", open && "rotate-90")}
+          />
+        </button>
+        {open && item.text.trim() && <CopyButton text={item.text} iconOnly label="Copy thinking" />}
+      </div>
       {(open || (live && tail)) && (
         <div className={cx("pt-2 text-fg-muted", live && !open && "line-clamp-5")}>
           <Markdown text={open ? item.text : tail} streaming={live} className="gap-1.5 text-callout" />
@@ -321,7 +335,10 @@ function TextBox({ text, label }: { text: string; label: string }) {
   const shown = all || lines.length <= 14 ? lines : lines.slice(0, 14);
   return (
     <div>
-      <div className="mb-1 font-semibold text-caption text-fg-muted">{label}</div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-semibold text-caption text-fg-muted">{label}</span>
+        {text.trim() && <CopyButton text={text} iconOnly label={`Copy ${label.toLowerCase()}`} />}
+      </div>
       <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
         {shown.join("\n")}
       </pre>
