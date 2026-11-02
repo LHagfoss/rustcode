@@ -7,7 +7,7 @@ import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
-import { foldTurns, type TurnFold } from "../state/fold";
+import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
 import { useApp } from "../state/store";
 import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
 import { AgentSpawnRow } from "./AgentViews";
@@ -16,6 +16,7 @@ import {
   AssistantRow,
   NoticeRow,
   ThoughtRow,
+  ToolGroupRow,
   ToolRow,
   TurnEndRow,
   TurnFoldRow,
@@ -25,7 +26,14 @@ import {
 import { TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
-type Row = { key: string; item?: TranscriptItem; working?: true; fold?: TurnFold; inFold?: string };
+type Row = {
+  key: string;
+  item?: TranscriptItem;
+  working?: true;
+  fold?: TurnFold;
+  group?: ToolGroup;
+  inFold?: string;
+};
 
 /** The turns the reader opened, by thread: kept while the app runs, so going back keeps them. */
 const openFolds = new Map<string, Set<string>>();
@@ -143,7 +151,9 @@ export function Transcript({
   );
   const searching = !!find?.query;
   const rows = useMemo<Row[]>(() => {
-    const out: Row[] = foldTurns(thread.items, thread.running, searching ? ALL_OPEN : open);
+    // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
+    const shown = searching ? ALL_OPEN : open;
+    const out: Row[] = groupTools(foldTurns(thread.items, thread.running, shown), shown);
     if (thread.running) out.push({ key: "working", working: true });
     return out;
   }, [thread.items, thread.running, open, searching]);
@@ -200,7 +210,7 @@ export function Transcript({
       const known = rowSizes.get(rows[i]?.key ?? "");
       if (known !== undefined) return known;
       const item = rows[i]?.item;
-      if (rows[i]?.fold) return 26;
+      if (rows[i]?.fold || rows[i]?.group) return 26;
       if (!item) return 24;
       if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
       return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
@@ -446,7 +456,6 @@ export function Transcript({
           {items.map((v) => {
             const row = rows[v.index]!;
             const item = row.item;
-            const prev = v.index > 0 ? rows[v.index - 1]?.item : undefined;
             if (row.fold) {
               return (
                 <div
@@ -462,8 +471,9 @@ export function Transcript({
                 </div>
               );
             }
-            // Rows are 18 apart; consecutive tool calls sit tight.
-            const gap = v.index === 0 ? 0 : item?.kind === "tool" && prev?.kind === "tool" ? 2 : 18;
+            // Rows are 18 apart; consecutive tool calls (and their groups) sit tight.
+            const toolLike = (r?: Row) => !!r?.group || r?.item?.kind === "tool";
+            const gap = v.index === 0 ? 0 : toolLike(row) && toolLike(rows[v.index - 1]) ? 2 : 18;
             return (
               <div
                 key={v.key}
@@ -476,7 +486,9 @@ export function Transcript({
                   className={cx("mx-auto w-full max-w-[1036px] px-7", row.inFold && "rc-expand")}
                   style={{ paddingTop: gap }}
                 >
-                  {row.working ? (
+                  {row.group ? (
+                    <ToolGroupRow group={row.group} onToggle={toggleFold} />
+                  ) : row.working ? (
                     <WorkingRow label={workingLabel(thread)} startedAt={thread.turnStartedAt} now={now} />
                   ) : item?.kind === "user" ? (
                     <UserRow item={item} threadId={thread.running ? undefined : thread.id} rewind={rewind} />

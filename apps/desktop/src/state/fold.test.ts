@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { foldLabel, foldTurns } from "./fold";
+import { foldLabel, foldTurns, groupTools, toolGroupLabel } from "./fold";
 import type { TranscriptItem } from "./thread";
 
 const user = (id: string): TranscriptItem => ({ kind: "user", id, text: id });
@@ -89,5 +89,58 @@ describe("turn folding", () => {
     const fold = rows.find((r) => "fold" in r);
     const label = fold && "fold" in fold ? foldLabel(fold.fold, (ms) => `${Math.round(ms / 1000)}s`) : "";
     expect(label).toBe("Worked for 80s · 5 steps · 1 file changed · 1 failed");
+  });
+});
+
+describe("tool groups", () => {
+  const kinded = (
+    id: string,
+    toolKind: string,
+    status: "completed" | "failed" | "in_progress" = "completed",
+  ): TranscriptItem => ({
+    kind: "tool",
+    id,
+    title: id,
+    toolKind,
+    status,
+    diffs: [],
+  });
+  const live = (items: TranscriptItem[], open: ReadonlySet<string> = new Set()) =>
+    groupTools(foldTurns(items, true, new Set()), open);
+
+  test("three or more finished calls in a row fold into one row", () => {
+    const rows = live([
+      user("u"),
+      kinded("a", "read"),
+      kinded("b", "read"),
+      kinded("c", "execute"),
+      kinded("d", "edit", "in_progress"),
+    ]);
+    expect(rows.map((r) => r.key)).toEqual(["u", "tools-a", "d"]);
+    const group = rows[1]!;
+    expect("group" in group && group.group.label).toBe("Read 2 files · Ran 1 command");
+  });
+
+  test("two calls stay as they are, and an open group lists its calls", () => {
+    expect(live([user("u"), kinded("a", "read"), kinded("b", "read")]).map((r) => r.key)).toEqual([
+      "u",
+      "a",
+      "b",
+    ]);
+    const rows = live(
+      [user("u"), kinded("a", "read"), kinded("b", "read"), kinded("c", "read")],
+      new Set(["tools-a"]),
+    );
+    expect(rows.map((r) => r.key)).toEqual(["u", "tools-a", "a", "b", "c"]);
+    expect(rows[2] && "inFold" in rows[2] ? rows[2].inFold : undefined).toBe("tools-a");
+  });
+
+  test("the label counts what the calls did, most first", () => {
+    expect(toolGroupLabel(["execute", "read", "execute", "search", undefined])).toBe(
+      "Ran 2 commands · Read 1 file · Searched once · 1 other step",
+    );
+    expect(toolGroupLabel(["read", "edit", "execute", "search", "fetch"])).toBe(
+      "Read 1 file · Edited 1 file · Ran 1 command · 2 more",
+    );
   });
 });

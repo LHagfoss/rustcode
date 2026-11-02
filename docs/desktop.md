@@ -371,6 +371,12 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   every step as it streamed; the running turn shows everything live, and
   replayed threads fold the same way (`src/state/fold.ts`, tests in
   `fold.test.ts`; recipe in [design.md](design.md)).
+- **Tool groups.** Inside what shows (the live turn, or an opened fold),
+  three or more finished tool calls in a row fold into one row in the tool
+  rows' grammar: "Read 4 files · Ran 2 commands · Searched once", counted
+  by ACP tool kind, most first, with a count of the rest and "N failed" in
+  danger. A call still running and a subagent keep their own rows; a
+  search opens every group (`groupTools`, after T3 Code's timeline).
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
   pictures, a click zooms, Esc or a click outside closes). A reply's

@@ -20,9 +20,19 @@ export interface TurnFold {
   files: number;
 }
 
+/** A run of finished tool calls shown as one row: `Read 4 files · Ran 2 commands`. */
+export interface ToolGroup {
+  key: string;
+  open: boolean;
+  count: number;
+  failed: number;
+  label: string;
+}
+
 export type FoldRow =
   | { key: string; item: TranscriptItem; inFold?: string }
-  | { key: string; fold: TurnFold };
+  | { key: string; fold: TurnFold; inFold?: string }
+  | { key: string; group: ToolGroup; inFold?: string };
 
 /** Whether an item stays in view when its turn folds. */
 function staysVisible(item: TranscriptItem): boolean {
@@ -114,4 +124,88 @@ export function foldLabel(fold: TurnFold, formatDuration: (ms: number) => string
   if (fold.files) parts.push(`${fold.files} ${fold.files === 1 ? "file" : "files"} changed`);
   if (fold.failed) parts.push(`${fold.failed} failed`);
   return parts.join(" · ");
+}
+
+/** Fewer finished calls in a row than this stay as they are. */
+export const GROUP_MIN = 3;
+
+type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
+
+/** A finished tool call that can fold into its neighbours; a subagent keeps its own row. */
+function groupable(row: FoldRow): row is { key: string; item: ToolItem; inFold?: string } {
+  if (!("item" in row)) return false;
+  const item = row.item;
+  return (
+    item.kind === "tool" &&
+    item.title !== "spawn_agent" &&
+    (item.status === "completed" || item.status === "failed")
+  );
+}
+
+const VERBS: [kinds: string[], one: string, many: (n: number) => string][] = [
+  [["read"], "Read 1 file", (n) => `Read ${n} files`],
+  [["edit", "delete", "move"], "Edited 1 file", (n) => `Edited ${n} files`],
+  [["execute"], "Ran 1 command", (n) => `Ran ${n} commands`],
+  [["search"], "Searched once", (n) => `Searched ${n} times`],
+  [["fetch"], "Fetched 1 page", (n) => `Fetched ${n} pages`],
+];
+
+/** What a run of calls did, most frequent first: three parts, then a count of the rest. */
+export function toolGroupLabel(kinds: (string | undefined)[]): string {
+  const counts = VERBS.map(([names, one, many]) => {
+    const n = kinds.filter((k) => !!k && names.includes(k)).length;
+    return { n, text: n === 1 ? one : many(n) };
+  });
+  const known = counts.reduce((sum, c) => sum + c.n, 0);
+  const other = kinds.length - known;
+  const parts = counts.filter((c) => c.n > 0).sort((a, b) => b.n - a.n);
+  if (other) parts.push({ n: other, text: `${other} other ${other === 1 ? "step" : "steps"}` });
+  // Three parts, or four when the fourth would only be replaced by "1 more"-style words.
+  const room = parts.length === 4 ? 4 : 3;
+  const shown = parts.slice(0, room).map((p) => p.text);
+  const rest = parts.slice(room).reduce((sum, p) => sum + p.n, 0);
+  if (rest) shown.push(`${rest} more`);
+  return shown.join(" · ");
+}
+
+/**
+ * Folds runs of `GROUP_MIN` or more finished tool calls into one group row
+ * each, the way T3 Code's timeline does, so a turn of fifty calls reads as a
+ * handful of lines. A call still running stays in view. `open` holds the
+ * groups the reader opened; an open group keeps its header above the calls.
+ */
+export function groupTools(rows: FoldRow[], open: ReadonlySet<string>): FoldRow[] {
+  const out: FoldRow[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    const row = rows[i]!;
+    if (!groupable(row)) {
+      out.push(row);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < rows.length) {
+      const next = rows[j]!;
+      if (!groupable(next) || next.inFold !== row.inFold) break;
+      j++;
+    }
+    const run = rows.slice(i, j) as { key: string; item: ToolItem; inFold?: string }[];
+    if (run.length < GROUP_MIN) {
+      out.push(...run);
+    } else {
+      const key = `tools-${run[0]!.key}`;
+      const group: ToolGroup = {
+        key,
+        open: open.has(key),
+        count: run.length,
+        failed: run.filter((r) => r.item.status === "failed").length,
+        label: toolGroupLabel(run.map((r) => r.item.toolKind)),
+      };
+      out.push({ key, group, inFold: row.inFold });
+      if (group.open) for (const r of run) out.push({ ...r, inFold: key });
+    }
+    i = j;
+  }
+  return out;
 }

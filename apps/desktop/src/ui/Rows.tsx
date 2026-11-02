@@ -14,6 +14,7 @@ import {
   FileText,
   Globe,
   Image as ImageIcon,
+  Layers,
   MoveRight,
   Pencil,
   RotateCcw,
@@ -29,7 +30,7 @@ import type { Json } from "../acp/jsonrpc";
 import type { FileDiff } from "../acp/types";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
-import { foldLabel, type TurnFold } from "../state/fold";
+import { foldLabel, type ToolGroup, type TurnFold } from "../state/fold";
 import { editMessage, retryMessage } from "../state/store";
 import {
   diffCounts,
@@ -579,6 +580,49 @@ export const TurnFoldRow = memo(function TurnFoldRow({
         className={cx("shrink-0 transition-transform duration-200", fold.open && "rotate-90")}
       />
     </button>
+  );
+});
+
+/**
+ * A run of finished tool calls as one line, in a tool row's own grammar (an
+ * icon in the 18px column, then the words): `Read 4 files · Ran 2 commands`.
+ * Opening it lists the calls under it.
+ */
+export const ToolGroupRow = memo(function ToolGroupRow({
+  group,
+  onToggle,
+}: {
+  group: ToolGroup;
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <div className="font-rounded">
+      <button
+        type="button"
+        aria-expanded={group.open}
+        onClick={() => onToggle(group.key)}
+        title={group.open ? "Hide these steps" : `Show ${group.count} steps`}
+        className="group -mx-1 flex min-h-6 w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+      >
+        <span className="flex w-[18px] shrink-0 justify-center">
+          <Layers size={13} className="text-fg-muted" />
+        </span>
+        <span className="min-w-0 truncate text-callout text-fg-muted">{group.label}</span>
+        {group.failed > 0 && (
+          <span className="flex shrink-0 items-center gap-0.5 text-caption text-danger">
+            <CircleX size={11} aria-hidden />
+            {group.failed} failed
+          </span>
+        )}
+        <ChevronRight
+          size={11}
+          className={cx(
+            "shrink-0 text-fg-faint transition-transform duration-200",
+            group.open && "rotate-90",
+          )}
+        />
+      </button>
+    </div>
   );
 });
 

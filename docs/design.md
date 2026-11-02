@@ -310,6 +310,11 @@ panels `rounded-xl`.
   buttons have the same 6px above them (to the box's edge) as at its
   sides and foot. The transcript scrolls under both (its bottom padding is the
   stack's height) and fades out from 56px above the box.
+- **Tool group:** three or more finished tool calls in a row are one row:
+  a `Layers` icon in the 18px icon column, then `Read 4 files · Ran 2
+  commands` in `text-callout text-fg-muted`, the failed count in `danger`,
+  and the fold chevron. It sits 2px from neighbouring tool rows, like
+  they do.
 - **Turn fold:** while a turn runs, every step shows as it streams
   (thoughts, tool calls with status and output, subagents). When it ends,
   its work folds into one summary row where the work began, above the
