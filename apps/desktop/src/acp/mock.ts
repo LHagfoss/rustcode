@@ -467,7 +467,11 @@ export class MockEngine {
             str(meta?.model) ??
             (harness === this.harnesses.default.harness ? this.harnesses.default.model : null) ??
             (harness === "rustcode" ? "chatgpt/gpt-6-luna" : (HARNESS_MODELS[harness]?.[0]?.id ?? "default")),
-          effort: str(meta?.effort) ?? this.harnesses.default.effort ?? "medium",
+          // Like the real engine, the built-in harness takes its effort from config, not from `session/new`.
+          effort:
+            (harness === "rustcode" ? undefined : str(meta?.effort)) ??
+            this.harnesses.default.effort ??
+            "medium",
           history: [],
         };
         this.threads.unshift(thread);

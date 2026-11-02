@@ -460,10 +460,24 @@ async function createThread(): Promise<string> {
     newThread: null,
     sessions: [{ id, cwd, updatedAt: Date.now(), harness: thread.harness?.id }, ...st.sessions],
   }));
-  // A model or effort the user picked before the thread existed applies now (built-in threads take it this way).
-  if (choice && s.harnesses?.unsupported) {
-    if (choice.model) await setConfigOption(id, "model", choice.model);
-    if (choice.effort) await setConfigOption(id, "effort", choice.effort);
+  // A model or effort picked before the thread existed applies now, when the thread did not take it
+  // from `session/new` (an older engine, or a harness that ignores it there).
+  if (choice) {
+    const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
+    if (
+      choice.model &&
+      current("model") !== choice.model &&
+      thread.configOptions.some((o) => o.id === "model")
+    ) {
+      await setConfigOption(id, "model", choice.model);
+    }
+    if (
+      choice.effort &&
+      current("effort") !== choice.effort &&
+      thread.configOptions.some((o) => o.id === "effort")
+    ) {
+      await setConfigOption(id, "effort", choice.effort);
+    }
   }
   return id;
 }

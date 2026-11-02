@@ -187,4 +187,14 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().planUsage[id] !== undefined);
     expect(useApp.getState().planUsage[id]?.windows).toHaveLength(2);
   });
+
+  test("a new thread gets the chosen effort even when session/new ignores it", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    setNewThreadChoice({ harness: "rustcode", model: "chatgpt/gpt-6-luna", effort: "low" });
+    const done = submit("yolo hi");
+    await until(() => selected()?.configOptions.find((o) => o.id === "effort")?.current === "low");
+    await done;
+  });
 });
