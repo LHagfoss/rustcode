@@ -69,6 +69,11 @@ pub fn run() {
             pty::pty_close,
             smartui::smartui_page,
         ])
+        .setup(|app| {
+            // The engine starts with the app, in parallel with the webview loading the UI.
+            app.state::<EngineState>().prestart();
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");
     app.run(|handle, event| {
