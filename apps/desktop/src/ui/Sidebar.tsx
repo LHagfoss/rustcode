@@ -42,6 +42,7 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { AgentMark } from "./AgentViews";
+import { LinkBadge } from "./Links";
 import { ChromeButton, Cluster, ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
 
 const MIN = 200;
@@ -187,6 +188,7 @@ function ThreadRow({
             <span className="flex w-full items-center gap-2">
               {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-2" />}
               <span className="min-w-0 flex-1 truncate text-body">{session.title || "New thread"}</span>
+              <LinkBadge threadId={session.id} />
               <span className="flex h-3.5 w-4 shrink-0 items-center justify-center group-hover:invisible">
                 {request ? (
                   <MessageCircleQuestion size={12} className="text-attention" />

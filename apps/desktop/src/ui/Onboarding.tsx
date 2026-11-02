@@ -35,7 +35,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && snapshot?.onboarded && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/22" />
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-black/22" />
         <Dialog.Content
           className="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-56px)] w-[min(640px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[20px] border border-fg/8 bg-chat shadow-panel rc-in"
           onEscapeKeyDown={(e) => !snapshot?.onboarded && e.preventDefault()}

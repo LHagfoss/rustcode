@@ -36,6 +36,7 @@ import {
   type SessionSummary,
   type SlashCommand,
 } from "../acp/types";
+import { parseWorktree, statusInUpdate, type ThreadStatus, V2Method, type Worktree } from "../acp/v2";
 import { setShellTransport, shellCall } from "../lib/shell";
 import {
   type ComposeExtras,
@@ -45,6 +46,15 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import {
+  answerOrchestration,
+  linkFinished,
+  linkStarted,
+  loadBook,
+  queuedLinkDropped,
+  stopLinksFrom,
+} from "./host";
+import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
 import {
   appendSteer,
   applyUpdate,
@@ -129,7 +139,34 @@ export interface AppState {
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
   planUsage: Record<string, PlanUsage | null>;
   /** An app-drawn confirmation (the webview has no native dialogs). */
-  confirm: { title: string; message: string; action: string; destructive?: boolean; run: () => void } | null;
+  confirm: {
+    title: string;
+    message: string;
+    action: string;
+    destructive?: boolean;
+    run: () => void;
+    /** A second, less prominent action (e.g. "Files and conversation"). */
+    alt?: { action: string; run: () => void };
+  } | null;
+  /** Threads can start and message other threads (Settings › General); the engine learns it at initialize. */
+  orchestration: boolean;
+  orchestrationPending: boolean;
+  /** Links between threads, fan-outs and grants, kept in app storage. */
+  links: LinkBook;
+  /** A thread asking the user whether it may reach another one. */
+  grant: (GrantAsk & { id: string }) | null;
+  /** v2 engine methods, probed at initialize: false hides the feature. Undefined: not known yet. */
+  features: { worktrees?: boolean; checkpoints?: boolean; status?: boolean };
+  /** Review / done marks kept by the app when the engine does not store them. */
+  statusMarks: Record<string, ThreadStatus>;
+  /** What the main column shows instead of the chat. */
+  view:
+    | { kind: "chat" }
+    | { kind: "board" }
+    | { kind: "review"; threadId: string }
+    | { kind: "compare"; fanOut: string };
+  /** The new-thread composer's worktree choice. */
+  newWorktree: { on: boolean; branch: string; edited: boolean };
 }
 
 const STORAGE = {
@@ -139,6 +176,8 @@ const STORAGE = {
   project: "rustcode.projectCwd",
   theme: "rustcode.theme",
   sidebar: "rustcode.sidebarHidden",
+  orchestration: "rustcode.orchestration",
+  statusMarks: "rustcode.statusMarks",
 };
 
 function stored(key: string): string | null {
@@ -149,7 +188,7 @@ function stored(key: string): string | null {
   }
 }
 
-function store(key: string, value: string) {
+export function store(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
   } catch {
@@ -171,6 +210,14 @@ export const useApp = create<AppState>(() => ({
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   editing: {},
   confirm: null,
+  orchestration: stored(STORAGE.orchestration) === "1",
+  orchestrationPending: false,
+  links: loadBook(),
+  grant: null,
+  features: {},
+  statusMarks: storedJson<Record<string, ThreadStatus>>(STORAGE.statusMarks, {}),
+  view: { kind: "chat" },
+  newWorktree: { on: false, branch: "", edited: false },
   smartUi: stored(STORAGE.smartUi) !== "0",
   smartUiPending: false,
   terminalOpen: false,
@@ -201,7 +248,7 @@ export const useApp = create<AppState>(() => ({
 const set = useApp.setState;
 const get = useApp.getState;
 
-function updateThread(id: string, fn: (thread: ThreadState) => ThreadState) {
+export function updateThread(id: string, fn: (thread: ThreadState) => ThreadState) {
   set((state) => {
     const thread = state.threads[id];
     if (!thread) return state;
@@ -216,7 +263,7 @@ export function toast(text: string, tone: Toast["tone"] = "info") {
   setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 3200);
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -262,11 +309,20 @@ async function handshake(): Promise<void> {
   try {
     const result = await conn.request(
       Method.initialize,
-      initializeParams(APP_VERSION, { smartUi: get().smartUi }),
+      initializeParams(APP_VERSION, {
+        smartUi: get().smartUi,
+        orchestration: get().orchestration ? CAPABILITY_VERSION : undefined,
+      }),
       20_000,
     );
     const agent = parseAgentInfo(result);
-    set({ agent, status: "ready", statusDetail: undefined, smartUiPending: false });
+    set({
+      agent,
+      status: "ready",
+      statusDetail: undefined,
+      smartUiPending: false,
+      orchestrationPending: false,
+    });
     // Threads that were open lost their engine-side state with the old process.
     set((s) => ({
       threads: Object.fromEntries(
@@ -276,12 +332,39 @@ async function handshake(): Promise<void> {
         ]),
       ),
     }));
-    await Promise.all([refreshSessions(), refreshHarnesses()]);
+    await Promise.all([refreshSessions(), refreshHarnesses(), probeFeatures(conn)]);
     const selected = get().selectedId;
     if (selected) void openThread(selected);
   } catch (error) {
     set({ status: "closed", statusDetail: errorText(error) });
   }
+}
+
+/** Which v2 methods the engine has: -32601 hides a feature, any other answer (even invalid params) shows it. */
+async function probeFeatures(conn: AcpConnection): Promise<void> {
+  const probe = async (method: string) => {
+    try {
+      await conn.request(method, {}, 10_000);
+      return true;
+    } catch (error) {
+      return !(error instanceof RpcError && error.isMethodNotFound);
+    }
+  };
+  const [worktrees, checkpoints, status] = await Promise.all([
+    probe(V2Method.worktreeList),
+    probe(V2Method.checkpointList),
+    probe(V2Method.sessionStatus),
+  ]);
+  if (connection === conn) set({ features: { worktrees, checkpoints, status } });
+}
+
+/** Why a v2 feature is hidden, for its tooltip; null when the engine has it. */
+export function featureMissing(feature: keyof AppState["features"]): string | null {
+  const known = get().features[feature];
+  if (known) return null;
+  if (known === undefined) return "Checking what the engine supports…";
+  const what = { worktrees: "worktrees", checkpoints: "checkpoints", status: "thread status" }[feature];
+  return `This engine has no ${what} yet (update RustCode).`;
 }
 
 export async function restartEngine(): Promise<void> {
@@ -320,6 +403,12 @@ async function handleInbound(message: Inbound) {
         }
         return;
       }
+      if (message.method === V2Method.orchestration) {
+        const conn = connection;
+        const result = await answerOrchestration(message.params);
+        conn?.respond(message.id, result);
+        return;
+      }
       // Nothing else is advertised; answer so the engine never waits.
       connection?.respondError(message.id, -32601, `Method not found: ${message.method}`);
       return;
@@ -337,6 +426,11 @@ function onSessionUpdate(params: JsonObject) {
   if (isReportUpdate(params) && update.kind === "agent") {
     toast(update.text.trim().split("\n")[0] ?? "Done");
     return;
+  }
+  const status = statusInUpdate(params);
+  if (status) {
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
+    if (status === "done" || status === "idle") clearStatusMark(sessionId);
   }
   if (update.kind === "title") {
     set((s) => ({
@@ -382,14 +476,22 @@ export async function refreshSessions(): Promise<void> {
 }
 
 export function selectThread(id: string | null) {
-  set({ selectedId: id, switcherOpen: false, settings: null });
+  set({ selectedId: id, switcherOpen: false, settings: null, view: { kind: "chat" } });
   if (id) void openThread(id);
 }
 
 export function startNewThread(cwd?: string) {
   const s = get();
   const projectCwd = cwd ?? (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
-  set({ selectedId: null, projectCwd, settings: null, switcherOpen: false, newThread: null });
+  set({
+    selectedId: null,
+    projectCwd,
+    settings: null,
+    switcherOpen: false,
+    newThread: null,
+    view: { kind: "chat" },
+    newWorktree: { on: s.newWorktree.on, branch: "", edited: false },
+  });
   if (projectCwd) store(STORAGE.project, projectCwd);
 }
 
@@ -398,7 +500,8 @@ export function setProjectCwd(cwd: string) {
   store(STORAGE.project, cwd);
 }
 
-async function openThread(id: string) {
+/** Loads a thread's history (the replay) if it is not loaded yet. */
+export async function openThread(id: string) {
   const conn = connection;
   const existing = get().threads[id];
   if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return;
@@ -431,54 +534,97 @@ export async function closeThread(id: string) {
   }
 }
 
-/** Creates a thread with the new-thread choice (or the default harness), and selects it. */
-async function createThread(): Promise<string> {
+export interface NewSession {
+  cwd: string;
+  harness?: string;
+  model?: string | null;
+  effort?: string | null;
+  /** Create a worktree first and run the thread in it (docs/orchestrator.md). */
+  worktree?: { repo: string; branch?: string; title?: string };
+  title?: string;
+  select?: boolean;
+}
+
+/** `session/new` with the harness, model, effort and worktree in `_meta.rustcode`; the thread is added to the list. */
+export async function createSession(options: NewSession): Promise<string> {
   const conn = engine();
+  const s = get();
+  const params: JsonObject = { cwd: options.cwd, mcpServers: [] };
+  const meta: JsonObject = {};
+  if (options.harness && !s.harnesses?.unsupported) {
+    meta.harness = options.harness;
+    if (options.model) meta.model = options.model;
+    if (options.effort) meta.effort = options.effort;
+  }
+  if (options.worktree) {
+    const w: JsonObject = { repo: options.worktree.repo };
+    if (options.worktree.branch) w.branch = options.worktree.branch;
+    if (options.worktree.title) w.title = options.worktree.title;
+    meta.worktree = w;
+  }
+  if (Object.keys(meta).length) params._meta = { rustcode: meta };
+  const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
+  const id = str(result.sessionId);
+  if (!id) throw new Error("The engine did not return a session id.");
+  const worktree: Worktree | undefined = parseWorktree(
+    ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
+  );
+  const cwd = worktree?.path ?? options.cwd;
+  const thread: ThreadState = {
+    ...emptyThread(id, cwd, options.title),
+    loaded: true,
+    configOptions: parseConfigOptions(result.configOptions),
+    harness: parseSessionHarness(result),
+    worktree,
+  };
+  set((st) => ({
+    threads: { ...st.threads, [id]: thread },
+    ...(options.select ? { selectedId: id, newThread: null } : {}),
+    sessions: [
+      {
+        id,
+        cwd,
+        updatedAt: Date.now(),
+        harness: thread.harness?.id ?? options.harness,
+        worktree,
+        title: options.title,
+      },
+      ...st.sessions,
+    ],
+  }));
+  // A model or effort picked before the thread existed applies now, when the thread did not take it
+  // from `session/new` (an older engine, or a harness that ignores it there).
+  const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
+  const has = (configId: string) => thread.configOptions.some((o) => o.id === configId);
+  if (options.model && current("model") !== options.model && has("model")) {
+    await setConfigOption(id, "model", options.model);
+  }
+  if (options.effort && current("effort") !== options.effort && has("effort")) {
+    await setConfigOption(id, "effort", options.effort);
+  }
+  return id;
+}
+
+/** Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and selects it. */
+async function createThread(firstMessage = ""): Promise<string> {
   const s = get();
   const cwd = s.projectCwd;
   if (!cwd) throw new Error("Choose a project folder for this thread first.");
   const choice = s.newThread;
-  const params: JsonObject = { cwd, mcpServers: [] };
-  if (choice && !s.harnesses?.unsupported) {
-    const meta: JsonObject = { harness: choice.harness };
-    if (choice.model) meta.model = choice.model;
-    if (choice.effort) meta.effort = choice.effort;
-    params._meta = { rustcode: meta };
-  }
-  const result = (await conn.request(Method.sessionNew, params, 60_000)) as JsonObject;
-  const id = str(result.sessionId);
-  if (!id) throw new Error("The engine did not return a session id.");
-  const thread: ThreadState = {
-    ...emptyThread(id, cwd),
-    loaded: true,
-    configOptions: parseConfigOptions(result.configOptions),
-    harness: parseSessionHarness(result),
-  };
-  set((st) => ({
-    threads: { ...st.threads, [id]: thread },
-    selectedId: id,
-    newThread: null,
-    sessions: [{ id, cwd, updatedAt: Date.now(), harness: thread.harness?.id }, ...st.sessions],
-  }));
-  // A model or effort picked before the thread existed applies now, when the thread did not take it
-  // from `session/new` (an older engine, or a harness that ignores it there).
-  if (choice) {
-    const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
-    if (
-      choice.model &&
-      current("model") !== choice.model &&
-      thread.configOptions.some((o) => o.id === "model")
-    ) {
-      await setConfigOption(id, "model", choice.model);
-    }
-    if (
-      choice.effort &&
-      current("effort") !== choice.effort &&
-      thread.configOptions.some((o) => o.id === "effort")
-    ) {
-      await setConfigOption(id, "effort", choice.effort);
-    }
-  }
+  const wt = s.newWorktree;
+  const worktree =
+    wt.on && s.features.worktrees
+      ? { repo: cwd, branch: wt.branch.trim() || undefined, title: firstMessage.split("\n")[0]?.slice(0, 80) }
+      : undefined;
+  const id = await createSession({
+    cwd,
+    harness: choice?.harness,
+    model: choice?.model,
+    effort: choice?.effort,
+    worktree,
+    select: true,
+  });
+  set({ newWorktree: { on: wt.on, branch: "", edited: false } });
   return id;
 }
 
@@ -609,7 +755,13 @@ export async function trashThread(id: string): Promise<boolean> {
   const archived = { ...get().archived };
   delete archived[id];
   const pinned = get().pinned.filter((x) => x !== id);
-  set((s) => ({ threads, archived, pinned, sessions: s.sessions.filter((x) => x.id !== id) }));
+  set((s) => ({
+    threads,
+    archived,
+    pinned,
+    sessions: s.sessions.filter((x) => x.id !== id),
+    links: forget(s.links, id),
+  }));
   store(STORAGE.archived, JSON.stringify(archived));
   store(STORAGE.pinned, JSON.stringify(pinned));
   toast("Moved to the Trash", "success");
@@ -649,7 +801,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   if (!trimmed && !hasExtras(extras)) return false;
   let id = get().selectedId;
   try {
-    if (!id) id = await createThread();
+    if (!id) id = await createThread(trimmed);
   } catch (error) {
     toast(`Could not start the thread: ${errorText(error)}`, "warning");
     return false;
@@ -745,7 +897,9 @@ export async function sendQueuedNow(id: string, queuedId: string) {
 }
 
 export function removeQueued(id: string, queuedId: string) {
+  const link = get().threads[id]?.queue.find((q) => q.id === queuedId)?.link;
   updateThread(id, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== queuedId) }));
+  if (link) queuedLinkDropped(link);
 }
 
 /** A queued message edited in place; an empty text removes it. */
@@ -771,14 +925,16 @@ export function moveQueued(id: string, queuedId: string, by: -1 | 1) {
   });
 }
 
-async function runPrompt(
+export async function runPrompt(
   id: string,
   text: string,
   extras: ComposeExtras = emptyExtras,
-  options: { fromView?: boolean } = {},
+  options: { fromView?: boolean; link?: string } = {},
 ): Promise<void> {
   const conn = engine();
   const thread = get().threads[id];
+  const startIndex = thread?.items.length ?? 0;
+  if (options.link) linkStarted(options.link);
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
     images: acceptsImages(thread),
@@ -814,6 +970,8 @@ async function runPrompt(
     failure = errorText(error);
   }
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
+  if (options.link)
+    linkFinished(options.link, id, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
   void refreshSessions();
   void refreshPlanUsage(id);
   void refreshAgents(id);
@@ -822,13 +980,15 @@ async function runPrompt(
   const next = get().threads[id]?.queue[0];
   if (outcome === "completed" && next) {
     removeQueued(id, next.id);
-    await runPrompt(id, next.text, next.extras, { fromView: next.fromView });
+    await runPrompt(id, next.text, next.extras, { fromView: next.fromView, link: next.link });
   }
 }
 
 export async function cancel(id = get().selectedId): Promise<void> {
   if (!id || !connection) return;
   const thread = get().threads[id];
+  // Stopping a thread stops the work it gave other threads (M1); turns the user started there go on.
+  void stopLinksFrom(id);
   if (!thread?.running) return;
   try {
     connection.notify(Method.sessionCancel, { sessionId: id });
@@ -967,6 +1127,65 @@ export function setNewThreadChoice(choice: NewThreadChoice | null) {
 }
 
 // ---------------------------------------------------------------- subagents and usage
+
+export function setOrchestration(on: boolean) {
+  set((s) => ({
+    orchestration: on,
+    orchestrationPending: s.status === "ready" ? !s.orchestrationPending : s.orchestrationPending,
+  }));
+  store(STORAGE.orchestration, on ? "1" : "0");
+}
+
+// ---------------------------------------------------------------- status and views
+
+/**
+ * What a thread is doing, for chips and the board: running or needs input
+ * from the live turn, else review or done as the engine (or the app, on an
+ * older engine) keeps it.
+ */
+export function statusOf(s: AppState, id: string): ThreadStatus {
+  const t = s.threads[id];
+  if (t?.permissions.length) return "needs_input";
+  if (t?.running) return "running";
+  const listed = s.sessions.find((x) => x.id === id)?.status;
+  const mark = s.statusMarks[id];
+  if (listed === "done" || listed === "review") return mark ?? listed;
+  return mark ?? "idle";
+}
+
+function saveMarks(marks: Record<string, ThreadStatus>) {
+  set({ statusMarks: marks });
+  store(STORAGE.statusMarks, JSON.stringify(marks));
+}
+
+export function clearStatusMark(id: string) {
+  const { [id]: _gone, ...rest } = get().statusMarks;
+  if (_gone) saveMarks(rest);
+}
+
+/** Mark a thread for review, done, or back to idle; stored by the engine when it can, else by the app. */
+export async function setThreadStatus(id: string, status: "review" | "done" | "idle"): Promise<void> {
+  set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)) }));
+  if (status === "idle") clearStatusMark(id);
+  else saveMarks({ ...get().statusMarks, [id]: status });
+  if (!get().features.status || !connection) return;
+  try {
+    await connection.request(V2Method.sessionStatus, { session_id: id, status }, 10_000);
+    // The engine keeps it now; the app's mark only covers the gap until the list says so.
+  } catch (error) {
+    if (!(error instanceof RpcError && error.isMethodNotFound)) {
+      toast(`Could not save the status: ${errorText(error)}`, "warning");
+    }
+  }
+}
+
+export function setView(view: AppState["view"]) {
+  set({ view, switcherOpen: false, settings: null });
+}
+
+export function setNewWorktree(change: Partial<AppState["newWorktree"]>) {
+  set((s) => ({ newWorktree: { ...s.newWorktree, ...change } }));
+}
 
 export function setSmartUi(on: boolean) {
   set((s) => ({ smartUi: on, smartUiPending: s.status === "ready" ? !s.smartUiPending : s.smartUiPending }));
@@ -1143,5 +1362,13 @@ export function resetForTests() {
     agents: {},
     agentOpen: null,
     planUsage: {},
+    orchestration: false,
+    orchestrationPending: false,
+    links: { links: [], grants: {}, counters: {}, fanOuts: [] },
+    grant: null,
+    features: {},
+    statusMarks: {},
+    view: { kind: "chat" },
+    newWorktree: { on: false, branch: "", edited: false },
   });
 }

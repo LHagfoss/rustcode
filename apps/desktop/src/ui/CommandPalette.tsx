@@ -218,7 +218,7 @@ export function CommandPalette() {
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/12" />
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-40 bg-black/12" />
         <Dialog.Content
           aria-describedby={undefined}
           className="surface fixed top-[max(72px,14vh)] left-1/2 z-50 flex w-[min(620px,calc(100vw-56px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] shadow-[0_14px_30px_rgb(0_0_0/0.18)] rc-in"

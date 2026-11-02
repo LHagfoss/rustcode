@@ -62,6 +62,8 @@ export interface QueuedPrompt {
   text: string;
   extras?: ComposeExtras;
   fromView?: boolean;
+  /** Delivered for another thread (orchestration link id): its answer goes back there. */
+  link?: string;
 }
 
 export interface ThreadState {
@@ -82,6 +84,8 @@ export interface ThreadState {
   loading: boolean;
   loaded: boolean;
   harness?: { id: string; capabilities: HarnessCapabilities };
+  /** The worktree the thread runs in, from `session/new` or the list. */
+  worktree?: import("../acp/v2").Worktree;
   error?: string;
   /** Turn timing seen on replayed replies, closed into a `turnEnd` row at the next user message. */
   pendingTurn?: { id?: string; elapsedMs?: number; at?: number; outcome?: string };

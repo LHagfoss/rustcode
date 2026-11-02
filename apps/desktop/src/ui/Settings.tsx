@@ -31,6 +31,7 @@ import {
   type SettingsSection,
   setDefaultHarness,
   setOnboarding,
+  setOrchestration,
   setProjectCwd,
   setSmartUi,
   setTheme,
@@ -115,6 +116,8 @@ function General() {
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
+  const orchestration = useApp((s) => s.orchestration);
+  const orchestrationPending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const shortcuts: [string, string][] = [
     ["New thread", "⌘N"],
@@ -151,6 +154,23 @@ function General() {
             title="Restart the engine to apply"
             subtitle="The engine learns the Smart UI setting when it starts."
           >
+            <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
+              Restart Engine
+            </Pill>
+          </Row>
+        )}
+        <Row
+          title="Threads can start and message other threads"
+          subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. You approve each first: Allow for This Thread, Allow Once or Don't Allow."
+        >
+          <Switch
+            label="Threads can start and message other threads"
+            checked={orchestration}
+            onChange={setOrchestration}
+          />
+        </Row>
+        {orchestrationPending && (
+          <Row title="Restart the engine to apply" subtitle="The engine learns this setting when it starts.">
             <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
               Restart Engine
             </Pill>

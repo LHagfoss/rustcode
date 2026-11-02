@@ -15,6 +15,7 @@ import {
 import { AgentsPanel } from "./ui/AgentViews";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
+import { GrantDialog } from "./ui/Links";
 import { cx, Pill } from "./ui/primitives";
 import { Sidebar } from "./ui/Sidebar";
 
@@ -154,6 +155,7 @@ export function App() {
         {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
       </Suspense>
       <ConfirmDialog />
+      <GrantDialog />
       <Toasts />
     </Tooltip.Provider>
   );

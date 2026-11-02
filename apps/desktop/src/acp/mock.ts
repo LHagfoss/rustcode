@@ -23,6 +23,63 @@ interface MockThread {
   model: string;
   effort: string;
   history: JsonObject[];
+  worktree?: MockWorktree;
+  status?: string;
+  checkpoints: MockCheckpoint[];
+}
+
+interface MockWorktree {
+  path: string;
+  branch: string;
+  repo: string;
+  base: string;
+  created_at: string;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
+
+interface MockCheckpoint {
+  turn: number;
+  prompt: string;
+  created_at: string;
+  files: { path: string; status: string; insertions: number; deletions: number; patch: string }[];
+}
+
+const COMPOSER_PATCH = `@@ -40,2 +40,3 @@
+   setDraft("");
+   submit(text);
++  requestAnimationFrame(() => input.current?.focus());`;
+
+const APP_PATCH = `@@ -1,2 +1,2 @@
+-const greeting = "hello";
++const greeting = "hello, world";
+ export default greeting;`;
+
+const LOGIN_PATCH = `@@ -0,0 +1,14 @@
++export function LoginForm({ onSubmit }: { onSubmit: (email: string) => void }) {
++  const [email, setEmail] = useState("");
++  return (
++    <form onSubmit={(e) => { e.preventDefault(); onSubmit(email); }}>
++      <label>
++        Email
++        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
++      </label>
++      <button type="submit">Sign in</button>
++    </form>
++  );
++}
++
++export default LoginForm;`;
+
+function slug(text: string): string {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 40) || "thread"
+  );
 }
 
 const RUSTCODE_MODELS = [
@@ -184,6 +241,22 @@ function seedThreads(): MockThread[] {
       harness: "rustcode",
       model: "chatgpt/gpt-6-luna",
       effort: "medium",
+      checkpoints: [
+        {
+          turn: 1,
+          prompt: "The composer loses its focus ring after sending. Can you fix it?",
+          created_at: new Date(minutes(6)).toISOString(),
+          files: [
+            {
+              path: "src/ui/Composer.tsx",
+              status: "modified",
+              insertions: 1,
+              deletions: 0,
+              patch: COMPOSER_PATCH,
+            },
+          ],
+        },
+      ],
       history: [
         update(a, {
           sessionUpdate: "user_message_chunk",
@@ -248,6 +321,7 @@ function seedThreads(): MockThread[] {
       harness: "codex",
       model: "gpt-6-luna",
       effort: "low",
+      checkpoints: [],
       history: [
         update(b, {
           sessionUpdate: "user_message_chunk",
@@ -270,6 +344,8 @@ function seedThreads(): MockThread[] {
       harness: "rustcode",
       model: "claude-sonnet-5",
       effort: "high",
+      status: "done",
+      checkpoints: [],
       history: [
         update(c, {
           sessionUpdate: "user_message_chunk",
@@ -279,6 +355,63 @@ function seedThreads(): MockThread[] {
           sessionUpdate: "agent_message_chunk",
           content: text("Added `ThemeToggle` to the header; it follows the system until you pick one."),
           ...turn(31_000),
+        }),
+      ],
+    },
+    {
+      id: "mock-thread-4",
+      cwd: "/Users/you/.config/rustcode/worktrees/rustcode/feat-login-form",
+      title: "Add the login form",
+      updatedAt: minutes(30),
+      harness: "codex",
+      model: "gpt-6-astra",
+      effort: "medium",
+      status: "review",
+      worktree: {
+        path: "/Users/you/.config/rustcode/worktrees/rustcode/feat-login-form",
+        branch: "feat/login-form",
+        repo: "/Users/you/code/rustcode",
+        base: "c1ace820",
+        created_at: new Date(minutes(45)).toISOString(),
+        dirty: true,
+        ahead: 2,
+        behind: 0,
+      },
+      checkpoints: [
+        {
+          turn: 1,
+          prompt: "Add a login form with an email field",
+          created_at: new Date(minutes(40)).toISOString(),
+          files: [
+            {
+              path: "src/ui/LoginForm.tsx",
+              status: "added",
+              insertions: 14,
+              deletions: 0,
+              patch: LOGIN_PATCH,
+            },
+          ],
+        },
+      ],
+      history: [
+        update("mock-thread-4", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Add a login form with an email field"),
+        }),
+        update("mock-thread-4", {
+          sessionUpdate: "tool_call",
+          toolCallId: "lf-1",
+          title: "edit src/ui/LoginForm.tsx",
+          kind: "edit",
+          status: "completed",
+          content: [
+            { type: "diff", path: "src/ui/LoginForm.tsx", newText: "export function LoginForm() {}\n" },
+          ],
+        }),
+        update("mock-thread-4", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Added `LoginForm` with an email field and a submit button, on `feat/login-form`."),
+          _meta: { rustcode: { turn: { id: "t1", elapsedMs: 52_000, outcome: "completed" } } },
         }),
       ],
     },
@@ -342,6 +475,9 @@ export class MockEngine {
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
   private agents = new Map<string, JsonObject[]>();
+  /** The client's `_meta.rustcode.orchestration` at initialize. */
+  private orchestration = 0;
+  private removedWorktrees = new Set<string>();
 
   constructor(
     private readonly emit: (line: string) => void,
@@ -430,7 +566,9 @@ export class MockEngine {
 
   private async handle(method: string, params: JsonObject): Promise<Json> {
     switch (method) {
-      case "initialize":
+      case "initialize": {
+        const rc = obj(obj(obj(params.clientCapabilities)?._meta)?.rustcode);
+        this.orchestration = typeof rc?.orchestration === "number" ? rc.orchestration : 0;
         return {
           protocolVersion: 1,
           agentCapabilities: {
@@ -441,6 +579,7 @@ export class MockEngine {
           },
           authMethods: [],
         };
+      }
       case "session/list":
         return {
           sessions: this.threads
@@ -450,7 +589,14 @@ export class MockEngine {
               cwd: t.cwd,
               title: t.title ?? null,
               updatedAt: new Date(t.updatedAt).toISOString(),
-              _meta: { model: t.model, rustcode: { harness: t.harness } },
+              _meta: {
+                model: t.model,
+                rustcode: {
+                  harness: t.harness,
+                  ...(t.status ? { status: t.status } : {}),
+                  ...(t.worktree ? { worktree: t.worktree as unknown as Json } : {}),
+                },
+              },
             })),
         };
       case "session/new": {
@@ -458,9 +604,17 @@ export class MockEngine {
         const harness = str(meta?.harness) ?? this.harnesses.default.harness;
         const h = this.harnesses.harnesses.find((x) => x.id === harness);
         if (!h) throw Object.assign(new Error(`Unknown harness ${harness}`), { code: -32602 });
+        const wanted = obj(meta?.worktree);
+        let worktree: MockWorktree | undefined;
+        if (wanted) {
+          const repo = str(wanted.repo) ?? str(params.cwd) ?? "/";
+          worktree = this.makeWorktree(repo, str(wanted.branch), str(wanted.title));
+        }
         const thread: MockThread = {
           id: `mock-${Date.now().toString(36)}-${++this.counter}`,
-          cwd: str(params.cwd) ?? "/",
+          cwd: worktree?.path ?? str(params.cwd) ?? "/",
+          worktree,
+          checkpoints: [],
           updatedAt: Date.now(),
           harness,
           model:
@@ -483,7 +637,12 @@ export class MockEngine {
         return {
           sessionId: thread.id,
           configOptions: configOptions(thread, this.harnesses),
-          _meta: { rustcode: { harness: { id: harness, capabilities: h.capabilities as unknown as Json } } },
+          _meta: {
+            rustcode: {
+              harness: { id: harness, capabilities: h.capabilities as unknown as Json },
+              ...(worktree ? { worktree: worktree as unknown as Json } : {}),
+            },
+          },
         };
       }
       case "session/load": {
@@ -664,6 +823,86 @@ export class MockEngine {
       }
       case "_rustcode/warm":
         return {};
+      case "_rustcode/worktrees/list": {
+        const repo = str(params.repo);
+        if (!repo) throw Object.assign(new Error("repo is required"), { code: -32602 });
+        return {
+          worktrees: this.threads
+            .filter(
+              (t) => t.worktree && t.worktree.repo === repo && !this.removedWorktrees.has(t.worktree.path),
+            )
+            .map((t) => ({ ...t.worktree, session_ids: [t.id] }) as unknown as Json),
+        };
+      }
+      case "_rustcode/worktrees/create": {
+        const repo = str(params.repo);
+        if (!repo) throw Object.assign(new Error("repo is required"), { code: -32602 });
+        return this.makeWorktree(repo, str(params.branch), str(params.title)) as unknown as Json;
+      }
+      case "_rustcode/worktrees/remove": {
+        const path = str(params.path);
+        if (!path) throw Object.assign(new Error("path is required"), { code: -32602 });
+        const t = this.threads.find((x) => x.worktree?.path === path);
+        if (!t?.worktree) throw Object.assign(new Error("No such worktree"), { code: -32602 });
+        if (params.force !== true && t.worktree.dirty) {
+          throw Object.assign(new Error("The worktree has uncommitted changes."), {
+            code: -32000,
+            data: { reason: "dirty" },
+          });
+        }
+        if (params.force !== true && t.worktree.ahead > 0) {
+          throw Object.assign(new Error("The branch has commits that are on no remote."), {
+            code: -32000,
+            data: { reason: "unpushed" },
+          });
+        }
+        this.removedWorktrees.add(path);
+        return { removed: true };
+      }
+      case "_rustcode/session/status": {
+        const status = str(params.status);
+        if (!status || !["review", "done", "idle"].includes(status)) {
+          throw Object.assign(new Error("status must be review, done or idle"), { code: -32602 });
+        }
+        const thread = this.thread(params.session_id);
+        thread.status = status;
+        return {};
+      }
+      case "_rustcode/checkpoints/list": {
+        const thread = this.thread(params.session_id);
+        return {
+          checkpoints: thread.checkpoints.map((c) => ({
+            turn: c.turn,
+            ref: `refs/rustcode/checkpoints/${thread.id}/${c.turn}`,
+            created_at: c.created_at,
+            prompt: c.prompt.slice(0, 80),
+            files_changed: c.files.length,
+            insertions: c.files.reduce((n, f) => n + f.insertions, 0),
+            deletions: c.files.reduce((n, f) => n + f.deletions, 0),
+          })),
+        };
+      }
+      case "_rustcode/checkpoints/diff": {
+        const thread = this.thread(params.session_id);
+        const c = thread.checkpoints.find((x) => x.turn === params.turn);
+        if (!c) throw Object.assign(new Error("No such checkpoint"), { code: -32602 });
+        return { files: c.files as unknown as Json };
+      }
+      case "_rustcode/checkpoints/restore": {
+        const thread = this.thread(params.session_id);
+        const at = thread.checkpoints.findIndex((x) => x.turn === params.turn);
+        if (at < 0) throw Object.assign(new Error("No such checkpoint"), { code: -32602 });
+        const canRewind = thread.harness === "rustcode";
+        if (params.rewind === true && canRewind) {
+          let n = 0;
+          const cut = thread.history.findIndex(
+            (u) => str(obj(u.update)?.sessionUpdate) === "user_message_chunk" && ++n === at + 1,
+          );
+          if (cut >= 0) thread.history.splice(cut);
+        }
+        thread.checkpoints.splice(at);
+        return { restored: true, conversation: params.rewind === true && canRewind ? "rewound" : "kept" };
+      }
       case "_rustcode/harnesses":
         return this.snapshot();
       case "_rustcode/harnesses/models": {
@@ -786,6 +1025,110 @@ export class MockEngine {
     }
   }
 
+  private makeWorktree(repo: string, branch?: string, title?: string): MockWorktree {
+    let name = branch || `feat/${slug(title ?? "thread")}`;
+    const taken = new Set(this.threads.flatMap((t) => (t.worktree ? [t.worktree.branch] : [])));
+    for (let n = 2; taken.has(name); n++) name = `${branch || `feat/${slug(title ?? "thread")}`}-${n}`;
+    const repoName = repo.split("/").filter(Boolean).pop() ?? "repo";
+    return {
+      path: `/Users/you/.config/rustcode/worktrees/${repoName}/${name.replace(/\//g, "-")}`,
+      branch: name,
+      repo,
+      base: "c1ace820",
+      created_at: new Date().toISOString(),
+      dirty: false,
+      ahead: 0,
+      behind: 0,
+    };
+  }
+
+  /** The agent's side of orchestration: a tool call forwarded to the client, as the engine does. */
+  private orchestrate(sid: string, tool: string, args: JsonObject): Promise<JsonObject> {
+    return this.ask("_rustcode/orchestration", { sessionId: sid, tool, args });
+  }
+
+  /** "fan out …", "ask the other thread …", "start a thread …": the v2 tools, when the client offers them. */
+  private async orchestrationTurn(
+    sid: string,
+    prompt: string,
+    push: (body: JsonObject) => void,
+  ): Promise<string | null> {
+    const tool = /fan.?out/i.test(prompt)
+      ? "fan_out"
+      : /start (a |another )?thread/i.test(prompt)
+        ? "start_session"
+        : /(ask|message) (the )?(other|another) thread/i.test(prompt)
+          ? "message_session"
+          : null;
+    if (!tool) return null;
+    if (this.orchestration < (tool === "message_session" ? 1 : 2)) {
+      return "I can't reach other threads here: turn on Settings › General › Threads can start and message other threads, then restart the engine.";
+    }
+    const call = (name: string, args: JsonObject) => {
+      const callId = `orch-${++this.counter}`;
+      push({
+        sessionUpdate: "tool_call",
+        toolCallId: callId,
+        title: name,
+        kind: "other",
+        status: "in_progress",
+        rawInput: args,
+      });
+      return this.orchestrate(sid, name, args).then((result) => {
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: callId,
+          status: obj(result.error) ? "failed" : "completed",
+          rawOutput: { content: JSON.stringify(result) },
+        });
+        return result;
+      });
+    };
+    const task =
+      prompt.replace(
+        /^.*?(fan.?out|start (a |another )?thread|(ask|message) (the )?(other|another) thread)[:,]?\s*/i,
+        "",
+      ) || "Update the greeting";
+    let links: string[] = [];
+    if (tool === "fan_out") {
+      const result = await call("fan_out", {
+        prompt: `${task} (yolo)`,
+        title: task.slice(0, 50),
+        harnesses: [{ harness: "rustcode" }, { harness: "codex", model: "gpt-6-luna", effort: "low" }],
+      });
+      const error = obj(result.error);
+      if (error) return `The fan-out did not start: ${str(error.message)}.`;
+      links = arr(result.links).flatMap((l) => str(obj(l)?.link_id) ?? []);
+    } else if (tool === "start_session") {
+      const result = await call("start_session", { prompt: `${task} (yolo)`, title: task.slice(0, 50) });
+      const error = obj(result.error);
+      if (error) return `The thread did not start: ${str(error.message)}.`;
+      links = [str(result.link_id) ?? ""];
+    } else {
+      const list = await call("list_sessions", {});
+      const target = str(obj(arr(list.sessions)[0])?.session_id);
+      if (!target) return "There is no other thread in this project to ask.";
+      const result = await call("message_session", { session_id: target, message: `${task} (yolo)` });
+      const error = obj(result.error);
+      if (error) return `The message was not sent: ${str(error.message)}.`;
+      links = [str(result.link_id) ?? ""];
+    }
+    const answers: string[] = [];
+    for (let i = 0; i < 40 && answers.length < links.length; i++) {
+      const pending = links.filter((_, j) => !answers[j]);
+      const waited = await call("wait_session", { link_ids: pending, timeout_ms: 30_000 });
+      for (const l of arr(waited.links)) {
+        const o = obj(l);
+        const at = links.indexOf(str(o?.link_id) ?? "");
+        if (at >= 0 && str(o?.status) !== "working" && str(o?.status) !== "queued") {
+          answers[at] =
+            `${str(o?.title)}: ${str(o?.status)}${str(o?.answer) ? ` — ${str(o?.answer)?.split("\n")[0]}` : ""}`;
+        }
+      }
+    }
+    return `Here is what came back:\n\n${answers.map((a) => `- ${a}`).join("\n")}`;
+  }
+
   /** "One agent spawns several": two children, started by `spawn_agent` calls, that finish a moment later. */
   private async spawnAgents(sid: string, push: (body: JsonObject) => void, run: { cancelled: boolean }) {
     const tasks: [string, string][] = [
@@ -877,7 +1220,14 @@ export class MockEngine {
         push({ sessionUpdate: "agent_thought_chunk", content: text(chunk) });
         await this.sleep();
       }
-      if (/agents?/i.test(prompt)) await this.spawnAgents(sid, push, run);
+      if (/^From thread/.test(prompt) === false) {
+        const answer = await this.orchestrationTurn(sid, prompt, push);
+        if (answer !== null) {
+          push({ sessionUpdate: "agent_message_chunk", content: text(answer) });
+          return done("end_turn");
+        }
+      }
+      if (/\bagents\b|subagents?/i.test(prompt)) await this.spawnAgents(sid, push, run);
       push({
         sessionUpdate: "plan",
         entries: [
@@ -959,7 +1309,14 @@ export class MockEngine {
         status: "pending",
         rawInput: { path: "src/app.ts", summary: "Update the greeting" },
       });
-      if (!/yolo/i.test(prompt)) {
+      thread.checkpoints.push({
+        turn: (thread.checkpoints.at(-1)?.turn ?? 0) + 1,
+        prompt: prompt.slice(0, 80),
+        created_at: new Date().toISOString(),
+        files: [{ path: "src/app.ts", status: "modified", insertions: 1, deletions: 1, patch: APP_PATCH }],
+      });
+      if (thread.worktree) thread.worktree.dirty = true;
+      if (!/yolo/i.test(prompt) && !/^From thread/.test(prompt)) {
         const answer = await this.ask("session/request_permission", {
           sessionId: sid,
           toolCall: {
@@ -1128,10 +1485,27 @@ export class MockTransport implements Transport {
     if (command === "link_meta") return mockLinkMeta(String(args.url));
     if (command === "thread_rename") return this.engine?.renameThread(String(args.id), String(args.title));
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
+    if (command === "git_changes")
+      return mockGitChanges(String(args.cwd), args.base ? String(args.base) : undefined);
+    if (command === "reveal_path" || command === "open_terminal_at") return null;
     throw new Error(`The mock does not run ${command}.`);
   }
 
   async stop(): Promise<void> {
     this.engine = null;
   }
+}
+
+/** Canned `git_changes`, as the shell answers it: the branch since its base adds the login form. */
+export function mockGitChanges(cwd: string, base?: string): JsonObject {
+  const files: Json[] = [
+    { path: "src/app.ts", status: "M", added: 1, removed: 1, binary: false },
+    { path: "src/ui/Composer.tsx", status: "M", added: 1, removed: 0, binary: false },
+  ];
+  let diff = `diff --git a/src/app.ts b/src/app.ts\nindex 1..2 100644\n--- a/src/app.ts\n+++ b/src/app.ts\n${APP_PATCH}\ndiff --git a/src/ui/Composer.tsx b/src/ui/Composer.tsx\nindex 3..4 100644\n--- a/src/ui/Composer.tsx\n+++ b/src/ui/Composer.tsx\n${COMPOSER_PATCH}\n`;
+  if (base || cwd.includes("worktrees")) {
+    files.push({ path: "src/ui/LoginForm.tsx", status: "A", added: 14, removed: 0, binary: false });
+    diff += `diff --git a/src/ui/LoginForm.tsx b/src/ui/LoginForm.tsx\nnew file mode 100644\n--- /dev/null\n+++ b/src/ui/LoginForm.tsx\n${LOGIN_PATCH}\n`;
+  }
+  return { branch: cwd.includes("worktrees") ? "feat/login-form" : "main", files, diff };
 }

@@ -174,7 +174,8 @@ export const AssistantRow = memo(function AssistantRow({
   threadId?: string;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
-  if (segments.length === 1 && segments[0]!.kind === "markdown") return <Markdown text={item.text} />;
+  if (segments.length === 1 && segments[0]!.kind === "markdown")
+    return <Markdown text={item.text} className={streaming ? "rc-stream" : undefined} />;
   return (
     <div className="flex flex-col gap-2.5">
       {segments.map((segment, i) =>
@@ -444,7 +445,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         </pre>
       )}
       {open && (
-        <div className="mt-1.5 mb-1 ml-[26px] flex flex-col gap-2.5">
+        <div className="rc-expand mt-1.5 mb-1 ml-[26px] flex flex-col gap-2.5">
           {item.diffs.length > 0 ? (
             item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
           ) : (

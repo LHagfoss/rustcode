@@ -33,6 +33,7 @@ import {
 import { formatTokens, type ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
+import { LinkedThreads } from "./Links";
 import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { Transcript } from "./Transcript";
 
@@ -407,6 +408,7 @@ export function ChatView() {
             }}
           />
         )}
+        {thread && <LinkedThreads threadId={thread.id} />}
         {request && (
           <AttentionCard
             request={request}
