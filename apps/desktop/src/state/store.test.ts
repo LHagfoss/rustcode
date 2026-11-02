@@ -551,3 +551,14 @@ describe("toasts", () => {
     expect(useApp.getState().toasts.find((t) => t.id === "engine")?.text).toBe("The engine restarted");
   });
 });
+
+describe("finished threads", () => {
+  test("a turn that completes elsewhere is flagged until the thread is seen", async () => {
+    const { markFinished, clearFinished } = await import("./store");
+    useApp.setState({ selectedId: "other", finished: {} });
+    markFinished("t1", 1000);
+    expect(useApp.getState().finished).toEqual({ t1: 1000 });
+    clearFinished("t1");
+    expect(useApp.getState().finished).toEqual({});
+  });
+});
