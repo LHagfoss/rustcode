@@ -451,7 +451,11 @@ const COMMANDS: Json[] = [
   { name: "skills", description: "List the skills this thread can load" },
   { name: "clear", description: "Start a new thread", _meta: { rustcode: { action: "new_session" } } },
   { name: "copy", description: "Copy the last reply", _meta: { rustcode: { action: "copy_response" } } },
-  { name: "resume", description: "Switch to another thread", _meta: { rustcode: { action: "session_picker" } } },
+  {
+    name: "resume",
+    description: "Switch to another thread",
+    _meta: { rustcode: { action: "session_picker" } },
+  },
 ];
 
 function configOptions(thread: MockThread, harnesses: HarnessSnapshot): Json[] {

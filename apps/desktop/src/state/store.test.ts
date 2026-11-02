@@ -82,7 +82,11 @@ describe("engine controller with the mock engine", () => {
     let copied = "";
     const nav = globalThis.navigator as unknown as { clipboard?: unknown };
     const saved = nav.clipboard;
-    nav.clipboard = { writeText: async (text: string) => void (copied = text) };
+    nav.clipboard = {
+      writeText: async (text: string) => {
+        copied = text;
+      },
+    };
     expect(await submit("/copy")).toBe(true);
     await until(() => copied.length > 0);
     nav.clipboard = saved;
