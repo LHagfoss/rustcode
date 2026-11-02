@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentActive,
+  nextPlanRefresh,
+  PLAN_REFRESH_MS,
   parseAgentList,
   parsePlanUsage,
   parsePullList,
   repositoryOf,
+  resetLabel,
   shownWindow,
   spawnedAgentId,
   windowTitle,
 } from "./rustcode";
+import { parseUsage } from "./types";
 
 describe("rustcode extensions", () => {
   test("agents and the spawn receipt", () => {
@@ -40,5 +44,50 @@ describe("rustcode extensions", () => {
     expect(list.hasMore).toBe(true);
     expect(repositoryOf("https://github.com/a/b/pull/3")).toBe("a/b");
     expect(repositoryOf("https://example.com/a/b/pull/3")).toBeUndefined();
+  });
+
+  test("plan usage refreshes on the interval, or just after the soonest reset", () => {
+    const now = 1_000_000;
+    expect(nextPlanRefresh(null, now)).toBe(PLAN_REFRESH_MS);
+    const soon = { source: "codex", windows: [{ usedPercent: 90, minutes: 300, resetsAt: now + 60_000 }] };
+    expect(nextPlanRefresh(soon, now)).toBe(65_000);
+    const past = { source: "codex", windows: [{ usedPercent: 90, minutes: 300, resetsAt: now - 1 }] };
+    expect(nextPlanRefresh(past, now)).toBe(PLAN_REFRESH_MS);
+    const now2 = { source: "codex", windows: [{ usedPercent: 90, minutes: 300, resetsAt: now + 1 }] };
+    expect(nextPlanRefresh(now2, now)).toBe(5_001);
+  });
+
+  test("a window's reset reads as time left", () => {
+    const now = 1_000_000;
+    expect(resetLabel({ usedPercent: 1 }, now)).toBeUndefined();
+    expect(resetLabel({ usedPercent: 1, resetsAt: now + 30 * 60_000 }, now)).toBe("resets in 30 min");
+    expect(resetLabel({ usedPercent: 1, resetsAt: now + 134 * 60_000 }, now)).toBe("resets in 2 h 14 min");
+    expect(resetLabel({ usedPercent: 1, resetsAt: now + 120 * 60_000 }, now)).toBe("resets in 2 h");
+    expect(resetLabel({ usedPercent: 1, resetsAt: now - 1 }, now)).toBe("resetting now");
+  });
+
+  test("a usage update carries the context breakdown", () => {
+    const usage = parseUsage({
+      used: 18_400,
+      size: 272_000,
+      _meta: {
+        rustcode: {
+          context: {
+            model: "m",
+            free: 253_600,
+            categories: [{ name: "Tool calls", tokens: 5_100 }, { name: "bad" }],
+            compaction: { count: 2, reclaimedTokens: 40_000 },
+          },
+        },
+      },
+    });
+    expect(usage?.context).toEqual({
+      model: "m",
+      categories: [{ name: "Tool calls", tokens: 5_100 }],
+      free: 253_600,
+      compactions: 2,
+      reclaimed: 40_000,
+    });
+    expect(parseUsage({ used: 1, size: 2 })?.context).toBeUndefined();
   });
 });

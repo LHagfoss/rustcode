@@ -699,7 +699,30 @@ export class MockEngine {
             sessionUpdate: "usage_update",
             used: 18_400,
             size: 272_000,
-            _meta: { rustcode: { estimated: true, inputTokens: 90_000, outputTokens: 3_200 } },
+            _meta: {
+              rustcode: {
+                estimated: true,
+                inputTokens: 90_000,
+                outputTokens: 3_200,
+                cachedTokens: 61_000,
+                context: {
+                  model: "gpt-6-luna",
+                  window: 272_000,
+                  used: 18_400,
+                  free: 253_600,
+                  categories: [
+                    { name: "User messages", tokens: 1_900 },
+                    { name: "Agent responses", tokens: 3_400 },
+                    { name: "Tool calls", tokens: 5_100 },
+                    { name: "Compacted history", tokens: 0 },
+                    { name: "System prompt", tokens: 4_200 },
+                    { name: "System tools", tokens: 2_900 },
+                    { name: "Skills", tokens: 900 },
+                    { name: "Subagents", tokens: 0 },
+                  ],
+                },
+              },
+            },
           }),
         );
         const h = this.harnesses.harnesses.find((x) => x.id === thread.harness);

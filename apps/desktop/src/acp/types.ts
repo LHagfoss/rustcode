@@ -234,6 +234,36 @@ export interface SessionUsage {
   cachedTokens?: number;
   cost?: number;
   currency?: string;
+  /** What fills the window, when the engine reports it (`_meta.rustcode.context`). */
+  context?: ContextDetail;
+}
+
+export interface ContextDetail {
+  model?: string;
+  /** In the engine's order, which matches the TUI legend; empty ones are kept. */
+  categories: { name: string; tokens: number }[];
+  free?: number;
+  compactions?: number;
+  reclaimed?: number;
+}
+
+function parseContextDetail(value: unknown): ContextDetail | undefined {
+  const o = obj(value);
+  if (!o || !Array.isArray(o.categories)) return undefined;
+  const categories = o.categories.flatMap((c) => {
+    const x = obj(c);
+    const name = str(x?.name);
+    const tokens = num(x?.tokens);
+    return name && tokens !== undefined ? [{ name, tokens }] : [];
+  });
+  const compaction = obj(o.compaction);
+  return {
+    model: str(o.model),
+    categories,
+    free: num(o.free),
+    compactions: num(compaction?.count),
+    reclaimed: num(compaction?.reclaimedTokens),
+  };
 }
 
 export function parseUsage(update: JsonObject): SessionUsage | undefined {
@@ -251,6 +281,7 @@ export function parseUsage(update: JsonObject): SessionUsage | undefined {
     cachedTokens: num(meta?.cachedTokens),
     cost: num(cost?.amount),
     currency: str(cost?.currency),
+    context: parseContextDetail(meta?.context),
   };
 }
 
