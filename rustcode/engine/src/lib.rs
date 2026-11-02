@@ -31,6 +31,7 @@ pub mod model_defaults;
 pub mod network;
 mod notifications;
 mod orchestration;
+pub use orchestration::hub::ORCHESTRATOR_TOKEN_ENV;
 pub use orchestration::mcp_server::run as run_mcp_orchestrator;
 mod platform;
 pub mod preview;

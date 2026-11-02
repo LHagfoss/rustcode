@@ -461,8 +461,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         token,
     }) = cli_args.command.as_ref()
     {
+        let token = token
+            .clone()
+            .or_else(|| std::env::var(rustcode::ORCHESTRATOR_TOKEN_ENV).ok())
+            .unwrap_or_default();
         if let Err(error) =
-            rustcode::run_mcp_orchestrator(session.clone(), socket.clone(), token.clone()).await
+            rustcode::run_mcp_orchestrator(session.clone(), socket.clone(), token).await
         {
             eprintln!("rustcode mcp-orchestrator: {error}");
             std::process::exit(1);

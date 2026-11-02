@@ -59,7 +59,13 @@ impl CallAnswer {
 pub struct Launch {
     pub command: PathBuf,
     pub args: Vec<String>,
+    /// Passed in the environment (`ORCHESTRATOR_TOKEN_ENV`), never in
+    /// `args`, so other local users cannot read it from the process list.
+    pub token: String,
 }
+
+/// The environment variable `rustcode mcp-orchestrator` reads its token from.
+pub const ORCHESTRATOR_TOKEN_ENV: &str = "RUSTCODE_ORCHESTRATOR_TOKEN";
 
 /// How long a harness should let one call run: the longest
 /// `wait_session` plus room for the app to answer.
@@ -78,9 +84,8 @@ impl Launch {
                 session_id.to_owned(),
                 "--socket".to_owned(),
                 socket.to_string_lossy().into_owned(),
-                "--token".to_owned(),
-                token.to_owned(),
             ],
+            token: token.to_owned(),
         }
     }
 
@@ -90,7 +95,7 @@ impl Launch {
             "name": SERVER_NAME,
             "command": self.command.to_string_lossy(),
             "args": self.args,
-            "env": [],
+            "env": [{ "name": ORCHESTRATOR_TOKEN_ENV, "value": self.token }],
         })
     }
 
@@ -101,6 +106,7 @@ impl Launch {
             format!("mcp_servers.{SERVER_NAME}"): {
                 "command": self.command.to_string_lossy(),
                 "args": self.args,
+                "env": { ORCHESTRATOR_TOKEN_ENV: self.token },
                 // Codex stops an MCP call after 60 s by default; a call
                 // can wait for the user, and `wait_session` up to an hour.
                 "tool_timeout_sec": TOOL_TIMEOUT_SECS,

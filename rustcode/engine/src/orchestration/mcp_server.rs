@@ -1,4 +1,5 @@
-//! `rustcode mcp-orchestrator --session <id> --socket <path> --token <t>`:
+//! `rustcode mcp-orchestrator --session <id> --socket <path>` (token in
+//! `RUSTCODE_ORCHESTRATOR_TOKEN`):
 //! a stdio MCP server that offers an external harness the orchestration
 //! tools (`docs/orchestrator.md`). It holds no state of its own: every
 //! `tools/call` goes to the parent engine's [`super::hub`], which checks the

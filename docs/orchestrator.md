@@ -186,8 +186,12 @@ client advertises orchestration `>= 2`, an external harness thread gets the
 same six tools through an MCP server the engine injects into its session:
 
 ```
-rustcode mcp-orchestrator --session <thread id> --socket <path> --token <t>
+RUSTCODE_ORCHESTRATOR_TOKEN=<t> rustcode mcp-orchestrator --session <thread id> --socket <path>
 ```
+
+The per-thread token travels in the server's environment (ACP `env`, Codex
+`env`), never in its arguments, so other local users cannot read it from the
+process list. `--token` still works for manual testing.
 
 a stdio MCP server (`tools/list`, `tools/call`, `ping`; server name
 `rustcode`), started by the harness with the engine's own executable:

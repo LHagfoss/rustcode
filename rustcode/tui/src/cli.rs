@@ -211,9 +211,10 @@ pub enum Commands {
         /// The parent engine's orchestrator socket
         #[arg(long)]
         socket: std::path::PathBuf,
-        /// The per-thread token the parent engine issued
+        /// The per-thread token the parent engine issued. Normally passed in
+        /// `RUSTCODE_ORCHESTRATOR_TOKEN` instead, so it is not visible in `ps`.
         #[arg(long)]
-        token: String,
+        token: Option<String>,
     },
 }
 
@@ -1160,7 +1161,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::McpOrchestrator { session, socket, token })
-                if session == "abc" && socket == std::path::Path::new("/tmp/o.sock") && token == "t"
+                if session == "abc" && socket == std::path::Path::new("/tmp/o.sock") && token.as_deref() == Some("t")
         ));
     }
 

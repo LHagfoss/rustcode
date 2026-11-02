@@ -394,8 +394,8 @@ async fn the_orchestrator_is_added_to_the_child_session() {
             "name": "rustcode",
             "command": "/opt/rustcode/bin/rustcode",
             "args": ["mcp-orchestrator", "--session", "thread-1",
-                     "--socket", "/tmp/run/orchestrator-1.sock", "--token", "secret"],
-            "env": [],
+                     "--socket", "/tmp/run/orchestrator-1.sock"],
+            "env": [{ "name": "RUSTCODE_ORCHESTRATOR_TOKEN", "value": "secret" }],
         }])
     );
 

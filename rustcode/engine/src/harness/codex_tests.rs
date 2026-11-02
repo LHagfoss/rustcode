@@ -537,7 +537,11 @@ async fn the_orchestrator_is_added_to_the_codex_thread_config() {
     let server = &started["config"]["mcp_servers.rustcode"];
     assert_eq!(server["command"], "/opt/rustcode/bin/rustcode");
     assert_eq!(server["args"][0], "mcp-orchestrator");
-    assert_eq!(server["args"][6], "secret");
+    assert_eq!(server["env"]["RUSTCODE_ORCHESTRATOR_TOKEN"], "secret");
+    assert!(
+        !server["args"].to_string().contains("secret"),
+        "the token never appears in the process arguments"
+    );
 
     let (_thread, mut seen) = start(Script::Reply, None, StartOptions::default()).await;
     let started = requests(&mut seen)
