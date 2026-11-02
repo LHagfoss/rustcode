@@ -207,6 +207,8 @@ export interface AppState {
   };
   /** Review / done marks kept by the app when the engine does not store them. */
   statusMarks: Record<string, ThreadStatus>;
+  /** Threads whose turn completed while you were elsewhere, by when: the sidebar's Finished section. */
+  finished: Record<string, number>;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -276,6 +278,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grant: null,
   features: {},
   statusMarks: storedJson<Record<string, ThreadStatus>>(STORAGE.statusMarks, {}),
+  finished: {},
   view: { kind: "chat" },
   checkpoints: {},
   newWorktree: { on: false, branch: "", edited: false },
@@ -838,7 +841,30 @@ export async function refreshSessions(): Promise<void> {
   }
 }
 
+/** How long a finished thread stays in the sidebar's Finished section unless you open it first. */
+export const FINISHED_MS = 10 * 60_000;
+
+/** A turn completed: flag the thread unless you are looking at it. */
+export function markFinished(id: string, now = Date.now()) {
+  const looking = get().selectedId === id && typeof document !== "undefined" && document.hasFocus();
+  if (!looking) set((s) => ({ finished: { ...s.finished, [id]: now } }));
+}
+
+/** You saw it: opening the thread (or coming back to the window on it) settles the flag. */
+export function clearFinished(id: string | null) {
+  if (!id || !(id in get().finished)) return;
+  set((s) => {
+    const { [id]: _, ...rest } = s.finished;
+    return { finished: rest };
+  });
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", () => clearFinished(get().selectedId));
+}
+
 export function selectThread(id: string | null) {
+  clearFinished(id);
   set({ selectedId: id, switcherOpen: false, settings: null, view: { kind: "chat" } });
   if (id) void openThread(id);
 }
@@ -1495,6 +1521,7 @@ export async function runPrompt(
     failure = errorText(error);
   }
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
+  if (outcome === "completed") markFinished(id);
   // A report command that answered in the panel leaves no turn behind: its message and footer go.
   const reported = get().report?.threadId === id;
   if (reported && outcome === "completed" && isReportCommand(text, extras)) {

@@ -1,6 +1,7 @@
 // The sidebar: a toolbar clear of the traffic lights, a search capsule with
 // a filter menu, and threads by where they are in their life (after T3
-// Code's sidebar): Pinned, Needs You, Working, Threads (by project), and
+// Code's sidebar): Pinned, Needs You, Working, Finished (completed while
+// you were elsewhere, until opened or 10 minutes pass), Threads (by project), and
 // Settled (threads marked Done) folded away unless opened. Each section
 // folds, and remembers it. Settings is in the top row, after New thread.
 
@@ -40,6 +41,7 @@ import { openTerminalAt, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import {
   askConfirm,
+  FINISHED_MS,
   featureMissing,
   openAgent,
   removeWorktree,
@@ -256,6 +258,8 @@ const ThreadRow = memo(function ThreadRow({
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
+  const finishedAt = useApp((s) => s.finished[session.id]);
+  const fresh = !!finishedAt && !selected && now - finishedAt < FINISHED_MS;
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const external = !!session.harness && session.harness !== "rustcode";
@@ -315,6 +319,13 @@ const ThreadRow = memo(function ThreadRow({
             )}
           >
             <span className="flex w-full items-center gap-1.5 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
+              {fresh && (
+                <span
+                  role="img"
+                  aria-label="Finished"
+                  className="size-1.5 shrink-0 rounded-full bg-success"
+                />
+              )}
               {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-muted" />}
               <span
                 className={cx(
@@ -499,14 +510,14 @@ function useStored<T>(key: string, initial: T) {
   return [value, setValue] as const;
 }
 
-type SectionId = "pinned" | "needs" | "working" | "threads" | "settled";
+type SectionId = "pinned" | "needs" | "working" | "finished" | "threads" | "settled";
 
 interface Section {
   id: SectionId;
   label: string;
   items: SessionSummary[];
-  /** What a folded section hides: a thread that needs you, else one that works. */
-  hidden?: "needs" | "working";
+  /** What a folded section hides: a thread that needs you, else one that works, else one just finished. */
+  hidden?: HiddenKind;
   /** Threads, split by project when there are several. */
   projects?: { key: string; label: string; items: SessionSummary[] }[];
 }
@@ -542,16 +553,24 @@ function Fold({ open, children }: { open: boolean; children: React.ReactNode }) 
   );
 }
 
+type HiddenKind = "needs" | "working" | "finished";
+
 /** The dot a folded group shows for what it hides. */
-function HiddenDot({ kind }: { kind?: "needs" | "working" }) {
+function HiddenDot({ kind }: { kind?: HiddenKind }) {
   if (!kind) return null;
   return (
     <span
       role="img"
-      aria-label={kind === "needs" ? "A thread here needs you" : "A thread here is working"}
+      aria-label={
+        kind === "needs"
+          ? "A thread here needs you"
+          : kind === "working"
+            ? "A thread here is working"
+            : "A thread here finished"
+      }
       className={cx(
         "size-1.5 shrink-0 rounded-full",
-        kind === "needs" ? "bg-warning" : "bg-accent animate-pulse",
+        kind === "needs" ? "bg-warning" : kind === "working" ? "bg-accent animate-pulse" : "bg-success",
       )}
     />
   );
@@ -578,17 +597,31 @@ function SectionHeader({
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
       {!open && <HiddenDot kind={section.hidden} />}
-      <span className="font-normal text-fg-faint tabular">{section.items.length}</span>
-      <ChevronRight
-        size={11}
-        strokeWidth={2.5}
-        className={cx(
-          "shrink-0 text-fg-faint transition-transform duration-200 ease-snappy",
-          open && "rotate-90",
-          // Open sections show the chevron on hover only, as macOS sidebars do.
-          open && "opacity-0 group-hover/h:opacity-100 group-focus-visible/h:opacity-100",
+      {/* One slot: an open section shows its count, and the chevron in its place on hover (macOS). */}
+      <span className="grid shrink-0 items-center justify-items-end">
+        <span
+          className={cx(
+            "font-normal text-fg-faint tabular [grid-area:1/1]",
+            open && "group-hover/h:opacity-0 group-focus-visible/h:opacity-0",
+            !open && "hidden",
+          )}
+        >
+          {section.items.length}
+        </span>
+        {!open && (
+          <span className="flex items-center gap-1.5 [grid-area:1/1]">
+            <span className="font-normal text-fg-faint tabular">{section.items.length}</span>
+            <ChevronRight size={11} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
+          </span>
         )}
-      />
+        {open && (
+          <ChevronRight
+            size={11}
+            strokeWidth={2.5}
+            className="shrink-0 rotate-90 text-fg-faint opacity-0 [grid-area:1/1] group-hover/h:opacity-100 group-focus-visible/h:opacity-100"
+          />
+        )}
+      </span>
     </button>
   );
 }
@@ -717,6 +750,7 @@ export function Sidebar() {
       .join(" "),
   );
   const marks = useApp((s) => s.statusMarks ?? NO_MARKS);
+  const finished = useApp((s) => s.finished);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
   // The slot collapses after the sidebar has slid out, and opens before it slides in: its width
@@ -791,6 +825,8 @@ export function Sidebar() {
     const pins: SessionSummary[] = [];
     const needs: SessionSummary[] = [];
     const working: SessionSummary[] = [];
+    const fresh: SessionSummary[] = [];
+    const isFresh = (id: string) => !!finished[id] && now - finished[id]! < FINISHED_MS;
     const active: SessionSummary[] = [];
     const settled: SessionSummary[] = [];
     for (const s of filtered) {
@@ -804,6 +840,7 @@ export function Sidebar() {
       if (pinned.includes(s.id)) pins.push(s);
       else if (flagged.has(`${s.id}:n`)) needs.push(s);
       else if (flagged.has(`${s.id}:w`)) working.push(s);
+      else if (isFresh(s.id)) fresh.push(s);
       else if (done) settled.push(s);
       else active.push(s);
     }
@@ -826,6 +863,7 @@ export function Sidebar() {
       { id: "pinned", label: "Pinned", items: pins },
       { id: "needs", label: "Needs You", items: needs },
       { id: "working", label: "Working", items: working },
+      { id: "finished", label: "Finished", items: fresh },
       { id: "threads", label: "Threads", items: active, projects },
       { id: "settled", label: "Settled", items: settled },
     ];
@@ -834,10 +872,12 @@ export function Sidebar() {
         ? "needs"
         : g.items.some((x) => flagged.has(`${x.id}:w`))
           ? "working"
-          : undefined;
+          : g.items.some((x) => isFresh(x.id))
+            ? "finished"
+            : undefined;
     }
     return all.filter((g) => g.items.length);
-  }, [filtered, flags, marks, pinned, parentOf, byProject, now]);
+  }, [filtered, flags, marks, finished, pinned, parentOf, byProject, now]);
 
   // A search shows every match, folded sections too.
   const isOpen = (id: string) => !!query.trim() || !folded.includes(id);
