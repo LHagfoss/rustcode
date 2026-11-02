@@ -552,6 +552,32 @@ export function relativeAge(at: number | undefined, now = Date.now()): string {
 }
 
 /** The `**headings**` of a thought, as the closed row's one-line gist. */
+/**
+ * The live line under a running turn: what the agent does right now. The
+ * newest step of the turn decides: a running tool (as "Running <command>" for
+ * a shell), a thought still streaming (its latest bold heading, as T3 Code
+ * shows it), a reply being written, else "Working".
+ */
+export function workingLabel(items: TranscriptItem[]): string {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    if (item.kind === "user") break;
+    if (item.kind === "tool") {
+      if (item.status !== "in_progress" && item.status !== "pending") return "Working";
+      return item.toolKind === "execute" || /^(bash|shell)/i.test(item.title)
+        ? `Running ${item.summary ?? item.title}`
+        : (item.summary ?? item.title);
+    }
+    if (item.kind === "thought") {
+      if (item.done) return "Working";
+      const heading = thoughtHeadings(item.text).at(-1);
+      return heading ? `Thinking · ${heading}` : "Thinking";
+    }
+    if (item.kind === "assistant") return "Writing the reply";
+  }
+  return "Working";
+}
+
 export function thoughtHeadings(text: string): string[] {
   return [...text.matchAll(/\*\*([^*\n]+)\*\*/g)].map((m) => m[1]!.trim()).filter(Boolean);
 }

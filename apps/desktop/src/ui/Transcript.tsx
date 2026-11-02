@@ -9,7 +9,13 @@ import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
 import { useApp } from "../state/store";
-import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
+import {
+  type ThreadState,
+  type TranscriptItem,
+  type TurnCompletion,
+  turnCompletion,
+  workingLabel,
+} from "../state/thread";
 import { AgentSpawnRow } from "./AgentViews";
 import { cx } from "./primitives";
 import {
@@ -62,19 +68,6 @@ function useNow(active: boolean) {
     return () => clearInterval(t);
   }, [active]);
   return now;
-}
-
-function workingLabel(thread: ThreadState): string {
-  for (let i = thread.items.length - 1; i >= 0; i--) {
-    const item = thread.items[i]!;
-    if (item.kind === "user") break;
-    if (item.kind === "tool" && (item.status === "in_progress" || item.status === "pending")) {
-      return item.toolKind === "execute" || /^(bash|shell)/i.test(item.title)
-        ? `Running ${item.summary ?? item.title}`
-        : (item.summary ?? item.title);
-    }
-  }
-  return "Working";
 }
 
 function searchable(item: TranscriptItem): string {
@@ -489,7 +482,11 @@ export function Transcript({
                   {row.group ? (
                     <ToolGroupRow group={row.group} onToggle={toggleFold} />
                   ) : row.working ? (
-                    <WorkingRow label={workingLabel(thread)} startedAt={thread.turnStartedAt} now={now} />
+                    <WorkingRow
+                      label={workingLabel(thread.items)}
+                      startedAt={thread.turnStartedAt}
+                      now={now}
+                    />
                   ) : item?.kind === "user" ? (
                     <UserRow item={item} threadId={thread.running ? undefined : thread.id} rewind={rewind} />
                   ) : item?.kind === "assistant" ? (
