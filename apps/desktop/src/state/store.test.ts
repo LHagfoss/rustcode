@@ -76,6 +76,42 @@ describe("engine controller with the mock engine", () => {
     expect(selected()!.configOptions.map((o) => o.id)).toEqual(["model", "effort"]);
   });
 
+  test("commands the app answers itself never reach the engine", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const first = useApp.getState().sessions[0]!;
+    selectThread(first.id);
+    await until(() => selected()?.loaded === true);
+    await until(() => useApp.getState().commands.some((c) => c.name === "/clear"));
+    const items = selected()!.items.length;
+
+    expect(await submit("/model")).toBe(true);
+    expect(useApp.getState().modelPickerAsk).toBe(1);
+    expect(await submit("/resume")).toBe(true);
+    expect(useApp.getState().switcherOpen).toBe(true);
+
+    let copied = "";
+    const nav = globalThis.navigator as unknown as { clipboard?: unknown };
+    const saved = nav.clipboard;
+    nav.clipboard = {
+      writeText: async (text: string) => {
+        copied = text;
+      },
+    };
+    expect(await submit("/copy")).toBe(true);
+    await until(() => copied.length > 0);
+    nav.clipboard = saved;
+    const last = [...selected()!.items].reverse().find((i) => i.kind === "assistant");
+    expect(copied).toBe(last?.kind === "assistant" ? last.text : "");
+    expect(selected()!.items.length).toBe(items);
+
+    expect(await submit("/clear")).toBe(true);
+    const s = useApp.getState();
+    expect(s.selectedId).toBeNull();
+    expect(s.newThread?.harness).toBe(first.harness ?? "rustcode");
+    expect(s.threads[first.id]!.items.length).toBe(items);
+  });
+
   test("a new thread streams a turn, asks for approval and finishes", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready");

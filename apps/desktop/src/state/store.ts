@@ -62,7 +62,7 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
-import { restoreChoice } from "./harness";
+import { restoreChoice, selectOption } from "./harness";
 import {
   answerOrchestration,
   linkFinished,
@@ -143,6 +143,8 @@ export interface AppState {
   extras: Record<string, ComposeExtras>;
   settings: SettingsSection | null;
   switcherOpen: boolean;
+  /** Bumped to open the composer's model picker (`/model`). */
+  modelPickerAsk: number;
   onboardingOpen: boolean;
   sidebarHidden: boolean;
   toasts: Toast[];
@@ -292,6 +294,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   extras: {},
   settings: null,
   switcherOpen: false,
+  modelPickerAsk: 0,
   onboardingOpen: false,
   sidebarHidden: stored(STORAGE.sidebar) === "1",
   toasts: [],
@@ -1156,9 +1159,56 @@ export function acceptsImages(thread?: ThreadState): boolean {
 }
 
 /** ⏎: send, or queue behind a running turn. False when no thread could start (the draft stays). */
+/**
+ * Commands the app answers itself, by the action the engine advertises with
+ * each one (`_meta.rustcode.action`): nothing goes to the engine as a prompt.
+ * Returns whether the command was one of them.
+ */
+export function runCommandAction(text: string, from: string | null): boolean {
+  const command = get().commands.find((c) => c.name === text);
+  if (!command || command.action === "execute") return false;
+  const thread = from ? get().threads[from] : undefined;
+  switch (command.action) {
+    case "new_session": {
+      // A fresh thread on the same project, harness, model and effort, selected and empty.
+      const model = thread ? selectOption(thread.configOptions, "model")?.current : undefined;
+      const effort = thread ? selectOption(thread.configOptions, "effort")?.current : undefined;
+      const harness = thread?.harness?.id ?? get().sessions.find((x) => x.id === from)?.harness;
+      startNewThread(thread?.cwd);
+      if (harness) setNewThreadChoice({ harness, model: model ?? null, effort: effort ?? null });
+      return true;
+    }
+    case "model_picker":
+      set((s) => ({ modelPickerAsk: s.modelPickerAsk + 1 }));
+      return true;
+    case "session_picker":
+      setSwitcher(true);
+      return true;
+    case "copy_response": {
+      const reply = [...(thread?.items ?? [])].reverse().find((i) => i.kind === "assistant");
+      if (reply?.kind === "assistant" && reply.text.trim()) {
+        void navigator.clipboard.writeText(reply.text).then(
+          () => void toast("Copied the last reply", "success"),
+          (error) => void toast(`Could not copy: ${errorText(error)}`, "error"),
+        );
+      } else toast("There is no reply to copy yet");
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 export async function submit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
   const trimmed = text.trim();
   if (!trimmed && !hasExtras(extras)) return false;
+  // A command the app answers itself, typed alone or left as a bare token.
+  const bare = !hasExtras(extras)
+    ? trimmed
+    : !trimmed && extras.command && !extras.links.length && !extras.attachments.length
+      ? extras.command.name
+      : null;
+  if (bare && runCommandAction(bare, get().selectedId)) return true;
   let id = get().selectedId;
   try {
     if (!id) id = await createThread(trimmed);
@@ -1200,8 +1250,28 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     }));
     return true;
   }
+  if (trimmed === "/fork" && !hasExtras(extras)) {
+    void forkThread(id);
+    return true;
+  }
   void runPrompt(id, trimmed, extras);
   return true;
+}
+
+/**
+ * `/fork` copies the chat into a new thread and leaves this one open (the
+ * engine's rule). The reply does not name the new thread, so the list is
+ * compared before and after, and a toast offers to open it.
+ */
+async function forkThread(id: string): Promise<void> {
+  const before = new Set(get().sessions.map((x) => x.id));
+  await runPrompt(id, "/fork");
+  await refreshSessions();
+  const fork = get().sessions.find((x) => !before.has(x.id));
+  if (!fork) return;
+  toast(`Forked into "${fork.title || "a new thread"}"`, "success", {
+    action: { label: "Open", run: () => selectThread(fork.id) },
+  });
 }
 
 /** ⌘⏎: hand the running turn a message to read after its current step, else send. */

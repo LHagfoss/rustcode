@@ -270,7 +270,8 @@ export const Composer = memo(function Composer({
   };
 
   const complete = (command: SlashCommand, run: boolean) => {
-    if (run && !command.takesArguments) {
+    // A command the app answers itself (a picker, a new thread) runs at once, arguments or not.
+    if (run && (!command.takesArguments || command.action !== "execute")) {
       update("");
       void submit(command.name);
     } else {
