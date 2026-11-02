@@ -19,6 +19,7 @@ import {
 import { relativeAge } from "../state/thread";
 import { Cluster, ClusterButton, cx, Tooltip } from "./primitives";
 import { StatusIcon } from "./Status";
+import { useLightsInset } from "./Titlebar";
 
 const COLUMNS: { status: ThreadStatus; hint: string }[] = [
   { status: "running", hint: "A turn is running" },
@@ -30,13 +31,15 @@ const COLUMNS: { status: ThreadStatus; hint: string }[] = [
 /** A header for views that replace the chat: clear of the traffic lights when the sidebar hides. */
 export function ViewHeader({ title, children }: { title: React.ReactNode; children?: React.ReactNode }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const lightsInset = useLightsInset();
   return (
     <header
       data-tauri-drag-region
       className={cx(
         "flex h-[42px] shrink-0 items-center gap-2.5 pt-1.5 pr-2.5 pb-2",
-        sidebarHidden ? "pl-[80px]" : "pl-4",
+        !sidebarHidden && "pl-4",
       )}
+      style={sidebarHidden ? { paddingLeft: lightsInset } : undefined}
     >
       {sidebarHidden && (
         <Cluster>

@@ -42,6 +42,7 @@ import {
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Pill, Spinner, Switch } from "./primitives";
+import { TitlebarRow } from "./Titlebar";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
   { id: "general", label: "General", icon: Gear },
@@ -661,11 +662,11 @@ export function Settings() {
   return (
     <div className="fixed inset-0 z-30 flex" role="dialog" aria-label="Settings">
       <nav className="flex w-[240px] shrink-0 flex-col bg-sidebar" aria-label="Settings sections">
-        <div data-tauri-drag-region className="flex h-[34px] items-end pr-2.5 pl-20">
+        <TitlebarRow className="pr-2.5">
           <ChromeButton label="Back to chat" tooltip="Back (Esc)" onClick={() => openSettings(null)}>
             <ChevronLeft size={16} />
           </ChromeButton>
-        </div>
+        </TitlebarRow>
         <div className="px-5 pt-4 pb-1 font-semibold text-caption text-fg-2">Settings</div>
         <div className="flex flex-col gap-0.5 px-2.5">
           {SECTIONS.map((s) => (

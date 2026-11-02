@@ -44,6 +44,7 @@ import { LinkedThreads } from "./Links";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
+import { useLightsInset } from "./Titlebar";
 import { Transcript } from "./Transcript";
 
 export function UsageCapsule({ thread }: { thread: ThreadState }) {
@@ -244,6 +245,7 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const working = useApp((s) => (thread ? (s.agents[thread.id] ?? []).filter(agentActive).length : 0));
   const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const lightsInset = useLightsInset();
   const projectCwd = useApp((s) => s.projectCwd);
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
   const title = thread ? (thread.title ?? listed ?? "New thread") : "New Thread";
@@ -255,8 +257,9 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
         "relative z-10 flex h-[42px] shrink-0 items-center gap-2.5 pt-1.5 pb-2 pr-2.5 transition-[background-color] duration-300",
         // Over a new thread's banner: frosted, its foot fading into the banner.
         overBanner ? "rc-frost" : "bg-chat/95",
-        sidebarHidden ? "pl-[80px]" : "pl-2.5",
+        !sidebarHidden && "pl-2.5",
       )}
+      style={sidebarHidden ? { paddingLeft: lightsInset } : undefined}
     >
       {sidebarHidden && (
         <Cluster>
