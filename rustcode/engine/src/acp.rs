@@ -881,6 +881,27 @@ struct AcpServer {
     external: harnesses::ExternalSessions,
 }
 
+/// A built-in `session/new` honours `_meta.rustcode.model` and `effort` the
+/// same way external harnesses do (docs/harnesses.md). Model first, since
+/// the effort choices depend on it; an unknown value is ignored and the
+/// session keeps its default.
+fn apply_requested_model_and_effort(
+    state: &mut crate::app::AppState,
+    asked: &crate::harness::HarnessRequest,
+) {
+    for (id, value) in [("model", &asked.model), ("effort", &asked.effort)] {
+        if let Some(value) = value {
+            let _ = handle_set_config_option(
+                state,
+                &agent_client_protocol::schema::v1::SessionConfigId::new(id),
+                &agent_client_protocol::schema::v1::SessionConfigOptionValue::value_id(
+                    value.clone(),
+                ),
+            );
+        }
+    }
+}
+
 fn unknown_session(session_id: &str) -> agent_client_protocol::Error {
     agent_client_protocol::Error::invalid_params()
         .data(format!("unknown ACP session: {session_id}"))
@@ -1256,6 +1277,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     // and its hard filesystem boundary, independent of the
                     // directory from which RustCode itself was launched.
                     state.workspace_root = Some(cwd.clone());
+                    apply_requested_model_and_effort(
+                        &mut state,
+                        &crate::harness::requested(request.meta.as_ref()),
+                    );
                     let config_options = build_session_config_options(&state);
                     let _ = crate::config::save_session_workspace(
                         &session_id,
@@ -3973,6 +3998,53 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn new_session_meta_sets_builtin_effort_and_ignores_unknown_values() {
+        let mut state = crate::app::AppState::new();
+        let active = state
+            .active_model_profile()
+            .expect("an active profile")
+            .name;
+        let profile = state
+            .config
+            .models
+            .iter_mut()
+            .find(|profile| profile.name == active)
+            .unwrap();
+        profile.supports_reasoning_effort = Some(true);
+        profile.reasoning_efforts = Some(vec!["low".into(), "high".into()]);
+        profile.reasoning_effort = None;
+        let current_effort = |state: &crate::app::AppState| {
+            build_session_config_options(state)
+                .iter()
+                .find(|option| option.id.0.as_ref() == "effort")
+                .and_then(|option| match &option.kind {
+                    SessionConfigKind::Select(select) => Some(select.current_value.0.to_string()),
+                    _ => None,
+                })
+        };
+
+        apply_requested_model_and_effort(
+            &mut state,
+            &crate::harness::HarnessRequest {
+                harness: None,
+                model: Some("no-such-model".into()),
+                effort: Some("low".into()),
+            },
+        );
+        assert_eq!(current_effort(&state).as_deref(), Some("low"));
+
+        apply_requested_model_and_effort(
+            &mut state,
+            &crate::harness::HarnessRequest {
+                harness: None,
+                model: None,
+                effort: Some("ludicrous".into()),
+            },
+        );
+        assert_eq!(current_effort(&state).as_deref(), Some("low"));
     }
 
     #[test]
