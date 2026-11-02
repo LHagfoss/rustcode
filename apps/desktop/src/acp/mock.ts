@@ -337,7 +337,7 @@ function seedThreads(): MockThread[] {
         update(b, {
           sessionUpdate: "agent_message_chunk",
           content: text(
-            "It doubles from 0.5 s up to 30 s, and resets after the engine stays up for a minute. See https://github.com/LHagfoss/rustcode/pull/2788 and the timer in https://docs.rs/tokio/latest/tokio/time/fn.sleep.html.",
+            "It doubles from 0.5 s up to 30 s, and resets after the engine stays up for a minute. See https://github.com/LHagfoss/rustcode/pull/2788 and the timer in https://docs.rs/tokio/latest/tokio/time/fn.sleep.html.\n\n```mermaid\nflowchart LR\n  A[Engine exits] --> B{Up for a minute?}\n  B -- yes --> C[Reset to 0.5 s]\n  B -- no --> D[Double the wait, max 30 s]\n  C --> E[Restart]\n  D --> E\n```\n\n![The backoff over time](docs/backoff.png)",
           ),
           ...turn(4_000),
         }),
@@ -1580,6 +1580,14 @@ export class MockTransport implements Transport {
       command === "open_in_editor"
     )
       return null;
+    if (command === "thread_image") {
+      // A drawn stand-in for any picture inside the thread's folder; the shell's rules decide the rest.
+      const path = String(args.path);
+      if (path.startsWith("/") && !path.startsWith(String((args.roots as string[])[0] ?? "")))
+        throw new Error("Pictures outside the thread's folder are not shown.");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#5b8def" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
+      return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
+    }
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
     throw new Error(`The mock does not run ${command}.`);
   }

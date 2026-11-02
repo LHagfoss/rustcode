@@ -679,3 +679,17 @@
 :root.reduce-transparency .rc-header-glass.rc-frost::before {
   --rc-glass-pane: var(--rc-bg);
 }
+
+/* Mermaid diagrams in replies (ui/MarkdownMedia.tsx): fit the column, flat like the rest of the chat. */
+.rc-mermaid svg {
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  display: block;
+}
+.rc-mermaid svg :is(.node, .cluster, .edgeLabel) :is(rect, polygon, circle, path) {
+  filter: none;
+}
+.rc-mermaid svg .node :is(rect, polygon) {
+  rx: 6px;
+}

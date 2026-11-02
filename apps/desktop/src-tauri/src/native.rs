@@ -373,6 +373,59 @@ pub fn read_image(path: String) -> Result<ImageFile, String> {
     })
 }
 
+/// The MIME type of a picture a reply may show (an attachable image, or SVG).
+fn display_mime(path: &Path) -> Option<&'static str> {
+    image_mime(path).or_else(|| {
+        let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+        (ext == "svg").then_some("image/svg+xml")
+    })
+}
+
+/// A picture a reply's Markdown shows (`![](path)`): an absolute path, or one
+/// relative to the thread's folder, that resolves (symlinks followed) inside
+/// one of `roots` (the thread's folder and its worktree). Anything else is
+/// refused, so a reply cannot read files from elsewhere on the disk.
+#[tauri::command(async)]
+pub fn thread_image(path: String, roots: Vec<String>) -> Result<ImageFile, String> {
+    use base64::Engine as _;
+    let roots: Vec<PathBuf> = roots
+        .iter()
+        .map(PathBuf::from)
+        .filter(|r| r.is_absolute())
+        .filter_map(|r| r.canonicalize().ok())
+        .collect();
+    let first = roots.first().ok_or("This thread has no folder.")?;
+    let raw = expand_home(&path);
+    let joined = if raw.is_absolute() {
+        raw
+    } else {
+        first.join(raw)
+    };
+    let real = joined
+        .canonicalize()
+        .map_err(|_| "No such picture.".to_string())?;
+    if !roots.iter().any(|root| real.starts_with(root)) {
+        return Err("Pictures outside the thread's folder are not shown.".into());
+    }
+    let mime = display_mime(&real).ok_or("Not a picture.")?;
+    let meta = std::fs::metadata(&real).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("Not a file.".into());
+    }
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err("Pictures must be 20 MB or smaller.".into());
+    }
+    let bytes = std::fs::read(&real).map_err(|e| e.to_string())?;
+    Ok(ImageFile {
+        name: real
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        mime_type: mime.into(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
 /// `~/…` from the engine or the mock, against `$HOME`.
 fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
@@ -608,6 +661,32 @@ mod tests {
         assert!(read_image("/etc/passwd".into()).is_err());
         assert_eq!(image_mime(Path::new("/a/b.JPG")), Some("image/jpeg"));
         assert_eq!(image_mime(Path::new("/a/b.txt")), None);
+    }
+
+    #[test]
+    fn shows_only_pictures_inside_the_thread_folder() {
+        let root = std::env::temp_dir().join(format!("rc-thread-image-{}", std::process::id()));
+        let inside = root.join("repo");
+        std::fs::create_dir_all(inside.join("docs")).unwrap();
+        std::fs::write(inside.join("docs/shot.png"), b"png").unwrap();
+        std::fs::write(root.join("secret.png"), b"png").unwrap();
+        std::fs::write(inside.join("notes.txt"), b"text").unwrap();
+        let roots = vec![inside.to_string_lossy().into_owned()];
+        let ok = thread_image("docs/shot.png".into(), roots.clone()).unwrap();
+        assert_eq!(ok.mime_type, "image/png");
+        let abs = inside.join("docs/shot.png").to_string_lossy().into_owned();
+        assert!(thread_image(abs, roots.clone()).is_ok());
+        assert!(thread_image("../secret.png".into(), roots.clone()).is_err());
+        let outside = root.join("secret.png").to_string_lossy().into_owned();
+        assert!(thread_image(outside, roots.clone()).is_err());
+        assert!(thread_image("notes.txt".into(), roots.clone()).is_err());
+        assert!(thread_image("docs/shot.png".into(), vec!["relative".into()]).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("secret.png"), inside.join("link.png")).unwrap();
+            assert!(thread_image("link.png".into(), roots).is_err());
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

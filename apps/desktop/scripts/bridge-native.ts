@@ -3,10 +3,10 @@
 // Same rules as the shell; the shell's Rust code is the one that ships.
 
 import { lookup } from "node:dns/promises";
-import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { resolveEngine } from "./engine-bridge";
 
 const TIMEOUT = 3000;
@@ -213,6 +213,37 @@ export const nativeCommands: Record<string, (args: Record<string, unknown>) => P
     if (!clean) throw new Error("A title can't be empty.");
     writeFileSync(join(threadDir(id), "title.txt"), clean);
     return clean;
+  },
+  // The shell's `thread_image` (native.rs), with the same rules: inside the roots, pictures only, 20 MB.
+  thread_image: async ({ path, roots }) => {
+    const real = (p: string) => realpathSync(p);
+    const dirs = (Array.isArray(roots) ? roots : [])
+      .map(String)
+      .filter((r) => isAbsolute(r) && existsSync(r))
+      .map(real);
+    if (!dirs.length) throw new Error("This thread has no folder.");
+    const raw = String(path ?? "").replace(/^~\//, `${homedir()}/`);
+    const joined = isAbsolute(raw) ? raw : join(dirs[0]!, raw);
+    if (!existsSync(joined)) throw new Error("No such picture.");
+    const file = real(joined);
+    if (!dirs.some((d) => file === d || file.startsWith(`${d}/`)))
+      throw new Error("Pictures outside the thread's folder are not shown.");
+    const ext = file.split(".").pop()?.toLowerCase() ?? "";
+    const mimeType = (
+      {
+        png: "image/png",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        gif: "image/gif",
+        webp: "image/webp",
+        svg: "image/svg+xml",
+      } as Record<string, string>
+    )[ext];
+    if (!mimeType) throw new Error("Not a picture.");
+    const stat = statSync(file);
+    if (!stat.isFile()) throw new Error("Not a file.");
+    if (stat.size > 20 * 1024 * 1024) throw new Error("Pictures must be 20 MB or smaller.");
+    return { name: basename(file), mimeType, data: readFileSync(file).toString("base64") };
   },
   thread_trash: async ({ id }) => {
     const dir = threadDir(id);
