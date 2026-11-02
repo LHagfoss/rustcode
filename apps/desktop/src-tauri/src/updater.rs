@@ -388,4 +388,18 @@ mod tests {
         assert_eq!(checksum(&format!("xyz  {asset}\n"), asset), None);
         assert_eq!(checksum("", asset), None);
     }
+
+    #[tokio::test]
+    #[ignore = "needs the network"]
+    async fn the_latest_release_and_its_app_are_found() {
+        let client = client().unwrap();
+        let tag = latest_tag(&client).await.expect("latest tag");
+        let latest = tag.trim_start_matches('v');
+        let url = download_url(&tag, &asset_name(latest));
+        println!(
+            "tag {tag} newer than 1.0.0-beta.1: {} asset {url}",
+            newer(latest, "1.0.0-beta.1")
+        );
+        assert!(exists(&client, &url).await, "the app zip is found");
+    }
 }

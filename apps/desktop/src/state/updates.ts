@@ -14,12 +14,21 @@ const SEEN_KEY = "rustcode.seenVersion";
 
 interface UpdatesState {
   info: UpdateInfo | null;
+  /** Why the last check failed, for Settings › Engine; null after a good check. */
+  error: string | null;
+  checkedAt: number | null;
   installing: boolean;
   /** The release notes to show once, after the app was updated. */
   whatsNew: { version: string; notes: string | null } | null;
 }
 
-export const useUpdates = create<UpdatesState>(() => ({ info: null, installing: false, whatsNew: null }));
+export const useUpdates = create<UpdatesState>(() => ({
+  info: null,
+  error: null,
+  checkedAt: null,
+  installing: false,
+  whatsNew: null,
+}));
 
 /** `0.116.0` is newer than `0.115.2`; prerelease suffixes compare as their base. */
 export function newerVersion(a: string, b: string): boolean {
@@ -60,14 +69,25 @@ function writeSeen(version: string) {
   }
 }
 
+/** A failed check tries again after this, not after the full interval. */
+const RETRY_MS = 60_000;
+let retry: ReturnType<typeof setTimeout> | undefined;
+let pendingWhatsNew = true;
+
 async function check(first: boolean) {
+  clearTimeout(retry);
   let info: UpdateInfo;
   try {
     info = await checkForUpdate();
-  } catch {
-    return; // Offline or GitHub busy: the next check tries again.
+  } catch (error) {
+    // Offline, GitHub busy, or the shell refused: say so in Settings and try again soon.
+    useUpdates.setState({ error: error instanceof Error ? error.message : String(error) });
+    retry = setTimeout(() => void check(first), RETRY_MS);
+    return;
   }
-  useUpdates.setState({ info });
+  useUpdates.setState({ info, error: null, checkedAt: Date.now() });
+  first = first && pendingWhatsNew;
+  pendingWhatsNew = false;
   if (!first) return;
   const seen = readSeen();
   writeSeen(info.current);
@@ -106,6 +126,11 @@ export function startUpdateChecks() {
   started = true;
   setTimeout(() => void check(true), 5_000);
   setInterval(() => void check(false), UPDATE_CHECK_MS);
+  // Back in front after a while away (a laptop that slept): check again.
+  window.addEventListener("focus", () => {
+    const last = useUpdates.getState().checkedAt;
+    if (!last || Date.now() - last > 10 * 60_000) void check(false);
+  });
 }
 
 /** The sidebar row's action: install in place where the app can, else the release page. */
