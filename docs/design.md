@@ -297,6 +297,22 @@ panels `rounded-xl`.
   buttons have the same 6px above them (to the box's edge) as at its
   sides and foot. The transcript scrolls under both (its bottom padding is the
   stack's height) and fades out from 56px above the box.
+- **Turn fold:** while a turn runs, every step shows as it streams
+  (thoughts, tool calls with status and output, subagents). When it ends,
+  its work folds into one summary row where the work began, above the
+  final answer: `Worked for 1m 20s · 14 steps · 3 files changed · 1 failed`
+  (`text-callout text-fg-faint`, hover `text-fg-muted`, a chevron that
+  turns 90° when open, a `CircleX` in `danger` when a step failed). What
+  stays visible: the message sent, the final answer (the replies after the
+  last step), warnings and errors, and the footer (time, copy, Changes),
+  which then leaves out the duration. Opening it shows the steps in order,
+  each fading in with `rc-expand` (opacity and 4px, so nothing lays out
+  under a transition; Reduce motion makes it instant). A `<button
+  aria-expanded>`, so ⏎ and Space toggle it. Opened turns are kept per
+  thread while the app runs; an opened old thread starts with every turn
+  folded; find in thread opens them all while it searches. Folded steps are
+  not rows at all, so the virtualizer and the timeline rail have fewer.
+  Logic: `state/fold.ts` (`foldTurns`).
 - **Right panel:** one `RightPanel` for every side view (Changes, Agents,
   Pull requests): floating, inset 8px from the window's top, right and
   bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has

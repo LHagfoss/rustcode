@@ -274,6 +274,13 @@ function ErrorBanner({
 /** Where an opening thread's transcript will be: a sent message, then reply lines, twice. */
 function TranscriptSkeleton() {
   const reply = [96, 88, 92, 54];
+  // A thread that opens quickly never shows it: it appears only after 200 ms, so it does not flash.
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShown(true), 200);
+    return () => clearTimeout(t);
+  }, []);
+  if (!shown) return <div className="min-h-0 flex-1" />;
   return (
     <div className="min-h-0 flex-1 overflow-hidden" role="status" aria-label="Loading thread">
       <div

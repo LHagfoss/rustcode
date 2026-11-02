@@ -313,6 +313,12 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   run (`ensureHarnessModels`), so the model list, effort and the rest are
   there before the thread exists; a stale default model falls back to the
   harness's first.
+- **Turn folding.** A finished turn's work (thoughts, tool calls,
+  subagents, the replies between steps) folds into one row above its final
+  answer, "Worked for 1m 20s · 14 steps · 3 files changed", which opens to
+  every step as it streamed; the running turn shows everything live, and
+  replayed threads fold the same way (`src/state/fold.ts`, tests in
+  `fold.test.ts`; recipe in [design.md](design.md)).
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
   pictures, a click zooms, Esc or a click outside closes). A reply's
@@ -537,6 +543,15 @@ engine, a scratch config) the engine now starts 0.85 s after launch
 instead of when the page asks for it (1.4 s); idle, the shell, the
 WebContent process and the engine sit at 0 % CPU.
 
+After the loading, toast, glass header, full-window Settings, pictures,
+diagrams and turn folding round (`perf prod`, same machine, before / after):
+startup thread list 261 / 244 ms; first rows of the 2,000-message thread
+149–163 / 152–221 ms (runs vary by about 60 ms; its longest task 62–80 ms
+in both); reopening it 6.5 / 5–13 ms; streaming 60 fps with 2 dropped
+frames, key-to-frame p95 15.3 / 15.7 ms, main thread 22 / 23 % busy; idle
+1–2 %. Mermaid is its own lazy chunk; the opening thread's skeleton shows
+only after 200 ms, so a fast open never draws it.
+
 Still open: the sidebar's 500 rows are not virtualized, so every store
 notification runs their selectors (about 3 % of the main thread while
 streaming) and filtering re-renders them; the window's vibrancy and
@@ -575,8 +590,7 @@ From the SwiftUI app, still missing or partial:
   (macOS); Finder's Put Back does not know it.
 - A file reference that is changed in the turn does not open the Changes
   or Review diff yet.
-- Turn folding ("Worked for … · N tool calls"), sticky
-  turn bar, stream pacing, quote in reply.
+- Sticky turn bar, stream pacing, quote in reply.
 - The auto-approve (YOLO) toggle on approval cards.
 - Subagents' verification status and background agents of threads off
   screen (subagents of a thread whose agents were listed nest under it).

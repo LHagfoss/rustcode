@@ -7,15 +7,30 @@ import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
+import { foldTurns, type TurnFold } from "../state/fold";
 import { useApp } from "../state/store";
 import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
 import { AgentSpawnRow } from "./AgentViews";
 import { cx } from "./primitives";
-import { AssistantRow, NoticeRow, ThoughtRow, ToolRow, TurnEndRow, UserRow, WorkingRow } from "./Rows";
+import {
+  AssistantRow,
+  NoticeRow,
+  ThoughtRow,
+  ToolRow,
+  TurnEndRow,
+  TurnFoldRow,
+  UserRow,
+  WorkingRow,
+} from "./Rows";
 import { TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
-type Row = { key: string; item?: TranscriptItem; working?: true };
+type Row = { key: string; item?: TranscriptItem; working?: true; fold?: TurnFold; inFold?: string };
+
+/** The turns the reader opened, by thread: kept while the app runs, so going back keeps them. */
+const openFolds = new Map<string, Set<string>>();
+const NO_FOLDS: ReadonlySet<string> = new Set();
+const ALL_OPEN: ReadonlySet<string> = { has: () => true } as unknown as ReadonlySet<string>;
 
 // Measured row heights by item id, kept across mounts and threads: reopening a
 // thread or scrolling back estimates each row exactly, so the virtualizer does
@@ -114,11 +129,30 @@ export function Transcript({
   const [showLatest, setShowLatest] = useState(false);
   const now = useNow(thread.running);
 
+  // Finished turns fold into one summary row each (state/fold.ts); find opens them all so it can reach every step.
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => openFolds.get(thread.id) ?? NO_FOLDS);
+  const toggleFold = useCallback(
+    (key: string) =>
+      setOpen((prev) => {
+        const next = new Set(prev);
+        if (!next.delete(key)) next.add(key);
+        openFolds.set(thread.id, next);
+        return next;
+      }),
+    [thread.id],
+  );
+  const searching = !!find?.query;
   const rows = useMemo<Row[]>(() => {
-    const out: Row[] = thread.items.map((item) => ({ key: item.id, item }));
+    const out: Row[] = foldTurns(thread.items, thread.running, searching ? ALL_OPEN : open);
     if (thread.running) out.push({ key: "working", working: true });
     return out;
-  }, [thread.items, thread.running]);
+  }, [thread.items, thread.running, open, searching]);
+  // Footers of folded turns: their time is in the summary row, not repeated.
+  const foldedEnds = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of rows) if (row.fold) set.add(row.fold.key.slice("fold-".length));
+    return set;
+  }, [rows]);
 
   // The reply each turn footer copies: the last reply before it.
   const replyBefore = useMemo(() => {
@@ -166,6 +200,7 @@ export function Transcript({
       const known = rowSizes.get(rows[i]?.key ?? "");
       if (known !== undefined) return known;
       const item = rows[i]?.item;
+      if (rows[i]?.fold) return 26;
       if (!item) return 24;
       if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
       return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
@@ -337,7 +372,8 @@ export function Transcript({
       f && matches.length ? { ...f, index: (f.index + delta + matches.length) % matches.length } : f,
     );
 
-  const lastIndex = thread.items.length - 1;
+  // The last item's row: the running turn never folds, so it is the last row before the working line.
+  const lastIndex = rows.length - (thread.running ? 2 : 1);
   // The first render draws no rows: the virtualizer has no scroll element yet and would pick the
   // thread's first rows. `attachScroll` then puts the view at the end, and the second render
   // (still before the first paint) draws the last rows straight away.
@@ -411,6 +447,21 @@ export function Transcript({
             const row = rows[v.index]!;
             const item = row.item;
             const prev = v.index > 0 ? rows[v.index - 1]?.item : undefined;
+            if (row.fold) {
+              return (
+                <div
+                  key={v.key}
+                  data-index={v.index}
+                  ref={measureRef}
+                  className="absolute top-0 left-0 w-full"
+                  style={{ transform: `translateY(${v.start}px)` }}
+                >
+                  <div className="mx-auto w-full max-w-[1036px] px-7" style={{ paddingTop: 18 }}>
+                    <TurnFoldRow fold={row.fold} onToggle={toggleFold} />
+                  </div>
+                </div>
+              );
+            }
             // Rows are 18 apart; consecutive tool calls sit tight.
             const gap = v.index === 0 ? 0 : item?.kind === "tool" && prev?.kind === "tool" ? 2 : 18;
             return (
@@ -421,7 +472,10 @@ export function Transcript({
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${v.start}px)` }}
               >
-                <div className="mx-auto w-full max-w-[1036px] px-7" style={{ paddingTop: gap }}>
+                <div
+                  className={cx("mx-auto w-full max-w-[1036px] px-7", row.inFold && "rc-expand")}
+                  style={{ paddingTop: gap }}
+                >
                   {row.working ? (
                     <WorkingRow label={workingLabel(thread)} startedAt={thread.turnStartedAt} now={now} />
                   ) : item?.kind === "user" ? (
@@ -443,6 +497,7 @@ export function Transcript({
                   ) : item?.kind === "turnEnd" ? (
                     <TurnEndRow
                       item={item}
+                      folded={foldedEnds.has(item.id)}
                       reply={replyBefore[item.id]}
                       completion={completions[item.id]}
                       changes={

@@ -29,6 +29,7 @@ import type { Json } from "../acp/jsonrpc";
 import type { FileDiff } from "../acp/types";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
+import { foldLabel, type TurnFold } from "../state/fold";
 import { editMessage, retryMessage } from "../state/store";
 import {
   diffCounts,
@@ -551,13 +552,46 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
   );
 }
 
+/**
+ * A finished turn's work, folded (state/fold.ts): `Worked for 1m 20s · 14 steps
+ * · 3 files changed`, a chevron, and the steps as they streamed under it when
+ * opened. The final answer, errors and the footer stay outside the fold.
+ */
+export const TurnFoldRow = memo(function TurnFoldRow({
+  fold,
+  onToggle,
+}: {
+  fold: TurnFold;
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={fold.open}
+      onClick={() => onToggle(fold.key)}
+      title={fold.open ? "Hide the work" : "Show the work"}
+      className="-mx-1 flex max-w-full items-center gap-1.5 rounded-sm px-1 text-callout text-fg-faint hover:text-fg-muted"
+    >
+      <span className="truncate tabular">{foldLabel(fold, formatDuration)}</span>
+      {fold.failed > 0 && <CircleX size={11} className="shrink-0 text-danger" aria-hidden />}
+      <ChevronRight
+        size={11}
+        className={cx("shrink-0 transition-transform duration-200", fold.open && "rotate-90")}
+      />
+    </button>
+  );
+});
+
 export function TurnEndRow({
   item,
   reply,
   completion,
   changes,
+  folded,
 }: {
   item: Item<"turnEnd">;
+  /** The turn's work is folded into a summary row that already says how long it took. */
+  folded?: boolean;
   reply?: string;
   completion?: TurnCompletion | null;
   /** The turn's checkpoint chip (Changes), when the engine keeps checkpoints. */
@@ -568,7 +602,7 @@ export function TurnEndRow({
       ? `Stopped by you${item.elapsedMs ? ` · after ${formatDuration(item.elapsedMs)}` : ""}`
       : item.outcome === "failed"
         ? "The turn failed"
-        : item.elapsedMs !== undefined
+        : item.elapsedMs !== undefined && !folded
           ? `Worked for ${formatDuration(item.elapsedMs)}`
           : undefined,
     timeLabel(item.at),
