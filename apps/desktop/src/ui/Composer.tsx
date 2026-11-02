@@ -24,6 +24,7 @@ import { DropdownMenu } from "radix-ui";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
+import { haptic } from "../lib/haptics";
 import { onFileDrop, pickFiles, pickFolder, readImage } from "../lib/native";
 import {
   type Attachment,
@@ -260,6 +261,7 @@ export const Composer = memo(function Composer({
   }, []);
 
   const send = (steer: boolean) => {
+    haptic("generic");
     const text = draft;
     const sentExtras = extras;
     if (!text.trim() && !hasExtras(sentExtras) && !(steer && running)) return;
@@ -570,7 +572,10 @@ export const Composer = memo(function Composer({
                 type="button"
                 aria-label="Stop turn"
                 disabled={!!cancelReason}
-                onClick={() => void cancel(thread?.id)}
+                onClick={() => {
+                  haptic("level");
+                  void cancel(thread?.id);
+                }}
                 className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85 disabled:opacity-40"
               >
                 <Square size={10} fill="currentColor" strokeWidth={0} />
@@ -582,6 +587,7 @@ export const Composer = memo(function Composer({
                 type="button"
                 aria-label="Send"
                 disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
+                onPointerEnter={(e) => !e.currentTarget.disabled && haptic("alignment")}
                 onClick={() => send(false)}
                 className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fg-muted/25"
               >

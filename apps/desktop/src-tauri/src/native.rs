@@ -728,3 +728,52 @@ mod tests {
         assert!(open_url("javascript:alert(1)".into()).is_err());
     }
 }
+
+/// A trackpad haptic (NSHapticFeedbackManager): `generic`, `alignment` or
+/// `level`. Felt only on a Force Touch trackpad with a finger on it; a no-op
+/// elsewhere and off macOS.
+#[tauri::command]
+pub fn haptic(app: tauri::AppHandle, kind: String) -> Result<(), String> {
+    // NSHapticFeedbackPattern: generic 0, alignment 1, levelChange 2.
+    let pattern: isize = match kind.as_str() {
+        "generic" => 0,
+        "alignment" => 1,
+        "level" => 2,
+        _ => return Err(format!("unknown haptic: {kind}")),
+    };
+    #[cfg(target_os = "macos")]
+    app.run_on_main_thread(move || perform_haptic(pattern))
+        .map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, pattern);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn perform_haptic(pattern: isize) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    let Some(manager) = AnyClass::get(c"NSHapticFeedbackManager") else {
+        return;
+    };
+    // SAFETY: documented AppKit class methods, called on the main thread;
+    // `defaultPerformer` is never nil, and 1 is NSHapticFeedbackPerformanceTimeNow.
+    unsafe {
+        let performer: *mut AnyObject = msg_send![manager, defaultPerformer];
+        if !performer.is_null() {
+            let _: () =
+                msg_send![performer, performFeedbackPattern: pattern, performanceTime: 1usize];
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod haptic_tests {
+    #[test]
+    fn haptic_message_matches_appkit() {
+        // objc2 checks argument encodings in debug builds: a wrong type panics here.
+        for pattern in 0..3 {
+            super::perform_haptic(pattern);
+        }
+    }
+}

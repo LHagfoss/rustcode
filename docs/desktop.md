@@ -806,6 +806,16 @@ built for the CLI. Extra arguments go to `tauri build`, e.g.
   the Developer ID as `APPLE_SIGNING_IDENTITY` and notarizes and staples the
   app. Windows and Linux packages are unsigned.
 
+### Haptics
+
+On macOS the shell's `haptic` command plays an NSHapticFeedbackManager
+pattern (`generic`, `alignment`, `level`) on the main thread
+(`src-tauri/src/native.rs`), through `src/lib/haptics.ts`. Sending or
+queueing taps `generic`, stopping a turn `level`, resting on an enabled Send
+`alignment`; repeats within 40 ms drop. Only a Force Touch trackpad with a
+finger on it feels them. Settings › General › Trackpad haptics turns them
+off (`rustcode.haptics`).
+
 ### Updater
 
 The app checks for an update 5 s after launch, every 30 minutes, when its window comes back after 10 minutes away, and a minute after a failed check
