@@ -1,10 +1,11 @@
 import { Tooltip } from "radix-ui";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import {
   cancel,
   closeConfirm,
   openSettings,
   setOnboarding,
+  setPanel,
   setSwitcher,
   startNewThread,
   toggleSidebar,
@@ -18,6 +19,8 @@ import { Switcher } from "./ui/Switcher";
 const Settings = lazy(() => import("./ui/Settings").then((m) => ({ default: m.Settings })));
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const ChangesPanel = lazy(() => import("./ui/ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
+const AgentsPanel = lazy(() => import("./ui/AgentViews").then((m) => ({ default: m.AgentsPanel })));
+const PullsPanel = lazy(() => import("./ui/PullRequests").then((m) => ({ default: m.PullsPanel })));
 
 function useTheme() {
   const theme = useApp((s) => s.theme);
@@ -122,17 +125,17 @@ export function App() {
   useShortcuts();
   const settings = useApp((s) => s.settings);
   const onboarding = useApp((s) => s.onboardingOpen);
-  const [changes, setChanges] = useState(false);
+  const panel = useApp((s) => s.panel);
   return (
     <Tooltip.Provider delayDuration={600}>
       <div className="flex h-full w-full overflow-hidden">
         <Sidebar />
-        <ChatView changesOpen={changes} onToggleChanges={() => setChanges(!changes)} />
-        {changes && (
-          <Suspense fallback={null}>
-            <ChangesPanel onClose={() => setChanges(false)} />
-          </Suspense>
-        )}
+        <ChatView />
+        <Suspense fallback={null}>
+          {panel === "changes" && <ChangesPanel onClose={() => setPanel(null)} />}
+          {panel === "agents" && <AgentsPanel />}
+          {panel === "pulls" && <PullsPanel />}
+        </Suspense>
       </div>
       <Switcher />
       <Suspense fallback={null}>

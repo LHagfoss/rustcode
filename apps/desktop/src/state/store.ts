@@ -3,6 +3,13 @@
 
 import { create } from "zustand";
 import { AcpConnection, type Inbound, type Json, type JsonObject, RpcError, str } from "../acp/jsonrpc";
+import {
+  agentActive,
+  type PlanUsage,
+  parseAgentList,
+  parsePlanUsage,
+  type SubagentInfo,
+} from "../acp/rustcode";
 import type { Transport } from "../acp/transport";
 import {
   type AgentInfo,
@@ -107,6 +114,14 @@ export interface AppState {
   archived: Record<string, number>;
   /** A sent message being edited in the composer: sending rewinds the thread to it first. */
   editing: Record<string, { itemId: string; userIndex: number; original: string }>;
+  /** The panel on the right of the chat. */
+  panel: "changes" | "agents" | "pulls" | null;
+  /** Each thread's subagents, as `_rustcode/agents` last listed them. */
+  agents: Record<string, SubagentInfo[]>;
+  /** The agent whose conversation the Agents panel shows. */
+  agentOpen: number | null;
+  /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
+  planUsage: Record<string, PlanUsage | null>;
   /** An app-drawn confirmation (the webview has no native dialogs). */
   confirm: { title: string; message: string; action: string; destructive?: boolean; run: () => void } | null;
 }
@@ -149,6 +164,10 @@ export const useApp = create<AppState>(() => ({
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   editing: {},
   confirm: null,
+  panel: null,
+  agents: {},
+  agentOpen: null,
+  planUsage: {},
   status: "connecting",
   engineLog: [],
   sessions: [],
@@ -207,6 +226,7 @@ export function engine(): AcpConnection {
 export async function connect(next: Transport): Promise<void> {
   transport = next;
   setShellTransport(next);
+  startAgentPolling();
   set({ status: "connecting", transport: next.name, statusDetail: undefined });
   try {
     await next.start((event) => {
@@ -381,6 +401,7 @@ async function openThread(id: string) {
       configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
       harness: parseSessionHarness(result) ?? t.harness,
     }));
+    void refreshPlanUsage(id);
   } catch (error) {
     updateThread(id, (t) => ({ ...finishLoad(t), error: `Could not open this thread: ${errorText(error)}` }));
   } finally {
@@ -743,6 +764,8 @@ async function runPrompt(
   }
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
   void refreshSessions();
+  void refreshPlanUsage(id);
+  void refreshAgents(id);
   if (outcome === "completed" && id !== get().selectedId) toast("A thread finished", "success");
   // A queued message starts at once, so "working" stays up across the hand-off.
   const next = get().threads[id]?.queue[0];
@@ -881,6 +904,96 @@ export function setNewThreadChoice(choice: NewThreadChoice | null) {
   set({ newThread: choice });
 }
 
+// ---------------------------------------------------------------- subagents and usage
+
+export function setPanel(panel: AppState["panel"]) {
+  set((s) => ({ panel: s.panel === panel ? null : panel }));
+}
+
+/** Whether the thread's harness lists subagents (`_rustcode/agents`). */
+export function hasAgents(thread?: ThreadState): boolean {
+  return !!get().agent?.agents && (thread?.harness?.capabilities.subagents ?? true);
+}
+
+export async function refreshAgents(id: string): Promise<SubagentInfo[]> {
+  const thread = get().threads[id];
+  if (!connection || !hasAgents(thread)) return [];
+  try {
+    const agents = parseAgentList(
+      await connection.request(Method.agents, { sessionId: id, action: "list" }, 10_000),
+    );
+    set((s) => ({ agents: { ...s.agents, [id]: agents } }));
+    return agents;
+  } catch {
+    return get().agents[id] ?? [];
+  }
+}
+
+/** A child's conversation, folded like a replayed thread. */
+export async function agentHistory(id: string, agentId: number): Promise<ThreadState> {
+  const result = (await engine().request(
+    Method.agents,
+    { sessionId: id, action: "history", id: agentId },
+    15_000,
+  )) as JsonObject | null;
+  let state = emptyThread(`${id}#${agentId}`, get().threads[id]?.cwd ?? "");
+  for (const update of Array.isArray(result?.updates) ? result.updates : []) {
+    state = applyUpdate(state, parseSessionUpdate({ sessionId: id, update }));
+  }
+  return finishLoad(state);
+}
+
+export async function sendToAgent(id: string, agentId: number, text: string): Promise<boolean> {
+  try {
+    await engine().request(Method.agents, { sessionId: id, action: "send", id: agentId, text }, 15_000);
+    void refreshAgents(id);
+    return true;
+  } catch (error) {
+    toast(`Could not send to the agent: ${errorText(error)}`, "warning");
+    return false;
+  }
+}
+
+export async function cancelAgent(id: string, agentId: number) {
+  try {
+    await engine().request(Method.agents, { sessionId: id, action: "cancel", id: agentId }, 15_000);
+  } catch (error) {
+    toast(`Could not stop the agent: ${errorText(error)}`, "warning");
+  }
+  void refreshAgents(id);
+}
+
+export function openAgent(agentId: number | null) {
+  set({ agentOpen: agentId, panel: agentId === null ? get().panel : "agents" });
+}
+
+let agentTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Poll the shown thread's agents while its turn runs or a child works, as the SwiftUI app does. */
+export function startAgentPolling() {
+  if (agentTimer) return;
+  agentTimer = setInterval(() => {
+    const s = get();
+    const id = s.selectedId;
+    const thread = id ? s.threads[id] : undefined;
+    if (!id || !thread || s.status !== "ready" || !hasAgents(thread)) return;
+    const known = s.agents[id];
+    if (thread.running || known?.some(agentActive) || (known === undefined && thread.loaded)) {
+      void refreshAgents(id);
+    }
+  }, 2000);
+}
+
+export async function refreshPlanUsage(id: string): Promise<void> {
+  if (!connection) return;
+  try {
+    const usage = parsePlanUsage(await connection.request(Method.usageLimits, { sessionId: id }, 10_000));
+    set((s) => ({ planUsage: { ...s.planUsage, [id]: usage } }));
+  } catch {
+    set((s) => ({ planUsage: { ...s.planUsage, [id]: null } }));
+  }
+}
+
 // ---------------------------------------------------------------- UI
 
 export function openSettings(section: SettingsSection | null) {
@@ -943,5 +1056,9 @@ export function resetForTests() {
     archived: {},
     editing: {},
     confirm: null,
+    panel: null,
+    agents: {},
+    agentOpen: null,
+    planUsage: {},
   });
 }

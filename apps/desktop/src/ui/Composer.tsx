@@ -38,6 +38,7 @@ import {
   useApp,
 } from "../state/store";
 import { localId, type ThreadState } from "../state/thread";
+import { AgentPill } from "./AgentViews";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
 import { cx, Tooltip } from "./primitives";
@@ -515,6 +516,7 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
               void attachmentsFromFiles(files, images, harnessName).then(attach);
             }}
           />
+          <AgentPill thread={thread} />
           <span className="flex-1" />
           {harness && !harness.builtin && (
             <Tooltip

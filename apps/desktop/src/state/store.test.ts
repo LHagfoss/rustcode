@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import {
+  agentHistory,
   answerPermission,
   answerQuestionOptions,
   cancel,
@@ -8,6 +9,7 @@ import {
   connect,
   editMessage,
   fetchHarnessModels,
+  refreshAgents,
   renameThread,
   resetForTests,
   selectThread,
@@ -168,5 +170,21 @@ describe("engine controller with the mock engine", () => {
       { path: "src/app.ts", added: 1, removed: 1 },
     ]);
     expect(turnCompletion(selected()!.items, end)?.checks[0]?.outcome).toBe("passed");
+  });
+
+  test("a turn that starts agents lists them, and their conversation reads", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    await submit("yolo split this between agents");
+    await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
+    const id = selected()!.id;
+    const agents = await refreshAgents(id);
+    expect(agents.map((a) => a.agentType)).toEqual(["explorer", "worker"]);
+    expect(agents.every((a) => a.status === "completed")).toBe(true);
+    const history = await agentHistory(id, 1);
+    expect(history.items.map((i) => i.kind)).toEqual(["user", "tool", "assistant"]);
+    await until(() => useApp.getState().planUsage[id] !== undefined);
+    expect(useApp.getState().planUsage[id]?.windows).toHaveLength(2);
   });
 });

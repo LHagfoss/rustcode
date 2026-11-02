@@ -8,17 +8,21 @@ import {
   CircleDot,
   FileDiff,
   Folder,
+  GitPullRequest,
   ListChecks,
   PanelLeft,
   SquarePen,
   TriangleAlert,
+  Users,
 } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
+import { agentActive, leftPercent, shownWindow, windowDetail, windowTitle } from "../acp/rustcode";
 import { pickFolder } from "../lib/native";
 import {
   refreshSessions,
   restartEngine,
+  setPanel,
   setProjectCwd,
   startNewThread,
   toggleSidebar,
@@ -32,7 +36,10 @@ import { Transcript } from "./Transcript";
 
 export function UsageCapsule({ thread }: { thread: ThreadState }) {
   const usage = thread.usage;
-  if (!usage?.size) return null;
+  const plan = useApp((s) => s.planUsage[thread.id]);
+  const shown = plan ? shownWindow(plan) : undefined;
+  if (!usage?.size && !shown) return null;
+  if (!usage?.size) return <PlanMeter thread={thread} />;
   const fraction = Math.min(1, usage.used / usage.size);
   const tint = fraction < 0.8 ? "bg-brand" : fraction < 0.95 ? "bg-attention" : "bg-danger";
   const detail = [
@@ -41,6 +48,13 @@ export function UsageCapsule({ thread }: { thread: ThreadState }) {
       ? `${formatTokens(usage.inputTokens)} in · ${formatTokens(usage.outputTokens ?? 0)} out`
       : undefined,
     usage.cachedTokens ? `${formatTokens(usage.cachedTokens)} cached` : undefined,
+    ...(plan
+      ? [
+          "",
+          ...plan.windows.map((w) => `${windowTitle(w)}: ${windowDetail(w)}`),
+          plan.source === "codex" ? "As the Codex CLI reports for your ChatGPT plan" : undefined,
+        ]
+      : []),
   ]
     .filter(Boolean)
     .join("\n");
@@ -63,6 +77,50 @@ export function UsageCapsule({ thread }: { thread: ThreadState }) {
         <span className="font-medium text-caption text-fg-2 tabular">
           {formatTokens(usage.used)} / {formatTokens(usage.size)}
         </span>
+        {shown && <PlanDot left={leftPercent(shown)} title={windowTitle(shown)} />}
+      </div>
+    </Tooltip>
+  );
+}
+
+/** The plan's shortest window, as the capsule's second part: `5-hour 58%`. */
+function PlanDot({ left, title }: { left: number; title: string }) {
+  const tint = left > 20 ? "text-fg-2" : left > 5 ? "text-attention" : "text-danger";
+  return (
+    <span
+      className={cx(
+        "flex items-center gap-1 border-hairline border-l pl-2 font-medium text-caption tabular",
+        tint,
+      )}
+    >
+      <span
+        className="relative size-[11px] rounded-full"
+        style={{ background: `conic-gradient(currentColor ${left * 3.6}deg, var(--rc-fg-4) 0)` }}
+      />
+      {title} {left}%
+    </span>
+  );
+}
+
+function PlanMeter({ thread }: { thread: ThreadState }) {
+  const plan = useApp((s) => s.planUsage[thread.id]);
+  const shown = plan ? shownWindow(plan) : undefined;
+  if (!plan || !shown) return null;
+  return (
+    <Tooltip
+      label={
+        <span className="whitespace-pre-line">
+          {plan.windows.map((w) => `${windowTitle(w)}: ${windowDetail(w)}`).join("\n")}
+        </span>
+      }
+    >
+      <div
+        className="flex h-7 items-center rounded-full bg-fill-3 px-2.5"
+        role="meter"
+        aria-label="Plan usage left"
+        aria-valuenow={leftPercent(shown)}
+      >
+        <PlanDot left={leftPercent(shown)} title={windowTitle(shown)} />
       </div>
     </Tooltip>
   );
@@ -119,15 +177,11 @@ function PlanButton({ thread }: { thread: ThreadState }) {
   );
 }
 
-function Header({
-  thread,
-  changesOpen,
-  onToggleChanges,
-}: {
-  thread?: ThreadState;
-  changesOpen: boolean;
-  onToggleChanges: () => void;
-}) {
+function Header({ thread }: { thread?: ThreadState }) {
+  const panel = useApp((s) => s.panel);
+  const agentsOn = useApp((s) => !!s.agent?.agents) && (thread?.harness?.capabilities.subagents ?? true);
+  const pullsOn = useApp((s) => !!s.agent?.pullRequests);
+  const working = useApp((s) => (thread ? (s.agents[thread.id] ?? []).filter(agentActive).length : 0));
   const sidebarHidden = useApp((s) => s.sidebarHidden);
   const projectCwd = useApp((s) => s.projectCwd);
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
@@ -168,11 +222,34 @@ function Header({
       {thread && <PlanButton thread={thread} />}
       {thread && <UsageCapsule thread={thread} />}
       <Cluster>
+        {thread && agentsOn && (
+          <ClusterButton
+            label="Agents"
+            tooltip={working ? `Agents (${working} working)` : "Agents this thread started"}
+            on={panel === "agents"}
+            onClick={() => setPanel("agents")}
+          >
+            <span className="relative">
+              <Users size={14} />
+              {working > 0 && <span className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-brand" />}
+            </span>
+          </ClusterButton>
+        )}
+        {pullsOn && (
+          <ClusterButton
+            label="Pull requests"
+            tooltip="Pull requests of this project"
+            on={panel === "pulls"}
+            onClick={() => setPanel("pulls")}
+          >
+            <GitPullRequest size={14} />
+          </ClusterButton>
+        )}
         <ClusterButton
           label="Changes"
           tooltip="Changes in the working tree"
-          on={changesOpen}
-          onClick={onToggleChanges}
+          on={panel === "changes"}
+          onClick={() => setPanel("changes")}
         >
           <FileDiff size={14} />
         </ClusterButton>
@@ -247,13 +324,7 @@ function EngineBanner() {
   );
 }
 
-export function ChatView({
-  changesOpen,
-  onToggleChanges,
-}: {
-  changesOpen: boolean;
-  onToggleChanges: () => void;
-}) {
+export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   const stackRef = useRef<HTMLDivElement>(null);
@@ -285,7 +356,7 @@ export function ChatView({
 
   return (
     <main ref={rootRef} className="relative flex min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
-      <Header thread={thread} changesOpen={changesOpen} onToggleChanges={onToggleChanges} />
+      <Header thread={thread} />
       {thread && !thread.loading ? (
         <Transcript thread={thread} bottomInset={stackHeight + 36} />
       ) : thread?.loading ? (

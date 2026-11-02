@@ -488,7 +488,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
           {completion.files.map((f) => (
             <div key={f.path} className="flex h-[22px] items-center gap-2 text-caption">
               <FileText size={11} className="shrink-0 text-fg-2" />
-              <span className="min-w-0 flex-1 truncate font-mono" dir="rtl">
+              <span className="min-w-0 flex-1 truncate text-left font-mono" dir="rtl">
                 <bdi>{f.path}</bdi>
               </span>
               <DiffCount added={f.added} removed={f.removed} />

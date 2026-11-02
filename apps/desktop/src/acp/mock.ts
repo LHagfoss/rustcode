@@ -341,6 +341,7 @@ export class MockEngine {
   private nextRpcId = 1000;
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
+  private agents = new Map<string, JsonObject[]>();
 
   constructor(
     private readonly emit: (line: string) => void,
@@ -525,6 +526,127 @@ export class MockEngine {
         run.steers.push(str(params.text) ?? "");
         return { accepted: true };
       }
+      case "_rustcode/agents": {
+        const sid = str(params.sessionId) ?? "";
+        const list = this.agents.get(sid) ?? [];
+        const action = str(params.action);
+        if (action === "list") return { agents: list };
+        const agent = list.find((a) => a.id === params.id);
+        if (!agent) throw Object.assign(new Error(`unknown subagent: ${params.id}`), { code: -32602 });
+        if (action === "history") {
+          return {
+            agent,
+            updates: [
+              { sessionUpdate: "user_message_chunk", content: text(String(agent.task)) },
+              {
+                sessionUpdate: "tool_call",
+                toolCallId: `a${agent.id}-1`,
+                title: "rg",
+                kind: "search",
+                status: "completed",
+                rawInput: { pattern: "Composer", summary: "Find the composer" },
+              },
+              ...(agent.status === "completed"
+                ? [{ sessionUpdate: "agent_message_chunk", content: text(String(agent.completion)) }]
+                : []),
+            ],
+          };
+        }
+        if (action === "cancel") {
+          agent.status = "cancelled";
+          agent.finishedAtMs = Date.now();
+          return { settled: true };
+        }
+        if (action === "send") return { queued: false };
+        throw Object.assign(new Error("bad action"), { code: -32602 });
+      }
+      case "_rustcode/usage/limits":
+        return {
+          source: "codex",
+          primary: { usedPercent: 42, windowMinutes: 300, resetsAt: Math.floor(Date.now() / 1000) + 7200 },
+          secondary: {
+            usedPercent: 71,
+            windowMinutes: 10080,
+            resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400,
+          },
+        };
+      case "_rustcode/pulls":
+        return {
+          list: {
+            provider: "github",
+            hasMore: false,
+            pulls: [
+              {
+                number: 2788,
+                title: "feat(desktop): Tauri desktop app on every harness",
+                author: "LHagfoss",
+                state: "open",
+                draft: true,
+                review: "review_required",
+                checks: { passed: 5, failed: 0, pending: 1, skipped: 0 },
+                headRef: "feat/desktop-tauri-harnesses",
+                baseRef: "main",
+                headSha: "58961fc5aa",
+                updatedAt: new Date(minutes(20)).toISOString(),
+                url: "https://github.com/LHagfoss/rustcode/pull/2788",
+                additions: 9120,
+                deletions: 12,
+                changedFiles: 64,
+              },
+              {
+                number: 2781,
+                title: "fix(engine): keep the steer queue across a restart",
+                author: "LHagfoss",
+                state: "open",
+                draft: false,
+                review: "approved",
+                checks: { passed: 6, failed: 1, pending: 0, skipped: 0 },
+                headRef: "fix/engine-steer-restart",
+                baseRef: "main",
+                headSha: "a1b2c3d4",
+                updatedAt: new Date(minutes(300)).toISOString(),
+                url: "https://github.com/LHagfoss/rustcode/pull/2781",
+                additions: 40,
+                deletions: 9,
+                changedFiles: 3,
+              },
+            ],
+          },
+        };
+      case "_rustcode/pulls/view":
+        return {
+          pull: {
+            number: params.number as number,
+            title: "feat(desktop): Tauri desktop app on every harness",
+            author: "LHagfoss",
+            state: "open",
+            draft: true,
+            checks: { passed: 5, failed: 0, pending: 1, skipped: 0 },
+            headRef: "feat/desktop-tauri-harnesses",
+            baseRef: "main",
+            headSha: "58961fc5aa",
+            url: `https://github.com/LHagfoss/rustcode/pull/${params.number}`,
+            additions: 9120,
+            deletions: 12,
+            changedFiles: 64,
+            body: "Adds `apps/desktop`: a Tauri shell around `rustcode --acp`.\n\n- Composer, approvals, harness pickers\n- Link chips and Smart UI",
+            checkRuns: [
+              { name: "desktop / check", status: "passed" },
+              { name: "rust / test", status: "pending" },
+            ],
+            files: [{ path: "apps/desktop/src/ui/Composer.tsx", additions: 420, deletions: 0 }],
+            activity: [
+              {
+                author: "reviewer",
+                kind: "COMMENTED",
+                at: new Date(minutes(40)).toISOString(),
+                body: "Looks good so far.",
+              },
+            ],
+          },
+        };
+      case "_rustcode/pulls/review":
+        return { review: { url: "https://github.com/LHagfoss/rustcode/pull/2788#pullrequestreview-1" } };
       case "_rustcode/rewind": {
         const thread = this.thread(params.sessionId);
         const wanted = Number(params.userIndex);
@@ -660,6 +782,63 @@ export class MockEngine {
     }
   }
 
+  /** "One agent spawns several": two children, started by `spawn_agent` calls, that finish a moment later. */
+  private async spawnAgents(sid: string, push: (body: JsonObject) => void, run: { cancelled: boolean }) {
+    const tasks: [string, string][] = [
+      ["explorer", "Map where the composer handles paste and drop"],
+      ["worker", "Write tests for link chips in the composer"],
+    ];
+    const list = this.agents.get(sid) ?? [];
+    this.agents.set(sid, list);
+    for (const [type, task] of tasks) {
+      const id = list.length + 1;
+      const callId = `spawn-${++this.counter}`;
+      push({
+        sessionUpdate: "tool_call",
+        toolCallId: callId,
+        title: "spawn_agent",
+        kind: "other",
+        status: "in_progress",
+        rawInput: { task, agent_type: type },
+      });
+      list.push({
+        id,
+        name: `agent-${id}`,
+        task,
+        model: "gpt-6-luna",
+        agentType: type,
+        status: "running",
+        activeTurn: true,
+        depth: 1,
+        startedAtMs: Date.now(),
+        lastActivityMs: Date.now(),
+        toolCalls: 3,
+        requests: 2,
+        inputTokens: 18_000,
+        outputTokens: 900,
+        cachedInputTokens: 12_000,
+      });
+      push({
+        sessionUpdate: "tool_call_update",
+        toolCallId: callId,
+        status: "completed",
+        rawOutput: { content: `{"agent_id":${id},"name":"agent-${id}"}` },
+      });
+    }
+    const finish = () => {
+      for (const agent of list) {
+        if (agent.status !== "running") continue;
+        agent.status = "completed";
+        agent.activeTurn = false;
+        agent.finishedAtMs = Date.now();
+        agent.completion = `Done: ${String(agent.task).toLowerCase()}.`;
+      }
+    };
+    if (this.delay) setTimeout(finish, this.delay * 40);
+    else finish();
+    if (run.cancelled) return;
+  }
+
   private async prompt(params: JsonObject): Promise<Json> {
     const thread = this.thread(params.sessionId);
     const prompt = arr(params.prompt)
@@ -694,6 +873,7 @@ export class MockEngine {
         push({ sessionUpdate: "agent_thought_chunk", content: text(chunk) });
         await this.sleep();
       }
+      if (/agents?/i.test(prompt)) await this.spawnAgents(sid, push, run);
       push({
         sessionUpdate: "plan",
         entries: [

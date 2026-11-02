@@ -7,6 +7,7 @@ import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/store";
 import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
+import { AgentSpawnRow } from "./AgentViews";
 import { cx } from "./primitives";
 import { AssistantRow, NoticeRow, ThoughtRow, ToolRow, TurnEndRow, UserRow, WorkingRow } from "./Rows";
 
@@ -296,6 +297,8 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
                     <AssistantRow item={item} />
                   ) : item?.kind === "thought" ? (
                     <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
+                  ) : item?.kind === "tool" && item.title === "spawn_agent" ? (
+                    <AgentSpawnRow item={item} threadId={thread.id} />
                   ) : item?.kind === "tool" ? (
                     <ToolRow item={item} cwd={thread.cwd} />
                   ) : item?.kind === "notice" ? (
