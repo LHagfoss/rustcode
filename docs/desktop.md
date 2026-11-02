@@ -38,10 +38,9 @@ Next, in rough order:
 1. Run the Build workflow once by hand: the Windows and Linux bundle jobs
    have never run. Then cut a beta (`scripts/release.sh --beta`).
 2. Signing and notarization once the Apple secrets exist (#2034).
-3. Open desktop issues: #2792 (queue/steer with images), #2793 (copy
-   actions), #2794 (report results), #2795 (command actions select their
-   thread), #2799 (cross-harness delegation, live test plan), and
-   #2802–#2806 ported from the SwiftUI app.
+3. Open desktop issues: #2792 (queue/steer with images), #2799
+   (cross-harness delegation, live test plan), #2802 (composer focus),
+   #2805 (panel buttons) and #2806 (slash-command composer polish).
 4. The rest of [Not yet ported](#not-yet-ported), then archive `macos/` in
    its own repository and drop its CI.
 
@@ -205,7 +204,14 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   effort; `model_picker` (`/model`) opens the model picker;
   `session_picker` the thread switcher; `copy_response` copies the last
   reply (`runCommandAction`). `/fork` leaves you in the thread, as the
-  engine does, and a toast offers *Open* on the fork. Images and files can be pasted, dropped or
+  engine does, and a toast offers *Open* on the fork. A report command
+  (`_meta.rustcode.report`: `/status`, `/stats`, `/context`…) answers in
+  a panel over the composer instead of the transcript (`ReportPanel`): its
+  bold first line is the title, `Label: value` lines (with `###` or bold
+  headings) become rows, anything else stays Markdown
+  (`state/report.ts`). It scrolls past 360px, has Copy and Close, and
+  Escape or a click outside closes it after any popover over it; the
+  command's message and footer leave the transcript. Images and files can be pasted, dropped or
   picked: images are ACP `image` blocks when the thread's harness takes
   them (`capabilities.images`, or `promptCapabilities.image` on the
   built-in one); files with a path go as an "Attached files" list on the
@@ -813,7 +819,7 @@ From the SwiftUI app, still missing or partial:
 - `@` file references; picking diff lines for a message. Files dropped in
   the browser are inlined as text rather than linked.
 - Slash commands the app answers itself (`/terminal`, `/remote`,
-  `/visualize`), report-command sheets.
+  `/visualize`).
 - Snoozed and done threads, moving a thread to another folder
   (`_rustcode/session/move`), the retention sweep, swipe actions; loading
   the thread list page by page. Trash moves the folder into `~/.Trash`
