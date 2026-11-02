@@ -1,0 +1,333 @@
+// The chat column: header (project / title, plan, usage, panels), the
+// transcript, and the composer stack with error and approval cards. A new
+// thread shows the centred empty state with the composer under it.
+
+import {
+  CircleCheck,
+  CircleDashed,
+  CircleDot,
+  FileDiff,
+  Folder,
+  ListChecks,
+  PanelLeft,
+  SquarePen,
+  TriangleAlert,
+} from "lucide-react";
+import { Popover } from "radix-ui";
+import { useEffect, useRef, useState } from "react";
+import { pickFolder } from "../lib/native";
+import {
+  refreshSessions,
+  restartEngine,
+  setProjectCwd,
+  startNewThread,
+  toggleSidebar,
+  useApp,
+} from "../state/store";
+import { formatTokens, type ThreadState } from "../state/thread";
+import { AttentionCard } from "./AttentionCards";
+import { Composer } from "./Composer";
+import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
+import { Transcript } from "./Transcript";
+
+export function UsageCapsule({ thread }: { thread: ThreadState }) {
+  const usage = thread.usage;
+  if (!usage?.size) return null;
+  const fraction = Math.min(1, usage.used / usage.size);
+  const tint = fraction < 0.8 ? "bg-brand" : fraction < 0.95 ? "bg-attention" : "bg-danger";
+  const detail = [
+    `${Math.round((1 - fraction) * 100)}% context left${usage.estimated ? " (estimated)" : ""}`,
+    usage.inputTokens !== undefined
+      ? `${formatTokens(usage.inputTokens)} in · ${formatTokens(usage.outputTokens ?? 0)} out`
+      : undefined,
+    usage.cachedTokens ? `${formatTokens(usage.cachedTokens)} cached` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <Tooltip label={<span className="whitespace-pre-line">{detail}</span>}>
+      <div
+        className="flex h-7 items-center gap-2 rounded-full bg-fill-3 px-2.5"
+        role="meter"
+        aria-label="Context used"
+        aria-valuemin={0}
+        aria-valuemax={usage.size}
+        aria-valuenow={usage.used}
+      >
+        <div className="h-[5px] w-[18px] overflow-hidden rounded-full bg-fg-4">
+          <div
+            className={cx("h-full rounded-full transition-[width] duration-300 ease-snappy", tint)}
+            style={{ width: `max(3px, ${fraction * 100}%)` }}
+          />
+        </div>
+        <span className="font-medium text-caption text-fg-2 tabular">
+          {formatTokens(usage.used)} / {formatTokens(usage.size)}
+        </span>
+      </div>
+    </Tooltip>
+  );
+}
+
+function PlanButton({ thread }: { thread: ThreadState }) {
+  if (!thread.plan.length) return null;
+  const done = thread.plan.filter((p) => p.status === "completed").length;
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-3 px-2.5 font-medium text-callout text-fg-2 hover:bg-fill-2 data-[state=open]:bg-fill-1"
+        >
+          <ListChecks size={13} />
+          <span className="tabular">
+            {done}/{thread.plan.length}
+          </span>
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="end"
+          sideOffset={6}
+          className="surface z-40 w-[380px] rounded-[20px] border border-hairline p-3 rc-in"
+        >
+          <div className="mb-1 flex items-baseline justify-between px-1">
+            <span className="font-semibold text-body">Plan</span>
+            <span className="text-callout text-fg-2">
+              {done} of {thread.plan.length} done
+            </span>
+          </div>
+          <p className="mb-2 px-1 text-caption text-fg-3">As the agent marked each step.</p>
+          <ol className="flex flex-col">
+            {thread.plan.map((entry, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: plan entries are positional
+              <li key={i} className="flex items-start gap-2 rounded-lg px-2 py-[7px]">
+                {entry.status === "completed" ? (
+                  <CircleCheck size={14} className="mt-px shrink-0 text-success" />
+                ) : entry.status === "in_progress" ? (
+                  <CircleDot size={14} className="mt-px shrink-0 text-info" />
+                ) : (
+                  <CircleDashed size={14} className="mt-px shrink-0 text-fg-3" />
+                )}
+                <span className={cx("text-body", entry.status === "completed" && "text-fg-2")}>
+                  {entry.content}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function Header({
+  thread,
+  changesOpen,
+  onToggleChanges,
+}: {
+  thread?: ThreadState;
+  changesOpen: boolean;
+  onToggleChanges: () => void;
+}) {
+  const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const projectCwd = useApp((s) => s.projectCwd);
+  const title = thread ? (thread.title ?? "New thread") : "New Thread";
+  const cwd = thread?.cwd ?? projectCwd;
+  return (
+    <header
+      data-tauri-drag-region
+      className={cx(
+        "flex h-[42px] shrink-0 items-center gap-2.5 bg-chat/95 pt-1.5 pb-2 pr-2.5",
+        sidebarHidden ? "pl-[80px]" : "pl-2.5",
+      )}
+    >
+      {sidebarHidden && (
+        <Cluster>
+          <ClusterButton label="Show sidebar" tooltip="Show sidebar (⌘B)" onClick={toggleSidebar}>
+            <PanelLeft size={14} />
+          </ClusterButton>
+          <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
+            <SquarePen size={14} />
+          </ClusterButton>
+        </Cluster>
+      )}
+      <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
+        {cwd && (
+          <Tooltip label={cwd}>
+            <span
+              className="max-w-[260px] shrink-0 truncate rounded-lg px-2 text-callout text-fg-2"
+              dir="rtl"
+            >
+              <bdi>{cwd.replace(/^\/Users\/[^/]+/, "~")}</bdi>
+            </span>
+          </Tooltip>
+        )}
+        {cwd && <span className="font-light text-fg-4 text-title3">/</span>}
+        <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
+      </div>
+      {thread && <PlanButton thread={thread} />}
+      {thread && <UsageCapsule thread={thread} />}
+      <Cluster>
+        <ClusterButton
+          label="Changes"
+          tooltip="Changes in the working tree"
+          on={changesOpen}
+          onClick={onToggleChanges}
+        >
+          <FileDiff size={14} />
+        </ClusterButton>
+      </Cluster>
+    </header>
+  );
+}
+
+function EmptyState() {
+  const projectCwd = useApp((s) => s.projectCwd);
+  return (
+    <div className="flex flex-col items-center gap-3.5 pb-6 text-center">
+      <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />
+      <h2 className="font-semibold text-title">What should we build?</h2>
+      <div className="flex max-w-[560px] items-center gap-1.5 text-callout text-fg-2">
+        <Folder size={13} />
+        <span className="truncate">
+          {projectCwd ? projectCwd.replace(/^\/Users\/[^/]+/, "~") : "No folder chosen"}
+        </span>
+        <button
+          type="button"
+          onClick={() => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p))}
+          className="text-brand hover:underline"
+        >
+          {projectCwd ? "Change" : "Choose…"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ErrorBanner({
+  text,
+  onDismiss,
+  action,
+}: {
+  text: string;
+  onDismiss?: () => void;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="surface flex items-center gap-2.5 rounded-[14px] px-3.5 py-2.5 rc-in" role="alert">
+      <TriangleAlert size={14} className="shrink-0 text-attention" />
+      <span className="selectable line-clamp-4 flex-1 text-callout">{text}</span>
+      {action}
+      {onDismiss && <Pill onClick={onDismiss}>Dismiss</Pill>}
+    </div>
+  );
+}
+
+function EngineBanner() {
+  const status = useApp((s) => s.status);
+  const detail = useApp((s) => s.statusDetail);
+  if (status === "ready") return null;
+  if (status === "connecting") {
+    return (
+      <div className="flex items-center justify-center gap-2 py-1 text-callout text-fg-2">
+        <Spinner />
+        {detail ?? "Starting the engine…"}
+      </div>
+    );
+  }
+  return (
+    <ErrorBanner
+      text={detail ?? "The engine stopped."}
+      action={
+        <Pill prominent onClick={() => void restartEngine()}>
+          Restart Engine
+        </Pill>
+      }
+    />
+  );
+}
+
+export function ChatView({
+  changesOpen,
+  onToggleChanges,
+}: {
+  changesOpen: boolean;
+  onToggleChanges: () => void;
+}) {
+  const selectedId = useApp((s) => s.selectedId);
+  const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
+  const stackRef = useRef<HTMLDivElement>(null);
+  const [stackHeight, setStackHeight] = useState(140);
+  const [dismissed, setDismissed] = useState<string | undefined>();
+  const [width, setWidth] = useState(1000);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = stackRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setStackHeight(el.offsetHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setWidth(el.offsetWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const isNew = !selectedId;
+  const request = thread?.permissions[0];
+  const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
+  const side = width >= 600 ? 28 : width >= 360 ? 20 : 16;
+
+  return (
+    <main ref={rootRef} className="relative flex min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
+      <Header thread={thread} changesOpen={changesOpen} onToggleChanges={onToggleChanges} />
+      {thread && !thread.loading ? (
+        <Transcript thread={thread} bottomInset={stackHeight + 36} />
+      ) : thread?.loading ? (
+        <div className="flex flex-1 items-center justify-center gap-2 text-callout text-fg-2">
+          <Spinner />
+          Loading thread…
+        </div>
+      ) : (
+        <div className="flex-1" />
+      )}
+      {/* The transcript fades out under the composer. */}
+      {!isNew && (
+        <div
+          className="pointer-events-none absolute right-0 bottom-0 left-0"
+          style={{
+            height: stackHeight + 52,
+            background: "linear-gradient(to bottom, transparent, var(--rc-chat) 40%)",
+          }}
+        />
+      )}
+      <div
+        ref={stackRef}
+        className={cx(
+          "absolute left-1/2 flex w-full max-w-[980px] -translate-x-1/2 flex-col gap-2.5 transition-[bottom,transform] duration-500 ease-snappy",
+          isNew ? "bottom-[max(16px,calc(50%-150px))]" : "bottom-4",
+        )}
+        style={{ paddingLeft: side, paddingRight: side }}
+      >
+        {isNew && <EmptyState />}
+        <EngineBanner />
+        {error && (
+          <ErrorBanner
+            text={error}
+            onDismiss={() => {
+              setDismissed(error);
+              void refreshSessions();
+            }}
+          />
+        )}
+        {request && <AttentionCard request={request} />}
+        <Composer thread={thread} compact={width < 600} />
+      </div>
+    </main>
+  );
+}

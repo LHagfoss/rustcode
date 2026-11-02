@@ -34,3 +34,9 @@ docs/superpowers/
 
 # SwiftPM build products for the native macOS app.
 .build/
+
+# Tauri desktop app (apps/desktop) build output.
+/apps/desktop/node_modules/
+/apps/desktop/dist/
+/apps/desktop/src-tauri/target/
+/apps/desktop/src-tauri/gen/

@@ -1,0 +1,708 @@
+// App state (Zustand) and the engine controller that drives it over ACP.
+// Components read slices with `useApp(selector)` and call the actions below.
+
+import { create } from "zustand";
+import { AcpConnection, type Inbound, type Json, type JsonObject, RpcError, str } from "../acp/jsonrpc";
+import type { Transport } from "../acp/transport";
+import {
+  type AgentInfo,
+  byActivity,
+  fallbackHarnessSnapshot,
+  type HarnessSnapshot,
+  initializeParams,
+  isReportUpdate,
+  Method,
+  type PermissionOption,
+  type PermissionRequest,
+  parseAgentInfo,
+  parseConfigOptions,
+  parseHarnessModels,
+  parseHarnessSnapshot,
+  parsePermissionRequest,
+  parseSessionHarness,
+  parseSessionList,
+  parseSessionUpdate,
+  permissionCancelled,
+  permissionSelected,
+  questionOptionsAnswer,
+  questionTextAnswer,
+  type SessionSummary,
+  type SlashCommand,
+} from "../acp/types";
+import {
+  appendSteer,
+  applyUpdate,
+  beginTurn,
+  emptyThread,
+  finishLoad,
+  finishTurn,
+  localId,
+  requeueSteers,
+  type ThreadState,
+} from "./thread";
+
+export const APP_VERSION = "0.1.0";
+
+export type SettingsSection =
+  | "general"
+  | "harnesses"
+  | "connections"
+  | "skills"
+  | "mcp"
+  | "appearance"
+  | "engine";
+
+export interface Toast {
+  id: string;
+  text: string;
+  tone: "info" | "success" | "warning";
+}
+
+export interface NewThreadChoice {
+  harness: string;
+  model: string | null;
+  effort: string | null;
+}
+
+export interface AppState {
+  status: "connecting" | "ready" | "closed";
+  statusDetail?: string;
+  transport?: Transport["name"];
+  engineLog: string[];
+  agent?: AgentInfo;
+  sessions: SessionSummary[];
+  sessionsLoaded: boolean;
+  threads: Record<string, ThreadState>;
+  /** Null shows the new-thread screen. */
+  selectedId: string | null;
+  /** The folder a new thread starts in. */
+  projectCwd: string;
+  newThread: NewThreadChoice | null;
+  harnesses: HarnessSnapshot | null;
+  commands: SlashCommand[];
+  drafts: Record<string, string>;
+  settings: SettingsSection | null;
+  switcherOpen: boolean;
+  onboardingOpen: boolean;
+  sidebarHidden: boolean;
+  toasts: Toast[];
+  theme: "system" | "light" | "dark";
+}
+
+const STORAGE = {
+  project: "rustcode.projectCwd",
+  theme: "rustcode.theme",
+  sidebar: "rustcode.sidebarHidden",
+};
+
+function stored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function store(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage can be unavailable (private window); the setting just does not persist.
+  }
+}
+
+export const useApp = create<AppState>(() => ({
+  status: "connecting",
+  engineLog: [],
+  sessions: [],
+  sessionsLoaded: false,
+  threads: {},
+  selectedId: null,
+  projectCwd: stored(STORAGE.project) ?? "",
+  newThread: null,
+  harnesses: null,
+  commands: [],
+  drafts: {},
+  settings: null,
+  switcherOpen: false,
+  onboardingOpen: false,
+  sidebarHidden: stored(STORAGE.sidebar) === "1",
+  toasts: [],
+  theme: (stored(STORAGE.theme) as AppState["theme"]) ?? "system",
+}));
+
+const set = useApp.setState;
+const get = useApp.getState;
+
+function updateThread(id: string, fn: (thread: ThreadState) => ThreadState) {
+  set((state) => {
+    const thread = state.threads[id];
+    if (!thread) return state;
+    const next = fn(thread);
+    return next === thread ? state : { threads: { ...state.threads, [id]: next } };
+  });
+}
+
+export function toast(text: string, tone: Toast["tone"] = "info") {
+  const id = localId("toast");
+  set((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, tone }] }));
+  setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 3200);
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// ---------------------------------------------------------------- connection
+
+let connection: AcpConnection | null = null;
+let transport: Transport | null = null;
+/** Sessions whose `session/load` replay is arriving. */
+const loading = new Set<string>();
+
+export function engine(): AcpConnection {
+  if (!connection) throw new Error("The engine is not connected.");
+  return connection;
+}
+
+/** Start the transport once; every engine (re)start then gets a fresh ACP connection. */
+export async function connect(next: Transport): Promise<void> {
+  transport = next;
+  set({ status: "connecting", transport: next.name, statusDetail: undefined });
+  try {
+    await next.start((event) => {
+      if (event.type === "line") connection?.receive(event.line);
+      else if (event.type === "log") set((s) => ({ engineLog: [...s.engineLog.slice(-400), event.line] }));
+      else if (event.type === "closed") connection?.close(event.reason);
+      // The shell (re)started the engine, after a crash too: initialize a fresh connection.
+      else if (event.type === "open") void handshake();
+    });
+  } catch (error) {
+    set({ status: "closed", statusDetail: errorText(error) });
+  }
+}
+
+async function handshake(): Promise<void> {
+  connection?.close("The engine restarted.");
+  const conn = new AcpConnection((line) => transport?.send(line));
+  connection = conn;
+  conn.onInbound((message) => {
+    if (connection === conn) void handleInbound(message);
+  });
+  set({ status: "connecting", statusDetail: undefined });
+  try {
+    const result = await conn.request(Method.initialize, initializeParams(APP_VERSION), 20_000);
+    const agent = parseAgentInfo(result);
+    set({ agent, status: "ready", statusDetail: undefined });
+    // Threads that were open lost their engine-side state with the old process.
+    set((s) => ({
+      threads: Object.fromEntries(
+        Object.entries(s.threads).map(([id, t]) => [
+          id,
+          { ...t, loaded: false, running: false, permissions: [] },
+        ]),
+      ),
+    }));
+    await Promise.all([refreshSessions(), refreshHarnesses()]);
+    const selected = get().selectedId;
+    if (selected) void openThread(selected);
+  } catch (error) {
+    set({ status: "closed", statusDetail: errorText(error) });
+  }
+}
+
+export async function restartEngine(): Promise<void> {
+  if (!transport) return;
+  set({ status: "connecting", statusDetail: "Restarting the engine…" });
+  await transport.restart().catch((error) => set({ status: "closed", statusDetail: errorText(error) }));
+}
+
+async function handleInbound(message: Inbound) {
+  switch (message.type) {
+    case "closed":
+      set((s) => ({
+        status: "closed",
+        statusDetail: message.reason,
+        threads: Object.fromEntries(
+          Object.entries(s.threads).map(([id, t]) => [
+            id,
+            t.running ? finishTurn(t, "failed", Date.now(), "The engine stopped during this turn.") : t,
+          ]),
+        ),
+      }));
+      return;
+    case "notification":
+      if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
+      return;
+    case "request":
+      if (message.method === Method.requestPermission) {
+        const request = parsePermissionRequest(message.id, message.params);
+        if (!request || !get().threads[request.sessionId]) {
+          connection?.respond(message.id, permissionCancelled);
+          return;
+        }
+        updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
+        if (request.sessionId !== get().selectedId) {
+          toast(request.question ? "A thread has a question" : "A thread needs approval", "warning");
+        }
+        return;
+      }
+      // Nothing else is advertised; answer so the engine never waits.
+      connection?.respondError(message.id, -32601, `Method not found: ${message.method}`);
+      return;
+  }
+}
+
+function onSessionUpdate(params: JsonObject) {
+  const sessionId = str(params.sessionId);
+  if (!sessionId) return;
+  const update = parseSessionUpdate(params);
+  if (update.kind === "commands") {
+    set({ commands: update.commands });
+    return;
+  }
+  if (isReportUpdate(params) && update.kind === "agent") {
+    toast(update.text.trim().split("\n")[0] ?? "Done");
+    return;
+  }
+  if (update.kind === "title") {
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, title: update.title } : x)),
+    }));
+  }
+  updateThread(sessionId, (t) => applyUpdate(t, update));
+}
+
+// ---------------------------------------------------------------- sessions
+
+export async function refreshSessions(): Promise<void> {
+  const conn = connection;
+  if (!conn || !get().agent?.listSessions) {
+    set({ sessionsLoaded: true });
+    return;
+  }
+  try {
+    const all: SessionSummary[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const params: JsonObject = cursor ? { cursor } : {};
+      const result = parseSessionList(await conn.request(Method.sessionList, params, 15_000));
+      all.push(...result.sessions);
+      cursor = result.nextCursor;
+      if (!cursor) break;
+    }
+    set((s) => {
+      // Threads started here that the engine does not list yet (it lists a session once it saved history).
+      const listed = new Set(all.map((x) => x.id));
+      const started = s.sessions.filter((x) => !listed.has(x.id) && s.threads[x.id]);
+      const sessions = byActivity([...started, ...all]);
+      return {
+        sessions,
+        sessionsLoaded: true,
+        projectCwd: s.projectCwd || sessions[0]?.cwd || "",
+      };
+    });
+  } catch (error) {
+    set({ sessionsLoaded: true });
+    toast(`Could not list threads: ${errorText(error)}`, "warning");
+  }
+}
+
+export function selectThread(id: string | null) {
+  set({ selectedId: id, switcherOpen: false, settings: null });
+  if (id) void openThread(id);
+}
+
+export function startNewThread(cwd?: string) {
+  const s = get();
+  const projectCwd = cwd ?? (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
+  set({ selectedId: null, projectCwd, settings: null, switcherOpen: false, newThread: null });
+  if (projectCwd) store(STORAGE.project, projectCwd);
+}
+
+export function setProjectCwd(cwd: string) {
+  set({ projectCwd: cwd });
+  store(STORAGE.project, cwd);
+}
+
+async function openThread(id: string) {
+  const conn = connection;
+  const existing = get().threads[id];
+  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return;
+  const summary = get().sessions.find((x) => x.id === id);
+  const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
+  loading.add(id);
+  set((s) => ({
+    threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
+  }));
+  try {
+    const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
+    updateThread(id, (t) => ({
+      ...finishLoad(t),
+      configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
+      harness: parseSessionHarness(result) ?? t.harness,
+    }));
+  } catch (error) {
+    updateThread(id, (t) => ({ ...finishLoad(t), error: `Could not open this thread: ${errorText(error)}` }));
+  } finally {
+    loading.delete(id);
+  }
+}
+
+export async function closeThread(id: string) {
+  try {
+    await connection?.request(Method.sessionClose, { sessionId: id }, 10_000);
+  } catch {
+    // Closing is best effort.
+  }
+}
+
+/** Creates a thread with the new-thread choice (or the default harness), and selects it. */
+async function createThread(): Promise<string> {
+  const conn = engine();
+  const s = get();
+  const cwd = s.projectCwd;
+  if (!cwd) throw new Error("Choose a project folder for this thread first.");
+  const choice = s.newThread;
+  const params: JsonObject = { cwd, mcpServers: [] };
+  if (choice && !s.harnesses?.unsupported) {
+    const meta: JsonObject = { harness: choice.harness };
+    if (choice.model) meta.model = choice.model;
+    if (choice.effort) meta.effort = choice.effort;
+    params._meta = { rustcode: meta };
+  }
+  const result = (await conn.request(Method.sessionNew, params, 60_000)) as JsonObject;
+  const id = str(result.sessionId);
+  if (!id) throw new Error("The engine did not return a session id.");
+  const thread: ThreadState = {
+    ...emptyThread(id, cwd),
+    loaded: true,
+    configOptions: parseConfigOptions(result.configOptions),
+    harness: parseSessionHarness(result),
+  };
+  set((st) => ({
+    threads: { ...st.threads, [id]: thread },
+    selectedId: id,
+    newThread: null,
+    sessions: [{ id, cwd, updatedAt: Date.now(), harness: thread.harness?.id }, ...st.sessions],
+  }));
+  // A model or effort the user picked before the thread existed applies now (built-in threads take it this way).
+  if (choice && s.harnesses?.unsupported) {
+    if (choice.model) await setConfigOption(id, "model", choice.model);
+    if (choice.effort) await setConfigOption(id, "effort", choice.effort);
+  }
+  return id;
+}
+
+// ---------------------------------------------------------------- turns
+
+export function setDraft(key: string, text: string) {
+  set((s) => ({ drafts: { ...s.drafts, [key]: text } }));
+}
+
+/** ⏎: send, or queue behind a running turn. */
+export async function submit(text: string): Promise<void> {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  let id = get().selectedId;
+  try {
+    if (!id) id = await createThread();
+  } catch (error) {
+    toast(errorText(error), "warning");
+    return;
+  }
+  const thread = get().threads[id];
+  if (!thread) return;
+  if (trimmed === "/cancel") {
+    await cancel(id);
+    return;
+  }
+  if (thread.running) {
+    updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
+    return;
+  }
+  await runPrompt(id, trimmed);
+}
+
+/** ⌘⏎: hand the running turn a message to read after its current step, else send. */
+export async function steerOrSubmit(text: string): Promise<boolean> {
+  const id = get().selectedId;
+  const thread = id ? get().threads[id] : undefined;
+  const trimmed = text.trim();
+  if (!id || !thread?.running || !canSteer(thread)) {
+    await submit(text);
+    return true;
+  }
+  if (!trimmed) {
+    const next = thread.queue[0];
+    if (next) await sendQueuedNow(id, next.id);
+    return true;
+  }
+  if (await steer(id, trimmed)) return true;
+  updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
+  toast("Queued: the turn is waiting for you");
+  return true;
+}
+
+export function canSteer(thread: ThreadState): boolean {
+  if (!get().agent?.steer) return false;
+  return !thread.harness || thread.harness.capabilities.steer === "live";
+}
+
+async function steer(id: string, text: string): Promise<boolean> {
+  try {
+    const result = (await engine().request(
+      Method.steer,
+      { sessionId: id, text },
+      10_000,
+    )) as JsonObject | null;
+    if (result?.accepted !== true) return false;
+    updateThread(id, (t) => appendSteer(t, text));
+    toast("Steering: read after the current step");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function sendQueuedNow(id: string, queuedId: string) {
+  const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
+  if (!item) return;
+  if (await steer(id, item.text)) {
+    removeQueued(id, queuedId);
+  } else {
+    toast("The turn can't take it now. It stays queued");
+  }
+}
+
+export function removeQueued(id: string, queuedId: string) {
+  updateThread(id, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== queuedId) }));
+}
+
+async function runPrompt(id: string, text: string): Promise<void> {
+  const conn = engine();
+  updateThread(id, (t) => beginTurn(t, text));
+  set((s) => ({
+    sessions: byActivity(
+      s.sessions.map((x) =>
+        x.id === id
+          ? { ...x, updatedAt: Date.now(), title: x.title ?? text.split("\n")[0]?.slice(0, 80) }
+          : x,
+      ),
+    ),
+  }));
+  let outcome: "completed" | "cancelled" | "failed" = "completed";
+  let failure: string | undefined;
+  let unused: string[] = [];
+  try {
+    const result = (await conn.request(Method.sessionPrompt, {
+      sessionId: id,
+      prompt: [{ type: "text", text }],
+    })) as JsonObject | null;
+    if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
+    const meta = (result?._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined;
+    unused = Array.isArray(meta?.unusedSteers)
+      ? meta.unusedSteers.filter((x): x is string => typeof x === "string")
+      : [];
+  } catch (error) {
+    outcome = "failed";
+    failure = errorText(error);
+  }
+  updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
+  void refreshSessions();
+  if (outcome === "completed" && id !== get().selectedId) toast("A thread finished", "success");
+  // A queued message starts at once, so "working" stays up across the hand-off.
+  const next = get().threads[id]?.queue[0];
+  if (outcome === "completed" && next) {
+    removeQueued(id, next.id);
+    await runPrompt(id, next.text);
+  }
+}
+
+export async function cancel(id = get().selectedId): Promise<void> {
+  if (!id || !connection) return;
+  const thread = get().threads[id];
+  if (!thread?.running) return;
+  try {
+    connection.notify(Method.sessionCancel, { sessionId: id });
+    // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
+    for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
+    updateThread(id, (t) => ({ ...t, permissions: [] }));
+  } catch (error) {
+    toast(errorText(error), "warning");
+  }
+}
+
+export async function setConfigOption(id: string, configId: string, value: string | boolean): Promise<void> {
+  const params: JsonObject =
+    typeof value === "boolean"
+      ? { sessionId: id, configId, type: "boolean", value }
+      : { sessionId: id, configId, value };
+  try {
+    const result = (await engine().request(
+      Method.sessionSetConfigOption,
+      params,
+      15_000,
+    )) as JsonObject | null;
+    if (result?.configOptions) {
+      updateThread(id, (t) => ({ ...t, configOptions: parseConfigOptions(result.configOptions) }));
+    }
+  } catch (error) {
+    toast(`Could not change ${configId}: ${errorText(error)}`, "warning");
+  }
+}
+
+// ---------------------------------------------------------------- approvals
+
+/** Answer exactly this request; it leaves the queue before the reply, so a double click cannot answer the next. */
+function reply(request: PermissionRequest, result: JsonObject) {
+  updateThread(request.sessionId, (t) => ({
+    ...t,
+    permissions: t.permissions.filter((p) => p.rpcId !== request.rpcId),
+  }));
+  connection?.respond(request.rpcId, result);
+}
+
+export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
+  reply(request, option ? permissionSelected(option.id) : permissionCancelled);
+}
+
+export function answerQuestionOptions(request: PermissionRequest, options: PermissionOption[]) {
+  if (!options.length) return;
+  reply(request, options.length === 1 ? permissionSelected(options[0]!.id) : questionOptionsAnswer(options));
+}
+
+export function answerQuestionText(request: PermissionRequest, text: string) {
+  const carrier = request.options.find(
+    (o) => o.kind === "allow_once" || o.kind === "allow_always" || !o.kind,
+  );
+  if (!carrier || !text.trim()) return;
+  reply(request, questionTextAnswer(text.trim(), carrier));
+}
+
+// ---------------------------------------------------------------- harnesses
+
+export async function refreshHarnesses(): Promise<HarnessSnapshot | null> {
+  const conn = connection;
+  if (!conn) return null;
+  try {
+    const snapshot = parseHarnessSnapshot(await conn.request(Method.harnesses, {}, 15_000));
+    set({ harnesses: snapshot });
+    if (!snapshot.onboarded) set({ onboardingOpen: true });
+    return snapshot;
+  } catch (error) {
+    // An engine without the harness layer: the built-in harness only, no onboarding.
+    const snapshot = fallbackHarnessSnapshot();
+    if (!(error instanceof RpcError && error.isMethodNotFound)) {
+      toast(`Could not read harnesses: ${errorText(error)}`, "warning");
+    }
+    set({ harnesses: snapshot });
+    return snapshot;
+  }
+}
+
+async function harnessCall(method: string, params: JsonObject): Promise<HarnessSnapshot | null> {
+  try {
+    const snapshot = parseHarnessSnapshot(await engine().request(method, params, 15_000));
+    set({ harnesses: snapshot });
+    return snapshot;
+  } catch (error) {
+    toast(errorText(error), "warning");
+    return null;
+  }
+}
+
+export const setHarnessEnabled = (id: string, enabled: boolean) =>
+  harnessCall(Method.harnessSet, { id, enabled });
+export const addHarness = (id: string, name: string, command: string[]) =>
+  harnessCall(Method.harnessSet, { id, name, kind: "acp", command, enabled: true });
+export const removeHarness = (id: string) => harnessCall(Method.harnessRemove, { id });
+export const setDefaultHarness = (choice: NewThreadChoice) =>
+  harnessCall(Method.harnessDefault, { harness: choice.harness, model: choice.model, effort: choice.effort });
+export const completeOnboarding = async () => {
+  const snapshot = await harnessCall(Method.onboardingComplete, {});
+  if (snapshot) set({ onboardingOpen: false });
+};
+
+/** "Test": ask the harness for its models. Throws the harness's error so the card can show it. */
+export async function fetchHarnessModels(id: string): Promise<void> {
+  const result = (await engine().request(Method.harnessModels, { harness: id }, 60_000)) as JsonObject | null;
+  const models = parseHarnessModels(result?.models as Json);
+  set((s) =>
+    s.harnesses
+      ? {
+          harnesses: {
+            ...s.harnesses,
+            harnesses: s.harnesses.harnesses.map((h) =>
+              h.id === id ? { ...h, models, auth: h.auth === "unknown" ? "ok" : h.auth, error: null } : h,
+            ),
+          },
+        }
+      : s,
+  );
+  // The engine may have learned more (auth, version); take its snapshot too.
+  void refreshHarnesses();
+}
+
+export function setNewThreadChoice(choice: NewThreadChoice | null) {
+  set({ newThread: choice });
+}
+
+// ---------------------------------------------------------------- UI
+
+export function openSettings(section: SettingsSection | null) {
+  set({ settings: section, switcherOpen: false });
+}
+
+export function setSwitcher(open: boolean) {
+  set({ switcherOpen: open });
+}
+
+export function setOnboarding(open: boolean) {
+  set({ onboardingOpen: open, settings: open ? null : get().settings });
+}
+
+export function toggleSidebar() {
+  const hidden = !get().sidebarHidden;
+  set({ sidebarHidden: hidden });
+  store(STORAGE.sidebar, hidden ? "1" : "0");
+}
+
+export function setTheme(theme: AppState["theme"]) {
+  set({ theme });
+  store(STORAGE.theme, theme);
+}
+
+/** Generic request for Settings pages (capabilities, connections). */
+export async function request<T = Json>(
+  method: string,
+  params: JsonObject = {},
+  timeoutMs = 15_000,
+): Promise<T> {
+  return engine().request<T>(method, params, timeoutMs);
+}
+
+/** Test hook: reset to a clean slate. */
+export function resetForTests() {
+  connection = null;
+  transport = null;
+  loading.clear();
+  set({
+    status: "connecting",
+    engineLog: [],
+    sessions: [],
+    sessionsLoaded: false,
+    threads: {},
+    selectedId: null,
+    projectCwd: "",
+    newThread: null,
+    harnesses: null,
+    commands: [],
+    drafts: {},
+    settings: null,
+    switcherOpen: false,
+    onboardingOpen: false,
+    toasts: [],
+    agent: undefined,
+  });
+}
