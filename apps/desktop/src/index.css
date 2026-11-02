@@ -84,6 +84,9 @@
   --rc-surface: #f0f0f1;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e8e8ea;
+  /* The composer's frost: white glass in light mode, a pale tint of the text in dark. */
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 62%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 78%, transparent);
   --rc-border: #0000000f;
   --rc-border-strong: #0000001f;
   --rc-text: #171717;
@@ -110,6 +113,8 @@
     --rc-surface: #18181a;
     --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
+    --rc-composer-bg: color-mix(in srgb, var(--rc-text) 7%, transparent);
+    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 10%, transparent);
     --rc-border: #ffffff0f;
     --rc-border-strong: #ffffff1c;
     --rc-text: #ededed;
@@ -135,6 +140,8 @@
   --rc-surface: #18181a;
   --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
+  --rc-composer-bg: color-mix(in srgb, var(--rc-text) 7%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 10%, transparent);
   --rc-border: #ffffff0f;
   --rc-border-strong: #ffffff1c;
   --rc-text: #ededed;
@@ -552,10 +559,15 @@
  * so its controls (fill-subtle pills) sit one step above it, not two.
  */
 .rc-composer {
-  background: var(--rc-glass-bg-strong);
+  background: var(--rc-composer-bg);
+  box-shadow:
+    inset 0 1px 0 0 color-mix(in srgb, var(--rc-text) 6%, transparent),
+    0 -10px 28px -14px var(--rc-shadow-color),
+    0 10px 28px -12px var(--rc-shadow-color),
+    0 0 0 1px var(--rc-border);
 }
 .rc-composer:focus-within {
-  background: color-mix(in srgb, var(--rc-surface-2) 90%, transparent);
+  background: var(--rc-composer-bg-focus);
 }
 .rc-toast-out {
   animation: rc-out 120ms ease-in forwards;
@@ -621,7 +633,9 @@
   --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 45%, transparent);
 }
 .rc-composer-tray {
-  background: var(--rc-surface-2);
+  background: color-mix(in srgb, var(--rc-surface-2) 70%, transparent);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
 }
 
 .rc-fade-in {
@@ -658,6 +672,8 @@
     --rc-glass-bg: var(--rc-surface-2);
     --rc-glass-bg-strong: var(--rc-surface-2);
     --rc-glass-filter: none;
+    --rc-composer-bg: var(--rc-surface-2);
+    --rc-composer-bg-focus: var(--rc-surface-2);
   }
   :root,
   .rc-header-glass.rc-frost::before {
@@ -671,6 +687,8 @@
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
   --rc-glass-filter: none;
+  --rc-composer-bg: var(--rc-surface-2);
+  --rc-composer-bg-focus: var(--rc-surface-2);
 }
 :root.reduce-transparency .rc-composer:focus-within {
   background: var(--rc-surface-2);
