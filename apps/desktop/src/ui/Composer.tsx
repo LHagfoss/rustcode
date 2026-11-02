@@ -92,6 +92,17 @@ function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   });
 }
 
+/**
+ * Whether a popover, menu or dialog is open over the app. Radix closes those
+ * on Escape from a document listener, after the field's own handler has run,
+ * so the composer checks first. Tooltips do not count.
+ */
+function overlayOpen(): boolean {
+  return !!document.querySelector(
+    '[data-radix-popper-content-wrapper]:not(:has([role="tooltip"])), [role="dialog"], [role="alertdialog"]',
+  );
+}
+
 /** Browser files (paste, drop, the file input) as attachments. */
 async function attachmentsFromFiles(
   files: File[],
@@ -334,6 +345,9 @@ export const Composer = memo(function Composer({
       return;
     }
     if (e.key === "Escape") {
+      // The topmost thing goes first: an open popover, menu or dialog takes this Escape for
+      // itself, and the draft and the running turn stay as they are (issue 2804).
+      if (overlayOpen()) return;
       e.preventDefault();
       if (draft || hasExtras(extras)) {
         update("");
