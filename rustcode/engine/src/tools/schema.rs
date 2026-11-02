@@ -2527,9 +2527,9 @@ pub(crate) fn append_visualization_hint(
 /// Guidance for `rustcode-ui v1` blocks (#2484), sent only to frontends that
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
-This app can run one small interactive component in a reply, written as a ```rustcode-ui v1 fence of self-contained HTML (no network). \
-Use it, even unasked, when controls such as sorting, filtering, sliders or toggles let the reader explore what a static chart cannot show; \
-for a plain chart, table or tree use rustcode-viz. Before writing one, load the `smart-ui` skill for the format and limits.\n\n";
+This app runs small interactive components in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat output. \
+Use one, even unasked, when controls (sort, filter, sliders, toggles, follow-up buttons) let the reader explore what a static chart cannot; \
+otherwise use rustcode-viz or Markdown. First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
 
 /// Sent instead of [`SMART_UI_PROMPT_HINT`] when the frontend could run the
 /// blocks but the user has the setting off. Without it an agent asked for

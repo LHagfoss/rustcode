@@ -1,0 +1,35 @@
+[package]
+name = "rustcode-desktop"
+version = "0.1.0"
+description = "RustCode desktop app: a Tauri shell around the rustcode --acp engine"
+edition = "2021"
+publish = false
+
+# Its own workspace: the repository's root workspace excludes this crate, so
+# the engine's `cargo check --workspace` never builds the desktop shell.
+[workspace]
+
+[lib]
+name = "rustcode_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.5", features = [] }
+tauri-plugin-dialog = "=2.8.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+# Link previews: fetched here, never by the webview (src/links.rs).
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["net", "time"] }
+# The workspace terminal (src/pty.rs).
+portable-pty = "0.9"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[profile.dev]
+incremental = false

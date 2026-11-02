@@ -1,0 +1,50 @@
+{
+  "name": "rustcode-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:web": "bun scripts/dev-web.ts",
+    "dev:mock": "VITE_TRANSPORT=mock vite",
+    "bridge": "bun scripts/engine-bridge.ts",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p .",
+    "lint": "biome check src scripts",
+    "format": "biome check --write src scripts",
+    "test": "bun test src",
+    "tauri": "tauri",
+    "bundle:engine": "bun scripts/bundle-engine.ts",
+    "bundle": "bun scripts/bundle-engine.ts --release && tauri build --config src-tauri/tauri.bundle.conf.json",
+    "bundle:debug": "bun scripts/bundle-engine.ts && tauri build --debug --config src-tauri/tauri.bundle.conf.json",
+    "check": "bun run typecheck && bun run lint && bun run test && bun run build"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "3.14.25",
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-dialog": "2.8.4",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "chart.js": "4.5.1",
+    "lucide-react": "1.66.0",
+    "radix-ui": "1.8.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "shiki": "4.6.0",
+    "zustand": "5.0.16"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.4",
+    "@tailwindcss/vite": "4.3.3",
+    "@tauri-apps/cli": "2.12.4",
+    "@types/bun": "1.4.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

@@ -22,6 +22,7 @@ use crate::app::{AppState, ChatMessage};
 mod desktop_control;
 pub mod discord_rpc;
 pub mod doctor;
+pub mod harness;
 mod keep_awake;
 pub mod mcp;
 mod memory;

@@ -19,23 +19,22 @@ rustcode/
 │   └── rustcode-loop-detect/  semantic loop and progress guards
 ├── engine/     Sources of the root `rustcode` crate (library only): agent
 │               loop, tools, config, session state, ACP, daemon, controller.
-├── tui/        `rustcode-tui`, the terminal frontend. Owns the `rustcode`
-│               binary (TUI + headless/ACP/daemon CLI modes); depends on the
-│               root library, never the reverse.
-└── desktop/    `rustcode-app`, the native GPUI shell.
+└── tui/        `rustcode-tui`, the terminal frontend. Owns the `rustcode`
+                binary (TUI + headless/ACP/daemon CLI modes); depends on the
+                root library, never the reverse.
 ```
 
-The SwiftUI macOS app in `macos/` is a separate Swift package that runs the
-engine over ACP; its targets, data flow and state ownership are mapped in
+The desktop app in `apps/desktop` (Tauri + React, see [desktop](desktop.md))
+and the SwiftUI macOS app it replaces in `macos/` both run the engine over
+ACP. The Swift app's targets, data flow and state ownership are mapped in
 [macOS app architecture](architecture/macos-app.md).
 
 The root `Cargo.toml` is both the workspace manifest and the `rustcode`
 package manifest; the engine lives in `rustcode/engine/src` and is declared
 with `[lib] path`. There are no Cargo features left: the terminal stack
 (ratatui, crossterm, syntect, pulldown-cmark) lives only in `rustcode/tui`.
-Nothing under `rustcode/core`, `rustcode/engine`, or `rustcode/desktop`
-may reference it; `cargo tree -p rustcode-app -i ratatui` must match
-nothing. See `docs/frontends.md` for the frontend contract and
+Nothing under `rustcode/core` or `rustcode/engine` may reference it;
+`cargo tree -p rustcode -i ratatui` must match nothing. See `docs/frontends.md` for the frontend contract and
 `docs/mobile.md` for the remote-only mobile decision.
 
 ## Workspace crates

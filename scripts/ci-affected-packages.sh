@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read changed paths on stdin and print the affected non-desktop Cargo packages.
+# Read changed paths on stdin and print the affected Cargo packages.
 # Output is a fixed list of Cargo arguments, safe to pass as shell words.
 set -euo pipefail
 
@@ -29,7 +29,7 @@ while IFS= read -r path; do
 done
 
 if "$all"; then
-    echo '--workspace --exclude rustcode-app'
+    echo '--workspace'
     exit 0
 fi
 

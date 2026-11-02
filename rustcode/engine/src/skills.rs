@@ -868,6 +868,18 @@ mod tests {
         let content = builtin_skill_content("smart-ui").unwrap();
         assert!(content.contains("```rustcode-ui v1"));
         assert!(content.len() < MAX_SKILL_CONTENT_BYTES);
+        let tokens = crate::network::compaction::estimate_tokens(&content);
+        assert!(tokens < 1_100, "the smart-ui skill is {tokens} tokens");
+        // The runtime the clients inject (docs/smart-ui.md), named exactly.
+        for name in [
+            "--rc-series-8",
+            ".rc-gap-4",
+            "rustcode-lib:chart.js",
+            "window.rustcode?.send",
+            "onThemeChange",
+        ] {
+            assert!(content.contains(name), "the skill names {name}");
+        }
 
         let own = test_metadata("smart-ui", "my own");
         let skills = with_builtin_skills(vec![own]);

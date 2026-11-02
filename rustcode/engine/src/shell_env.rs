@@ -56,6 +56,17 @@ pub fn env_var(name: &str) -> Option<String> {
         .filter(|v| !v.trim().is_empty())
 }
 
+/// The login shell's value of `name`, ignoring the process environment.
+/// External harness commands are looked up on this `PATH` too: an app
+/// launched from the Dock inherits a much shorter one than the terminal.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn login_shell_var(name: &str) -> Option<String> {
+    shell_import()
+        .get(name)
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+}
+
 /// Like [`env_var`] but reports where the value came from (never the value).
 pub fn env_var_source(name: &str) -> EnvSource {
     if let Ok(val) = std::env::var(name)

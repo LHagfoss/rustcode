@@ -1,0 +1,688 @@
+// The composer, after ContentView.swift's Composer: one floating rounded
+// box with the queue, attachments, the field (with a slash-command token and
+// pasted link chips in front of it) and a button row: the folder, Files, the
+// harness, the model pill and send/queue/stop. Keys follow the SwiftUI app:
+// ⏎ send (or queue while running), ⇧⏎ newline, ⌘⏎ steer, Esc closes
+// suggestions, then clears the draft, then stops the turn.
+
+import { ArrowUp, ChevronDown, FileText, Folder, ListEnd, Paperclip, Pencil, Square, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { projectName, type SlashCommand } from "../acp/types";
+import { onFileDrop, pickFiles, pickFolder, readImage } from "../lib/native";
+import {
+  type Attachment,
+  type ComposeExtras,
+  emptyExtras,
+  hasExtras,
+  IMAGE_TYPES,
+  imageMime,
+  MAX_IMAGE_BYTES,
+  MAX_INLINE_FILE_BYTES,
+  pastedUrl,
+} from "../state/compose";
+import { controlDisabledReason } from "../state/harness";
+import {
+  acceptsImages,
+  cancel,
+  cancelEdit,
+  canSteer,
+  removeQueued,
+  sendQueuedNow,
+  setDraft,
+  setExtras,
+  setProjectCwd,
+  steerOrSubmit,
+  submit,
+  threadHarness,
+  toast,
+  useApp,
+} from "../state/store";
+import { localId, type ThreadState } from "../state/thread";
+import { AgentPill } from "./AgentViews";
+import { LinkChip } from "./LinkChip";
+import { ModelPicker } from "./ModelPicker";
+import { cx, Tooltip } from "./primitives";
+
+function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
+  if (!draft.startsWith("/") || /\s/.test(draft)) return [];
+  const typed = draft.toLowerCase();
+  const prefixed = commands.filter((c) => c.name.toLowerCase().startsWith(typed));
+  const others =
+    typed.length > 1
+      ? commands.filter((c) => !prefixed.includes(c) && c.name.toLowerCase().includes(typed.slice(1)))
+      : [];
+  return [...prefixed, ...others].slice(0, 40);
+}
+
+const LINE = 18;
+
+function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the file."));
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(as === "base64" ? result.slice(result.indexOf(",") + 1) : result);
+    };
+    if (as === "base64") reader.readAsDataURL(file);
+    else reader.readAsText(file);
+  });
+}
+
+/** Browser files (paste, drop, the file input) as attachments. */
+async function attachmentsFromFiles(
+  files: File[],
+  images: boolean,
+  harnessName: string,
+): Promise<Attachment[]> {
+  const out: Attachment[] = [];
+  for (const file of files) {
+    const mime = Object.values(IMAGE_TYPES).includes(file.type) ? file.type : imageMime(file.name);
+    if (mime) {
+      if (!images) {
+        toast(`${harnessName} does not take images`, "warning");
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast(`${file.name || "The image"} is over 20 MB`, "warning");
+        continue;
+      }
+      out.push({
+        id: localId("image"),
+        kind: "image",
+        name: file.name || "Pasted image",
+        mimeType: mime,
+        data: await readFileAs(file, "base64"),
+      });
+    } else if (file.size <= MAX_INLINE_FILE_BYTES) {
+      out.push({ id: localId("file"), kind: "file", name: file.name, text: await readFileAs(file, "text") });
+    } else {
+      toast(`${file.name} is too big to send inline here; the app attaches it by path`, "warning");
+    }
+  }
+  return out;
+}
+
+/** Paths from the open panel or a drop in the app: images are read, other files go by path. */
+async function attachmentsFromPaths(
+  paths: string[],
+  images: boolean,
+  harnessName: string,
+): Promise<Attachment[]> {
+  const out: Attachment[] = [];
+  for (const path of paths) {
+    const name = path.split("/").pop() ?? path;
+    if (imageMime(name) && images) {
+      try {
+        const image = await readImage(path);
+        out.push({ id: localId("image"), kind: "image", ...image });
+      } catch (error) {
+        toast(
+          `Could not attach ${name}: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      }
+    } else {
+      if (imageMime(name)) toast(`${harnessName} does not take images; ${name} goes as a path`);
+      out.push({ id: localId("file"), kind: "file", name, path });
+    }
+  }
+  return out;
+}
+
+export function Composer({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
+  const key = thread?.id ?? "new";
+  const draft = useApp((s) => s.drafts[key] ?? "");
+  const extras = useApp((s) => s.extras[key] ?? emptyExtras);
+  const editing = useApp((s) => s.editing[key]);
+  const commands = useApp((s) => s.commands);
+  const projectCwd = useApp((s) => s.projectCwd);
+  useApp((s) => s.harnesses); // re-render when harness capabilities arrive
+  const status = useApp((s) => s.status);
+  const field = useRef<HTMLTextAreaElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [selected, setSelected] = useState(0);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [dropping, setDropping] = useState(false);
+
+  const running = thread?.running ?? false;
+  const steerable = thread ? canSteer(thread) : false;
+  const list = useMemo(
+    () => (dismissed === draft || extras.command ? [] : suggestions(draft, commands)),
+    [draft, commands, dismissed, extras.command],
+  );
+  const harness = threadHarness(thread);
+  const harnessName = harness?.name ?? "This harness";
+  const images = acceptsImages(thread);
+  const cancelReason = controlDisabledReason("cancel", thread?.harness?.capabilities, harnessName);
+  const cwd = thread?.cwd ?? projectCwd;
+  const canSend = !!draft.trim() || hasExtras(extras);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refocus on thread change
+  useEffect(() => {
+    field.current?.focus();
+  }, [key]);
+
+  // Grow from 2 to 10 lines, then scroll.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measure on every draft change
+  useLayoutEffect(() => {
+    const el = field.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE * 2), LINE * 10)}px`;
+  }, [draft]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
+  useEffect(() => setSelected(0), [list.length]);
+
+  const update = (text: string) => setDraft(key, text);
+  const change = (fn: (e: ComposeExtras) => ComposeExtras) => setExtras(key, fn);
+  const attach = (more: Attachment[]) => {
+    if (more.length) change((e) => ({ ...e, attachments: [...e.attachments, ...more] }));
+  };
+
+  // Files dropped on the app window arrive as paths from the shell.
+  const dropped = useRef<(paths: string[]) => void>(() => undefined);
+  dropped.current = (paths) => void attachmentsFromPaths(paths, images, harnessName).then(attach);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let live = true;
+    void onFileDrop((event) => {
+      setDropping(event.type === "over");
+      if (event.type === "drop" && event.paths.length) dropped.current(event.paths);
+    }).then((unlisten) => {
+      if (live) stop = unlisten;
+      else unlisten();
+    });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, []);
+
+  const send = (steer: boolean) => {
+    const text = draft;
+    const sentExtras = extras;
+    if (!text.trim() && !hasExtras(sentExtras) && !(steer && running)) return;
+    update("");
+    change(() => emptyExtras);
+    const sending = steer && !hasExtras(sentExtras) ? steerOrSubmit(text) : submit(text, sentExtras);
+    void sending.then((sent) => {
+      // A thread that could not start keeps the message for another try.
+      if (!sent && !useApp.getState().drafts[key]) {
+        update(text);
+        change(() => sentExtras);
+      }
+    });
+  };
+
+  const complete = (command: SlashCommand, run: boolean) => {
+    if (run && !command.takesArguments) {
+      update("");
+      void submit(command.name);
+    } else {
+      // A command that wants arguments becomes the token in front of the field.
+      change((e) => ({ ...e, command }));
+      update("");
+    }
+  };
+
+  const onChange = (text: string) => {
+    // `/name ` typed out becomes the token too, as in the SwiftUI app.
+    const typed = /^(\/\S+) (.*)$/s.exec(text);
+    const command = typed && !extras.command ? commands.find((c) => c.name === typed[1]) : undefined;
+    if (command?.takesArguments) {
+      change((e) => ({ ...e, command }));
+      update(typed![2] ?? "");
+    } else {
+      update(text);
+    }
+    setDismissed(null);
+  };
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = [...e.clipboardData.files];
+    if (files.length) {
+      e.preventDefault();
+      void attachmentsFromFiles(files, images, harnessName).then(attach);
+      return;
+    }
+    const url = pastedUrl(e.clipboardData.getData("text/plain"));
+    if (url) {
+      // A pasted link becomes a chip in front of the field; the prompt still carries the URL.
+      e.preventDefault();
+      change((x) => (x.links.includes(url) ? x : { ...x, links: [...x.links, url] }));
+    }
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (list.length) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey)) {
+        e.preventDefault();
+        const command = list[selected];
+        if (command) complete(command, e.key === "Enter");
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDismissed(draft);
+        return;
+      }
+    }
+    const el = e.currentTarget;
+    if (e.key === "Backspace" && el.selectionStart === 0 && el.selectionEnd === 0) {
+      // ⌫ at the start takes back the last chip: a link, then the command (as text).
+      if (extras.links.length) {
+        e.preventDefault();
+        change((x) => ({ ...x, links: x.links.slice(0, -1) }));
+        return;
+      }
+      if (extras.command) {
+        e.preventDefault();
+        const name = extras.command.name;
+        change((x) => ({ ...x, command: undefined }));
+        update(`${name}${draft ? ` ${draft}` : ""}`);
+        return;
+      }
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      send(e.metaKey || e.ctrlKey);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (draft || hasExtras(extras)) {
+        update("");
+        change(() => emptyExtras);
+      } else if (running) void cancel(thread?.id);
+      return;
+    }
+    if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread) {
+      const last = [...thread.items].reverse().find((i) => i.kind === "user");
+      if (last && last.kind === "user") {
+        e.preventDefault();
+        update(last.text);
+      }
+    }
+  };
+
+  const chooseFiles = () => {
+    void pickFiles(cwd).then((paths) => {
+      if (paths === null) fileInput.current?.click();
+      else void attachmentsFromPaths(paths, images, harnessName).then(attach);
+    });
+  };
+
+  const placeholder = extras.command
+    ? extras.command.description || "Arguments…"
+    : running
+      ? steerable
+        ? "⏎ queues for the next turn, ⌘⏎ steers this one…"
+        : "Queue a message…"
+      : "Message RustCode…";
+
+  return (
+    <div className="relative">
+      {list.length > 0 && (
+        <div
+          className="surface absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto rounded-[20px] border border-hairline p-1.5 rc-in"
+          role="listbox"
+          aria-label="Commands"
+        >
+          {list.map((c, i) => (
+            <button
+              key={c.name}
+              type="button"
+              role="option"
+              aria-selected={i === selected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => complete(c, true)}
+              onMouseEnter={() => setSelected(i)}
+              className={cx(
+                "flex w-full items-baseline gap-3 rounded-[14px] px-3 py-[7px] text-left",
+                i === selected && "bg-brand/18",
+              )}
+            >
+              <span className="min-w-[110px] font-semibold text-brand text-callout">{c.name}</span>
+              <span className="truncate text-callout text-fg-2">{c.description}</span>
+              {c.takesArguments && <span className="ml-auto shrink-0 text-caption text-fg-3">…</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      <div
+        className={cx(
+          "surface relative z-10 flex flex-col gap-2 rounded-[22px] p-2.5",
+          dropping && "outline-2 outline-brand outline-dashed",
+        )}
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) {
+            e.preventDefault();
+            field.current?.focus();
+          }
+        }}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("Files")) {
+            e.preventDefault();
+            setDropping(true);
+          }
+        }}
+        onDragLeave={() => setDropping(false)}
+        onDrop={(e) => {
+          if (!e.dataTransfer.files.length) return;
+          e.preventDefault();
+          setDropping(false);
+          void attachmentsFromFiles([...e.dataTransfer.files], images, harnessName).then(attach);
+        }}
+      >
+        {thread && thread.queue.length > 0 && (
+          <div className="flex flex-col gap-1.5 px-1">
+            <div className="flex items-center gap-1.5 text-caption text-brand">
+              <ListEnd size={12} />
+              <b>Queued</b>
+              <span className="text-fg-2">
+                · sent when this turn ends{steerable ? ", or now with ⌘⏎" : ""}
+              </span>
+            </div>
+            {thread.queue.map((q, i) => (
+              <div key={q.id} className="flex items-center gap-2 rounded-xl bg-fill-2 px-2 py-1.5 rc-in">
+                <span className="font-mono text-caption text-fg-3">{i + 1}</span>
+                <span className="line-clamp-2 flex-1 text-callout">
+                  {q.text || (q.extras?.attachments.length ? "Attachments" : "")}
+                </span>
+                {steerable && !q.extras?.attachments.length && (
+                  <Tooltip label="Send now: the turn reads it after its current step">
+                    <button
+                      type="button"
+                      aria-label="Send now"
+                      onClick={() => void sendQueuedNow(thread.id, q.id)}
+                      className="text-fg-2 hover:text-fg"
+                    >
+                      <ArrowUp size={13} />
+                    </button>
+                  </Tooltip>
+                )}
+                <Tooltip label="Edit">
+                  <button
+                    type="button"
+                    aria-label="Edit queued message"
+                    onClick={() => {
+                      removeQueued(thread.id, q.id);
+                      update(q.text);
+                      if (q.extras) change(() => q.extras!);
+                      field.current?.focus();
+                    }}
+                    className="text-fg-2 hover:text-fg"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                </Tooltip>
+                <Tooltip label="Remove">
+                  <button
+                    type="button"
+                    aria-label="Remove queued message"
+                    onClick={() => removeQueued(thread.id, q.id)}
+                    className="text-fg-3 hover:text-fg"
+                  >
+                    <X size={13} />
+                  </button>
+                </Tooltip>
+              </div>
+            ))}
+          </div>
+        )}
+        {editing && (
+          <div className="flex items-center gap-1.5 px-1.5 text-caption text-brand">
+            <Pencil size={11} />
+            <b>Editing a sent message</b>
+            <span className="text-fg-2">· sending takes the thread back to it</span>
+            <button
+              type="button"
+              onClick={() => {
+                cancelEdit(key);
+                update("");
+              }}
+              className="ml-auto rounded-md px-1.5 text-fg-2 hover:bg-fill-2 hover:text-fg"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+        {extras.attachments.length > 0 && (
+          <AttachmentStrip
+            attachments={extras.attachments}
+            onRemove={(id) =>
+              change((e) => ({ ...e, attachments: e.attachments.filter((a) => a.id !== id) }))
+            }
+          />
+        )}
+        <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-1.5 pt-1">
+          {extras.command && (
+            <Tooltip label={extras.command.description}>
+              <span className="flex h-[20px] shrink-0 items-center rounded-full bg-brand/15 px-2 font-semibold text-body text-brand">
+                {extras.command.name}
+              </span>
+            </Tooltip>
+          )}
+          {extras.links.map((url) => (
+            <LinkChip
+              key={url}
+              url={url}
+              onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
+            />
+          ))}
+          <textarea
+            ref={field}
+            value={draft}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            rows={2}
+            placeholder={placeholder}
+            aria-label="Message"
+            spellCheck
+            className="min-w-[160px] flex-1 basis-[160px] resize-none bg-transparent text-body leading-[18px] outline-none placeholder:text-fg-3"
+          />
+        </div>
+        <div className="flex items-center gap-1">
+          <FolderMenu thread={thread} cwd={cwd} />
+          <Tooltip
+            label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}
+          >
+            <button
+              type="button"
+              onClick={chooseFiles}
+              className="flex h-[26px] items-center gap-1.5 rounded-xl px-2.5 text-callout text-fg-2 hover:bg-fill-2"
+            >
+              <Paperclip size={12} />
+              {!compact && <span>Files</span>}
+            </button>
+          </Tooltip>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              const files = [...(e.target.files ?? [])];
+              e.target.value = "";
+              void attachmentsFromFiles(files, images, harnessName).then(attach);
+            }}
+          />
+          <AgentPill thread={thread} />
+          <span className="flex-1" />
+          {harness && !harness.builtin && (
+            <Tooltip
+              label={`${harness.name} runs this thread with its own sign-in, tools and permission rules. RustCode's sandbox does not apply.`}
+            >
+              <span className="flex h-[26px] items-center gap-1.5 rounded-xl px-2 text-callout text-fg-2">
+                <span className="size-1.5 rounded-full bg-brand" />
+                {!compact && harness.name}
+              </span>
+            </Tooltip>
+          )}
+          <ModelPicker thread={thread} compact={compact} />
+          {running && canSend && (
+            <Tooltip label="Queue for when this turn ends (⏎)">
+              <button
+                type="button"
+                aria-label="Queue message"
+                onClick={() => send(false)}
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white"
+              >
+                <ListEnd size={13} strokeWidth={2.5} />
+              </button>
+            </Tooltip>
+          )}
+          {running ? (
+            <Tooltip label={cancelReason ?? "Stop turn (Esc)"}>
+              <button
+                type="button"
+                aria-label="Stop turn"
+                disabled={!!cancelReason}
+                onClick={() => void cancel(thread?.id)}
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-gradient-to-b from-[#ff5f57] to-[#e0352b] text-white disabled:opacity-40"
+              >
+                <Square size={10} fill="currentColor" strokeWidth={0} />
+              </button>
+            </Tooltip>
+          ) : (
+            <Tooltip label="Send (⏎)">
+              <button
+                type="button"
+                aria-label="Send"
+                disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
+                onClick={() => send(false)}
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-brand-fill text-white transition-colors disabled:bg-fg-2/25"
+              >
+                <ArrowUp size={14} strokeWidth={2.75} />
+              </button>
+            </Tooltip>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttachmentStrip({
+  attachments,
+  onRemove,
+}: {
+  attachments: Attachment[];
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="flex gap-1.5 overflow-x-auto px-1 pt-0.5 pb-0.5">
+      {attachments.map((a) =>
+        a.kind === "image" ? (
+          <div key={a.id} className="group relative shrink-0">
+            <img
+              src={`data:${a.mimeType};base64,${a.data}`}
+              alt={a.name}
+              title={a.name}
+              className="size-[52px] rounded-[10px] border border-hairline object-cover"
+            />
+            <button
+              type="button"
+              aria-label={`Remove ${a.name}`}
+              onClick={() => onRemove(a.id)}
+              className="absolute -top-1 -right-1 flex size-[18px] items-center justify-center rounded-full bg-fg/70 text-chat opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            >
+              <X size={11} strokeWidth={2.5} />
+            </button>
+          </div>
+        ) : (
+          <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
+            <span className="flex h-[28px] shrink-0 items-center gap-1.5 rounded-full bg-fill-3 pr-1.5 pl-2.5 text-callout">
+              <FileText size={12} className="text-fg-2" />
+              <span className="max-w-[200px] truncate">{a.name}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${a.name}`}
+                onClick={() => onRemove(a.id)}
+                className="text-fg-3 hover:text-fg"
+              >
+                <X size={12} />
+              </button>
+            </span>
+          </Tooltip>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** The folder a thread works in: a menu for a new thread, a label once it exists. */
+function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
+  const sessions = useApp((s) => s.sessions);
+  const projects = useMemo(
+    () => [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 12),
+    [sessions],
+  );
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <Tooltip label={cwd || "Choose a folder"}>
+        <button
+          type="button"
+          disabled={!!thread}
+          onClick={() => setOpen(!open)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="flex h-[26px] items-center gap-1.5 rounded-xl px-2.5 text-callout text-fg-2 hover:bg-fill-2 disabled:hover:bg-transparent"
+        >
+          <Folder size={12} />
+          <span className="max-w-[220px] truncate">{cwd ? projectName(cwd) : "Choose a folder"}</span>
+          {!thread && <ChevronDown size={11} className="text-fg-3" />}
+        </button>
+      </Tooltip>
+      {open && (
+        <div
+          role="menu"
+          className="surface absolute bottom-full left-0 z-30 mb-2 w-[300px] rounded-[20px] border border-hairline p-1.5 rc-in"
+          onMouseLeave={() => setOpen(false)}
+        >
+          {projects.map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setProjectCwd(p);
+                setOpen(false);
+              }}
+              className={cx(
+                "flex w-full flex-col rounded-[14px] px-2.5 py-1.5 text-left hover:bg-fill-2",
+                p === cwd && "bg-brand/15",
+              )}
+            >
+              <span className="text-body text-fg">{projectName(p)}</span>
+              <span className="truncate text-caption text-fg-2" dir="rtl">
+                <bdi>{p}</bdi>
+              </span>
+            </button>
+          ))}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              void pickFolder(cwd).then((p) => p && setProjectCwd(p));
+            }}
+            className="mt-0.5 flex w-full rounded-[14px] px-2.5 py-2 text-left text-body hover:bg-fill-2"
+          >
+            Choose Folder…
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

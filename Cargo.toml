@@ -19,10 +19,10 @@ members = [
     # session state, ACP, daemon, and the terminal frontend behind `tui`.
     # Terminal frontend (TUI + CLI modes).
     "rustcode/tui",
-    # Native desktop shell (GPUI).
-    "rustcode/desktop",
 ]
 resolver = "3"
+# The Tauri desktop app is its own Cargo workspace (own lockfile and target).
+exclude = ["apps/desktop/src-tauri"]
 
 [lib]
 name = "rustcode"

@@ -2,8 +2,9 @@
 
 Smart UI ([#2484](https://github.com/LHagfoss/rustcode/issues/2484)) lets
 the agent answer with a small interactive component, such as a filterable
-table or a view driven by a few controls, that the macOS app runs in the
-transcript. It is **on by default** (it shipped opt-in, and agents almost
+table or a view driven by a few controls, that the client runs in the
+transcript: the macOS app and the desktop app (`apps/desktop`). A view reads
+like the rest of the reply: no card chrome, border or background of its own. It is **on by default** (it shipped opt-in, and agents almost
 never reached it): Settings › General › Chat › Smart UI turns it off. The engine learns the setting when it starts, so after
 switching it Settings offers **Restart Engine** (shown once no chat is
 running).
@@ -21,16 +22,18 @@ self-contained HTML fragment:
 ```rustcode-ui v1
 <title>Slowest tests</title>
 <meta name="description" content="Filter by name, click a heading to sort">
-<style> table { width: 100%; } th { color: AccentColor; cursor: pointer; } </style>
-<input id="q" placeholder="Filter"><table>…</table>
+<style> table { width: 100%; } th { color: var(--rc-accent, AccentColor); cursor: pointer; } </style>
+<input id="q" placeholder="Filter"><table class="rc-num">…</table>
 <script> /* plain JavaScript, data embedded */ </script>
 ```
 ````
 
-- `<title>` is the card's heading (default "Interactive view"), and
-  `<meta name="description">` is the line under it.
-- Styles and scripts are inline. No framework, package or build step. System
-  colors (`Canvas`, `CanvasText`, `AccentColor`) follow light and dark mode.
+- `<title>` labels the view (the macOS card's heading, default "Interactive
+  view"), and `<meta name="description">` is the line under it. The body
+  does not repeat the title.
+- Styles and scripts are inline. No framework, package or build step. Colors
+  come from the runtime's variables (below), with system colors as the
+  fallback for clients without the runtime.
 - Bundled libraries: `<script src="rustcode-lib:chart.js"></script>` is
   replaced with Chart.js 4.4.7 inline before the page loads
   (`SmartUI.expandingLibraries`). The code ships in the app
@@ -48,20 +51,51 @@ with another version all show as text. A malformed, oversized, empty or
 unfinished block shows its source with the reason. Copy and Show Source are
 on every card.
 
+## Runtime
+
+The client puts these on every page before the fragment. The names are a
+contract between the engine's `smart-ui` skill and the clients; change them
+in both.
+
+| Part | What the page gets |
+| --- | --- |
+| Base | A transparent body in the app's font and text color. Headings, paragraphs, tables, inputs, selects, buttons and code are already styled like the chat, so a view needs little CSS. |
+| CSS variables on `:root` | `--rc-text`, `--rc-muted`, `--rc-faint`, `--rc-accent`, `--rc-surface`, `--rc-separator`, `--rc-danger`, `--rc-success`, `--rc-warning`, `--rc-font`, `--rc-mono`, `--rc-radius`, `--rc-series-1` … `--rc-series-8`. They follow light and dark mode. |
+| Layout classes | `.rc-row` and `.rc-col` (flex row / column, wrapping), `.rc-grid` (auto-fit grid), `.rc-gap-1` … `.rc-gap-4`, `.rc-muted`, `.rc-mono`, `.rc-num` (tabular figures, right-aligned in tables), `.rc-card` (a quiet inner group, not an outer frame), `.rc-scroll` (bounded, scrolls inside). |
+| Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colors), so agents set no colors. A page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. System color keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
+| `window.rustcode` | `send(text)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X". It works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
+
+Which client has what:
+
+| Client | Runtime (base, variables, classes, themed Chart.js) | `window.rustcode` |
+| --- | --- | --- |
+| Desktop app | Yes | Yes |
+| macOS app | No: a transparent body with the system font and `CanvasText` only | No |
+
+The skill tells the agent to call `window.rustcode?.send(...)`, give each
+variable a fallback (`var(--rc-muted, GrayText)`) and keep the view readable
+without the classes, so one block works in both.
+
 ## Teaching the agent
 
 A client that runs blocks advertises `clientCapabilities._meta.rustcode.smartUi = 1`
 at `initialize` while the setting is on. Sessions of that engine then get a
 short `# Smart UI` section in the root system prompt: when to use Smart UI,
-the fence name, and to load the `smart-ui` skill before writing one (83
-estimated tokens, down from 139 when the format lived there; #2625).
+the fence name, and to call `use_skill` with `smart-ui` directly before
+writing one. Agents used to call `list_skills` first, a wasted round. It is 93
+estimated tokens (`estimate_tokens`; 96 before, 139 when the format lived
+there, #2625).
 
 The `smart-ui` skill is built into the engine
-(`rustcode/engine/src/skills_builtin/smart-ui.md`, about 890 tokens) and is
+(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,063 estimated tokens
+with its front matter, 1,071 before; a test keeps it under 1,100) and is
 listed with the other skills as `<built-in>/smart-ui`. It holds the format,
-limits and design guidance: pick Markdown or `rustcode-viz` first, one compact
-component per reply (the app runs one view at a time), sized for a narrow
-column, system colors and fonts, accessible controls. A skill named
+limits, the runtime above and design guidance: pick Markdown or
+`rustcode-viz` first, one compact component per question, no outer card,
+border, background or repeated title, sized for a 320 px column, accessible
+controls. A thread that built a weather chart (2026-11-02, 7 rounds, 143 s)
+spent 3 of its 4 previews on a blank Chart.js canvas because the skill then
+said to use system colors; the themed `Chart.defaults` remove that step. A skill named
 `smart-ui` in any skill root overrides it, and `disabled_skills` can turn it
 off.
 
@@ -131,18 +165,20 @@ Generated code is treated as untrusted, even when the assistant wrote it.
 | Network and files | CSP `default-src 'none'`, with only inline `script-src`/`style-src` and `data:` images and fonts. `connect-src`, `frame-src`, `worker-src`, `object-src`, `form-action` and `base-uri` are `'none'`. A content rule list also blocks every `http(s)`, `ws(s)`, `file`, `ftp` and `blob` load. A page's own CSP can only narrow the policy. |
 | Navigation | Only the initial `about:blank` document in the main frame. Links, redirects, forms, frames and downloads are cancelled. |
 | Windows and panels | `window.open` returns nothing. `alert`, `confirm` and `prompt` return at once without showing UI. File pickers return nothing, and camera, microphone and screen capture are denied. Fullscreen, AirPlay and media autoplay are off. |
-| Native bridge | None. No script message handler is installed. The app reads the page's height and element count by evaluating one fixed expression every 0.5 s. |
+| Native bridge | macOS app: none. No script message handler is installed; the app reads the page's height and element count by evaluating one fixed expression every 0.5 s. Desktop app: `window.rustcode` is a `postMessage` to the host carrying a per-frame token the host checks, so another frame cannot speak for the view. `send` is accepted only during a user gesture (a click or key press) and is rate limited; it can only add a user message to its own thread, which the user sees like any other. `copy` writes text only. |
 | Runaway pages | The page is stopped and its source shown when it does not finish loading in 5 s, when the height poll goes 3 s without an answer (a busy loop), when it builds more than 5,000 elements, or when its WebContent process exits (WebKit's memory limit or a crash). |
 | Provenance | Blocks run only from assistant replies, with the explicit versioned info string, and only while the setting is on. While it is off, a block shows as a card with its title and a **Turn On Smart UI** button instead of its source (#2536). |
 
 The rules were checked against real WebKit (see Measurements). From a page,
 `fetch`, an external `<img>`, a `WebSocket` and `window.open` were all
 blocked, `location` changes to `https:` and `file:` left the page on
-`about:blank`, cookies stayed empty, and no message handler was exposed.
+`about:blank`, cookies stayed empty, and no message handler was exposed
+(macOS app).
 
 Residual risks: the page can use CPU until the watchdog's next poll, and up to
 WebKit's own memory limit. It can draw anything inside its card, including
-text that imitates the app. It cannot reach anything outside the card.
+text that imitates the app. It cannot reach anything outside the card, except
+that in the desktop app a click on it can send a message into the thread.
 
 ## Measurements
 

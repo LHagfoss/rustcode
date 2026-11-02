@@ -126,6 +126,28 @@ These extension requests back the app's Settings pages:
 Semantics and scope are described in
 [configuration.md](configuration.md#turning-skills-and-mcp-servers-on-and-off).
 
+## Harnesses
+
+A thread can run on an external coding agent (Codex, Claude Code, Gemini
+CLI, OpenCode, any ACP agent) instead of RustCode's own turn loop. The
+contract is in [harnesses.md](harnesses.md); the requests are:
+
+- `_rustcode/harnesses` (`{}`): every harness with its detection,
+  capabilities and models, the defaults and `onboarded`.
+- `_rustcode/harnesses/models` (`{"harness"}`): `{"models": [...]}`,
+  starting the harness briefly when its models are not known yet.
+- `_rustcode/harnesses/set` (`{"id", "enabled"?, "command"?, "name"?,
+  "kind"?}`): turn a harness on or off, override its command, or add a
+  custom ACP harness.
+- `_rustcode/harnesses/remove` (`{"id"}`): remove a custom harness.
+- `_rustcode/harnesses/default` (`{"harness", "model"?, "effort"?}`): what
+  new threads start with.
+- `_rustcode/onboarding/complete` (`{}`): first-run onboarding is done.
+
+Each answers with the fresh snapshot (`models` with its list). `session/new`
+with `_meta.rustcode.harness` starts a thread on that harness; the rest of
+the thread is standard ACP.
+
 ## Failure behavior
 
 Per-session completion delivery is bounded so a disconnected or stalled client

@@ -1,0 +1,320 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens, ported from the SwiftUI app (macos/Sources/RustCode/Theme.swift,
+ * CodeStyle.swift) and the macOS text styles it uses. Colours switch with the
+ * system appearance, or with `data-theme` on <html> when the user picks one.
+ */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, "Cascadia Mono", monospace;
+  --font-rounded: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+
+  /* macOS text styles, in points (= CSS px). */
+  --text-caption: 10px;
+  --text-caption--line-height: 13px;
+  --text-sub: 11px;
+  --text-sub--line-height: 14px;
+  --text-callout: 12px;
+  --text-callout--line-height: 16px;
+  --text-body: 13px;
+  --text-body--line-height: 18px;
+  --text-title3: 15px;
+  --text-title3--line-height: 20px;
+  --text-title2: 17px;
+  --text-title2--line-height: 22px;
+  --text-title: 22px;
+  --text-title--line-height: 28px;
+
+  --color-sidebar: var(--rc-sidebar);
+  --color-chat: var(--rc-chat);
+  --color-fg: var(--rc-fg);
+  --color-fg-2: var(--rc-fg-2);
+  --color-fg-3: var(--rc-fg-3);
+  --color-fg-4: var(--rc-fg-4);
+  --color-fill-1: var(--rc-fill-1);
+  --color-fill-2: var(--rc-fill-2);
+  --color-fill-3: var(--rc-fill-3);
+  --color-fill-4: var(--rc-fill-4);
+  --color-hairline: var(--rc-hairline);
+  --color-brand: var(--rc-brand);
+  --color-brand-fill: var(--rc-brand-fill);
+  --color-attention: var(--rc-attention);
+  --color-danger: var(--rc-red);
+  --color-success: var(--rc-green);
+  --color-warning: var(--rc-orange);
+  --color-info: var(--rc-blue);
+  --color-surface: var(--rc-surface);
+  --color-field: var(--rc-field);
+
+  --radius-pill: 999px;
+  --ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --shadow-float: 0 3px 10px rgb(0 0 0 / 0.1);
+  --shadow-panel: 0 12px 28px rgb(0 0 0 / 0.22);
+}
+
+:root {
+  color-scheme: light;
+  --rc-sidebar: #eeeef0;
+  --rc-chat: #ffffff;
+  --rc-fg: rgb(0 0 0 / 0.85);
+  --rc-fg-2: rgb(0 0 0 / 0.5);
+  --rc-fg-3: rgb(0 0 0 / 0.28);
+  --rc-fg-4: rgb(0 0 0 / 0.16);
+  --rc-fill-1: rgb(0 0 0 / 0.1);
+  --rc-fill-2: rgb(0 0 0 / 0.065);
+  --rc-fill-3: rgb(0 0 0 / 0.04);
+  --rc-fill-4: rgb(0 0 0 / 0.025);
+  --rc-hairline: rgb(0 0 0 / 0.08);
+  --rc-brand: #435c6e;
+  --rc-brand-fill: #435c6e;
+  --rc-attention: #8a5a00;
+  --rc-red: #ff3b30;
+  --rc-green: #28a745;
+  --rc-orange: #f08c00;
+  --rc-blue: #007aff;
+  --rc-surface: rgb(250 250 252 / 0.82);
+  --rc-field: #ffffff;
+  /* Xcode's default light code colours. */
+  --rc-code-keyword: #9b2393;
+  --rc-code-string: #c41a16;
+  --rc-code-comment: #5d6c79;
+  --rc-code-number: #1c00cf;
+  --rc-code-type: #0b4f79;
+  --rc-diff-add: rgb(40 167 69 / 0.13);
+  --rc-diff-del: rgb(255 59 48 / 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --rc-sidebar: #2a2a2d;
+    --rc-chat: #1e1e20;
+    --rc-fg: rgb(255 255 255 / 0.88);
+    --rc-fg-2: rgb(255 255 255 / 0.55);
+    --rc-fg-3: rgb(255 255 255 / 0.28);
+    --rc-fg-4: rgb(255 255 255 / 0.16);
+    --rc-fill-1: rgb(255 255 255 / 0.16);
+    --rc-fill-2: rgb(255 255 255 / 0.11);
+    --rc-fill-3: rgb(255 255 255 / 0.07);
+    --rc-fill-4: rgb(255 255 255 / 0.045);
+    --rc-hairline: rgb(255 255 255 / 0.09);
+    --rc-brand: #7fa3bd;
+    --rc-brand-fill: #4f6d83;
+    --rc-attention: #ffd60a;
+    --rc-red: #ff453a;
+    --rc-green: #32d74b;
+    --rc-orange: #ff9f0a;
+    --rc-blue: #0a84ff;
+    --rc-surface: rgb(46 46 50 / 0.82);
+    --rc-field: rgb(255 255 255 / 0.06);
+    --rc-code-keyword: #fc5fa3;
+    --rc-code-string: #fc6a5d;
+    --rc-code-comment: #7f8c98;
+    --rc-code-number: #d0bf69;
+    --rc-code-type: #5dd8ff;
+    --rc-diff-add: rgb(50 215 75 / 0.14);
+    --rc-diff-del: rgb(255 69 58 / 0.14);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --rc-sidebar: #2a2a2d;
+  --rc-chat: #1e1e20;
+  --rc-fg: rgb(255 255 255 / 0.88);
+  --rc-fg-2: rgb(255 255 255 / 0.55);
+  --rc-fg-3: rgb(255 255 255 / 0.28);
+  --rc-fg-4: rgb(255 255 255 / 0.16);
+  --rc-fill-1: rgb(255 255 255 / 0.16);
+  --rc-fill-2: rgb(255 255 255 / 0.11);
+  --rc-fill-3: rgb(255 255 255 / 0.07);
+  --rc-fill-4: rgb(255 255 255 / 0.045);
+  --rc-hairline: rgb(255 255 255 / 0.09);
+  --rc-brand: #7fa3bd;
+  --rc-brand-fill: #4f6d83;
+  --rc-attention: #ffd60a;
+  --rc-red: #ff453a;
+  --rc-green: #32d74b;
+  --rc-orange: #ff9f0a;
+  --rc-blue: #0a84ff;
+  --rc-surface: rgb(46 46 50 / 0.82);
+  --rc-field: rgb(255 255 255 / 0.06);
+  --rc-code-keyword: #fc5fa3;
+  --rc-code-string: #fc6a5d;
+  --rc-code-comment: #7f8c98;
+  --rc-code-number: #d0bf69;
+  --rc-code-type: #5dd8ff;
+  --rc-diff-add: rgb(50 215 75 / 0.14);
+  --rc-diff-del: rgb(255 69 58 / 0.14);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--rc-sidebar);
+    color: var(--rc-fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 18px;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  /* Text people read or copy is selectable; chrome is not, as in a native app. */
+  .selectable,
+  .selectable * {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+  }
+
+  input,
+  textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  button {
+    cursor: default;
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--rc-blue) 60%, transparent);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--rc-blue) 28%, transparent);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--rc-fill-1);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@utility surface {
+  background: var(--rc-surface);
+  backdrop-filter: saturate(1.6) blur(24px);
+  -webkit-backdrop-filter: saturate(1.6) blur(24px);
+  box-shadow: var(--shadow-float);
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility drag-region {
+  -webkit-app-region: drag;
+}
+
+/* Shiki dual-theme output: colours come from CSS variables per token. */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+  background: transparent !important;
+}
+
+:root[data-theme="dark"] .shiki,
+:root[data-theme="dark"] .shiki span {
+  color: var(--shiki-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shiki,
+  :root:not([data-theme="light"]) .shiki span {
+    color: var(--shiki-dark);
+  }
+}
+
+@keyframes rc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rc-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+@keyframes rc-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+.rc-shimmer {
+  background:
+    linear-gradient(
+      90deg,
+      var(--rc-fg-2) 0%,
+      var(--rc-fg-2) 32%,
+      var(--rc-fg) 50%,
+      var(--rc-fg-2) 68%,
+      var(--rc-fg-2) 100%
+    )
+    0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: rc-shimmer 1.8s linear infinite;
+}
+
+.rc-in {
+  animation: rc-in 0.2s var(--ease-snappy);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .rc-shimmer {
+    animation: none;
+    color: var(--rc-fg-2);
+    background: none;
+  }
+}
+
+/* Find in thread (⌘F), painted with the CSS Custom Highlight API. */
+::highlight(rc-find) {
+  background-color: color-mix(in srgb, var(--rc-attention) 30%, transparent);
+}
+
+::highlight(rc-find-current) {
+  background-color: #ffd60a;
+  color: #000;
+}
