@@ -4,7 +4,7 @@
 
 import { Dialog } from "radix-ui";
 import { useState } from "react";
-import { normalizeDefault, validateDefault } from "../state/harness";
+import { normalizeDefault, preferredDefault, validateDefault } from "../state/harness";
 import {
   completeOnboarding,
   type NewThreadChoice,
@@ -20,7 +20,13 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<0 | 1>(0);
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
   const [saving, setSaving] = useState(false);
-  const value = choice ?? snapshot?.default ?? { harness: "rustcode", model: null, effort: null };
+  // A first run suggests Claude Code (or the first agent that can run); later runs show the saved default.
+  const value = choice ??
+    (snapshot ? (snapshot.onboarded ? snapshot.default : preferredDefault(snapshot)) : null) ?? {
+      harness: "rustcode",
+      model: null,
+      effort: null,
+    };
   const problem = snapshot ? validateDefault(snapshot, value) : "Loading";
 
   const finish = async () => {
@@ -48,7 +54,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               </Dialog.Title>
               <Dialog.Description className="text-callout text-fg-muted">
                 {step === 0
-                  ? "A harness runs a thread. RustCode's own engine is built in; other coding agents bring their own sign-in, models and rules."
+                  ? "A harness is the coding agent that runs a thread: Claude Code, Codex and others, each with its own sign-in, models and rules. RustCode's local engine stays available for the TUI and local models."
                   : "New threads start on this harness. You can pick another one when a thread starts."}
               </Dialog.Description>
             </div>

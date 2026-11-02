@@ -154,47 +154,58 @@ function General() {
 
 function Harnesses() {
   const snapshot = useApp((s) => s.harnesses);
+  const [saved, setSaved] = useState(false);
+  // An unsaved choice stays here while it is not valid yet (a harness that still lists models).
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
   if (!snapshot) return <Loading error={null} />;
-  const value = choice ?? snapshot.default;
-  const problem = validateDefault(snapshot, value);
+  // The default saves as it changes: there is nothing to confirm, and the choice is easy to undo.
+  const change = (next: NewThreadChoice) => {
+    setSaved(false);
+    setChoice(next);
+    if (validateDefault(snapshot, next)) return;
+    void setDefaultHarness(next).then((ok) => {
+      if (!ok) return;
+      setChoice(null);
+      setSaved(true);
+    });
+  };
   return (
     <>
       {snapshot.unsupported && (
         <p className="mb-4 rounded-lg bg-warning/10 px-3.5 py-2.5 text-callout">
           This engine does not run other harnesses yet (no{" "}
-          <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's built-in harness.
-          Update RustCode to add Codex, Claude Code, Gemini and others.
+          <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's local engine. Update
+          RustCode to add Claude Code, Codex, Gemini and others.
         </p>
       )}
+      {!snapshot.unsupported && (
+        <Group
+          title="New threads start on"
+          action={
+            saved ? (
+              <span className="flex items-center gap-1 text-caption text-success">
+                <Check size={12} /> Saved
+              </span>
+            ) : undefined
+          }
+          footer="A thread can still switch harness and model from the composer."
+        >
+          <DefaultsForm snapshot={snapshot} value={choice ?? snapshot.default} onChange={change} />
+        </Group>
+      )}
       <Group
-        title="Harnesses"
-        footer="Each harness signs in on its own; RustCode never stores its credentials."
+        title="Coding agents"
+        footer={
+          <>
+            Each agent signs in on its own; RustCode never stores its credentials.{" "}
+            <button type="button" onClick={() => setOnboarding(true)} className="text-accent hover:underline">
+              Run setup again
+            </button>
+          </>
+        }
       >
         <HarnessList snapshot={snapshot} />
       </Group>
-      {!snapshot.unsupported && (
-        <section className="mb-[18px]">
-          <h3 className="mb-1.5 px-1 font-semibold text-callout text-fg-muted">Default for new threads</h3>
-          <DefaultsForm snapshot={snapshot} value={value} onChange={setChoice} />
-          <div className="mt-2.5 flex gap-2">
-            <Pill
-              prominent
-              disabled={!choice || !!problem}
-              onClick={() =>
-                void setDefaultHarness(value).then((saved) => {
-                  if (!saved) return;
-                  setChoice(null);
-                  toast("Default saved", "success");
-                })
-              }
-            >
-              Save default
-            </Pill>
-            <Pill onClick={() => setOnboarding(true)}>Set up again…</Pill>
-          </div>
-        </section>
-      )}
     </>
   );
 }

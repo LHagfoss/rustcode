@@ -163,7 +163,17 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
 - **Harness logic** (`src/state/harness.ts`): what can be chosen and why
   something is greyed out, from capability flags only, never a harness id.
   Before an engine implements `_rustcode/harnesses`, the app shows only the
-  built-in harness and says so in Settings.
+  built-in harness and says so in Settings. One product choice names an id:
+  Claude Code (`PREFERRED_HARNESS`) is listed first and suggested on a
+  first run, and RustCode's own engine is listed last as the *Local*
+  harness, kept for the TUI, testing and local models.
+- **Settings › Harnesses.** *New threads start on* comes first and saves as
+  it changes (no Save button); picking an external harness lists its
+  models at once (`ensureHarnessModels`). Under it, *Coding agents*: one
+  card per harness with its mark, status and version, *Sign in* only until
+  the harness is known to be signed in, *Check* (lists the models, the
+  cheapest proof it runs) and the on/off switch; turning a harness on
+  checks it. The command and what it supports fold under *Details*.
 - **UI** (`src/ui/`): every colour, radius and shadow is a token from
   [design.md](design.md), defined once in `src/index.css` (the Tailwind
   `@theme` maps `--rc-*` variables to classes; the palette is switched

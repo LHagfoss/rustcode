@@ -6,6 +6,8 @@ import {
   controlDisabledReason,
   defaultEffort,
   normalizeDefault,
+  orderHarnesses,
+  preferredDefault,
   restoreChoice,
   unavailableReason,
   usableHarnesses,
@@ -146,5 +148,26 @@ describe("harness logic", () => {
     expect(defaultEffort(undefined, ["low", "medium", "high", "default"])).toBe("default");
     expect(defaultEffort(undefined, ["low", "high"])).toBe("low");
     expect(defaultEffort(undefined, [])).toBeNull();
+  });
+});
+
+describe("the desktop app's preferred harness", () => {
+  const rustcode: Harness = { ...base, id: "rustcode", name: "RustCode", builtin: true };
+  const claude: Harness = { ...base, id: "claude-code", name: "Claude Code", kind: "acp" };
+
+  test("Claude Code first, RustCode last", () => {
+    expect(orderHarnesses([rustcode, base, claude]).map((h) => h.id)).toEqual([
+      "claude-code",
+      "codex",
+      "rustcode",
+    ]);
+  });
+
+  test("a first run starts on Claude Code, else another agent, else RustCode", () => {
+    expect(preferredDefault(snapshot([rustcode, base, claude])).harness).toBe("claude-code");
+    expect(preferredDefault(snapshot([rustcode, base, { ...claude, installed: false }])).harness).toBe(
+      "codex",
+    );
+    expect(preferredDefault(snapshot([rustcode, { ...base, auth: "needs_login" }])).harness).toBe("rustcode");
   });
 });
