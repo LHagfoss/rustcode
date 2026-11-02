@@ -21,27 +21,38 @@ and message other threads ([orchestrator.md](orchestrator.md)). The design
 rules are in [design.md](design.md), themes in [themes.md](themes.md), and
 reply formatting in [output-style.md](output-style.md).
 
-Shipped (#2788, #2790, #2791 and the PR after them):
-
-- Chat on any harness, approvals and questions, onboarding, settings,
-  Capabilities (skills + MCP), themes shared with the TUI, glass design.
-- Worktree threads, thread status and the sidebar sections, per-turn
-  checkpoints, review, fan-out compare, orchestration client.
-- Performance: virtualized transcript, batched updates, 120 Hz rendering,
-  highlighting in a worker.
-- Release bundles for macOS, Windows and Linux, native installers, an
-  in-app updater on macOS. The Swift app's updater moves existing installs
-  to this app.
+Shipped in **1.0.0** (2026-11-02, #2788 to #2837): the app on every harness,
+orchestration, worktree threads, checkpoints and review; a T3-style
+sidebar (live clock, Pin/Settle on hover, threads idle for three days settle,
+Settled paged); harness settings with live model lists (Claude Code first,
+RustCode as the local harness); approvals with Allow/Decline/More; tool-call
+groups, a working line that says what the agent does, a context inspector
+and plan usage card, report panels, copy everywhere, ⌘O/⌘⇧O folders;
+compaction on any harness (`/compact`, Codex through `thread/compact/start`);
+a SQLite thread index with full-text search (`index.sqlite`); background
+update checks with an "Update to X" sidebar row and What's New; installers
+for macOS, Windows and Linux (the Windows and Linux bundle jobs ran for the
+first time in 1.0.0). The SwiftUI app was removed (tag `swiftui-app-final`).
 
 Next, in rough order:
 
-1. Run the Build workflow once by hand: the Windows and Linux bundle jobs
-   have never run. Then cut a beta (`scripts/release.sh --beta`).
-2. Signing and notarization once the Apple secrets exist (#2034).
-3. Open desktop issues: #2792 (queue/steer with images), #2799
-   (cross-harness delegation, live test plan), #2802 (composer focus),
-   #2805 (panel buttons) and #2806 (slash-command composer polish).
-4. The rest of [Not yet ported](#not-yet-ported).
+1. Signing and notarization once the Apple secrets exist (#2034).
+2. #2799, cross-harness delegation: the live test plan with Claude Code
+   and Codex parents, a harness/model discovery tool, one approval per
+   delegation, Codex MCP elicitation, waking a parent when its child ends.
+3. Compaction follow-ups from T3 Code: the auto-compact tick on the context
+   bar (`autoCompactThreshold`), Claude's idle compaction before the prompt
+   cache expires.
+4. SQLite as the store, not only an index: pins and status first, then an
+   event table (T3's `orchestration_v2_events` with projections), the
+   sidebar listed from the index, lazy transcript import.
+5. The rest of [Not yet ported](#not-yet-ported).
+
+Checking UI: the mock (`bun run dev:mock`) driven by headless Chrome over
+CDP at 1512×945 @2x, never a browser pane in the user's terminal; WebKit
+(the app) can differ from Chrome, so check alignment-sensitive changes in
+the app. Releases: `scripts/release-notes.sh > notes.md`, edit, then
+`scripts/release.sh --version X --notes-file notes.md --yes`.
 
 How to continue: run the app with `bun tauri dev` in `apps/desktop` (it uses
 `target/debug/rustcode`; rebuild with `cargo build -p rustcode-tui --bin
@@ -797,14 +808,14 @@ built for the CLI. Extra arguments go to `tauri build`, e.g.
 
 ### Updater
 
-The app checks for an update 5 s after launch and every 30 minutes
+The app checks for an update 5 s after launch, every 30 minutes, when its window comes back after 10 minutes away, and a minute after a failed check
 (`src/state/updates.ts`). When a newer release is out, an *Update to X* row
 sits at the foot of the sidebar: it installs in place where the app can
 (below), else opens the release page. The first launch of a new version
 shows *What's New* with that release's notes, the GitHub release body that
 `scripts/release-notes.sh` writes from each PR's Changelog line, fetched by
 the shell's `release_notes` command. A first install and a dev build skip
-it; Settings › Engine opens it on demand. `?updatePreview` in the dev browser
+it; Settings › Engine opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
 shows both with sample data.
 
 `src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›

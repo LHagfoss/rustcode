@@ -46,7 +46,7 @@ import {
   toast,
   useApp,
 } from "../state/store";
-import { showWhatsNew } from "../state/updates";
+import { showWhatsNew, useUpdates } from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
@@ -621,19 +621,27 @@ function AppVersion() {
       setBusy(null);
     }
   };
+  // The background check's failure, until a check here says otherwise.
+  const background = useUpdates((s) => s.error);
   const subtitle = error
     ? error
-    : busy === "installing"
-      ? "Installing… RustCode reopens when it is done."
-      : info && !info.available
-        ? "RustCode is up to date."
-        : info?.development
-          ? "A development build; it does not update itself."
-          : undefined;
+    : !info && background
+      ? `The last update check failed: ${background}`
+      : busy === "installing"
+        ? "Installing… RustCode reopens when it is done."
+        : info && !info.available
+          ? "RustCode is up to date."
+          : info?.development
+            ? "A development build; it does not update itself."
+            : undefined;
   return (
     <Row
       title={`RustCode ${version}`}
-      subtitle={<span className={error ? "text-warning" : undefined}>{subtitle ?? "App version"}</span>}
+      subtitle={
+        <span className={error || (!info && background) ? "text-warning" : undefined}>
+          {subtitle ?? "App version"}
+        </span>
+      }
     >
       {canUpdate() && <Pill onClick={() => void showWhatsNew(version)}>What's New</Pill>}
       {!canUpdate() ? (
