@@ -168,6 +168,38 @@ async fn check(app: &AppHandle) -> Result<(UpdateInfo, String), String> {
     Ok((info, tag))
 }
 
+/// A release's notes (its GitHub body, Markdown), for What's New. `None` when
+/// the release does not exist or has no notes.
+#[tauri::command]
+pub async fn release_notes(version: String) -> Result<Option<String>, String> {
+    let version = version.trim().trim_start_matches('v');
+    if parse(version).is_none() {
+        return Err(format!("not a version: {version}"));
+    }
+    let response = client()?
+        .get(format!(
+            "https://api.github.com/repos/{REPO}/releases/tags/v{version}"
+        ))
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("GitHub did not answer: {e}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!("GitHub answered {}", response.status()));
+    }
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    let release: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    Ok(release
+        .get("body")
+        .and_then(|body| body.as_str())
+        .map(str::trim)
+        .filter(|body| !body.is_empty())
+        .map(str::to_owned))
+}
+
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> Result<UpdateInfo, String> {
     check(&app).await.map(|(info, _)| info)

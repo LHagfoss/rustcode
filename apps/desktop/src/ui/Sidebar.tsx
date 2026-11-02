@@ -63,6 +63,7 @@ import { SettingsButton } from "./MainHeader";
 import { Cluster, ClusterButton, cx, Skeleton, Spinner, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
 import { TitlebarRow } from "./Titlebar";
+import { UpdateRow } from "./Updates";
 
 const MIN = 200;
 const MAX = 460;
@@ -952,6 +953,7 @@ export function Sidebar() {
             })}
           </div>
         </nav>
+        <UpdateRow />
       </div>
       {!hidden && (
         <div

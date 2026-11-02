@@ -80,6 +80,7 @@ pub fn run() {
             smartui::smartui_page,
             updater::update_check,
             updater::update_install,
+            updater::release_notes,
             webview::display_info,
         ])
         .setup(|app| {
