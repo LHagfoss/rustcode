@@ -6,6 +6,7 @@ import {
   answerPermission,
   answerQuestionOptions,
   cancel,
+  closeReport,
   completeOnboarding,
   connect,
   editMessage,
@@ -110,6 +111,21 @@ describe("engine controller with the mock engine", () => {
     expect(s.selectedId).toBeNull();
     expect(s.newThread?.harness).toBe(first.harness ?? "rustcode");
     expect(s.threads[first.id]!.items.length).toBe(items);
+  });
+
+  test("a report command answers in the panel and leaves the transcript as it was", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    selectThread(useApp.getState().sessions[0]!.id);
+    await until(() => selected()?.loaded === true);
+    await until(() => useApp.getState().commands.some((c) => c.name === "/status"));
+    const items = selected()!.items.length;
+    await submit("/status");
+    await until(() => !selected()!.running && (useApp.getState().report?.text.includes("Folder") ?? false));
+    expect(useApp.getState().report?.text.startsWith("**Status**")).toBe(true);
+    expect(selected()!.items.length).toBe(items);
+    closeReport();
+    expect(useApp.getState().report).toBeNull();
   });
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {

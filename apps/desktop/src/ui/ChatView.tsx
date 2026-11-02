@@ -40,6 +40,7 @@ import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { Callout, Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
+import { ReportPanel } from "./ReportPanel";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
 
@@ -343,6 +344,7 @@ export function ChatView() {
     doc.setProperty("--rc-toast-bottom", `${Math.round(below + (isNew ? 16 : 16 + stackHeight + 12))}px`);
   }, [isNew, stackHeight, width, height]);
   const request = thread?.permissions[0];
+  const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   const side = width >= 600 ? 28 : width >= 360 ? 20 : 16;
   const showsBanner = isNew && !!banner.name;
@@ -398,6 +400,7 @@ export function ChatView() {
           />
         )}
         {thread && <LinkedThreads threadId={thread.id} />}
+        {report && report.threadId === thread?.id && <ReportPanel text={report.text} />}
         {request && (
           <AttentionCard
             request={request}

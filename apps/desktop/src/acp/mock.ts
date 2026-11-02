@@ -462,8 +462,25 @@ function seedThreads(): MockThread[] {
   ];
 }
 
+/** What the mock's report commands answer, in the chunks they stream in. */
+const MOCK_REPORTS: Record<string, string[]> = {
+  "/status": [
+    "**Status**\n\nModel: `gpt-6-luna`\nEffort: medium\nHarness: RustCode\n",
+    "\n### Session\n- Messages: 14\n- Context: 18k of 272k\n- Folder: ~/code/rustcode\n",
+  ],
+  "/context": [
+    "**Context**\n\n18k of 272k tokens in use. Most of it is tool output from this turn; ",
+    "`/compact` would free about 9k.",
+  ],
+};
+
 const COMMANDS: Json[] = [
   { name: "compact", description: "Summarize the conversation to free context" },
+  {
+    name: "status",
+    description: "Show the thread's model, harness and session",
+    _meta: { rustcode: { report: true } },
+  },
   {
     name: "context",
     description: "Show what fills the context window",
@@ -1372,6 +1389,21 @@ export class MockEngine {
       return { stopReason, _meta: { rustcode: { unusedSteers: run.steers } } };
     };
     try {
+      // Report commands answer like the engine's: marked as a report, kept out of the transcript.
+      const report = MOCK_REPORTS[prompt.trim()];
+      if (report) {
+        for (const chunk of report) {
+          this.notify(
+            update(sid, {
+              sessionUpdate: "agent_message_chunk",
+              content: text(chunk),
+              _meta: { rustcode: { report: true } },
+            }),
+          );
+          await this.sleep();
+        }
+        return done("end_turn");
+      }
       if (!thread.title) {
         thread.title = prompt.split("\n")[0]?.slice(0, 60) || "New thread";
         this.notify(update(sid, { sessionUpdate: "session_info_update", title: thread.title }));
