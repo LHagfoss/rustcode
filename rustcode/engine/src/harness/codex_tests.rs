@@ -511,3 +511,39 @@ async fn a_dismissed_question_fails_the_user_input_request() {
         .unwrap();
     assert_eq!(answer.1, json!(-32000));
 }
+
+#[tokio::test]
+async fn the_orchestrator_is_added_to_the_codex_thread_config() {
+    let launch = crate::orchestration::hub::Launch::new(
+        "/opt/rustcode/bin/rustcode".into(),
+        "thread-1",
+        std::path::Path::new("/tmp/run/orchestrator-1.sock"),
+        "secret",
+    );
+    let (_thread, mut seen) = start(
+        Script::Reply,
+        None,
+        StartOptions {
+            orchestrator: Some(launch),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    let started = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "thread/start")
+        .expect("thread/start was sent")
+        .1;
+    let server = &started["config"]["mcp_servers.rustcode"];
+    assert_eq!(server["command"], "/opt/rustcode/bin/rustcode");
+    assert_eq!(server["args"][0], "mcp-orchestrator");
+    assert_eq!(server["args"][6], "secret");
+
+    let (_thread, mut seen) = start(Script::Reply, None, StartOptions::default()).await;
+    let started = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "thread/start")
+        .unwrap()
+        .1;
+    assert!(started.get("config").is_none());
+}

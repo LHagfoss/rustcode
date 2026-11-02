@@ -36,7 +36,19 @@ import {
   type SessionSummary,
   type SlashCommand,
 } from "../acp/types";
-import { parseWorktree, statusInUpdate, type ThreadStatus, V2Method, type Worktree } from "../acp/v2";
+import {
+  type Checkpoint,
+  type PatchFile,
+  parseCheckpoints,
+  parseTurnDiff,
+  parseWorktree,
+  parseWorktreeList,
+  removeRefusal,
+  statusInUpdate,
+  type ThreadStatus,
+  V2Method,
+  type Worktree,
+} from "../acp/v2";
 import { setShellTransport, shellCall } from "../lib/shell";
 import {
   type ComposeExtras,
@@ -165,6 +177,8 @@ export interface AppState {
     | { kind: "board" }
     | { kind: "review"; threadId: string }
     | { kind: "compare"; fanOut: string };
+  /** Each thread's per-turn checkpoints (`_rustcode/checkpoints/list`). */
+  checkpoints: Record<string, Checkpoint[]>;
   /** The new-thread composer's worktree choice. */
   newWorktree: { on: boolean; branch: string; edited: boolean };
 }
@@ -217,6 +231,7 @@ export const useApp = create<AppState>(() => ({
   features: {},
   statusMarks: storedJson<Record<string, ThreadStatus>>(STORAGE.statusMarks, {}),
   view: { kind: "chat" },
+  checkpoints: {},
   newWorktree: { on: false, branch: "", edited: false },
   smartUi: stored(STORAGE.smartUi) !== "0",
   smartUiPending: false,
@@ -519,6 +534,7 @@ export async function openThread(id: string) {
       harness: parseSessionHarness(result) ?? t.harness,
     }));
     void refreshPlanUsage(id);
+    void refreshCheckpoints(id);
   } catch (error) {
     updateThread(id, (t) => ({ ...finishLoad(t), error: `Could not open this thread: ${errorText(error)}` }));
   } finally {
@@ -975,6 +991,7 @@ export async function runPrompt(
   void refreshSessions();
   void refreshPlanUsage(id);
   void refreshAgents(id);
+  void refreshCheckpoints(id);
   if (outcome === "completed" && id !== get().selectedId) toast("A thread finished", "success");
   // A queued message starts at once, so "working" stays up across the hand-off.
   const next = get().threads[id]?.queue[0];
@@ -1183,6 +1200,126 @@ export function setView(view: AppState["view"]) {
   set({ view, switcherOpen: false, settings: null });
 }
 
+/** The worktree a thread runs in, from the thread or the list. */
+export function worktreeOf(s: AppState, id: string): Worktree | undefined {
+  return s.threads[id]?.worktree ?? s.sessions.find((x) => x.id === id)?.worktree;
+}
+
+/**
+ * Remove a thread's worktree, guarded: the confirm says when it has
+ * uncommitted changes or commits on no remote, and the engine refuses those
+ * unless the user removes it anyway.
+ */
+export async function removeWorktree(id: string): Promise<void> {
+  const wt = worktreeOf(get(), id);
+  if (!wt || !connection) return;
+  if (get().threads[id]?.running) {
+    toast("Stop the running turn before removing its worktree.", "warning");
+    return;
+  }
+  let info: Worktree | undefined;
+  try {
+    const listed = (await connection.request(V2Method.worktreeList, { repo: wt.repo }, 15_000)) as Json;
+    info = parseWorktreeList(listed).find((w) => w.path === wt.path);
+  } catch {
+    // The list is advice only; the engine checks again when removing.
+  }
+  const reasons = [
+    info?.dirty ? "it has uncommitted changes" : "",
+    info?.ahead ? `${info.ahead} commit${info.ahead === 1 ? " is" : "s are"} on no remote branch` : "",
+  ].filter(Boolean);
+  const go = async (force: boolean) => {
+    try {
+      await engine().request(V2Method.worktreeRemove, { path: wt.path, force }, 30_000);
+    } catch (error) {
+      const refusal = error instanceof RpcError ? removeRefusal(error.data) : undefined;
+      if (refusal && !force) {
+        askConfirm({
+          title: "Remove it anyway?",
+          message:
+            refusal === "dirty"
+              ? `${wt.branch} has uncommitted changes. Removing the worktree deletes them.`
+              : `${wt.branch} has commits that are on no remote branch. Removing the worktree may lose them.`,
+          action: "Remove Anyway",
+          destructive: true,
+          run: () => void go(true),
+        });
+        return;
+      }
+      toast(`Could not remove the worktree: ${errorText(error)}`, "warning");
+      return;
+    }
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, worktree: undefined } : x)),
+    }));
+    updateThread(id, (t) => ({ ...t, worktree: undefined }));
+    toast(`Removed the worktree of ${wt.branch}`, "success");
+  };
+  askConfirm({
+    title: `Remove the worktree of ${wt.branch}?`,
+    message: reasons.length
+      ? `Careful: ${reasons.join(", and ")}. The folder ${wt.path.replace(/^\/Users\/[^/]+/, "~")} goes; the thread stays.`
+      : `The folder ${wt.path.replace(/^\/Users\/[^/]+/, "~")} goes; the thread and its history stay. The branch is deleted only when it is merged.`,
+    action: "Remove Worktree",
+    destructive: true,
+    run: () => void go(false),
+  });
+}
+
+// ---------------------------------------------------------------- checkpoints
+
+export async function refreshCheckpoints(id: string): Promise<void> {
+  if (!connection || !get().features.checkpoints) return;
+  try {
+    const list = parseCheckpoints(
+      await connection.request(V2Method.checkpointList, { session_id: id }, 15_000),
+    );
+    set((s) => ({ checkpoints: { ...s.checkpoints, [id]: list } }));
+  } catch {
+    // A thread outside a git repository has none.
+  }
+}
+
+/** What one turn changed: its checkpoint against the next (or the working tree). */
+export async function turnDiff(id: string, turn: number): Promise<PatchFile[]> {
+  return parseTurnDiff(await engine().request(V2Method.checkpointDiff, { session_id: id, turn }, 30_000));
+}
+
+/**
+ * Put the files back to before a turn; with `rewind`, the conversation too
+ * when the harness can rewind (else the engine keeps it and says so).
+ */
+export async function restoreCheckpoint(id: string, turn: number, rewind: boolean): Promise<boolean> {
+  try {
+    const result = (await engine().request(
+      V2Method.checkpointRestore,
+      { session_id: id, turn, rewind },
+      60_000,
+    )) as JsonObject | null;
+    const kept = result?.conversation === "kept";
+    toast(
+      rewind && !kept
+        ? "Restored the files and the conversation"
+        : "Restored the files; the conversation stays",
+      "success",
+    );
+    if (rewind && !kept) {
+      // The conversation changed under the app: load it again.
+      updateThread(id, (t) => ({ ...t, loaded: false }));
+      set((s) => {
+        const { [id]: _gone, ...threads } = s.threads;
+        return { threads };
+      });
+      await openThread(id);
+    }
+    void refreshCheckpoints(id);
+    return true;
+  } catch (error) {
+    toast(`Could not restore: ${errorText(error)}`, "warning");
+    return false;
+  }
+}
+
 export function setNewWorktree(change: Partial<AppState["newWorktree"]>) {
   set((s) => ({ newWorktree: { ...s.newWorktree, ...change } }));
 }
@@ -1369,6 +1506,7 @@ export function resetForTests() {
     features: {},
     statusMarks: {},
     view: { kind: "chat" },
+    checkpoints: {},
     newWorktree: { on: false, branch: "", edited: false },
   });
 }

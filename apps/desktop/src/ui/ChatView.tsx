@@ -6,8 +6,10 @@ import {
   CircleCheck,
   CircleDashed,
   CircleDot,
+  Eye,
   FileDiff,
   Folder,
+  GitBranch,
   GitPullRequest,
   ListChecks,
   PanelLeft,
@@ -16,7 +18,7 @@ import {
   TriangleAlert,
   Users,
 } from "lucide-react";
-import { Popover } from "radix-ui";
+import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { agentActive, leftPercent, shownWindow, windowDetail, windowTitle } from "../acp/rustcode";
 import { pickFolder } from "../lib/native";
@@ -26,15 +28,20 @@ import {
   setPanel,
   setProjectCwd,
   setTerminalOpen,
+  setThreadStatus,
+  setView,
   startNewThread,
+  statusOf,
   toggleSidebar,
   useApp,
+  worktreeOf,
 } from "../state/store";
 import { formatTokens, type ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { LinkedThreads } from "./Links";
 import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
+import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
 
 export function UsageCapsule({ thread }: { thread: ThreadState }) {
@@ -180,6 +187,54 @@ function PlanButton({ thread }: { thread: ThreadState }) {
   );
 }
 
+/** The thread's status chip; a click marks it for review, done, or clears it. */
+function ThreadStatusMenu({ threadId }: { threadId: string }) {
+  const status = useApp((s) => statusOf(s, threadId));
+  const wt = useApp((s) => worktreeOf(s, threadId));
+  const item =
+    "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-brand-fill data-[highlighted]:text-white";
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Thread status"
+          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-3 px-2.5 text-callout text-fg-2 hover:bg-fill-2 data-[state=open]:bg-fill-1"
+        >
+          {wt && (
+            <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
+              <GitBranch size={11} className="shrink-0" />
+              <span className="truncate">{wt.branch}</span>
+            </span>
+          )}
+          {status === "idle" ? <CircleDashed size={12} /> : <StatusChip status={status} className="-mx-1" />}
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="surface z-50 min-w-[190px] rounded-[12px] border border-hairline p-1"
+        >
+          <DropdownMenu.Item className={item} onSelect={() => setView({ kind: "review", threadId })}>
+            <FileDiff size={13} /> Review Changes
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-hairline" />
+          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "review")}>
+            <Eye size={13} /> Mark for Review
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "done")}>
+            <CircleCheck size={13} /> Mark Done
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "idle")}>
+            <CircleDashed size={13} /> Clear Status
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 function Header({ thread }: { thread?: ThreadState }) {
   const panel = useApp((s) => s.panel);
   const terminalOpen = useApp((s) => s.terminalOpen);
@@ -223,6 +278,7 @@ function Header({ thread }: { thread?: ThreadState }) {
         {cwd && <span className="font-light text-fg-4 text-title3">/</span>}
         <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
       </div>
+      {thread && <ThreadStatusMenu threadId={thread.id} />}
       {thread && <PlanButton thread={thread} />}
       {thread && <UsageCapsule thread={thread} />}
       <Cluster>

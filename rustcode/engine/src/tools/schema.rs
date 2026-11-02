@@ -149,6 +149,9 @@ pub struct ToolSchemaPolicy {
     /// `list_sessions`, `message_session` and `wait_session`, offered only
     /// when the client hosts other threads (#2637).
     pub(crate) include_orchestration_tools: bool,
+    /// `read_session`, `start_session` and `fan_out`, for a client that
+    /// advertises orchestration version 2.
+    pub(crate) include_orchestration_v2_tools: bool,
     pub(crate) profile: ToolSchemaProfile,
     pub(crate) compact_text_prompt: bool,
 }
@@ -209,6 +212,7 @@ impl ToolSchemaPolicy {
             include_desktop_tool: false,
             include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
+            include_orchestration_v2_tools: false,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
         }
@@ -231,6 +235,7 @@ impl ToolSchemaPolicy {
             include_desktop_tool: false,
             include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
+            include_orchestration_v2_tools: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
         }
@@ -246,6 +251,7 @@ impl ToolSchemaPolicy {
             include_desktop_tool: false,
             include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
+            include_orchestration_v2_tools: false,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
         }
@@ -294,8 +300,11 @@ impl ToolSchemaPolicy {
 
     /// Offer the tools that message other threads. Only the root coding
     /// profile gets them: Plan mode and subagents never drive another thread.
-    pub(crate) fn with_orchestration_tools(mut self) -> Self {
-        self.include_orchestration_tools = self.profile == ToolSchemaProfile::Coding;
+    /// `version` is what the client advertised: 1 keeps the M1 tools only.
+    pub(crate) fn with_orchestration_tools(mut self, version: u8) -> Self {
+        self.include_orchestration_tools =
+            self.profile == ToolSchemaProfile::Coding && version >= 1;
+        self.include_orchestration_v2_tools = self.include_orchestration_tools && version >= 2;
         self
     }
 
@@ -818,6 +827,9 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::LIST_SESSIONS,
     crate::orchestration::MESSAGE_SESSION,
     crate::orchestration::WAIT_SESSION,
+    crate::orchestration::READ_SESSION,
+    crate::orchestration::START_SESSION,
+    crate::orchestration::FAN_OUT,
 ];
 
 /// Whether a read-only child agent's gate runs `tool`, so it is worth
@@ -849,6 +861,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (tool.name == crate::smart_ui::PREVIEW_TOOL_NAME
             && !policy.include_smart_ui_preview_tool)
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
+        || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
@@ -2571,7 +2584,9 @@ pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy)
     if policy.include_smart_ui_preview_tool {
         prompt.push_str(crate::smart_ui::PREVIEW_PROMPT_HINT);
     }
-    if policy.include_orchestration_tools {
+    if policy.include_orchestration_v2_tools {
+        prompt.push_str(crate::orchestration::PROMPT_HINT_V2);
+    } else if policy.include_orchestration_tools {
         prompt.push_str(crate::orchestration::PROMPT_HINT);
     }
 }
@@ -2640,6 +2655,7 @@ pub(crate) fn tool_system_prompt_for_policy(
         include_desktop_tool: false,
         include_smart_ui_preview_tool: false,
         include_orchestration_tools: false,
+        include_orchestration_v2_tools: false,
         ..policy
     };
     let mut p = String::new();

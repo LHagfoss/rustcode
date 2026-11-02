@@ -6,8 +6,15 @@ import {
   Archive,
   ArchiveRestore,
   ChevronRight,
+  CircleCheck,
+  CircleDashed,
   Ellipsis,
+  Eye,
+  FileDiff,
   Folder,
+  FolderOpen,
+  FolderX,
+  GitBranch,
   MessageCircleQuestion,
   PanelLeft,
   Pencil,
@@ -16,6 +23,7 @@ import {
   Search,
   Settings,
   SquarePen,
+  SquareTerminal,
   Trash2,
   Users,
   X,
@@ -24,26 +32,34 @@ import { ContextMenu, DropdownMenu } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
-import { pickFolder } from "../lib/native";
+import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import {
   askConfirm,
+  featureMissing,
   openAgent,
   openSettings,
+  removeWorktree,
   renameThread,
   selectThread,
   setArchived,
   setProjectCwd,
+  setThreadStatus,
+  setView,
   startNewThread,
+  statusOf,
+  toast,
   togglePin,
   toggleSidebar,
   trashThread,
   useApp,
+  worktreeOf,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { AgentMark } from "./AgentViews";
 import { LinkBadge } from "./Links";
 import { ChromeButton, Cluster, ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
+import { StatusChip } from "./Status";
 
 const MIN = 200;
 const MAX = 460;
@@ -83,9 +99,34 @@ function ThreadMenuItems({
 }) {
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const archived = useApp((s) => session.id in s.archived);
+  const status = useApp((s) => statusOf(s, session.id));
+  const worktree = useApp((s) => worktreeOf(s, session.id));
+  const statusMissing = useApp((s) => (s.features.status ? null : featureMissing("status")));
   const canFiles = hasShell();
   return (
     <>
+      {status !== "review" && (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
+          <Eye size={13} /> Mark for Review
+        </Item>
+      )}
+      {status !== "done" && (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "done")}>
+          <CircleCheck size={13} /> Mark Done
+        </Item>
+      )}
+      {(status === "review" || status === "done") && (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
+          <CircleDashed size={13} /> Clear Status
+        </Item>
+      )}
+      {statusMissing && (
+        <div className="px-2.5 pb-1 text-caption text-fg-3">Kept by the app: {statusMissing}</div>
+      )}
+      <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
+        <FileDiff size={13} /> Review Changes
+      </Item>
+      <Separator className="mx-1.5 my-1 h-px bg-hairline" />
       <Item className={menuItem} onSelect={() => togglePin(session.id)}>
         {pinned ? <PinOff size={13} /> : <Pin size={13} />}
         {pinned ? "Unpin" : "Pin"}
@@ -97,6 +138,30 @@ function ThreadMenuItems({
         {archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
         {archived ? "Unarchive" : "Archive"}
       </Item>
+      {worktree && (
+        <>
+          <Separator className="mx-1.5 my-1 h-px bg-hairline" />
+          <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-2">
+            <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
+          </div>
+          <Item className={menuItem} disabled={!canFiles} onSelect={() => revealPath(worktree.path)}>
+            <FolderOpen size={13} /> Open in Finder
+          </Item>
+          <Item
+            className={menuItem}
+            disabled={!canFiles}
+            onSelect={() => void openTerminalAt(worktree.path).catch((e) => toast(String(e), "warning"))}
+          >
+            <SquareTerminal size={13} /> Open in Terminal
+          </Item>
+          <Item
+            className={cx(menuItem, "text-danger data-[highlighted]:bg-danger")}
+            onSelect={() => void removeWorktree(session.id)}
+          >
+            <FolderX size={13} /> Remove Worktree…
+          </Item>
+        </>
+      )}
       <Separator className="mx-1.5 my-1 h-px bg-hairline" />
       <Item
         className={cx(menuItem, "text-danger data-[highlighted]:bg-danger")}
@@ -129,6 +194,8 @@ function ThreadRow({
   now: number;
 }) {
   const thread = useApp((s) => s.threads[session.id]);
+  const status = useApp((s) => statusOf(s, session.id));
+  const worktree = useApp((s) => worktreeOf(s, session.id));
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const [renaming, setRenaming] = useState(false);
@@ -140,7 +207,7 @@ function ThreadRow({
       ? harnesses?.harnesses.find((h) => h.id === session.harness)
       : undefined;
   const detail = [
-    scopeAll && session.cwd ? projectName(session.cwd) : undefined,
+    worktree ? undefined : scopeAll && session.cwd ? projectName(session.cwd) : undefined,
     harness?.name ?? (session.harness && session.harness !== "rustcode" ? session.harness : undefined),
     modelName(session.model),
     relativeAge(session.updatedAt, now),
@@ -181,8 +248,9 @@ function ThreadRow({
             onClick={() => selectThread(session.id)}
             aria-current={selected ? "page" : undefined}
             className={cx(
-              "flex w-full flex-col gap-0.5 rounded-[9px] px-2.5 py-[7px] text-left transition-colors duration-100",
-              selected ? "bg-fg/10" : "hover:bg-fg/[0.035]",
+              "flex w-full flex-col gap-0.5 rounded-[9px] px-2.5 py-[7px] text-left transition-colors duration-150 ease-out",
+              selected ? "bg-fg/10" : "hover:bg-fg/[0.05] active:bg-fg/[0.08]",
+              status === "done" && !selected && "opacity-60",
             )}
           >
             <span className="flex w-full items-center gap-2">
@@ -194,7 +262,9 @@ function ThreadRow({
                   <MessageCircleQuestion size={12} className="text-attention" />
                 ) : running ? (
                   <Spinner size={12} />
-                ) : null}
+                ) : (
+                  <StatusChip status={status} compact />
+                )}
               </span>
             </span>
             {request ? (
@@ -203,7 +273,14 @@ function ThreadRow({
               </span>
             ) : (
               <span className="flex items-center gap-1 truncate text-caption text-fg-2">
-                {scopeAll && session.cwd && <Folder size={9} className="shrink-0" />}
+                {worktree ? (
+                  <span className="flex min-w-0 shrink items-center gap-0.5 rounded-[5px] bg-fill-3 px-1 font-mono text-[10px]">
+                    <GitBranch size={9} className="shrink-0" />
+                    <span className="truncate">{worktree.branch}</span>
+                  </span>
+                ) : (
+                  scopeAll && session.cwd && <Folder size={9} className="shrink-0" />
+                )}
                 <span className="truncate">{detail.join(" · ")}</span>
               </span>
             )}
@@ -310,6 +387,7 @@ export function Sidebar() {
   const hidden = useApp((s) => s.sidebarHidden);
   const pinned = useApp((s) => s.pinned);
   const archived = useApp((s) => s.archived);
+  const view = useApp((s) => s.view.kind);
   const [showArchived, setShowArchived] = useState(false);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"all" | "project">("all");
@@ -340,12 +418,30 @@ export function Sidebar() {
   }, [sessions, query, scope, projectCwd, archived, showArchived]);
   const archivedCount = useMemo(() => sessions.filter((s) => s.id in archived).length, [sessions, archived]);
 
+  const links = useApp((s) => s.links.links);
+  // Threads another thread started (start_session, fan_out) sit under it.
+  const parentOf = useMemo(() => {
+    const listed = new Set(filtered.map((s) => s.id));
+    const map: Record<string, string> = {};
+    for (const l of links) if (l.started && listed.has(l.orchestrator)) map[l.target] = l.orchestrator;
+    return map;
+  }, [links, filtered]);
+  const childrenOf = useMemo(() => {
+    const map: Record<string, SessionSummary[]> = {};
+    for (const s of filtered) {
+      const parent = parentOf[s.id];
+      if (parent) map[parent] = [...(map[parent] ?? []), s];
+    }
+    return map;
+  }, [filtered, parentOf]);
+
   const groups = useMemo(() => {
     const needs: SessionSummary[] = [];
     const working: SessionSummary[] = [];
     const pins: SessionSummary[] = [];
     const rest: SessionSummary[] = [];
     for (const s of filtered) {
+      if (parentOf[s.id]) continue;
       const t = threads[s.id];
       if (t?.permissions.length) needs.push(s);
       else if (t?.running) working.push(s);
@@ -353,13 +449,27 @@ export function Sidebar() {
       else rest.push(s);
     }
     pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
+    // The rest by project: a worktree thread belongs to its repository.
+    const byProject = new Map<string, SessionSummary[]>();
+    for (const s of rest) {
+      const key = s.worktree?.repo || s.cwd || "";
+      byProject.set(key, [...(byProject.get(key) ?? []), s]);
+    }
+    const projects =
+      showArchived || byProject.size <= 1
+        ? [{ id: "threads", label: showArchived ? "Archived" : undefined, items: rest }]
+        : [...byProject.entries()].map(([key, items]) => ({
+            id: `project:${key}`,
+            label: key ? projectName(key) : "No folder",
+            items,
+          }));
     return [
       { id: "needs", label: "Needs You", items: needs },
       { id: "working", label: "Working", items: working },
       { id: "pinned", label: "Pinned", items: pins },
-      { id: "threads", label: showArchived ? "Archived" : undefined, items: rest },
+      ...projects,
     ].filter((g) => g.items.length);
-  }, [filtered, threads, pinned, showArchived]);
+  }, [filtered, threads, pinned, showArchived, parentOf]);
 
   const onResize = (e: React.PointerEvent) => {
     dragging.current = true;
@@ -398,7 +508,7 @@ export function Sidebar() {
             </ClusterButton>
           </Cluster>
         </div>
-        <label className="surface mx-3 mt-2 flex h-[30px] shrink-0 items-center gap-1.5 rounded-full px-3">
+        <label className="mx-3 mt-2 flex h-[30px] shrink-0 items-center gap-1.5 rounded-full bg-fill-3 px-3 transition-colors duration-150 focus-within:bg-fill-2 hover:bg-fill-2">
           <Search size={13} className="shrink-0 text-fg-2" />
           <input
             value={query}
@@ -420,7 +530,15 @@ export function Sidebar() {
           )}
         </label>
         <div className="flex shrink-0 items-center justify-between pt-3 pr-3 pb-1 pl-5">
-          <span className="font-semibold text-caption text-fg-2">Threads</span>
+          <Segments
+            label="View"
+            value={view === "board" ? "board" : "list"}
+            onChange={(v) => setView(v === "board" ? { kind: "board" } : { kind: "chat" })}
+            options={[
+              { value: "list", label: "List" },
+              { value: "board", label: "Board" },
+            ]}
+          />
           <Segments
             label="Scope"
             value={scope}
@@ -471,13 +589,24 @@ export function Sidebar() {
               )}
               <div className="flex flex-col gap-0.5">
                 {group.items.map((s) => (
-                  <ThreadRow
-                    key={s.id}
-                    session={s}
-                    selected={s.id === selectedId}
-                    scopeAll={scope === "all"}
-                    now={now}
-                  />
+                  <div key={s.id} className="flex flex-col gap-0.5">
+                    <ThreadRow
+                      session={s}
+                      selected={s.id === selectedId}
+                      scopeAll={scope === "all" && !group.id.startsWith("project:")}
+                      now={now}
+                    />
+                    {childrenOf[s.id]?.map((child) => (
+                      <div key={child.id} className="ml-[14px] border-fg/[0.08] border-l pl-1">
+                        <ThreadRow
+                          session={child}
+                          selected={child.id === selectedId}
+                          scopeAll={false}
+                          now={now}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 ))}
               </div>
             </div>

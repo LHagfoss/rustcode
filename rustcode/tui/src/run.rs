@@ -453,6 +453,22 @@ fn run_storage_command(
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = crate::cli::Cli::parse();
+    // Started by an external harness on the engine's behalf: it speaks MCP
+    // on stdio and must not run migrations or print anything else.
+    if let Some(crate::cli::Commands::McpOrchestrator {
+        session,
+        socket,
+        token,
+    }) = cli_args.command.as_ref()
+    {
+        if let Err(error) =
+            rustcode::run_mcp_orchestrator(session.clone(), socket.clone(), token.clone()).await
+        {
+            eprintln!("rustcode mcp-orchestrator: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(crate::cli::Commands::Storage { command }) = cli_args.command.as_ref() {
         run_storage_command(command)?;
         return Ok(());

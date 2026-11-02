@@ -148,6 +148,19 @@ Each answers with the fresh snapshot (`models` with its list). `session/new`
 with `_meta.rustcode.harness` starts a thread on that harness; the rest of
 the thread is standard ACP.
 
+## Orchestration
+
+A client that hosts threads advertises `clientCapabilities._meta.rustcode.orchestration`
+in `initialize`: `1` for the M1 tools (`list_sessions`, `message_session`,
+`wait_session`), `2` to add `read_session`, `start_session` and `fan_out`
+([orchestrator.md](orchestrator.md)). The engine sends each call to the
+client as a `_rustcode/orchestration` request
+(`{"sessionId", "tool", "args"}`); the client answers with the result or
+`{"error": {"code", "message"}}`. With `2`, external harness threads get the
+same tools through the injected `rustcode mcp-orchestrator`, and their
+calls arrive the same way under the external thread's id; the thread's
+`_meta.rustcode.harness.capabilities.orchestration` says whether it has them.
+
 ## Failure behavior
 
 Per-session completion delivery is bounded so a disconnected or stalled client

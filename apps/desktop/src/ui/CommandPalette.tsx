@@ -4,8 +4,13 @@
 // only; ⇥ switches threads between all projects and this one.
 
 import {
+  CircleCheck,
+  Columns3,
   CornerDownLeft,
+  Eye,
+  FileDiff,
   Settings as Gear,
+  GitBranch,
   type LucideIcon,
   MessageSquare,
   Moon,
@@ -22,14 +27,18 @@ import { Dialog } from "radix-ui";
 import { useMemo, useState } from "react";
 import { modelName, projectName } from "../acp/types";
 import {
+  featureMissing,
   openSettings,
   restartEngine,
   type SettingsSection,
   selectThread,
   setNewThreadChoice,
+  setNewWorktree,
   setSwitcher,
   setTerminalOpen,
   setTheme,
+  setThreadStatus,
+  setView,
   startNewThread,
   toggleSidebar,
   useApp,
@@ -87,6 +96,59 @@ function baseActions(): PaletteAction[] {
           },
         }),
       ),
+    {
+      id: "board",
+      label: s.view.kind === "board" ? "Show the chat" : "Show the board",
+      detail: "Running, Needs input, Review, Done",
+      icon: Columns3,
+      words: "kanban status view list",
+      run: () => setView(s.view.kind === "board" ? { kind: "chat" } : { kind: "board" }),
+    },
+    ...(s.selectedId
+      ? [
+          {
+            id: "review",
+            label: "Review changes of this thread",
+            icon: FileDiff,
+            words: "diff comments pull request",
+            run: () => setView({ kind: "review", threadId: s.selectedId! }),
+          },
+          {
+            id: "mark-review",
+            label: "Mark this thread for review",
+            icon: Eye,
+            words: "status",
+            run: () => void setThreadStatus(s.selectedId!, "review"),
+          },
+          {
+            id: "mark-done",
+            label: "Mark this thread done",
+            icon: CircleCheck,
+            words: "status",
+            run: () => void setThreadStatus(s.selectedId!, "done"),
+          },
+        ]
+      : []),
+    {
+      id: "new-worktree",
+      label: "New thread in a worktree",
+      icon: GitBranch,
+      words: "branch",
+      disabled: featureMissing("worktrees") ?? undefined,
+      run: () => {
+        startNewThread();
+        setNewWorktree({ on: true, branch: "", edited: false });
+      },
+    },
+    ...s.links.fanOuts.slice(-3).map(
+      (f): PaletteAction => ({
+        id: `compare-${f.id}`,
+        label: `Compare: ${f.title}`,
+        icon: Columns3,
+        words: "fan out harnesses",
+        run: () => setView({ kind: "compare", fanOut: f.id }),
+      }),
+    ),
     { id: "sidebar", label: "Toggle sidebar", icon: PanelLeft, keys: "⌘B", run: toggleSidebar },
     {
       id: "terminal",

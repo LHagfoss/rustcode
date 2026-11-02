@@ -1500,6 +1500,9 @@ pub const TOOLS: &[Tool] = &[
     misc::LIST_SESSIONS,
     misc::MESSAGE_SESSION,
     misc::WAIT_SESSION,
+    misc::READ_SESSION,
+    misc::START_SESSION,
+    misc::FAN_OUT,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {

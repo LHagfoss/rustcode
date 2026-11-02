@@ -11,6 +11,7 @@ import {
   ChevronUp,
   FileText,
   Folder,
+  GitBranch,
   ListEnd,
   Paperclip,
   Pencil,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectName, type SlashCommand } from "../acp/types";
+import { suggestBranch, validBranch } from "../acp/v2";
 import { onFileDrop, pickFiles, pickFolder, readImage } from "../lib/native";
 import {
   type Attachment,
@@ -37,11 +39,13 @@ import {
   cancel,
   cancelEdit,
   canSteer,
+  featureMissing,
   moveQueued,
   removeQueued,
   sendQueuedNow,
   setDraft,
   setExtras,
+  setNewWorktree,
   setProjectCwd,
   steerOrSubmit,
   submit,
@@ -453,6 +457,15 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
         </div>
         <div className="flex items-center gap-1">
           <FolderMenu thread={thread} cwd={cwd} />
+          {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+          {thread?.worktree && (
+            <Tooltip label={`Worktree: ${thread.worktree.path}`}>
+              <span className="flex h-[26px] max-w-[220px] items-center gap-1.5 rounded-xl px-2 text-callout text-fg-2">
+                <GitBranch size={12} className="shrink-0" />
+                <span className="truncate">{thread.worktree.branch}</span>
+              </span>
+            </Tooltip>
+          )}
           <Tooltip
             label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}
           >
@@ -682,6 +695,63 @@ function AttachmentStrip({
             </span>
           </Tooltip>
         ),
+      )}
+    </div>
+  );
+}
+
+/**
+ * "New worktree" for a new thread: the thread runs on its own branch in its
+ * own folder, so parallel threads never edit the same checkout. The branch
+ * name follows the message until the user edits it.
+ */
+function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }) {
+  const wt = useApp((s) => s.newWorktree);
+  const missing = useApp((s) => (s.features.worktrees ? null : featureMissing("worktrees")));
+  const suggested = suggestBranch(draft || "new thread");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: follow the draft until edited
+  useEffect(() => {
+    if (wt.on && !wt.edited && wt.branch !== suggested) setNewWorktree({ branch: suggested });
+  }, [suggested, wt.on, wt.edited]);
+  const valid = !wt.branch.trim() || validBranch(wt.branch.trim());
+  return (
+    <div className="flex items-center gap-1">
+      <Tooltip
+        label={
+          missing ??
+          (wt.on
+            ? "This thread gets its own branch and folder (a git worktree)"
+            : "New worktree: run this thread on its own branch, in its own folder")
+        }
+      >
+        <button
+          type="button"
+          aria-pressed={wt.on}
+          disabled={!!missing}
+          onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
+          className={cx(
+            "flex h-[26px] items-center gap-1.5 rounded-xl px-2.5 text-callout disabled:opacity-40",
+            wt.on ? "bg-brand/15 text-brand" : "text-fg-2 enabled:hover:bg-fill-2",
+          )}
+        >
+          <GitBranch size={12} />
+          {!compact && !wt.on && <span>Worktree</span>}
+        </button>
+      </Tooltip>
+      {wt.on && (
+        <input
+          value={wt.branch}
+          onChange={(e) => setNewWorktree({ branch: e.target.value, edited: true })}
+          aria-label="Branch name"
+          aria-invalid={!valid}
+          spellCheck={false}
+          placeholder={suggested}
+          size={Math.min(32, Math.max(12, wt.branch.length + 1))}
+          className={cx(
+            "h-[24px] rounded-lg bg-field px-2 font-mono text-caption outline-none ring-1 rc-in",
+            valid ? "ring-hairline focus:ring-brand/50" : "ring-danger/60",
+          )}
+        />
       )}
     </div>
   );

@@ -144,6 +144,18 @@ export async function defaultTransport(): Promise<Transport> {
   if (isTauri()) return new TauriTransport();
   const query = new URLSearchParams(window.location.search).get("transport");
   const choice = query ?? import.meta.env.VITE_TRANSPORT;
+  if (choice === "perf") {
+    // `bun run perf`: a load generator; numbers in the query size it.
+    const { PerfTransport } = await import("./perf");
+    const q = new URLSearchParams(window.location.search);
+    const n = (key: string) => (q.has(key) ? Number(q.get(key)) : undefined);
+    return new PerfTransport({
+      threads: n("threads"),
+      messages: n("messages"),
+      rate: n("rate"),
+      seconds: n("seconds"),
+    });
+  }
   if (choice === "mock") {
     const { MockTransport } = await import("./mock");
     const scenario = new URLSearchParams(window.location.search).get("scenario") ?? undefined;

@@ -535,10 +535,13 @@ export function TurnEndRow({
   item,
   reply,
   completion,
+  changes,
 }: {
   item: Item<"turnEnd">;
   reply?: string;
   completion?: TurnCompletion | null;
+  /** The turn's checkpoint chip (Changes), when the engine keeps checkpoints. */
+  changes?: ReactNode;
 }) {
   const parts = [
     item.outcome === "cancelled"
@@ -557,6 +560,7 @@ export function TurnEndRow({
         {reply && <CopyButton text={reply} iconOnly label="Copy reply" />}
         {item.outcome === "cancelled" && <SquareStop size={11} />}
         <span className="tabular">{parts.join(" · ")}</span>
+        {changes}
       </div>
     </div>
   );

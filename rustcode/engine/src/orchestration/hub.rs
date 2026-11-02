@@ -1,0 +1,398 @@
+//! The parent engine's end of `rustcode mcp-orchestrator`
+//! (`docs/orchestrator.md`, External harnesses as orchestrators).
+//!
+//! An external harness thread gets the orchestration tools through an MCP
+//! server the engine injects into it. That server runs as a child of the
+//! harness, so it cannot reach the ACP client itself: it sends each call
+//! here over a unix socket, with the thread's id and a per-thread token.
+//! The hub checks both and forwards the call through the same
+//! `_rustcode/orchestration` client request a built-in tool uses, so the
+//! client's rules and approvals apply unchanged.
+//!
+//! The socket is `<config>/run/orchestrator-<pid>.sock`, mode 0600 in a
+//! 0700 directory, and is bound the first time a thread registers.
+//!
+//! Wire format: one connection per call. The caller writes one JSON line
+//! `{"session_id", "token", "tool", "args"}` and reads one JSON line
+//! `{"success": bool, "content": "..."}`. Closing the connection early
+//! cancels the call.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::preview::PreviewClient;
+
+/// The longest request line the hub reads: arguments are bounded well
+/// below this by validation.
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallRequest {
+    pub session_id: String,
+    pub token: String,
+    pub tool: String,
+    #[serde(default)]
+    pub args: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallAnswer {
+    pub success: bool,
+    pub content: String,
+}
+
+impl CallAnswer {
+    fn failure(content: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            content: content.into(),
+        }
+    }
+}
+
+/// How the engine starts `rustcode mcp-orchestrator` for one thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub command: PathBuf,
+    pub args: Vec<String>,
+}
+
+/// How long a harness should let one call run: the longest
+/// `wait_session` plus room for the app to answer.
+pub const TOOL_TIMEOUT_SECS: u64 = super::MAX_WAIT_MS / 1000 + 60;
+
+/// The name the server has in a harness's MCP list.
+pub const SERVER_NAME: &str = "rustcode";
+
+impl Launch {
+    pub fn new(command: PathBuf, session_id: &str, socket: &Path, token: &str) -> Self {
+        Self {
+            command,
+            args: vec![
+                "mcp-orchestrator".to_owned(),
+                "--session".to_owned(),
+                session_id.to_owned(),
+                "--socket".to_owned(),
+                socket.to_string_lossy().into_owned(),
+                "--token".to_owned(),
+                token.to_owned(),
+            ],
+        }
+    }
+
+    /// One ACP `McpServer` (stdio) entry for `session/new`'s `mcpServers`.
+    pub fn acp_server(&self) -> Value {
+        serde_json::json!({
+            "name": SERVER_NAME,
+            "command": self.command.to_string_lossy(),
+            "args": self.args,
+            "env": [],
+        })
+    }
+
+    /// Codex `thread/start` / `thread/resume` `config` overrides that add
+    /// the server for that thread only.
+    pub fn codex_config(&self) -> Value {
+        serde_json::json!({
+            format!("mcp_servers.{SERVER_NAME}"): {
+                "command": self.command.to_string_lossy(),
+                "args": self.args,
+                // Codex stops an MCP call after 60 s by default; a call
+                // can wait for the user, and `wait_session` up to an hour.
+                "tool_timeout_sec": TOOL_TIMEOUT_SECS,
+            }
+        })
+    }
+}
+
+struct Registered {
+    token: String,
+    client: Arc<dyn PreviewClient>,
+}
+
+pub struct Hub {
+    path: PathBuf,
+    sessions: StdMutex<HashMap<String, Registered>>,
+}
+
+fn random_token() -> String {
+    format!(
+        "{:032x}{:032x}",
+        rand::random::<u128>(),
+        rand::random::<u128>()
+    )
+}
+
+fn same_token(left: &str, right: &str) -> bool {
+    left.len() == right.len()
+        && left
+            .bytes()
+            .zip(right.bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
+impl Hub {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Let `session_id` call through `client`; returns its token. A thread
+    /// registered again gets a new token.
+    pub fn register(&self, session_id: &str, client: Arc<dyn PreviewClient>) -> String {
+        let token = random_token();
+        self.lock().insert(
+            session_id.to_owned(),
+            Registered {
+                token: token.clone(),
+                client,
+            },
+        );
+        token
+    }
+
+    pub fn unregister(&self, session_id: &str) {
+        self.lock().remove(session_id);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Registered>> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// The client for a call, when its session and token match.
+    fn authorize(&self, request: &CallRequest) -> Option<Arc<dyn PreviewClient>> {
+        let sessions = self.lock();
+        let registered = sessions.get(&request.session_id)?;
+        same_token(&registered.token, &request.token).then(|| Arc::clone(&registered.client))
+    }
+
+    /// Answer one decoded call.
+    pub async fn answer(
+        &self,
+        request: CallRequest,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> CallAnswer {
+        let Some(client) = self.authorize(&request) else {
+            return CallAnswer::failure(
+                "error: RustCode did not accept this orchestrator's session or token. Nothing was sent.",
+            );
+        };
+        if !super::is_tool(&request.tool) {
+            return CallAnswer::failure(format!(
+                "error: {} is not an orchestration tool",
+                request.tool
+            ));
+        }
+        let output = super::execute_versioned(
+            Some(client),
+            super::VERSION,
+            cancel,
+            &request.tool,
+            &request.args,
+        )
+        .await;
+        CallAnswer {
+            success: output.success,
+            content: output.content,
+        }
+    }
+}
+
+#[cfg(unix)]
+mod listen {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{UnixListener, UnixStream};
+
+    impl Hub {
+        /// Bind the socket at `path` (its directory made 0700, the socket
+        /// 0600) and serve it until the process exits.
+        pub async fn bind(path: PathBuf) -> std::io::Result<Arc<Self>> {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+                prune_stale(dir);
+            }
+            let _ = std::fs::remove_file(&path);
+            let listener = UnixListener::bind(&path)?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            let hub = Arc::new(Self {
+                path,
+                sessions: StdMutex::new(HashMap::new()),
+            });
+            let serving = Arc::clone(&hub);
+            tokio::spawn(async move {
+                loop {
+                    match listener.accept().await {
+                        Ok((stream, _)) => {
+                            let hub = Arc::clone(&serving);
+                            tokio::spawn(async move { hub.serve(stream).await });
+                        }
+                        Err(error) => {
+                            crate::dbg_log!("orchestrator socket accept failed: {error}");
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        }
+                    }
+                }
+            });
+            Ok(hub)
+        }
+
+        async fn serve(self: Arc<Self>, stream: UnixStream) {
+            let (read, mut write) = stream.into_split();
+            let mut reader = BufReader::new(read);
+            let mut line = Vec::new();
+            let read_line = (&mut reader)
+                .take(MAX_REQUEST_BYTES as u64 + 1)
+                .read_until(b'\n', &mut line)
+                .await;
+            let answer = match read_line {
+                Ok(_) if line.len() > MAX_REQUEST_BYTES => {
+                    CallAnswer::failure("error: the orchestration call is too large")
+                }
+                Ok(_) => match serde_json::from_slice::<CallRequest>(&line) {
+                    Ok(request) => {
+                        let cancel = tokio_util::sync::CancellationToken::new();
+                        // The caller closing its end cancels the call.
+                        let watch = {
+                            let cancel = cancel.clone();
+                            tokio::spawn(async move {
+                                let mut rest = [0u8; 64];
+                                while matches!(reader.read(&mut rest).await, Ok(n) if n > 0) {}
+                                cancel.cancel();
+                            })
+                        };
+                        let answer = self.answer(request, &cancel).await;
+                        watch.abort();
+                        answer
+                    }
+                    Err(error) => {
+                        CallAnswer::failure(format!("error: bad orchestration call: {error}"))
+                    }
+                },
+                Err(error) => CallAnswer::failure(format!("error: {error}")),
+            };
+            let mut text = serde_json::to_vec(&answer).unwrap_or_default();
+            text.push(b'\n');
+            let _ = write.write_all(&text).await;
+            let _ = write.shutdown().await;
+        }
+    }
+
+    /// Remove sockets of engines that are no longer running.
+    fn prune_stale(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(pid) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix("orchestrator-"))
+                .and_then(|name| name.strip_suffix(".sock"))
+                .and_then(|pid| pid.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if pid <= 0 || pid as u32 == std::process::id() {
+                continue;
+            }
+            // SAFETY: signal 0 only checks whether the process exists.
+            let alive = unsafe { libc::kill(pid, 0) } == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+            if !alive {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    /// Send one call to the hub at `socket` and read its answer.
+    pub async fn call(socket: &Path, request: &CallRequest) -> CallAnswer {
+        let mut stream = match UnixStream::connect(socket).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                return CallAnswer::failure(format!(
+                    "error: RustCode is not reachable ({error}); the thread that started this harness may have closed. Nothing was sent."
+                ));
+            }
+        };
+        let mut line = serde_json::to_vec(request).unwrap_or_default();
+        line.push(b'\n');
+        if let Err(error) = stream.write_all(&line).await {
+            return CallAnswer::failure(format!("error: could not reach RustCode: {error}"));
+        }
+        let mut answer = Vec::new();
+        if let Err(error) = BufReader::new(stream).read_until(b'\n', &mut answer).await {
+            return CallAnswer::failure(format!("error: RustCode did not answer: {error}"));
+        }
+        serde_json::from_slice(&answer).unwrap_or_else(|_| {
+            CallAnswer::failure(
+                "error: RustCode closed the call without an answer; if it was a message, it may have been delivered",
+            )
+        })
+    }
+}
+
+#[cfg(unix)]
+pub use listen::call;
+
+#[cfg(unix)]
+static HUB: tokio::sync::OnceCell<Arc<Hub>> = tokio::sync::OnceCell::const_new();
+
+/// The process's hub, bound on first use.
+#[cfg(unix)]
+pub async fn shared() -> Result<Arc<Hub>, String> {
+    HUB.get_or_try_init(|| async {
+        let dir = crate::harness::config::config_dir()?.join("run");
+        let path = dir.join(format!("orchestrator-{}.sock", std::process::id()));
+        Hub::bind(path)
+            .await
+            .map_err(|error| format!("orchestrator socket: {error}"))
+    })
+    .await
+    .cloned()
+}
+
+/// Register an external harness thread with the process's hub, binding it
+/// on first use, and say how to start its MCP server. `None` when the
+/// platform or the socket cannot carry it.
+pub async fn launch_for(session_id: &str, client: Arc<dyn PreviewClient>) -> Option<Launch> {
+    #[cfg(unix)]
+    {
+        let hub = match shared().await {
+            Ok(hub) => hub,
+            Err(error) => {
+                crate::dbg_log!("orchestrator unavailable: {error}");
+                return None;
+            }
+        };
+        let command = std::env::current_exe().ok()?;
+        let token = hub.register(session_id, client);
+        Some(Launch::new(command, session_id, hub.path(), &token))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (session_id, client);
+        None
+    }
+}
+
+/// Forget a closed thread's registration.
+pub fn release(session_id: &str) {
+    #[cfg(unix)]
+    {
+        // Only a hub that was bound has registrations; never bind here.
+        if let Some(hub) = HUB.get() {
+            hub.unregister(session_id);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = session_id;
+}

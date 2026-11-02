@@ -213,6 +213,9 @@ impl CodexAdapter {
             if let Some(model) = &options.model {
                 params["model"] = json!(model);
             }
+            if let Some(launch) = &options.orchestrator {
+                params["config"] = launch.codex_config();
+            }
             match peer
                 .request_within("thread/resume", params, HANDSHAKE_TIMEOUT)
                 .await
@@ -231,6 +234,9 @@ impl CodexAdapter {
                 let mut params = json!({"cwd": cwd_text});
                 if let Some(model) = &options.model {
                     params["model"] = json!(model);
+                }
+                if let Some(launch) = &options.orchestrator {
+                    params["config"] = launch.codex_config();
                 }
                 peer.request_within("thread/start", params, HANDSHAKE_TIMEOUT)
                     .await

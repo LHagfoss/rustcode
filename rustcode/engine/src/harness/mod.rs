@@ -49,6 +49,10 @@ pub(crate) struct Capabilities {
     pub slash_commands: bool,
     pub smart_ui: bool,
     pub rustcode_extensions: bool,
+    /// Whether the thread gets the orchestration tools: built in for
+    /// RustCode, through the injected `rustcode mcp-orchestrator` for an
+    /// external harness (`docs/orchestrator.md`).
+    pub orchestration: bool,
 }
 
 impl Capabilities {
@@ -66,6 +70,7 @@ impl Capabilities {
             slash_commands: true,
             smart_ui: true,
             rustcode_extensions: true,
+            orchestration: true,
         }
     }
 
@@ -91,6 +96,9 @@ impl Capabilities {
             slash_commands: kind == HarnessKind::Acp,
             smart_ui: false,
             rustcode_extensions: false,
+            // Both kinds take a per-thread MCP server (ACP `mcpServers`,
+            // Codex `config.mcp_servers`); it needs a unix socket.
+            orchestration: cfg!(unix),
         }
     }
 }
@@ -290,10 +298,16 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
 }
 
 /// The thread metadata that names its harness, for `session/new` answers.
-pub(crate) fn session_meta(harness: &ResolvedHarness) -> serde_json::Map<String, Value> {
+/// `orchestration` says whether this thread got the orchestration tools.
+pub(crate) fn session_meta(
+    harness: &ResolvedHarness,
+    orchestration: bool,
+) -> serde_json::Map<String, Value> {
+    let mut capabilities = capabilities(harness);
+    capabilities.orchestration = orchestration;
     serde_json::Map::from_iter([(
         "rustcode".to_owned(),
-        json!({ "harness": { "id": harness.id, "capabilities": capabilities(harness) } }),
+        json!({ "harness": { "id": harness.id, "capabilities": capabilities } }),
     )])
 }
 
@@ -511,7 +525,7 @@ mod tests {
                 "images": true, "models": "static", "effort": true,
                 "permission_modes": ["default", "auto_edit", "full_access"],
                 "subagents": true, "slash_commands": true, "smart_ui": true,
-                "rustcode_extensions": true
+                "rustcode_extensions": true, "orchestration": true
             })
         );
         let codex = serde_json::to_value(Capabilities::external(HarnessKind::Codex)).unwrap();
@@ -521,7 +535,7 @@ mod tests {
                 "steer": "live", "cancel": true, "resume": true, "rewind": false,
                 "images": true, "models": "dynamic", "effort": true,
                 "permission_modes": [], "subagents": false, "slash_commands": false,
-                "smart_ui": false, "rustcode_extensions": false
+                "smart_ui": false, "rustcode_extensions": false, "orchestration": cfg!(unix)
             })
         );
         let acp = serde_json::to_value(Capabilities::external(HarnessKind::Acp)).unwrap();

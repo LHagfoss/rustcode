@@ -317,6 +317,9 @@ pub struct AppState {
     /// The client that hosts other threads for `message_session` (#2637),
     /// when it advertised one.
     pub orchestration_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
+    /// The orchestration version that client advertised: 1 offers the M1
+    /// tools, 2 adds `read_session`, `start_session` and `fan_out`.
+    pub orchestration_version: u8,
     pub preview_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     pub desktop_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     /// The client that renders `smart_ui_preview` calls, when Smart UI is on
@@ -1792,6 +1795,7 @@ impl AppState {
             desktop_client: None,
             smart_ui_client: None,
             orchestration_client: None,
+            orchestration_version: 0,
             pending_preview_images: Vec::new(),
             show_mcp_config: false,
             mcp_picker_index: 0,

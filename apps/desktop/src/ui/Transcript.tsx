@@ -5,11 +5,13 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { checkpointsByTurn } from "../acp/v2";
 import { useApp } from "../state/store";
 import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
 import { AgentSpawnRow } from "./AgentViews";
 import { cx } from "./primitives";
 import { AssistantRow, NoticeRow, ThoughtRow, ToolRow, TurnEndRow, UserRow, WorkingRow } from "./Rows";
+import { TurnChanges } from "./TurnChanges";
 
 type Row = { key: string; item?: TranscriptItem; working?: true };
 
@@ -112,6 +114,18 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
     return map;
   }, [thread.items]);
   const rewind = useApp((s) => !!s.agent?.rewind) && (thread.harness?.capabilities.rewind ?? true);
+  const checkpoints = useApp((s) => s.checkpoints[thread.id]);
+  // Each finished turn's checkpoint, for its Changes chip.
+  const turnCheckpoints = useMemo(() => {
+    if (!checkpoints?.length) return {};
+    const turns: { id: string; prompt: string }[] = [];
+    let prompt = "";
+    for (const item of thread.items) {
+      if (item.kind === "user") prompt = item.text;
+      else if (item.kind === "turnEnd") turns.push({ id: item.id, prompt });
+    }
+    return checkpointsByTurn(turns, checkpoints);
+  }, [thread.items, checkpoints]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -308,7 +322,16 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
                   ) : item?.kind === "notice" ? (
                     <NoticeRow item={item} />
                   ) : item?.kind === "turnEnd" ? (
-                    <TurnEndRow item={item} reply={replyBefore[item.id]} completion={completions[item.id]} />
+                    <TurnEndRow
+                      item={item}
+                      reply={replyBefore[item.id]}
+                      completion={completions[item.id]}
+                      changes={
+                        turnCheckpoints[item.id] && (
+                          <TurnChanges threadId={thread.id} checkpoint={turnCheckpoints[item.id]!} />
+                        )
+                      }
+                    />
                   ) : null}
                 </div>
               </div>

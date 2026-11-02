@@ -513,7 +513,14 @@ async fn acp_load_session(
                 agent_client_protocol::Error::invalid_params().data("session is already active")
             );
         }
-        return harnesses::load_session(&server.external, &request, record, connection).await;
+        return harnesses::load_session(
+            &server.external,
+            &request,
+            record,
+            connection,
+            server.client_has_orchestration.load(Ordering::Relaxed),
+        )
+        .await;
     }
     let cwd = canonical_acp_cwd(&request.cwd, "session/load")?;
     let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
@@ -561,7 +568,7 @@ async fn acp_load_session(
             connection,
             &session_id,
         );
-        state.orchestration_client = preview::orchestration_client_for(
+        (state.orchestration_client, state.orchestration_version) = preview::orchestration_for(
             server.client_has_orchestration.load(Ordering::Relaxed),
             connection,
             &session_id,
@@ -872,7 +879,8 @@ struct AcpServer {
     /// The client renders `smart_ui_preview` calls (`smartUi >= 2`).
     client_has_smart_ui_preview: Arc<AtomicBool>,
     /// The client hosts other threads for `message_session` (#2637).
-    client_has_orchestration: Arc<AtomicBool>,
+    /// The orchestration version the client advertised; 0 for none.
+    client_has_orchestration: Arc<AtomicU8>,
     /// Discord Rich Presence, for a client that asked for it (#2179).
     presence: presence::Presence,
     /// `/remote` shares and their pairing offers.
@@ -950,7 +958,7 @@ impl AcpServer {
             client_has_preview: Arc::new(AtomicBool::new(false)),
             client_has_desktop: Arc::new(AtomicBool::new(false)),
             client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
-            client_has_orchestration: Arc::new(AtomicBool::new(false)),
+            client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             external: harnesses::ExternalSessions::default(),
@@ -1208,7 +1216,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     Ordering::Relaxed,
                 );
                 server.client_has_orchestration.store(
-                    crate::orchestration::client_meta_supports(
+                    crate::orchestration::client_meta_version(
                         request.client_capabilities.meta.as_ref(),
                     ),
                     Ordering::Relaxed,
@@ -1233,10 +1241,17 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     // while; it does not hold the dispatch loop.
                     if let Some(asked) = harnesses::external_request(&request) {
                         let external = server.external.clone();
+                        let orchestration = server.client_has_orchestration.load(Ordering::Relaxed);
                         let connection = _connection.clone();
                         return _connection.spawn(async move {
-                            match harnesses::new_session(&external, request, asked, &connection)
-                                .await
+                            match harnesses::new_session(
+                                &external,
+                                request,
+                                asked,
+                                &connection,
+                                orchestration,
+                            )
+                            .await
                             {
                                 Ok(response) => responder.respond(response)?,
                                 Err(error) => responder.respond_with_error(error)?,
@@ -1260,11 +1275,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         &session_id,
                     );
                     state.desktop_client = preview::desktop_client_for(server.client_has_desktop.load(Ordering::Relaxed), &_connection, &session_id);
-                    state.orchestration_client = preview::orchestration_client_for(
-                        server.client_has_orchestration.load(Ordering::Relaxed),
-                        &_connection,
-                        &session_id,
-                    );
+                    (state.orchestration_client, state.orchestration_version) =
+                        preview::orchestration_for(
+                            server.client_has_orchestration.load(Ordering::Relaxed),
+                            &_connection,
+                            &session_id,
+                        );
                     state.smart_ui_client = preview::smart_ui_client_for(
                         state.smart_ui == crate::app::SmartUi::On
                             && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
@@ -2383,7 +2399,7 @@ mod tests {
             client_has_preview: Arc::new(AtomicBool::new(false)),
             client_has_desktop: Arc::new(AtomicBool::new(false)),
             client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
-            client_has_orchestration: Arc::new(AtomicBool::new(false)),
+            client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             external: harnesses::ExternalSessions::default(),

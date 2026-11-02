@@ -25,6 +25,8 @@ createRoot(root).render(
 
 // Dev builds expose the store and its actions, so an agent can drive and inspect the UI
 // (`window.__rustcode.useApp.getState()`), as DebugDriver does for the SwiftUI app.
-if (import.meta.env.DEV) Object.assign(window, { __rustcode: store });
+// `?transport=perf` exposes them in a production build too, for `bun run perf`.
+if (import.meta.env.DEV || new URLSearchParams(window.location.search).get("transport") === "perf")
+  Object.assign(window, { __rustcode: store });
 
 void defaultTransport().then(store.connect);
