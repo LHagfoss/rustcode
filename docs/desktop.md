@@ -39,9 +39,9 @@ Next, in rough order:
    have never run. Then cut a beta (`scripts/release.sh --beta`).
 2. Signing and notarization once the Apple secrets exist (#2034).
 3. Open desktop issues: #2792 (queue/steer with images), #2793 (copy
-   actions), #2794 (report results, context inspector), #2795 (command
-   actions select their thread), #2796 (usage ring refresh), #2799
-   (cross-harness delegation, live test plan).
+   actions), #2794 (report results), #2795 (command actions select their
+   thread), #2799 (cross-harness delegation, live test plan), and
+   #2802–#2806 ported from the SwiftUI app.
 4. The rest of [Not yet ported](#not-yet-ported), then archive `macos/` in
    its own repository and drop its CI.
 
@@ -223,12 +223,17 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   request changes, at the head commit). "Ask the agent to review" starts a
   thread draft naming the commit.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
-  and `PlanUsageMeter`: a ring filling with the context window in use
-  (`34k / 128k tokens · 73% left` on hover), and the plan's shortest window
-  from `_rustcode/usage/limits` as a short bar with the percentage left
-  (all windows and their resets on hover, which also refreshes them). A new
-  thread shows the limits the last thread learnt. The chat header no longer
-  repeats them.
+  and `PlanUsageMeter`: a ring filling with the context window in use, and
+  the plan's shortest window from `_rustcode/usage/limits` as a short bar
+  with the percentage left. Clicking the ring opens the context inspector:
+  a stacked bar and each category's tokens from the `usage_update`'s
+  `_meta.rustcode.context` (the conversation in accent shades, the fixed
+  overhead in greys), then the thread's in/out/cached totals. Hovering the
+  bar opens every window at once with a bar, quarter ticks and the time to
+  its reset. The plan numbers refresh on hover, every 5 minutes while the
+  app is in front and just after a window resets; a failed refresh keeps
+  the last numbers and says so. A new thread shows the limits the last
+  thread learnt. The chat header no longer repeats them.
 - **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
   model has the `fast` option) and the model with its effort on one line;
   the model's name drills into the list. Effort is a slider with a dot per
@@ -769,7 +774,7 @@ From the SwiftUI app, still missing or partial:
 - `@` file references; picking diff lines for a message. Files dropped in
   the browser are inlined as text rather than linked.
 - Slash commands the app answers itself (`/terminal`, `/remote`,
-  `/visualize`), report-command sheets, `/context` sheet.
+  `/visualize`), report-command sheets.
 - Snoozed and done threads, moving a thread to another folder
   (`_rustcode/session/move`), the retention sweep, swipe actions; loading
   the thread list page by page. Trash moves the folder into `~/.Trash`

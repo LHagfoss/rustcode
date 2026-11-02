@@ -1894,13 +1894,26 @@ export function startAgentPolling() {
   }, 2000);
 }
 
+const planUsageInFlight = new Set<string>();
+
+/**
+ * Asks the engine for the plan's usage windows. One request per thread at a
+ * time; a failed one keeps the last good numbers (marked stale), and only an
+ * answer without windows (the harness has no plan usage) clears them.
+ */
 export async function refreshPlanUsage(id: string): Promise<void> {
-  if (!connection) return;
+  if (!connection || planUsageInFlight.has(id)) return;
+  planUsageInFlight.add(id);
   try {
     const usage = parsePlanUsage(await connection.request(Method.usageLimits, { sessionId: id }, 10_000));
-    set((s) => ({ planUsage: { ...s.planUsage, [id]: usage } }));
+    set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt: Date.now() } } }));
   } catch {
-    set((s) => ({ planUsage: { ...s.planUsage, [id]: null } }));
+    set((s) => {
+      const last = s.planUsage[id];
+      return last ? { planUsage: { ...s.planUsage, [id]: { ...last, stale: true } } } : s;
+    });
+  } finally {
+    planUsageInFlight.delete(id);
   }
 }
 

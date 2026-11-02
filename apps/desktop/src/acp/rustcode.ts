@@ -277,6 +277,10 @@ export interface UsageWindow {
 export interface PlanUsage {
   source: string;
   windows: UsageWindow[];
+  /** When the client last got these numbers (ms). */
+  fetchedAt?: number;
+  /** The last refresh failed; these are the numbers from before it. */
+  stale?: boolean;
 }
 
 export function parsePlanUsage(result: Json | undefined): PlanUsage | null {
@@ -310,13 +314,35 @@ export function shownWindow(usage: PlanUsage): UsageWindow | undefined {
   return [...usage.windows].sort((a, b) => (a.minutes ?? Infinity) - (b.minutes ?? Infinity))[0];
 }
 
-export function windowDetail(w: UsageWindow, now = Date.now()): string {
-  if (!w.resetsAt) return `${leftPercent(w)}% left`;
-  const d = new Date(w.resetsAt);
-  const soon = w.resetsAt - now < 12 * 3600_000;
-  const time = d.toLocaleString(
-    undefined,
-    soon ? { hour: "2-digit", minute: "2-digit" } : { weekday: "short", hour: "2-digit", minute: "2-digit" },
-  );
-  return `${leftPercent(w)}% left · resets ${time}`;
+/** "resets in 2 h 14 min", or the clock time when it is more than a day away. */
+export function resetLabel(w: UsageWindow, now = Date.now()): string | undefined {
+  if (!w.resetsAt) return undefined;
+  const ms = w.resetsAt - now;
+  if (ms <= 0) return "resetting now";
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) return `resets in ${minutes} min`;
+  if (minutes < 24 * 60) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return `resets in ${h} h${m ? ` ${m} min` : ""}`;
+  }
+  const day = new Date(w.resetsAt).toLocaleString(undefined, {
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `resets ${day}`;
+}
+
+/** How often an idle app asks for fresh plan usage. */
+export const PLAN_REFRESH_MS = 5 * 60_000;
+
+/**
+ * When to ask again: on the regular interval, or a few seconds after the
+ * soonest window resets if that comes first, and never sooner than 5 s.
+ */
+export function nextPlanRefresh(plan: PlanUsage | null | undefined, now = Date.now()): number {
+  const resets = (plan?.windows ?? []).flatMap((w) => (w.resetsAt && w.resetsAt > now ? [w.resetsAt] : []));
+  const afterReset = resets.length ? Math.min(...resets) + 5_000 - now : Infinity;
+  return Math.max(5_000, Math.min(PLAN_REFRESH_MS, afterReset));
 }
