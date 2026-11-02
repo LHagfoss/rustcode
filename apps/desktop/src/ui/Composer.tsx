@@ -34,6 +34,7 @@ import {
   imageMime,
   MAX_IMAGE_BYTES,
   MAX_INLINE_FILE_BYTES,
+  splitUrls,
 } from "../state/compose";
 import { controlDisabledReason } from "../state/harness";
 import {
@@ -210,6 +211,8 @@ export const Composer = memo(function Composer({
   const cancelReason = controlDisabledReason("cancel", thread?.harness?.capabilities, harnessName);
   const cwd = thread?.cwd ?? projectCwd;
   const canSend = !!draft.trim() || hasExtras(extras);
+  const mirror = useRef<HTMLDivElement>(null);
+  const hasUrl = useMemo(() => /\bhttps?:\/\//i.test(draft), [draft]);
 
   // Ready to type on entering a thread, and again on coming back to the chat from Settings or
   // another view (the draft is kept either way).
@@ -483,18 +486,50 @@ export const Composer = memo(function Composer({
               onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
             />
           ))}
-          <textarea
-            ref={field}
-            value={draft}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            rows={1}
-            placeholder={placeholder}
-            aria-label="Message"
-            spellCheck
-            className="min-w-[160px] flex-1 basis-[160px] resize-none bg-transparent text-body leading-[18px] outline-none placeholder:text-fg-faint"
-          />
+          {/* Links in the draft read as links: a mirror under the field draws the same text with
+              each URL on an accent pill, and the field's own text is transparent so the mirror shows
+              through while the caret, selection and editing stay the field's. */}
+          <div className="relative min-w-[160px] flex-1 basis-[160px]">
+            {hasUrl && (
+              <div
+                ref={mirror}
+                aria-hidden
+                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-body text-fg leading-[18px]"
+              >
+                {splitUrls(draft).map((part, i) =>
+                  part.url ? (
+                    <span
+                      key={i}
+                      className="rounded-xs bg-accent/15 text-accent [box-decoration-break:clone]"
+                    >
+                      {part.url}
+                    </span>
+                  ) : (
+                    part.text
+                  ),
+                )}
+                {"\u200b"}
+              </div>
+            )}
+            <textarea
+              ref={field}
+              value={draft}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              onScroll={(e) => {
+                if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
+              }}
+              rows={1}
+              placeholder={placeholder}
+              aria-label="Message"
+              spellCheck
+              className={cx(
+                "relative block w-full resize-none bg-transparent text-body leading-[18px] outline-none placeholder:text-fg-faint",
+                hasUrl && "text-transparent caret-fg selection:bg-accent/30",
+              )}
+            />
+          </div>
         </div>
         <div className="flex items-center gap-0.5">
           <PlusMenu

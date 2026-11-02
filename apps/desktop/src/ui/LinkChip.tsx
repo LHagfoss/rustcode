@@ -47,7 +47,7 @@ export function LinkChip({
     <Tooltip label={<span className="break-all">{url}</span>}>
       <span
         className={cx(
-          "inline-flex h-[20px] max-w-[280px] shrink-0 items-center gap-1 rounded-full pr-2 pl-1 align-[-1px] text-callout leading-none",
+          "inline-flex h-[20px] max-w-[280px] shrink-0 items-center gap-1 rounded-full pr-2 pl-1 align-top text-callout leading-none",
           !tint && "bg-fill-strong shadow-[inset_0_0_0_0.5px_var(--color-border)]",
           onRemove && "pr-1",
           className,
@@ -75,7 +75,9 @@ export function LinkChip({
             <Globe size={12} className="ml-px shrink-0 text-fg-muted" />
           )}
           <span className="truncate font-medium">{title}</span>
-          {meta?.title && <span className="shrink-0 text-fg-muted">· {host}</span>}
+          {meta?.title && meta.title.trim() !== host && (
+            <span className="shrink-0 text-fg-muted">· {host}</span>
+          )}
         </a>
         {onRemove && (
           <button
