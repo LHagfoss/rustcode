@@ -271,9 +271,14 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
   long scrollers.
-- **Approvals** are one slim bar over the composer (Details opens the
-  command and diff); when a turn waits on several, *Approve all* allows
-  them once. Queued messages are rows above the composer that can be
+- **Approvals** are one card over the composer: what the agent wants (the
+  title opens the command and diff), then "Waiting for your approval" and
+  two buttons, *Decline* and *Allow* (prominent). The rarer answers, the
+  engine's always-allow and always-reject options and, when a turn waits
+  on several, *Allow all N waiting*, sit in *More* (after T3 Code). Keys
+  1–9 still pick in the engine's order. The composer is a light frost
+  (`--rc-composer-bg`: white glass in light mode, a pale tint of the text
+  in dark), solid under Reduce transparency. Queued messages are rows above the composer that can be
   edited in place, moved up, sent now as a steer, or removed.
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,

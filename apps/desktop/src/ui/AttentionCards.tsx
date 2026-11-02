@@ -1,16 +1,20 @@
 // Approval and question cards over the composer, after AttentionCards.swift.
-// Only the selected thread's first pending request shows. Buttons keep the
-// engine's option names, ordered reject → always → allow once (prominent).
-// Keys (when no text field has focus): 1–9 pick an option in button order.
+// Only the selected thread's first pending request shows. An approval offers
+// Decline and Allow (prominent); the rarer answers (always allow, always
+// reject, approve all) sit in a More menu, as T3 Code does. Keys (when no
+// text field has focus): 1–9 pick an option in the engine's order
+// reject → always → allow once, shown on each button's tooltip.
 
 import {
   CheckCheck,
+  ChevronDown,
   ChevronRight,
   CircleArrowUp,
   Hand,
   MessageCircleQuestion,
   ShieldAlert,
 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { isAllow, type PermissionOption, type PermissionRequest } from "../acp/types";
@@ -69,6 +73,12 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
     if (option) answerPermission(request, option);
   };
   useDigitKeys(options.length, pick);
+  // The two everyday answers get buttons; the rest go in More.
+  const decline =
+    options.find((o) => o.kind === "reject_once") ?? options.find((o) => o.kind === "reject_always");
+  const allow =
+    options.find((o) => o.kind === "allow_once") ?? options.find((o) => o.kind === "allow_always");
+  const always = options.filter((o) => o !== decline && o !== allow);
   const cwd = field(request.input, "cwd") ?? field(request.input, "workdir");
   const note = field(request.input, "reason");
   const expandable = request.input !== undefined || request.diffs.length > 0;
@@ -103,25 +113,6 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
           )}
         </button>
         {pending > 1 && <span className="shrink-0 text-caption text-fg-muted tabular">1 of {pending}</span>}
-        <div className="flex shrink-0 items-center gap-1.5">
-          {options.map((o, i) => {
-            const backtick = o.kind === "allow_always" && o.name.includes("`");
-            return (
-              <Tooltip key={o.id} label={backtick ? o.name : `${o.name} (${i + 1})`}>
-                <Pill prominent={o.kind === "allow_once"} onClick={() => pick(i)}>
-                  {backtick ? "Always allow this" : o.name}
-                </Pill>
-              </Tooltip>
-            );
-          })}
-          {pending > 1 && (
-            <Tooltip label={`Allow all ${pending} waiting requests once`}>
-              <Pill prominent onClick={() => approveAll(request.sessionId)}>
-                <CheckCheck size={13} /> Approve all
-              </Pill>
-            </Tooltip>
-          )}
-        </div>
       </div>
       {details && (
         <div className="flex flex-col gap-2 px-1 pb-1">
@@ -158,6 +149,60 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
           )}
         </div>
       )}
+      <div className="flex items-center gap-1.5 pl-1">
+        <span className="flex min-w-0 flex-1 items-center gap-1 text-caption text-warning">
+          <ShieldAlert size={12} className="shrink-0" />
+          <span className="truncate">Waiting for your approval</span>
+        </span>
+        {(always.length > 0 || pending > 1) && (
+          <DropdownMenu.Root modal={false}>
+            <DropdownMenu.Trigger asChild>
+              <Pill aria-label="More answers">
+                More <ChevronDown size={11} />
+              </Pill>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="top"
+                align="end"
+                sideOffset={6}
+                className="elevated z-50 max-w-[360px] min-w-[220px] rounded-lg p-1 rc-in"
+              >
+                {always.map((o) => (
+                  <DropdownMenu.Item
+                    key={o.id}
+                    onSelect={() => pick(options.indexOf(o))}
+                    className="flex items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill"
+                  >
+                    <span className="min-w-0 flex-1 break-words">{o.name}</span>
+                    <Kbd>{options.indexOf(o) + 1}</Kbd>
+                  </DropdownMenu.Item>
+                ))}
+                {pending > 1 && (
+                  <DropdownMenu.Item
+                    onSelect={() => approveAll(request.sessionId)}
+                    className="flex items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill"
+                  >
+                    <CheckCheck size={13} /> Allow all {pending} waiting
+                  </DropdownMenu.Item>
+                )}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        )}
+        {decline && (
+          <Tooltip label={`${decline.name} (${options.indexOf(decline) + 1})`}>
+            <Pill onClick={() => pick(options.indexOf(decline))}>Decline</Pill>
+          </Tooltip>
+        )}
+        {allow && (
+          <Tooltip label={`${allow.name} (${options.indexOf(allow) + 1})`}>
+            <Pill prominent onClick={() => pick(options.indexOf(allow))}>
+              Allow
+            </Pill>
+          </Tooltip>
+        )}
+      </div>
     </section>
   );
 }
