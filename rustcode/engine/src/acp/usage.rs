@@ -215,6 +215,75 @@ pub(crate) async fn limits(
     limits_json(limits.as_ref(), if chatgpt { "codex" } else { "provider" })
 }
 
+/// `_rustcode/usage/plans`: every subscription this machine is signed in to,
+/// with its windows, for Settings › Usage. Needs no session. Claude's numbers
+/// come from Claude Code's sign-in, which on macOS is in the Keychain, so it is
+/// read only when the app asks for it (`claude: true`) after the user chose to.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/usage/plans", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsagePlansRequest {
+    #[serde(default)]
+    pub claude: bool,
+}
+
+/// Answer `_rustcode/usage/plans`: `{plans: [{id, name, status, plan?, error?,
+/// windows: [{label, usedPercent, windowMinutes, resetsAt}]}]}`, where status
+/// is `ok`, `signedOut`, `unavailable` or `notAsked`.
+pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
+    let window = |label: &str, window: &crate::provider_auth::RateLimitWindow| {
+        serde_json::json!({
+            "label": label,
+            "usedPercent": window.used_percent,
+            "windowMinutes": window.window_minutes,
+            "resetsAt": window.resets_at,
+        })
+    };
+    let codex = crate::provider_auth::codex_usage::rate_limits().await;
+    let codex = match codex {
+        Some(limits) => {
+            let windows: Vec<_> = [limits.primary.as_ref(), limits.secondary.as_ref()]
+                .into_iter()
+                .flatten()
+                .map(|w| window(window_label(w.window_minutes), w))
+                .collect();
+            serde_json::json!({"id": "codex", "name": "ChatGPT", "via": "Codex CLI", "status": "ok", "windows": windows})
+        }
+        None => {
+            serde_json::json!({"id": "codex", "name": "ChatGPT", "via": "Codex CLI", "status": "signedOut", "windows": []})
+        }
+    };
+    let claude = if request.claude {
+        use crate::provider_auth::claude_usage::{ClaudeUsage, usage};
+        match usage().await {
+            ClaudeUsage::Windows { plan, windows } => serde_json::json!({
+                "id": "claude", "name": "Claude", "via": "Claude Code", "status": "ok", "plan": plan,
+                "windows": windows.iter().map(|w| window(w.label, &w.window)).collect::<Vec<_>>(),
+            }),
+            ClaudeUsage::NotSignedIn => {
+                serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code", "status": "signedOut", "windows": []})
+            }
+            ClaudeUsage::Unavailable(error) => {
+                serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code", "status": "unavailable", "error": error, "windows": []})
+            }
+        }
+    } else {
+        serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code", "status": "notAsked", "windows": []})
+    };
+    serde_json::json!({ "plans": [claude, codex] })
+}
+
+fn window_label(minutes: Option<u64>) -> &'static str {
+    match minutes {
+        Some(300) => "5-hour",
+        Some(10_080) => "Weekly",
+        Some(1_440) => "Daily",
+        _ => "Usage",
+    }
+}
+
 fn limits_json(
     limits: Option<&crate::provider_auth::ProviderRateLimits>,
     source: &str,

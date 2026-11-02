@@ -97,6 +97,7 @@ export type SettingsSection =
   | "connections"
   | "capabilities"
   | "appearance"
+  | "usage"
   | "engine";
 
 export type ToastTone = "info" | "success" | "error";

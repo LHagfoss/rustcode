@@ -254,6 +254,16 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   activity) and posts a review you write (`/review`: comment, approve or
   request changes, at the head commit). "Ask the agent to review" starts a
   thread draft naming the commit.
+- **Settings › Usage.** Every subscription this machine is signed in to, with
+  no thread open: `_rustcode/usage/plans` (engine `acp/usage.rs`) answers
+  `{plans: [{id, name, via, status, plan?, error?, windows}]}`. ChatGPT comes
+  from the Codex CLI's `account/rateLimits/read` (as the composer meter);
+  Claude from Claude Code's OAuth sign-in (Keychain `Claude Code-credentials`,
+  else `~/.claude/.credentials.json`) against `api.anthropic.com/api/oauth/usage`
+  (5-hour, weekly, weekly per model), read-only and never refreshed
+  (`provider_auth/claude_usage.rs`). Claude is read only after the user
+  presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
+  allow Keychain access. Each source is cached a minute.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
   and `PlanUsageMeter`: a ring filling with the context window in use, and
   the plan's shortest window from `_rustcode/usage/limits` as a short bar

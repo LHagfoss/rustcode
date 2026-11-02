@@ -9,6 +9,7 @@ import {
   Check,
   ChevronLeft,
   FolderOpen,
+  Gauge,
   Settings as Gear,
   Info,
   KeyRound,
@@ -54,6 +55,7 @@ import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { cx, Kbd, Pill, Segments, Switch, Tooltip } from "./primitives";
 import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
+import { UsagePage } from "./UsagePage";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
   { id: "general", label: "General", icon: Gear },
@@ -61,6 +63,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
   { id: "connections", label: "Connections", icon: KeyRound },
   { id: "capabilities", label: "Capabilities", icon: Blocks },
   { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "usage", label: "Usage", icon: Gauge },
   { id: "engine", label: "Engine", icon: TerminalSquare },
 ];
 
@@ -773,6 +776,7 @@ export function Settings() {
             {section === "connections" && <ConnectionsPage />}
             {section === "capabilities" && <CapabilitiesPage />}
             {section === "appearance" && <Appearance />}
+            {section === "usage" && <UsagePage />}
             {section === "engine" && <Engine />}
           </div>
         </div>
