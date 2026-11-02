@@ -22,9 +22,10 @@ import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
 import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
-import { pickFolder, revealPath } from "../lib/native";
+import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
+import { canUpdate, checkForUpdate, installUpdate, type UpdateInfo } from "../lib/updater";
 import { validateDefault } from "../state/harness";
 import {
   APP_VERSION,
@@ -547,6 +548,70 @@ function BannerSetting() {
   );
 }
 
+/**
+ * The app's version and its update, like the SwiftUI app's UpdateControl:
+ * Check for Updates, then Update to X (macOS installs in place, quits and
+ * reopens) or Download X (the release page, where the installer updates).
+ */
+function AppVersion() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [busy, setBusy] = useState<"checking" | "installing" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const version = info?.current ?? APP_VERSION;
+  const check = async () => {
+    setBusy("checking");
+    setError(null);
+    try {
+      setInfo(await checkForUpdate());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const install = async () => {
+    if (!info?.canInstall) {
+      if (info?.page) openExternal(info.page);
+      return;
+    }
+    setBusy("installing");
+    setError(null);
+    try {
+      await installUpdate();
+    } catch (e) {
+      setError(String(e));
+      setBusy(null);
+    }
+  };
+  const subtitle = error
+    ? error
+    : busy === "installing"
+      ? "Installing… RustCode reopens when it is done."
+      : info && !info.available
+        ? "RustCode is up to date."
+        : info?.development
+          ? "A development build; it does not update itself."
+          : undefined;
+  return (
+    <Row
+      title={`RustCode ${version}`}
+      subtitle={<span className={error ? "text-warning" : undefined}>{subtitle ?? "App version"}</span>}
+    >
+      {!canUpdate() ? (
+        <Info size={14} className="text-fg-faint" />
+      ) : info?.available && info.latest ? (
+        <Pill prominent disabled={busy !== null} onClick={() => void install()}>
+          {info.canInstall ? `Update to ${info.latest}` : `Download ${info.latest}`}
+        </Pill>
+      ) : (
+        <Pill disabled={busy !== null} onClick={() => void check()}>
+          {busy === "checking" ? "Checking…" : "Check for Updates"}
+        </Pill>
+      )}
+    </Row>
+  );
+}
+
 function Engine() {
   const status = useApp((s) => s.status);
   const detail = useApp((s) => s.statusDetail);
@@ -568,9 +633,7 @@ function Engine() {
         >
           <Pill onClick={() => void restartEngine()}>Restart</Pill>
         </Row>
-        <Row title="App version" subtitle={`RustCode desktop ${APP_VERSION}`}>
-          <Info size={14} className="text-fg-faint" />
-        </Row>
+        <AppVersion />
       </Group>
       <Group title="Engine log" footer="The engine's stderr; turns log to each thread's logs/debug.log.">
         <pre className="selectable m-0 max-h-[320px] overflow-auto p-3 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">

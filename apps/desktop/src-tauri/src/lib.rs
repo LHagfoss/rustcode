@@ -10,6 +10,7 @@ mod native;
 mod pty;
 mod smartui;
 mod threads;
+mod updater;
 
 use engine::{Engine, EngineEvent};
 use std::sync::Arc;
@@ -76,6 +77,8 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_close,
             smartui::smartui_page,
+            updater::update_check,
+            updater::update_install,
         ])
         .setup(|app| {
             // The engine starts with the app, in parallel with the webview loading the UI.
