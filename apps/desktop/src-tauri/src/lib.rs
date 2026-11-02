@@ -3,6 +3,7 @@
 //! UI needs (links, Finder, a harness login in Terminal, git changes). Every
 //! argument from the webview is validated here.
 
+mod banner;
 mod engine;
 mod links;
 mod native;
@@ -60,6 +61,9 @@ pub fn run() {
             native::read_image,
             native::open_terminal_at,
             native::reduce_transparency,
+            banner::banner_save,
+            banner::banner_read,
+            banner::banner_remove,
             links::link_meta,
             threads::thread_rename,
             threads::thread_trash,

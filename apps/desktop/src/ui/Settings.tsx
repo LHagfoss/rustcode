@@ -19,6 +19,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
+import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
 import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { pickFolder } from "../lib/native";
 import { validateDefault } from "../state/harness";
@@ -39,6 +40,7 @@ import {
   useApp,
 } from "../state/store";
 import { DefaultsForm, HarnessList } from "./Harnesses";
+import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Pill, Spinner, Switch } from "./primitives";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
@@ -555,7 +557,67 @@ function Appearance() {
           </button>
         ))}
       </div>
+      <BannerSetting />
     </Group>
+  );
+}
+
+/** Settings ▸ Appearance ▸ New thread banner, after SettingsView.swift. */
+function BannerSetting() {
+  const banner = useBanner();
+  const choose = () =>
+    void chooseBanner().catch((e) =>
+      toast(`Could not use that picture: ${e instanceof Error ? e.message : e}`, "warning"),
+    );
+  return (
+    <div>
+      <Row
+        title="New thread banner"
+        subtitle={
+          banner.name
+            ? "Behind the top of new threads, fading toward the message field"
+            : "A wide picture over new threads, drawn in text or as is. Cropped to fit"
+        }
+      >
+        <div className="flex shrink-0 items-center gap-2">
+          {banner.name && (
+            <>
+              <div
+                role="radiogroup"
+                aria-label="Banner style"
+                className="flex h-7 rounded-full bg-fill-3 p-0.5"
+              >
+                {(["ascii", "picture"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    role="radio"
+                    aria-checked={banner.style === v}
+                    onClick={() => setBannerStyle(v)}
+                    className={cx(
+                      "rounded-full px-3 font-medium text-callout",
+                      banner.style === v ? "bg-fill-1 text-fg" : "text-fg-2 hover:text-fg",
+                    )}
+                  >
+                    {v === "ascii" ? "Text" : "Picture"}
+                  </button>
+                ))}
+              </div>
+              <Pill onClick={() => void removeBanner()}>Remove</Pill>
+            </>
+          )}
+          <Pill onClick={choose}>{banner.name ? "Change…" : "Choose…"}</Pill>
+        </div>
+      </Row>
+      {banner.name && (
+        // As a new thread shows it, at a size that reads.
+        <div className="px-3.5 pb-3.5">
+          <div className="overflow-hidden rounded-xl bg-chat">
+            <NewThreadBanner key={banner.style} name={banner.name} style={banner.style} height={240} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -21,6 +21,7 @@ import {
 import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { agentActive, leftPercent, shownWindow, windowDetail, windowTitle } from "../acp/rustcode";
+import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import {
   refreshSessions,
@@ -40,6 +41,7 @@ import { formatTokens, type ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { LinkedThreads } from "./Links";
+import { NewThreadBanner } from "./NewThreadBanner";
 import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
@@ -235,7 +237,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
   );
 }
 
-function Header({ thread }: { thread?: ThreadState }) {
+function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boolean }) {
   const panel = useApp((s) => s.panel);
   const terminalOpen = useApp((s) => s.terminalOpen);
   const agentsOn = useApp((s) => !!s.agent?.agents) && (thread?.harness?.capabilities.subagents ?? true);
@@ -250,7 +252,9 @@ function Header({ thread }: { thread?: ThreadState }) {
     <header
       data-tauri-drag-region
       className={cx(
-        "flex h-[42px] shrink-0 items-center gap-2.5 bg-chat/95 pt-1.5 pb-2 pr-2.5",
+        "relative z-10 flex h-[42px] shrink-0 items-center gap-2.5 pt-1.5 pb-2 pr-2.5 transition-[background-color] duration-300",
+        // Over a new thread's banner: frosted, its foot fading into the banner.
+        overBanner ? "rc-frost" : "bg-chat/95",
         sidebarHidden ? "pl-[80px]" : "pl-2.5",
       )}
     >
@@ -326,11 +330,12 @@ function Header({ thread }: { thread?: ThreadState }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ banner }: { banner: boolean }) {
   const projectCwd = useApp((s) => s.projectCwd);
   return (
     <div className="flex flex-col items-center gap-3.5 pb-6 text-center">
-      <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />
+      {/* A banner is drawn behind the chat instead of the icon. */}
+      {!banner && <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />}
       <h2 className="font-semibold text-title">What should we build?</h2>
       <div className="flex max-w-[560px] items-center gap-1.5 text-callout text-fg-2">
         <Folder size={13} />
@@ -399,6 +404,8 @@ export function ChatView() {
   const [stackHeight, setStackHeight] = useState(140);
   const [dismissed, setDismissed] = useState<string | undefined>();
   const [width, setWidth] = useState(1000);
+  const [height, setHeight] = useState(800);
+  const banner = useBanner();
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -412,7 +419,10 @@ export function ChatView() {
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => setWidth(el.offsetWidth));
+    const observer = new ResizeObserver(() => {
+      setWidth(el.offsetWidth);
+      setHeight(el.offsetHeight);
+    });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -421,10 +431,20 @@ export function ChatView() {
   const request = thread?.permissions[0];
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   const side = width >= 600 ? 28 : width >= 360 ? 20 : 16;
+  const showsBanner = isNew && !!banner.name;
 
   return (
     <main ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
-      <Header thread={thread} />
+      {showsBanner && (
+        <NewThreadBanner
+          key={banner.style}
+          name={banner.name}
+          style={banner.style}
+          height={Math.round(height / 2)}
+          className="!absolute top-0 left-0 rc-fade-in"
+        />
+      )}
+      <Header thread={thread} overBanner={showsBanner} />
       {thread && !thread.loading ? (
         // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
         <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} />
@@ -454,7 +474,7 @@ export function ChatView() {
         )}
         style={{ paddingLeft: side, paddingRight: side }}
       >
-        {isNew && <EmptyState />}
+        {isNew && <EmptyState banner={showsBanner} />}
         <EngineBanner />
         {error && (
           <ErrorBanner

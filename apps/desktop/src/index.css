@@ -494,3 +494,21 @@
 .rc-expand {
   animation: rc-in 160ms var(--ease-snappy);
 }
+
+/* A bar over the new-thread banner: frosted, its foot fading into the banner rather than a hard edge. */
+.rc-frost::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -12px 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--rc-chat) 45%, transparent);
+  backdrop-filter: saturate(1.6) blur(20px);
+  -webkit-backdrop-filter: saturate(1.6) blur(20px);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  pointer-events: none;
+}
+
+.rc-fade-in {
+  animation: rc-fade 400ms ease-out;
+}
