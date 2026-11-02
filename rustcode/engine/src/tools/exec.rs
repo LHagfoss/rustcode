@@ -367,7 +367,7 @@ fn manage_task_schema() -> Value {
 pub const MANAGE_TASK: Tool = Tool {
     name: "manage_task",
     description: "Manage run_command tasks. 'wait' blocks until a task (or the first of task_ids) finishes; use it only when nothing else is left to do, and never poll. 'logs' returns captured output. Detached tasks are silent unless waited on or started with notify_on_complete.",
-    arguments: r#"{"action": "list, status, logs, kill, or wait", "task_id": "required for status/kill/logs or single-task wait", "task_ids": "optional list of IDs for wait-any", "full": "optional true to retrieve the complete log", "tail_bytes": "optional log tail limit, max 65536", "timeout_ms": "optional wait timeout in ms, default 600000, max 1800000"}"#,
+    arguments: r#"{"action": "list, status, logs, kill, or wait", "task_id": "required for status/kill/logs or single-task wait", "task_ids": "optional list of IDs for wait-any", "full": "optional true to retrieve the complete log", "tail_bytes": "optional log tail limit, max 65536", "timeout_ms": "optional wait timeout in ms, default 300000, max 1800000"}"#,
     handler: manage_task_tool,
     requires_confirmation: false,
     schema: manage_task_schema,
@@ -1470,7 +1470,9 @@ fn finished_within_grace(
     }
 }
 
-const DEFAULT_WAIT_TIMEOUT_MS: u64 = 600_000;
+/// Five minutes: long enough for most builds, short enough that the agent
+/// checks in, reads the output and decides instead of blocking (#2785).
+const DEFAULT_WAIT_TIMEOUT_MS: u64 = 300_000;
 const MAX_WAIT_TIMEOUT_MS: u64 = 1_800_000;
 
 fn wait_timeout(args: &Value) -> std::time::Duration {
@@ -1687,6 +1689,16 @@ fn wait_for_background_tasks(
         };
         // Wake often enough to forward new output, but never past the deadline.
         let slice = remaining.min(std::time::Duration::from_millis(250));
+        // The turn stopped: give the thread back at once. The tasks keep running;
+        // stopping a wait is not stopping the build.
+        if crate::tools::active_tool_cancelled() {
+            return still_running_report(
+                manager,
+                session_id,
+                &matched,
+                "Stopped waiting: the turn was cancelled.",
+            );
+        }
         match subscription.recv_timeout(slice) {
             Ok(event)
                 if task_ids.iter().any(|id| id == event.task_id().as_str())
@@ -1731,10 +1743,11 @@ fn wait_for_background_tasks(
                 task_ids.join(", ")
             )
         } else {
-            format!(
-                "Tasks {} are still running after {}s. Call 'wait' again to keep waiting, or continue other work meanwhile.",
-                running_ids.join(", "),
-                timeout.as_secs()
+            still_running_report(
+                manager,
+                session_id,
+                &running_ids,
+                &format!("Still running after waiting {}s.", timeout.as_secs()),
             )
         }
     }
@@ -1895,6 +1908,48 @@ fn task_tail_bytes(args: &serde_json::Value) -> usize {
         .and_then(|value| value.as_u64())
         .unwrap_or(16_384)
         .clamp(1, 65_536) as usize
+}
+
+/// What a wait that ends before its tasks do hands back: each task with how
+/// long it has run and the last lines of its output, then what the agent can
+/// do next. The tasks are left running.
+fn still_running_report(
+    manager: &TaskManager,
+    session_id: &str,
+    ids: &[String],
+    headline: &str,
+) -> String {
+    let running = manager.list(session_id);
+    let mut out = String::from(headline);
+    for id in ids {
+        let Some(task) = running.iter().find(|task| task.id.as_str() == id.as_str()) else {
+            continue;
+        };
+        out.push_str(&format!(
+            "\n\nTask '{id}' (`{}`) has run for {}s.",
+            task.command,
+            task.started_at.elapsed().as_secs()
+        ));
+        if let Some(path) = &task.output_log
+            && let Ok((excerpt, _, _)) = read_task_log(path, false, 2048)
+        {
+            let lines: Vec<&str> = excerpt
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+            let last = &lines[lines.len().saturating_sub(12)..];
+            if !last.is_empty() {
+                out.push_str("\nLast output:\n");
+                out.push_str(&last.join("\n"));
+            }
+        }
+    }
+    out.push_str(
+        "\n\nNext: continue other work (the result arrives when the task ends), read more with \
+         manage_task logs, wait again with a timeout_ms that fits, or stop a task you no longer need \
+         with manage_task kill. The tasks are still running.",
+    );
+    out
 }
 
 pub(crate) fn read_task_log(
@@ -2990,6 +3045,57 @@ mod tests {
         assert!(
             output.contains("still running"),
             "unexpected wait output: {output}"
+        );
+        // The report names the task and the way on; a timed-out wait leaves the task running.
+        assert!(output.contains(task_id), "{output}");
+        assert!(output.contains("manage_task kill"), "{output}");
+        assert!(
+            crate::tools::background_task_snapshots(session)
+                .iter()
+                .any(|task| task.id == task_id),
+            "a wait that timed out must not stop the task"
+        );
+        crate::tools::stop_background_tasks(session);
+        crate::tools::set_active_session_id(None);
+    }
+
+    #[test]
+    fn manage_task_wait_stops_when_the_turn_is_cancelled() {
+        let session = "manage-wait-cancel-session";
+        let task_id = "manage-wait-cancel-task";
+        crate::tools::set_active_session_id(Some(session.to_owned()));
+        crate::tools::spawn_background_task_for_test(
+            task_id,
+            session,
+            if cfg!(target_os = "windows") {
+                "Start-Sleep -Seconds 30"
+            } else {
+                "sleep 30"
+            },
+        )
+        .unwrap();
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+        crate::tools::set_active_tool_cancel(Some(token));
+        let started = std::time::Instant::now();
+        let output = manage_task_tool(&serde_json::json!({
+            "action": "wait",
+            "task_id": task_id,
+            "timeout_ms": 30_000,
+        }))
+        .expect("a cancelled wait reports, it does not fail");
+        crate::tools::set_active_tool_cancel(None);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the wait held the thread for {:?} after the turn was cancelled",
+            started.elapsed()
+        );
+        assert!(output.contains("Stopped waiting"), "{output}");
+        assert!(
+            crate::tools::background_task_snapshots(session)
+                .iter()
+                .any(|task| task.id == task_id),
+            "stopping a wait must not stop the task"
         );
         crate::tools::stop_background_tasks(session);
         crate::tools::set_active_session_id(None);

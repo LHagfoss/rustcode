@@ -490,6 +490,7 @@ async fn run_authorized_tool(
                                 });
                             crate::tools::set_active_tool_progress(Some(callback));
                         }
+                        crate::tools::set_active_tool_cancel(Some(cancel_token_for_task.clone()));
                         let output = crate::tools::execute_with_metadata_cancellable_for_call(
                             &name_owned,
                             &args_owned,
@@ -497,6 +498,7 @@ async fn run_authorized_tool(
                             call_id_owned.as_deref(),
                         );
                         crate::tools::set_active_tool_progress(None);
+                        crate::tools::set_active_tool_cancel(None);
                         output
                     };
                     if result.success

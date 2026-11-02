@@ -1098,6 +1098,27 @@ thread_local! {
     /// tail reaches the transcript while they are still blocked (#2230).
     static ACTIVE_TOOL_PROGRESS: RefCell<Option<rustcode_command::ProgressCallback>> =
         const { RefCell::new(None) };
+    /// The turn's cancel token for the tool running on this worker thread, so
+    /// a tool that blocks (`manage_task` `wait`) stops when the turn stops
+    /// instead of holding the thread until its own timeout (#2785).
+    static ACTIVE_TOOL_CANCEL: RefCell<Option<tokio_util::sync::CancellationToken>> =
+        const { RefCell::new(None) };
+}
+
+/// Install the cancel token for the tool about to run on this thread; `None`
+/// clears it, so a pooled blocking thread cannot carry one turn's token on.
+pub(crate) fn set_active_tool_cancel(token: Option<tokio_util::sync::CancellationToken>) {
+    ACTIVE_TOOL_CANCEL.with(|current| *current.borrow_mut() = token);
+}
+
+/// Whether the turn the tool on this thread belongs to was cancelled.
+pub(crate) fn active_tool_cancelled() -> bool {
+    ACTIVE_TOOL_CANCEL.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    })
 }
 
 /// Install the live-output sink for the tool about to run on this thread.
