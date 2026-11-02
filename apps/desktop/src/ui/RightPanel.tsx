@@ -1,8 +1,9 @@
 // The right panel (docs/design.md, Right panel): one floating frame for
 // every side view (Changes, Agents, Pull requests), inset from the window's
 // edges, with tabs between them, a close button and a draggable left edge.
-// It slides open by animating its slot's width, so the chat column reflows
-// with it; its content stays mounted while it closes.
+// Its slot takes its width at once (one reflow of the chat column, not one
+// per frame), and the frame slides and fades in and out on the compositor;
+// its content stays mounted while it closes (docs/desktop.md › Native frame rate).
 
 import { X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -39,7 +40,6 @@ export function RightPanel() {
   // What the frame shows: the open panel, or while closing the one that was.
   const [shown, setShown] = useState<Kind | null>(panel);
   const [width, setWidth] = useState(storedWidth);
-  const [dragging, setDragging] = useState(false);
   const widthRef = useRef(width);
   widthRef.current = width;
 
@@ -54,10 +54,8 @@ export function RightPanel() {
     e.preventDefault();
     const startX = e.clientX;
     const start = widthRef.current;
-    setDragging(true);
     const move = (ev: PointerEvent) => setWidth(Math.min(MAX, Math.max(MIN, start - (ev.clientX - startX))));
     const up = () => {
-      setDragging(false);
       try {
         localStorage.setItem(KEY, String(widthRef.current));
       } catch {
@@ -78,24 +76,21 @@ export function RightPanel() {
 
   return (
     <div
-      className={cx(
-        "relative shrink-0 overflow-hidden",
-        !dragging && "transition-[width] duration-200 ease-snappy",
-      )}
-      style={{ width: open ? width + INSET : 0 }}
-      onTransitionEnd={(e) => {
-        if (e.target === e.currentTarget && !open) setShown(null);
-      }}
+      className="relative shrink-0 overflow-hidden"
+      style={{ width: kind ? width + INSET : 0 }}
       aria-hidden={!open}
     >
       {kind && (
         <aside
           aria-label="Side panel"
           className={cx(
-            "rc-glass absolute flex flex-col overflow-hidden rounded-xl shadow-2 transition-[opacity,transform] duration-200 ease-snappy",
+            "rc-glass rc-drill absolute flex flex-col overflow-hidden rounded-xl shadow-2 transition-[opacity,translate] duration-200 ease-snappy",
             open ? "translate-x-0 opacity-100" : "translate-x-3 opacity-0",
           )}
           style={{ top: INSET, bottom: INSET, left: 0, width }}
+          onTransitionEnd={(e) => {
+            if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
+          }}
         >
           <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 pr-2 pl-2.5">
             {tabs.length > 1 ? (

@@ -560,6 +560,17 @@ export function Sidebar() {
   const marks = useApp((s) => s.statusMarks ?? NO_MARKS);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
+  // The slot collapses after the sidebar has slid out, and opens before it slides in: its width
+  // changes once per toggle, not every frame (docs/design.md › Motion).
+  const [collapsed, setCollapsed] = useState(hidden);
+  useEffect(() => {
+    if (!hidden) {
+      setCollapsed(false);
+      return;
+    }
+    const t = setTimeout(() => setCollapsed(true), 200);
+    return () => clearTimeout(t);
+  }, [hidden]);
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
   const [byProject, setByProject] = useStored("rustcode.sidebar.byProject", true);
@@ -678,11 +689,17 @@ export function Sidebar() {
   return (
     <aside
       aria-label="Threads"
-      className="relative flex shrink-0 flex-col overflow-hidden bg-sidebar transition-[width] duration-200 ease-snappy"
-      style={{ width: hidden ? 0 : width }}
+      className="relative flex shrink-0 flex-col overflow-hidden"
+      style={{ width: collapsed ? 0 : width }}
       aria-hidden={hidden}
     >
-      <div className="flex h-full flex-col" style={{ width, minWidth: width }}>
+      <div
+        className={cx(
+          "flex h-full flex-col bg-sidebar transition-[translate] duration-200 ease-snappy",
+          hidden ? "-translate-x-full" : "translate-x-0",
+        )}
+        style={{ width, minWidth: width }}
+      >
         <TitlebarRow className="justify-end pr-2.5">
           <Cluster>
             <ClusterButton label="Hide sidebar" tooltip="Hide sidebar (⌘B)" onClick={toggleSidebar}>
