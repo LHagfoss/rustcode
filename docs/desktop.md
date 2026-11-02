@@ -136,9 +136,11 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 
 ## Features
 
-- **Composer.** One rounded unit: the queue, attachments, the field and a
-  button row (folder, Files, agents working, harness, model pill,
-  send/queue/stop). A slash command from `available_commands_update` that
+- **Composer.** A compact rounded box (the field, then a row: **+** for
+  attaching and new threads, the plan meter, the context ring, the model
+  pill and send/queue/stop) with a lighter tray tucked under it: the
+  project folder, *Worktree* (new threads), *Files*, agents working, and the
+  harness only when it is not the default one. A slash command from `available_commands_update` that
   takes arguments becomes a token in front of the field (picked from the
   popup or typed as `/name `). Images and files can be pasted, dropped or
   picked: images are ACP `image` blocks when the thread's harness takes
@@ -153,8 +155,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   the plain URL. Settings › General › Chat › Link previews turns fetching off.
 - **Thread actions.** A row's ⋯ menu or right-click: Pin, Rename, Archive,
   Move to Trash. Pins and archives are app storage, as the SwiftUI app
-  keeps them; archived threads move under "Archived" at the foot of the
-  list. ⌘F finds in the thread (CSS highlights, ⏎/⇧⏎ step). A sent
+  keeps them; archived threads move to Settled. ⌘F finds in the thread (CSS highlights, ⏎/⇧⏎ step). A sent
   message has Edit (back to the composer; sending takes the thread back to
   it) and Retry, both with `_rustcode/rewind`, asking first when later
   messages go too. A finished turn shows a summary card: files changed with
@@ -170,8 +171,27 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   activity) and posts a review you write (`/review`: comment, approve or
   request changes, at the head commit). "Ask the agent to review" starts a
   thread draft naming the commit.
-- **Plan usage.** The usage capsule adds the plan's shortest window from
-  `_rustcode/usage/limits` (`5-hour 58%`), all windows in its tooltip.
+- **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
+  and `PlanUsageMeter`: a ring filling with the context window in use
+  (`34k / 128k tokens · 73% left` on hover), and the plan's shortest window
+  from `_rustcode/usage/limits` as a short bar with the percentage left
+  (all windows and their resets on hover, which also refreshes them). A new
+  thread shows the limits the last thread learnt. The chat header no longer
+  repeats them.
+- **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
+  model has the `fast` option) and the model with its effort on one line;
+  the model's name drills into the list. Effort is a slider with a dot per
+  level: drag (snaps on release), click, or ←→/Home/End. The harness row
+  shows only when more than one harness is usable. Fast mode is set on a
+  thread once it exists; a new thread does not carry it yet.
+- **New thread banner.** Settings › Appearance: a wide picture over new
+  threads, drawn in coloured text (ASCII, inverted on a light background)
+  or as is, covering the top half of the chat and fading toward the
+  composer, under a frosted title bar. The picture is copied into the app's
+  data folder (`src-tauri/src/banner.rs`; the setting keeps the copy's
+  name), decoded once, and the text drawn once per size on an offscreen
+  canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
+  the new one is ready. It fades in, and does not move under Reduce motion.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Smart UI.** See below.
@@ -190,10 +210,21 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Sidebar.** Threads grouped Needs You, Working, Pinned, then by project
-  (a worktree thread under its repository, with its branch). Subagents nest
-  under their thread (open one in the Agents panel), and threads another
-  thread started nest under it. The list fades out above the project card.
+- **Sidebar.** Threads by where they are in their life (after T3 Code):
+  Pinned (always shown), Needs You, Working, Threads (split by project when
+  there are several; a worktree thread under its repository, with its
+  branch), and Settled: done or archived threads, folded by default. Each
+  section folds with its chevron and remembers it; a search opens them all.
+  Settling is marking a thread Done; a new message brings it back. The
+  filter button by the search groups by project, keeps to the current
+  project, and opens the Board. Subagents nest under their thread (open one
+  in the Agents panel), and threads another thread started nest under it.
+  Settings is the gear at the foot; the project is chosen per thread in the
+  composer's tray.
+- **Title bar.** The sidebar's and header's buttons sit on the traffic
+  lights' line, just past the zoom button, as `SidebarMetrics` places them
+  in the SwiftUI app (`src/ui/Titlebar.tsx`); in full screen, where the
+  lights hide, the rows start at the edge.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
@@ -217,8 +248,8 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   opens it in Finder or Terminal and removes it, asking first and again with
   the engine's reason (uncommitted changes, unpushed commits).
 - **Status and Board.** Running, Needs input, Review and Done chips on rows
-  and in the chat header (a menu marks Review or Done). *Board* (sidebar
-  switch, or ⌘K) shows those four columns; drag a card to Review or Done.
+  and in the chat header (a menu marks Review or Done). *Board* (the
+  sidebar's filter menu, or ⌘K) shows those four columns; drag a card to Review or Done.
   Marks go to `_rustcode/session/status`; on an engine without it the app
   keeps them itself. `_meta.rustcode.status` from the engine (a merged
   branch's auto-done) updates the chip.
@@ -405,8 +436,14 @@ then runs `tauri build` with `src-tauri/tauri.bundle.conf.json`, which adds
 `"externalBin": ["binaries/rustcode"]`. Keeping that out of
 `tauri.conf.json` means `tauri dev`, clippy and CI never need the engine
 built. The shell finds the sidecar next to its binary (a debug build still
-prefers the workspace's `target/debug/rustcode`). The icons in
-`src-tauri/icons` are the repository's app icon. Signing, notarization and
+prefers the workspace's `target/debug/rustcode`). The bundle carries the
+SwiftUI app's layered macOS 26 icon: `scripts/app-icon.ts` compiles
+`macos/Resources/AppIcon.icon` with `xcrun actool` into `Assets.car`
+(mapped into `Contents/Resources` by a generated
+`src-tauri/gen-icon/tauri.conf.json`), and `src-tauri/Info.plist` sets
+`CFBundleIconName = AppIcon`, with `icons/icon.icns` as the fallback when
+actool is missing. `tauri dev` runs the bare binary, so the Dock shows the
+flat icon there; only the bundled app shows the layered one. Signing, notarization and
 an updater are not set up.
 
 ## Not yet ported
