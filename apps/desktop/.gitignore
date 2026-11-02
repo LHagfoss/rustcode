@@ -1,0 +1,2 @@
+# The engine sidecar, built by scripts/bundle-engine.ts.
+/src-tauri/binaries/
