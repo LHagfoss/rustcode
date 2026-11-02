@@ -1354,16 +1354,18 @@ export class MockEngine {
       }
       const reply = /\bview\b/i.test(prompt)
         ? MOCK_VIEW
-        : [
-            "Done. ",
-            "I updated the greeting in `src/app.ts` ",
-            "and the tests pass.\n\n",
-            "```ts\n",
-            'const greeting = "hello, world";\n',
-            "export default greeting;\n",
-            "```\n\n",
-            "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-          ];
+        : /\bcharts?\b/i.test(prompt)
+          ? MOCK_VIZ
+          : [
+              "Done. ",
+              "I updated the greeting in `src/app.ts` ",
+              "and the tests pass.\n\n",
+              "```ts\n",
+              'const greeting = "hello, world";\n',
+              "export default greeting;\n",
+              "```\n\n",
+              "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+            ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -1394,6 +1396,17 @@ export class MockEngine {
     }
   }
 }
+
+/** A `rustcode-viz` reply: a bar chart and a checklist. */
+export const MOCK_VIZ = [
+  "Test time by crate, and where the migration stands:\n\n",
+  "```rustcode-viz\n",
+  '{"version":1,"type":"bar_chart","title":"Test time by crate","summary":"engine dominates the run","unit":"s","items":[{"label":"engine","value":42},{"label":"tui","value":10.5},{"label":"core","value":3}]}\n',
+  "```\n\n",
+  "```rustcode-viz\n",
+  '{"version":1,"type":"checklist","title":"Orchestrator v2","items":[{"label":"Worktrees","status":"done"},{"label":"Checkpoints","status":"in_progress"},{"label":"Fan-out compare","status":"todo","note":"needs the engine"}]}\n',
+  "```\n",
+];
 
 /** A Smart UI reply: a themed chart and a button that asks a follow-up through `rustcode.send`. */
 export const MOCK_VIEW = [

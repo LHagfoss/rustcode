@@ -327,6 +327,8 @@ async function handshake(): Promise<void> {
       initializeParams(APP_VERSION, {
         smartUi: get().smartUi,
         orchestration: get().orchestration ? CAPABILITY_VERSION : undefined,
+        // rustcode-viz levels 1 and 2 are drawn natively (ui/Viz.tsx).
+        visualizations: 2,
       }),
       20_000,
     );

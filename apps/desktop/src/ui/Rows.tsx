@@ -40,9 +40,10 @@ import {
   thoughtHeadings,
 } from "../state/thread";
 import { LinkChip } from "./LinkChip";
-import { CodeBlock, CopyButton, Markdown } from "./Markdown";
+import { CopyButton, Markdown } from "./Markdown";
 import { cx, Spinner, Tooltip } from "./primitives";
 import { SmartUIView } from "./SmartUIView";
+import { VizView } from "./Viz";
 
 type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K }>;
 
@@ -190,7 +191,7 @@ export const AssistantRow = memo(function AssistantRow({
             threadId={threadId}
           />
         ) : (
-          <CodeBlock key={`viz${segment.index}`} code={segment.source} lang="rustcode-viz" />
+          <VizView key={`viz${segment.index}`} source={segment.source} complete={segment.complete} />
         ),
       )}
     </div>
