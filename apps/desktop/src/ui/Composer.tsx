@@ -211,10 +211,13 @@ export const Composer = memo(function Composer({
   const cwd = thread?.cwd ?? projectCwd;
   const canSend = !!draft.trim() || hasExtras(extras);
 
+  // Ready to type on entering a thread, and again on coming back to the chat from Settings or
+  // another view (the draft is kept either way).
+  const inChat = useApp((s) => !s.settings && s.view.kind === "chat" && !s.switcherOpen);
   // biome-ignore lint/correctness/useExhaustiveDependencies: refocus on thread change
   useEffect(() => {
-    field.current?.focus();
-  }, [key]);
+    if (inChat) field.current?.focus();
+  }, [key, inChat]);
 
   // Grow from 1 to 10 lines, then scroll.
   // biome-ignore lint/correctness/useExhaustiveDependencies: measure on every draft change
