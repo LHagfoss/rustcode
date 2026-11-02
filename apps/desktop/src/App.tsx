@@ -1,6 +1,7 @@
 import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect } from "react";
 import { applyTheme, resolveTheme } from "./lib/themes";
+import { chooseFolder } from "./state/folders";
 import {
   cancel,
   closeConfirm,
@@ -66,6 +67,10 @@ function useShortcuts() {
       if (mod && !e.shiftKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         startNewThread();
+      } else if (mod && e.key.toLowerCase() === "o") {
+        // ⌘O: the folder of this thread (a new one starts there, an open one moves); ⌘⇧O: the default.
+        e.preventDefault();
+        void chooseFolder(e.shiftKey);
       } else if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setSwitcher(!s.switcherOpen);
