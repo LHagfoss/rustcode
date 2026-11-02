@@ -453,12 +453,20 @@ mod tests {
         let bytes = png(1, 1);
         // The first upload creates the directory the lock lives in.
         upload(&root, "first", &chunk(&bytes, 0, bytes.len())).unwrap();
-        let held = lock_private_file(
-            &root.canonicalize().unwrap(),
-            "upload.lock",
-            "image attachments",
-        )
-        .unwrap();
+        // The first upload just let go of the lock; a child another test forked
+        // meanwhile can share it until it execs (#2360, #2763), so take it the
+        // way `upload` does, with a short wait.
+        let canonical = root.canonicalize().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let held = loop {
+            match lock_private_file(&canonical, "upload.lock", "image attachments") {
+                Ok(file) => break file,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("the upload lock stayed busy: {error:#}"),
+            }
+        };
         let release = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(60));
             drop(held);
