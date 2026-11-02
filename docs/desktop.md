@@ -1,21 +1,21 @@
 # Desktop app (Tauri)
 
-`apps/desktop` is the new RustCode desktop app: Tauri 2 with a React,
-TypeScript and Tailwind UI. It is meant to replace the SwiftUI app in
-`macos/` over time, with the same look and layout. Like the SwiftUI app, it
-runs the engine as `rustcode --acp` and talks ACP to it, so every harness
+`apps/desktop` is the RustCode app, the orchestrator: Tauri 2 with a React,
+TypeScript and Tailwind UI. It replaced the SwiftUI app (removed from the
+tree; it lives on in git history). It runs the engine as `rustcode --acp`
+and talks ACP to it, so every harness
 (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode, any ACP agent;
 see [harnesses.md](harnesses.md)) runs a thread through the same UI.
 
 Status: usable day to day. A chat for a thread on any harness with
 approvals, attachments, link chips, Smart UI views, thread actions, find,
-rewind, subagents, pull requests, plan usage and a terminal. Parts of the
-SwiftUI app are not ported yet; see [Not yet ported](#not-yet-ported).
+rewind, subagents, pull requests, plan usage and a terminal. A few things
+the SwiftUI app had are not ported yet; see [Not yet ported](#not-yet-ported).
 
 ## Status and roadmap
 
 Where the desktop work stands, so the next session (in any harness) can pick
-it up. Direction: this app replaces the SwiftUI app; external coding agents
+it up. Direction: this app is the product; external coding agents
 run threads as harnesses ([harnesses.md](harnesses.md)); agents can start
 and message other threads ([orchestrator.md](orchestrator.md)). The design
 rules are in [design.md](design.md), themes in [themes.md](themes.md), and
@@ -41,8 +41,7 @@ Next, in rough order:
 3. Open desktop issues: #2792 (queue/steer with images), #2799
    (cross-harness delegation, live test plan), #2802 (composer focus),
    #2805 (panel buttons) and #2806 (slash-command composer polish).
-4. The rest of [Not yet ported](#not-yet-ported), then archive `macos/` in
-   its own repository and drop its CI.
+4. The rest of [Not yet ported](#not-yet-ported).
 
 How to continue: run the app with `bun tauri dev` in `apps/desktop` (it uses
 `target/debug/rustcode`; rebuild with `cargo build -p rustcode-tui --bin
@@ -767,7 +766,7 @@ built for the CLI. Extra arguments go to `tauri build`, e.g.
   bundle, the installer and the engine agree. `tauri.conf.json`'s `0.1.0` is
   only the dev build's.
 - **Icon.** The bundle carries the SwiftUI app's layered macOS 26 icon:
-  `scripts/app-icon.ts` compiles `macos/Resources/AppIcon.icon` with `xcrun
+  `scripts/app-icon.ts` compiles `src-tauri/icons/AppIcon.icon` with `xcrun
   actool` into `Assets.car` (mapped into `Contents/Resources` by `gen-icon`),
   and `src-tauri/Info.plist` sets `CFBundleIconName = AppIcon`, with
   `icons/icon.icns` as the fallback when actool is missing. `tauri dev` runs

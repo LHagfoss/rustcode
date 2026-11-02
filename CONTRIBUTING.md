@@ -31,7 +31,7 @@ The repo has a few parts:
 | `rustcode/engine` | The agent: providers, tools, sessions, ACP server |
 | `rustcode/tui` | The terminal app |
 | `rustcode/core` | Shared crates |
-| `macos/` | Native macOS app (SwiftUI) |
+| `apps/desktop` | The RustCode app (Tauri + React) |
 | `ios/` | iOS app for `/remote` |
 | `docs/` | User docs |
 
@@ -48,10 +48,10 @@ cargo test --workspace
 Use `--workspace`, otherwise only the engine is built and TUI changes slip
 through.
 
-If you touched the macOS app:
+If you touched the desktop app (`apps/desktop`):
 
 ```bash
-cd macos && swift build && swift test
+cd apps/desktop && bun run check
 ```
 
 If you touched the iOS app, see [ios/AGENTS.md](ios/AGENTS.md) for the

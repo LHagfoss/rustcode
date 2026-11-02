@@ -25,9 +25,8 @@ rustcode/
 ```
 
 The desktop app in `apps/desktop` (Tauri + React, see [desktop](desktop.md))
-and the SwiftUI macOS app it replaces in `macos/` both run the engine over
-ACP. The Swift app's targets, data flow and state ownership are mapped in
-[macOS app architecture](architecture/macos-app.md).
+runs the engine over ACP. The SwiftUI macOS app it replaced was removed;
+[macOS app architecture](architecture/macos-app.md) maps it for history.
 
 The root `Cargo.toml` is both the workspace manifest and the `rustcode`
 package manifest; the engine lives in `rustcode/engine/src` and is declared

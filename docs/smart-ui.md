@@ -1,9 +1,13 @@
 # Smart UI
 
+> The SwiftUI app this was first built for has been removed. Paths under
+> `macos/` below describe that host and are kept for history; the desktop
+> app's host is `apps/desktop/src/ui/SmartUIView.tsx` with `src/smartui/`.
+
 Smart UI ([#2484](https://github.com/LHagfoss/rustcode/issues/2484)) lets
 the agent answer with a small interactive component, such as a filterable
 table or a view driven by a few controls, that the client runs in the
-transcript: the macOS app and the desktop app (`apps/desktop`). A view reads
+transcript of the desktop app (`apps/desktop`). A view reads
 like the rest of the reply: no card chrome, border or background of its own. It is **on by default** (it shipped opt-in, and agents almost
 never reached it): Settings › General › Chat › Smart UI turns it off. The engine learns the setting when it starts, so after
 switching it Settings offers **Restart Engine** (shown once no chat is
