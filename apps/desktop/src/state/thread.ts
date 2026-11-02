@@ -366,6 +366,91 @@ export function requeueSteers(state: ThreadState, unused: string[]): ThreadState
   };
 }
 
+/** The thread as it was just before item `itemId` (a rewind): later items go, tool indexes are rebuilt. */
+export function truncateBefore(state: ThreadState, itemId: string): ThreadState {
+  const at = state.items.findIndex((i) => i.id === itemId);
+  if (at < 0) return state;
+  const items = state.items.slice(0, at);
+  const toolIndex: Record<string, number> = {};
+  items.forEach((item, i) => {
+    if (item.kind === "tool") toolIndex[item.id] = i;
+  });
+  return { ...state, items, toolIndex, pendingTurn: undefined, plan: [] };
+}
+
+/** Which of the thread's messages `itemId` is, counting from 0 as a replay shows them; -1 if none. */
+export function userIndexOf(state: ThreadState, itemId: string): number {
+  let n = 0;
+  for (const item of state.items) {
+    if (item.kind !== "user") continue;
+    if (item.id === itemId) return n;
+    n++;
+  }
+  return -1;
+}
+
+/** User messages after `itemId`. */
+export function messagesAfter(state: ThreadState, itemId: string): number {
+  const at = state.items.findIndex((i) => i.id === itemId);
+  return at < 0 ? 0 : state.items.slice(at + 1).filter((i) => i.kind === "user").length;
+}
+
+export interface TurnCompletion {
+  files: { path: string; added: number; removed: number }[];
+  added: number;
+  removed: number;
+  checks: { command: string; outcome: "passed" | "failed" | "unknown" }[];
+}
+
+const CHECK =
+  /\b(test|tests|check|lint|clippy|typecheck|tsc|pytest|jest|vitest|build|fmt\s+--check|swift-test)\b/;
+
+/** What the turn ending at `endIndex` changed and which checks it ran, from its tool calls only. */
+export function turnCompletion(items: TranscriptItem[], endIndex: number): TurnCompletion | null {
+  let start = endIndex - 1;
+  while (start >= 0 && items[start]?.kind !== "user") start--;
+  const files = new Map<string, { path: string; added: number; removed: number }>();
+  const checks = new Map<string, { command: string; outcome: "passed" | "failed" | "unknown" }>();
+  for (const item of items.slice(start + 1, endIndex)) {
+    if (item.kind !== "tool") continue;
+    if (item.status !== "failed") {
+      for (const diff of item.diffs) {
+        const counts = diffCounts([diff]);
+        const f = files.get(diff.path) ?? { path: diff.path, added: 0, removed: 0 };
+        f.added += counts.added;
+        f.removed += counts.removed;
+        files.set(diff.path, f);
+      }
+    }
+    const input =
+      item.input && typeof item.input === "object" && !Array.isArray(item.input) ? item.input : {};
+    const command =
+      typeof input.command === "string"
+        ? input.command
+        : typeof input.cmd === "string"
+          ? input.cmd
+          : undefined;
+    if (command && CHECK.test(command)) {
+      const key = command.trim().split(/\s+/).join(" ");
+      const failed = item.status === "failed" || (item.exitCode !== undefined && item.exitCode !== 0);
+      // A check run again counts as its last run.
+      checks.delete(key);
+      checks.set(key, {
+        command: key,
+        outcome: failed ? "failed" : item.status === "completed" ? "passed" : "unknown",
+      });
+    }
+  }
+  if (!files.size && !checks.size) return null;
+  const list = [...files.values()];
+  return {
+    files: list,
+    added: list.reduce((n, f) => n + f.added, 0),
+    removed: list.reduce((n, f) => n + f.removed, 0),
+    checks: [...checks.values()],
+  };
+}
+
 // ---------------------------------------------------------------- derived values
 
 export function formatDuration(ms: number): string {

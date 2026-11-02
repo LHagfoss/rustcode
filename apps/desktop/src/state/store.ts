@@ -29,8 +29,15 @@ import {
   type SessionSummary,
   type SlashCommand,
 } from "../acp/types";
-import { setShellTransport } from "../lib/shell";
-import { type ComposeExtras, emptyExtras, hasExtras, promptBlocks, sentAttachments } from "./compose";
+import { setShellTransport, shellCall } from "../lib/shell";
+import {
+  type ComposeExtras,
+  emptyExtras,
+  hasExtras,
+  promptBlocks,
+  sentAttachments,
+  splitImageMarkers,
+} from "./compose";
 import {
   appendSteer,
   applyUpdate,
@@ -39,8 +46,11 @@ import {
   finishLoad,
   finishTurn,
   localId,
+  messagesAfter,
   requeueSteers,
   type ThreadState,
+  truncateBefore,
+  userIndexOf,
 } from "./thread";
 
 export const APP_VERSION = "0.1.0";
@@ -91,9 +101,19 @@ export interface AppState {
   sidebarHidden: boolean;
   toasts: Toast[];
   theme: "system" | "light" | "dark";
+  /** Pinned threads, kept in app storage like the SwiftUI app's `pinnedSessions`. */
+  pinned: string[];
+  /** Archived threads and when, kept in app storage; they leave the list until shown. */
+  archived: Record<string, number>;
+  /** A sent message being edited in the composer: sending rewinds the thread to it first. */
+  editing: Record<string, { itemId: string; userIndex: number; original: string }>;
+  /** An app-drawn confirmation (the webview has no native dialogs). */
+  confirm: { title: string; message: string; action: string; destructive?: boolean; run: () => void } | null;
 }
 
 const STORAGE = {
+  pinned: "rustcode.pinned",
+  archived: "rustcode.archived",
   project: "rustcode.projectCwd",
   theme: "rustcode.theme",
   sidebar: "rustcode.sidebarHidden",
@@ -115,7 +135,20 @@ function store(key: string, value: string) {
   }
 }
 
+function storedJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = stored(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export const useApp = create<AppState>(() => ({
+  pinned: storedJson<string[]>(STORAGE.pinned, []),
+  archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
+  editing: {},
+  confirm: null,
   status: "connecting",
   engineLog: [],
   sessions: [],
@@ -400,6 +433,141 @@ async function createThread(): Promise<string> {
   return id;
 }
 
+// ---------------------------------------------------------------- thread actions
+
+export function askConfirm(confirm: NonNullable<AppState["confirm"]>) {
+  set({ confirm });
+}
+
+export function closeConfirm() {
+  set({ confirm: null });
+}
+
+/** Whether the thread can be taken back to one of its messages. */
+export function canRewind(thread: ThreadState): boolean {
+  return !!get().agent?.rewind && (thread.harness?.capabilities.rewind ?? true) && !thread.running;
+}
+
+async function rewindTo(id: string, itemId: string, text: string): Promise<boolean> {
+  const thread = get().threads[id];
+  if (!thread) return false;
+  const userIndex = userIndexOf(thread, itemId);
+  if (userIndex < 0) return false;
+  try {
+    await engine().request(Method.rewind, { sessionId: id, userIndex, text }, 10_000);
+  } catch (error) {
+    toast(`Could not rewind: ${errorText(error)}`, "warning");
+    return false;
+  }
+  updateThread(id, (t) => truncateBefore(t, itemId));
+  return true;
+}
+
+/** Retry: the thread goes back to just before the message and sends it again (after a confirm when later messages go too). */
+export function retryMessage(id: string, itemId: string) {
+  const thread = get().threads[id];
+  const item = thread?.items.find((i) => i.id === itemId);
+  if (!thread || item?.kind !== "user") return;
+  const go = async () => {
+    if (canRewind(thread)) {
+      if (await rewindTo(id, itemId, item.text)) void runPrompt(id, item.text);
+    } else void submit(item.text);
+  };
+  const later = messagesAfter(thread, itemId);
+  if (later > 0 && canRewind(thread)) {
+    askConfirm({
+      title: "Retry this message?",
+      message:
+        later === 1
+          ? "The message after it and its reply will be removed."
+          : `The ${later} messages after it and their replies will be removed.`,
+      action: "Retry",
+      destructive: true,
+      run: () => void go(),
+    });
+  } else void go();
+}
+
+/** Edit: the message goes back to the composer; sending it rewinds the thread to it first. */
+export function editMessage(id: string, itemId: string) {
+  const thread = get().threads[id];
+  const item = thread?.items.find((i) => i.id === itemId);
+  if (!thread || item?.kind !== "user") return;
+  const text = splitImageMarkers(item.text).text;
+  set((s) => ({
+    drafts: { ...s.drafts, [id]: text },
+    editing: canRewind(thread)
+      ? { ...s.editing, [id]: { itemId, userIndex: userIndexOf(thread, itemId), original: item.text } }
+      : s.editing,
+  }));
+}
+
+export function cancelEdit(key: string) {
+  set((s) => {
+    const { [key]: _gone, ...editing } = s.editing;
+    return { editing };
+  });
+}
+
+export function togglePin(id: string) {
+  const pinned = get().pinned.includes(id) ? get().pinned.filter((x) => x !== id) : [id, ...get().pinned];
+  set({ pinned });
+  store(STORAGE.pinned, JSON.stringify(pinned));
+  toast(pinned.includes(id) ? "Pinned" : "Unpinned", "success");
+}
+
+export function setArchived(id: string, on: boolean) {
+  const archived = { ...get().archived };
+  if (on) {
+    if (get().threads[id]?.running) {
+      toast("Stop the running turn before archiving this thread.", "warning");
+      return;
+    }
+    archived[id] = Date.now();
+  } else delete archived[id];
+  set({ archived });
+  store(STORAGE.archived, JSON.stringify(archived));
+  toast(on ? "Archived. It's under Archived in the sidebar." : "Unarchived", "success");
+  if (on && get().selectedId === id) startNewThread();
+}
+
+export async function renameThread(id: string, title: string): Promise<boolean> {
+  try {
+    const saved = await shellCall<string>("thread_rename", { id, title });
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: saved } : x)) }));
+    updateThread(id, (t) => ({ ...t, title: saved }));
+    return true;
+  } catch (error) {
+    toast(`Could not rename the thread: ${errorText(error)}`, "warning");
+    return false;
+  }
+}
+
+/** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
+export async function trashThread(id: string): Promise<boolean> {
+  if (get().threads[id]?.running) {
+    toast("Stop the running turn before moving this thread to the Trash.", "warning");
+    return false;
+  }
+  if (get().threads[id] && get().agent?.closeSession) await closeThread(id);
+  try {
+    await shellCall("thread_trash", { id });
+  } catch (error) {
+    toast(errorText(error), "warning");
+    return false;
+  }
+  const { [id]: _gone, ...threads } = get().threads;
+  const archived = { ...get().archived };
+  delete archived[id];
+  const pinned = get().pinned.filter((x) => x !== id);
+  set((s) => ({ threads, archived, pinned, sessions: s.sessions.filter((x) => x.id !== id) }));
+  store(STORAGE.archived, JSON.stringify(archived));
+  store(STORAGE.pinned, JSON.stringify(pinned));
+  toast("Moved to the Trash", "success");
+  if (get().selectedId === id) startNewThread();
+  return true;
+}
+
 // ---------------------------------------------------------------- turns
 
 export function setDraft(key: string, text: string) {
@@ -441,6 +609,24 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   if (!thread) return false;
   if (trimmed === "/cancel" && !hasExtras(extras)) {
     await cancel(id);
+    return true;
+  }
+  const edit = get().editing[id];
+  if (edit && !thread.running) {
+    cancelEdit(id);
+    const later = messagesAfter(thread, edit.itemId);
+    const go = async () => {
+      if (await rewindTo(id!, edit.itemId, edit.original)) void runPrompt(id!, trimmed, extras);
+    };
+    if (later > 0) {
+      askConfirm({
+        title: "Send the edited message?",
+        message: `The thread goes back to the message you edited; ${later === 1 ? "the message after it and its reply" : `the ${later} messages after it and their replies`} will be removed.`,
+        action: "Send",
+        destructive: true,
+        run: () => void go(),
+      });
+    } else void go();
     return true;
   }
   if (thread.running) {
@@ -753,5 +939,9 @@ export function resetForTests() {
     onboardingOpen: false,
     toasts: [],
     agent: undefined,
+    pinned: [],
+    archived: {},
+    editing: {},
+    confirm: null,
   });
 }

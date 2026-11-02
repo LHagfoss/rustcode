@@ -3,7 +3,11 @@
 // Same rules as the shell; the shell's Rust code is the one that ships.
 
 import { lookup } from "node:dns/promises";
+import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { resolveEngine } from "./engine-bridge";
 
 const TIMEOUT = 3000;
 const MAX_HTML = 512 * 1024;
@@ -115,6 +119,24 @@ async function linkMeta(url: string) {
   return meta;
 }
 
+/** Thread `id`'s folder from `rustcode threads path`, only when it is that thread's folder in the store. */
+function threadDir(id: unknown): string {
+  if (typeof id !== "string" || !/^[\w-]{1,128}$/.test(id)) throw new Error("Not a thread id.");
+  const out = Bun.spawnSync([resolveEngine(), "threads", "path", id]);
+  const dir = out.stdout.toString().trim();
+  if (
+    out.exitCode !== 0 ||
+    !dir.startsWith("/") ||
+    dir.split("/").pop() !== id ||
+    dir.includes("/../") ||
+    !/\/rustcode\/(threads|sessions)\//.test(dir) ||
+    !statSync(dir, { throwIfNoEntry: false })?.isDirectory()
+  ) {
+    throw new Error("Could not find this thread's folder.");
+  }
+  return dir;
+}
+
 export type Native = (command: string, args: Record<string, unknown>) => Promise<unknown>;
 
 export const nativeCommands: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {
@@ -122,5 +144,23 @@ export const nativeCommands: Record<string, (args: Record<string, unknown>) => P
     if (typeof url !== "string" || !/^https?:\/\//i.test(url) || url.length > 2048)
       throw new Error("Only web links.");
     return linkMeta(url);
+  },
+  thread_rename: async ({ id, title }) => {
+    const clean = String(title ?? "")
+      .split(/\s+/)
+      .join(" ")
+      .trim()
+      .slice(0, 200);
+    if (!clean) throw new Error("A title can't be empty.");
+    writeFileSync(join(threadDir(id), "title.txt"), clean);
+    return clean;
+  },
+  thread_trash: async ({ id }) => {
+    const dir = threadDir(id);
+    const trash = join(homedir(), ".Trash");
+    let target = join(trash, String(id));
+    for (let n = 2; existsSync(target); n++) target = join(trash, `${id} ${n}`);
+    renameSync(dir, target);
+    return null;
   },
 };

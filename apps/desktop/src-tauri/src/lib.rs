@@ -6,6 +6,7 @@
 mod engine;
 mod links;
 mod native;
+mod threads;
 
 use engine::{Engine, EngineEvent};
 use std::sync::Arc;
@@ -51,6 +52,8 @@ pub fn run() {
             native::git_changes,
             native::read_image,
             links::link_meta,
+            threads::thread_rename,
+            threads::thread_trash,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");

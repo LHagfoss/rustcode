@@ -411,6 +411,18 @@ export class MockEngine {
     return thread;
   }
 
+  /** The shell's thread actions, on the mock's own threads. */
+  renameThread(id: string, title: string): string {
+    const thread = this.thread(id);
+    thread.title = title.split(/\s+/).join(" ").trim();
+    return thread.title;
+  }
+
+  trashThread(id: string) {
+    this.thread(id);
+    this.threads = this.threads.filter((t) => t.id !== id);
+  }
+
   private snapshot(): Json {
     return this.harnesses as unknown as Json;
   }
@@ -512,6 +524,17 @@ export class MockEngine {
         if (!run) return { accepted: false };
         run.steers.push(str(params.text) ?? "");
         return { accepted: true };
+      }
+      case "_rustcode/rewind": {
+        const thread = this.thread(params.sessionId);
+        const wanted = Number(params.userIndex);
+        let n = -1;
+        const at = thread.history.findIndex(
+          (u) => str(obj(u.update)?.sessionUpdate) === "user_message_chunk" && ++n === wanted,
+        );
+        if (at < 0) throw Object.assign(new Error("No such message"), { code: -32602 });
+        thread.history.splice(at);
+        return {};
       }
       case "_rustcode/warm":
         return {};
@@ -891,6 +914,8 @@ export class MockTransport implements Transport {
 
   async call(command: string, args: Record<string, unknown>): Promise<unknown> {
     if (command === "link_meta") return mockLinkMeta(String(args.url));
+    if (command === "thread_rename") return this.engine?.renameThread(String(args.id), String(args.title));
+    if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     throw new Error(`The mock does not run ${command}.`);
   }
 

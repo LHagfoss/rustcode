@@ -308,3 +308,13 @@
     background: none;
   }
 }
+
+/* Find in thread (⌘F), painted with the CSS Custom Highlight API. */
+::highlight(rc-find) {
+  background-color: color-mix(in srgb, var(--rc-attention) 30%, transparent);
+}
+
+::highlight(rc-find-current) {
+  background-color: #ffd60a;
+  color: #000;
+}

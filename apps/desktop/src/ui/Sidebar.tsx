@@ -2,16 +2,38 @@
 // lights, a search capsule, threads grouped by attention (Needs You,
 // Working, Threads), and the project card with Settings at the foot.
 
-import { Folder, MessageCircleQuestion, PanelLeft, Search, Settings, SquarePen, X } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  Ellipsis,
+  Folder,
+  MessageCircleQuestion,
+  PanelLeft,
+  Pencil,
+  Pin,
+  PinOff,
+  Search,
+  Settings,
+  SquarePen,
+  Trash2,
+  X,
+} from "lucide-react";
+import { ContextMenu, DropdownMenu } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import { pickFolder } from "../lib/native";
+import { hasShell } from "../lib/shell";
 import {
+  askConfirm,
   openSettings,
+  renameThread,
   selectThread,
+  setArchived,
   setProjectCwd,
   startNewThread,
+  togglePin,
   toggleSidebar,
+  trashThread,
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
@@ -38,6 +60,57 @@ function useSidebarWidth() {
   return [width, setWidth] as const;
 }
 
+const menuItem =
+  "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-brand-fill data-[highlighted]:text-white";
+const menuSurface = "surface z-50 min-w-[190px] rounded-[12px] border border-hairline p-1 rc-in";
+
+function ThreadMenuItems({
+  session,
+  Item,
+  Separator,
+  onRename,
+}: {
+  session: SessionSummary;
+  Item: typeof DropdownMenu.Item | typeof ContextMenu.Item;
+  Separator: typeof DropdownMenu.Separator | typeof ContextMenu.Separator;
+  onRename: () => void;
+}) {
+  const pinned = useApp((s) => s.pinned.includes(session.id));
+  const archived = useApp((s) => session.id in s.archived);
+  const canFiles = hasShell();
+  return (
+    <>
+      <Item className={menuItem} onSelect={() => togglePin(session.id)}>
+        {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+        {pinned ? "Unpin" : "Pin"}
+      </Item>
+      <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
+        <Pencil size={13} /> Rename…
+      </Item>
+      <Item className={menuItem} onSelect={() => setArchived(session.id, !archived)}>
+        {archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+        {archived ? "Unarchive" : "Archive"}
+      </Item>
+      <Separator className="mx-1.5 my-1 h-px bg-hairline" />
+      <Item
+        className={cx(menuItem, "text-danger data-[highlighted]:bg-danger")}
+        disabled={!canFiles}
+        onSelect={() =>
+          askConfirm({
+            title: "Move this thread to the Trash?",
+            message: `"${session.title || "New thread"}" and its history move to the Trash, where you can still get them back.`,
+            action: "Move to Trash",
+            destructive: true,
+            run: () => void trashThread(session.id),
+          })
+        }
+      >
+        <Trash2 size={13} /> Move to Trash
+      </Item>
+    </>
+  );
+}
+
 function ThreadRow({
   session,
   selected,
@@ -51,6 +124,9 @@ function ThreadRow({
 }) {
   const thread = useApp((s) => s.threads[session.id]);
   const harnesses = useApp((s) => s.harnesses);
+  const pinned = useApp((s) => s.pinned.includes(session.id));
+  const [renaming, setRenaming] = useState(false);
+  const [title, setTitle] = useState("");
   const request = thread?.permissions[0];
   const running = thread?.running ?? false;
   const harness =
@@ -63,37 +139,102 @@ function ThreadRow({
     modelName(session.model),
     relativeAge(session.updatedAt, now),
   ].filter(Boolean);
+  const startRename = () => {
+    setTitle(session.title ?? "");
+    // After the menu closes and gives focus back.
+    setTimeout(() => setRenaming(true), 0);
+  };
+  const commit = () => {
+    setRenaming(false);
+    if (title.trim() && title.trim() !== session.title) void renameThread(session.id, title);
+  };
+  if (renaming) {
+    return (
+      <div className="rounded-[9px] bg-fg/10 px-1.5 py-[5px]">
+        <input
+          autoFocus
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") setRenaming(false);
+          }}
+          aria-label="Thread title"
+          className="w-full rounded-[6px] bg-field px-1.5 py-0.5 text-body outline-none ring-2 ring-info/50"
+        />
+      </div>
+    );
+  }
   return (
-    <button
-      type="button"
-      onClick={() => selectThread(session.id)}
-      aria-current={selected ? "page" : undefined}
-      className={cx(
-        "flex w-full flex-col gap-0.5 rounded-[9px] px-2.5 py-[7px] text-left transition-colors duration-100",
-        selected ? "bg-fg/10" : "hover:bg-fg/[0.035]",
-      )}
-    >
-      <span className="flex w-full items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-body">{session.title || "New thread"}</span>
-        <span className="flex h-3.5 w-4 shrink-0 items-center justify-center">
-          {request ? (
-            <MessageCircleQuestion size={12} className="text-attention" />
-          ) : running ? (
-            <Spinner size={12} />
-          ) : null}
-        </span>
-      </span>
-      {request ? (
-        <span className="truncate font-medium text-attention text-caption">
-          {request.question ? `Asks: ${request.question.text}` : `Approve: ${request.title}`}
-        </span>
-      ) : (
-        <span className="flex items-center gap-1 truncate text-caption text-fg-2">
-          {scopeAll && session.cwd && <Folder size={9} className="shrink-0" />}
-          <span className="truncate">{detail.join(" · ")}</span>
-        </span>
-      )}
-    </button>
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <div className="group relative">
+          <button
+            type="button"
+            onClick={() => selectThread(session.id)}
+            aria-current={selected ? "page" : undefined}
+            className={cx(
+              "flex w-full flex-col gap-0.5 rounded-[9px] px-2.5 py-[7px] text-left transition-colors duration-100",
+              selected ? "bg-fg/10" : "hover:bg-fg/[0.035]",
+            )}
+          >
+            <span className="flex w-full items-center gap-2">
+              {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-2" />}
+              <span className="min-w-0 flex-1 truncate text-body">{session.title || "New thread"}</span>
+              <span className="flex h-3.5 w-4 shrink-0 items-center justify-center group-hover:invisible">
+                {request ? (
+                  <MessageCircleQuestion size={12} className="text-attention" />
+                ) : running ? (
+                  <Spinner size={12} />
+                ) : null}
+              </span>
+            </span>
+            {request ? (
+              <span className="truncate font-medium text-attention text-caption">
+                {request.question ? `Asks: ${request.question.text}` : `Approve: ${request.title}`}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 truncate text-caption text-fg-2">
+                {scopeAll && session.cwd && <Folder size={9} className="shrink-0" />}
+                <span className="truncate">{detail.join(" · ")}</span>
+              </span>
+            )}
+          </button>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button
+                type="button"
+                aria-label={`Actions for ${session.title || "thread"}`}
+                className="absolute top-[6px] right-1.5 flex size-[20px] items-center justify-center rounded-[6px] text-fg-2 opacity-0 hover:bg-fg/10 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+              >
+                <Ellipsis size={13} />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content align="start" sideOffset={4} className={menuSurface}>
+                <ThreadMenuItems
+                  session={session}
+                  Item={DropdownMenu.Item}
+                  Separator={DropdownMenu.Separator}
+                  onRename={startRename}
+                />
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className={menuSurface}>
+          <ThreadMenuItems
+            session={session}
+            Item={ContextMenu.Item}
+            Separator={ContextMenu.Separator}
+            onRename={startRename}
+          />
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -113,6 +254,9 @@ export function Sidebar() {
   const threads = useApp((s) => s.threads);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
+  const pinned = useApp((s) => s.pinned);
+  const archived = useApp((s) => s.archived);
+  const [showArchived, setShowArchived] = useState(false);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"all" | "project">("all");
   const [width, setWidth] = useSidebarWidth();
@@ -124,26 +268,32 @@ export function Sidebar() {
     return sessions.filter(
       (s) =>
         (scope === "all" || s.cwd === projectCwd) &&
+        s.id in archived === showArchived &&
         (!q || `${s.title ?? ""} ${s.cwd}`.toLowerCase().includes(q)),
     );
-  }, [sessions, query, scope, projectCwd]);
+  }, [sessions, query, scope, projectCwd, archived, showArchived]);
+  const archivedCount = useMemo(() => sessions.filter((s) => s.id in archived).length, [sessions, archived]);
 
   const groups = useMemo(() => {
     const needs: SessionSummary[] = [];
     const working: SessionSummary[] = [];
+    const pins: SessionSummary[] = [];
     const rest: SessionSummary[] = [];
     for (const s of filtered) {
       const t = threads[s.id];
       if (t?.permissions.length) needs.push(s);
       else if (t?.running) working.push(s);
+      else if (pinned.includes(s.id)) pins.push(s);
       else rest.push(s);
     }
+    pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
     return [
       { id: "needs", label: "Needs You", items: needs },
       { id: "working", label: "Working", items: working },
-      { id: "threads", label: undefined, items: rest },
+      { id: "pinned", label: "Pinned", items: pins },
+      { id: "threads", label: showArchived ? "Archived" : undefined, items: rest },
     ].filter((g) => g.items.length);
-  }, [filtered, threads]);
+  }, [filtered, threads, pinned, showArchived]);
 
   const onResize = (e: React.PointerEvent) => {
     dragging.current = true;
@@ -223,11 +373,13 @@ export function Sidebar() {
           )}
           {sessionsLoaded && !filtered.length && (
             <div className="px-2.5 py-3 text-callout text-fg-2">
-              {query
-                ? "No matching threads."
-                : scope === "project"
-                  ? "No threads in this project yet."
-                  : "No threads yet."}
+              {showArchived
+                ? "No archived threads."
+                : query
+                  ? "No matching threads."
+                  : scope === "project"
+                    ? "No threads in this project yet."
+                    : "No threads yet."}
             </div>
           )}
           {groups.map((group, gi) => (
@@ -256,6 +408,16 @@ export function Sidebar() {
               </div>
             </div>
           ))}
+          {(archivedCount > 0 || showArchived) && (
+            <button
+              type="button"
+              onClick={() => setShowArchived(!showArchived)}
+              className="mt-2 flex w-full items-center gap-1.5 rounded-[9px] px-2.5 py-1.5 text-caption text-fg-2 hover:bg-fg/[0.035]"
+            >
+              <Archive size={11} />
+              {showArchived ? "Back to threads" : `Archived (${archivedCount})`}
+            </button>
+          )}
         </nav>
         <div className="surface absolute right-2.5 bottom-2.5 left-2.5 flex items-center gap-1 rounded-2xl border-[0.5px] border-hairline p-1">
           <Tooltip label="Default folder for new threads">

@@ -6,16 +6,22 @@ import {
   cancel,
   completeOnboarding,
   connect,
+  editMessage,
   fetchHarnessModels,
+  renameThread,
   resetForTests,
   selectThread,
+  setArchived,
   setDefaultHarness,
   setHarnessEnabled,
   setNewThreadChoice,
   setProjectCwd,
   submit,
+  togglePin,
+  trashThread,
   useApp,
 } from "./store";
+import { turnCompletion } from "./thread";
 
 const until = async (check: () => boolean, ms = 2000) => {
   const start = Date.now();
@@ -112,5 +118,55 @@ describe("engine controller with the mock engine", () => {
     expect(selected()!.harness?.capabilities.steer).toBe("live");
     await done;
     await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
+  });
+
+  test("thread actions: pin, archive, rename and trash", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length === 3);
+    const id = useApp.getState().sessions[1]!.id;
+    togglePin(id);
+    expect(useApp.getState().pinned).toEqual([id]);
+    setArchived(id, true);
+    expect(id in useApp.getState().archived).toBe(true);
+    expect(await renameThread(id, "  New\n name ")).toBe(true);
+    expect(useApp.getState().sessions.find((x) => x.id === id)?.title).toBe("New name");
+    expect(await trashThread(id)).toBe(true);
+    const s = useApp.getState();
+    expect(s.sessions.some((x) => x.id === id)).toBe(false);
+    expect(s.pinned).toEqual([]);
+    expect(id in s.archived).toBe(false);
+  });
+
+  test("edit and resend rewinds the thread to the message first", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    await submit("yolo first");
+    await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
+    await submit("yolo second");
+    await until(() => selected()?.items.filter((i) => i.kind === "turnEnd").length === 2);
+    const thread = selected()!;
+    const first = thread.items.find((i) => i.kind === "user")!;
+    editMessage(thread.id, first.id);
+    expect(useApp.getState().drafts[thread.id]).toBe("yolo first");
+    expect(useApp.getState().editing[thread.id]?.userIndex).toBe(0);
+    await submit("yolo first, edited");
+    // Later messages go too, so it asks first.
+    const confirm = useApp.getState().confirm;
+    expect(confirm?.action).toBe("Send");
+    confirm!.run();
+    await until(
+      () => selected()?.items.filter((i) => i.kind === "turnEnd").length === 1 && !selected()!.running,
+    );
+    const users = selected()!
+      .items.filter((i) => i.kind === "user")
+      .map((i) => (i as { text: string }).text);
+    expect(users).toEqual(["yolo first, edited"]);
+    // The turn changed a file: its completion summary says so.
+    const end = selected()!.items.findIndex((i) => i.kind === "turnEnd");
+    expect(turnCompletion(selected()!.items, end)?.files).toEqual([
+      { path: "src/app.ts", added: 1, removed: 1 },
+    ]);
+    expect(turnCompletion(selected()!.items, end)?.checks[0]?.outcome).toBe("passed");
   });
 });

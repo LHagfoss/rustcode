@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  CircleCheck,
   CircleX,
   FilePlus,
   FileText,
@@ -16,6 +17,7 @@ import {
   MoveRight,
   OctagonAlert,
   Pencil,
+  RotateCcw,
   Search,
   SquareStop,
   Terminal,
@@ -27,7 +29,15 @@ import { memo, type ReactNode, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import type { FileDiff } from "../acp/types";
 import { splitImageMarkers, splitUrls } from "../state/compose";
-import { diffCounts, diffLines, formatDuration, type TranscriptItem, thoughtHeadings } from "../state/thread";
+import { editMessage, retryMessage } from "../state/store";
+import {
+  diffCounts,
+  diffLines,
+  formatDuration,
+  type TranscriptItem,
+  type TurnCompletion,
+  thoughtHeadings,
+} from "../state/thread";
 import { LinkChip } from "./LinkChip";
 import { CopyButton, Markdown } from "./Markdown";
 import { cx, Spinner, Tooltip } from "./primitives";
@@ -42,7 +52,16 @@ function TextWithLinks({ text }: { text: string }) {
   return <>{parts.map((p, i) => (p.url ? <LinkChip key={i} url={p.url} className="mx-px" /> : p.text))}</>;
 }
 
-export const UserRow = memo(function UserRow({ item }: { item: Item<"user"> }) {
+export const UserRow = memo(function UserRow({
+  item,
+  threadId,
+  rewind,
+}: {
+  item: Item<"user">;
+  threadId?: string;
+  /** Edit and Retry take the thread back to this message (`_rustcode/rewind`). */
+  rewind?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
   const long = text.length > 600 || text.split("\n").length > 12;
@@ -110,6 +129,34 @@ export const UserRow = memo(function UserRow({ item }: { item: Item<"user"> }) {
           <span className="tabular">{timeLabel(item.at)}</span>
         </Tooltip>
         <CopyButton text={item.text} iconOnly label="Copy message" />
+        {threadId && (
+          <>
+            <Tooltip
+              label={
+                rewind ? "Edit and resend: the thread goes back to this message" : "Edit in the composer"
+              }
+            >
+              <button
+                type="button"
+                aria-label="Edit message"
+                onClick={() => editMessage(threadId, item.id)}
+                className="inline-flex size-[22px] items-center justify-center rounded-[7px] text-fg-2 opacity-0 transition-opacity hover:bg-fill-2 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <Pencil size={12} />
+              </button>
+            </Tooltip>
+            <Tooltip label={rewind ? "Retry: send it again from here" : "Send it again"}>
+              <button
+                type="button"
+                aria-label="Retry message"
+                onClick={() => retryMessage(threadId, item.id)}
+                className="inline-flex size-[22px] items-center justify-center rounded-[7px] text-fg-2 opacity-0 transition-opacity hover:bg-fill-2 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <RotateCcw size={12} />
+              </button>
+            </Tooltip>
+          </>
+        )}
       </div>
     </div>
   );
@@ -393,7 +440,75 @@ export function NoticeRow({ item, action }: { item: Item<"notice">; action?: Rea
   );
 }
 
-export function TurnEndRow({ item, reply }: { item: Item<"turnEnd">; reply?: string }) {
+/** What a finished turn changed and which checks it ran, as TurnCompletionCard.swift draws it. */
+export function CompletionCard({ completion }: { completion: TurnCompletion }) {
+  const [open, setOpen] = useState(false);
+  const failed = completion.checks.filter((c) => c.outcome === "failed");
+  const passed = completion.checks.length > 0 && completion.checks.every((c) => c.outcome === "passed");
+  return (
+    <div className="mb-2 rounded-[10px] bg-fill-4 font-rounded text-callout">
+      <div className="flex min-h-8 items-center gap-2 px-2.5">
+        {completion.files.length ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+            className="-mx-1 flex items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-fill-3"
+          >
+            <span className="font-medium">
+              {completion.files.length} file{completion.files.length === 1 ? "" : "s"} changed
+            </span>
+            <DiffCount added={completion.added} removed={completion.removed} />
+            <ChevronRight
+              size={11}
+              className={cx("text-fg-3 transition-transform duration-200", open && "rotate-90")}
+            />
+          </button>
+        ) : (
+          <span className="text-fg-2">No files changed</span>
+        )}
+        <span className="flex-1" />
+        {failed.length > 0 ? (
+          <Tooltip label={`Failed on its last run:\n${failed.map((c) => c.command).join("\n")}`}>
+            <span className="flex items-center gap-1 font-medium text-caption text-danger">
+              <CircleX size={12} />
+              {failed.length === 1 ? "1 check failed" : `${failed.length} checks failed`}
+            </span>
+          </Tooltip>
+        ) : passed ? (
+          <Tooltip label={completion.checks.map((c) => c.command).join("\n")}>
+            <span className="flex items-center gap-1 font-medium text-caption text-success">
+              <CircleCheck size={12} /> Checks passed
+            </span>
+          </Tooltip>
+        ) : null}
+      </div>
+      {open && (
+        <div className="px-2.5 pb-2">
+          {completion.files.map((f) => (
+            <div key={f.path} className="flex h-[22px] items-center gap-2 text-caption">
+              <FileText size={11} className="shrink-0 text-fg-2" />
+              <span className="min-w-0 flex-1 truncate font-mono" dir="rtl">
+                <bdi>{f.path}</bdi>
+              </span>
+              <DiffCount added={f.added} removed={f.removed} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function TurnEndRow({
+  item,
+  reply,
+  completion,
+}: {
+  item: Item<"turnEnd">;
+  reply?: string;
+  completion?: TurnCompletion | null;
+}) {
   const parts = [
     item.outcome === "cancelled"
       ? `Stopped by you${item.elapsedMs ? ` · after ${formatDuration(item.elapsedMs)}` : ""}`
@@ -405,10 +520,13 @@ export function TurnEndRow({ item, reply }: { item: Item<"turnEnd">; reply?: str
     timeLabel(item.at),
   ].filter(Boolean);
   return (
-    <div className="-mt-2 flex h-[22px] items-center gap-1.5 text-caption text-fg-3">
-      {reply && <CopyButton text={reply} iconOnly label="Copy reply" />}
-      {item.outcome === "cancelled" && <SquareStop size={11} />}
-      <span className="tabular">{parts.join(" · ")}</span>
+    <div className="-mt-2">
+      {completion && <CompletionCard completion={completion} />}
+      <div className="flex h-[22px] items-center gap-1.5 text-caption text-fg-3">
+        {reply && <CopyButton text={reply} iconOnly label="Copy reply" />}
+        {item.outcome === "cancelled" && <SquareStop size={11} />}
+        <span className="tabular">{parts.join(" · ")}</span>
+      </div>
     </div>
   );
 }

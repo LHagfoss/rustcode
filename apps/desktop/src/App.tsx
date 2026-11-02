@@ -2,6 +2,7 @@ import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
   cancel,
+  closeConfirm,
   openSettings,
   setOnboarding,
   setSwitcher,
@@ -10,7 +11,7 @@ import {
   useApp,
 } from "./state/store";
 import { ChatView } from "./ui/ChatView";
-import { cx } from "./ui/primitives";
+import { cx, Pill } from "./ui/primitives";
 import { Sidebar } from "./ui/Sidebar";
 import { Switcher } from "./ui/Switcher";
 
@@ -54,6 +55,44 @@ function useShortcuts() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+}
+
+function ConfirmDialog() {
+  const confirm = useApp((s) => s.confirm);
+  if (!confirm) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25"
+      onMouseDown={(e) => e.target === e.currentTarget && closeConfirm()}
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="rc-confirm-title"
+        className="surface w-[340px] rounded-[18px] border border-hairline p-5 shadow-panel rc-in"
+        onKeyDown={(e) => e.key === "Escape" && closeConfirm()}
+      >
+        <h2 id="rc-confirm-title" className="font-semibold text-body">
+          {confirm.title}
+        </h2>
+        <p className="mt-1.5 text-callout text-fg-2">{confirm.message}</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Pill onClick={closeConfirm}>Cancel</Pill>
+          <Pill
+            prominent
+            autoFocus
+            className={confirm.destructive ? "!bg-danger" : undefined}
+            onClick={() => {
+              closeConfirm();
+              confirm.run();
+            }}
+          >
+            {confirm.action}
+          </Pill>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Toasts() {
@@ -100,6 +139,7 @@ export function App() {
         {settings && <Settings />}
         {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
       </Suspense>
+      <ConfirmDialog />
       <Toasts />
     </Tooltip.Provider>
   );

@@ -3,9 +3,10 @@
 // scrolled up, and a "Latest" button brings them back.
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ThreadState, TranscriptItem } from "../state/thread";
+import { useApp } from "../state/store";
+import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
 import { cx } from "./primitives";
 import { AssistantRow, NoticeRow, ThoughtRow, ToolRow, TurnEndRow, UserRow, WorkingRow } from "./Rows";
 
@@ -34,7 +35,50 @@ function workingLabel(thread: ThreadState): string {
   return "Working";
 }
 
+function searchable(item: TranscriptItem): string {
+  switch (item.kind) {
+    case "user":
+    case "assistant":
+    case "thought":
+    case "notice":
+      return item.text;
+    case "tool":
+      return `${item.title} ${item.summary ?? ""} ${item.detail ?? ""} ${item.output ?? ""}`;
+    default:
+      return "";
+  }
+}
+
+/** Marks every visible occurrence of `query` with the CSS highlight `rc-find` (current one: `rc-find-current`). */
+function paintMatches(root: HTMLElement | null, query: string, current: HTMLElement | null) {
+  const highlights = (globalThis.CSS as unknown as { highlights?: Map<string, unknown> })?.highlights;
+  const HighlightCtor = (globalThis as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+  if (!highlights || !HighlightCtor) return;
+  highlights.delete("rc-find");
+  highlights.delete("rc-find-current");
+  if (!root || !query) return;
+  const all: Range[] = [];
+  const mine: Range[] = [];
+  const needle = query.toLowerCase();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.nodeValue?.toLowerCase() ?? "";
+    let at = text.indexOf(needle);
+    while (at >= 0) {
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + needle.length);
+      (current?.contains(node) ? mine : all).push(range);
+      at = text.indexOf(needle, at + needle.length);
+    }
+  }
+  highlights.set("rc-find", new HighlightCtor(...all));
+  highlights.set("rc-find-current", new HighlightCtor(...mine));
+}
+
 export function Transcript({ thread, bottomInset }: { thread: ThreadState; bottomInset: number }) {
+  const [find, setFind] = useState<{ query: string; index: number } | null>(null);
+  const findField = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -58,6 +102,15 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
     }
     return map;
   }, [thread.items]);
+
+  const completions = useMemo(() => {
+    const map: Record<string, TurnCompletion | null> = {};
+    thread.items.forEach((item, i) => {
+      if (item.kind === "turnEnd") map[item.id] = turnCompletion(thread.items, i);
+    });
+    return map;
+  }, [thread.items]);
+  const rewind = useApp((s) => !!s.agent?.rewind) && (thread.harness?.capabilities.rewind ?? true);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -117,11 +170,99 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
     if (e.deltaY < 0) pinned.current = false;
   };
 
+  const matches = useMemo(() => {
+    const q = find?.query.trim().toLowerCase();
+    if (!q) return [];
+    return rows.flatMap((row, i) => (row.item && searchable(row.item).toLowerCase().includes(q) ? [i] : []));
+  }, [rows, find?.query]);
+  const currentRow = find && matches.length ? matches[Math.min(find.index, matches.length - 1)] : undefined;
+
+  // ⌘F opens find in this thread; Esc closes it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setFind((f) => f ?? { query: "", index: 0 });
+        requestAnimationFrame(() => findField.current?.select());
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the current match changes
+  useEffect(() => {
+    if (currentRow === undefined) return;
+    pinned.current = false;
+    virtualizer.scrollToIndex(currentRow, { align: "center" });
+  }, [currentRow]);
+
+  // Paint after each render; rows mount as they scroll into view.
+  useEffect(() => {
+    const current = innerRef.current?.querySelector<HTMLElement>(`[data-index="${currentRow}"]`) ?? null;
+    paintMatches(find ? innerRef.current : null, find?.query.trim() ?? "", current);
+  });
+  useEffect(() => () => paintMatches(null, "", null), []);
+
+  const step = (delta: number) =>
+    setFind((f) =>
+      f && matches.length ? { ...f, index: (f.index + delta + matches.length) % matches.length } : f,
+    );
+
   const lastIndex = thread.items.length - 1;
   const items = virtualizer.getVirtualItems();
 
   return (
     <div className="relative min-h-0 flex-1">
+      {find && (
+        <div className="surface absolute top-2 right-7 z-20 flex h-[32px] items-center gap-1 rounded-full border border-hairline pr-1 pl-3 rc-in">
+          <Search size={12} className="text-fg-2" />
+          <input
+            ref={findField}
+            autoFocus
+            value={find.query}
+            onChange={(e) => setFind({ query: e.target.value, index: 0 })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
+              if (e.key === "Escape") setFind(null);
+            }}
+            placeholder="Find in thread"
+            aria-label="Find in thread"
+            className="w-[180px] bg-transparent text-callout outline-none placeholder:text-fg-3"
+          />
+          <span className="min-w-[52px] text-right text-caption text-fg-2 tabular" aria-live="polite">
+            {find.query.trim()
+              ? matches.length
+                ? `${Math.min(find.index, matches.length - 1) + 1} of ${matches.length}`
+                : "None"
+              : ""}
+          </span>
+          <button
+            type="button"
+            aria-label="Previous match"
+            onClick={() => step(-1)}
+            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+          >
+            <ChevronUp size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label="Next match"
+            onClick={() => step(1)}
+            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+          >
+            <ChevronDown size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label="Close find"
+            onClick={() => setFind(null)}
+            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -150,7 +291,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
                   {row.working ? (
                     <WorkingRow label={workingLabel(thread)} startedAt={thread.turnStartedAt} now={now} />
                   ) : item?.kind === "user" ? (
-                    <UserRow item={item} />
+                    <UserRow item={item} threadId={thread.running ? undefined : thread.id} rewind={rewind} />
                   ) : item?.kind === "assistant" ? (
                     <AssistantRow item={item} />
                   ) : item?.kind === "thought" ? (
@@ -160,7 +301,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
                   ) : item?.kind === "notice" ? (
                     <NoticeRow item={item} />
                   ) : item?.kind === "turnEnd" ? (
-                    <TurnEndRow item={item} reply={replyBefore[item.id]} />
+                    <TurnEndRow item={item} reply={replyBefore[item.id]} completion={completions[item.id]} />
                   ) : null}
                 </div>
               </div>

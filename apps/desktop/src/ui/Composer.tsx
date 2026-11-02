@@ -24,6 +24,7 @@ import { controlDisabledReason } from "../state/harness";
 import {
   acceptsImages,
   cancel,
+  cancelEdit,
   canSteer,
   removeQueued,
   sendQueuedNow,
@@ -132,6 +133,7 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
   const key = thread?.id ?? "new";
   const draft = useApp((s) => s.drafts[key] ?? "");
   const extras = useApp((s) => s.extras[key] ?? emptyExtras);
+  const editing = useApp((s) => s.editing[key]);
   const commands = useApp((s) => s.commands);
   const projectCwd = useApp((s) => s.projectCwd);
   useApp((s) => s.harnesses); // re-render when harness capabilities arrive
@@ -433,6 +435,23 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
                 </Tooltip>
               </div>
             ))}
+          </div>
+        )}
+        {editing && (
+          <div className="flex items-center gap-1.5 px-1.5 text-caption text-brand">
+            <Pencil size={11} />
+            <b>Editing a sent message</b>
+            <span className="text-fg-2">· sending takes the thread back to it</span>
+            <button
+              type="button"
+              onClick={() => {
+                cancelEdit(key);
+                update("");
+              }}
+              className="ml-auto rounded-md px-1.5 text-fg-2 hover:bg-fill-2 hover:text-fg"
+            >
+              Cancel
+            </button>
           </div>
         )}
         {extras.attachments.length > 0 && (
