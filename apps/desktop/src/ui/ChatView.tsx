@@ -423,10 +423,11 @@ export function ChatView() {
   const side = width >= 600 ? 28 : width >= 360 ? 20 : 16;
 
   return (
-    <main ref={rootRef} className="relative flex min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
+    <main ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
       <Header thread={thread} />
       {thread && !thread.loading ? (
-        <Transcript thread={thread} bottomInset={stackHeight + 36} />
+        // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
+        <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} />
       ) : thread?.loading ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-callout text-fg-2">
           <Spinner />
