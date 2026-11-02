@@ -1,3 +1,14 @@
+## [v1.1.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.1.0) - 2026-11-02
+
+### Features
+- The update check tries again when it fails and when the app comes back to the front, and Settings shows why a check failed. (#2838)
+- Larger text across the app, a rounder composer, bigger pasted-image thumbnails and a lighter disabled Send button. (#2846)
+- Inline code has a background, links show the pointer and a hover state, long tool rows truncate, and replies have one copy button. (#2847)
+- Pictures in the chat can be zoomed with a pinch, ⌘-scroll, double-click or + and −, and panned by dragging. (#2848)
+- Threads that finish while you are elsewhere show in a Finished section with a green dot until you open them. (#2849)
+- Updates show a download progress bar, and the release notes open after every update. (#2850)
+- The Mac app gives a light trackpad tap when you send, stop a turn or rest on Send (Settings › General to turn off). (#2851)
+- Settings › Usage shows the 5-hour and weekly limits of your Claude and ChatGPT plans in one place. (#2852)
 ## [v1.0.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.0.0) - 2026-11-02
 
 ### Features
