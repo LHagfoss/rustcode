@@ -11,15 +11,19 @@ import {
   ChevronUp,
   CircleCheck,
   CircleX,
+  ExternalLink,
   FilePlus,
   FileText,
   Globe,
+  Hourglass,
   Image as ImageIcon,
   Layers,
+  MessagesSquare,
   MoveRight,
   Pencil,
   RotateCcw,
   Search,
+  Shield,
   SquareStop,
   Terminal,
   Trash2,
@@ -33,7 +37,9 @@ import { displayCommand } from "../lib/command";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
-import { editMessage, retryMessage, useApp } from "../state/store";
+import { stateOf } from "../state/host";
+import { LINK_LABEL } from "../state/orchestration";
+import { editMessage, retryMessage, selectThread, useApp } from "../state/store";
 import {
   diffCounts,
   diffLines,
@@ -42,9 +48,11 @@ import {
   type TurnCompletion,
   thoughtHeadings,
 } from "../state/thread";
+import { bareTool, displayTool, sessionIdOf, usefulSummary } from "../state/toolNames";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
+import { LinkStateIcon } from "./Links";
 import { CopyButton, Markdown } from "./Markdown";
 import { Callout, cx, Spinner, Tooltip } from "./primitives";
 import { SmartUIView } from "./SmartUIView";
@@ -293,6 +301,8 @@ export const KIND_ICON: Record<string, typeof Wrench> = {
   fetch: Globe,
   agent: Users,
   skill: Book,
+  thread: MessagesSquare,
+  wait: Hourglass,
   other: Wrench,
 };
 
@@ -429,7 +439,16 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const running = item.status === "pending" || item.status === "in_progress";
   const failed = item.status === "failed";
   const detail = toolDetail(item, kind);
-  const title = displayCommand(item.title);
+  // MCP calls come named `mcp__server__tool`: the row says what they did instead.
+  const label = displayTool(item.title, item.input, item.status);
+  const title = displayCommand(label.title);
+  // The line that tells two calls apart; a lone fence marker is not one.
+  const summary = usefulSummary(item.summary) ?? label.summary;
+  // A `start_session` that answered with a thread: the row opens it, and shows how it is doing.
+  const startedId = bareTool(item.title) === "start_session" ? sessionIdOf(item.output) : undefined;
+  const link = useApp((s) => (startedId ? s.links.links.find((l) => l.target === startedId) : undefined));
+  const linkState = useApp((s) => (link ? stateOf(s, link) : undefined));
+  const opensThread = !!startedId && !!link;
   const relative =
     detail.text && cwd && detail.text.startsWith(`${cwd}/`) ? detail.text.slice(cwd.length + 1) : detail.text;
   const trimmed = relative && displayCommand(relative);
@@ -446,8 +465,8 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
     <div className="font-rounded">
       <button
         type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        aria-expanded={opensThread ? undefined : open}
+        onClick={() => (opensThread ? selectThread(startedId) : setOpen(!open))}
         className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
@@ -462,9 +481,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         <span className="min-w-0 max-w-full shrink truncate text-callout text-fg-muted" title={item.title}>
           {title}
         </span>
-        {item.summary && (
-          <span className="min-w-0 shrink truncate text-callout text-fg-faint">{item.summary}</span>
-        )}
+        {summary && <span className="min-w-0 shrink truncate text-callout text-fg-faint">{summary}</span>}
         {shownDetail && (
           <span
             className={cx(
@@ -488,13 +505,31 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         {item.exitCode !== undefined && item.exitCode !== 0 && (
           <span className="font-mono text-caption text-danger">exit {item.exitCode}</span>
         )}
-        <ChevronRight
-          size={11}
-          className={cx(
-            "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
-            open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
-          )}
-        />
+        {item.autoAllowed && (
+          <Tooltip label={`Allowed by ${item.autoAllowed}`}>
+            <span className="flex shrink-0 items-center text-fg-faint">
+              <Shield size={11} />
+            </span>
+          </Tooltip>
+        )}
+        {linkState && (
+          <Tooltip label={`“${link?.targetTitle}” · ${LINK_LABEL[linkState]}`}>
+            <span className="flex shrink-0 items-center">
+              <LinkStateIcon state={linkState} size={11} />
+            </span>
+          </Tooltip>
+        )}
+        {opensThread ? (
+          <ExternalLink size={11} className="shrink-0 text-fg-faint opacity-0 group-hover:opacity-100" />
+        ) : (
+          <ChevronRight
+            size={11}
+            className={cx(
+              "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
+              open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
+            )}
+          />
+        )}
       </button>
       {tailLines.length > 0 && !open && (
         <pre className="m-0 mt-0.5 ml-[26px] overflow-hidden font-mono text-caption text-fg-muted leading-[15px] whitespace-pre-wrap">

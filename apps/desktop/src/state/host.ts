@@ -61,7 +61,7 @@ import {
   updateThread,
   useApp,
 } from "./store";
-import { appendNotice, localId, type TranscriptItem, turnCompletion } from "./thread";
+import { appendNotice, attachAutoAllowed, localId, type TranscriptItem, turnCompletion } from "./thread";
 
 const BOOK_KEY = "rustcode.threadLinks";
 
@@ -139,6 +139,22 @@ export function resolveGrant(choice: GrantChoice) {
   resolve?.(choice);
 }
 
+/** The orchestration tool each grant kind answers for, on the caller's own transcript row. */
+const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
+  read: "read_session",
+  message: "message_session",
+  start: "start_session",
+  fan_out: "fan_out",
+};
+
+/** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
+const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
+  read: "Read a thread",
+  message: "Messaged a thread",
+  start: "Started a thread",
+  fan_out: "Fanned out across harnesses",
+};
+
 const toasted = new Set<string>();
 
 async function permitted(caller: RuleThread, key: string, question: GrantAsk): Promise<Failure | null> {
@@ -147,15 +163,26 @@ async function permitted(caller: RuleThread, key: string, question: GrantAsk): P
   // policy that answers the harness's own approvals, so a Full-access thread is not re-asked here.
   const mode = permissionModeOf(useApp.getState(), caller.id);
   if (delegationAllowed(mode, question.kind)) {
-    // Not silent: the transcript says what the thread did on its own, and why.
-    const text = `“${caller.title}” ${verb(question)}, allowed by ${modeLabel(mode)}`;
-    updateThread(caller.id, (t) => appendNotice(t, text));
+    // Not silent: the call's own row says the thread did it on its own, and why. A notice would
+    // both name the caller (the reader is already in that thread) and split the run of calls.
+    const why = modeLabel(mode);
+    let attached = false;
+    updateThread(caller.id, (t) => {
+      const marked = attachAutoAllowed(t, TOOL_OF_KIND[question.kind], why);
+      attached = marked.attached;
+      return marked.attached ? marked.state : t;
+    });
+    if (!attached) {
+      updateThread(caller.id, (t) =>
+        appendNotice(t, `${ALLOWED_NOTICE[question.kind]} · allowed by ${why}`, "info"),
+      );
+    }
     // The transcript keeps every one; the toast comes once per thread and kind, so an orchestrator
     // reading threads in a loop does not flood the screen.
     const once = `${caller.id}:${question.kind}`;
     if (!toasted.has(once)) {
       toasted.add(once);
-      toast(text, "info");
+      toast(`“${caller.title}” ${verb(question)}, allowed by ${why}`, "info");
     }
     return null;
   }

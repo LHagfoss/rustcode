@@ -8,6 +8,7 @@
 // transcript and the tests share it; one pass over the items.
 
 import { subagentOf, type TranscriptItem } from "./thread";
+import { bareTool } from "./toolNames";
 
 export interface TurnFold {
   /** Stable per turn: its footer's id, else its first step's. */
@@ -147,10 +148,19 @@ export const GROUP_MIN = 2;
 
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
 
+/** The calls that reach other threads: they start one or wait on one. */
+const THREAD_TOOLS = /^(start_session|message_session|fan_out)$/;
+const WAIT_TOOLS = /^(wait_session|read_session|list_sessions)$/;
+
 /** What a call does, from its ACP kind, else its title. */
 export function inferToolKind(item: { toolKind?: string; title: string }): string {
   if (item.toolKind && item.toolKind !== "other") return item.toolKind;
   const t = item.title.toLowerCase();
+  // Orchestration calls before the verbs: `read_session` is not a file read, and
+  // `start_session` is not a shell.
+  const bare = bareTool(item.title).toLowerCase();
+  if (THREAD_TOOLS.test(bare)) return "thread";
+  if (WAIT_TOOLS.test(bare)) return "wait";
   if (/^(glob|grep|rg|search|find|list|ls)/.test(t)) return "search";
   if (/^(read|cat|view|open)/.test(t)) return "read";
   if (/^(edit|write|apply|patch|create|replace)/.test(t)) return "edit";
@@ -181,11 +191,13 @@ function groupable(row: FoldRow): row is GroupRow {
 }
 
 const VERBS: [kinds: string[], one: string, many: (n: number) => string][] = [
+  [["thread"], "started 1 thread", (n) => `started ${n} threads`],
   [["read"], "read 1 file", (n) => `read ${n} files`],
   [["edit", "delete", "move"], "edited 1 file", (n) => `edited ${n} files`],
   [["execute"], "ran 1 command", (n) => `ran ${n} commands`],
   [["search"], "searched once", (n) => `searched ${n} times`],
   [["fetch"], "fetched 1 page", (n) => `fetched ${n} pages`],
+  [["wait"], "waited for threads", () => "waited for threads"],
   [["think"], "thought", (n) => `thought ${n} times`],
 ];
 

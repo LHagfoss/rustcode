@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { foldLabel, foldTurns, groupTools, toolGroupLabel } from "./fold";
+import { foldLabel, foldTurns, groupTools, inferToolKind, toolGroupLabel } from "./fold";
 import type { TranscriptItem } from "./thread";
 
 const user = (id: string): TranscriptItem => ({ kind: "user", id, text: id });
@@ -155,6 +155,26 @@ describe("tool groups", () => {
     expect(toolGroupLabel(["read", "edit", "execute"])).toBe(
       "Read 1 file, edited 1 file and performed 1 other action",
     );
+  });
+
+  test("orchestration calls read as threads started and threads waited for", () => {
+    expect(toolGroupLabel(["thread", "thread", "thread", "execute"])).toBe(
+      "Started 3 threads and ran 1 command",
+    );
+    expect(toolGroupLabel(["wait", "wait"])).toBe("Waited for threads");
+  });
+
+  test("an orchestration call's kind comes from its name, MCP prefix or not", () => {
+    const kindOf = (title: string) => inferToolKind({ title });
+    expect(kindOf("mcp__rustcode__start_session")).toBe("thread");
+    expect(kindOf("message_session")).toBe("thread");
+    expect(kindOf("mcp__rustcode__fan_out")).toBe("thread");
+    expect(kindOf("mcp__rustcode__wait_session")).toBe("wait");
+    expect(kindOf("read_session")).toBe("wait");
+    expect(kindOf("mcp__rustcode__list_sessions")).toBe("wait");
+    // Everything else reads as before.
+    expect(kindOf("Read")).toBe("read");
+    expect(kindOf("bash")).toBe("execute");
   });
 });
 
