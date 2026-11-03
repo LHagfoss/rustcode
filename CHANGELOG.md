@@ -1,3 +1,25 @@
+## [v1.4.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.4.0) - 2026-11-03
+
+### Features
+### New harness
+- Pi is a built-in harness: Settings › Harnesses finds an installed `pi`, and threads can run on it with pi's own models, logins and skills. (#2932)
+
+### A calmer chat
+- While a turn runs, the chat shows what it is doing now and folds its earlier steps into one row. The header's status button is icon-only, and the composer no longer cuts off the bottom of the text you type. (#2930)
+- Claude Code subagents show as one live row each, with the step they are on and their step count and time when done, instead of every step in the chat. Hover "N agents working" over the composer to see what each is doing. (#2925)
+- Chat rows no longer jump or overlap while a reply streams or while you scroll. (#2927)
+
+### Usage
+- Plan usage and context show how much you have left: the bars and the context ring drain as you use them, in the composer and in Settings › Usage. (#2926)
+- Threads on the Codex harness show your ChatGPT plan's usage in the composer, like Settings › Usage. (#2928)
+
+### MCP
+- Claude Code and Codex threads can use remote MCP servers you signed in to in RustCode; the login is passed to them. (#2929)
+- Opening an MCP server in Settings › Capabilities no longer crashes the app. (#2931)
+
+### Fixes
+- ⌘R reloads the view without stopping your threads, and a view that fails to render offers Reload view instead of a blank window. (#2931)
+- The checks pill under a turn counts only real test, lint and build runs, not commands that mention a test file. (#2927)
 ## [v1.3.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.3.0) - 2026-11-03
 
 ### Features
