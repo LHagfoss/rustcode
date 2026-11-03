@@ -1,3 +1,10 @@
+## [v1.5.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.5.0) - 2026-11-03
+
+### Features
+- Switch an open thread to another harness from the model picker; the new harness gets the conversation so far. (#2937)
+- Background work (background agents, commands, turns Claude starts by itself) shows in the thread, and subagents look the same on every harness. (#2936)
+- Steer a running Claude Code or Codex turn with images, not only text. (#2938)
+- CI: releases build the desktop app alongside the engine and build once instead of twice. (#2934, #2935)
 ## [v1.4.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.4.0) - 2026-11-03
 
 ### Features
