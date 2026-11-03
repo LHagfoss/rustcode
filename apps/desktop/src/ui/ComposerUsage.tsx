@@ -1,5 +1,5 @@
 // The composer's meters, after UsageCapsule.swift and PlanUsageMeter.swift:
-// a small ring draining as the context window fills, and the plan's
+// a small ring filling as the context window fills, and the plan's
 // shortest window (5-hour) as a short bar with the percentage left. Clicking
 // the ring opens the context inspector; hovering the bar opens every plan
 // window at once. They read the store themselves: the composer does not
@@ -65,11 +65,11 @@ export function ContextRing({ threadId }: { threadId: string }) {
       <HoverCard.Trigger asChild>
         <span
           role="img"
-          aria-label={`Context: ${formatTokens(Math.max(0, usage.size - usage.used))} of ${formatTokens(usage.size)} tokens left`}
+          aria-label={`Context: ${percentOf(usage.used, usage.size)} used, ${formatTokens(usage.used)} of ${formatTokens(usage.size)} tokens`}
           className="flex size-[30px] cursor-default items-center justify-center rounded-full transition-colors hover:bg-fill data-[state=open]:bg-fill"
         >
           <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
-            <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-text-faint)" strokeWidth="2" />
+            <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-fill-strong)" strokeWidth="2" />
             <circle
               cx="8.5"
               cy="8.5"
@@ -79,7 +79,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
               strokeWidth="2"
               strokeLinecap="round"
               strokeDasharray={c}
-              strokeDashoffset={c * Math.min(fraction, 0.96)}
+              strokeDashoffset={c * (1 - fraction)}
               className="transition-[stroke-dashoffset] duration-300 ease-snappy"
             />
           </svg>
@@ -111,10 +111,10 @@ export function ContextInspector({ usage, onCompact }: { usage: SessionUsage; on
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <span className="font-semibold text-body">Context</span>
         <span className="text-callout text-fg-muted tabular">
-          <span className="font-medium text-fg">{percentOf(free, usage.size)} left</span>
+          <span className="font-medium text-fg">{percentOf(usage.used, usage.size)} used</span>
           <span className="text-fg-faint">
             {" "}
-            · {formatTokens(free)} of {formatTokens(usage.size)}
+            · {formatTokens(usage.used)} of {formatTokens(usage.size)}
           </span>
         </span>
       </div>

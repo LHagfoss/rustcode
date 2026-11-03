@@ -244,9 +244,10 @@ impl CodexAdapter {
         }
 
         let cwd_text = cwd.to_string_lossy().into_owned();
-        // How replies are formatted for RustCode's chat (docs/output-style.md);
-        // Codex appends it to its own instructions as a developer message.
-        let output_style = crate::tools::schema::harness_output_style();
+        // Where it runs and how replies are formatted for RustCode's chat
+        // (docs/output-style.md); Codex appends it to its own instructions as
+        // a developer message.
+        let output_style = crate::tools::schema::harness_instructions(&harness.name);
         let mut thread = None;
         if let Some(resume) = &options.resume {
             let mut params = json!({

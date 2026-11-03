@@ -648,12 +648,13 @@ async fn the_workspaces_mcp_servers_are_thread_config() {
         config["mcp_servers.api"]["http_headers"]["Authorization"],
         "Bearer t"
     );
-    // Codex never sees RustCode's root prompt; the reply style rides along
-    // as developer instructions (docs/output-style.md).
-    assert_eq!(
-        started["developerInstructions"],
-        crate::tools::schema::harness_output_style()
+    // Codex never sees RustCode's root prompt; where it runs and the reply
+    // style ride along as developer instructions (docs/output-style.md).
+    let instructions = started["developerInstructions"].as_str().unwrap();
+    assert!(
+        instructions.starts_with("<runtime_info>In case you're asked: you are running in RustCode")
     );
+    assert!(instructions.ends_with(&crate::tools::schema::harness_output_style()));
 }
 
 #[tokio::test]

@@ -235,15 +235,19 @@ What each part does for an external thread:
   (Codex `turn/completed` with `failed`, an ACP error, the process exiting)
   fails `session/prompt` with the harness's message. A harness that exited is
   started again by the next prompt.
-- **Reply style.** An external harness never sees RustCode's system prompt.
-  Codex gets the output-style rules
-  ([output-style.md](output-style.md)) as `developerInstructions` on
-  `thread/start` and `thread/resume`, which Codex adds as a developer message
-  after its own instructions. That field replaces a `developer_instructions`
-  set in the user's Codex `config.toml` for that thread. ACP has no
-  system-prompt field, so an ACP harness gets none: wrapping the first prompt
-  (what T3 Code does) would show in the thread's own history and in the
-  agent's replay, and `session/new` `_meta` is not read by any agent.
+- **Reply style and runtime info.** An external harness never sees
+  RustCode's system prompt. Like T3 Code's runtime instructions, it gets a
+  `<runtime_info>` line (it runs in RustCode through that harness; embed
+  images and link files by absolute path so the app opens them) and the
+  output-style rules ([output-style.md](output-style.md)). Codex gets them as
+  `developerInstructions` on `thread/start` and `thread/resume`, which Codex
+  adds as a developer message after its own instructions. That field replaces
+  a `developer_instructions` set in the user's Codex `config.toml` for that
+  thread. An ACP agent that advertises `sessionCapabilities.systemPrompt`
+  (Claude Code's adapter) gets them as `systemPrompt` in `append` mode on
+  `session/new` and `session/load`, after its own system prompt. Other ACP
+  agents get none: wrapping the prompt would show in the thread's own history
+  and in the agent's replay.
 - **Codex events.** Message deltas are `agent_message_chunk`, reasoning
   summaries `agent_thought_chunk`, command, file-change, MCP and web-search
   items `tool_call`/`tool_call_update` (command output and diffs as text
