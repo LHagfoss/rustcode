@@ -1,3 +1,10 @@
+## [v1.6.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.6.0) - 2026-11-03
+
+### Features
+- The chat looks like T3 Code's: "Working for 12s" at the top of a running turn, finished calls grouped as one sentence, "Worked for 1m 3s" dividers and a narrower lane. (#2943)
+- The sidebar is one list like T3 Code's, with Done/Failed/Approval/Input in each row until you open it, ⌘1–⌘9 to jump, and Mark Unread. (#2944)
+- Subagents started together collapse into one "N subagents" row with how many still work, like T3 Code. (#2945)
+- The context ring fills as context is used, the folder under the composer opens a menu (Finder, Terminal, copy path, new thread), and Claude Code now gets RustCode's reply style and runtime info. (#2942)
 ## [v1.5.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.5.1) - 2026-11-03
 
 ### Features
