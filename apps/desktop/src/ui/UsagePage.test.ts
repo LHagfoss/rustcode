@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parsePlans } from "./UsagePage";
+import { parsePlans } from "../acp/rustcode";
 
 describe("usage plans", () => {
   test("reads each plan and its windows", () => {

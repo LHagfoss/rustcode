@@ -1,68 +1,22 @@
 // Settings › Usage: every subscription this machine is signed in to, with its
 // plan windows (`_rustcode/usage/plans`), whatever thread is open. Claude's
-// numbers come from Claude Code's sign-in in the macOS Keychain, so they are
-// read only after you ask once (macOS may ask to allow it); the choice is kept.
+// numbers come from Claude Code's sign-in in the macOS Keychain: while the app
+// is open it is read every few minutes, so the composer's meter has the plan
+// (macOS may ask once to allow it); the switch below turns that off.
 
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { arr, type Json, num, obj, str } from "../acp/jsonrpc";
-import { resetLabel, type UsageWindow } from "../acp/rustcode";
+import { parsePlans, planHarness, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
-import { request, useApp } from "../state/store";
+import { CLAUDE_USAGE_KEY, commitPlansAnswer, request, setClaudeUsageAllowed, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { PlanWindow } from "./ComposerUsage";
-import { Pill, Spinner } from "./primitives";
+import { Pill, Skeleton, Spinner, Switch } from "./primitives";
 import { Group, Row } from "./settingsKit";
-
-const CLAUDE_KEY = "rustcode.claudeUsage";
-
-export interface PlanEntry {
-  id: string;
-  name: string;
-  via?: string;
-  status: "ok" | "signedOut" | "notInstalled" | "unavailable" | "notAsked";
-  plan?: string;
-  error?: string;
-  windows: (UsageWindow & { label: string })[];
-}
-
-export function parsePlans(result: Json | undefined): PlanEntry[] {
-  return arr(obj(result)?.plans).flatMap((p) => {
-    const o = obj(p);
-    const id = str(o?.id);
-    const status = str(o?.status);
-    if (!o || !id || !status) return [];
-    const windows = arr(o.windows).flatMap((w) => {
-      const x = obj(w);
-      const used = num(x?.usedPercent);
-      if (used === undefined) return [];
-      const resets = num(x?.resetsAt);
-      return [
-        {
-          label: str(x?.label) ?? "Usage",
-          usedPercent: used,
-          minutes: num(x?.windowMinutes),
-          resetsAt: resets ? resets * 1000 : undefined,
-        },
-      ];
-    });
-    return [
-      {
-        id,
-        name: str(o.name) ?? id,
-        via: str(o.via),
-        status: status as PlanEntry["status"],
-        plan: str(o.plan),
-        error: str(o.error),
-        windows,
-      },
-    ];
-  });
-}
 
 function claudeAllowed(): boolean {
   try {
-    return localStorage.getItem(CLAUDE_KEY) === "1";
+    return localStorage.getItem(CLAUDE_USAGE_KEY) === "1";
   } catch {
     return false;
   }
@@ -71,14 +25,18 @@ function claudeAllowed(): boolean {
 export function UsagePage() {
   const status = useApp((s) => s.status);
   const [claude, setClaude] = useState(claudeAllowed);
-  const [plans, setPlans] = useState<PlanEntry[] | null>(null);
+  const [plans, setPlans] = useState<UsagePlan[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [readAt, setReadAt] = useState<number | null>(null);
   const load = useCallback(async (withClaude: boolean) => {
     setLoading(true);
     try {
-      setPlans(parsePlans(await request(Method.usagePlans, { claude: withClaude }, 20_000)));
+      const answer = parsePlans(await request(Method.usagePlans, { claude: withClaude }, 20_000));
+      setPlans(answer);
+      // The same answer fills the cache the composer's meter reads, and asking
+      // here is what lets the background poll read Claude again after a pause.
+      commitPlansAnswer(answer, withClaude);
       setReadAt(Date.now());
       setError(null);
     } catch (e) {
@@ -90,22 +48,12 @@ export function UsagePage() {
   useEffect(() => {
     if (status === "ready") void load(claude);
   }, [status, claude, load]);
-  const allowClaude = () => {
-    try {
-      localStorage.setItem(CLAUDE_KEY, "1");
-    } catch {
-      // Asked again next time in a private window.
-    }
-    setClaude(true);
+  const allowClaude = (on: boolean) => {
+    setClaudeUsageAllowed(on);
+    setClaude(on);
   };
   if (!plans) {
-    return error ? (
-      <p className="text-callout text-warning">{error}</p>
-    ) : (
-      <div className="flex items-center gap-2 text-callout text-fg-muted">
-        <Spinner size={12} /> Reading your plans…
-      </div>
-    );
+    return error ? <p className="text-callout text-warning">{error}</p> : <PlansSkeleton />;
   }
   return (
     <>
@@ -126,16 +74,7 @@ export function UsagePage() {
                 <PlanWindow key={w.label} window={w} title={w.label} />
               ))}
             </div>
-          ) : p.status === "notAsked" ? (
-            <Row
-              title="Show Claude plan usage"
-              subtitle="Reads Claude Code's sign-in to ask Anthropic for your 5-hour and weekly windows. macOS may ask once to allow access to it in the Keychain. Only reads; never signs in or out."
-            >
-              <Pill prominent onClick={allowClaude}>
-                Show
-              </Pill>
-            </Row>
-          ) : (
+          ) : p.status === "notAsked" ? null : (
             <Row
               title={
                 p.status === "signedOut"
@@ -156,6 +95,14 @@ export function UsagePage() {
               }
             />
           )}
+          {planHarness(p.id) === "claude-code" && (
+            <Row
+              title="Show Claude usage in the composer"
+              subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer shows your plan. macOS may ask once to allow it in the Keychain. Only reads; never signs in or out."
+            >
+              <Switch label="Show Claude usage in the composer" checked={claude} onChange={allowClaude} />
+            </Row>
+          )}
         </Group>
       ))}
       <div className="flex items-center gap-2 px-1 text-caption text-fg-faint">
@@ -174,10 +121,43 @@ export function UsagePage() {
   );
 }
 
-function soonestReset(plans: PlanEntry[]): string | undefined {
+function soonestReset(plans: UsagePlan[]): string | undefined {
   const next = plans
     .flatMap((p) => p.windows)
     .filter((w) => w.resetsAt)
     .sort((a, b) => a.resetsAt! - b.resetsAt!)[0];
   return next ? `The soonest window ${resetLabel(next)}.` : undefined;
+}
+
+/**
+ * Where the plans will be: two group cards, each a title and the windows'
+ * label, bar and numbers, at the size the real rows take.
+ */
+function PlansSkeleton() {
+  return (
+    <div role="status" aria-label="Loading">
+      {[0, 1].map((card) => (
+        <section key={card} className="mb-6">
+          <div className="mb-2 flex min-h-6 items-center px-1">
+            <Skeleton className="h-2.5 w-20" />
+          </div>
+          <div className="flex flex-col gap-4 overflow-hidden rounded-lg bg-surface px-3.5 py-3.5">
+            {[0, 1].map((row) => (
+              <div key={row} className="flex flex-col gap-1.5 px-0.5">
+                <div className="flex items-baseline justify-between gap-3">
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-2.5 w-24" />
+                </div>
+                <Skeleton className="h-[6px] rounded-full" />
+                <div className="flex justify-between">
+                  <Skeleton className="h-2.5 w-14" />
+                  <Skeleton className="h-2.5 w-12" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
 }
