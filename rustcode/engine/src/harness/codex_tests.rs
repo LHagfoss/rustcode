@@ -734,3 +734,29 @@ fn forms_with_fields_and_urls_are_declined() {
         "elicitationId": "e1", "message": "Sign in", "url": "https://example.com"});
     assert!(matches!(elicitation(&url), Elicitation::Decline));
 }
+
+#[test]
+fn codex_subagent_calls_are_steps() {
+    let spawn = json!({
+        "type": "collabAgentToolCall",
+        "id": "c1",
+        "tool": "spawnAgent",
+        "prompt": "\nWrite pytest coverage for calc.py\nThen stop.",
+        "receiverThreadIds": ["t2"],
+        "senderThreadId": "t1",
+        "status": "inProgress",
+        "agentsStates": {},
+    });
+    let call = tool_call_for(&spawn).expect("a step");
+    assert_eq!(
+        call.title,
+        "Start subagent: Write pytest coverage for calc.py"
+    );
+    let wait =
+        json!({"type": "collabAgentToolCall", "id": "c2", "tool": "wait", "status": "completed"});
+    assert_eq!(tool_call_for(&wait).unwrap().title, "Wait for subagents");
+    let done =
+        tool_update_for(&json!({"type": "collabAgentToolCall", "id": "c2", "status": "failed"}))
+            .expect("an update");
+    assert_eq!(done.fields.status, Some(ToolCallStatus::Failed));
+}
