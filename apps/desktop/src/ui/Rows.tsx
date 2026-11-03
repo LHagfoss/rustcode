@@ -458,7 +458,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="group -mx-1 flex min-h-6 w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
           {running ? (
@@ -477,13 +477,15 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         )}
         {shownDetail && (
           <span
-            className={cx("min-w-0 flex-1 truncate text-caption text-fg-faint", detail.mono && "font-mono")}
+            className={cx(
+              "min-w-0 max-w-[42ch] shrink truncate text-caption text-fg-faint",
+              detail.mono && "font-mono",
+            )}
             dir="auto"
           >
             {shownDetail}
           </span>
         )}
-        {!shownDetail && <span className="flex-1" />}
         {failed && item.exitCode === undefined && (
           <span
             className="min-w-0 max-w-[45%] shrink truncate text-caption text-danger"
@@ -640,7 +642,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         aria-expanded={group.open}
         onClick={() => onToggle(group.key)}
         title={group.open ? "Hide these steps" : `Show ${group.count} steps`}
-        className="group -mx-1 flex min-h-6 w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
           <Layers size={13} className="text-fg-muted" />
