@@ -469,7 +469,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
-  Off by default. The app answers `_rustcode/orchestration`
+  On by default (Settings › General turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only (another project only
