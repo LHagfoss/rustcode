@@ -239,9 +239,10 @@ function EmptyState({ banner }: { banner: boolean }) {
               type="button"
               onClick={choose}
               title={`Change folder (${displayPath(projectCwd)})`}
-              className="-mx-1 rounded-md px-1 text-fg hover:bg-fill"
+              className="-mx-1 inline-block max-w-full truncate rounded-md px-1 align-bottom text-fg hover:bg-fill"
             >
               {projectName(projectCwd)}
+              <span className="sr-only"> (change folder)</span>
             </button>
             ?
           </>
@@ -411,8 +412,9 @@ export function ChatView() {
           className="pointer-events-none absolute right-0 bottom-0 left-0"
           // A short fade, then solid: the transcript scrolls under the composer, not through it.
           style={{
-            height: stackHeight + 24,
-            background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 24px, var(--rc-bg) 100%)",
+            // The stack sits 16px up (bottom-4), so the fade ends above the composer's top edge.
+            height: stackHeight + 16 + 20,
+            background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 20px, var(--rc-bg) 100%)",
           }}
         />
       )}
