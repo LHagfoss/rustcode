@@ -52,7 +52,14 @@ import {
   toast,
   useApp,
 } from "../state/store";
-import { applyUpdate, checkNow, installProgress, showWhatsNew, useUpdates } from "../state/updates";
+import {
+  applyUpdate,
+  checkIfStale,
+  checkNow,
+  installProgress,
+  showWhatsNew,
+  useUpdates,
+} from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
@@ -692,7 +699,9 @@ function AppVersion() {
   const background = useUpdates((s) => s.error);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const version = info?.current ?? APP_VERSION;
+  const shellVersion = useUpdates((s) => s.version);
+  const version = info?.current ?? shellVersion ?? APP_VERSION;
+  useEffect(() => checkIfStale(), []);
   const check = async () => {
     setChecking(true);
     setError(null);
