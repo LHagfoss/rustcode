@@ -222,8 +222,10 @@ export interface AppState {
   permissionModes: Record<string, PermissionMode>;
   /** ...and the next thread's, when the pill is used before one exists. */
   newThreadPermissionMode: PermissionMode | null;
-  /** Threads whose turn completed while you were elsewhere, by when: the sidebar's Finished section. */
+  /** Threads whose turn completed while you were elsewhere, by when: Done in the sidebar until opened. */
   finished: Record<string, number>;
+  /** Threads whose last turn failed while you looked elsewhere, until you open them. */
+  failed: Record<string, number>;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -307,6 +309,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   permissionModes: storedJson<Record<string, PermissionMode>>(STORAGE.permissionModes, {}),
   newThreadPermissionMode: null,
   finished: {},
+  failed: {},
   view: { kind: "chat" },
   checkpoints: {},
   newWorktree: { on: false, branch: "", edited: false },
@@ -905,22 +908,35 @@ export async function refreshSessions(): Promise<void> {
   }
 }
 
-/** How long a finished thread stays in the sidebar's Finished section unless you open it first. */
-export const FINISHED_MS = 10 * 60_000;
-
-/** A turn completed: flag the thread unless you are looking at it. */
-export function markFinished(id: string, now = Date.now()) {
+/**
+ * A turn ended: flag the thread unless you are looking at it, as T3 Code's
+ * sidebar does. The row says Done (or Failed) until you open the thread.
+ */
+export function markFinished(id: string, now = Date.now(), failed = false) {
   const looking = get().selectedId === id && typeof document !== "undefined" && document.hasFocus();
-  if (!looking) set((s) => ({ finished: { ...s.finished, [id]: now } }));
+  if (looking) return;
+  set((s) =>
+    failed
+      ? { failed: { ...s.failed, [id]: now } }
+      : { finished: { ...s.finished, [id]: now }, failed: without(s.failed, id) },
+  );
+}
+
+/** Mark a thread unread again: its row says Done until you open it. */
+export function markUnread(id: string) {
+  set((s) => ({ finished: { ...s.finished, [id]: Date.now() } }));
+}
+
+function without(map: Record<string, number>, id: string): Record<string, number> {
+  if (!(id in map)) return map;
+  const { [id]: _, ...rest } = map;
+  return rest;
 }
 
 /** You saw it: opening the thread (or coming back to the window on it) settles the flag. */
 export function clearFinished(id: string | null) {
-  if (!id || !(id in get().finished)) return;
-  set((s) => {
-    const { [id]: _, ...rest } = s.finished;
-    return { finished: rest };
-  });
+  if (!id || !(id in get().finished || id in get().failed)) return;
+  set((s) => ({ finished: without(s.finished, id), failed: without(s.failed, id) }));
 }
 
 if (typeof window !== "undefined") {
@@ -1674,6 +1690,7 @@ export async function runPrompt(
   }
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
   if (outcome === "completed") markFinished(id);
+  else if (outcome === "failed") markFinished(id, Date.now(), true);
   // A report command that answered in the panel leaves no turn behind: its message and footer go.
   const reported = get().report?.threadId === id;
   if (reported && outcome === "completed" && isReportCommand(text, extras)) {

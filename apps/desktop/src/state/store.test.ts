@@ -588,6 +588,17 @@ describe("finished threads", () => {
     clearFinished("t1");
     expect(useApp.getState().finished).toEqual({});
   });
+
+  test("a failed turn says Failed until seen, and Mark Unread brings Done back", async () => {
+    const { markFinished, clearFinished, markUnread } = await import("./store");
+    useApp.setState({ selectedId: "other", finished: {}, failed: {} });
+    markFinished("t1", 1000, true);
+    expect(useApp.getState().failed).toEqual({ t1: 1000 });
+    clearFinished("t1");
+    expect(useApp.getState().failed).toEqual({});
+    markUnread("t1");
+    expect(Object.keys(useApp.getState().finished)).toEqual(["t1"]);
+  });
 });
 
 test("a mode chosen in one thread leaves the default and the other threads alone", async () => {

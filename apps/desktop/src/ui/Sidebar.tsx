@@ -1,16 +1,18 @@
-// The sidebar: a toolbar clear of the traffic lights, a search capsule with
-// a filter menu, and threads by where they are in their life (after T3
-// Code's sidebar): Pinned, Needs You, Working, Finished (completed while
-// you were elsewhere, until opened or 10 minutes pass), Threads (by project), and
-// Settled (threads marked Done) folded away unless opened. Each section
-// folds, and remembers it. Settings is in the top row, after New thread.
+// The sidebar, after T3 Code's: a toolbar clear of the traffic lights, a
+// search field with a filter menu, then one list: pinned threads first, then
+// every active thread (by project when asked), each saying in its right slot
+// what it does (Working, Approval, Input, Failed, Done until you open it), and
+// Settled (threads marked Done) as a shelf at the foot. ⌘1–⌘9 open the
+// first nine rows; holding ⌘ shows which is which.
 
 import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   CircleCheck,
   CircleDashed,
+  Copy,
   Ellipsis,
   Eye,
   FileDiff,
@@ -26,6 +28,7 @@ import {
   Pin,
   PinOff,
   Search,
+  ShieldQuestion,
   SquarePen,
   SquareTerminal,
   Trash2,
@@ -40,8 +43,8 @@ import { openTerminalAt, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import {
   askConfirm,
-  FINISHED_MS,
   featureMissing,
+  markUnread,
   removeWorktree,
   renameThread,
   repairThread,
@@ -67,15 +70,15 @@ import { StatusChip } from "./Status";
 import { TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
 
-const MIN = 200;
+const MIN = 208;
 const MAX = 460;
 
 function useSidebarWidth() {
   const [width, setWidth] = useState(() => {
     try {
-      return Number(localStorage.getItem("rustcode.sidebarWidth")) || 270;
+      return Number(localStorage.getItem("rustcode.sidebarWidth")) || 256;
     } catch {
-      return 270;
+      return 256;
     }
   });
   useEffect(() => {
@@ -131,6 +134,9 @@ function ThreadMenuItems({
       <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
         <FileDiff size={13} /> Review Changes
       </Item>
+      <Item className={menuItem} onSelect={() => markUnread(session.id)}>
+        <CircleCheck size={13} /> Mark Unread
+      </Item>
       <Separator className="mx-1.5 my-1 h-px bg-border" />
       <Item className={menuItem} onSelect={() => togglePin(session.id)}>
         {pinned ? <PinOff size={13} /> : <Pin size={13} />}
@@ -141,6 +147,14 @@ function ThreadMenuItems({
       </Item>
       <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
         <Wrench size={13} /> Repair Thread
+      </Item>
+      {session.cwd && (
+        <Item className={menuItem} onSelect={() => copyText(worktree?.path ?? session.cwd!, "Path copied")}>
+          <Copy size={13} /> Copy Path
+        </Item>
+      )}
+      <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
+        <Copy size={13} /> Copy Thread ID
       </Item>
       {worktree && (
         <>
@@ -183,6 +197,13 @@ function ThreadMenuItems({
         <Trash2 size={13} /> Move to Trash
       </Item>
     </>
+  );
+}
+
+function copyText(text: string, done: string) {
+  void navigator.clipboard.writeText(text).then(
+    () => toast(done, "info"),
+    () => toast("Could not copy", "error"),
   );
 }
 
@@ -244,6 +265,7 @@ const ThreadRow = memo(function ThreadRow({
   scopeAll,
   now,
   snippet,
+  jump,
 }: {
   session: SessionSummary;
   selected: boolean;
@@ -251,6 +273,8 @@ const ThreadRow = memo(function ThreadRow({
   now: number;
   /** While searching: the words around the match in what was said. */
   snippet?: string;
+  /** While ⌘ is held: the digit that opens this row. */
+  jump?: number;
 }) {
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
@@ -261,7 +285,10 @@ const ThreadRow = memo(function ThreadRow({
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const finishedAt = useApp((s) => s.finished[session.id]);
-  const fresh = !!finishedAt && !selected && now - finishedAt < FINISHED_MS;
+  const failedAt = useApp((s) => s.failed[session.id]);
+  // Done or Failed while you were elsewhere, until you open it (T3 Code's unseen completion).
+  const fresh = !!finishedAt && !selected;
+  const failed = !!failedAt && !selected;
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const external = !!session.harness && session.harness !== "rustcode";
@@ -321,28 +348,32 @@ const ThreadRow = memo(function ThreadRow({
             )}
           >
             <span className="flex w-full items-center gap-1.5 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
-              {fresh && (
-                <span
-                  role="img"
-                  aria-label="Finished"
-                  className="size-1.5 shrink-0 rc-dot-in rounded-full bg-success"
-                />
-              )}
               {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-muted" />}
               <span
                 className={cx(
                   "min-w-0 flex-1 truncate text-body",
-                  selected ? "font-medium text-fg" : done ? "text-fg-muted" : "text-fg",
+                  // What wants you reads strong; what works, waits or is seen recedes.
+                  selected || request || fresh || failed
+                    ? "font-medium text-fg"
+                    : done || running || waiting
+                      ? "text-fg/75"
+                      : "text-fg",
                 )}
               >
                 {session.title || "New thread"}
               </span>
               <LinkBadge threadId={session.id} />
               <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
-                {request ? (
+                {jump !== undefined ? (
+                  <kbd className="rounded-sm bg-fill px-1 font-sans text-fg-muted">⌘{jump}</kbd>
+                ) : request ? (
                   <>
-                    <MessageCircleQuestion size={12} className="text-warning" />
-                    <span className="font-medium text-warning">
+                    {request.question ? (
+                      <MessageCircleQuestion size={12} className="text-accent" />
+                    ) : (
+                      <ShieldQuestion size={12} className="text-warning" />
+                    )}
+                    <span className={cx("font-medium", request.question ? "text-accent" : "text-warning")}>
                       {request.question ? "Input" : "Approval"}
                     </span>
                   </>
@@ -364,6 +395,16 @@ const ThreadRow = memo(function ThreadRow({
                     </span>
                     Waiting
                   </span>
+                ) : failed ? (
+                  <>
+                    <CircleAlert size={12} className="text-danger" />
+                    <span className="font-medium text-danger">Failed</span>
+                  </>
+                ) : fresh ? (
+                  <>
+                    <CircleCheck size={12} className="text-success" />
+                    <span className="font-medium text-success">Done</span>
+                  </>
                 ) : (
                   <>
                     {status === "review" && <StatusChip status={status} compact />}
@@ -473,12 +514,7 @@ function ChildThreads({
         const linked = s.links.links.some(
           (l) => l.target === c.id && l.orchestrator === parentId && l.state === "working",
         );
-        return (
-          status === "running" ||
-          status === "needs_input" ||
-          linked ||
-          (!!finishedAt && now - finishedAt < FINISHED_MS)
-        );
+        return status === "running" || status === "needs_input" || linked || !!finishedAt;
       })
       .map((c) => c.id)
       .join(" "),
@@ -536,7 +572,7 @@ function useStored<T>(key: string, initial: T) {
   return [value, setValue] as const;
 }
 
-type SectionId = "pinned" | "needs" | "working" | "finished" | "threads" | "settled";
+type SectionId = "pinned" | "threads" | "settled";
 
 interface Section {
   id: SectionId;
@@ -618,7 +654,7 @@ function SectionHeader({
       aria-expanded={open}
       className={cx(
         "group/h flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left font-semibold text-callout hover:bg-fill-subtle",
-        section.id === "needs" ? "text-warning" : "text-fg-muted",
+        "text-fg-muted",
       )}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
@@ -652,46 +688,50 @@ function SectionHeader({
   );
 }
 
-/** A project's folder inside Threads: folds, counts, and starts a thread there on hover. */
+/**
+ * A project's folder, as T3 Code draws it: the folder and its name, a dot for
+ * what it hides and its count only while folded, the chevron at the end, and
+ * a new-thread button on hover.
+ */
 function ProjectHeader({
   label,
   count,
   open,
+  hidden,
   onToggle,
   onNew,
 }: {
   label: string;
   count: number;
   open: boolean;
+  hidden?: HiddenKind;
   onToggle: () => void;
   onNew?: () => void;
 }) {
   return (
-    <div className="group/p relative flex h-7 items-center">
+    <div className="group/p relative flex h-8 items-center">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5 text-left font-medium text-callout text-fg-muted hover:bg-fill-subtle"
+        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 text-left font-medium text-body text-fg/90 hover:bg-fill-subtle"
       >
-        <ChevronRight
-          size={11}
-          strokeWidth={2.5}
+        {open ? (
+          <FolderOpen size={14} className="shrink-0 text-fg-muted" />
+        ) : (
+          <Folder size={14} className="shrink-0 text-fg-muted" />
+        )}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {!open && <HiddenDot kind={hidden} />}
+        {!open && <span className="font-normal text-fg-faint text-sub tabular">{count}</span>}
+        <ChevronDown
+          size={12}
           className={cx(
             "shrink-0 text-fg-faint transition-transform duration-200 ease-snappy",
-            open && "rotate-90",
-          )}
-        />
-        {open ? <FolderOpen size={12} className="shrink-0" /> : <Folder size={12} className="shrink-0" />}
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        <span
-          className={cx(
-            "text-fg-faint tabular",
+            !open && "-rotate-90",
             onNew && "group-hover/p:invisible group-has-[:focus-visible]/p:invisible",
           )}
-        >
-          {count}
-        </span>
+        />
       </button>
       {onNew && (
         <span className="absolute right-1.5 hidden group-hover/p:flex group-has-[:focus-visible]/p:flex">
@@ -854,10 +894,7 @@ export function Sidebar() {
   const sections = useMemo(() => {
     const flagged = new Set(flags.split(" "));
     const pins: SessionSummary[] = [];
-    const needs: SessionSummary[] = [];
-    const working: SessionSummary[] = [];
-    const fresh: SessionSummary[] = [];
-    const isFresh = (id: string) => !!finished[id] && now - finished[id]! < FINISHED_MS;
+    const isFresh = (id: string) => !!finished[id];
     const active: SessionSummary[] = [];
     const settled: SessionSummary[] = [];
     for (const s of filtered) {
@@ -868,11 +905,10 @@ export function Sidebar() {
       const status = marks[s.id] ?? listed;
       const done = status === "done" || (status !== "review" && idleSettled(s.updatedAt, now));
       // A pinned thread always shows, whatever it is doing.
+      // As T3 Code's: one list, each row saying what it does; only settled threads leave it.
       if (pinned.includes(s.id)) pins.push(s);
-      else if (flagged.has(`${s.id}:n`)) needs.push(s);
-      else if (flagged.has(`${s.id}:w`)) working.push(s);
-      else if (isFresh(s.id)) fresh.push(s);
-      else if (done) settled.push(s);
+      else if (done && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`) && !isFresh(s.id))
+        settled.push(s);
       else active.push(s);
     }
     pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
@@ -892,9 +928,6 @@ export function Sidebar() {
         : undefined;
     const all: Section[] = [
       { id: "pinned", label: "Pinned", items: pins },
-      { id: "needs", label: "Needs You", items: needs },
-      { id: "working", label: "Working", items: working },
-      { id: "finished", label: "Finished", items: fresh },
       { id: "threads", label: "Threads", items: active, projects },
       { id: "settled", label: "Settled", items: settled },
     ];
@@ -928,6 +961,59 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
+  // ⌘1–⌘9 open the first nine rows as they show; holding ⌘ labels them (T3 Code).
+  const searching = !!query.trim();
+  const jumpOrder = useMemo(() => {
+    const out: string[] = [];
+    for (const section of sections) {
+      if (section.id === "settled") continue;
+      if (section.projects) {
+        for (const p of section.projects)
+          if (searching || !folded.includes(`project:${p.key}`)) out.push(...p.items.map((x) => x.id));
+      } else out.push(...section.items.map((x) => x.id));
+    }
+    return out.slice(0, 9);
+  }, [sections, folded, searching]);
+  const [metaHeld, setMetaHeld] = useState(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "Meta") {
+        timer = setTimeout(() => setMetaHeld(true), 200);
+        return;
+      }
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
+        const id = jumpOrder[Number(e.key) - 1];
+        if (!id) return;
+        e.preventDefault();
+        selectThread(id);
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key !== "Meta") return;
+      clearTimeout(timer);
+      setMetaHeld(false);
+    };
+    const blur = () => {
+      clearTimeout(timer);
+      setMetaHeld(false);
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, [jumpOrder]);
+  const jumpOf = (id: string) => {
+    if (!metaHeld) return undefined;
+    const i = jumpOrder.indexOf(id);
+    return i < 0 ? undefined : i + 1;
+  };
+
   const rows = (items: SessionSummary[], scopeAll: boolean) => (
     <div className="flex flex-col gap-px">
       {items.map((s) => (
@@ -938,6 +1024,7 @@ export function Sidebar() {
             scopeAll={scopeAll}
             now={now}
             snippet={query.trim() ? contentHits[s.id] : undefined}
+            jump={jumpOf(s.id)}
           />
           {childrenOf[s.id] && (
             <ChildThreads items={childrenOf[s.id]!} parentId={s.id} selectedId={selectedId} now={now} />
@@ -1019,15 +1106,18 @@ export function Sidebar() {
           )}
           <div className="flex min-h-full flex-col">
             {sections.map((section) => {
-              const open = isOpen(section.id);
+              const open = section.id !== "settled" || isOpen(section.id);
               return (
                 <section
                   key={section.id}
                   // Settled is a shelf at the foot of the list, as in T3 Code.
-                  className={cx("mt-1.5 first:mt-0", section.id === "settled" && "mt-auto pt-3")}
+                  className={cx("mt-2 first:mt-0", section.id === "settled" && "mt-auto pt-3")}
                   aria-label={section.label}
                 >
-                  <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
+                  {/* One list, as T3 Code's: only the Settled shelf has a header. */}
+                  {section.id === "settled" && (
+                    <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
+                  )}
                   <Fold open={open}>
                     {section.projects
                       ? section.projects.map((p) => {
@@ -1037,11 +1127,22 @@ export function Sidebar() {
                               <ProjectHeader
                                 label={p.label}
                                 count={p.items.length}
+                                hidden={
+                                  p.items.some((x) => flags.includes(`${x.id}:n`))
+                                    ? "needs"
+                                    : p.items.some((x) => flags.includes(`${x.id}:w`))
+                                      ? "working"
+                                      : p.items.some((x) => !!finished[x.id])
+                                        ? "finished"
+                                        : undefined
+                                }
                                 open={projectOpen}
                                 onToggle={() => toggle(`project:${p.key}`)}
                                 onNew={p.key ? () => startNewThread(p.key) : undefined}
                               />
-                              <Fold open={projectOpen}>{rows(p.items, false)}</Fold>
+                              <Fold open={projectOpen}>
+                                <div className="pl-3">{rows(p.items, false)}</div>
+                              </Fold>
                             </div>
                           );
                         })
