@@ -24,6 +24,7 @@ import {
   pickNewThreadChoice,
   setConfigOption,
   switchNewThreadHarness,
+  switchThreadHarness,
   useApp,
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
@@ -544,7 +545,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
               {showHarness && (
                 <button
                   type="button"
-                  disabled={!isNew}
+                  disabled={!isNew && !!thread?.running}
                   onClick={() => setPane("harness")}
                   className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-left hover:bg-fill disabled:hover:bg-transparent"
                 >
@@ -553,10 +554,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                     <HarnessIcon id={harness?.id ?? "rustcode"} name={harnessName} size={14} />
                     {harnessName}
                   </span>
-                  {isNew ? (
+                  {isNew || !thread?.running ? (
                     <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
                   ) : (
-                    <Tooltip label="A thread keeps its harness">
+                    <Tooltip label="Stop the turn to switch harness">
                       <Lock size={11} className="text-fg-faint" />
                     </Tooltip>
                   )}
@@ -580,12 +581,16 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
               {shownPane === "harness" && harnesses && (
                 <HarnessList
                   // RustCode turned off in Settings › Harnesses leaves the list.
-                  harnesses={harnesses.harnesses.filter(
-                    (h) => !h.builtin || h.enabled || h.id === effective.harness,
+                  // A thread moves only to an external harness: RustCode cannot take one over yet.
+                  harnesses={harnesses.harnesses.filter((h) =>
+                    isNew
+                      ? !h.builtin || h.enabled || h.id === effective.harness
+                      : !h.builtin || h.id === harness?.id,
                   )}
-                  current={effective.harness}
+                  current={isNew ? effective.harness : (harness?.id ?? "rustcode")}
                   onPick={(id) => {
-                    switchNewThreadHarness(id);
+                    if (isNew) switchNewThreadHarness(id);
+                    else if (thread && id !== harness?.id) void switchThreadHarness(thread.id, id);
                     setPane("main");
                   }}
                 />

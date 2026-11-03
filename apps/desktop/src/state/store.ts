@@ -1959,6 +1959,41 @@ export function switchNewThreadHarness(harness: string) {
   set({ newThread: restoreChoice(snapshot, harness, appChoices(snapshot)) });
 }
 
+/**
+ * Move a thread to another harness, as T3 Code's context handoff does: the
+ * harness starts fresh and its first prompt carries the conversation so far
+ * (`_rustcode/session/harness`). It starts on the model and effort it was
+ * last left on; the thread shows a divider where it switched.
+ */
+export async function switchThreadHarness(id: string, harness: string): Promise<boolean> {
+  const thread = get().threads[id];
+  if (!thread || thread.running) return false;
+  const last = get().harnesses?.harnesses.find((h) => h.id === harness)?.last;
+  try {
+    const result = (await engine().request(
+      Method.sessionHarness,
+      { sessionId: id, harness, model: last?.model ?? null, effort: last?.effort ?? null },
+      30_000,
+    )) as JsonObject | null;
+    const listed = get().harnesses?.harnesses.find((h) => h.id === harness);
+    const next =
+      parseSessionHarness(result) ?? (listed && { id: harness, capabilities: listed.capabilities });
+    updateThread(id, (t) => ({
+      ...t,
+      harness: next,
+      configOptions: parseConfigOptions(result?.configOptions),
+    }));
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, harness } : x)) }));
+    const opened = get().threads[id];
+    if (opened && lacksModels(opened)) void ensureHarnessModels(harness);
+    void refreshPlanUsage(id);
+    return true;
+  } catch (error) {
+    toast(`Could not switch harness: ${errorText(error)}`, "error");
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------- subagents and usage
 
 export function setResumeAfterRestart(on: boolean) {

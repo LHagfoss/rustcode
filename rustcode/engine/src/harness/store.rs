@@ -23,6 +23,10 @@ pub(crate) struct HarnessRecord {
     /// The thread's latest `usage_update`, sent again on `session/load`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<serde_json::Value>,
+    /// The harness the thread was switched from; its next prompt carries the
+    /// conversation so far (`harness/handoff.rs`), then this clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_from: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

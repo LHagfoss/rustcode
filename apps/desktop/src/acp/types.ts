@@ -37,6 +37,7 @@ export const Method = {
   harnessRemove: "_rustcode/harnesses/remove",
   harnessDefault: "_rustcode/harnesses/default",
   harnessRemember: "_rustcode/harnesses/remember",
+  sessionHarness: "_rustcode/session/harness",
   onboardingComplete: "_rustcode/onboarding/complete",
   capabilities: "_rustcode/capabilities",
   capabilitiesSet: "_rustcode/capabilities/set",
@@ -376,6 +377,8 @@ export type SessionUpdate =
   | { kind: "notice"; text: string; resumable: boolean }
   /** The harness compacted the conversation (`_meta.rustcode.kind == "compaction"`). */
   | { kind: "compaction"; text: string }
+  /** The thread moved to another harness here (`_meta.rustcode.kind == "handoff"`). */
+  | { kind: "handoff"; from: string; to: string; model?: string }
   | {
       kind: "toolCall";
       id: string;
@@ -461,6 +464,14 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
       return { kind: "user", text: contentText(update.content), at: parseDate(meta?.at) };
     case "agent_message_chunk":
       if (str(meta?.kind) === "compaction") return { kind: "compaction", text: contentText(update.content) };
+      if (str(meta?.kind) === "handoff") {
+        return {
+          kind: "handoff",
+          from: str(meta?.from) ?? "",
+          to: str(meta?.to) ?? "",
+          model: str(meta?.model),
+        };
+      }
       if (str(meta?.kind) === "notice") {
         return {
           kind: "notice",

@@ -8,7 +8,7 @@ use super::transcript::Transcript;
 use super::{HarnessKind, HarnessModel, ResolvedHarness, acp_child, codex, process};
 use agent_client_protocol::schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionConfigOption, SessionUpdate, StopReason,
+    SessionConfigOption, SessionUpdate, StopReason, TextContent,
 };
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -427,6 +427,11 @@ impl ExternalSession {
         }
     }
 
+    /// Write the history now: a thread just switched to this harness.
+    pub(crate) fn save_now(&self) {
+        self.save_history();
+    }
+
     /// Wire an adapter in directly (tests).
     #[cfg(test)]
     pub(crate) async fn attach(&self, adapter: Adapter) {
@@ -592,11 +597,24 @@ impl ExternalSession {
         cancel: &Notify,
     ) -> Result<StopReason, String> {
         let adapter = self.ensure_started().await?;
+        // The first prompt after a switch carries the conversation so far.
+        let handoff = self.record().handoff_from.and_then(|from| {
+            let transcript = self
+                .transcript
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            super::handoff::context(&transcript.history, &from, &self.harness.id)
+        });
         self.transcript
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push_user(&prompt_text(&prompt));
         self.save_history();
+        let mut prompt = prompt;
+        let handed = handoff.is_some();
+        if let Some(context) = handoff {
+            prompt.insert(0, ContentBlock::Text(TextContent::new(context)));
+        }
         let turn = adapter.prompt(prompt);
         tokio::pin!(turn);
         // The turn is polled first, so its request is on the wire before a
@@ -606,6 +624,9 @@ impl ExternalSession {
             result = &mut turn => {
                 if !adapter.is_alive() {
                     self.forget_adapter(&adapter).await;
+                }
+                if handed && result.is_ok() {
+                    self.save_record(|record| record.handoff_from = None);
                 }
                 result
             }

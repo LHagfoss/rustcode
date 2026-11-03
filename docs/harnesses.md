@@ -287,6 +287,22 @@ What each part does for an external thread:
   `permission_modes` is empty for external harnesses: each applies its own
   configured approval rules.
 
+## Switching a thread's harness
+
+`_rustcode/session/harness` `{ "sessionId", "harness", "model"?, "effort"? }`
+→ `{ "configOptions", "_meta" }` moves a thread to another external harness,
+as T3 Code's context handoff does (`harness/handoff.rs`). The old harness
+stops; `harness.json` names the new one, without a native session, with
+`handoff_from` set. Its first prompt carries the conversation so far, newest
+back to about 16k tokens (tool results cut short), as
+`<context>…</context>\n\nUser message:\n` before the user's text; then
+`handoff_from` clears. The history gets a `handoff` message, which replays as
+an `agent_message_chunk` with `_meta.rustcode.kind == "handoff"` (`from`,
+`to`, `model`) and is never sent to a model; the app draws it as a divider.
+A built-in RustCode thread can move to an external harness; moving one to
+RustCode is not supported yet. A running turn must stop first. In the app,
+the composer's model picker › Harness switches an open thread.
+
 ## Compaction
 
 Each harness compacts its own context; RustCode does not compact on a
