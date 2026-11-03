@@ -3,7 +3,14 @@
 
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { Tooltip as RadixTooltip } from "radix-ui";
-import { type ButtonHTMLAttributes, forwardRef, type ReactNode } from "react";
+import {
+  type ButtonHTMLAttributes,
+  forwardRef,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { errorText, toast } from "../state/store";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
@@ -213,8 +220,28 @@ export function Segments<T extends string>({
   onChange: (value: T) => void;
   label: string;
 }) {
+  // The selected segment's pill slides to the new one instead of jumping.
+  const group = useRef<HTMLDivElement>(null);
+  const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures when the choice or labels change
+  useLayoutEffect(() => {
+    const el = group.current?.querySelector<HTMLElement>('[aria-checked="true"]');
+    setThumb(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
+  }, [value, options.map((o) => o.label).join()]);
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-full bg-fill-subtle p-[2px]">
+    <div
+      ref={group}
+      role="radiogroup"
+      aria-label={label}
+      className="relative inline-flex rounded-full bg-fill-subtle p-[2px]"
+    >
+      {thumb && (
+        <span
+          aria-hidden
+          className="absolute top-0 left-0 h-5 rounded-full bg-surface-3 shadow-1 transition-[transform,width] duration-200 ease-snappy"
+          style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
+        />
+      )}
       {options.map((o) => (
         <button
           key={o.value}
@@ -224,8 +251,10 @@ export function Segments<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "h-5 rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
-            o.value === value ? "bg-surface-3 text-fg shadow-1" : "text-fg-muted hover:bg-fill hover:text-fg",
+            "relative h-5 rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
+            o.value === value
+              ? cx("text-fg", !thumb && "bg-surface-3 shadow-1")
+              : "text-fg-muted hover:text-fg",
           )}
         >
           {o.label}

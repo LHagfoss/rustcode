@@ -47,6 +47,7 @@ import {
   setDefaultPermissionMode,
   setOnboarding,
   setOrchestration,
+  setRoundedFont,
   setSmartUi,
   setTheme,
   toast,
@@ -533,6 +534,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 
 function Appearance() {
   const mode = useApp((s) => s.theme);
+  const roundedFont = useApp((s) => s.roundedFont);
   const active = useApp((s) => s.themeActive);
   const snapshot = useApp((s) => s.themes);
   const supported = useApp((s) => s.features.themes);
@@ -555,6 +557,12 @@ function Appearance() {
               { value: "dark", label: "Dark" },
             ]}
           />
+        </Row>
+        <Row
+          title="Rounded font"
+          subtitle="SF Pro Rounded for the interface and chat. Code stays monospaced."
+        >
+          <Switch label="Rounded font" checked={roundedFont} onChange={setRoundedFont} />
         </Row>
       </Group>
       <Group

@@ -198,6 +198,8 @@ export interface AppState {
   } | null;
   /** Threads can start and message other threads (Settings › General); the engine learns it at initialize. */
   orchestration: boolean;
+  /** The interface in SF Pro Rounded (the default) or the standard system font. */
+  roundedFont: boolean;
   orchestrationPending: boolean;
   /** Links between threads, fan-outs and grants, kept in app storage. */
   links: LinkBook;
@@ -244,6 +246,7 @@ const STORAGE = {
   archiveMigrated: "rustcode.archiveMigrated",
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
+  roundedFont: "rustcode.roundedFont",
   statusMarks: "rustcode.statusMarks",
   permissionMode: "rustcode.permissionMode",
   permissionModes: "rustcode.permissionModes",
@@ -289,6 +292,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // On unless turned off: an agent asks before it starts or messages a thread (Ask), so
   // delegating is there to use without first finding the setting.
   orchestration: stored(STORAGE.orchestration) !== "0",
+  roundedFont: stored(STORAGE.roundedFont) !== "0",
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
@@ -1875,6 +1879,11 @@ export function switchNewThreadHarness(harness: string) {
 }
 
 // ---------------------------------------------------------------- subagents and usage
+
+export function setRoundedFont(on: boolean) {
+  set({ roundedFont: on });
+  store(STORAGE.roundedFont, on ? "1" : "0");
+}
 
 export function setOrchestration(on: boolean) {
   set((s) => ({

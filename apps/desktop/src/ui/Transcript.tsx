@@ -396,6 +396,20 @@ export function Transcript({
   // thread's first rows. `attachScroll` then puts the view at the end, and the second render
   // (still before the first paint) draws the last rows straight away.
   const items = ready ? virtualizer.getVirtualItems() : [];
+  // New rows (a sent message, a reply, a tool call) rise in once. Rows already there when the
+  // thread opened do not, and neither does a row the virtualizer remounts on scroll: each key's
+  // first sighting is kept, and only a sighting under 300 ms old animates.
+  const sightings = useRef<{ thread: string; at: Map<string, number> }>({ thread: "", at: new Map() });
+  // A thread whose history arrives after it opens counts that first batch as already there.
+  if (sightings.current.thread !== thread.id || (sightings.current.at.size <= 1 && rows.length > 1)) {
+    sightings.current = { thread: thread.id, at: new Map(rows.map((r) => [r.key, 0])) };
+  }
+  const nowMs = performance.now();
+  const fresh = (key: string) => {
+    const at = sightings.current.at;
+    if (!at.has(key)) at.set(key, nowMs);
+    return nowMs - at.get(key)! < 300;
+  };
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -491,7 +505,10 @@ export function Transcript({
                 style={{ transform: `translateY(${v.start}px)` }}
               >
                 <div
-                  className={cx("mx-auto w-full max-w-[1036px] px-7", row.inFold && "rc-expand")}
+                  className={cx(
+                    "mx-auto w-full max-w-[1036px] px-7",
+                    row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
+                  )}
                   style={{ paddingTop: gap }}
                 >
                   {row.group ? (
