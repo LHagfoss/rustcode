@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { haptic } from "../lib/haptics";
@@ -906,9 +907,14 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   const trigger = useRef<HTMLButtonElement>(null);
   // At most 360px or half the window, and never over the header: the room above the trigger less the 42px header and gaps.
   const [maxHeight, setMaxHeight] = useState(360);
+  // The tray's backdrop blur makes it a stacking context under the message box, so the menu
+  // renders in the body, fixed 8px above the trigger, or the box would cover it.
+  const [anchor, setAnchor] = useState({ left: 0, bottom: 0 });
   const toggle = () => {
-    const top = trigger.current?.getBoundingClientRect().top ?? 600;
+    const rect = trigger.current?.getBoundingClientRect();
+    const top = rect?.top ?? 600;
     setMaxHeight(Math.max(140, Math.min(360, window.innerHeight * 0.5, top - 42 - 16)));
+    setAnchor({ left: rect?.left ?? 0, bottom: window.innerHeight - top + 8 });
     setOpen(!open);
   };
   return (
@@ -928,50 +934,52 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
           {!thread && <ChevronDown size={11} className="text-fg-faint" />}
         </button>
       </Tooltip>
-      {open && (
-        <div
-          role="menu"
-          className="elevated absolute bottom-full left-0 z-30 mb-2 flex w-[300px] flex-col rounded-xl p-1.5 rc-in"
-          style={{ maxHeight }}
-          onMouseLeave={() => setOpen(false)}
-        >
-          {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
-          <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
-            {projects.map((p) => (
-              <button
-                key={p}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setProjectCwd(p);
-                  setOpen(false);
-                }}
-                className={cx(
-                  "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left hover:bg-fill",
-                  p === cwd && "bg-fill",
-                )}
-              >
-                <span className="text-body text-fg">{projectName(p)}</span>
-                <span className="truncate text-caption text-fg-muted" dir="rtl">
-                  <bdi>{p}</bdi>
-                </span>
-              </button>
-            ))}
-          </div>
-          {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              void pickFolder(cwd).then((p) => p && setProjectCwd(p));
-            }}
-            className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body hover:bg-fill"
+      {open &&
+        createPortal(
+          <div
+            role="menu"
+            className="elevated fixed z-50 flex w-[300px] flex-col rounded-xl p-1.5 rc-in"
+            style={{ maxHeight, left: anchor.left, bottom: anchor.bottom }}
+            onMouseLeave={() => setOpen(false)}
           >
-            Choose Folder…
-          </button>
-        </div>
-      )}
+            {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
+            <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
+              {projects.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setProjectCwd(p);
+                    setOpen(false);
+                  }}
+                  className={cx(
+                    "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left hover:bg-fill",
+                    p === cwd && "bg-fill",
+                  )}
+                >
+                  <span className="text-body text-fg">{projectName(p)}</span>
+                  <span className="truncate text-caption text-fg-muted" dir="rtl">
+                    <bdi>{p}</bdi>
+                  </span>
+                </button>
+              ))}
+            </div>
+            {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                void pickFolder(cwd).then((p) => p && setProjectCwd(p));
+              }}
+              className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body hover:bg-fill"
+            >
+              Choose Folder…
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
