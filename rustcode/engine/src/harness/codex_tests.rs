@@ -568,6 +568,67 @@ async fn the_orchestrator_is_added_to_the_codex_thread_config() {
         .unwrap()
         .1;
     assert!(started.get("config").is_none());
+}
+
+#[tokio::test]
+async fn the_workspaces_mcp_servers_are_thread_config() {
+    let (_thread, mut seen) = start(
+        Script::Reply,
+        None,
+        StartOptions {
+            mcp: vec![
+                crate::config::McpServerConfig {
+                    name: "files".to_owned(),
+                    command: "npx".to_owned(),
+                    args: vec!["-y".to_owned(), "@example/files-mcp".to_owned()],
+                    env: std::collections::HashMap::from([("API_KEY".to_owned(), "k".to_owned())]),
+                    url: None,
+                    headers: std::collections::HashMap::new(),
+                    client_id: None,
+                    enabled: true,
+                    always_include: false,
+                    timeout_secs: None,
+                },
+                crate::config::McpServerConfig {
+                    name: "api".to_owned(),
+                    command: String::new(),
+                    args: Vec::new(),
+                    env: std::collections::HashMap::new(),
+                    url: Some("https://mcp.example.com/mcp".to_owned()),
+                    headers: std::collections::HashMap::from([(
+                        "Authorization".to_owned(),
+                        "Bearer t".to_owned(),
+                    )]),
+                    client_id: None,
+                    enabled: true,
+                    always_include: false,
+                    timeout_secs: None,
+                },
+            ],
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    let started = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "thread/start")
+        .expect("thread/start was sent")
+        .1;
+    let config = &started["config"];
+    assert_eq!(config["mcp_servers.files"]["command"], "npx");
+    assert_eq!(
+        config["mcp_servers.files"]["args"],
+        json!(["-y", "@example/files-mcp"])
+    );
+    assert_eq!(config["mcp_servers.files"]["env"]["API_KEY"], "k");
+    assert_eq!(
+        config["mcp_servers.api"]["url"],
+        "https://mcp.example.com/mcp"
+    );
+    assert_eq!(
+        config["mcp_servers.api"]["http_headers"]["Authorization"],
+        "Bearer t"
+    );
     // Codex never sees RustCode's root prompt; the reply style rides along
     // as developer instructions (docs/output-style.md).
     assert_eq!(

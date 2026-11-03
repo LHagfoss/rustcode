@@ -371,6 +371,15 @@ same place:
   Header and environment values are never shown; credentials in a URL and
   secret-looking arguments (`--token`, `API_KEY=…`) are masked.
 
+Every enabled server is also handed to the external harnesses, so one list
+covers a thread on any of them: an ACP harness (Claude Code, Gemini CLI,
+OpenCode) gets them in its `session/new`'s `mcpServers`, and Codex gets them as
+`mcp_servers.<name>` overrides on `thread/start`. RustCode spawns nothing
+itself for those threads; the harness starts the server in its own session, and
+the server's name, command and URL are the same as in `Settings → MCP Servers`.
+Skills are RustCode's own: an external harness runs its own skill model, so
+this list does not reach it (see `docs/harnesses.md`).
+
 A toggle applies from the next message of every open session in the process
 that made it: the terminal you toggled in, or the macOS app's engine for all of
 its chats. A turn already running is not changed. Another RustCode process

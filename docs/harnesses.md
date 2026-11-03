@@ -369,3 +369,16 @@ choices in its own storage instead.
   recorded as failed. A plan is a `tool` message with `tool_name` `plan`
   and a `- [x] / [~] / [ ]` checklist. The latest usage is kept in
   `harness.json` (`usage`).
+
+## MCP servers and skills
+
+A thread on an external harness runs with the workspace's MCP servers: the
+engine passes the enabled `[[mcp_servers]]` entries of the user and project
+config to the harness's own session (ACP `mcpServers`, or Codex's
+`mcp_servers.<name>` config), so Settings → MCP Servers is the one list for
+every harness and nothing is written into the other tools' config files.
+Skills are not passed this way: RustCode discovers them from the roots in
+[configuration.md](configuration.md#skills), and an external harness keeps its
+own skill and tool model. `~/.agents/skills` is the root shared with other
+agents that read it, and `extra_skill_dirs` is how RustCode can also read a
+harness's own root.
