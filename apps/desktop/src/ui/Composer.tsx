@@ -16,6 +16,9 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Shield,
+  ShieldCheck,
+  ShieldOff,
   Square,
   SquarePen,
   X,
@@ -38,6 +41,7 @@ import {
   splitUrls,
 } from "../state/compose";
 import { controlDisabledReason } from "../state/harness";
+import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   acceptsImages,
   cancel,
@@ -45,11 +49,13 @@ import {
   canSteer,
   featureMissing,
   moveQueued,
+  permissionModeOf,
   removeQueued,
   sendQueuedNow,
   setDraft,
   setExtras,
   setNewWorktree,
+  setPermissionMode,
   setProjectCwd,
   startNewThread,
   steerOrSubmit,
@@ -618,6 +624,7 @@ export const Composer = memo(function Composer({
             {!compact && <span>Files</span>}
           </button>
         </Tooltip>
+        <PermissionMenu threadId={thread?.id} compact={compact} />
         <span className="flex-1" />
         <AgentPill thread={thread} />
         {harness && !harness.builtin && harness.id !== defaultHarness && (
@@ -961,6 +968,73 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
 
 const trayButton =
   "flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
+
+const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
+  ask: Shield,
+  edits: ShieldCheck,
+  full: ShieldOff,
+};
+
+/** What the thread may do without asking. Full access is tinted so it is never on unnoticed. */
+function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: boolean }) {
+  const mode = useApp((s) => permissionModeOf(s, threadId));
+  const current = PERMISSION_MODES.find((m) => m.id === mode)!;
+  const Icon = PERMISSION_ICON[mode];
+  return (
+    <DropdownMenu.Root>
+      <Tooltip side="bottom" label={current.detail}>
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            aria-label={`Permissions: ${current.label}`}
+            className={cx(
+              trayButton,
+              "data-[state=open]:bg-fill",
+              mode === "full" && "text-warning hover:text-warning",
+            )}
+          >
+            <Icon size={12} />
+            {!compact && <span>{current.label}</span>}
+            <ChevronDown size={11} className="text-fg-faint" />
+          </button>
+        </DropdownMenu.Trigger>
+      </Tooltip>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="top"
+          align="start"
+          sideOffset={8}
+          className="elevated z-50 w-[280px] rounded-lg p-1"
+        >
+          <DropdownMenu.RadioGroup
+            value={mode}
+            onValueChange={(value) => setPermissionMode(threadId, value as PermissionMode)}
+          >
+            {PERMISSION_MODES.map((m) => {
+              const ItemIcon = PERMISSION_ICON[m.id];
+              return (
+                <DropdownMenu.RadioItem
+                  key={m.id}
+                  value={m.id}
+                  className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-[7px] outline-none data-[highlighted]:bg-fill data-[state=checked]:bg-fill-subtle"
+                >
+                  <ItemIcon
+                    size={13}
+                    className={cx("mt-[3px] shrink-0", m.id === "full" && "text-warning")}
+                  />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="text-body text-fg">{m.label}</span>
+                    <span className="text-caption text-fg-muted">{m.detail}</span>
+                  </span>
+                </DropdownMenu.RadioItem>
+              );
+            })}
+          </DropdownMenu.RadioGroup>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
 
 /** The + menu at the start of the composer's row, after the SwiftUI app's AddPanel. */
 function PlusMenu({

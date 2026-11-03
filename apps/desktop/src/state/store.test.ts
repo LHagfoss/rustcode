@@ -14,6 +14,7 @@ import {
   ensureHarnessModels,
   fetchHarnessModels,
   moveThread,
+  permissionModeOf,
   pickNewThreadChoice,
   refreshAgents,
   refreshHarnesses,
@@ -30,6 +31,7 @@ import {
   setHarnessEnabled,
   setNewThreadChoice,
   setOrchestration,
+  setPermissionMode,
   setProjectCwd,
   setThreadStatus,
   startNewThread,
@@ -218,6 +220,26 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().defaultCwd).toBe("/tmp/default");
     startNewThread();
     expect(useApp.getState().projectCwd).toBe("/tmp/default");
+  });
+
+  test("Full access answers the edit approval itself and the turn finishes", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    setPermissionMode(undefined, "full");
+    try {
+      let asked = false;
+      const unsubscribe = useApp.subscribe(() => {
+        if (selected()?.permissions.length) asked = true;
+      });
+      await submit("change the greeting");
+      await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
+      unsubscribe();
+      expect(asked).toBe(false);
+      expect(selected()!.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "completed" });
+    } finally {
+      resetForTests();
+    }
   });
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {
@@ -561,4 +583,20 @@ describe("finished threads", () => {
     clearFinished("t1");
     expect(useApp.getState().finished).toEqual({});
   });
+});
+
+test("a mode chosen in one thread leaves the other listed threads as they were", async () => {
+  resetForTests();
+  useApp.setState({
+    sessions: [
+      { id: "a", title: "A", cwd: "/tmp" },
+      { id: "b", title: "B", cwd: "/tmp" },
+    ] as never,
+  });
+  setPermissionMode("b", "full");
+  const s = useApp.getState();
+  expect(permissionModeOf(s, "b")).toBe("full");
+  expect(permissionModeOf(s, "a")).toBe("ask");
+  expect(permissionModeOf(s, "new-thread")).toBe("full");
+  resetForTests();
 });

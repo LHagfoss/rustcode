@@ -73,6 +73,7 @@ import {
   stopLinksFrom,
 } from "./host";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
+import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import {
   appendSteer,
   applyUpdate,
@@ -208,6 +209,10 @@ export interface AppState {
   };
   /** Review / done marks kept by the app when the engine does not store them. */
   statusMarks: Record<string, ThreadStatus>;
+  /** What threads may do without asking (the composer's permission pill): the last choice... */
+  defaultPermissionMode: PermissionMode;
+  /** ...and each thread's own, once it was set there. */
+  permissionModes: Record<string, PermissionMode>;
   /** Threads whose turn completed while you were elsewhere, by when: the sidebar's Finished section. */
   finished: Record<string, number>;
   /** What the main column shows instead of the chat. */
@@ -234,6 +239,8 @@ const STORAGE = {
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
   statusMarks: "rustcode.statusMarks",
+  permissionMode: "rustcode.permissionMode",
+  permissionModes: "rustcode.permissionModes",
   /** Each harness's last new-thread choice, for an engine that does not remember it. */
   harnessChoices: "rustcode.harnessChoices",
 };
@@ -279,6 +286,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grant: null,
   features: {},
   statusMarks: storedJson<Record<string, ThreadStatus>>(STORAGE.statusMarks, {}),
+  defaultPermissionMode: parsePermissionMode(stored(STORAGE.permissionMode)),
+  permissionModes: storedJson<Record<string, PermissionMode>>(STORAGE.permissionModes, {}),
   finished: {},
   view: { kind: "chat" },
   checkpoints: {},
@@ -755,6 +764,11 @@ async function handleInbound(message: Inbound) {
         const request = parsePermissionRequest(message.id, message.params);
         if (!request || !get().threads[request.sessionId]) {
           connection?.respond(message.id, permissionCancelled);
+          return;
+        }
+        const auto = autoAnswer(request, permissionModeOf(get(), request.sessionId));
+        if (auto) {
+          connection?.respond(message.id, permissionSelected(auto.id));
           return;
         }
         updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
@@ -1611,6 +1625,32 @@ export function approveAll(threadId: string) {
   }
 }
 
+// ---------------------------------------------------------------- permission mode
+
+export function permissionModeOf(s: AppState, threadId: string | undefined): PermissionMode {
+  return (threadId && s.permissionModes[threadId]) || s.defaultPermissionMode;
+}
+
+/**
+ * Set what `threadId` may do without asking (the draft's when undefined); it is also the
+ * default for new threads. Requests already waiting that the mode now allows are answered.
+ */
+export function setPermissionMode(threadId: string | undefined, mode: PermissionMode) {
+  // The new default is for threads to come: the ones already listed keep the mode they had.
+  const { defaultPermissionMode: before, sessions, threads } = get();
+  const modes = { ...get().permissionModes };
+  for (const id of [...sessions.map((x) => x.id), ...Object.keys(threads)]) modes[id] ??= before;
+  if (threadId) modes[threadId] = mode;
+  set({ defaultPermissionMode: mode, permissionModes: modes });
+  store(STORAGE.permissionMode, mode);
+  store(STORAGE.permissionModes, JSON.stringify(modes));
+  if (!threadId) return;
+  for (const request of get().threads[threadId]?.permissions ?? []) {
+    const option = autoAnswer(request, mode);
+    if (option) reply(request, permissionSelected(option.id));
+  }
+}
+
 export function answerQuestionOptions(request: PermissionRequest, options: PermissionOption[]) {
   if (!options.length) return;
   reply(request, options.length === 1 ? permissionSelected(options[0]!.id) : questionOptionsAnswer(options));
@@ -2194,6 +2234,8 @@ export function resetForTests() {
     themes: null,
     themeActive: "rustcode",
     statusMarks: {},
+    defaultPermissionMode: "ask",
+    permissionModes: {},
     view: { kind: "chat" },
     checkpoints: {},
     newWorktree: { on: false, branch: "", edited: false },
