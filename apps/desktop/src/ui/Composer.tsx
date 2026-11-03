@@ -70,7 +70,6 @@ import {
 import { localId, type QueuedPrompt, type ThreadState } from "../state/thread";
 import { AgentPill } from "./AgentViews";
 import { ContextRing, PlanMeter } from "./ComposerUsage";
-import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
@@ -214,7 +213,6 @@ export const Composer = memo(function Composer({
     [draft, commands, dismissed, extras.command],
   );
   const harness = threadHarness(thread);
-  const defaultHarness = useApp((s) => s.harnesses?.default.harness ?? "rustcode");
   const harnessName = harness?.name ?? "This harness";
   // Who the message goes to: the thread's harness, or for a new thread the one it will start on.
   const speakingTo = useApp((s) => {
@@ -662,15 +660,8 @@ export const Composer = memo(function Composer({
         </Tooltip>
         <PermissionMenu threadId={thread?.id} compact={compact} />
         <span className="flex-1" />
+        {/* The harness shows in the model picker; it is not repeated here. */}
         <AgentPill thread={thread} />
-        {harness && !harness.builtin && harness.id !== defaultHarness && (
-          <Tooltip side="bottom" label="Its own sign-in and tools; RustCode's sandbox does not apply">
-            <span className="flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted">
-              <HarnessIcon id={harness.id} name={harness.name} size={14} />
-              {harness.name}
-            </span>
-          </Tooltip>
-        )}
       </div>
     </div>
   );
