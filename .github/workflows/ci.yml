@@ -209,9 +209,9 @@ jobs:
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
 
-            - name: Check test targets
-              run: cargo check --locked -p rustcode --tests
-
+            # `cargo test` compiles what it runs; a separate `cargo check --tests`
+            # first compiled the crate a second time (~5 of this job's 10 min).
+            # The Linux `test` job compiles every test target.
             - name: Test Seatbelt enforcement
               run: cargo test --locked --lib tools::exec::sandbox::tests -- --test-threads=1
 
