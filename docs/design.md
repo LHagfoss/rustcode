@@ -91,9 +91,9 @@ the accent marks state (on, selected, linked), it does not shout.
 | xs | 4 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
 | sm | 6 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
 | md | 8 | `rounded-md` | Buttons that are not pills, sidebar rows, menu items, list rows, inputs, tooltips |
-| lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), popovers, menus, toasts, pictures in replies |
-| xl | 16 | `rounded-xl` | Dialogs, the command palette, large panels, composer picture thumbnails |
-| 2xl | 22 | `rounded-2xl` | The composer and its tray: the one surface the hand returns to |
+| lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), popovers, menu items, pictures in replies |
+| xl | 16 | `rounded-xl` | Menus and dropdowns (`p-1.5`, items `rounded-lg px-3 py-[7px]`), dialogs, the command palette, large panels, composer picture thumbnails |
+| 2xl | 22 | `rounded-2xl` | The composer and its tray, toasts |
 | full | — | `rounded-full` | Pills, toolbar clusters, switches, segmented controls, avatars, dots |
 
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
@@ -208,8 +208,8 @@ that change use `tabular`.
   `opacity` (`rc-drill` in, `translate`/`opacity` out). Animate only
   `transform`, `opacity` and colour; never `filter` or `box-shadow` on
   something that moves every frame.
-- Toasts come in with `rc-in` (200ms, fade + 4px) and leave in 120ms
-  `ease-in`; a swipe follows the pointer and snaps back in 160ms.
+- Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
+  in 140ms `ease-in`; a swipe follows the pointer and snaps back in 160ms.
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
@@ -277,16 +277,17 @@ panels `rounded-xl`.
   highlighted `bg-fill` (not accent); destructive items `text-danger`,
   highlighted `bg-danger/12`.
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
-- **Toast:** `.rc-toast rounded-lg` (the composer's glass, denser, and its
-  slight shadow), 340px wide, `py-2 pl-3 pr-1.5 text-callout`: an icon
+- **Toast:** `.rc-toast rounded-2xl` (the composer's glass, denser, and its
+  slight shadow), 380px wide, `py-1.5 pl-3.5 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a
-  spinner while it has progress), the text in `text-fg` (up to 4 lines,
-  selectable), at most one action as a secondary pill (`h-6 bg-fill`), and
-  a close button. Progress is a 2px accent bar along its foot. One stack
-  (`Toaster`), bottom right of the chat column, 12px above the composer
-  stack and 16px from the column's edge (the window's corner over
-  Settings); newest lowest, three at most. Info and success leave after
-  4s, errors stay; hover pauses; swipe right or close dismisses. Use a
+  spinner while it has progress), the text in `text-fg` (up to 3 lines), at
+  most one action as a secondary pill (`h-6 bg-fill`), "+N" when more wait
+  (it clears them all), and a close button. Progress is a 2px accent bar
+  along its foot. One slot (`Toaster`), centred at the top of the chat
+  column 8px under its header (the window's top over Settings): only the
+  newest shows, four more wait, older ones are dropped. Info and success
+  leave after 3s, errors after 7s; hover pauses; a swipe up or sideways,
+  Escape or × dismisses. Use a
   toast for what is not tied to a message (copied, engine, worktree,
   harness and theme events, errors of an action); an error about a
   thread's turn stays an error card over the composer. No banners.

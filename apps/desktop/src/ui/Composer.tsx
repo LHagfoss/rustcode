@@ -1030,7 +1030,7 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
           side="top"
           align="start"
           sideOffset={8}
-          className="elevated z-50 w-[280px] rounded-lg p-1"
+          className="elevated z-50 w-[280px] rounded-xl p-1.5"
         >
           <DropdownMenu.RadioGroup
             value={mode}
@@ -1042,7 +1042,7 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
                 <DropdownMenu.RadioItem
                   key={m.id}
                   value={m.id}
-                  className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-[7px] outline-none data-[highlighted]:bg-fill data-[state=checked]:bg-fill-subtle"
+                  className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2 outline-none data-[highlighted]:bg-fill data-[state=checked]:bg-fill-subtle"
                 >
                   <ItemIcon
                     size={13}
@@ -1073,7 +1073,7 @@ function PlusMenu({
   cwd: string;
 }) {
   const item =
-    "flex w-full items-center gap-2 rounded-md px-2.5 py-[6px] text-body outline-none data-[highlighted]:bg-fill";
+    "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
   return (
     <DropdownMenu.Root>
       <Tooltip label="Attach and more">
@@ -1092,7 +1092,7 @@ function PlusMenu({
           side="top"
           align="start"
           sideOffset={8}
-          className="elevated z-50 min-w-[220px] rounded-lg p-1"
+          className="elevated z-50 min-w-[220px] rounded-xl p-1.5"
         >
           <DropdownMenu.Item className={item} onSelect={onAttach}>
             <Paperclip size={13} /> {attachLabel}

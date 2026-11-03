@@ -93,8 +93,8 @@ function useSidebarWidth() {
 }
 
 const menuItem =
-  "flex w-full items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill";
-const menuSurface = "elevated z-50 min-w-[190px] rounded-lg p-1 rc-in";
+  "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
+const menuSurface = "elevated z-50 min-w-[200px] rounded-xl p-1.5 rc-in";
 
 function ThreadMenuItems({
   session,
@@ -259,6 +259,7 @@ const ThreadRow = memo(function ThreadRow({
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
+  const waiting = useApp((s) => s.threads[session.id]?.waiting ?? 0);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const harnesses = useApp((s) => s.harnesses);
@@ -356,6 +357,17 @@ const ThreadRow = memo(function ThreadRow({
                       {startedAt ? <Elapsed since={startedAt} /> : "Working"}
                     </span>
                   </>
+                ) : waiting ? (
+                  <span
+                    className="flex items-center gap-1 text-fg-muted"
+                    title={`Waiting on ${waiting} background command${waiting === 1 ? "" : "s"}`}
+                  >
+                    <span className="relative flex size-2 items-center justify-center">
+                      <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
+                      <span className="size-1.5 rounded-full bg-accent" />
+                    </span>
+                    Waiting
+                  </span>
                 ) : (
                   <>
                     {status === "review" && <StatusChip status={status} compact />}
@@ -441,6 +453,66 @@ const ThreadRow = memo(function ThreadRow({
 });
 
 const NO_AGENTS: SubagentInfo[] = [];
+
+/**
+ * Threads this one started (start_session, fan_out), nested under it as ordinary thread rows.
+ * One that is working, waits for you, is open or has just finished shows; the rest fold
+ * behind "N finished", so delegated work leaves the list once it is done.
+ */
+function ChildThreads({
+  items,
+  parentId,
+  selectedId,
+  now,
+}: {
+  items: SessionSummary[];
+  parentId: string;
+  selectedId: string | null;
+  now: number;
+}) {
+  const [open, setOpen] = useState(false);
+  // A string, so the rows re-render only when which children are live changes.
+  const live = useApp((s) =>
+    items
+      .filter((c) => {
+        const status = statusOf(s, c.id);
+        const finishedAt = s.finished[c.id];
+        const linked = s.links.links.some(
+          (l) => l.target === c.id && l.orchestrator === parentId && l.state === "working",
+        );
+        return (
+          status === "running" ||
+          status === "needs_input" ||
+          linked ||
+          (!!finishedAt && now - finishedAt < FINISHED_MS)
+        );
+      })
+      .map((c) => c.id)
+      .join(" "),
+  );
+  const shown = items.filter((c) => open || c.id === selectedId || live.split(" ").includes(c.id));
+  const folded = items.length - shown.length;
+  return (
+    <>
+      {shown.map((child) => (
+        <div key={child.id} className="ml-[14px] border-border border-l pl-1 rc-in">
+          <ThreadRow session={child} selected={child.id === selectedId} scopeAll={false} now={now} />
+        </div>
+      ))}
+      {(folded > 0 || open) && (
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          className="ml-[14px] flex h-[20px] items-center gap-1 rounded-sm px-2 text-caption text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
+        >
+          <ChevronRight size={10} className={cx("transition-transform", open && "rotate-90")} />
+          {open ? "Hide finished" : `${folded} finished`}
+        </button>
+      )}
+    </>
+  );
+}
 
 /** The thread's subagents, nested under its row: running ones first, then the latest finished. */
 function AgentChildren({ threadId }: { threadId: string }) {
@@ -918,11 +990,9 @@ export function Sidebar() {
             now={now}
             snippet={query.trim() ? contentHits[s.id] : undefined}
           />
-          {childrenOf[s.id]?.map((child) => (
-            <div key={child.id} className="ml-[14px] border-border border-l pl-1">
-              <ThreadRow session={child} selected={child.id === selectedId} scopeAll={false} now={now} />
-            </div>
-          ))}
+          {childrenOf[s.id] && (
+            <ChildThreads items={childrenOf[s.id]!} parentId={s.id} selectedId={selectedId} now={now} />
+          )}
         </div>
       ))}
     </div>

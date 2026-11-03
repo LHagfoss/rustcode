@@ -231,7 +231,7 @@ pub(crate) struct UsagePlansRequest {
 
 /// Answer `_rustcode/usage/plans`: `{plans: [{id, name, status, plan?, error?,
 /// windows: [{label, usedPercent, windowMinutes, resetsAt}]}]}`, where status
-/// is `ok`, `signedOut`, `unavailable` or `notAsked`.
+/// is `ok`, `signedOut`, `notInstalled`, `unavailable` or `notAsked`.
 pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     let window = |label: &str, window: &crate::provider_auth::RateLimitWindow| {
         serde_json::json!({
@@ -241,19 +241,23 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
             "resetsAt": window.resets_at,
         })
     };
-    let codex = crate::provider_auth::codex_usage::rate_limits().await;
-    let codex = match codex {
-        Some(limits) => {
+    use crate::provider_auth::codex_usage::{CodexUsageError, read_cached};
+    let codex = |status: &str, error: Option<&str>, windows: Vec<serde_json::Value>| {
+        serde_json::json!({"id": "codex", "name": "ChatGPT", "via": "Codex CLI",
+                           "status": status, "error": error, "windows": windows})
+    };
+    let codex = match read_cached().await {
+        Ok(limits) => {
             let windows: Vec<_> = [limits.primary.as_ref(), limits.secondary.as_ref()]
                 .into_iter()
                 .flatten()
                 .map(|w| window(window_label(w.window_minutes), w))
                 .collect();
-            serde_json::json!({"id": "codex", "name": "ChatGPT", "via": "Codex CLI", "status": "ok", "windows": windows})
+            codex("ok", None, windows)
         }
-        None => {
-            serde_json::json!({"id": "codex", "name": "ChatGPT", "via": "Codex CLI", "status": "signedOut", "windows": []})
-        }
+        Err(CodexUsageError::NotInstalled) => codex("notInstalled", None, vec![]),
+        Err(CodexUsageError::SignedOut) => codex("signedOut", None, vec![]),
+        Err(CodexUsageError::Unavailable(error)) => codex("unavailable", Some(&error), vec![]),
     };
     let claude = if request.claude {
         use crate::provider_auth::claude_usage::{ClaudeUsage, usage};

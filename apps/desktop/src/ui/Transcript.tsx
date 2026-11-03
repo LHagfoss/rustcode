@@ -3,12 +3,12 @@
 // scrolled up, and a "Latest" button brings them back.
 
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
+import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
-import { useApp } from "../state/store";
+import { RESUME_TEXT, useApp } from "../state/store";
 import {
   type ThreadState,
   type TranscriptItem,
@@ -27,6 +27,7 @@ import {
   TurnEndRow,
   TurnFoldRow,
   UserRow,
+  WaitingRow,
   WorkingRow,
 } from "./Rows";
 import { TimelineRail, type Turn, turnTitle } from "./TimelineRail";
@@ -36,6 +37,8 @@ type Row = {
   key: string;
   item?: TranscriptItem;
   working?: true;
+  /** The turn parked on this many background commands. */
+  waiting?: number;
   fold?: TurnFold;
   group?: ToolGroup;
   inFold?: string;
@@ -148,8 +151,9 @@ export function Transcript({
     const shown = searching ? ALL_OPEN : open;
     const out: Row[] = groupTools(foldTurns(thread.items, thread.running, shown), shown);
     if (thread.running) out.push({ key: "working", working: true });
+    else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
     return out;
-  }, [thread.items, thread.running, open, searching]);
+  }, [thread.items, thread.running, thread.waiting, open, searching]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -513,12 +517,21 @@ export function Transcript({
                 >
                   {row.group ? (
                     <ToolGroupRow group={row.group} onToggle={toggleFold} />
+                  ) : row.waiting ? (
+                    <WaitingRow count={row.waiting} />
                   ) : row.working ? (
                     <WorkingRow
                       label={workingLabel(thread.items)}
                       startedAt={thread.turnStartedAt}
                       now={now}
                     />
+                  ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
+                    <div className="flex items-center gap-2 text-caption text-fg-faint">
+                      <span className="h-px flex-1 bg-border" />
+                      <RotateCw size={11} />
+                      Continued after a restart
+                      <span className="h-px flex-1 bg-border" />
+                    </div>
                   ) : item?.kind === "user" ? (
                     <UserRow item={item} threadId={thread.running ? undefined : thread.id} rewind={rewind} />
                   ) : item?.kind === "assistant" ? (

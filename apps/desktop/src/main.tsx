@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { defaultTransport, isTauri } from "./acp/transport";
 import "./index.css";
+import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
 import * as store from "./state/store";
 
@@ -16,6 +17,9 @@ if (isTauri() && /Mac/i.test(navigator.userAgent)) {
     .then((reduce) => document.documentElement.classList.toggle("reduce-transparency", reduce))
     .catch(() => undefined);
 }
+
+// No native title tooltips or Writing Tools: the app has its own tooltips (lib/quietNative.ts).
+quietNativeChrome();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("No #root element");

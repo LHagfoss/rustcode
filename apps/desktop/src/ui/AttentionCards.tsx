@@ -177,13 +177,13 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
                 side="top"
                 align="end"
                 sideOffset={6}
-                className="elevated z-50 max-w-[360px] min-w-[220px] rounded-lg p-1 rc-in"
+                className="elevated z-50 max-w-[360px] min-w-[220px] rounded-xl p-1.5 rc-in"
               >
                 {always.map((o) => (
                   <DropdownMenu.Item
                     key={o.id}
                     onSelect={() => pick(options.indexOf(o))}
-                    className="flex items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill"
+                    className="flex items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill"
                   >
                     <span className="min-w-0 flex-1 break-words">{o.name}</span>
                     <Kbd>{options.indexOf(o) + 1}</Kbd>
@@ -192,7 +192,7 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
                 {pending > 1 && (
                   <DropdownMenu.Item
                     onSelect={() => approveAll(request.sessionId)}
-                    className="flex items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill"
+                    className="flex items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill"
                   >
                     <CheckCheck size={13} /> Allow all {pending} waiting
                   </DropdownMenu.Item>

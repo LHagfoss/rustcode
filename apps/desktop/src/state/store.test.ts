@@ -554,14 +554,18 @@ describe("model memory per harness (#2797, #2798)", () => {
 });
 
 describe("toasts", () => {
-  test("errors persist, a repeat restarts the shown one, an id replaces in place", async () => {
+  test("errors time out too, a repeat restarts the shown one, an id replaces in place", async () => {
     const { toast, dismissToast } = await import("./store");
     toast("Copied", "success");
     toast("Copied", "success");
     expect(useApp.getState().toasts.length).toBe(1);
     expect(useApp.getState().toasts[0]!.persist).toBe(false);
     toast("Could not save", "error");
-    expect(useApp.getState().toasts.at(-1)!.persist).toBe(true);
+    expect(useApp.getState().toasts.at(-1)!.persist).toBe(false);
+    // A burst keeps only the newest five.
+    for (let i = 0; i < 50; i++) toast(`Failed ${i}`, "error");
+    expect(useApp.getState().toasts.length).toBe(5);
+    expect(useApp.getState().toasts.at(-1)!.text).toBe("Failed 49");
     toast("Starting engine…", "info", { id: "engine", persist: true, progress: 0.2 });
     toast("The engine stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
     const engine = useApp.getState().toasts.filter((t) => t.id === "engine");
