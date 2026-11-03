@@ -10,13 +10,15 @@ import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
 import { RESUME_TEXT, useApp } from "../state/store";
 import {
+  splitSubagentSteps,
+  subagentOf,
   type ThreadState,
   type TranscriptItem,
   type TurnCompletion,
   turnCompletion,
   workingLabel,
 } from "../state/thread";
-import { AgentSpawnRow } from "./AgentViews";
+import { AgentSpawnRow, SubagentRow } from "./AgentViews";
 import { cx } from "./primitives";
 import {
   AssistantRow,
@@ -46,6 +48,7 @@ type Row = {
 
 /** The turns the reader opened, by thread: kept while the app runs, so going back keeps them. */
 const openFolds = new Map<string, Set<string>>();
+const NO_STEPS: Extract<TranscriptItem, { kind: "tool" }>[] = [];
 const NO_FOLDS: ReadonlySet<string> = new Set();
 const ALL_OPEN: ReadonlySet<string> = { has: () => true } as unknown as ReadonlySet<string>;
 
@@ -146,14 +149,19 @@ export function Transcript({
     [thread.id],
   );
   const searching = !!find?.query;
+  // A subagent's steps fold into its own row instead of filling the thread.
+  const { items: visible, steps: subagentSteps } = useMemo(
+    () => splitSubagentSteps(thread.items),
+    [thread.items],
+  );
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
     const shown = searching ? ALL_OPEN : open;
-    const out: Row[] = groupTools(foldTurns(thread.items, thread.running, shown), shown);
+    const out: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown);
     if (thread.running) out.push({ key: "working", working: true });
     else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
     return out;
-  }, [thread.items, thread.running, thread.waiting, open, searching]);
+  }, [visible, thread.running, thread.waiting, open, searching]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -545,6 +553,8 @@ export function Transcript({
                     <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
                   ) : item?.kind === "tool" && item.title === "spawn_agent" ? (
                     <AgentSpawnRow item={item} threadId={thread.id} />
+                  ) : item?.kind === "tool" && (subagentOf(item) || subagentSteps.has(item.id)) ? (
+                    <SubagentRow item={item} steps={subagentSteps.get(item.id) ?? NO_STEPS} />
                   ) : item?.kind === "tool" ? (
                     <ToolRow item={item} cwd={thread.cwd} />
                   ) : item?.kind === "notice" ? (

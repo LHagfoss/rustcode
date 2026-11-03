@@ -18,6 +18,28 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 }
 
 /** The running indicator: a 12px arc trimmed to 70%, one turn per second. */
+// The ring of a 3×3 grid, clockwise from the top-left; the centre (4) stays still.
+const ORB_RING = [0, 1, 2, 5, 8, 7, 6, 3];
+
+/** An agent working: a small ring of dots with a travelling light, quieter than a spinner. */
+export function Orb({ className }: { className?: string }) {
+  return (
+    <span className={cx("rc-orb text-accent", className)} aria-hidden>
+      {Array.from({ length: 9 }, (_, cell) => {
+        const at = ORB_RING.indexOf(cell);
+        return at < 0 ? (
+          <i key={cell} data-centre="" />
+        ) : (
+          <i
+            key={cell}
+            style={{ animationDelay: `${-((ORB_RING.length - at) / ORB_RING.length) * 1100}ms` }}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
 export function Spinner({ size = 12, className }: { size?: number; className?: string }) {
   const r = size / 2 - 1;
   const c = 2 * Math.PI * r;

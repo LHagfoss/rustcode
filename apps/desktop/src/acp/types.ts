@@ -387,6 +387,10 @@ export type SessionUpdate =
       summary?: string;
       diffs: FileDiff[];
       output?: string;
+      /** The harness's own tool name (`_meta.claudeCode.toolName`), such as `Agent`. */
+      toolName?: string;
+      /** The Agent/Task call whose subagent made this call (`_meta.claudeCode.parentToolUseId`). */
+      parent?: string;
     }
   | {
       kind: "toolCallUpdate";
@@ -397,6 +401,7 @@ export type SessionUpdate =
       outputDelta?: string;
       diffs: FileDiff[];
       exitCode?: number;
+      parent?: string;
     }
   | { kind: "plan"; entries: PlanEntry[] }
   | { kind: "title"; title: string }
@@ -440,6 +445,11 @@ function parseDate(value: Json | undefined): number | undefined {
   return Number.isNaN(t) ? undefined : t;
 }
 
+/** Claude Code's adapter metadata on an update (`_meta.claudeCode`). */
+function claudeMeta(update: JsonObject): JsonObject | undefined {
+  return obj(obj(update._meta)?.claudeCode);
+}
+
 export function parseSessionUpdate(params: JsonObject): SessionUpdate {
   const update = obj(params.update) ?? {};
   const type = str(update.sessionUpdate) ?? "";
@@ -481,6 +491,8 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         summary: str(meta?.summary) ?? str(obj(update.rawInput)?.summary),
         diffs: parseDiffs(update.content),
         output: toolOutput(update),
+        toolName: str(claudeMeta(update)?.toolName),
+        parent: str(claudeMeta(update)?.parentToolUseId),
       };
     case "tool_call_update":
       return {
@@ -492,6 +504,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         outputDelta: str(meta?.outputDelta),
         diffs: parseDiffs(update.content),
         exitCode: num(obj(update.rawOutput)?.exitCode),
+        parent: str(claudeMeta(update)?.parentToolUseId),
       };
     case "plan":
       return {

@@ -4,6 +4,7 @@
 // with a field to send it more and Stop.
 
 import { ArrowUp, ChevronLeft, ChevronRight, CircleCheck, CircleX, Square, Users } from "lucide-react";
+import { HoverCard } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import {
   AGENT_STATUS_LABEL,
@@ -22,9 +23,15 @@ import {
   setPanel,
   useApp,
 } from "../state/store";
-import type { ThreadState, TranscriptItem } from "../state/thread";
+import {
+  formatDuration,
+  stepLabel,
+  subagentOf,
+  type ThreadState,
+  type TranscriptItem,
+} from "../state/thread";
 import { Markdown } from "./Markdown";
-import { cx, Spinner, Tooltip } from "./primitives";
+import { cx, Orb, Spinner, Tooltip } from "./primitives";
 import { AssistantRow, ThoughtRow, ToolRow, UserRow } from "./Rows";
 
 const EMPTY: SubagentInfo[] = [];
@@ -40,7 +47,7 @@ function useNow(active: boolean) {
 }
 
 export function AgentMark({ agent }: { agent?: SubagentInfo }) {
-  if (!agent || agentActive(agent)) return <Spinner size={11} />;
+  if (!agent || agentActive(agent)) return <Orb />;
   if (agent.status === "completed") return <CircleCheck size={13} className="text-success" />;
   if (agent.status === "failed") return <CircleX size={13} className="text-danger" />;
   return <Square size={10} className="text-fg-muted" />;
@@ -110,20 +117,173 @@ export function AgentSpawnRow({
   );
 }
 
-/** Over the composer while agents work: `● 2 agents working`, which opens the panel. */
-export function AgentPill({ thread }: { thread?: ThreadState }) {
-  const agents = useApp((s) => (thread ? (s.agents[thread.id] ?? EMPTY) : EMPTY));
-  const working = agents.filter(agentActive).length;
-  if (!working) return null;
+type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
+
+const live = (item: ToolItem) => item.status === "pending" || item.status === "in_progress";
+
+/**
+ * A Claude Code subagent (an `Agent`/`Task` call), drawn as one line: what it
+ * was asked, and while it works the step it is on; once done, how many steps it
+ * took and how long. Its steps stay folded; the chevron lists them.
+ */
+export function SubagentRow({ item, steps }: { item: ToolItem; steps: readonly ToolItem[] }) {
+  const agent = subagentOf(item) ?? { name: "Agent", task: item.title };
+  const running = live(item);
+  const failed = item.status === "failed";
+  const [open, setOpen] = useState(false);
+  const now = useNow(running);
+  const current = running ? ([...steps].reverse().find(live) ?? steps.at(-1)) : undefined;
+  const elapsed =
+    item.startedAt !== undefined && (running || item.endedAt !== undefined)
+      ? (running ? now : item.endedAt!) - item.startedAt
+      : undefined;
+  const count = steps.length ? `${steps.length} step${steps.length === 1 ? "" : "s"}` : undefined;
+  const done = [count, elapsed !== undefined && elapsed >= 1000 ? formatDuration(elapsed) : undefined]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <button
-      type="button"
-      onClick={() => setPanel("agents")}
-      className="flex h-[26px] items-center gap-1.5 rounded-lg px-2.5 text-callout text-accent hover:bg-fill"
-    >
-      <span className="size-1.5 animate-pulse rounded-full bg-accent" />
-      {working === 1 ? "1 agent working" : `${working} agents working`}
-    </button>
+    <div className="font-rounded">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className={cx(
+          "group flex h-7 w-fit max-w-full items-center gap-2 rounded-full border px-2.5 text-left transition-colors duration-200",
+          running
+            ? "border-accent/25 bg-accent/[0.06]"
+            : "border-border bg-fill-subtle/60 hover:bg-fill-subtle",
+        )}
+      >
+        <span className="flex w-3.5 shrink-0 justify-center">
+          {running ? (
+            <Orb />
+          ) : failed ? (
+            <CircleX size={13} className="text-danger" />
+          ) : (
+            <CircleCheck size={13} className="text-success rc-dot-in" />
+          )}
+        </span>
+        <span className="shrink-0 font-medium text-callout">{agent.name}</span>
+        <span className="min-w-0 shrink truncate text-callout text-fg-muted">{agent.task}</span>
+        {running ? (
+          <span className="min-w-0 max-w-[40%] shrink truncate text-caption">
+            <span className="rc-shimmer">{current ? stepLabel(current) : "Starting"}</span>
+          </span>
+        ) : (
+          done && <span className="shrink-0 text-caption text-fg-faint tabular">{done}</span>
+        )}
+        {(steps.length > 0 || item.output) && (
+          <ChevronRight
+            size={11}
+            className={cx("shrink-0 text-fg-faint transition-transform duration-200", open && "rotate-90")}
+          />
+        )}
+      </button>
+      {open && (
+        <div className="rc-expand mt-1.5 ml-3 flex flex-col gap-0.5 border-border border-l pl-3">
+          {steps.map((step) => (
+            <div key={step.id} className="flex h-5 min-w-0 items-center gap-1.5 text-caption text-fg-muted">
+              {live(step) ? (
+                <Spinner size={10} />
+              ) : step.status === "failed" ? (
+                <CircleX size={10} className="shrink-0 text-danger" />
+              ) : (
+                <span className="size-1 shrink-0 rounded-full bg-fg-faint" />
+              )}
+              <span className="min-w-0 truncate">{stepLabel(step)}</span>
+            </div>
+          ))}
+          {item.output && !running && (
+            <div className="mt-1.5 max-h-64 overflow-y-auto rounded-lg bg-fill-subtle p-2.5">
+              <Markdown text={item.output} className="text-callout" />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What one working agent is doing, for the pill's card. */
+interface Working {
+  key: string;
+  name: string;
+  task: string;
+  step?: string;
+}
+
+/**
+ * Over the composer while agents work: a ring and `2 agents working`; hover
+ * lists each with the step it is on. RustCode's agents open the Agents panel.
+ */
+export function AgentPill({ threadId }: { threadId?: string }) {
+  const agents = useApp((s) => (threadId ? (s.agents[threadId] ?? EMPTY) : EMPTY));
+  // Read here, not from the composer's prop: the composer skips item changes.
+  const thread = useApp((s) => (threadId ? s.threads[threadId] : undefined));
+  const working = useMemo<Working[]>(() => {
+    const out: Working[] = agents
+      .filter(agentActive)
+      .map((a) => ({ key: `rc-${a.id}`, name: a.name, task: a.task.split("\n")[0] ?? "" }));
+    if (!thread?.running) return out;
+    const items = thread.items;
+    for (const item of items) {
+      if (item.kind !== "tool" || !live(item)) continue;
+      const agent = subagentOf(item);
+      if (!agent) continue;
+      let step: ToolItem | undefined;
+      for (let i = items.length - 1; i >= 0; i--) {
+        const s = items[i]!;
+        if (s.kind === "tool" && s.parent === item.id) {
+          step = s;
+          break;
+        }
+      }
+      out.push({ key: item.id, name: agent.name, task: agent.task, step: step && stepLabel(step) });
+    }
+    return out;
+  }, [agents, thread?.items, thread?.running]);
+  if (!working.length) return null;
+  const rustcode = working.some((w) => w.key.startsWith("rc-"));
+  return (
+    <HoverCard.Root openDelay={80} closeDelay={120}>
+      <HoverCard.Trigger asChild>
+        <button
+          type="button"
+          onClick={rustcode ? () => setPanel("agents") : undefined}
+          className={cx(
+            "flex h-[26px] items-center gap-2 rounded-full bg-accent/[0.08] px-2.5 text-callout text-accent rc-in",
+            rustcode ? "hover:bg-accent/[0.14]" : "cursor-default",
+          )}
+        >
+          <Orb />
+          {working.length === 1 ? "1 agent working" : `${working.length} agents working`}
+        </button>
+      </HoverCard.Trigger>
+      <HoverCard.Portal>
+        <HoverCard.Content
+          side="top"
+          align="end"
+          sideOffset={8}
+          collisionPadding={10}
+          className="elevated z-40 flex w-[300px] flex-col gap-0.5 rounded-xl p-1.5 rc-in"
+        >
+          {working.map((w) => (
+            <div key={w.key} className="flex items-start gap-2 rounded-lg px-2 py-1.5">
+              <span className="mt-[5px] flex w-3.5 justify-center">
+                <Orb />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-1.5">
+                  <span className="shrink-0 font-medium text-callout">{w.name}</span>
+                  <span className="min-w-0 truncate text-callout text-fg-muted">{w.task}</span>
+                </span>
+                {w.step && <span className="block truncate text-caption text-fg-faint">{w.step}</span>}
+              </span>
+            </div>
+          ))}
+        </HoverCard.Content>
+      </HoverCard.Portal>
+    </HoverCard.Root>
   );
 }
 
