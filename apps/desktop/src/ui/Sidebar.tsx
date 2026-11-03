@@ -591,7 +591,7 @@ function SectionHeader({
       onClick={onToggle}
       aria-expanded={open}
       className={cx(
-        "group/h flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left font-semibold text-sub hover:bg-fill-subtle",
+        "group/h flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left font-semibold text-callout hover:bg-fill-subtle",
         section.id === "needs" ? "text-warning" : "text-fg-muted",
       )}
     >
@@ -646,7 +646,7 @@ function ProjectHeader({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5 text-left text-fg-muted text-sub hover:bg-fill-subtle"
+        className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5 text-left font-medium text-callout text-fg-muted hover:bg-fill-subtle"
       >
         <ChevronRight
           size={11}
@@ -657,7 +657,7 @@ function ProjectHeader({
           )}
         />
         {open ? <FolderOpen size={12} className="shrink-0" /> : <Folder size={12} className="shrink-0" />}
-        <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+        <span className="min-w-0 flex-1 truncate">{label}</span>
         <span
           className={cx(
             "text-fg-faint tabular",
