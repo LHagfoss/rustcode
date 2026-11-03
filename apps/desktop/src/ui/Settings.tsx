@@ -757,7 +757,7 @@ export function Settings() {
       />
       <div className="scroll-stable min-h-0 flex-1">
         <div
-          className="mx-auto flex w-full max-w-[760px] gap-8 px-[clamp(16px,4%,32px)] pb-16"
+          className="mx-auto flex w-full max-w-[840px] gap-8 px-[clamp(16px,4%,32px)] pb-16"
           style={{ paddingTop: HEADER_HEIGHT + 20 }}
         >
           <nav
