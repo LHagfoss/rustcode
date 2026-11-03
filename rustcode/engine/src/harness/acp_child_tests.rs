@@ -51,7 +51,8 @@ async fn fake_agent(
             "initialize" => peer.respond(
                 id,
                 Ok(json!({"protocolVersion": 1, "agentCapabilities": {
-                    "loadSession": true, "promptCapabilities": {"image": true}},
+                    "loadSession": true, "promptCapabilities": {"image": true},
+                    "mcpCapabilities": {"http": true}},
                     "_meta": {"steering": {"supported": true}}})),
             ),
             // As claude-agent-acp: injected into a running turn, else the
@@ -510,4 +511,55 @@ async fn steering_adds_a_message_to_the_running_turn() {
     assert_eq!(crate::harness::capabilities(&harness).steer, "live");
     thread.session.cancel();
     let _ = turn.await;
+}
+
+#[test]
+fn remote_servers_need_the_childs_http_support_and_the_orchestrator_keeps_its_name() {
+    let server = |name: &str, url: Option<&str>| crate::config::McpServerConfig {
+        name: name.to_owned(),
+        command: if url.is_some() {
+            String::new()
+        } else {
+            "npx".to_owned()
+        },
+        args: Vec::new(),
+        env: std::collections::HashMap::new(),
+        url: url.map(str::to_owned),
+        headers: std::collections::HashMap::new(),
+        client_id: None,
+        enabled: true,
+        always_include: false,
+        timeout_secs: None,
+    };
+    let options = StartOptions {
+        orchestrator: Some(orchestrator()),
+        mcp: vec![
+            server("rustcode", None),
+            server("files", None),
+            server("api", Some("https://mcp.example.com/mcp")),
+        ],
+        ..StartOptions::default()
+    };
+    let names = |value: Value| -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|server| server["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(super::mcp_servers(&options, true)),
+        ["rustcode", "files", "api"]
+    );
+    assert_eq!(
+        names(super::mcp_servers(&options, false)),
+        ["rustcode", "files"],
+        "no HTTP support, no remote server"
+    );
+    let server_list = super::mcp_servers(&options, true);
+    assert_eq!(
+        server_list[0]["command"], "/opt/rustcode/bin/rustcode",
+        "the orchestrator, not the user's server of the same name"
+    );
 }
