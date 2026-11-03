@@ -124,15 +124,18 @@ inside a padded parent uses the step below the parent's.
 ## Elevation
 
 Two levels, both including the 1px edge ring and both light: half the
-theme's `--rc-shadow-color` (`--rc-shadow-soft`), a small blur, close to
-the edge. A raised surface is told apart by its edge and glass, not by a
-dark halo.
+theme's `--rc-shadow-color` (`--rc-shadow-soft`, so `#00000040` in the dark
+theme and `#0000001a` in the light one), a small blur, close to the edge.
+A raised surface is told apart by its edge and glass, not by a dark halo.
 
-- `--rc-shadow-1` (`shadow-1`): things resting above the chat: the
-  jump-to-latest button, queued messages, error cards over the
-  transcript. (The composer and toasts share a slight shadow under them.)
-- `--rc-shadow-2` (`shadow-2`): things that open over everything:
-  popovers, menus, tooltips, dialogs, the command palette.
+- `--rc-shadow-1` (`shadow-1`, `0 1px 1px` + ring): things resting above the
+  chat: the jump-to-latest button, queued messages, error cards over the
+  transcript. (The composer and toasts share a slight shadow under them,
+  `0 2px 8px -4px`.)
+- `--rc-shadow-2` (`shadow-2`, `0 2px 8px` + ring): things that open over
+  everything: popovers, menus, tooltips, dialogs, the command palette.
+
+Do not hand-tune a shadow on one component: the tokens are the whole scale.
 
 The `elevated` utility is glass (`--rc-glass-bg-strong`) + `shadow-2` +
 `rounded-lg`: use it for every popover, menu and tooltip.
@@ -141,21 +144,20 @@ The `elevated` utility is glass (`--rc-glass-bg-strong`) + `shadow-2` +
 
 One translucency, one token pair, for every floating surface: the
 composer, popovers, menus, tooltips, dialogs, toasts, the right panel and
-the lightbox. `--rc-glass-bg` (`surface-2` at 68%; `--rc-glass-bg-strong`
-at 80% for popovers, menus and the focused composer) with
-`--rc-glass-filter` (`saturate(1.5) blur(22px)`). Use `.rc-glass` or the
+the lightbox. `--rc-glass-bg` (`surface-2` at 84%; `--rc-glass-bg-strong`
+at 93% for popovers, menus and the focused composer) with
+`--rc-glass-filter` (`saturate(1.2) blur(13px)`). Use `.rc-glass` or the
 `elevated` utility, never a hand-made `backdrop-filter`. Reduce
 transparency (the media query, or the system setting the shell reads)
 turns the pair solid. Headers use the same filter tinted with the pane
-instead of a surface (`--rc-glass-pane`, `bg` at 72%; 45% with `.rc-frost`
+instead of a surface (`--rc-glass-pane`, `bg` at 86%; 60% with `.rc-frost`
 over a new thread's banner), through `.rc-header-glass`. Panes, cards,
 rows and the sidebar stay opaque.
 
-Glass is cheap where it is: WebKit draws `backdrop-filter` as a
-CoreAnimation backdrop layer, and turning every blur off changed no frame
-or CPU number measurably (docs/desktop.md › Native frame rate). Keep it
-to the one filter on floating surfaces and headers: no larger radius, no
-second blur stacked on the first, no blur on a pane or a scrolling row.
+Near-solid and lightly blurred on purpose: text scrolling under a panel
+should be a hint, not a smear. Keep it to the one filter on floating
+surfaces and headers: no larger radius, no second blur stacked on the
+first, no blur on a pane or a scrolling row.
 
 ## Spacing
 
@@ -303,7 +305,7 @@ panels `rounded-xl`.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** `.rc-composer rounded-2xl p-2.5` in the denser glass
-  (`--rc-glass-bg-strong`, `surface-2` at 90% on focus), a soft shadow
+  (`--rc-composer-bg`, the text colour at 7%; 10% on focus), a soft shadow
   above and below plus the edge ring; no ring or colour on focus. Its
   controls rest one step above it: the **+** and the model pill are
   `bg-fill-subtle`, `bg-fill` on hover, `bg-fill-strong` when open. Its
