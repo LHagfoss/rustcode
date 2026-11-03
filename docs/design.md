@@ -123,11 +123,14 @@ inside a padded parent uses the step below the parent's.
 
 ## Elevation
 
-Two levels, both including the 1px edge ring:
+Two levels, both including the 1px edge ring and both light: half the
+theme's `--rc-shadow-color` (`--rc-shadow-soft`), a small blur, close to
+the edge. A raised surface is told apart by its edge and glass, not by a
+dark halo.
 
 - `--rc-shadow-1` (`shadow-1`): things resting above the chat: the
   jump-to-latest button, queued messages, error cards over the
-  transcript. (The composer and toasts share a softer two-sided shadow.)
+  transcript. (The composer and toasts share a slight shadow under them.)
 - `--rc-shadow-2` (`shadow-2`): things that open over everything:
   popovers, menus, tooltips, dialogs, the command palette.
 
@@ -267,7 +270,7 @@ panels `rounded-xl`.
   highlighted `bg-danger/12`.
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
 - **Toast:** `.rc-toast rounded-lg` (the composer's glass, denser, and its
-  two-sided shadow), 340px wide, `py-2 pl-3 pr-1.5 text-callout`: an icon
+  slight shadow), 340px wide, `py-2 pl-3 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a
   spinner while it has progress), the text in `text-fg` (up to 4 lines,
   selectable), at most one action as a secondary pill (`h-6 bg-fill`), and

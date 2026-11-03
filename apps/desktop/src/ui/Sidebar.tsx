@@ -33,7 +33,7 @@ import {
   X,
 } from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
@@ -753,17 +753,6 @@ export function Sidebar() {
   const finished = useApp((s) => s.finished);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
-  // The slot collapses after the sidebar has slid out, and opens before it slides in: its width
-  // changes once per toggle, not every frame (docs/design.md › Motion).
-  const [collapsed, setCollapsed] = useState(hidden);
-  useEffect(() => {
-    if (!hidden) {
-      setCollapsed(false);
-      return;
-    }
-    const t = setTimeout(() => setCollapsed(true), 200);
-    return () => clearTimeout(t);
-  }, [hidden]);
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
   // By state, as T3 Code's sidebar, with the project on each row; grouping by project is an option.
@@ -771,6 +760,22 @@ export function Sidebar() {
   const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
   const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", FOLDED_BY_DEFAULT);
   const [width, setWidth] = useSidebarWidth();
+  // The slot takes its new width at once, so the transcript reflows once per toggle, not every
+  // frame (docs/design.md › Motion). The column beside it then slides from where it was with a
+  // transform, in step with the sidebar's own slide, so the sidebar pushes the content along.
+  const slot = useRef<HTMLElement>(null);
+  const shown = useRef(!hidden);
+  useLayoutEffect(() => {
+    if (shown.current === !hidden) return;
+    shown.current = !hidden;
+    const column = slot.current?.nextElementSibling;
+    if (!column || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const from = hidden ? width : -width;
+    column.animate([{ transform: `translateX(${from}px)` }, { transform: "translateX(0)" }], {
+      duration: 200,
+      easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+    });
+  }, [hidden, width]);
   const dragging = useRef(false);
   const now = useNow();
   // Settled lists 10 threads, then 25 more at a time, as T3 Code does.
@@ -920,9 +925,11 @@ export function Sidebar() {
 
   return (
     <aside
+      ref={slot}
       aria-label="Threads"
-      className="relative flex shrink-0 flex-col overflow-hidden"
-      style={{ width: collapsed ? 0 : width }}
+      // Not clipped: while it slides out of a slot already 0 wide, the column beside it covers it.
+      className="relative flex shrink-0 flex-col"
+      style={{ width: hidden ? 0 : width }}
       aria-hidden={hidden}
     >
       <div

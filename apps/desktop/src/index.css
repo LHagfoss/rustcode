@@ -167,8 +167,10 @@
   --rc-fill-strong: color-mix(in srgb, var(--rc-text) 13%, transparent);
   --rc-diff-add: color-mix(in srgb, var(--rc-success) 14%, transparent);
   --rc-diff-del: color-mix(in srgb, var(--rc-danger) 14%, transparent);
-  --rc-shadow-1: 0 1px 3px var(--rc-shadow-color), 0 0 0 1px var(--rc-border);
-  --rc-shadow-2: 0 10px 28px var(--rc-shadow-color), 0 0 0 1px var(--rc-border);
+  /* Shadows lift, they do not loom: about half a theme's shadow colour, kept close to the edge. */
+  --rc-shadow-soft: color-mix(in srgb, var(--rc-shadow-color) 50%, transparent);
+  --rc-shadow-1: 0 1px 2px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);
+  --rc-shadow-2: 0 4px 14px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);
   --rc-radius-xs: 4px;
   --rc-radius-sm: 6px;
   --rc-radius-md: 8px;
@@ -545,8 +547,8 @@
 }
 
 /*
- * The composer floats over the transcript in glass, with a soft shadow
- * above and below. Focus makes the glass a little denser; there is no ring
+ * The composer floats over the transcript in glass, with a slight shadow
+ * under it. Focus makes the glass a little denser; there is no ring
  * or coloured edge. Its tray sits 6px under it, solid and borderless.
  */
 .rc-composer,
@@ -555,8 +557,7 @@
   backdrop-filter: var(--rc-glass-filter);
   -webkit-backdrop-filter: var(--rc-glass-filter);
   box-shadow:
-    0 -10px 28px -14px var(--rc-shadow-color),
-    0 10px 28px -12px var(--rc-shadow-color),
+    0 4px 14px -6px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-border);
   transition: background-color 160ms ease-out;
 }
@@ -571,8 +572,7 @@
   background: var(--rc-composer-bg);
   box-shadow:
     inset 0 1px 0 0 color-mix(in srgb, var(--rc-text) 6%, transparent),
-    0 -10px 28px -14px var(--rc-shadow-color),
-    0 10px 28px -12px var(--rc-shadow-color),
+    0 4px 14px -6px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-border);
 }
 .rc-composer:focus-within {
