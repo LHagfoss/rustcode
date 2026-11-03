@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Json } from "./jsonrpc";
 import {
   fallbackHarnessSnapshot,
   initializeParams,
@@ -39,6 +40,15 @@ describe("ACP types", () => {
     const params = initializeParams("0.1.0") as { clientCapabilities: { fs: unknown; terminal: boolean } };
     expect(params.clientCapabilities.terminal).toBe(false);
     expect(params.clientCapabilities.fs).toEqual({ readTextFile: false, writeTextFile: false });
+  });
+
+  test("asks for Discord presence only when the client wants it", () => {
+    const meta = (options: Parameters<typeof initializeParams>[1]) =>
+      (initializeParams("0.1.0", options) as { clientCapabilities: { _meta: { rustcode: Json } } })
+        .clientCapabilities._meta.rustcode;
+    expect(meta({ presence: 1 })).toMatchObject({ presence: 1 });
+    expect(meta({})).not.toHaveProperty("presence");
+    expect(meta({ presence: 0 })).not.toHaveProperty("presence");
   });
 
   test("parses session/list with model and harness", () => {

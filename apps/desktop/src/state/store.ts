@@ -559,6 +559,8 @@ async function handshake(): Promise<void> {
         orchestration: get().orchestration ? CAPABILITY_VERSION : undefined,
         // rustcode-viz levels 1 and 2 are drawn natively (ui/Viz.tsx).
         visualizations: 2,
+        // Discord Rich Presence (docs/discord-rich-presence.md); whether it publishes is the config.
+        presence: 1,
       }),
       20_000,
     );

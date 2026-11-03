@@ -19,8 +19,8 @@ import {
   RefreshCw,
   TerminalSquare,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
+import { useCallback, useEffect, useState } from "react";
+import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
 import { haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
@@ -34,9 +34,11 @@ import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   APP_VERSION,
   createTheme,
+  errorText,
   type NewThreadChoice,
   openSettings,
   refreshHarnesses,
+  request,
   restartEngine,
   type SettingsSection,
   setActiveTheme,
@@ -70,6 +72,64 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
 ];
 
 // ---------------------------------------------------------------- pages
+
+/**
+ * Discord Rich Presence (docs/discord-rich-presence.md): the engine publishes the open project's
+ * folder name and whether a turn runs. It reads the same `discord_rpc_enabled` the CLI writes, so
+ * this row and `rustcode discord` are one setting.
+ */
+function PresenceRow() {
+  const projectCwd = useApp((s) => s.projectCwd || s.defaultCwd);
+  const status = useApp((s) => s.status);
+  const [state, setState] = useState<{ enabled: boolean; discordDetected: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const show = (value: Json) => {
+      const root = obj(value);
+      setState({
+        enabled: root?.enabled === true,
+        discordDetected: root?.discordDetected === true,
+      });
+      setError(null);
+    };
+    try {
+      const params: JsonObject = {};
+      if (projectCwd) params.cwd = projectCwd;
+      show(await request("_rustcode/presence", params));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, [projectCwd]);
+  useEffect(() => {
+    if (status === "ready") void load();
+  }, [status, load]);
+  const setEnabled = (enabled: boolean) => {
+    const params: JsonObject = { enabled };
+    if (projectCwd) params.cwd = projectCwd;
+    void request("_rustcode/presence/set", params).then(
+      (value) => {
+        const root = obj(value);
+        setState({ enabled: root?.enabled === true, discordDetected: root?.discordDetected === true });
+        setError(null);
+      },
+      (e) => setError(errorText(e)),
+    );
+  };
+  const subtitle = error
+    ? error
+    : !state
+      ? "Checking Discord…"
+      : !state.enabled
+        ? "Off: nothing is shared with Discord."
+        : state.discordDetected
+          ? "Shares the open project's folder name and whether a turn is running. Discord is running."
+          : "Shares the open project's folder name and whether a turn is running. Discord's desktop app is not running right now.";
+  return (
+    <Row title="Discord Rich Presence" subtitle={subtitle}>
+      {state && <Switch label="Discord Rich Presence" checked={state.enabled} onChange={setEnabled} />}
+    </Row>
+  );
+}
 
 function General() {
   const defaultCwd = useApp((s) => s.defaultCwd);
@@ -178,6 +238,7 @@ function General() {
             }}
           />
         </Row>
+        <PresenceRow />
       </Group>
       <Group title="Keyboard">
         {shortcuts.map(([label, keys]) => (

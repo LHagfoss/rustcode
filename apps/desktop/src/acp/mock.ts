@@ -550,6 +550,8 @@ export class MockEngine {
   private agents = new Map<string, JsonObject[]>();
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
+  /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
+  private presence = true;
   private removedWorktrees = new Set<string>();
   /** The engine's themes: the app's built-ins plus one user theme, as `_rustcode/themes` lists them. */
   private themes: JsonObject[] = [
@@ -1088,6 +1090,11 @@ export class MockEngine {
         thread.checkpoints.splice(at);
         return { restored: true, conversation: params.rewind === true && canRewind ? "rewound" : "kept" };
       }
+      case "_rustcode/presence":
+        return { enabled: this.presence, discordDetected: true };
+      case "_rustcode/presence/set":
+        this.presence = params.enabled === true;
+        return { enabled: this.presence, discordDetected: true };
       case "_rustcode/harnesses":
         return this.snapshot();
       case "_rustcode/harnesses/models": {

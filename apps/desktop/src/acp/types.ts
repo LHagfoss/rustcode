@@ -101,9 +101,17 @@ export function parseAgentInfo(result: Json): AgentInfo {
  */
 export function initializeParams(
   appVersion: string,
-  options: { smartUi?: boolean; orchestration?: number; visualizations?: number } = {},
+  options: {
+    smartUi?: boolean;
+    orchestration?: number;
+    visualizations?: number;
+    presence?: number;
+  } = {},
 ): JsonObject {
   const rustcode: JsonObject = { smartUi: options.smartUi ? 1 : 0 };
+  // Discord Rich Presence (docs/discord-rich-presence.md): the engine publishes the project and
+  // whether a turn runs, for clients that ask; the setting itself is the engine's config.
+  if (options.presence) rustcode.presence = options.presence;
   // Threads that start and message other threads (docs/orchestrator.md): only while the setting is on.
   if (options.orchestration) rustcode.orchestration = options.orchestration;
   if (options.visualizations) rustcode.visualizations = options.visualizations;
