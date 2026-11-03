@@ -1521,7 +1521,16 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: usage::UsageLimitsRequest, responder, connection| {
                     let Some((state, _)) = server.session_handle(&request.session_id).await else {
-                        return responder.respond_with_error(unknown_session(&request.session_id));
+                        // A thread on another harness has no engine session: its plan is that
+                        // harness's own (the Codex CLI's windows for Codex).
+                        let Some(harness) = usage::external_harness(&request.session_id) else {
+                            return responder
+                                .respond_with_error(unknown_session(&request.session_id));
+                        };
+                        return connection.spawn(async move {
+                            responder.respond(usage::harness_limits(&harness).await)?;
+                            Ok(())
+                        });
                     };
                     connection.spawn(async move {
                         responder.respond(usage::limits(&state).await)?;
