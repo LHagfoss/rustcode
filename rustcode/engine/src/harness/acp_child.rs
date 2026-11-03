@@ -170,14 +170,32 @@ fn parse_options(value: Option<&Value>) -> Vec<SessionConfigOption> {
 /// The MCP servers the child's session gets: the orchestrator when the thread has one, then the
 /// workspace's own servers, so a Claude Code or OpenCode thread has the servers Settings · MCP
 /// shows (docs/configuration.md). A stdio server is `name`/`command`/`args`/`env`, a remote one
-/// `type: "http"`/`url`/`headers`, as ACP's `session/new` takes them.
-fn mcp_servers(options: &StartOptions) -> Value {
+/// `type: "http"`/`url`/`headers`, as ACP's `session/new` takes them. A remote server goes only
+/// to a child that advertised `mcpCapabilities.http`, so one that cannot take it still starts; a
+/// workspace server named like the orchestrator gives way to it.
+fn mcp_servers(options: &StartOptions, http: bool) -> Value {
     let mut servers: Vec<Value> = options
         .orchestrator
         .iter()
         .map(crate::orchestration::hub::Launch::acp_server)
         .collect();
-    servers.extend(options.mcp.iter().map(config_server));
+    for server in &options.mcp {
+        if options.orchestrator.is_some() && server.name == crate::orchestration::hub::SERVER_NAME {
+            crate::dbg_log!(
+                "harness MCP: '{}' is the orchestrator's name; skipped",
+                server.name
+            );
+            continue;
+        }
+        if server.url.is_some() && !http {
+            crate::dbg_log!(
+                "harness MCP: '{}' is remote and the harness takes no HTTP servers; skipped",
+                server.name
+            );
+            continue;
+        }
+        servers.push(config_server(server));
+    }
     Value::Array(servers)
 }
 
@@ -252,7 +270,11 @@ impl AcpAdapter {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let cwd_text = cwd.to_string_lossy().into_owned();
-        let mcp_servers = mcp_servers(&options);
+        let http = capabilities
+            .and_then(|capabilities| capabilities.pointer("/mcpCapabilities/http"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let mcp_servers = mcp_servers(&options, http);
 
         let mut native = None;
         let mut session = Value::Null;
