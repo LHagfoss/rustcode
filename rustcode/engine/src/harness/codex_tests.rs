@@ -617,3 +617,54 @@ async fn codex_auto_compaction_inside_a_turn_does_not_end_the_turn() {
         "the reply after the compaction still arrives in the same turn"
     );
 }
+
+fn tool_approval(server: &str) -> Value {
+    json!({
+        "threadId": "t1",
+        "serverName": server,
+        "mode": "form",
+        "message": format!("Allow the {server} MCP server to run tool \"fan_out\"?"),
+        "requestedSchema": {"type": "object", "properties": {}},
+        "_meta": {"codex_approval_kind": "mcp_tool_call"},
+    })
+}
+
+#[test]
+fn tool_approvals_for_our_own_server_are_accepted() {
+    assert!(matches!(
+        elicitation(&tool_approval("rustcode")),
+        Elicitation::Accept
+    ));
+}
+
+#[test]
+fn tool_approvals_for_other_servers_ask_the_user() {
+    let Elicitation::Ask(request) = elicitation(&tool_approval("github")) else {
+        panic!("expected a permission request");
+    };
+    assert_eq!(
+        request.tool_call.fields.title.as_deref(),
+        Some("Allow the github MCP server to run tool \"fan_out\"?")
+    );
+    let ids: Vec<_> = request
+        .options
+        .iter()
+        .map(|option| option.option_id.0.to_string())
+        .collect();
+    assert_eq!(ids, ["accept", "acceptForSession", "decline"]);
+    assert_eq!(
+        elicitation_reply("acceptForSession")["_meta"]["persist"],
+        "session"
+    );
+    assert_eq!(elicitation_reply("")["action"], "decline");
+}
+
+#[test]
+fn forms_with_fields_and_urls_are_declined() {
+    let mut form = tool_approval("github");
+    form["requestedSchema"]["properties"] = json!({"name": {"type": "string"}});
+    assert!(matches!(elicitation(&form), Elicitation::Decline));
+    let url = json!({"threadId": "t1", "serverName": "rustcode", "mode": "url",
+        "elicitationId": "e1", "message": "Sign in", "url": "https://example.com"});
+    assert!(matches!(elicitation(&url), Elicitation::Decline));
+}
