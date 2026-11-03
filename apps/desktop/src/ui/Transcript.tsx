@@ -165,7 +165,7 @@ export function Transcript({
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
-    for (const row of rows) if (row.fold) set.add(row.fold.key.slice("fold-".length));
+    for (const row of rows) if (row.fold && !row.fold.live) set.add(row.fold.key.slice("fold-".length));
     return set;
   }, [rows]);
 
