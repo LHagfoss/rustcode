@@ -6,6 +6,7 @@ import "./index.css";
 import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
 import * as store from "./state/store";
+import { Recoverable } from "./ui/Recover";
 
 // The last theme, before the first render, so a custom theme does not flash the default.
 applyCachedTheme();
@@ -26,7 +27,9 @@ if (!root) throw new Error("No #root element");
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <Recoverable>
+      <App />
+    </Recoverable>
   </StrictMode>,
 );
 
