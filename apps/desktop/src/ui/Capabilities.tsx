@@ -238,7 +238,13 @@ function McpRow({
   run: (method: string, params: JsonObject, timeout?: number) => Promise<boolean>;
 }) {
   // The engine's stderr lines that name this server.
-  const log = useApp((st) => (open ? st.engineLog.filter((l) => l.includes(s.name)).slice(-40) : null));
+  // Select the log itself and filter here: a selector that builds a new array on every read made
+  // React re-render without end (opening a server blanked the app).
+  const engineLog = useApp((st) => (open ? st.engineLog : null));
+  const log = useMemo(
+    () => engineLog?.filter((l) => l.includes(s.name)).slice(-40) ?? null,
+    [engineLog, s.name],
+  );
   const toggleable = s.scope === "user";
   return (
     <div>
