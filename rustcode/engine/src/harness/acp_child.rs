@@ -297,7 +297,7 @@ impl AcpAdapter {
                     "mode": "append",
                     "content": [{
                         "type": "text",
-                        "text": crate::tools::schema::harness_instructions(&harness.name),
+                        "text": crate::tools::schema::harness_instructions(&harness.name, super::client_visualization_level()),
                     }],
                 })
             });
