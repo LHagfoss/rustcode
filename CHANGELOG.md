@@ -1,3 +1,31 @@
+## [v1.2.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.2.0) - 2026-11-03
+
+### Features
+### Delegation and harnesses
+- Threads can start and message subagent threads out of the box; under Ask you still approve each one. (#2908)
+- Codex threads can edit files in any folder, not only ones Codex already trusts. (#2906)
+- Codex threads show when Codex starts, messages or waits for its own subagents. (#2909)
+- A thread on any harness runs with the MCP servers from Settings › MCP Servers. (#2897)
+- Settings › Harnesses can turn the built-in RustCode harness off once another harness is the default. (#2904)
+- Settings › General has a Default access row, and a Full-access thread delegates without a prompt, with the delegation recorded in its transcript. (#2889)
+
+### Fixes
+- Moving a Claude Code or Codex thread to another folder with ⌘O no longer loses the chat or switches it to the RustCode harness. (#2900)
+- The project folder menu under the composer no longer opens behind the message box. (#2901)
+- Delegating in the same folder no longer warns about another project, Codex and Claude Code turns no longer say "No files changed", titles end on a word, and the composer names the agent you are talking to. (#2905)
+- The effort slider puts Off at the left and Max at the top. (#2884, #2903)
+- Arrow Up takes the latest queued message back into the composer, skipping queued replies to other threads. (#2888, #2903)
+- Settings shows download progress while an update installs, a failed update check retries sooner, and a failed manual check says so. (#2894, #2903)
+- Opening Settings or a new thread closes any popover, menu or context menu left open. (#2886)
+- The app publishes Discord Rich Presence again, with a switch in Settings. (#2893)
+
+### Look and feel
+- The window reopens at the size it was closed with. (#2892)
+- The context meter under the composer reads as a gauge instead of a loading spinner, and its tooltip gives the percentage used. (#2907)
+- Menus, popovers and the composer are near-solid with a lighter shadow, so text behind them no longer smears through. (#2883)
+- Tool-call rows hug their content. (#2885)
+- Settings uses a wider content column, and the sidebar's section and project headers are one type step larger. (#2890, #2891)
+- Folders in /tmp show without the /private prefix. (#2910)
 ## [v1.1.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.1.1) - 2026-11-03
 
 ### Features
