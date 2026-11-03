@@ -15,6 +15,7 @@ import {
   idleSettled,
   requeueSteers,
   shortAge,
+  splitSubagentSteps,
   thoughtHeadings,
   wakeTurn,
   workingLabel,
@@ -308,5 +309,44 @@ describe("a turn the engine wakes", () => {
     const running = beginTurn(emptyThread("s", "/p"), "go", 0);
     expect(wakeTurn(running, 10).items).toHaveLength(running.items.length);
     expect(finishTurn(woken, "completed", 20).woken).toBeUndefined();
+  });
+});
+
+describe("Claude Code subagents", () => {
+  const call = (body: Record<string, unknown>) =>
+    parseSessionUpdate({ sessionId: "s", update: { sessionUpdate: "tool_call", ...body } } as never);
+  const agent = call({
+    toolCallId: "a1",
+    title: "Map the code",
+    status: "in_progress",
+    rawInput: { description: "Map the code", subagent_type: "Explore" },
+    _meta: { claudeCode: { toolName: "Agent" } },
+  });
+  const step = call({
+    toolCallId: "s1",
+    title: "Read Composer.tsx",
+    kind: "read",
+    status: "in_progress",
+    _meta: { claudeCode: { toolName: "Read", parentToolUseId: "a1" } },
+  });
+
+  test("its steps fold under the call that started it", () => {
+    let t = beginTurn(emptyThread("s", "/p"), "go");
+    t = applyUpdate(applyUpdate(t, agent), step);
+    const { items, steps } = splitSubagentSteps(t.items);
+    expect(items.some((i) => i.id === "s1")).toBe(false);
+    expect(steps.get("a1")?.map((i) => i.id)).toEqual(["s1"]);
+  });
+
+  test("the working line names the agent, not its step", () => {
+    let t = beginTurn(emptyThread("s", "/p"), "go");
+    t = applyUpdate(applyUpdate(t, agent), step);
+    expect(workingLabel(t.items)).toBe("Explore · Map the code");
+  });
+
+  test("a step whose parent is unknown stays in the thread", () => {
+    let t = beginTurn(emptyThread("s", "/p"), "go");
+    t = applyUpdate(t, step);
+    expect(splitSubagentSteps(t.items).items.some((i) => i.id === "s1")).toBe(true);
   });
 });

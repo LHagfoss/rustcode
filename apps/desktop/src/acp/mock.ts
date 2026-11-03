@@ -1423,6 +1423,77 @@ export class MockEngine {
     if (run.cancelled) return;
   }
 
+  /**
+   * "Task agents": Claude Code's subagents, as its adapter streams them. Each
+   * `Agent` call's own steps carry `_meta.claudeCode.parentToolUseId`.
+   */
+  private async claudeAgents(push: (body: JsonObject) => void, run: { cancelled: boolean }) {
+    const agents: [string, string, string, [string, string, JsonObject][]][] = [
+      [
+        "Explore",
+        "Map the composer's paste handling",
+        "explore",
+        [
+          ["Grep", "search", { pattern: "onPaste", path: "src/ui" }],
+          ["Read Composer.tsx", "read", { file_path: "src/ui/Composer.tsx" }],
+          ["Read compose.ts", "read", { file_path: "src/state/compose.ts" }],
+        ],
+      ],
+      [
+        "general-purpose",
+        "Write tests for link chips",
+        "worker",
+        [
+          ["Read Markdown.tsx", "read", { file_path: "src/ui/Markdown.tsx" }],
+          ["Write Markdown.test.tsx", "edit", { file_path: "src/ui/Markdown.test.tsx" }],
+          ["bun test src/ui", "execute", { command: "bun test src/ui" }],
+        ],
+      ],
+    ];
+    const ids = agents.map(([type, description]) => {
+      const id = `agent-${++this.counter}`;
+      push({
+        sessionUpdate: "tool_call",
+        toolCallId: id,
+        title: description,
+        kind: "think",
+        status: "in_progress",
+        rawInput: { description, prompt: `${description}.`, subagent_type: type },
+        _meta: { claudeCode: { toolName: "Agent" } },
+      });
+      return id;
+    });
+    const longest = Math.max(...agents.map((a) => a[3].length));
+    for (let step = 0; step < longest; step++) {
+      for (const [i, agent] of agents.entries()) {
+        const s = agent[3][step];
+        if (!s || run.cancelled) continue;
+        const id = `${ids[i]}-${step}`;
+        const meta = { claudeCode: { toolName: s[0].split(" ")[0] ?? s[0], parentToolUseId: ids[i] ?? "" } };
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: id,
+          title: s[0],
+          kind: s[1],
+          status: "in_progress",
+          rawInput: s[2],
+          _meta: meta,
+        });
+        await this.sleep(this.delay * 8);
+        push({ sessionUpdate: "tool_call_update", toolCallId: id, status: "completed", _meta: meta });
+      }
+    }
+    for (const [i, agent] of agents.entries()) {
+      push({
+        sessionUpdate: "tool_call_update",
+        toolCallId: ids[i]!,
+        status: "completed",
+        rawOutput: { content: `Done: ${agent[1].toLowerCase()}. Three files touched, all tests pass.` },
+      });
+      await this.sleep(this.delay * 4);
+    }
+  }
+
   private async prompt(params: JsonObject): Promise<Json> {
     const thread = this.thread(params.sessionId);
     const prompt = arr(params.prompt)
@@ -1479,7 +1550,8 @@ export class MockEngine {
           return done("end_turn");
         }
       }
-      if (/\bagents\b|subagents?/i.test(prompt)) await this.spawnAgents(sid, push, run);
+      if (/\btask agents\b/i.test(prompt)) await this.claudeAgents(push, run);
+      else if (/\bagents\b|subagents?/i.test(prompt)) await this.spawnAgents(sid, push, run);
       push({
         sessionUpdate: "plan",
         entries: [

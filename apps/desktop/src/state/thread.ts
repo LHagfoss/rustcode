@@ -47,6 +47,13 @@ export type TranscriptItem =
       output?: string;
       diffs: FileDiff[];
       exitCode?: number;
+      /** The harness's own tool name, such as Claude Code's `Agent`. */
+      toolName?: string;
+      /** The subagent call (its tool call id) this call was made under. */
+      parent?: string;
+      /** When the app saw it start and end; a replayed call has both at load time. */
+      startedAt?: number;
+      endedAt?: number;
     }
   | { kind: "notice"; id: string; text: string; tone: "warning" | "error" | "info"; resumable?: boolean }
   | {
@@ -283,9 +290,21 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         summary: update.summary,
         diffs: update.diffs,
         output: update.output,
+        toolName: update.toolName,
+        parent: update.parent,
+        startedAt: now,
+        endedAt: update.status === "completed" || update.status === "failed" ? now : undefined,
       };
       if (existing !== undefined && items[existing]?.kind === "tool") {
-        const merged = { ...(items[existing] as Extract<TranscriptItem, { kind: "tool" }>), ...tool };
+        const before = items[existing] as Extract<TranscriptItem, { kind: "tool" }>;
+        const merged = {
+          ...before,
+          ...tool,
+          toolName: tool.toolName ?? before.toolName,
+          parent: tool.parent ?? before.parent,
+          startedAt: before.startedAt,
+          endedAt: tool.endedAt ?? before.endedAt,
+        };
         return { ...state, items: replaceAt(items, existing, merged) };
       }
       const toolIndex = writable(state.toolIndex, (index) => ({ ...index }));
@@ -297,8 +316,11 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       const item = index === undefined ? undefined : state.items[index];
       if (index === undefined || item?.kind !== "tool") return state;
       const next = writable(state.items, copyItems);
+      const ended = update.status === "completed" || update.status === "failed";
       next[index] = {
         ...item,
+        parent: item.parent ?? update.parent,
+        endedAt: item.endedAt ?? (ended ? now : undefined),
         title: update.title ?? item.title,
         status: update.status ?? (item.status === "pending" ? "in_progress" : item.status),
         output:
@@ -409,7 +431,7 @@ export function finishTurn(
 ): ThreadState {
   const items = finishAllThoughts(state.items, now).map((item) =>
     item.kind === "tool" && (item.status === "pending" || item.status === "in_progress")
-      ? { ...item, status: (outcome === "completed" ? "completed" : "failed") as ToolStatus }
+      ? { ...item, status: (outcome === "completed" ? "completed" : "failed") as ToolStatus, endedAt: now }
       : item,
   );
   const elapsedMs = state.turnStartedAt !== undefined ? now - state.turnStartedAt : undefined;
@@ -624,10 +646,17 @@ export function workingLabel(items: TranscriptItem[]): string {
     const item = items[i]!;
     if (item.kind === "user") break;
     if (item.kind === "tool") {
+      // A subagent's own steps show on its row, not here.
+      if (item.parent) continue;
       if (item.status !== "in_progress" && item.status !== "pending") return "Working";
-      return item.toolKind === "execute" || /^(bash|shell)/i.test(item.title)
-        ? `Running ${item.summary ?? item.title}`
-        : (item.summary ?? item.title);
+      const agent = subagentOf(item);
+      if (agent) {
+        const working = items.filter(
+          (i) => subagentOf(i) && i.kind === "tool" && (i.status === "in_progress" || i.status === "pending"),
+        ).length;
+        return working > 1 ? `${working} agents working` : `${agent.name} · ${agent.task}`;
+      }
+      return stepLabel(item);
     }
     if (item.kind === "thought") {
       if (item.done) return "Working";
@@ -637,6 +666,50 @@ export function workingLabel(items: TranscriptItem[]): string {
     if (item.kind === "assistant") return "Writing the reply";
   }
   return "Working";
+}
+
+/** A tool call that starts a subagent (Claude Code's `Agent`/`Task`): who it is and what it was asked. */
+export function subagentOf(item: TranscriptItem): { name: string; task: string } | undefined {
+  if (item.kind !== "tool" || (item.toolName !== "Agent" && item.toolName !== "Task")) return undefined;
+  const input = item.input && typeof item.input === "object" && !Array.isArray(item.input) ? item.input : {};
+  const type = typeof input.subagent_type === "string" ? input.subagent_type : "";
+  const description = typeof input.description === "string" ? input.description : "";
+  return {
+    name: type && type !== "general-purpose" ? type : "Agent",
+    task: description || item.title,
+  };
+}
+
+/**
+ * The items without the steps subagents made, and those steps by the call that
+ * started each subagent. A step whose parent is not in the list stays put.
+ */
+export function splitSubagentSteps(items: TranscriptItem[]): {
+  items: TranscriptItem[];
+  steps: ReadonlyMap<string, ToolItem[]>;
+} {
+  if (!items.some((i) => i.kind === "tool" && i.parent)) return { items, steps: NO_STEPS };
+  const ids = new Set(items.flatMap((i) => (i.kind === "tool" ? [i.id] : [])));
+  const steps = new Map<string, ToolItem[]>();
+  const rest: TranscriptItem[] = [];
+  for (const item of items) {
+    if (item.kind === "tool" && item.parent && ids.has(item.parent)) {
+      const list = steps.get(item.parent);
+      if (list) list.push(item);
+      else steps.set(item.parent, [item]);
+    } else rest.push(item);
+  }
+  return { items: rest, steps };
+}
+
+type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
+const NO_STEPS: ReadonlyMap<string, ToolItem[]> = new Map();
+
+/** A step's one-line label: `Running <command>` for a shell, else its summary or title. */
+export function stepLabel(item: ToolItem): string {
+  return item.toolKind === "execute" || /^(bash|shell)/i.test(item.title)
+    ? `Running ${item.summary ?? item.title}`
+    : (item.summary ?? item.title);
 }
 
 export function thoughtHeadings(text: string): string[] {

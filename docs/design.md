@@ -328,6 +328,17 @@ panels `rounded-xl`.
   commands` in `text-callout text-fg-muted`, the failed count in `danger`,
   and the fold chevron. It sits 2px from neighbouring tool rows, like
   they do.
+- **Subagent row:** a Claude Code subagent (an `Agent`/`Task` call) is one
+  `rounded-full` row: its type (`Explore`, or `Agent`), the task in
+  `text-fg-muted`, and while it works an accent tint, the `Orb` (a 3×3 dot
+  ring whose light travels clockwise, a still centre; quieter than a
+  spinner) and its current step in `rc-shimmer`. Done, a `CircleCheck` pops
+  in and the tail reads `3 steps · 42s`. Its own steps (those carrying
+  `_meta.claudeCode.parentToolUseId`) never become transcript rows; the
+  chevron lists them as one-line labels with the agent's answer. Over the
+  composer, `● 2 agents working` (accent pill with the `Orb`) opens on hover
+  a card of each working agent and its step; the working line says the
+  same.
 - **Turn fold:** while a turn runs, every step shows as it streams
   (thoughts, tool calls with status and output, subagents). When it ends,
   its work folds into one summary row where the work began, above the

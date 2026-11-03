@@ -5,7 +5,7 @@
 // answer, warnings and errors, and the turn's footer (time, Changes). Pure, so
 // the transcript and the tests share it; one pass over the items.
 
-import type { TranscriptItem } from "./thread";
+import { subagentOf, type TranscriptItem } from "./thread";
 
 export interface TurnFold {
   /** Stable per turn: its footer's id, else its first step's. */
@@ -138,6 +138,7 @@ function groupable(row: FoldRow): row is { key: string; item: ToolItem; inFold?:
   return (
     item.kind === "tool" &&
     item.title !== "spawn_agent" &&
+    !subagentOf(item) &&
     (item.status === "completed" || item.status === "failed")
   );
 }

@@ -418,6 +418,41 @@
   animation: rc-breathe 2.4s ease-in-out infinite;
 }
 
+/*
+ * An agent at work: eight dots round a still centre light up one after the
+ * other, a small comet. Each dot runs the same cycle, offset by a negative
+ * delay so the ring is mid-turn from the first frame.
+ */
+.rc-orb {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 2.5px);
+  gap: 1.5px;
+  flex-shrink: 0;
+}
+.rc-orb > i {
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.2;
+  animation: rc-orb 1.1s linear infinite;
+}
+.rc-orb > i[data-centre] {
+  opacity: 0.45;
+  animation: none;
+}
+@keyframes rc-orb {
+  0% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+  55%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.9);
+  }
+}
+
 /* A status dot appearing (a thread just finished). */
 @keyframes rc-dot-in {
   from {
@@ -450,6 +485,10 @@
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+  .rc-orb > i {
+    animation: none;
+    opacity: 0.6;
   }
   .rc-shimmer {
     animation: none;

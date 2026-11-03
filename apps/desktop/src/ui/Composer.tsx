@@ -661,7 +661,7 @@ export const Composer = memo(function Composer({
         <PermissionMenu threadId={thread?.id} compact={compact} />
         <span className="flex-1" />
         {/* The harness shows in the model picker; it is not repeated here. */}
-        <AgentPill thread={thread} />
+        <AgentPill threadId={thread?.id} />
       </div>
     </div>
   );
