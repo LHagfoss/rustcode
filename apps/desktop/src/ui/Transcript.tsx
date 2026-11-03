@@ -27,6 +27,7 @@ import {
   TurnEndRow,
   TurnFoldRow,
   UserRow,
+  WaitingRow,
   WorkingRow,
 } from "./Rows";
 import { TimelineRail, type Turn, turnTitle } from "./TimelineRail";
@@ -36,6 +37,8 @@ type Row = {
   key: string;
   item?: TranscriptItem;
   working?: true;
+  /** The turn parked on this many background commands. */
+  waiting?: number;
   fold?: TurnFold;
   group?: ToolGroup;
   inFold?: string;
@@ -148,8 +151,9 @@ export function Transcript({
     const shown = searching ? ALL_OPEN : open;
     const out: Row[] = groupTools(foldTurns(thread.items, thread.running, shown), shown);
     if (thread.running) out.push({ key: "working", working: true });
+    else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
     return out;
-  }, [thread.items, thread.running, open, searching]);
+  }, [thread.items, thread.running, thread.waiting, open, searching]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -513,6 +517,8 @@ export function Transcript({
                 >
                   {row.group ? (
                     <ToolGroupRow group={row.group} onToggle={toggleFold} />
+                  ) : row.waiting ? (
+                    <WaitingRow count={row.waiting} />
                   ) : row.working ? (
                     <WorkingRow
                       label={workingLabel(thread.items)}

@@ -80,6 +80,10 @@ export interface ThreadState {
   queue: QueuedPrompt[];
   running: boolean;
   turnStartedAt?: number;
+  /** Background commands the last turn parked on; it resumes when they finish. */
+  waiting?: number;
+  /** The running turn is one the engine resumed itself, not a prompt the app sent. */
+  woken?: boolean;
   /** The replay of `session/load` is still arriving. */
   loading: boolean;
   loaded: boolean;
@@ -359,6 +363,8 @@ export function beginTurn(
     ...closed,
     running: true,
     turnStartedAt: now,
+    waiting: undefined,
+    woken: undefined,
     error: undefined,
     items: [
       ...closed.items,
@@ -370,6 +376,26 @@ export function beginTurn(
         attachments: attachments?.length ? attachments : undefined,
         fromView: fromView || undefined,
       },
+    ],
+  };
+}
+
+/**
+ * The engine resumed a turn on its own (the background commands it parked on
+ * finished): it runs again, with a quiet line saying why.
+ */
+export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
+  if (state.running) return { ...state, waiting: undefined };
+  return {
+    ...state,
+    running: true,
+    woken: true,
+    waiting: undefined,
+    turnStartedAt: now,
+    error: undefined,
+    items: [
+      ...state.items,
+      { kind: "notice", id: localId("wake"), text: "Background work finished — continuing", tone: "info" },
     ],
   };
 }
@@ -391,6 +417,7 @@ export function finishTurn(
     ...state,
     running: false,
     turnStartedAt: undefined,
+    woken: undefined,
     pendingTurn: undefined,
     permissions: [],
     error,

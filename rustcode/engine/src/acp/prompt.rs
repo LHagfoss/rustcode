@@ -503,6 +503,12 @@ pub(crate) async fn run_prompt(
                 // chat is free meanwhile; a server that never exits used to
                 // keep it busy for good (#2280). The command's completion
                 // resumes the turn.
+                send_activity(
+                    &connection,
+                    &session_id,
+                    "waiting",
+                    turn_tasks.pending.len(),
+                );
                 tokio::spawn(resume_after_background(BackgroundWakeup {
                     state: Arc::clone(&state),
                     cwd: cwd.clone(),
@@ -538,6 +544,35 @@ pub(crate) async fn run_prompt(
         }
     }
     result
+}
+
+/// `_rustcode/session/activity`: what a thread does outside a prompt the
+/// client sent. `waiting` when a turn parks on background commands
+/// (`background` of them), `running` when their completion wakes it, `idle`
+/// when that continuation ends. Without it the app showed nothing while a
+/// woken turn worked.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/session/activity")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionActivityNotification {
+    pub session_id: String,
+    pub state: String,
+    pub background: usize,
+}
+
+fn send_activity(
+    connection: &ConnectionTo<Client>,
+    session_id: &str,
+    state: &str,
+    background: usize,
+) {
+    let _ = connection.send_notification(SessionActivityNotification {
+        session_id: session_id.to_owned(),
+        state: state.to_owned(),
+        background,
+    });
 }
 
 /// A turn parked on background commands, resumed once they finish.
@@ -591,6 +626,8 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
     let scheduled = turns.schedule();
     drop(turns);
     let turn = scheduled.begin().await;
+    send_activity(&wakeup.connection, &session_id, "running", 0);
+    let mut parked_again = false;
     let turn_id = {
         let mut state = wakeup.state.lock().await;
         state.status = crate::app::AppStatus::Streaming;
@@ -646,6 +683,13 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
             };
             turn_tasks.observe_live_tasks(task_manager, &session_id);
             if !turn_tasks.pending.is_empty() {
+                parked_again = true;
+                send_activity(
+                    &wakeup.connection,
+                    &session_id,
+                    "waiting",
+                    turn_tasks.pending.len(),
+                );
                 tokio::spawn(resume_after_background(BackgroundWakeup {
                     state: Arc::clone(&state),
                     cwd: wakeup.cwd.clone(),
@@ -662,6 +706,9 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
         }
     })
     .await;
+    if !parked_again {
+        send_activity(&wakeup.connection, &session_id, "idle", 0);
+    }
     let mut state = state.lock().await;
     state.end_turn_identity(&turn_id);
     state.enter_idle();

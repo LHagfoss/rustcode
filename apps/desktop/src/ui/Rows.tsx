@@ -706,6 +706,23 @@ export function TurnEndRow({
 }
 
 /** The live line under a running turn: what it does now and for how long, with a shimmer. */
+/**
+ * The turn is done for now but parked on background commands: a slow pulse
+ * and a plain line, quieter than Working. The turn resumes when they finish.
+ */
+export function WaitingRow({ count }: { count: number }) {
+  return (
+    <div className="flex items-center gap-2 text-callout text-fg-muted" role="status" aria-live="polite">
+      <span className="relative flex size-2 items-center justify-center">
+        <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
+        <span className="size-1.5 rounded-full bg-accent" />
+      </span>
+      Waiting on {count === 1 ? "a background command" : `${count} background commands`}
+      <span className="text-fg-faint">· continues when {count === 1 ? "it finishes" : "they finish"}</span>
+    </div>
+  );
+}
+
 export function WorkingRow({ label, startedAt, now }: { label: string; startedAt?: number; now: number }) {
   const seconds = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
   const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;

@@ -121,6 +121,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "agents": agents::AGENTS_CAPABILITY_VERSION,
                 "rewind": 1,
                 "sessionMove": 1,
+                "sessionActivity": 1,
                 "pullRequests": 3,
                 "worktrees": 1,
                 "checkpoints": 1,
