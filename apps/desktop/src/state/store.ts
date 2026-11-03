@@ -285,7 +285,9 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   editing: {},
   confirm: null,
-  orchestration: stored(STORAGE.orchestration) === "1",
+  // On unless turned off: an agent asks before it starts or messages a thread (Ask), so
+  // delegating is there to use without first finding the setting.
+  orchestration: stored(STORAGE.orchestration) !== "0",
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
