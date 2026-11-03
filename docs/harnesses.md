@@ -256,9 +256,14 @@ What each part does for an external thread:
   as a RustCode question (a `session/request_permission` with
   `_meta.rustcode.kind = "question"`, see `acp/questions.rs`), one at a time;
   the selected option or free text is the answer, and dismissing one fails
-  the request. Secret questions are asked the same way (no masking). MCP
-  elicitations (`mcpServer/elicitation/request`) are declined, since they
-  need a form RustCode does not draw; dynamic tool calls are refused.
+  the request. Secret questions are asked the same way (no masking). Codex
+  asks before an MCP tool runs with an elicitation
+  (`mcpServer/elicitation/request`) whose form has no fields: for the
+  injected `rustcode` server it is accepted (RustCode asks the user itself),
+  for any other server it becomes an approval card (Allow, Allow for this
+  thread as `_meta.persist = "session"`, Deny). Elicitations with form
+  fields or a URL are declined, since RustCode draws no form; dynamic tool
+  calls are refused.
 - **ACP events.** The agent's `session/update`s (its `usage_update`s too)
   are relayed under the thread's id. RustCode advertises no `fs` or `terminal` client capability,
   and refuses those requests, so the agent uses its own tools.

@@ -15,7 +15,7 @@
 //! | `item/*/requestApproval` | `session/request_permission` |
 //! | `item/tool/requestUserInput` | a RustCode question (`acp/questions.rs`) |
 //! | `thread/tokenUsage/updated` | `usage_update` |
-//! | `mcpServer/elicitation/request` | declined (no form UI) |
+//! | `mcpServer/elicitation/request` | MCP tool approval: accepted for `rustcode`, else `session/request_permission`; forms with fields declined |
 
 use super::rpc::{Incoming, RpcError, RpcPeer};
 use super::session::{Output, OutputSender, StartOptions};
@@ -993,6 +993,74 @@ async fn ask_user(peer: Arc<RpcPeer>, out: OutputSender, id: Value, params: Valu
     peer.respond(id, Ok(json!({"answers": answers})));
 }
 
+/// What to do with a Codex `mcpServer/elicitation/request`.
+#[derive(Debug)]
+pub(super) enum Elicitation {
+    /// Our own orchestrator server: RustCode asks the user itself when a
+    /// thread starts or messages another, so a second prompt adds nothing.
+    Accept,
+    /// A yes/no confirmation, such as "Allow GitHub to run tool …?".
+    Ask(RequestPermissionRequest),
+    /// A form with fields, or a URL to open: no UI for it.
+    Decline,
+}
+
+/// Codex asks before an MCP tool runs through an elicitation with an empty
+/// form. Accept it for our server, ask the user for others.
+pub(super) fn elicitation(params: &Value) -> Elicitation {
+    let mode = str_field(params, "mode").unwrap_or("form");
+    let empty_form = mode != "url"
+        && params
+            .get("requestedSchema")
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .is_none_or(serde_json::Map::is_empty);
+    if !empty_form {
+        return Elicitation::Decline;
+    }
+    let server = str_field(params, "serverName").unwrap_or_default();
+    if server == crate::orchestration::hub::SERVER_NAME {
+        return Elicitation::Accept;
+    }
+    let message = str_field(params, "message")
+        .filter(|message| !message.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Allow {server} to run a tool?"));
+    let options = vec![
+        PermissionOption::new("accept", "Allow", PermissionOptionKind::AllowOnce),
+        PermissionOption::new(
+            "acceptForSession",
+            "Allow for this thread",
+            PermissionOptionKind::AllowAlways,
+        ),
+        PermissionOption::new("decline", "Deny", PermissionOptionKind::RejectOnce),
+    ];
+    let tool_call = ToolCallUpdate::new(
+        "elicitation",
+        ToolCallUpdateFields::new()
+            .title(message)
+            .kind(ToolKind::Other)
+            .raw_input(params.clone()),
+    );
+    Elicitation::Ask(RequestPermissionRequest::new(
+        String::new(),
+        tool_call,
+        options,
+    ))
+}
+
+/// Codex's answer for the option the user picked; anything else declines.
+/// "For this thread" rides in `_meta.persist`, as Codex's own UI sends it.
+pub(super) fn elicitation_reply(option: &str) -> Value {
+    match option {
+        "accept" => json!({"action": "accept", "content": {}}),
+        "acceptForSession" => {
+            json!({"action": "accept", "content": {}, "_meta": {"persist": "session"}})
+        }
+        _ => json!({"action": "decline", "content": null}),
+    }
+}
+
 /// The ACP permission request for a Codex approval request, with the
 /// decision each option answers.
 fn approval_request(method: &str, params: &Value) -> Option<(RequestPermissionRequest, bool)> {
@@ -1074,13 +1142,34 @@ async fn relay(
             Incoming::Request { id, method, params }
                 if method == "mcpServer/elicitation/request" =>
             {
-                // A form with its own JSON schema: RustCode has no form UI, so
-                // the MCP server hears a decline rather than an error.
-                crate::dbg_log!(
-                    "codex elicitation declined: {}",
-                    str_field(&params, "message").unwrap_or_default()
-                );
-                peer.respond(id, Ok(json!({"action": "decline", "content": null})));
+                match elicitation(&params) {
+                    Elicitation::Accept => {
+                        peer.respond(id, Ok(json!({"action": "accept", "content": {}})));
+                    }
+                    Elicitation::Decline => {
+                        // A form with fields of its own: RustCode has no form
+                        // UI, so the MCP server hears a decline, not an error.
+                        crate::dbg_log!(
+                            "codex elicitation declined: {}",
+                            str_field(&params, "message").unwrap_or_default()
+                        );
+                        peer.respond(id, Ok(json!({"action": "decline", "content": null})));
+                    }
+                    Elicitation::Ask(request) => {
+                        let (reply, answer) = oneshot::channel();
+                        let asked = out.send(Output::Permission { request, reply }).is_ok();
+                        let peer = Arc::clone(&peer);
+                        tokio::spawn(async move {
+                            let selected = match answer.await.map(|response| response.outcome) {
+                                Ok(RequestPermissionOutcome::Selected(selected)) if asked => {
+                                    selected.option_id.0.to_string()
+                                }
+                                _ => String::new(),
+                            };
+                            peer.respond(id, Ok(elicitation_reply(&selected)));
+                        });
+                    }
+                }
             }
             Incoming::Request { id, method, params } => {
                 let Some((request, legacy)) = approval_request(&method, &params) else {

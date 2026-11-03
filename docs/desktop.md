@@ -39,7 +39,7 @@ Next, in rough order:
 1. Signing and notarization once the Apple secrets exist (#2034).
 2. #2799, cross-harness delegation: the live test plan with Claude Code
    and Codex parents, a harness/model discovery tool, one approval per
-   delegation, Codex MCP elicitation, waking a parent when its child ends.
+   delegation, waking a parent when its child ends.
 3. Compaction follow-ups from T3 Code: the auto-compact tick on the context
    bar (`autoCompactThreshold`), Claude's idle compaction before the prompt
    cache expires.
