@@ -1,23 +1,22 @@
 // Settings › Usage: every subscription this machine is signed in to, with its
 // plan windows (`_rustcode/usage/plans`), whatever thread is open. Claude's
-// numbers come from Claude Code's sign-in in the macOS Keychain, so they are
-// read only after you ask once (macOS may ask to allow it); the choice is kept.
+// numbers come from Claude Code's sign-in in the macOS Keychain: while the app
+// is open it is read every few minutes, so the composer's meter has the plan
+// (macOS may ask once to allow it); the switch below turns that off.
 
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
+import { parsePlans, planHarness, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
-import { request, useApp } from "../state/store";
+import { CLAUDE_USAGE_KEY, commitPlansAnswer, request, setClaudeUsageAllowed, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { PlanWindow } from "./ComposerUsage";
-import { Pill, Skeleton, Spinner } from "./primitives";
+import { Pill, Skeleton, Spinner, Switch } from "./primitives";
 import { Group, Row } from "./settingsKit";
-
-const CLAUDE_KEY = "rustcode.claudeUsage";
 
 function claudeAllowed(): boolean {
   try {
-    return localStorage.getItem(CLAUDE_KEY) === "1";
+    return localStorage.getItem(CLAUDE_USAGE_KEY) === "1";
   } catch {
     return false;
   }
@@ -33,7 +32,11 @@ export function UsagePage() {
   const load = useCallback(async (withClaude: boolean) => {
     setLoading(true);
     try {
-      setPlans(parsePlans(await request(Method.usagePlans, { claude: withClaude }, 20_000)));
+      const answer = parsePlans(await request(Method.usagePlans, { claude: withClaude }, 20_000));
+      setPlans(answer);
+      // The same answer fills the cache the composer's meter reads, and asking
+      // here is what lets the background poll read Claude again after a pause.
+      commitPlansAnswer(answer, withClaude);
       setReadAt(Date.now());
       setError(null);
     } catch (e) {
@@ -45,13 +48,9 @@ export function UsagePage() {
   useEffect(() => {
     if (status === "ready") void load(claude);
   }, [status, claude, load]);
-  const allowClaude = () => {
-    try {
-      localStorage.setItem(CLAUDE_KEY, "1");
-    } catch {
-      // Asked again next time in a private window.
-    }
-    setClaude(true);
+  const allowClaude = (on: boolean) => {
+    setClaudeUsageAllowed(on);
+    setClaude(on);
   };
   if (!plans) {
     return error ? <p className="text-callout text-warning">{error}</p> : <PlansSkeleton />;
@@ -75,16 +74,7 @@ export function UsagePage() {
                 <PlanWindow key={w.label} window={w} title={w.label} />
               ))}
             </div>
-          ) : p.status === "notAsked" ? (
-            <Row
-              title="Show Claude plan usage"
-              subtitle="Reads Claude Code's sign-in to ask Anthropic for your 5-hour and weekly windows. macOS may ask once to allow access to it in the Keychain. Only reads; never signs in or out."
-            >
-              <Pill prominent onClick={allowClaude}>
-                Show
-              </Pill>
-            </Row>
-          ) : (
+          ) : p.status === "notAsked" ? null : (
             <Row
               title={
                 p.status === "signedOut"
@@ -104,6 +94,14 @@ export function UsagePage() {
                     : undefined)
               }
             />
+          )}
+          {planHarness(p.id) === "claude-code" && (
+            <Row
+              title="Show Claude usage in the composer"
+              subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer shows your plan. macOS may ask once to allow it in the Keychain. Only reads; never signs in or out."
+            >
+              <Switch label="Show Claude usage in the composer" checked={claude} onChange={allowClaude} />
+            </Row>
           )}
         </Group>
       ))}

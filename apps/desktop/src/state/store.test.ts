@@ -10,19 +10,25 @@ import {
   type CachedPlan,
   cancel,
   closeReport,
+  commitPlansAnswer,
   completeOnboarding,
   connect,
   editMessage,
   ensureHarnessModels,
   fetchHarnessModels,
+  forgetPlans,
   mergePlans,
   moveThread,
   onlyCachedPlan,
+  PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
   permissionModeOf,
   pickNewThreadChoice,
+  planCacheStale,
   planIsStale,
+  planNow,
   plansToCache,
+  prunePlans,
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
@@ -52,6 +58,7 @@ import {
   trashThread,
   updateQueued,
   useApp,
+  windowNow,
 } from "./store";
 import { turnCompletion } from "./thread";
 
@@ -712,7 +719,7 @@ describe("plan usage cache", () => {
     });
   });
 
-  test("the meter shows a thread's limits unless the cached plan is newer", () => {
+  test("a thread's own limits always win over the cache", () => {
     const own: CachedPlan = {
       source: "codex",
       windows: [{ usedPercent: 42, minutes: 300 }],
@@ -723,9 +730,9 @@ describe("plan usage cache", () => {
     // A thread on Claude Code has no limits of its own: the cache shows through.
     const cached = plan(18, 1000);
     expect(shownPlan(null, cached)).toEqual({ plan: cached, cached: true });
-    // The app's poll is newer than the thread's last answer.
-    expect(shownPlan(own, plan(30, 3000))).toEqual({ plan: plan(30, 3000), cached: true });
-    expect(shownPlan(own, plan(30, 1000))).toEqual({ plan: own, cached: false });
+    // A newer cache is another account's numbers (`rustcode` runs several
+    // providers): the thread's own still win, and are not marked cached.
+    expect(shownPlan(own, plan(30, 3000))).toEqual({ plan: own, cached: false });
     // An answer without windows is not a plan.
     expect(shownPlan({ source: "codex", windows: [], fetchedAt: 9000 }, cached)).toEqual({
       plan: cached,
@@ -735,5 +742,74 @@ describe("plan usage cache", () => {
     expect(onlyCachedPlan({})).toBeUndefined();
     expect(onlyCachedPlan({ "claude-code": cached })).toBe(cached);
     expect(onlyCachedPlan({ "claude-code": cached, codex: plan(40, 2000) })).toBeUndefined();
+  });
+
+  test("a harness that is signed out loses its entry, and a day-old cache is dropped", () => {
+    const cache = { "claude-code": plan(20, 1000), codex: plan(40, 2000) };
+    expect(forgetPlans(cache, ["codex"])).toEqual({ "claude-code": plan(20, 1000) });
+    // Nothing to forget: the same map comes back, so nothing re-renders.
+    expect(forgetPlans(cache, ["nope"])).toBe(cache);
+    expect(cache.codex).toBeDefined();
+    // Launch after a day: numbers older than that are not shown at all.
+    const now = 20 * 24 * 60 * 60_000;
+    const old = plan(20, now - PLAN_CACHE_MAX_AGE_MS - 1);
+    const fresh = plan(40, now);
+    expect(prunePlans({ old, fresh }, now)).toEqual({ fresh });
+    expect(prunePlans(cache, 2000)).toBe(cache);
+  });
+
+  test("a window whose reset has passed reads as reset, not as its old numbers", () => {
+    const now = 10_000;
+    const passed: CachedPlan = {
+      source: "claude-code",
+      windows: [{ usedPercent: 92, minutes: 300, resetsAt: now - 1000 }],
+      fetchedAt: now - 7000,
+    };
+    expect(shownPlan(null, passed, now)).toEqual({
+      plan: { ...passed, windows: [{ usedPercent: 0, minutes: 300 }] },
+      cached: true,
+    });
+    // A window still running keeps its numbers.
+    const running: CachedPlan = {
+      ...passed,
+      windows: [{ usedPercent: 92, minutes: 300, resetsAt: now + 60_000 }],
+    };
+    expect(shownPlan(null, running, now)).toEqual({ plan: running, cached: true });
+    expect(windowNow({ usedPercent: 5, minutes: 60, resetsAt: now }, now)).toEqual({
+      usedPercent: 0,
+      minutes: 60,
+    });
+    expect(planNow({ source: "codex", windows: [] }, now)).toBeUndefined();
+  });
+
+  test("coming back to the window catches up when any harness is stale", () => {
+    const now = 10_000_000;
+    expect(planCacheStale({}, now)).toBe(true);
+    expect(planCacheStale({ "claude-code": plan(20, now), codex: plan(40, now) }, now)).toBe(false);
+    // One stale harness among fresh ones is enough to ask again.
+    const mixed = { "claude-code": plan(20, now), codex: plan(40, now - PLAN_CACHE_POLL_MS) };
+    expect(planCacheStale(mixed, now)).toBe(true);
+  });
+
+  test("a plans answer drops a harness it says is signed out", () => {
+    resetForTests();
+    useApp.setState({ planCache: { "claude-code": plan(20, 1000), codex: plan(40, 1000) } });
+    commitPlansAnswer(
+      parsePlans({
+        plans: [
+          {
+            id: "claude",
+            name: "Claude",
+            status: "ok",
+            windows: [{ label: "5-hour", usedPercent: 30, windowMinutes: 300 }],
+          },
+          { id: "codex", name: "ChatGPT", status: "signedOut", windows: [] },
+        ],
+      }),
+    );
+    const cache = useApp.getState().planCache;
+    expect(cache.codex).toBeUndefined();
+    expect(cache["claude-code"]?.windows[0]?.usedPercent).toBe(30);
+    resetForTests();
   });
 });

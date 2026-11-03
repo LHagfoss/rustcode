@@ -15,7 +15,15 @@ import {
   windowTitle,
 } from "../acp/rustcode";
 import type { SessionUsage } from "../acp/types";
-import { harnessOf, onlyCachedPlan, refreshPlanUsage, shownPlan, submit, useApp } from "../state/store";
+import {
+  harnessOf,
+  onlyCachedPlan,
+  refreshPlanCache,
+  refreshPlanUsage,
+  shownPlan,
+  submit,
+  useApp,
+} from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
 import { cx, Pill } from "./primitives";
 
@@ -215,7 +223,13 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
     <HoverCard.Root
       openDelay={60}
       closeDelay={120}
-      onOpenChange={(open) => open && threadId && void refreshPlanUsage(threadId)}
+      onOpenChange={(open) => {
+        if (!open) return;
+        // The thread's own numbers, when it has any; for a harness that answers
+        // none (Claude Code) the plans call is the only way to refresh the cache.
+        if (threadId) void refreshPlanUsage(threadId);
+        if (fromCache) void refreshPlanCache();
+      }}
     >
       <HoverCard.Trigger asChild>
         <button
