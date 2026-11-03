@@ -2,7 +2,7 @@
 
 A **harness** is the agent runtime that runs a thread. RustCode's own engine is
 the built-in harness, and it stays the default with the most features. Other
-coding agents — Codex, Claude Code, Gemini CLI, OpenCode, or any ACP agent —
+coding agents — Codex, Claude Code, Gemini CLI, OpenCode, Pi, or any ACP agent —
 can run a thread as external harnesses. Each owns its own sign-in, model
 catalog, tools and permission rules. RustCode never stores their credentials.
 
@@ -116,6 +116,7 @@ harnesses. Detection is cached for a minute; `set` and `remove` refresh it.
 | `claude-code` | `acp` | `npx -y @agentclientprotocol/claude-agent-acp` | `claude --version` | `unknown` |
 | `gemini` | `acp` | `gemini --experimental-acp` | `gemini --version` | `unknown` |
 | `opencode` | `acp` | `opencode acp` | `opencode --version` | `unknown` |
+| `pi` | `acp` | `npx -y pi-acp` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
 
 Commands are looked up on the engine's `PATH` and then the login shell's, so
 an app started from the Dock finds what the terminal finds.

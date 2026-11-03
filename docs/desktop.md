@@ -4,7 +4,7 @@
 TypeScript and Tailwind UI. It replaced the SwiftUI app (removed from the
 tree; it lives on in git history). It runs the engine as `rustcode --acp`
 and talks ACP to it, so every harness
-(the built-in one, Codex, Claude Code, Gemini CLI, OpenCode, any ACP agent;
+(the built-in one, Codex, Claude Code, Gemini CLI, OpenCode, Pi, any ACP agent;
 see [harnesses.md](harnesses.md)) runs a thread through the same UI.
 
 Status: usable day to day. A chat for a thread on any harness with

@@ -1143,7 +1143,8 @@ export class MockEngine {
       case "_rustcode/harnesses/remove": {
         this.harnesses.harnesses = this.harnesses.harnesses.filter(
           (h) =>
-            h.id !== params.id || ["rustcode", "codex", "claude-code", "gemini", "opencode"].includes(h.id),
+            h.id !== params.id ||
+            ["rustcode", "codex", "claude-code", "gemini", "opencode", "pi"].includes(h.id),
         );
         return this.snapshot();
       }

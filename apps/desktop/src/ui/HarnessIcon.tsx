@@ -8,6 +8,7 @@
 // - OpenCode: `packages/identity/mark.svg` of https://github.com/anomalyco/opencode
 //   (MIT), its two greys as currentColor at full and 35%, cropped to the mark.
 // - RustCode: the app's own icon.
+// - Pi: the letter π in the rounded square other harnesses get.
 // NOTICE: these marks are trademarks of their owners (OpenAI, Anthropic,
 // Google, Anomaly/OpenCode); they are used only to identify the integration.
 // A harness that sends its own `icon` (a URL or `data:`) shows that instead,
@@ -123,11 +124,14 @@ export function HarnessIcon({
       </svg>
     );
   }
+  // Pi has no mark of its own to ship; its name is the letter.
   const letter =
-    (name || id)
-      .replace(/[^a-z0-9]/gi, "")
-      .charAt(0)
-      .toUpperCase() || "?";
+    id === "pi"
+      ? "π"
+      : (name || id)
+          .replace(/[^a-z0-9]/gi, "")
+          .charAt(0)
+          .toUpperCase() || "?";
   return (
     <span
       aria-hidden

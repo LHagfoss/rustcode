@@ -108,7 +108,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   // RustCode turns off only once another harness starts new threads: the engine refuses otherwise.
   const isDefault = useApp((s) => s.harnesses?.default.harness === harness.id);
   const pinned = local && isDefault && harness.enabled;
-  const custom = !local && !["codex", "claude-code", "gemini", "opencode"].includes(harness.id);
+  const custom = !local && !["codex", "claude-code", "gemini", "opencode", "pi"].includes(harness.id);
   // Sign in stays out of the way once the harness is known to be signed in.
   const signIn = !local && harness.installed && harness.auth !== "ok" && !result?.ok;
   return (
