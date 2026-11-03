@@ -23,6 +23,8 @@ const SEEN_KEY = "rustcode.seenVersion";
 const UPDATED_FROM_KEY = "rustcode.updatedFrom";
 
 interface UpdatesState {
+  /** This app's version from the shell, known before any check answers. */
+  version: string | null;
   info: UpdateInfo | null;
   /** Why the last check failed, for Settings › Engine; null after a good check. */
   error: string | null;
@@ -35,6 +37,7 @@ interface UpdatesState {
 }
 
 export const useUpdates = create<UpdatesState>(() => ({
+  version: null,
   info: null,
   error: null,
   checkedAt: null,
@@ -116,8 +119,24 @@ const RETRY_MAX_MS = 5 * 60_000;
 let retry: ReturnType<typeof setTimeout> | undefined;
 let retryDelay = RETRY_FIRST_MS;
 
+let checking: Promise<void> | null = null;
+
 /** Check now: on launch, on the interval, when the app comes back, and from Settings › Engine. */
-export async function checkNow(): Promise<void> {
+export function checkNow(): Promise<void> {
+  // One check at a time: a second caller waits for the one already running.
+  checking ??= runCheck().finally(() => {
+    checking = null;
+  });
+  return checking;
+}
+
+/** Opening Settings checks again when the last good check is missing or over 10 minutes old. */
+export function checkIfStale() {
+  const last = useUpdates.getState().checkedAt;
+  if (canUpdate() && (!last || Date.now() - last > 10 * 60_000)) void checkNow();
+}
+
+async function runCheck(): Promise<void> {
   clearTimeout(retry);
   let info: UpdateInfo;
   try {
@@ -176,6 +195,7 @@ export function startUpdateChecks() {
   }
   if (started || !canUpdate()) return;
   started = true;
+  void appVersion().then((version) => version && useUpdates.setState({ version }));
   void whatsNewOnLaunch();
   setTimeout(() => void checkNow(), 5_000);
   setInterval(() => void checkNow(), UPDATE_CHECK_MS);
