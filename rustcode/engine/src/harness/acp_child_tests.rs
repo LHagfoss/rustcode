@@ -416,6 +416,72 @@ async fn the_orchestrator_is_added_to_the_child_session() {
 }
 
 #[tokio::test]
+async fn the_workspaces_mcp_servers_go_to_the_child_session() {
+    let (_thread, mut seen) = start(
+        None,
+        StartOptions {
+            orchestrator: Some(orchestrator()),
+            mcp: vec![
+                crate::config::McpServerConfig {
+                    name: "files".to_owned(),
+                    command: "npx".to_owned(),
+                    args: vec!["-y".to_owned(), "@example/files-mcp".to_owned()],
+                    env: std::collections::HashMap::from([("API_KEY".to_owned(), "k".to_owned())]),
+                    url: None,
+                    headers: std::collections::HashMap::new(),
+                    client_id: None,
+                    enabled: true,
+                    always_include: false,
+                    timeout_secs: None,
+                },
+                crate::config::McpServerConfig {
+                    name: "api".to_owned(),
+                    url: Some("https://mcp.example.com/mcp".to_owned()),
+                    headers: std::collections::HashMap::from([(
+                        "Authorization".to_owned(),
+                        "Bearer t".to_owned(),
+                    )]),
+                    command: String::new(),
+                    args: Vec::new(),
+                    env: std::collections::HashMap::new(),
+                    client_id: None,
+                    enabled: true,
+                    always_include: false,
+                    timeout_secs: None,
+                },
+            ],
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    let new = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "session/new")
+        .expect("session/new was sent")
+        .1;
+    let servers = new["mcpServers"].as_array().expect("a list of servers");
+    assert_eq!(
+        servers.len(),
+        3,
+        "the orchestrator, then the workspace's two"
+    );
+    assert_eq!(servers[1]["name"], "files");
+    assert_eq!(servers[1]["command"], "npx");
+    assert_eq!(servers[1]["args"], json!(["-y", "@example/files-mcp"]));
+    assert_eq!(
+        servers[1]["env"],
+        json!([{ "name": "API_KEY", "value": "k" }]),
+        "a stdio server's environment, named and valued"
+    );
+    assert_eq!(servers[2]["type"], "http");
+    assert_eq!(servers[2]["url"], "https://mcp.example.com/mcp");
+    assert_eq!(
+        servers[2]["headers"],
+        json!([{ "name": "Authorization", "value": "Bearer t" }])
+    );
+}
+
+#[tokio::test]
 async fn steering_adds_a_message_to_the_running_turn() {
     let (thread, mut seen) = start(None, StartOptions::default()).await;
     assert!(!thread.session.steer("too early").await, "no turn yet");

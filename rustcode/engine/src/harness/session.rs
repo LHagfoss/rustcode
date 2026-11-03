@@ -58,6 +58,9 @@ pub(crate) struct StartOptions {
     pub log_session: Option<String>,
     /// The `rustcode mcp-orchestrator` to add to the harness's session.
     pub orchestrator: Option<crate::orchestration::hub::Launch>,
+    /// The MCP servers the user configured for this workspace, so a thread on any harness has the
+    /// same servers as a RustCode thread (docs/configuration.md).
+    pub mcp: Vec<crate::config::McpServerConfig>,
 }
 
 pub(crate) enum Adapter {
@@ -461,6 +464,14 @@ impl ExternalSession {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
+        // The workspace's own servers, with the user config under them: the same list the built-in
+        // harness runs, so Settings › MCP is one place for every harness.
+        let mcp = crate::config::get_config_dir()
+            .map(|dir| crate::config::workspace_mcp_servers_in(&dir, &self.cwd))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|server| server.enabled)
+            .collect();
         let adapter = Adapter::start(
             &self.harness,
             &self.cwd,
@@ -470,6 +481,7 @@ impl ExternalSession {
                 effort: record.effort.clone(),
                 log_session: self.persist.then(|| self.id.clone()),
                 orchestrator,
+                mcp,
             },
             self.out.clone(),
         )

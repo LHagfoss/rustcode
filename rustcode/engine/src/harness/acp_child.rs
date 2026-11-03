@@ -167,16 +167,42 @@ fn parse_options(value: Option<&Value>) -> Vec<SessionConfigOption> {
         .unwrap_or_default()
 }
 
-/// The MCP servers the child's session gets: the orchestrator, when the
-/// thread has one.
+/// The MCP servers the child's session gets: the orchestrator when the thread has one, then the
+/// workspace's own servers, so a Claude Code or OpenCode thread has the servers Settings · MCP
+/// shows (docs/configuration.md). A stdio server is `name`/`command`/`args`/`env`, a remote one
+/// `type: "http"`/`url`/`headers`, as ACP's `session/new` takes them.
 fn mcp_servers(options: &StartOptions) -> Value {
-    Value::Array(
-        options
-            .orchestrator
-            .iter()
-            .map(crate::orchestration::hub::Launch::acp_server)
-            .collect(),
-    )
+    let mut servers: Vec<Value> = options
+        .orchestrator
+        .iter()
+        .map(crate::orchestration::hub::Launch::acp_server)
+        .collect();
+    servers.extend(options.mcp.iter().map(config_server));
+    Value::Array(servers)
+}
+
+fn config_server(server: &crate::config::McpServerConfig) -> Value {
+    let pairs = |map: &std::collections::HashMap<String, String>| {
+        Value::Array(
+            map.iter()
+                .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
+                .collect(),
+        )
+    };
+    match &server.url {
+        Some(url) => serde_json::json!({
+            "type": "http",
+            "name": server.name,
+            "url": url,
+            "headers": pairs(&server.headers),
+        }),
+        None => serde_json::json!({
+            "name": server.name,
+            "command": server.command,
+            "args": server.args,
+            "env": pairs(&server.env),
+        }),
+    }
 }
 
 impl AcpAdapter {

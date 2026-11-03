@@ -136,6 +136,31 @@ fn parse_models(answer: &Value) -> Vec<CodexModel> {
         .unwrap_or_default()
 }
 
+/// The `config` overrides for `thread/start` and `thread/resume`: the orchestrator when the thread
+/// has one, and the workspace's own MCP servers, so a Codex thread runs the servers Settings · MCP
+/// shows. Codex takes a stdio server as `command`/`args`/`env` and a remote one as
+/// `url`/`http_headers` (docs/configuration.md).
+fn codex_config(options: &StartOptions) -> Option<Value> {
+    let mut config = match &options.orchestrator {
+        Some(launch) => launch.codex_config(),
+        None => serde_json::Map::new().into(),
+    };
+    for server in &options.mcp {
+        let entry = match &server.url {
+            Some(url) => serde_json::json!({ "url": url, "http_headers": server.headers }),
+            None => serde_json::json!({
+                "command": server.command,
+                "args": server.args,
+                "env": server.env,
+            }),
+        };
+        config[format!("mcp_servers.{}", server.name)] = entry;
+    }
+    // Nothing to override: leave the key out rather than send an empty object.
+    let empty = config.as_object().is_none_or(|map| map.is_empty());
+    (!empty).then_some(config)
+}
+
 /// ACP prompt blocks as Codex input items.
 fn input_items(prompt: &[ContentBlock]) -> Vec<Value> {
     let mut items = Vec::new();
@@ -224,8 +249,8 @@ impl CodexAdapter {
             if let Some(model) = &options.model {
                 params["model"] = json!(model);
             }
-            if let Some(launch) = &options.orchestrator {
-                params["config"] = launch.codex_config();
+            if let Some(config) = codex_config(&options) {
+                params["config"] = config;
             }
             match peer
                 .request_within("thread/resume", params, HANDSHAKE_TIMEOUT)
@@ -246,8 +271,8 @@ impl CodexAdapter {
                 if let Some(model) = &options.model {
                     params["model"] = json!(model);
                 }
-                if let Some(launch) = &options.orchestrator {
-                    params["config"] = launch.codex_config();
+                if let Some(config) = codex_config(&options) {
+                    params["config"] = config;
                 }
                 peer.request_within("thread/start", params, HANDSHAKE_TIMEOUT)
                     .await
