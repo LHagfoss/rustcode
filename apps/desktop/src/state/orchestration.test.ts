@@ -20,6 +20,7 @@ import {
   listSessions,
   parseCall,
   type RuleThread,
+  sameProject,
 } from "./orchestration";
 
 const thread = (id: string, folder = "/repo", extra: Partial<RuleThread> = {}): RuleThread => ({
@@ -145,5 +146,14 @@ describe("v2 shapes", () => {
     );
     expect(paired.t2?.turn).toBe(2);
     expect(paired.t3).toBeUndefined();
+  });
+});
+
+describe("projects", () => {
+  test("a macOS /private path is the folder it links from", () => {
+    expect(sameProject("/private/tmp/app", "/tmp/app")).toBe(true);
+    expect(sameProject("/private/var/folders/x/", "/var/folders/x")).toBe(true);
+    expect(sameProject("/private/tmpx/app", "/tmpx/app")).toBe(false);
+    expect(sameProject("/Users/me/a", "/Users/me/b")).toBe(false);
   });
 });
