@@ -157,10 +157,10 @@ impl Adapter {
         }
     }
 
-    pub(crate) async fn steer(&self, text: &str) -> bool {
+    pub(crate) async fn steer(&self, prompt: &[ContentBlock]) -> bool {
         match self {
-            Adapter::Acp(adapter) => adapter.steer(text).await,
-            Adapter::Codex(adapter) => adapter.steer(text).await,
+            Adapter::Acp(adapter) => adapter.steer(prompt).await,
+            Adapter::Codex(adapter) => adapter.steer(prompt).await,
         }
     }
 
@@ -537,17 +537,17 @@ impl ExternalSession {
         Ok(options)
     }
 
-    pub(crate) async fn steer(&self, text: &str) -> bool {
+    pub(crate) async fn steer(&self, prompt: &[ContentBlock]) -> bool {
         let adapter = self.adapter.lock().await.clone();
         let Some(adapter) = adapter else {
             return false;
         };
-        let accepted = adapter.steer(text).await;
+        let accepted = adapter.steer(prompt).await;
         if accepted {
             self.transcript
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .push_user(text);
+                .push_user(&prompt_text(prompt));
         }
         accepted
     }

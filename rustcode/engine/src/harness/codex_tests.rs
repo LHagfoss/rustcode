@@ -362,13 +362,27 @@ async fn a_failed_turn_is_a_failed_prompt_with_the_reason() {
 #[tokio::test]
 async fn steer_adds_input_to_the_running_turn() {
     let (thread, mut seen) = start(Script::UntilInterrupted, None, StartOptions::default()).await;
-    assert!(!thread.session.steer("too early").await, "no turn yet");
+    assert!(
+        !thread
+            .session
+            .steer(&[agent_client_protocol::schema::v1::ContentBlock::from(
+                "too early"
+            )])
+            .await,
+        "no turn yet"
+    );
     let session = Arc::clone(&thread.session);
     let turn = tokio::spawn(async move { session.prompt(text("long task")).await });
     let mut steered = false;
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        if thread.session.steer("also check tests").await {
+        if thread
+            .session
+            .steer(&[agent_client_protocol::schema::v1::ContentBlock::from(
+                "also check tests",
+            )])
+            .await
+        {
             steered = true;
             break;
         }

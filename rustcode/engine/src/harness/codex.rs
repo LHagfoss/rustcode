@@ -420,11 +420,12 @@ impl CodexAdapter {
         }
     }
 
-    pub(crate) async fn steer(&self, text: &str) -> bool {
+    pub(crate) async fn steer(&self, prompt: &[ContentBlock]) -> bool {
         let Some(turn_id) = lock(&self.state).turn_id.clone() else {
             return false;
         };
-        if text.trim().is_empty() {
+        let input = input_items(prompt);
+        if input.is_empty() {
             return false;
         }
         self.peer
@@ -432,7 +433,7 @@ impl CodexAdapter {
                 "turn/steer",
                 json!({
                     "threadId": self.thread_id,
-                    "input": [{"type": "text", "text": text.trim(), "text_elements": []}],
+                    "input": input,
                     "expectedTurnId": turn_id,
                 }),
             )

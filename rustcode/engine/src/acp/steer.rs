@@ -20,6 +20,10 @@ pub(crate) const STEER_CAPABILITY_VERSION: u64 = 1;
 pub(crate) struct SteerRequest {
     pub session_id: String,
     pub text: String,
+    /// The message as prompt blocks, with its images, for a harness that
+    /// takes them mid-turn. The built-in harness steers with `text` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Vec<agent_client_protocol::schema::v1::ContentBlock>>,
 }
 
 /// Mark the session's ACP turn as one that takes steers.

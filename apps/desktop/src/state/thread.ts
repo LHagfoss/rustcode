@@ -501,10 +501,25 @@ export function appendNotice(
 }
 
 /** Add a steered message where the running turn will read it. */
-export function appendSteer(state: ThreadState, text: string, now = Date.now()): ThreadState {
+export function appendSteer(
+  state: ThreadState,
+  text: string,
+  now = Date.now(),
+  attachments?: SentAttachment[],
+): ThreadState {
   return {
     ...state,
-    items: [...state.items, { kind: "user", id: localId("user"), text, at: now, steered: true }],
+    items: [
+      ...state.items,
+      {
+        kind: "user",
+        id: localId("user"),
+        text,
+        at: now,
+        steered: true,
+        attachments: attachments?.length ? attachments : undefined,
+      },
+    ],
   };
 }
 

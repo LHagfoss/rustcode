@@ -489,12 +489,26 @@ async fn the_workspaces_mcp_servers_go_to_the_child_session() {
 #[tokio::test]
 async fn steering_adds_a_message_to_the_running_turn() {
     let (thread, mut seen) = start(None, StartOptions::default()).await;
-    assert!(!thread.session.steer("too early").await, "no turn yet");
+    assert!(
+        !thread
+            .session
+            .steer(&[agent_client_protocol::schema::v1::ContentBlock::from(
+                "too early"
+            )])
+            .await,
+        "no turn yet"
+    );
     let session = Arc::clone(&thread.session);
     let turn = tokio::spawn(async move { session.prompt(text("wait")).await });
     let mut steered = false;
     for _ in 0..100 {
-        if thread.session.steer("also check tests").await {
+        if thread
+            .session
+            .steer(&[agent_client_protocol::schema::v1::ContentBlock::from(
+                "also check tests",
+            )])
+            .await
+        {
             steered = true;
             break;
         }

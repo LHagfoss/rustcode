@@ -1564,7 +1564,14 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         harnesses::get(&server.external, &request.session_id).await
                     {
                         return connection.spawn(async move {
-                            let accepted = external.steer(&request.text).await;
+                            let blocks = request.prompt.clone().unwrap_or_else(|| {
+                                vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                                    agent_client_protocol::schema::v1::TextContent::new(
+                                        request.text.clone(),
+                                    ),
+                                )]
+                            });
+                            let accepted = external.steer(&blocks).await;
                             responder.respond(serde_json::json!({ "accepted": accepted }))?;
                             Ok(())
                         });
@@ -1581,6 +1588,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                                 .data(format!("unknown ACP session: {}", request.session_id)),
                         );
                     };
+                    // The built-in harness reads a steer as text; one with images waits for the next turn.
+                    let images = request.prompt.iter().flatten().any(|block| {
+                        matches!(block, agent_client_protocol::schema::v1::ContentBlock::Image(_))
+                    });
+                    if images {
+                        return responder.respond(serde_json::json!({ "accepted": false }));
+                    }
                     let answer = steer::accept(&mut *state.lock().await, &request.text);
                     responder.respond(answer)
                 }

@@ -1508,6 +1508,15 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
   // ⌘⏎ always tries: a harness learns it can steer when its first thread starts, so a thread
   // started before that still reads "none" though the engine can steer it now.
   if (!id || !thread?.running || !get().agent?.steer) return submit(text, extras);
+  // Images ride along when the harness takes them mid-turn; other extras wait for the next turn.
+  const imagesOnly =
+    extras.attachments.length > 0 &&
+    extras.attachments.every((a) => a.kind === "image") &&
+    !extras.command &&
+    !extras.links.length &&
+    acceptsImages(thread) &&
+    !(threadHarness(thread)?.builtin ?? true);
+  if (imagesOnly && (await steer(id, trimmed, extras))) return true;
   if (hasExtras(extras)) {
     const sent = await submit(text, extras);
     if (sent)
@@ -1538,15 +1547,19 @@ export function canSteer(thread: ThreadState): boolean {
   return !thread.harness || thread.harness.capabilities.steer === "live";
 }
 
-async function steer(id: string, text: string): Promise<boolean> {
+async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
+  const thread = get().threads[id];
+  const prompt = extras?.attachments.length
+    ? promptBlocks(text, extras, { images: true, builtin: false, cwd: thread?.cwd ?? "" })
+    : undefined;
   try {
     const result = (await engine().request(
       Method.steer,
-      { sessionId: id, text },
+      prompt ? { sessionId: id, text, prompt } : { sessionId: id, text },
       10_000,
     )) as JsonObject | null;
     if (result?.accepted !== true) return false;
-    updateThread(id, (t) => appendSteer(t, text));
+    updateThread(id, (t) => appendSteer(t, text, Date.now(), extras && sentAttachments(extras)));
     toast("Steering: read after the current step");
     return true;
   } catch {
@@ -1557,11 +1570,12 @@ async function steer(id: string, text: string): Promise<boolean> {
 export async function sendQueuedNow(id: string, queuedId: string) {
   const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
   if (!item) return;
-  if (item.extras?.attachments.length) {
-    toast("Attachments go with the next turn: a running turn takes text only");
+  const thread = get().threads[id];
+  if (item.extras?.attachments.length && (threadHarness(thread)?.builtin ?? true)) {
+    toast("Attachments go with the next turn: RustCode takes text only mid-turn");
     return;
   }
-  if (await steer(id, item.text)) {
+  if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
   } else {
     toast("The turn can't take it now. It stays queued");
