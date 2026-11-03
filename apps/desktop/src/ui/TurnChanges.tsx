@@ -93,7 +93,7 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
           side="top"
           align="start"
           sideOffset={6}
-          className="elevated z-40 flex max-h-[min(520px,70vh)] w-[min(640px,80vw)] flex-col gap-2 rounded-xl p-3"
+          className="elevated z-40 flex max-h-[min(520px,70vh)] w-[min(640px,80vw)] flex-col gap-2 p-3"
         >
           <div className="flex items-center gap-2 px-1">
             <span className="font-semibold text-body">Turn {checkpoint.turn}</span>

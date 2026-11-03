@@ -91,7 +91,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 w-[320px] rounded-xl p-3 rc-in"
+          className="elevated z-40 w-[320px] p-3 rc-in"
         >
           <ContextInspector usage={usage} onCompact={running ? undefined : () => void submit("/compact")} />
         </HoverCard.Content>
@@ -245,7 +245,7 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 w-[300px] rounded-xl p-3 rc-in"
+          className="elevated z-40 w-[300px] p-3 rc-in"
         >
           <PlanCard plan={plan} />
         </HoverCard.Content>

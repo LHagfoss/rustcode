@@ -613,7 +613,7 @@ export function Review({ threadId }: { threadId: string }) {
             )}
           </div>
           {(comments.length > 0 || note) && (
-            <div className="elevated mx-4 mb-4 flex flex-col gap-2 rounded-xl p-2.5 rc-in">
+            <div className="elevated mx-4 mb-4 flex flex-col gap-2 p-2.5 rc-in">
               <div className="flex items-center gap-2 px-1 text-callout">
                 <ChevronRight size={12} className="text-fg-faint" />
                 <b>

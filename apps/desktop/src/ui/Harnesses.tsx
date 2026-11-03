@@ -55,7 +55,7 @@ function SignIn({ harness }: { harness: Harness }) {
         <Popover.Content
           align="end"
           sideOffset={6}
-          className="elevated z-[60] flex w-[340px] flex-col gap-2.5 rounded-xl p-3.5 rc-in"
+          className="elevated z-[60] flex w-[340px] flex-col gap-2.5 p-3 rc-in"
         >
           <p className="text-callout text-fg-muted">
             {harness.name} signs in with its own login. Run this in a terminal; RustCode never sees the

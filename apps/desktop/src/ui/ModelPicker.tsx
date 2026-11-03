@@ -489,7 +489,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 w-[min(340px,calc(100vw-40px))] overflow-hidden rounded-xl p-2"
+          className="elevated z-40 w-[min(340px,calc(100vw-40px))] overflow-hidden p-1.5"
         >
           {shownPane === "main" && (
             <div key="main" className="flex flex-col gap-2 rc-drill-back">

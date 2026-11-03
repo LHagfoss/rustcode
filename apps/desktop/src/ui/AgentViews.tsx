@@ -289,10 +289,10 @@ export function AgentPill({ threadId }: { threadId?: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 flex w-[300px] flex-col gap-0.5 rounded-xl p-1.5 rc-in"
+          className="elevated z-40 flex w-[300px] flex-col gap-0.5 p-1.5 rc-in"
         >
           {working.map((w) => (
-            <div key={w.key} className="flex items-start gap-2 rounded-lg px-2 py-1.5">
+            <div key={w.key} className="flex items-start gap-2 rounded-lg px-3 py-[7px]">
               <span className="mt-[5px] flex w-3.5 justify-center">
                 <Orb />
               </span>

@@ -132,7 +132,7 @@ export function GrantDialog() {
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="elevated fixed top-1/2 left-1/2 z-50 flex w-[min(460px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl p-5 shadow-2"
+          className="elevated fixed top-1/2 left-1/2 z-50 flex w-[min(460px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 p-5"
         >
           <Dialog.Title className="font-semibold text-body">
             “{grant.callerTitle}” wants to {verb(grant)}

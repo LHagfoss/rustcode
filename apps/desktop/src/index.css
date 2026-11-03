@@ -85,9 +85,9 @@
   --rc-surface: #f0f0f1;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e8e8ea;
-  /* The composer's frost: white glass in light mode, a pale tint of the text in dark. */
-  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 62%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 78%, transparent);
+  /* The composer's frost: a near-solid tint of the raised surface, in every theme. */
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 94%, transparent);
   --rc-border: #0000000f;
   --rc-border-strong: #0000001f;
   --rc-text: #171717;
@@ -114,8 +114,8 @@
     --rc-surface: #18181a;
     --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
-    --rc-composer-bg: color-mix(in srgb, var(--rc-text) 4%, transparent);
-    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 6%, transparent);
+    --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 94%, transparent);
     --rc-border: #ffffff0f;
     --rc-border-strong: #ffffff1c;
     --rc-text: #ededed;
@@ -141,8 +141,8 @@
   --rc-surface: #18181a;
   --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
-  --rc-composer-bg: color-mix(in srgb, var(--rc-text) 4%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 6%, transparent);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 94%, transparent);
   --rc-border: #ffffff0f;
   --rc-border-strong: #ffffff1c;
   --rc-text: #ededed;
@@ -315,7 +315,7 @@
   backdrop-filter: var(--rc-glass-filter);
   -webkit-backdrop-filter: var(--rc-glass-filter);
   box-shadow: var(--rc-shadow-2);
-  border-radius: var(--rc-radius-lg);
+  border-radius: var(--rc-radius-xl);
 }
 
 /* A long scroller that never shifts its content when a classic scrollbar appears. */
@@ -637,9 +637,9 @@
 }
 
 /*
- * The composer floats over the transcript in glass, with a slight shadow
- * under it. Focus makes the glass a little denser; there is no ring
- * or coloured edge. Its tray sits 6px under it, solid and borderless.
+ * The composer floats over the transcript on a nearly solid surface, with a
+ * slight shadow under it. Focus makes it denser still; there is no coloured
+ * edge. Its tray tucks under it, solid and borderless.
  */
 .rc-composer,
 .rc-toast {
@@ -661,9 +661,17 @@
 .rc-composer {
   background: var(--rc-composer-bg);
   box-shadow:
-    inset 0 1px 0 0 color-mix(in srgb, var(--rc-text) 4%, transparent),
-    0 2px 8px -4px var(--rc-shadow-soft),
+    0 1px 2px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-border);
+}
+/* In dark the lift is invisible; the 1px ring alone separates it from the transcript. */
+:root[data-theme="dark"] .rc-composer {
+  box-shadow: 0 0 0 1px var(--rc-border);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rc-composer {
+    box-shadow: 0 0 0 1px var(--rc-border);
+  }
 }
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
@@ -748,9 +756,8 @@
   --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 60%, transparent);
 }
 .rc-composer-tray {
-  background: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  /* Under the composer's edge, so it never reads as a second surface. */
+  background: var(--rc-glass-bg-strong);
 }
 
 .rc-fade-in {

@@ -93,7 +93,7 @@ function useSidebarWidth() {
 
 const menuItem =
   "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
-const menuSurface = "elevated z-50 min-w-[200px] rounded-xl p-1.5 rc-in";
+const menuSurface = "elevated z-50 min-w-[200px] p-1.5 rc-in";
 
 function ThreadMenuItems({
   session,
@@ -847,7 +847,7 @@ export function Sidebar() {
   // Settled lists 10 threads, then 25 more at a time, as T3 Code does.
   const [settledShown, setSettledShown] = useState(10);
   // design-lint: allow (mask alpha, not a colour)
-  const fade = "linear-gradient(to bottom, #000 calc(100% - 28px), transparent)";
+  const fade = "linear-gradient(to bottom, #000 calc(100% - 12px), transparent)";
 
   // What was said in a thread matches too: the engine's index answers once the query has three
   // characters, a moment after typing stops.
@@ -1091,7 +1091,7 @@ export function Sidebar() {
           />
         </div>
         <nav
-          className="min-h-0 flex-1 overflow-y-auto px-2 pb-6"
+          className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
           {!sessionsLoaded && <ThreadRowsSkeleton />}
@@ -1111,7 +1111,7 @@ export function Sidebar() {
                 <section
                   key={section.id}
                   // Settled is a shelf at the foot of the list, as in T3 Code.
-                  className={cx("mt-2 first:mt-0", section.id === "settled" && "mt-auto pt-3")}
+                  className={cx("mt-2 first:mt-0", section.id === "settled" && "mt-auto pt-2")}
                   aria-label={section.label}
                 >
                   {/* One list, as T3 Code's: only the Settled shelf has a header. */}
@@ -1163,7 +1163,7 @@ export function Sidebar() {
                       </button>
                     )}
                     {section.id === "settled" && (
-                      <p className="px-2.5 pt-1 pb-1.5 text-fg-faint text-sub">
+                      <p className="px-2.5 pt-1 pb-1 text-fg-faint text-sub">
                         Done, or untouched for 3 days. A new message brings one back.
                       </p>
                     )}
