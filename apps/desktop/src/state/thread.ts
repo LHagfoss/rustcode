@@ -14,6 +14,7 @@ import type {
 } from "../acp/types";
 import { unwrapShell } from "../lib/command";
 import type { ComposeExtras, SentAttachment } from "./compose";
+import { displayTool, orchestrationTool, usefulSummary } from "./toolNames";
 
 export type TranscriptItem =
   | {
@@ -50,6 +51,12 @@ export type TranscriptItem =
       exitCode?: number;
       /** The harness's own tool name, such as Claude Code's `Agent`. */
       toolName?: string;
+      /**
+       * The access mode that let this call through without asking (an
+       * orchestration call on a Full-access thread): the row says so itself,
+       * instead of a notice above it splitting the run of calls.
+       */
+      autoAllowed?: string;
       /** The subagent call (its tool call id) this call was made under. */
       parent?: string;
       /** When the app saw it start and end; a replayed call has both at load time. */
@@ -313,6 +320,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           parent: tool.parent ?? before.parent,
           startedAt: before.startedAt,
           endedAt: tool.endedAt ?? before.endedAt,
+          autoAllowed: before.autoAllowed,
         };
         return { ...state, items: replaceAt(items, existing, merged) };
       }
@@ -508,6 +516,35 @@ export function appendNotice(
     ...state,
     items: [...state.items, { kind: "notice", id: localId("notice"), text, tone }],
   };
+}
+
+/**
+ * A call the thread's access level let through without asking: the newest call
+ * still running for that orchestration tool says so on its own row. `attached`
+ * is false when no such row is in flight (the caller then says it another way).
+ */
+export function attachAutoAllowed(
+  state: ThreadState,
+  tool: string,
+  mode: string,
+): { state: ThreadState; attached: boolean } {
+  const want = orchestrationTool(tool);
+  if (!want) return { state, attached: false };
+  for (let i = state.items.length - 1; i >= 0; i--) {
+    const item = state.items[i]!;
+    if (item.kind !== "tool") continue;
+    if (item.status !== "pending" && item.status !== "in_progress") continue;
+    // A row that already says why keeps its first answer: two calls in flight
+    // mark two rows, not the same one twice.
+    if (item.autoAllowed) continue;
+    // Only RustCode's own server, or a bare name: another server's tool is not ours.
+    if (orchestrationTool(item.title) !== want) continue;
+    return {
+      state: { ...state, items: replaceAt(state.items, i, { ...item, autoAllowed: mode }) },
+      attached: true,
+    };
+  }
+  return { state, attached: false };
 }
 
 /** Add a steered message where the running turn will read it. */
@@ -801,9 +838,12 @@ const NO_STEPS: ReadonlyMap<string, ToolItem[]> = new Map();
 
 /** A step's one-line label: `Running <command>` for a shell, else its summary or title. */
 export function stepLabel(item: ToolItem): string {
-  return item.toolKind === "execute" || /^(bash|shell)/i.test(item.title)
-    ? `Running ${item.summary ?? item.title}`
-    : (item.summary ?? item.title);
+  const label = displayTool(item.title, item.input, item.status);
+  const summary = usefulSummary(item.summary);
+  if (item.toolKind === "execute" || /^(bash|shell)/i.test(item.title)) {
+    return `Running ${summary ?? label.summary ?? label.title}`;
+  }
+  return summary ?? label.summary ?? label.title;
 }
 
 export function thoughtHeadings(text: string): string[] {

@@ -3,6 +3,7 @@ import { parseSessionUpdate, type SessionUpdate } from "../acp/types";
 import {
   appendSteer,
   applyUpdate,
+  attachAutoAllowed,
   beginTurn,
   checkCommands,
   diffCounts,
@@ -62,6 +63,54 @@ describe("thread reducer", () => {
     ]);
     expect(s.items).toHaveLength(1);
     expect(s.items[0]).toMatchObject({ kind: "tool", status: "completed", output: "a\nb\n", exitCode: 0 });
+  });
+
+  test("an auto-allowed call says so on its own row, and later updates keep it", () => {
+    const s = apply([
+      { kind: "user", text: "go" },
+      { kind: "toolCall", id: "c", title: "mcp__rustcode__start_session", diffs: [] },
+      { kind: "toolCall", id: "other", title: "bash", diffs: [] },
+    ]);
+    const marked = attachAutoAllowed(s, "start_session", "Full access");
+    expect(marked.attached).toBe(true);
+    expect(marked.state.items[1]).toMatchObject({ id: "c", autoAllowed: "Full access" });
+    expect(marked.state.items[2]).not.toHaveProperty("autoAllowed");
+    const after = applyUpdate(
+      marked.state,
+      { kind: "toolCallUpdate", id: "c", status: "completed", diffs: [] },
+      2000,
+    );
+    expect(after.items[1]).toMatchObject({ status: "completed", autoAllowed: "Full access" });
+    const again = applyUpdate(
+      marked.state,
+      { kind: "toolCall", id: "c", title: "mcp__rustcode__start_session", status: "in_progress", diffs: [] },
+      2000,
+    );
+    expect(again.items[1]).toMatchObject({ status: "in_progress", autoAllowed: "Full access" });
+  });
+
+  test("with no call in flight for that tool, there is nothing to mark", () => {
+    const s = apply([
+      { kind: "toolCall", id: "c", title: "mcp__rustcode__start_session", status: "completed", diffs: [] },
+    ]);
+    expect(attachAutoAllowed(s, "start_session", "Full access")).toEqual({ state: s, attached: false });
+    expect(attachAutoAllowed(s, "message_session", "Full access").attached).toBe(false);
+  });
+
+  test("two calls in flight mark two rows, and only RustCode's own call is marked", () => {
+    const s = apply([
+      { kind: "user", text: "go" },
+      { kind: "toolCall", id: "a", title: "mcp__rustcode__start_session", diffs: [] },
+      { kind: "toolCall", id: "b", title: "mcp__rustcode__start_session", diffs: [] },
+      { kind: "toolCall", id: "other", title: "mcp__github__start_session", diffs: [] },
+    ]);
+    const first = attachAutoAllowed(s, "start_session", "Full access");
+    const second = attachAutoAllowed(first.state, "start_session", "Full access");
+    expect([first.attached, second.attached]).toEqual([true, true]);
+    const marked = second.state.items.flatMap((i) => (i.kind === "tool" ? [i.autoAllowed] : []));
+    expect(marked).toEqual(["Full access", "Full access", undefined]);
+    // Both rows are spoken for: a third call has no row of its own to mark.
+    expect(attachAutoAllowed(second.state, "start_session", "Full access").attached).toBe(false);
   });
 
   test("replayed turn timing becomes a footer before the next user message and at the end of the load", () => {
