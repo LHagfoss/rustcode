@@ -18,7 +18,7 @@ import {
   turnCompletion,
   workingLabel,
 } from "../state/thread";
-import { AgentSpawnRow, SubagentRow } from "./AgentViews";
+import { SubagentRow } from "./AgentViews";
 import { cx } from "./primitives";
 import {
   AssistantRow,
@@ -550,10 +550,12 @@ export function Transcript({
                       />
                     ) : item?.kind === "thought" ? (
                       <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
-                    ) : item?.kind === "tool" && item.title === "spawn_agent" ? (
-                      <AgentSpawnRow item={item} threadId={thread.id} />
                     ) : item?.kind === "tool" && (subagentOf(item) || subagentSteps.has(item.id)) ? (
-                      <SubagentRow item={item} steps={subagentSteps.get(item.id) ?? NO_STEPS} />
+                      <SubagentRow
+                        item={item}
+                        steps={subagentSteps.get(item.id) ?? NO_STEPS}
+                        threadId={thread.id}
+                      />
                     ) : item?.kind === "tool" ? (
                       <ToolRow item={item} cwd={thread.cwd} />
                     ) : item?.kind === "notice" ? (

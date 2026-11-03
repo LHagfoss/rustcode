@@ -17,6 +17,7 @@ import {
   requeueSteers,
   shortAge,
   splitSubagentSteps,
+  subagentOf,
   thoughtHeadings,
   wakeTurn,
   workingLabel,
@@ -343,6 +344,66 @@ describe("Claude Code subagents", () => {
     let t = beginTurn(emptyThread("s", "/p"), "go");
     t = applyUpdate(applyUpdate(t, agent), step);
     expect(workingLabel(t.items)).toBe("Explore · Map the code");
+  });
+
+  const result = (body: Record<string, unknown>) =>
+    parseSessionUpdate({
+      sessionId: "s",
+      update: { sessionUpdate: "tool_call_update", ...body },
+    } as never);
+
+  test("a subagent sent to the background keeps working until the turn ends", () => {
+    let t = beginTurn(emptyThread("s", "/p"), "go");
+    t = applyUpdate(t, agent);
+    t = applyUpdate(
+      t,
+      result({
+        toolCallId: "a1",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "Async agent launched successfully." } }],
+      }),
+    );
+    expect(t.items.at(-1)).toMatchObject({ status: "in_progress", background: "agent" });
+    t = finishTurn(t, "completed");
+    expect(t.items.find((i) => i.id === "a1")).toMatchObject({ status: "completed" });
+  });
+
+  test("a backgrounded command outlives the turn until the engine ends its call", () => {
+    let t = beginTurn(emptyThread("s", "/p"), "go");
+    t = applyUpdate(t, call({ toolCallId: "b1", title: "npm test", kind: "execute", status: "in_progress" }));
+    t = applyUpdate(
+      t,
+      result({
+        toolCallId: "b1",
+        status: "completed",
+        _meta: { jetbrains: { air: { asyncTasks: { backgrounded: true } } } },
+      }),
+    );
+    t = finishTurn(t, "completed");
+    expect(t.items.find((i) => i.id === "b1")).toMatchObject({ status: "in_progress", background: "task" });
+    t = applyUpdate(t, result({ toolCallId: "b1", status: "completed" }));
+    expect(t.items.find((i) => i.id === "b1")).toMatchObject({ status: "completed" });
+  });
+
+  test("a replayed background launch is over", () => {
+    let t = applyUpdate(emptyThread("s", "/p"), agent);
+    t = applyUpdate(
+      t,
+      result({
+        toolCallId: "a1",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "Async agent launched successfully." } }],
+      }),
+    );
+    expect(t.items.at(-1)).toMatchObject({ status: "completed" });
+  });
+
+  test("a RustCode spawn_agent call is a subagent too", () => {
+    const t = applyUpdate(
+      emptyThread("s", "/p"),
+      call({ toolCallId: "r1", title: "spawn_agent", rawInput: { task: "Map the code\nmore", agent_type: "explorer" } }),
+    );
+    expect(subagentOf(t.items[0]!)).toEqual({ name: "explorer", task: "Map the code" });
   });
 
   test("a step whose parent is unknown stays in the thread", () => {

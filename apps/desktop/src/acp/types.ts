@@ -402,6 +402,8 @@ export type SessionUpdate =
       diffs: FileDiff[];
       exitCode?: number;
       parent?: string;
+      /** The call's work went on in the background (Claude Code's async task marker). */
+      backgrounded?: boolean;
     }
   | { kind: "plan"; entries: PlanEntry[] }
   | { kind: "title"; title: string }
@@ -505,6 +507,8 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         diffs: parseDiffs(update.content),
         exitCode: num(obj(update.rawOutput)?.exitCode),
         parent: str(claudeMeta(update)?.parentToolUseId),
+        backgrounded:
+          bool(obj(obj(obj(obj(update._meta)?.jetbrains)?.air)?.asyncTasks)?.backgrounded) || undefined,
       };
     case "plan":
       return {

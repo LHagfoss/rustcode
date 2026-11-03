@@ -29,13 +29,11 @@ import {
   SquarePen,
   SquareTerminal,
   Trash2,
-  Users,
   Wrench,
   X,
 } from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { openTerminalAt, revealPath } from "../lib/native";
@@ -44,7 +42,6 @@ import {
   askConfirm,
   FINISHED_MS,
   featureMissing,
-  openAgent,
   removeWorktree,
   renameThread,
   repairThread,
@@ -62,7 +59,6 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
-import { AgentMark } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
@@ -435,7 +431,6 @@ const ThreadRow = memo(function ThreadRow({
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
           </div>
-          <AgentChildren threadId={session.id} />
         </div>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
@@ -451,8 +446,6 @@ const ThreadRow = memo(function ThreadRow({
     </ContextMenu.Root>
   );
 });
-
-const NO_AGENTS: SubagentInfo[] = [];
 
 /**
  * Threads this one started (start_session, fan_out), nested under it as ordinary thread rows.
@@ -511,50 +504,6 @@ function ChildThreads({
         </button>
       )}
     </>
-  );
-}
-
-/** The thread's subagents, nested under its row: running ones first, then the latest finished. */
-function AgentChildren({ threadId }: { threadId: string }) {
-  const agents = useApp((s) => s.agents[threadId] ?? NO_AGENTS);
-  const [open, setOpen] = useState<boolean | null>(null);
-  const active = agents.filter(agentActive);
-  if (!agents.length) return null;
-  const expanded = open ?? active.length > 0;
-  const shown = [...active, ...agents.filter((a) => !agentActive(a)).slice(-3)].slice(0, 6);
-  return (
-    <div className="ml-[18px] border-border border-l pl-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen(!expanded)}
-        aria-expanded={expanded}
-        className="flex h-[20px] w-full items-center gap-1 rounded-sm px-1.5 text-caption text-fg-muted hover:bg-fill-subtle"
-      >
-        <ChevronRight size={10} className={cx("transition-transform", expanded && "rotate-90")} />
-        <Users size={10} />
-        {active.length
-          ? `${active.length} agent${active.length === 1 ? "" : "s"} working`
-          : `${agents.length} agents`}
-      </button>
-      {expanded &&
-        shown.map((a) => (
-          <button
-            key={a.id}
-            type="button"
-            onClick={() => {
-              selectThread(threadId);
-              openAgent(a.id);
-            }}
-            className="flex h-[22px] w-full items-center gap-1.5 rounded-sm px-1.5 text-left text-caption hover:bg-fill-subtle"
-          >
-            <span className="flex w-3 justify-center">
-              <AgentMark agent={a} />
-            </span>
-            <span className="shrink-0 font-medium text-fg">{a.agentType || a.name}</span>
-            <span className="min-w-0 truncate text-fg-muted">{a.task}</span>
-          </button>
-        ))}
-    </div>
   );
 }
 

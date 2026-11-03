@@ -9,6 +9,7 @@
 //! the thread.
 
 pub(crate) mod acp_child;
+pub(crate) mod background;
 pub(crate) mod cache;
 pub(crate) mod codex;
 pub mod config;

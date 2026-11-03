@@ -153,6 +153,16 @@ impl ClientSink for AcpClientSink {
             .send_notification(SessionNotification::new(self.session_id.clone(), update));
     }
 
+    fn activity(&self, activity: harness::background::Activity) {
+        let _ = self
+            .connection
+            .send_notification(super::prompt::SessionActivityNotification {
+                session_id: self.session_id.clone(),
+                state: activity.state.to_owned(),
+                background: activity.background,
+            });
+    }
+
     fn request_permission(&self, mut request: RequestPermissionRequest) -> PermissionFuture {
         request.session_id = self.session_id.clone().into();
         let connection = self.connection.clone();

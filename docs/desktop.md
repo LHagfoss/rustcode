@@ -249,11 +249,20 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   messages go too. A finished turn shows a summary card: files changed with
   +/−, and whether the checks it ran (test, lint, build, …) passed on their
   last run, from its tool calls only.
-- **Subagents.** A `spawn_agent` call shows as the agent it started (status,
-  role, task, time, tokens). The Agents panel lists the thread's agents
-  (`_rustcode/agents`, polled every 2 s while a turn runs or a child
-  works), reads one's conversation, stops it and sends it more. A pill in
-  the composer row says how many work.
+- **Subagents.** Every harness's subagents take one row, as T3 Code draws
+  them: Claude Code's `Agent`/`Task` calls (their steps fold under them by
+  `_meta.claudeCode.parentToolUseId`) and RustCode's `spawn_agent` (status
+  from `_rustcode/agents`, polled every 2 s while a turn runs or a child
+  works; steps from the child's conversation). While one works the row says
+  the step it is on; once done, how many steps and how long. A subagent sent
+  to the background keeps its row running until the turn ends. A pill in the
+  composer row says how many work.
+- **Background work.** Claude Code's background commands and the turns it
+  starts on its own when one finishes reach the app as
+  `_rustcode/session/activity` (the engine asks the adapter for its async
+  tasks, `harness/background.rs`): the thread shows "Waiting on a background
+  command", the command's row runs until it ends, and a turn Claude starts
+  itself shows as working.
 - **Pull requests.** A panel lists the project's pull requests
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
@@ -350,8 +359,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   also what was said: the engine's SQLite index (`index.sqlite`,
   `_rustcode/threads/search`) adds threads whose messages match, with the
   matching words under the title.
-  Subagents nest under their thread (open one
-  in the Agents panel), and threads another thread started nest under it.
+  Threads another thread started nest under it.
   Settings is the gear in the top row, after Hide sidebar and New thread
   (in the header's cluster while the sidebar is hidden); the project is
   chosen per thread in the composer's tray.

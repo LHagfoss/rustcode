@@ -180,11 +180,9 @@ export interface AppState {
   /** The workspace terminal under the chat (⌘J). */
   terminalOpen: boolean;
   /** The panel on the right of the chat. */
-  panel: "changes" | "agents" | "pulls" | null;
+  panel: "changes" | "pulls" | null;
   /** Each thread's subagents, as `_rustcode/agents` last listed them. */
   agents: Record<string, SubagentInfo[]>;
-  /** The agent whose conversation the Agents panel shows. */
-  agentOpen: number | null;
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
   planUsage: Record<string, PlanUsage | null>;
   /** An app-drawn confirmation (the webview has no native dialogs). */
@@ -317,7 +315,6 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   terminalOpen: false,
   panel: null,
   agents: {},
-  agentOpen: null,
   planUsage: {},
   status: "connecting",
   engineLog: [],
@@ -2241,30 +2238,6 @@ export async function agentHistory(id: string, agentId: number): Promise<ThreadS
   return finishLoad(state);
 }
 
-export async function sendToAgent(id: string, agentId: number, text: string): Promise<boolean> {
-  try {
-    await engine().request(Method.agents, { sessionId: id, action: "send", id: agentId, text }, 15_000);
-    void refreshAgents(id);
-    return true;
-  } catch (error) {
-    toast(`Could not send to the agent: ${errorText(error)}`, "error");
-    return false;
-  }
-}
-
-export async function cancelAgent(id: string, agentId: number) {
-  try {
-    await engine().request(Method.agents, { sessionId: id, action: "cancel", id: agentId }, 15_000);
-  } catch (error) {
-    toast(`Could not stop the agent: ${errorText(error)}`, "error");
-  }
-  void refreshAgents(id);
-}
-
-export function openAgent(agentId: number | null) {
-  set({ agentOpen: agentId, panel: agentId === null ? get().panel : "agents" });
-}
-
 let agentTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Poll the shown thread's agents while its turn runs or a child works, as the SwiftUI app does. */
@@ -2375,7 +2348,6 @@ export function resetForTests() {
     confirm: null,
     panel: null,
     agents: {},
-    agentOpen: null,
     planUsage: {},
     orchestration: false,
     orchestrationPending: false,
