@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
+import { parsePlans } from "../acp/rustcode";
 import { emptyExtras } from "./compose";
 import { answerOrchestration, resolveGrant } from "./host";
 import {
   agentHistory,
   answerPermission,
   answerQuestionOptions,
+  type CachedPlan,
   cancel,
   closeReport,
   completeOnboarding,
@@ -13,9 +15,14 @@ import {
   editMessage,
   ensureHarnessModels,
   fetchHarnessModels,
+  mergePlans,
   moveThread,
+  onlyCachedPlan,
+  PLAN_CACHE_POLL_MS,
   permissionModeOf,
   pickNewThreadChoice,
+  planIsStale,
+  plansToCache,
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
@@ -35,6 +42,7 @@ import {
   setPermissionMode,
   setProjectCwd,
   setThreadStatus,
+  shownPlan,
   startNewThread,
   statusOf,
   steerOrSubmit,
@@ -640,4 +648,92 @@ test("changing the default access leaves the listed threads as they were", () =>
   expect(permissionModeOf(s, "a")).toBe("ask");
   expect(permissionModeOf(s, "a-new-one")).toBe("edits");
   resetForTests();
+});
+
+describe("plan usage cache", () => {
+  const plan = (used: number, fetchedAt: number): CachedPlan => ({
+    source: "claude-code",
+    windows: [{ usedPercent: used, minutes: 300 }],
+    fetchedAt,
+  });
+
+  test("keeps the newer numbers for each harness and never erases them", () => {
+    const before = { "claude-code": plan(20, 1000) };
+    // A newer answer replaces the numbers, and is the same map shape.
+    expect(
+      mergePlans(before, { "claude-code": plan(40, 2000) })["claude-code"]?.windows[0]?.usedPercent,
+    ).toBe(40);
+    expect(before["claude-code"]?.windows[0]?.usedPercent).toBe(20);
+    // A slow answer from before the numbers already shown does not go back in time.
+    expect(mergePlans(before, { "claude-code": plan(10, 500) })).toBe(before);
+    // The same instant keeps what is shown: no churn, no re-render.
+    expect(mergePlans(before, { "claude-code": plan(10, 1000) })).toBe(before);
+    // A harness whose plan cannot be read (Claude Code's limits answer null) adds nothing.
+    const empty = mergePlans(before, { codex: { source: "codex", windows: [], fetchedAt: 3000 } });
+    expect(empty).toBe(before);
+    // Each harness is its own entry.
+    const both = mergePlans(before, { codex: plan(70, 3000) });
+    expect(Object.keys(both).sort()).toEqual(["claude-code", "codex"]);
+    expect((before as Record<string, CachedPlan>).codex).toBeUndefined();
+  });
+
+  test("staleness follows the three-minute poll", () => {
+    const now = 10_000_000;
+    expect(PLAN_CACHE_POLL_MS).toBe(180_000);
+    expect(planIsStale(undefined, now)).toBe(true);
+    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS + 1), now)).toBe(false);
+    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS), now)).toBe(true);
+  });
+
+  test("the plans answer maps a subscription to its harness, dropping ones with no windows", () => {
+    const cache = plansToCache(
+      parsePlans({
+        plans: [
+          {
+            id: "claude",
+            name: "Claude",
+            via: "Claude Code",
+            status: "ok",
+            plan: "max",
+            windows: [{ label: "5-hour", usedPercent: 18, windowMinutes: 300, resetsAt: 1000 }],
+          },
+          { id: "codex", name: "ChatGPT", status: "signedOut", windows: [] },
+        ],
+      }),
+      5000,
+    );
+    expect(Object.keys(cache)).toEqual(["claude-code"]);
+    expect(cache["claude-code"]).toEqual({
+      source: "claude-code",
+      windows: [{ usedPercent: 18, minutes: 300, resetsAt: 1_000_000 }],
+      fetchedAt: 5000,
+      name: "Claude",
+      plan: "max",
+    });
+  });
+
+  test("the meter shows a thread's limits unless the cached plan is newer", () => {
+    const own: CachedPlan = {
+      source: "codex",
+      windows: [{ usedPercent: 42, minutes: 300 }],
+      fetchedAt: 2000,
+    };
+    expect(shownPlan(own, undefined).plan).toBe(own);
+    expect(shownPlan(own, undefined).cached).toBe(false);
+    // A thread on Claude Code has no limits of its own: the cache shows through.
+    const cached = plan(18, 1000);
+    expect(shownPlan(null, cached)).toEqual({ plan: cached, cached: true });
+    // The app's poll is newer than the thread's last answer.
+    expect(shownPlan(own, plan(30, 3000))).toEqual({ plan: plan(30, 3000), cached: true });
+    expect(shownPlan(own, plan(30, 1000))).toEqual({ plan: own, cached: false });
+    // An answer without windows is not a plan.
+    expect(shownPlan({ source: "codex", windows: [], fetchedAt: 9000 }, cached)).toEqual({
+      plan: cached,
+      cached: true,
+    });
+    // A thread whose harness the engine did not name uses the one plan there is.
+    expect(onlyCachedPlan({})).toBeUndefined();
+    expect(onlyCachedPlan({ "claude-code": cached })).toBe(cached);
+    expect(onlyCachedPlan({ "claude-code": cached, codex: plan(40, 2000) })).toBeUndefined();
+  });
 });

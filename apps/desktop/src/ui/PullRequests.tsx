@@ -29,7 +29,7 @@ import { openExternal } from "../lib/native";
 import { openSettings, request, setDraft, setPanel, startNewThread, toast, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { Markdown } from "./Markdown";
-import { Cluster, ClusterButton, cx, Pill, Segments, Spinner } from "./primitives";
+import { Cluster, ClusterButton, cx, Pill, Segments, Skeleton, Spinner } from "./primitives";
 
 function ChecksMark({ pull }: { pull: PullRequest }) {
   const c = pull.checks;
@@ -179,11 +179,7 @@ function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack
         <ArrowLeft size={12} /> All pull requests
       </button>
       {error && <ErrorView error={error} />}
-      {!detail && !error && (
-        <div className="flex items-center gap-2 text-callout text-fg-muted">
-          <Spinner /> Reading #{number}…
-        </div>
-      )}
+      {!detail && !error && <PullSkeleton />}
       {detail && (
         <>
           <h2 className="selectable font-semibold text-title3">
@@ -330,11 +326,7 @@ export function PullsPanel() {
             {!error && pulls?.length === 0 && (
               <p className="px-2.5 py-2 text-callout text-fg-muted">No pull requests.</p>
             )}
-            {!pulls && !error && (
-              <div className="flex items-center gap-2 px-2.5 py-2 text-callout text-fg-muted">
-                <Spinner /> Asking GitHub…
-              </div>
-            )}
+            {!pulls && !error && <PullListSkeleton />}
             {pulls?.map((pull) => (
               <button
                 key={pull.number}
@@ -371,6 +363,39 @@ export function PullsPanel() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** Where one pull request will be: its title and meta line, then the body's lines. */
+function PullSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="flex flex-col gap-2">
+      <Skeleton className="h-4 w-3/5" />
+      <Skeleton className="h-2.5 w-4/5" />
+      <div className="mt-1 flex gap-1.5">
+        <Skeleton className="h-[22px] w-20 rounded-full" />
+        <Skeleton className="h-[22px] w-32 rounded-full" />
+      </div>
+      <div className="mt-2 flex flex-col gap-[5px] rounded-lg bg-fill-subtle p-3">
+        {[92, 78, 84, 64, 88, 40].map((w, i) => (
+          <Skeleton key={i} className="h-2.5" style={{ width: `${w}%` }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Where the list will be: rows the height of a pull request, its title and meta line. */
+function PullListSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="flex flex-col gap-1">
+      {[76, 58, 84, 66].map((w, i) => (
+        <div key={i} className="flex flex-col gap-1.5 px-2.5 py-2">
+          <Skeleton className="h-3" style={{ width: `${w}%` }} />
+          <Skeleton className="h-2.5 w-2/5" />
+        </div>
+      ))}
     </div>
   );
 }

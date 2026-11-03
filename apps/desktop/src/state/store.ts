@@ -7,8 +7,11 @@ import {
   agentActive,
   type PlanUsage,
   parseAgentList,
+  parsePlans,
   parsePlanUsage,
+  planHarness,
   type SubagentInfo,
+  type UsagePlan,
 } from "../acp/rustcode";
 import type { Transport } from "../acp/transport";
 import {
@@ -130,6 +133,17 @@ export interface NewThreadChoice {
   effort: string | null;
 }
 
+/**
+ * A harness's plan windows, with where they came from. `_rustcode/usage/plans`
+ * names the subscription; a thread's `_rustcode/usage/limits` only has numbers.
+ */
+export interface CachedPlan extends PlanUsage {
+  /** The subscription as Settings › Usage names it ("Claude"), when it was read there. */
+  name?: string;
+  /** Its tier ("max"), when the provider named one. */
+  plan?: string;
+}
+
 export interface AppState {
   status: "connecting" | "ready" | "closed";
   statusDetail?: string;
@@ -185,6 +199,12 @@ export interface AppState {
   agents: Record<string, SubagentInfo[]>;
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
   planUsage: Record<string, PlanUsage | null>;
+  /**
+   * Each harness's plan windows as last learnt, by harness id, from Settings'
+   * `_rustcode/usage/plans` and from any thread's `_rustcode/usage/limits`.
+   * The composer's meter reads it for a thread with no numbers of its own.
+   */
+  planCache: Record<string, CachedPlan>;
   /** An app-drawn confirmation (the webview has no native dialogs). */
   confirm: {
     title: string;
@@ -258,6 +278,8 @@ const STORAGE = {
   permissionModes: "rustcode.permissionModes",
   /** Each harness's last new-thread choice, for an engine that does not remember it. */
   harnessChoices: "rustcode.harnessChoices",
+  /** Each harness's plan windows, so the composer's meter is there on launch. */
+  planCache: "rustcode.planCache",
 };
 
 function stored(key: string): string | null {
@@ -319,6 +341,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   panel: null,
   agents: {},
   planUsage: {},
+  planCache: storedJson<Record<string, CachedPlan>>(STORAGE.planCache, {}),
   status: "connecting",
   engineLog: [],
   sessions: [],
@@ -541,6 +564,7 @@ export async function connect(next: Transport): Promise<void> {
   transport = next;
   setShellTransport(next);
   startAgentPolling();
+  startPlanPolling();
   bootProgress = 0.15;
   set({ status: "connecting", transport: next.name, statusDetail: undefined });
   watchEngine();
@@ -605,6 +629,8 @@ async function handshake(): Promise<void> {
       ),
     }));
     await Promise.all([refreshSessions(), refreshHarnesses(), probeFeatures(conn), refreshThemes(conn)]);
+    // The composer's meter is ready before the first thread opens.
+    void refreshPlanCache();
     if (connection === conn) await syncPinsAndSettled(conn);
     const selected = get().selectedId;
     if (selected) void openThread(selected);
@@ -2324,6 +2350,101 @@ export function startAgentPolling() {
 const planUsageInFlight = new Set<string>();
 
 /**
+ * The harness a thread runs on, as far as the app knows: its own record once
+ * opened, else the summary from the list. With no thread, the one the next
+ * thread will start on.
+ */
+export function harnessOf(
+  s: Pick<AppState, "threads" | "sessions" | "newThread" | "harnesses">,
+  threadId?: string,
+): string | undefined {
+  if (!threadId) return s.newThread?.harness ?? s.harnesses?.default.harness ?? "rustcode";
+  return s.threads[threadId]?.harness?.id ?? s.sessions.find((x) => x.id === threadId)?.harness;
+}
+
+/** How often the app asks for every plan while its window is visible. */
+export const PLAN_CACHE_POLL_MS = 180_000;
+
+/** True when a harness's numbers are missing or older than the poll interval. */
+export function planIsStale(plan: CachedPlan | undefined, now = Date.now()): boolean {
+  return !plan?.fetchedAt || now - plan.fetchedAt >= PLAN_CACHE_POLL_MS;
+}
+
+/**
+ * Folds fresh numbers into the cache, one entry per harness: the newer of the
+ * two wins, so a slow plans answer never overwrites a thread's newer limits,
+ * and an answer without windows (a harness with no plan) never erases one.
+ */
+export function mergePlans(
+  cache: Record<string, CachedPlan>,
+  incoming: Record<string, CachedPlan>,
+): Record<string, CachedPlan> {
+  let next = cache;
+  for (const [harness, plan] of Object.entries(incoming)) {
+    if (!plan.windows.length) continue;
+    const known = next[harness];
+    if (known && (known.fetchedAt ?? 0) >= (plan.fetchedAt ?? 0)) continue;
+    if (next === cache) next = { ...cache };
+    next[harness] = plan;
+  }
+  return next;
+}
+
+/** The plans answer as cache entries, for each signed-in harness that reported windows. */
+export function plansToCache(plans: UsagePlan[], fetchedAt = Date.now()): Record<string, CachedPlan> {
+  const out: Record<string, CachedPlan> = {};
+  for (const p of plans) {
+    if (p.status !== "ok" || !p.windows.length) continue;
+    const harness = planHarness(p.id);
+    out[harness] = {
+      source: harness,
+      windows: p.windows.map((w) => ({
+        usedPercent: w.usedPercent,
+        minutes: w.minutes,
+        resetsAt: w.resetsAt,
+      })),
+      fetchedAt,
+      name: p.name,
+      plan: p.plan,
+    };
+  }
+  return out;
+}
+
+/**
+ * The one plan in the cache, for a thread whose harness the engine did not
+ * report: with a single subscription signed in, it is the one in use. With
+ * several, guessing would show another harness's numbers, so none is used.
+ */
+export function onlyCachedPlan(cache: Record<string, CachedPlan>): CachedPlan | undefined {
+  const plans = Object.values(cache).filter((p) => p.windows.length);
+  return plans.length === 1 ? plans[0] : undefined;
+}
+
+/**
+ * The plan the composer's meter shows: the thread's own limits when they are
+ * the newer numbers, else the harness's cached plan (marked `cached`).
+ */
+export function shownPlan(
+  own: PlanUsage | null | undefined,
+  cached: CachedPlan | undefined,
+): { plan: PlanUsage | undefined; cached: boolean } {
+  const live = own?.windows.length ? own : undefined;
+  const known = cached?.windows.length ? cached : undefined;
+  if (!live) return { plan: known, cached: !!known };
+  if (known && (known.fetchedAt ?? 0) > (live.fetchedAt ?? 0)) return { plan: known, cached: true };
+  return { plan: live, cached: false };
+}
+
+/** Writes merged numbers into the store and app storage; no-op when nothing is newer. */
+function commitPlans(incoming: Record<string, CachedPlan>) {
+  const merged = mergePlans(get().planCache, incoming);
+  if (merged === get().planCache) return;
+  set({ planCache: merged });
+  store(STORAGE.planCache, JSON.stringify(merged));
+}
+
+/**
  * Asks the engine for the plan's usage windows. One request per thread at a
  * time; a failed one keeps the last good numbers (marked stale), and only an
  * answer without windows (the harness has no plan usage) clears them.
@@ -2333,7 +2454,12 @@ export async function refreshPlanUsage(id: string): Promise<void> {
   planUsageInFlight.add(id);
   try {
     const usage = parsePlanUsage(await connection.request(Method.usageLimits, { sessionId: id }, 10_000));
-    set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt: Date.now() } } }));
+    const fetchedAt = Date.now();
+    set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt } } }));
+    // The same numbers serve every thread on that harness, and the meter of a
+    // thread that has none of its own (Claude Code's limits answer null).
+    const harness = harnessOf(get(), id) ?? usage?.source;
+    if (usage && harness) commitPlans({ [harness]: { ...usage, fetchedAt, source: harness } });
   } catch {
     set((s) => {
       const last = s.planUsage[id];
@@ -2342,6 +2468,62 @@ export async function refreshPlanUsage(id: string): Promise<void> {
   } finally {
     planUsageInFlight.delete(id);
   }
+}
+
+let plansInFlight = false;
+
+/** The consent Settings › Usage keeps before Claude's sign-in is read from the Keychain. */
+function claudeUsageAllowed(): boolean {
+  return stored("rustcode.claudeUsage") === "1";
+}
+
+/**
+ * Asks for every subscription's plan (`_rustcode/usage/plans`, no thread
+ * needed) and folds the answer into the cache. One request at a time; a failed
+ * one keeps the last numbers for the next poll.
+ */
+export async function refreshPlanCache(): Promise<void> {
+  if (!connection || plansInFlight || get().status !== "ready") return;
+  plansInFlight = true;
+  try {
+    const result = await connection.request(Method.usagePlans, { claude: claudeUsageAllowed() }, 20_000);
+    commitPlans(plansToCache(parsePlans(result)));
+  } catch {
+    // Cached numbers stay; the next poll tries again.
+  } finally {
+    plansInFlight = false;
+  }
+}
+
+let planTimer: ReturnType<typeof setInterval> | null = null;
+let plansOnVisible: (() => void) | null = null;
+
+/**
+ * One poller for the app, not one per thread: every three minutes while the
+ * window is visible, and at once when it comes back after being hidden for
+ * longer than that. A hidden window asks for nothing.
+ */
+export function startPlanPolling() {
+  if (planTimer) return;
+  planTimer = setInterval(() => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    void refreshPlanCache();
+  }, PLAN_CACHE_POLL_MS);
+  if (typeof document === "undefined") return;
+  plansOnVisible = () => {
+    if (document.hidden) return;
+    // Back after a while: catch up now rather than at the next tick.
+    if (Object.values(get().planCache).every((p) => planIsStale(p))) void refreshPlanCache();
+  };
+  document.addEventListener("visibilitychange", plansOnVisible);
+}
+
+function stopPlanPolling() {
+  if (planTimer) clearInterval(planTimer);
+  planTimer = null;
+  if (plansOnVisible) document.removeEventListener("visibilitychange", plansOnVisible);
+  plansOnVisible = null;
+  plansInFlight = false;
 }
 
 // ---------------------------------------------------------------- UI
@@ -2382,6 +2564,7 @@ export async function request<T = Json>(
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
   clearTimeout(slowTimer);
+  stopPlanPolling();
   engineWatch?.();
   engineWatch = undefined;
   crashed = false;
@@ -2415,6 +2598,7 @@ export function resetForTests() {
     panel: null,
     agents: {},
     planUsage: {},
+    planCache: {},
     orchestration: false,
     orchestrationPending: false,
     links: { links: [], grants: {}, counters: {}, fanOuts: [] },

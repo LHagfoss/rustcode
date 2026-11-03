@@ -27,7 +27,7 @@ import {
 } from "../state/store";
 import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
-import { cx, Pill, Spinner, Switch, Tooltip } from "./primitives";
+import { cx, Pill, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
 
 function StatusDot({ tone }: { tone: "ok" | "warn" | "off" }) {
   return (
@@ -237,6 +237,28 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Where the cards will be: each one's icon, name and status line, and its switch. */
+export function HarnessListSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div
+      role="status"
+      aria-label="Loading"
+      className="divide-y divide-border overflow-hidden rounded-lg bg-fill-subtle"
+    >
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex items-center gap-3 px-3.5 py-3">
+          <Skeleton className="size-8 shrink-0 rounded-lg" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <Skeleton className="h-3" style={{ width: `${[34, 46, 30][i % 3]}%` }} />
+            <Skeleton className="h-2 w-2/5" />
+          </div>
+          <Skeleton className="h-5 w-9 shrink-0 rounded-full" />
+        </div>
+      ))}
     </div>
   );
 }
