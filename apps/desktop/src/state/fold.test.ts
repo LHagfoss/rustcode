@@ -84,11 +84,24 @@ describe("turn folding", () => {
     expect(keys(rows)).toEqual(["u1", "[fold-e1]", "x1", "r1", "e1", "u2", "r2", "e2"]);
   });
 
-  test("the summary reads time, steps, files and failures", () => {
+  test("the divider reads how long it worked, or that you stopped it", () => {
+    const seconds = (ms: number) => `${Math.round(ms / 1000)}s`;
     const rows = foldTurns(items, true, new Set());
     const fold = rows.find((r) => "fold" in r);
-    const label = fold && "fold" in fold ? foldLabel(fold.fold, (ms) => `${Math.round(ms / 1000)}s`) : "";
-    expect(label).toBe("Worked for 80s · 5 steps · 1 file changed · 1 failed");
+    expect(fold && "fold" in fold ? foldLabel(fold.fold, seconds) : "").toBe("Worked for 80s");
+    const stopped = foldTurns(
+      [
+        user("u"),
+        tool("c"),
+        reply("r"),
+        { kind: "turnEnd", id: "e", elapsedMs: 12_000, outcome: "cancelled" },
+      ],
+      false,
+      new Set(),
+    ).find((r) => "fold" in r);
+    expect(stopped && "fold" in stopped ? foldLabel(stopped.fold, seconds) : "").toBe(
+      "You stopped after 12s",
+    );
   });
 });
 
@@ -108,7 +121,7 @@ describe("tool groups", () => {
   const live = (items: TranscriptItem[], open: ReadonlySet<string> = new Set()) =>
     groupTools(foldTurns(items, true, new Set()), open);
 
-  test("three or more finished calls in a row fold into one row", () => {
+  test("two or more finished calls in a row fold into one row", () => {
     const rows = live([
       user("u"),
       kinded("a", "read"),
@@ -118,15 +131,14 @@ describe("tool groups", () => {
     ]);
     expect(rows.map((r) => r.key)).toEqual(["u", "tools-a", "d"]);
     const group = rows[1]!;
-    expect("group" in group && group.group.label).toBe("Read 2 files · Ran 1 command");
+    expect("group" in group && group.group.label).toBe("Read 2 files and ran 1 command");
+    expect("group" in group && group.group.kind).toBe("read");
   });
 
-  test("two calls stay as they are, and an open group lists its calls", () => {
-    expect(live([user("u"), kinded("a", "read"), kinded("b", "read")]).map((r) => r.key)).toEqual([
-      "u",
-      "a",
-      "b",
-    ]);
+  test("one call stays as it is, and an open group lists its calls", () => {
+    expect(
+      live([user("u"), kinded("a", "read"), kinded("b", "read", "in_progress")]).map((r) => r.key),
+    ).toEqual(["u", "a", "b"]);
     const rows = live(
       [user("u"), kinded("a", "read"), kinded("b", "read"), kinded("c", "read")],
       new Set(["tools-a"]),
@@ -137,10 +149,11 @@ describe("tool groups", () => {
 
   test("the label counts what the calls did, most first", () => {
     expect(toolGroupLabel(["execute", "read", "execute", "search", undefined])).toBe(
-      "Ran 2 commands · Read 1 file · Searched once · 1 other step",
+      "Ran 2 commands, read 1 file and performed 2 other actions",
     );
-    expect(toolGroupLabel(["read", "edit", "execute", "search", "fetch"])).toBe(
-      "Read 1 file · Edited 1 file · Ran 1 command · 2 more",
+    expect(toolGroupLabel(["read", "read"])).toBe("Read 2 files");
+    expect(toolGroupLabel(["read", "edit", "execute"])).toBe(
+      "Read 1 file, edited 1 file and performed 1 other action",
     );
   });
 });
@@ -157,38 +170,14 @@ describe("the running turn", () => {
     tool("b2"),
   ];
 
-  test("folds what came before its latest reply", () => {
-    const rows = foldTurns(long, true, new Set());
-    expect(keys(rows)).toEqual(["u", "[live-u]", "r", "b1", "b2"]);
-    const fold = rows.find((r) => "fold" in r);
-    expect(fold && "fold" in fold && fold.fold).toMatchObject({
-      steps: 4,
-      tools: 3,
-      failed: 1,
-      files: 1,
-      live: true,
-    });
-    expect(foldLabel((fold as { fold: Parameters<typeof foldLabel>[0] }).fold, String)).toBe(
-      "4 earlier steps · 1 file changed · 1 failed",
-    );
+  test("shows as it streams, nothing folded", () => {
+    expect(keys(foldTurns(long, true, new Set()))).toEqual(["u", "t", "a1", "a2", "a3", "r", "b1", "b2"]);
   });
 
-  test("opens like a finished turn", () => {
-    const rows = foldTurns(long, true, new Set(["live-u"]));
-    expect(keys(rows)).toEqual(["u", "[live-u]", "t", "a1", "a2", "a3", "r", "b1", "b2"]);
-  });
-
-  test("with no reply yet, keeps only its last steps", () => {
-    const steps = [user("u"), ...Array.from({ length: 10 }, (_, i) => tool(`c${i}`))];
-    expect(keys(foldTurns(steps, true, new Set()))).toEqual([
-      "u",
-      "[live-u]",
-      "c4",
-      "c5",
-      "c6",
-      "c7",
-      "c8",
-      "c9",
-    ]);
+  test("its finished calls (and the thoughts among them) read as one line per run", () => {
+    const rows = groupTools(foldTurns(long, true, new Set()), new Set());
+    expect(rows.map((r) => r.key)).toEqual(["u", "tools-t", "r", "tools-b1"]);
+    const first = rows[1]!;
+    expect("group" in first && first.group).toMatchObject({ count: 4, failed: 1 });
   });
 });

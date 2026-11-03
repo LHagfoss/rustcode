@@ -32,7 +32,7 @@ import type { FileDiff } from "../acp/types";
 import { displayCommand } from "../lib/command";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
-import { foldLabel, type ToolGroup, type TurnFold } from "../state/fold";
+import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { editMessage, retryMessage, useApp } from "../state/store";
 import {
   diffCounts,
@@ -76,7 +76,7 @@ export const UserRow = memo(function UserRow({
   const attachments = item.attachments ?? [];
   const placeholders = attachments.some((a) => a.kind === "image") ? 0 : markers;
   return (
-    <div className="group flex flex-col items-end pb-2.5 pl-20">
+    <div className="group flex flex-col items-end">
       {(attachments.length > 0 || placeholders > 0) && (
         <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) =>
@@ -127,7 +127,7 @@ export const UserRow = memo(function UserRow({
           ))}
         </div>
       )}
-      <div className={cx("relative max-w-full rounded-xl bg-fill px-3.5 py-[9px]", !text && "hidden")}>
+      <div className={cx("relative max-w-[80%] rounded-2xl bg-fill px-3.5 py-2.5", !text && "hidden")}>
         <div
           className={cx(
             "selectable text-body leading-[20px] whitespace-pre-wrap break-words",
@@ -149,9 +149,10 @@ export const UserRow = memo(function UserRow({
           </button>
         )}
       </div>
-      <div className="mt-1 flex h-[22px] items-center gap-1 text-caption text-fg-faint">
-        {item.steered && <span className="text-accent">Steered</span>}
-        {item.fromView && <span className="text-accent">From view</span>}
+      {/* Time and actions show on hover, as T3 Code keeps the bubble quiet. */}
+      <div className="mt-1 flex h-[22px] items-center gap-1 text-caption text-fg-faint opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
+        {item.steered && <span className="rc-keep text-accent">Steered</span>}
+        {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
           <span className="tabular">{timeLabel(item.at)}</span>
         </Tooltip>
@@ -281,20 +282,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
 
 // ---------------------------------------------------------------- tools
 
-function toolKind(item: Item<"tool">): string {
-  if (item.toolKind && item.toolKind !== "other") return item.toolKind;
-  const t = item.title.toLowerCase();
-  if (/^(glob|grep|rg|search|find|list|ls)/.test(t)) return "search";
-  if (/^(read|cat|view|open)/.test(t)) return "read";
-  if (/^(edit|write|apply|patch|create|replace)/.test(t)) return "edit";
-  if (/^(bash|shell|exec|run|command)/.test(t)) return "execute";
-  if (/^(web|fetch|http|read url|browse)/.test(t)) return "fetch";
-  if (/(agent|task|delegate)/.test(t)) return "agent";
-  if (/skill/.test(t)) return "skill";
-  return "other";
-}
-
-const KIND_ICON: Record<string, typeof Wrench> = {
+export const KIND_ICON: Record<string, typeof Wrench> = {
   read: FileText,
   edit: Pencil,
   delete: Trash2,
@@ -435,7 +423,7 @@ function inputWithoutSummary(input: Json | undefined): string | undefined {
 }
 
 export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">; cwd: string }) {
-  const kind = toolKind(item);
+  const kind = inferToolKind(item);
   const [open, setOpen] = useState(kind === "edit" && item.diffs.length > 0 && item.diffs.length <= 2);
   const Icon = KIND_ICON[kind] ?? Wrench;
   const running = item.status === "pending" || item.status === "in_progress";
@@ -471,11 +459,11 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
             <Icon size={13} className="text-fg-muted" />
           )}
         </span>
-        <span className="min-w-0 max-w-full shrink truncate font-medium text-callout" title={item.title}>
+        <span className="min-w-0 max-w-full shrink truncate text-callout text-fg-muted" title={item.title}>
           {title}
         </span>
         {item.summary && (
-          <span className="min-w-0 shrink truncate text-callout text-fg-muted">{item.summary}</span>
+          <span className="min-w-0 shrink truncate text-callout text-fg-faint">{item.summary}</span>
         )}
         {shownDetail && (
           <span
@@ -502,7 +490,10 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         )}
         <ChevronRight
           size={11}
-          className={cx("shrink-0 text-fg-faint transition-transform duration-200", open && "rotate-90")}
+          className={cx(
+            "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
+            open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
+          )}
         />
       </button>
       {tailLines.length > 0 && !open && (
@@ -628,9 +619,9 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
 }
 
 /**
- * A finished turn's work, folded (state/fold.ts): `Worked for 1m 20s · 14 steps
- * · 3 files changed`, a chevron, and the steps as they streamed under it when
- * opened. The final answer, errors and the footer stay outside the fold.
+ * A finished turn's work, folded (state/fold.ts), as T3 Code's divider:
+ * `Worked for 1m 3s ›` over a hairline, and the steps as they streamed under
+ * it when opened. The final answer, errors and the footer stay outside it.
  */
 export const TurnFoldRow = memo(function TurnFoldRow({
   fold,
@@ -644,14 +635,19 @@ export const TurnFoldRow = memo(function TurnFoldRow({
       type="button"
       aria-expanded={fold.open}
       onClick={() => onToggle(fold.key)}
-      title={fold.open ? "Hide the work" : "Show the work"}
-      className="-mx-1 flex max-w-full items-center gap-1.5 rounded-sm px-1 text-callout text-fg-faint hover:text-fg-muted"
+      title={
+        fold.open ? "Hide the work" : `Show the work: ${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`
+      }
+      className="group flex w-full items-center gap-1.5 border-border/60 border-b pt-1 pb-2 text-left text-body text-fg-muted hover:text-fg"
     >
+      {fold.stopped && <SquareStop size={12} className="shrink-0" aria-hidden />}
       <span className="truncate tabular">{foldLabel(fold, formatDuration)}</span>
-      {fold.failed > 0 && <CircleX size={11} className="shrink-0 text-danger" aria-hidden />}
+      {fold.failed > 0 && (
+        <CircleX size={12} className="shrink-0 text-danger" aria-label={`${fold.failed} failed`} />
+      )}
       <ChevronRight
-        size={11}
-        className={cx("shrink-0 transition-transform duration-200", fold.open && "rotate-90")}
+        size={12}
+        className={cx("shrink-0 text-fg-faint transition-transform duration-200", fold.open && "rotate-90")}
       />
     </button>
   );
@@ -676,10 +672,14 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         aria-expanded={group.open}
         onClick={() => onToggle(group.key)}
         title={group.open ? "Hide these steps" : `Show ${group.count} steps`}
+        data-kind={group.kind}
         className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
-          <Layers size={13} className="text-fg-muted" />
+          {(() => {
+            const Icon = (group.kind && KIND_ICON[group.kind]) || Layers;
+            return <Icon size={13} className="text-fg-muted" />;
+          })()}
         </span>
         <span className="min-w-0 truncate text-callout text-fg-muted">{group.label}</span>
         {group.failed > 0 && (
@@ -716,7 +716,7 @@ export function TurnEndRow({
   changes?: ReactNode;
 }) {
   const parts = [
-    item.outcome === "cancelled"
+    item.outcome === "cancelled" && !folded
       ? `Stopped by you${item.elapsedMs ? ` · after ${formatDuration(item.elapsedMs)}` : ""}`
       : item.outcome === "failed"
         ? "The turn failed"
@@ -730,7 +730,7 @@ export function TurnEndRow({
       {completion && <CompletionCard completion={completion} />}
       <div className="flex h-[22px] items-center gap-1.5 text-caption text-fg-faint">
         {reply && <CopyButton text={reply} iconOnly label="Copy reply" />}
-        {item.outcome === "cancelled" && <SquareStop size={11} />}
+        {item.outcome === "cancelled" && !folded && <SquareStop size={11} />}
         <span className="tabular">{parts.join(" · ")}</span>
         {changes}
       </div>
@@ -756,13 +756,33 @@ export function WaitingRow({ count }: { count: number }) {
   );
 }
 
-export function WorkingRow({ label, startedAt, now }: { label: string; startedAt?: number; now: number }) {
-  const seconds = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
-  const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+/**
+ * The running turn's header, right under the message that started it, as T3
+ * Code draws it: `Working for 12s` over a hairline. What the turn does now
+ * shows at the foot ({@link LiveActivityRow}).
+ */
+export function WorkingRow({ startedAt, now }: { startedAt?: number; now: number }) {
+  const elapsed = startedAt ? Math.max(0, now - startedAt) : undefined;
   return (
-    <div className="flex items-center gap-1.5 text-callout" role="status" aria-live="polite">
+    <div
+      className="flex h-[30px] items-center border-border/60 border-b pt-1 pb-2 text-body text-fg-muted tabular"
+      role="status"
+    >
+      {elapsed !== undefined
+        ? `Working for ${formatDuration(Math.floor(elapsed / 1000) * 1000)}`
+        : "Working…"}
+    </div>
+  );
+}
+
+/** The running turn's foot while nothing else shows it working: what it does now, shimmering. */
+export function LiveActivityRow({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-6 items-center gap-2 text-callout" role="status" aria-live="polite">
+      <span className="flex w-[18px] shrink-0 justify-center">
+        <Spinner size={12} />
+      </span>
       <span className="rc-shimmer truncate">{label}</span>
-      <span className="text-fg-faint tabular">· {clock}</span>
     </div>
   );
 }
