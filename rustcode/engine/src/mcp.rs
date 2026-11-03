@@ -1975,6 +1975,62 @@ impl McpClient {
     }
 }
 
+/// The access token RustCode holds for a remote server, for a harness that
+/// connects to it on its own (Claude Code, Codex): refreshed and saved first
+/// when it expired and can be. None when there is no usable sign-in.
+pub(crate) async fn bearer_for_harness(server: &str) -> Option<String> {
+    let token = load_oauth_token(server)?;
+    if token.usable() {
+        return Some(token.access_token);
+    }
+    let (Some(refresh), Some(endpoint)) = (
+        token.refresh_token.as_deref(),
+        token.token_endpoint.as_deref(),
+    ) else {
+        return None;
+    };
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .ok()?;
+    match refresh_access_token(&http, endpoint, token.client_id.as_deref(), refresh).await {
+        Ok(fresh) => {
+            if let Err(error) = save_oauth_token(server, &fresh) {
+                crate::dbg_log!("harness MCP: '{server}' token not saved: {error}");
+            }
+            Some(fresh.access_token)
+        }
+        Err(error) => {
+            crate::dbg_log!("harness MCP: '{server}' token refresh failed: {error}");
+            None
+        }
+    }
+}
+
+/// The servers with RustCode's sign-in added: a remote server without its own
+/// `Authorization` header gets the saved OAuth token as one, so a harness uses
+/// the login made in RustCode instead of failing on its own.
+pub(crate) async fn with_saved_logins(
+    mut servers: Vec<crate::config::McpServerConfig>,
+) -> Vec<crate::config::McpServerConfig> {
+    for server in &mut servers {
+        if server.url.is_none()
+            || server
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("authorization"))
+        {
+            continue;
+        }
+        if let Some(token) = bearer_for_harness(&server.name).await {
+            server
+                .headers
+                .insert("Authorization".to_owned(), format!("Bearer {token}"));
+        }
+    }
+    servers
+}
+
 async fn refresh_access_token(
     http: &reqwest::Client,
     token_endpoint: &str,
@@ -3832,5 +3888,64 @@ mod deferred_start_tests {
         assert!(super::deferred_server_names().is_empty());
         super::start_deferred_servers().await;
         assert!(super::deferred_server_names().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod harness_login_tests {
+    use super::{OAuthToken, save_oauth_token, with_saved_logins};
+    use crate::config::McpServerConfig;
+
+    fn server(name: &str, url: Option<&str>) -> McpServerConfig {
+        McpServerConfig {
+            name: name.to_owned(),
+            command: if url.is_some() {
+                String::new()
+            } else {
+                "srv".to_owned()
+            },
+            args: vec![],
+            env: Default::default(),
+            url: url.map(str::to_owned),
+            headers: Default::default(),
+            client_id: None,
+            enabled: true,
+            always_include: false,
+            timeout_secs: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_harness_gets_the_login_made_in_rustcode() {
+        for name in ["login-remote", "login-own-header", "login-stdio"] {
+            save_oauth_token(
+                name,
+                &OAuthToken {
+                    access_token: "tok".into(),
+                    refresh_token: None,
+                    client_id: None,
+                    token_endpoint: None,
+                    expires_at: None,
+                },
+            )
+            .unwrap();
+        }
+        let mut own = server("login-own-header", Some("https://b.example/mcp"));
+        own.headers
+            .insert("authorization".into(), "Bearer mine".into());
+        let servers = with_saved_logins(vec![
+            server("login-remote", Some("https://a.example/mcp")),
+            own,
+            server("login-stdio", None),
+            server("login-none", Some("https://c.example/mcp")),
+        ])
+        .await;
+        assert_eq!(servers[0].headers["Authorization"], "Bearer tok");
+        assert_eq!(servers[1].headers.len(), 1, "its own header is kept");
+        assert!(
+            servers[2].headers.is_empty(),
+            "stdio servers take no header"
+        );
+        assert!(servers[3].headers.is_empty(), "no sign-in, no header");
     }
 }
