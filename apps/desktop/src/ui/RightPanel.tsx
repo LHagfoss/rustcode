@@ -7,8 +7,7 @@
 
 import { X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { type AppState, hasAgents, setPanel, showPanel, useApp } from "../state/store";
-import { AgentsPanel } from "./AgentViews";
+import { type AppState, setPanel, showPanel, useApp } from "../state/store";
 import { cx, Segments, Tooltip } from "./primitives";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
@@ -33,9 +32,6 @@ function storedWidth(): number {
 
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
-  const agentsOn = useApp(
-    (s) => hasAgents(s.selectedId ? s.threads[s.selectedId] : undefined) && !!s.selectedId,
-  );
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   // What the frame shows: the open panel, or while closing the one that was.
   const [shown, setShown] = useState<Kind | null>(panel);
@@ -70,7 +66,6 @@ export function RightPanel() {
 
   const tabs: { value: Kind; label: string }[] = [
     { value: "changes", label: "Changes" },
-    ...(agentsOn ? [{ value: "agents" as const, label: "Agents" }] : []),
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
   ];
 
@@ -112,7 +107,6 @@ export function RightPanel() {
           </div>
           <Suspense fallback={<div className="flex-1" />}>
             {kind === "changes" && <ChangesPanel />}
-            {kind === "agents" && <AgentsPanel />}
             {kind === "pulls" && <PullsPanel />}
           </Suspense>
           {open && (

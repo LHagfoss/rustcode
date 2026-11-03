@@ -269,7 +269,11 @@ async fn updates_and_permissions_are_relayed() {
         .unwrap();
     assert_eq!(
         initialize.1["clientCapabilities"],
-        json!({"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false})
+        json!({
+            "fs": {"readTextFile": false, "writeTextFile": false},
+            "terminal": false,
+            "_meta": {"jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}}},
+        })
     );
     let prompt = requests
         .iter()

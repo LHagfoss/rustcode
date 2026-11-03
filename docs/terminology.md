@@ -15,7 +15,7 @@ apps, the CLI and on disk. Only the Agent Client Protocol keeps its own name,
 | **Round** | One model request inside a turn; tool calls run between rounds. | Logs and `turn.summary` events (`rounds`), not the UI. |
 | **Tool call** | One action the agent takes in a round (read, edit, run a command). | The thread's steps. |
 | **Run** | A row of consecutive tool calls the thread folds into one line. | "Ran 3 commands", "Show steps". |
-| **Agent** (subagent) | A helper the thread's agent starts for a delegated task. It has its own conversation but is not a thread: it is not listed in the sidebar by itself and ends with its parent. | Rows nested under the thread, the Agents panel, `spawn_agent`. |
+| **Agent** (subagent) | A helper the thread's agent starts for a delegated task. It has its own conversation but is not a thread: it is not listed in the sidebar by itself and ends with its parent. | A row in the thread where it started, `spawn_agent`. |
 | **Harness** | What runs a thread's turns: RustCode's own turn loop (the built-in harness `rustcode`) or an external coding agent such as Codex or Claude Code. Chosen when the thread starts ([harnesses.md](harnesses.md)). | The new-thread picker, onboarding, Settings; `_meta.rustcode.harness` in ACP. |
 | **Provider** | A model API the built-in harness calls (OpenAI, Anthropic, Copilot, an OpenAI-compatible server). An external harness has its own models and sign-in, not RustCode's providers. | Settings → providers, `[[providers]]` in the config. |
 | **Plan** | The agent's task list (`todo_write`): what it proposes to do, step by step. | The task plan; never proof that a step ran. |

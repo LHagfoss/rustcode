@@ -36,6 +36,8 @@ pub(crate) enum Output {
     },
     /// Answered once everything sent before it was handled.
     Flush(oneshot::Sender<()>),
+    /// The harness's background work changed (`harness/background.rs`).
+    Activity(super::background::Activity),
 }
 
 pub(crate) type OutputSender = mpsc::UnboundedSender<Output>;
@@ -47,6 +49,8 @@ pub(crate) type PermissionFuture = Pin<Box<dyn Future<Output = RequestPermission
 pub(crate) trait ClientSink: Send + Sync + 'static {
     fn update(&self, update: SessionUpdate);
     fn request_permission(&self, request: RequestPermissionRequest) -> PermissionFuture;
+    /// What the thread does outside a prompt: background work, or a turn the harness started itself.
+    fn activity(&self, _activity: super::background::Activity) {}
 }
 
 /// The settings an adapter starts with.
@@ -216,7 +220,7 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
                 Output::Flush(reply) => {
                     let _ = reply.send(());
                 }
-                Output::Update(_) => {}
+                Output::Update(_) | Output::Activity(_) => {}
             }
         }
     });
@@ -348,6 +352,7 @@ impl ExternalSession {
                         Output::Flush(reply) => {
                             let _ = reply.send(());
                         }
+                        Output::Activity(activity) => sink.activity(activity),
                     }
                 }
             });

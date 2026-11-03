@@ -36,6 +36,8 @@ struct State {
     /// Updates are dropped while the child replays history on load: the
     /// client already has the thread's recorded transcript.
     muted: bool,
+    /// Claude Code's async tasks that still run.
+    background: super::background::Background,
 }
 
 pub(crate) struct AcpAdapter {
@@ -249,6 +251,8 @@ impl AcpAdapter {
                     "clientCapabilities": {
                         "fs": { "readTextFile": false, "writeTextFile": false },
                         "terminal": false,
+                        // Claude Code's adapter then reports its background work.
+                        "_meta": super::background::capabilities_meta(),
                     },
                     "clientInfo": { "name": "rustcode", "title": "RustCode", "version": env!("CARGO_PKG_VERSION") },
                 }),
@@ -538,6 +542,16 @@ async fn relay(
                 let Some(update) = params.get("update").cloned() else {
                     continue;
                 };
+                if super::background::Background::is_task_update(&update) {
+                    let effects = lock(&state).background.apply(&update);
+                    if let Some(update) = effects.update {
+                        let _ = out.send(Output::Update(update));
+                    }
+                    if let Some(activity) = effects.activity {
+                        let _ = out.send(Output::Activity(activity));
+                    }
+                    continue;
+                }
                 let update = match serde_json::from_value::<SessionUpdate>(update) {
                     Ok(update) => update,
                     Err(error) => {

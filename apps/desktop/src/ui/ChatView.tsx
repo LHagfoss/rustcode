@@ -13,11 +13,9 @@ import {
   GitPullRequest,
   ListChecks,
   SquareTerminal,
-  Users,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
-import { agentActive } from "../acp/rustcode";
 import { displayPath } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
@@ -151,9 +149,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
 function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boolean }) {
   const panel = useApp((s) => s.panel);
   const terminalOpen = useApp((s) => s.terminalOpen);
-  const agentsOn = useApp((s) => !!s.agent?.agents) && (thread?.harness?.capabilities.subagents ?? true);
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
-  const working = useApp((s) => (thread ? (s.agents[thread.id] ?? []).filter(agentActive).length : 0));
   const projectCwd = useApp((s) => s.projectCwd);
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
   const title = thread ? (thread.title ?? listed ?? "New thread") : "New thread";
@@ -197,21 +193,6 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
           {thread && <ThreadStatusMenu threadId={thread.id} />}
           {thread && <PlanButton thread={thread} />}
           <Cluster>
-            {thread && agentsOn && (
-              <ClusterButton
-                label="Agents"
-                tooltip={working ? `Agents (${working} working)` : "Agents this thread started"}
-                on={panel === "agents"}
-                onClick={() => setPanel("agents")}
-              >
-                <span className="relative">
-                  <Users size={14} />
-                  {working > 0 && (
-                    <span className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-accent" />
-                  )}
-                </span>
-              </ClusterButton>
-            )}
             {pullsOn && (
               <ClusterButton
                 label="Pull requests"

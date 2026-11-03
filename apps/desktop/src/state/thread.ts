@@ -55,6 +55,12 @@ export type TranscriptItem =
       /** When the app saw it start and end; a replayed call has both at load time. */
       startedAt?: number;
       endedAt?: number;
+      /**
+       * Its work goes on after the call returned: `agent` for a subagent sent
+       * to the background (the turn waits for it), `task` for a background
+       * command (it outlives the turn; the engine completes the call when it ends).
+       */
+      background?: "agent" | "task";
     }
   | { kind: "notice"; id: string; text: string; tone: "warning" | "error" | "info"; resumable?: boolean }
   | {
@@ -317,16 +323,21 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       const item = index === undefined ? undefined : state.items[index];
       if (index === undefined || item?.kind !== "tool") return state;
       const next = writable(state.items, copyItems);
-      const ended = update.status === "completed" || update.status === "failed";
+      const output =
+        update.output ??
+        (update.outputDelta !== undefined ? (item.output ?? "") + update.outputDelta : item.output);
+      const background = backgroundOf(item, update, output, state.running);
+      const ended = !background && (update.status === "completed" || update.status === "failed");
       next[index] = {
         ...item,
         parent: item.parent ?? update.parent,
         endedAt: item.endedAt ?? (ended ? now : undefined),
         title: update.title ?? item.title,
-        status: update.status ?? (item.status === "pending" ? "in_progress" : item.status),
-        output:
-          update.output ??
-          (update.outputDelta !== undefined ? (item.output ?? "") + update.outputDelta : item.output),
+        status: background
+          ? "in_progress"
+          : (update.status ?? (item.status === "pending" ? "in_progress" : item.status)),
+        background: background ?? item.background,
+        output,
         diffs: update.diffs.length ? update.diffs : item.diffs,
         exitCode: update.exitCode ?? item.exitCode,
       };
@@ -423,7 +434,28 @@ export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
   };
 }
 
-/** A turn ended: thoughts stop, running tools are marked, and a footer row is added. */
+/**
+ * Whether this update's call goes on in the background, so its row keeps
+ * running: a call the harness marks backgrounded, or a subagent launched in the
+ * background (Claude Code answers `Async agent launched` at once, then holds the
+ * turn until the agent ends). Only while the turn runs: a replayed one is over.
+ */
+function backgroundOf(
+  item: ToolItem,
+  update: Extract<SessionUpdate, { kind: "toolCallUpdate" }>,
+  output: string | undefined,
+  running: boolean,
+): "agent" | "task" | undefined {
+  if (update.status !== "completed" || !running) return undefined;
+  if (update.backgrounded) return "task";
+  if (subagentOf(item) && output?.trimStart().startsWith("Async agent launched")) return "agent";
+  return undefined;
+}
+
+/**
+ * A turn ended: thoughts stop, running tools are marked, and a footer row is
+ * added. A background command keeps running; the engine ends its call.
+ */
 export function finishTurn(
   state: ThreadState,
   outcome: "completed" | "cancelled" | "failed",
@@ -431,7 +463,9 @@ export function finishTurn(
   error?: string,
 ): ThreadState {
   const items = finishAllThoughts(state.items, now).map((item) =>
-    item.kind === "tool" && (item.status === "pending" || item.status === "in_progress")
+    item.kind === "tool" &&
+    (item.status === "pending" || item.status === "in_progress") &&
+    !(item.background === "task" && outcome === "completed")
       ? { ...item, status: (outcome === "completed" ? "completed" : "failed") as ToolStatus, endedAt: now }
       : item,
   );
@@ -694,10 +728,19 @@ export function workingLabel(items: TranscriptItem[]): string {
   return "Working";
 }
 
-/** A tool call that starts a subagent (Claude Code's `Agent`/`Task`): who it is and what it was asked. */
+/**
+ * A tool call that starts a subagent (Claude Code's `Agent`/`Task`, RustCode's
+ * `spawn_agent`): who it is and what it was asked.
+ */
 export function subagentOf(item: TranscriptItem): { name: string; task: string } | undefined {
-  if (item.kind !== "tool" || (item.toolName !== "Agent" && item.toolName !== "Task")) return undefined;
+  if (item.kind !== "tool") return undefined;
   const input = item.input && typeof item.input === "object" && !Array.isArray(item.input) ? item.input : {};
+  if (item.title === "spawn_agent") {
+    const type = typeof input.agent_type === "string" ? input.agent_type : "";
+    const task = typeof input.task === "string" ? input.task.split("\n")[0]! : (item.summary ?? "");
+    return { name: type && type !== "default" ? type : "Agent", task };
+  }
+  if (item.toolName !== "Agent" && item.toolName !== "Task") return undefined;
   const type = typeof input.subagent_type === "string" ? input.subagent_type : "";
   const description = typeof input.description === "string" ? input.description : "";
   return {
