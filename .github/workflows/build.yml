@@ -163,13 +163,10 @@ jobs:
                   MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
               run: scripts/macos-release-signing.sh notarize apps/desktop/src-tauri/target/release/bundle/macos/RustCode.app
 
-            # RustCode-<ver>-macos-aarch64.app.zip, plus the same zip under the
-            # SwiftUI app's old asset name: the Swift app's updater downloads
-            # that name, so existing installs move to this app by themselves.
+            # RustCode-<ver>-macos-aarch64.app.zip, the asset the app's updater downloads.
             - name: Zip RustCode.app
               run: |
                   (cd apps/desktop && bun scripts/release-assets.ts ../../desktop-assets)
-                  cp desktop-assets/RustCode-*-macos-aarch64.app.zip desktop-assets/rustcode-macos-aarch64-swift-app.zip
 
             # Check the asset as a user gets it: unpacked from the zip, with
             # the quarantine flag a browser download sets.
@@ -178,7 +175,7 @@ jobs:
               run: |
                   check="$RUNNER_TEMP/gatekeeper-check"
                   rm -rf "$check" && mkdir -p "$check"
-                  ditto -x -k desktop-assets/rustcode-macos-aarch64-swift-app.zip "$check"
+                  ditto -x -k desktop-assets/RustCode-*-macos-aarch64.app.zip "$check"
                   xattr -w com.apple.quarantine "0083;$(printf '%x' "$(date +%s)");Safari;" "$check/RustCode.app"
                   xcrun stapler validate "$check/RustCode.app"
                   spctl --assess --type execute --verbose=4 "$check/RustCode.app"
@@ -297,7 +294,6 @@ jobs:
                   files=(
                       "RustCode-${version}-macos-aarch64.app.zip"
                       rustcode-macos-aarch64.tar.gz
-                      rustcode-macos-aarch64-swift-app.zip
                   )
                   for file in "${files[@]}"; do
                       test -f "$file"
@@ -388,7 +384,6 @@ jobs:
                       rustcode-linux-aarch64.tar.gz
                       rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
-                      rustcode-macos-aarch64-swift-app.zip
                       rustcode-windows-x86_64.zip
                   )
                   for file in "${files[@]}"; do
