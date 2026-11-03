@@ -2524,8 +2524,8 @@ pub(crate) fn output_style_hint(visualization_level: u8) -> String {
 /// The output-style guidance for an external harness that takes developer
 /// instructions (Codex `thread/start` `developerInstructions`). It never
 /// gets RustCode's root prompt, so it also carries the citation rule from
-/// the Workflow section, and no `rustcode-viz` clause: a resumed thread may
-/// open in a client that does not draw the blocks.
+/// the Workflow section. The `rustcode-viz` clause is added by
+/// [`harness_instructions`], only for a client that draws the blocks.
 pub(crate) fn harness_output_style() -> String {
     format!(
         "{OUTPUT_STYLE_PROMPT_HINT}Cite code as `path:line` with the full repo-relative path.\n"
@@ -2534,14 +2534,16 @@ pub(crate) fn harness_output_style() -> String {
 
 /// What an external harness adds to its own system prompt (as T3 Code's
 /// runtime instructions do): where it runs, so it can say so when asked and
-/// link what it makes so the app opens it, then [`harness_output_style`].
-pub(crate) fn harness_instructions(harness: &str) -> String {
+/// link what it makes so the app opens it, the `rustcode-viz` types the
+/// connected client draws (none at level 0), then [`harness_output_style`].
+pub(crate) fn harness_instructions(harness: &str, visualization_level: u8) -> String {
     let harness = harness.split_whitespace().collect::<Vec<_>>().join(" ");
     format!(
         "<runtime_info>In case you're asked: you are running in RustCode through the {harness} harness. \
          No need to mention this otherwise. You can embed images in your reply with Markdown image syntax \
          and an absolute file path. Link any other file you produce by its absolute path so the user can \
-         open it from RustCode.</runtime_info>\n\n{}",
+         open it from RustCode.</runtime_info>\n\n{}{}",
+        visualization_prompt_hint(visualization_level),
         harness_output_style()
     )
 }

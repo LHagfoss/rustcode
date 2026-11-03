@@ -1252,10 +1252,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .name("rustcode")
         .on_receive_request(
             async |request: InitializeRequest, responder, _connection| {
-                server.visualization_level.store(
-                    client_visualization_level(&request.client_capabilities),
-                    Ordering::Relaxed,
-                );
+                let visualization_level = client_visualization_level(&request.client_capabilities);
+                server
+                    .visualization_level
+                    .store(visualization_level, Ordering::Relaxed);
+                crate::harness::set_client_visualization_level(visualization_level);
                 server.client_smart_ui.store(
                     client_smart_ui(&request.client_capabilities).as_u8(),
                     Ordering::Relaxed,

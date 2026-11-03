@@ -24,9 +24,24 @@ pub(crate) mod transcript;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) const BUILTIN_ID: &str = "rustcode";
+
+/// The `rustcode-viz` level the connected client draws (`acp.rs`
+/// `client_visualization_level`). An engine serves one client, so external
+/// harnesses started afterwards are taught the same widget types as a
+/// RustCode thread; 0 (no client yet, or one that draws none) teaches none.
+static CLIENT_VISUALIZATION_LEVEL: AtomicU8 = AtomicU8::new(0);
+
+pub(crate) fn set_client_visualization_level(level: u8) {
+    CLIENT_VISUALIZATION_LEVEL.store(level, Ordering::Relaxed);
+}
+
+pub(crate) fn client_visualization_level() -> u8 {
+    CLIENT_VISUALIZATION_LEVEL.load(Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

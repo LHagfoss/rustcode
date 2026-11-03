@@ -5016,6 +5016,22 @@ fn output_style_reaches_root_prompts_within_budget() {
 }
 
 #[test]
+fn harness_instructions_teach_the_viz_types_the_client_draws() {
+    use super::schema::{harness_instructions, harness_output_style};
+    let none = harness_instructions("Claude Code", 0);
+    assert!(none.contains("through the Claude Code harness"));
+    assert!(!none.contains("rustcode-viz"));
+    assert!(none.ends_with(&harness_output_style()));
+
+    let level_1 = harness_instructions("Codex", 1);
+    assert!(level_1.contains("```rustcode-viz") && !level_1.contains("line_chart"));
+    assert!(level_1.ends_with(&harness_output_style()));
+
+    let level_2 = harness_instructions("Pi", 2);
+    assert!(level_2.contains("line_chart") && level_2.contains("checklist"));
+}
+
+#[test]
 fn desktop_control_is_only_offered_to_capable_root_sessions() {
     let has_desktop = |policy| {
         native_tools_schema_for_context(policy, &[])
