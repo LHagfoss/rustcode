@@ -12,6 +12,7 @@ import type {
   SessionUsage,
   ToolStatus,
 } from "../acp/types";
+import { unwrapShell } from "../lib/command";
 import type { ComposeExtras, SentAttachment } from "./compose";
 
 export type TranscriptItem =
@@ -527,8 +528,34 @@ export interface TurnCompletion {
   checks: { command: string; outcome: "passed" | "failed" | "unknown" }[];
 }
 
-const CHECK =
-  /\b(test|tests|check|lint|clippy|typecheck|tsc|pytest|jest|vitest|build|fmt\s+--check|swift-test)\b/;
+/** A run of tests, a linter, a type check or a build: the program, or a runner and its verb. */
+const CHECK_PROGRAM = /^(pytest|jest|vitest|tsc|eslint|ruff|mypy|clippy|swift-test|playwright)$/;
+const CHECK_RUNNER =
+  /^(cargo|bun|bunx|npm|pnpm|yarn|npx|deno|go|swift|make|just|uv|python3?|mix|dotnet|gradle|\.\/gradlew|mvn|xcodebuild|biome)$/;
+const CHECK_VERB = /^(test|tests|check|lint|clippy|typecheck|tsc|pytest|build|ci|fmt|vitest|jest)(:\S+)?$/;
+
+/**
+ * The checks a command line runs, each as typed: `bun test && bun run lint` is two.
+ * A word in a path (`nl src/queue.test.ts`) or an option (`git diff --check`) is not one.
+ */
+export function checkCommands(command: string): string[] {
+  return unwrapShell(command.trim())
+    .split(/\s*(?:&&|\|\||;|\n)\s*/)
+    .flatMap((part) => {
+      const words = part
+        .trim()
+        .split(/\s+/)
+        .filter((w) => !/^\w+=/.test(w));
+      const program = words[0]?.split("/").at(-1) ?? "";
+      if (CHECK_PROGRAM.test(program)) return [words.join(" ")];
+      if (!CHECK_RUNNER.test(program)) return [];
+      // The verb comes first, after `run`/`-m`, or after a few options (`cargo +nightly clippy`).
+      const verbs = words
+        .slice(1, 5)
+        .filter((w) => !w.startsWith("-") && !w.startsWith("+") && w !== "run" && w !== "x");
+      return verbs[0] && CHECK_VERB.test(verbs[0]) ? [words.join(" ")] : [];
+    });
+}
 
 /** What the turn ending at `endIndex` changed and which checks it ran, from its tool calls only. */
 export function turnCompletion(items: TranscriptItem[], endIndex: number): TurnCompletion | null {
@@ -555,9 +582,8 @@ export function turnCompletion(items: TranscriptItem[], endIndex: number): TurnC
         : typeof input.cmd === "string"
           ? input.cmd
           : undefined;
-    if (command && CHECK.test(command)) {
-      const key = command.trim().split(/\s+/).join(" ");
-      const failed = item.status === "failed" || (item.exitCode !== undefined && item.exitCode !== 0);
+    const failed = item.status === "failed" || (item.exitCode !== undefined && item.exitCode !== 0);
+    for (const key of command ? checkCommands(command) : []) {
       // A check run again counts as its last run.
       checks.delete(key);
       checks.set(key, {
