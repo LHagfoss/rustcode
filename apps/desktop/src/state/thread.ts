@@ -404,6 +404,18 @@ export function finishLoad(state: ThreadState): ThreadState {
   return { ...closed, loading: false, loaded: true, items: finishAllThoughts(closed.items, Date.now()) };
 }
 
+/** One quiet row in the transcript, for something the app did on the thread's behalf. */
+export function appendNotice(
+  state: ThreadState,
+  text: string,
+  tone: "info" | "warning" = "info",
+): ThreadState {
+  return {
+    ...state,
+    items: [...state.items, { kind: "notice", id: localId("notice"), text, tone }],
+  };
+}
+
 /** Add a steered message where the running turn will read it. */
 export function appendSteer(state: ThreadState, text: string, now = Date.now()): ThreadState {
   return {
