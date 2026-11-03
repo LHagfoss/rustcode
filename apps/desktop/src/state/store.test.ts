@@ -14,6 +14,7 @@ import {
   ensureHarnessModels,
   fetchHarnessModels,
   moveThread,
+  permissionModeOf,
   pickNewThreadChoice,
   refreshAgents,
   refreshHarnesses,
@@ -237,7 +238,7 @@ describe("engine controller with the mock engine", () => {
       expect(asked).toBe(false);
       expect(selected()!.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "completed" });
     } finally {
-      setPermissionMode(undefined, "ask");
+      resetForTests();
     }
   });
 
@@ -582,4 +583,20 @@ describe("finished threads", () => {
     clearFinished("t1");
     expect(useApp.getState().finished).toEqual({});
   });
+});
+
+test("a mode chosen in one thread leaves the other listed threads as they were", async () => {
+  resetForTests();
+  useApp.setState({
+    sessions: [
+      { id: "a", title: "A", cwd: "/tmp" },
+      { id: "b", title: "B", cwd: "/tmp" },
+    ] as never,
+  });
+  setPermissionMode("b", "full");
+  const s = useApp.getState();
+  expect(permissionModeOf(s, "b")).toBe("full");
+  expect(permissionModeOf(s, "a")).toBe("ask");
+  expect(permissionModeOf(s, "new-thread")).toBe("full");
+  resetForTests();
 });

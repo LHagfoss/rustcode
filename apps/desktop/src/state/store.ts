@@ -1633,19 +1633,21 @@ export function permissionModeOf(s: AppState, threadId: string | undefined): Per
 
 /**
  * Set what `threadId` may do without asking (the draft's when undefined); it is also the
- * default for threads not set yet. Requests already waiting that the mode now allows are answered.
+ * default for new threads. Requests already waiting that the mode now allows are answered.
  */
 export function setPermissionMode(threadId: string | undefined, mode: PermissionMode) {
-  const modes = threadId ? { ...get().permissionModes, [threadId]: mode } : get().permissionModes;
+  // The new default is for threads to come: the ones already listed keep the mode they had.
+  const { defaultPermissionMode: before, sessions, threads } = get();
+  const modes = { ...get().permissionModes };
+  for (const id of [...sessions.map((x) => x.id), ...Object.keys(threads)]) modes[id] ??= before;
+  if (threadId) modes[threadId] = mode;
   set({ defaultPermissionMode: mode, permissionModes: modes });
   store(STORAGE.permissionMode, mode);
   store(STORAGE.permissionModes, JSON.stringify(modes));
-  const ids = threadId ? [threadId] : Object.keys(get().threads);
-  for (const id of ids) {
-    for (const request of get().threads[id]?.permissions ?? []) {
-      const option = autoAnswer(request, permissionModeOf(get(), id));
-      if (option) reply(request, permissionSelected(option.id));
-    }
+  if (!threadId) return;
+  for (const request of get().threads[threadId]?.permissions ?? []) {
+    const option = autoAnswer(request, mode);
+    if (option) reply(request, permissionSelected(option.id));
   }
 }
 
@@ -2232,6 +2234,8 @@ export function resetForTests() {
     themes: null,
     themeActive: "rustcode",
     statusMarks: {},
+    defaultPermissionMode: "ask",
+    permissionModes: {},
     view: { kind: "chat" },
     checkpoints: {},
     newWorktree: { on: false, branch: "", edited: false },

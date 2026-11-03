@@ -27,8 +27,26 @@ const EDIT_KINDS = new Set(["read", "edit", "move", "search", "think", "fetch"])
  */
 export function autoAnswer(request: PermissionRequest, mode: PermissionMode): PermissionOption | null {
   if (mode === "ask" || request.question || request.toolKind === "switch_mode") return null;
-  if (mode === "edits" && !EDIT_KINDS.has(request.toolKind ?? "")) return null;
+  if (mode === "edits" && !EDIT_KINDS.has(kindOf(request))) return null;
   return allowOption(request);
+}
+
+/** RustCode's built-in tools ask without an ACP kind; their names say it. */
+const BUILTIN_KINDS: Record<string, string> = {
+  replace_file_content: "edit",
+  multi_replace_file_content: "edit",
+  write_to_file: "edit",
+  write_file_chunk: "edit",
+  copy_file: "edit",
+  move_file: "move",
+  view_file: "read",
+  delete_file: "delete",
+  run_command: "execute",
+};
+
+function kindOf(request: PermissionRequest): string {
+  if (request.toolKind && request.toolKind !== "other") return request.toolKind;
+  return BUILTIN_KINDS[request.title.split(/\s/)[0] ?? ""] ?? "other";
 }
 
 export function allowOption(request: PermissionRequest): PermissionOption | null {

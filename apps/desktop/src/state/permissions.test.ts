@@ -40,6 +40,14 @@ describe("autoAnswer", () => {
     ).toBeNull();
   });
 
+  test("Auto-edit reads RustCode's built-in tool names when no kind is sent", () => {
+    expect(autoAnswer(request("", { toolKind: undefined, title: "replace_file_content" }), "edits")?.id).toBe(
+      "allow",
+    );
+    expect(autoAnswer(request("", { toolKind: undefined, title: "run_command" }), "edits")).toBeNull();
+    expect(autoAnswer(request("", { toolKind: undefined, title: "delete_file" }), "edits")).toBeNull();
+  });
+
   test("a request without an allow option still asks", () => {
     expect(
       autoAnswer(
