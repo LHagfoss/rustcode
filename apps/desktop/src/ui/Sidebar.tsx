@@ -91,8 +91,8 @@ function useSidebarWidth() {
 }
 
 const menuItem =
-  "flex w-full items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill";
-const menuSurface = "elevated z-50 min-w-[190px] rounded-lg p-1 rc-in";
+  "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
+const menuSurface = "elevated z-50 min-w-[200px] rounded-xl p-1.5 rc-in";
 
 function ThreadMenuItems({
   session,
