@@ -201,6 +201,8 @@ export interface AppState {
   resumeAfterRestart: boolean;
   /** The interface in SF Pro Rounded (the default) or the standard system font. */
   roundedFont: boolean;
+  /** A streaming reply's new words fade in as the model writes them. */
+  animateStreaming: boolean;
   orchestrationPending: boolean;
   /** Links between threads, fan-outs and grants, kept in app storage. */
   links: LinkBook;
@@ -253,6 +255,7 @@ const STORAGE = {
   /** The ids of the threads running a turn, kept while the engine is up. */
   runningThreads: "rustcode.runningThreads",
   roundedFont: "rustcode.roundedFont",
+  animateStreaming: "rustcode.animateStreaming",
   statusMarks: "rustcode.statusMarks",
   permissionMode: "rustcode.permissionMode",
   permissionModes: "rustcode.permissionModes",
@@ -300,6 +303,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   orchestration: stored(STORAGE.orchestration) !== "0",
   resumeAfterRestart: stored(STORAGE.resumeAfterRestart) !== "0",
   roundedFont: stored(STORAGE.roundedFont) !== "0",
+  animateStreaming: stored(STORAGE.animateStreaming) !== "0",
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
@@ -2035,6 +2039,11 @@ export function setResumeAfterRestart(on: boolean) {
 export function setRoundedFont(on: boolean) {
   set({ roundedFont: on });
   store(STORAGE.roundedFont, on ? "1" : "0");
+}
+
+export function setAnimateStreaming(on: boolean) {
+  set({ animateStreaming: on });
+  store(STORAGE.animateStreaming, on ? "1" : "0");
 }
 
 export function setOrchestration(on: boolean) {
