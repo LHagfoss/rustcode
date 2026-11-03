@@ -10,7 +10,7 @@ apps, the CLI and on disk. Only the Agent Client Protocol keeps its own name,
 | Term | Means | Where it shows |
 | --- | --- | --- |
 | **Thread** | A conversation the user sees and returns to: its messages, its project folder, its model, its history, logs and folder under `~/.config/rustcode/threads/`. | macOS and iOS sidebars and menus, the TUI, the CLI (`rustcode threads …`), storage, logs. |
-| **Session** | The Agent Client Protocol's name for a thread. One thread is one ACP session. | ACP only (`session/new`, `session/load`, `sessionId`), and internal code identifiers that have not been renamed. |
+| **Session** | The provider's own handle on a conversation: an ACP `sessionId` or a Codex thread id. In RustCode it is a *binding* to a thread, not the app's object ([the execution graph](architecture/execution-graph.md)); today one thread still has exactly one. | ACP (`session/new`, `session/load`, `sessionId`), and internal code identifiers that have not been renamed. |
 | **Turn** | One user message and everything the agent does to answer it, until the answer ends or the user stops it. | "Worked for 1m 29s", the turn summary, Stop. |
 | **Round** | One model request inside a turn; tool calls run between rounds. | Logs and `turn.summary` events (`rounds`), not the UI. |
 | **Tool call** | One action the agent takes in a round (read, edit, run a command). | The thread's steps. |
@@ -33,11 +33,17 @@ These three are easy to mix up:
   not "the Codex agent", for an external harness, so "agent" keeps meaning
   the rows under a thread.
 
-## Session = thread
+## Session = the provider's handle
 
-A session and a thread are the same thing: one conversation, one id, one
-folder. "Thread" is the name; "session" is what older code, ACP and some
-files still say. Wherever both appear they mean the same:
+A thread is the conversation; a session is the provider's handle on it. Today
+they coincide — one thread, one id, one folder, one ACP session — and the two
+words are used for the same thing. That is an implementation detail, not the
+model: [#2882](https://github.com/LHagfoss/rustcode/issues/2882) gives a thread
+1..n provider threads (a harness or provider switch adds one), and a session
+then names only the binding. The domain model is
+[the execution graph](architecture/execution-graph.md).
+
+Where both words appear today they mean the same:
 
 | You see | Means the same as | Where |
 | --- | --- | --- |

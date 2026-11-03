@@ -48,6 +48,11 @@ Next, in rough order:
    sidebar listed from the index, lazy transcript import.
 5. The rest of [Not yet ported](#not-yet-ported).
 
+Item 4 and the rest of the orchestration work move the domain model from
+sessions to a T3-style execution graph:
+[architecture/execution-graph.md](architecture/execution-graph.md) records that
+decision, the current → target mapping and the migration order (#2879).
+
 Checking UI: the mock (`bun run dev:mock`) driven by headless Chrome over
 CDP at 1512×945 @2x, never a browser pane in the user's terminal; WebKit
 (the app) can differ from Chrome, so check alignment-sensitive changes in
