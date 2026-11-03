@@ -819,9 +819,9 @@ built for the CLI. Extra arguments go to `tauri build`, e.g.
   [install.md](install.md#testing-the-installers-without-a-release)).
 - **CI.** `build.yml`'s `desktop-macos` job (also for a beta) and `desktop`
   job (Windows, Linux) build these from the CLI jobs' engine artifacts, and
-  the release lists them in `SHA256SUMS`. The macOS zip is also published as
-  `rustcode-macos-aarch64-swift-app.zip`, the name the SwiftUI app's updater
-  downloads, so existing SwiftUI installs update into this app.
+  the release lists them in `SHA256SUMS`. Releases up to 1.2.0 also published
+  the macOS zip as `rustcode-macos-aarch64-swift-app.zip` so SwiftUI installs
+  could update into this app; that bridge has ended.
 - **Signing.** The macOS bundle is ad-hoc signed (`signingIdentity: "-"`);
   with the `MACOS_*` secrets (docs/macos-release-signing.md) the job passes
   the Developer ID as `APPLE_SIGNING_IDENTITY` and notarizes and staples the

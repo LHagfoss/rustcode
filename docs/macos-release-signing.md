@@ -3,9 +3,7 @@
 Tagged releases publish the macOS CLI archive
 `rustcode-macos-aarch64.tar.gz` (also used by the Homebrew formula) and the
 desktop app `RustCode-<ver>-macos-aarch64.app.zip` (apps/desktop, Tauri),
-which bundles the same engine as `Contents/MacOS/rustcode`. The same zip is
-also published as `rustcode-macos-aarch64-swift-app.zip`, the name the
-retired SwiftUI app's updater downloads.
+which bundles the same engine as `Contents/MacOS/rustcode`.
 
 The release workflow (`.github/workflows/build.yml`) signs both with a
 Developer ID and notarizes them **only when all five secrets below are set**.

@@ -136,10 +136,9 @@ the identifier `dev.rustcode.desktop` (`tauri.conf.json`); only the bundle
 (`tauri.bundle.conf.json`) takes the release identity, so development data
 stays apart from the installed app.
 
-Releases publish the macOS app zip a second time as
-`rustcode-macos-aarch64-swift-app.zip`, the name the SwiftUI app's updater
-downloads: an installed SwiftUI app offers the update and replaces itself
-with this app.
+An old SwiftUI RustCode app no longer finds updates: releases up to 1.2.0
+carried it over to this app, and later ones do not. Download the app zip from
+the release page instead.
 
 Until releases are signed with a Developer ID and notarized
 ([macOS release signing](macos-release-signing.md)), the app is ad-hoc
@@ -151,125 +150,6 @@ copy downloaded with a browser needs right-click › Open once, or
 
 The desktop app lives in `apps/desktop` (Tauri 2, React, Tailwind). Build
 and run it as described in [desktop.md](desktop.md).
-
-### SwiftUI macOS app (no longer released)
-
-The SwiftUI app in `macos/` is frozen: releases no longer ship it, and its
-CI (`macos-swift-ci.yml`) keeps running until it is archived. The rest of
-this section describes it for anyone building it from source.
-
-The native SwiftUI app is a separate front end to the Rust engine. It launches
-`rustcode --acp` as a child process; the reusable protocol client and process
-management code live in the UI-independent `RustCodeKit` Swift package target.
-How the app is put together (targets, engine-to-UI data flow, state and
-tests) is in [macOS app architecture](architecture/macos-app.md).
-Build and test it on macOS with Swift 6:
-
-```bash
-cd macos
-swift build
-swift test
-```
-
-To create a local app bundle using an existing executable engine:
-
-```bash
-cd ..
-cargo build --release -p rustcode-tui
-scripts/package-swift-app.sh target/release/rustcode
-open target/swift-app/RustCode.app
-```
-
-
-⌘K (File > Switch Chat…) opens a switcher over the window: type part of a
-chat's title, project or model, or something said in it, move with ↑↓ and
-press ⏎ to open the highlighted chat, or Esc to close. It searches in the
-sidebar's All or Project scope, which it can also switch.
-
-To hand a message to another chat without leaving this one, type it, then
-choose **+ > Send Message to Another Chat…** and pick the chat. It runs there as
-that chat's own turn, in its folder, after any turn it is running; this chat
-stays open. Its answer arrives as for any chat working in the background: a
-toast that opens it and a dot in the sidebar. It is a one-way handoff, so the
-answer stays in that chat.
-
-Long chats can be read from the keyboard: Page Up and Page Down (fn-↑ and
-fn-↓ on a laptop) scroll the chat by a screen, Home goes to its first message
-and End to the latest, following new output again like the Latest button. The
-keys work while the composer or chat search has focus, since they do not edit
-text there; with Shift, Option, Control or Command they are left to the text
-field, and they stay with the terminal, the preview and open sheets.
-
-Questions the agent asks (`ask_question`) appear as cards: one button per
-option, ticks and Submit for multi-select questions, and a free-text answer.
-
-The Swift app remembers the last project folder and can choose another from
-its sidebar. Its workspace is sent as the ACP session working directory; the
-engine's configured sandbox and permission policy still govern file and tool
-access. Tool permissions are requested through ACP and the app never starts the
-engine with `--yolo`.
-
-To look at a web app the agent is building, open the localhost preview with
-⇧⌘P (View > Show Preview, or the globe button in the chat's title bar). It is a
-panel beside the chat that shows a running dev server in an embedded WebKit
-view, with JavaScript, client-side routing and the server's assets working as in
-a browser. Enter `http://localhost:PORT`, `127.0.0.1` or `[::1]` (a bare port
-such as `5173` means localhost); other hosts are refused with an offer to open
-them in the browser, and links to other sites open there too. Back, forward,
-reload (⌘R) and Open in Browser are in its toolbar, an unreachable server shows
-Retry, and the last URL is remembered per project. Showing a page gives the
-agent nothing: it can inspect, screenshot or drive the preview with the
-`localhost_preview` tool only after you choose Allow for This Chat in the
-panel's prompt, only on the approved localhost origin, and only until you click
-the Agent button in the preview's toolbar to revoke it, switch project or
-restart the engine. Details and limits are in [docs/preview.md](preview.md).
-
-For your own commands, open the terminal with ⇧⌘T (View > Show Terminal, the
-terminal button in the chat's title bar, or `/terminal` in the composer, which
-works even while the engine is not running). It is a resizable drawer under the
-chat running your login shell (`$SHELL`, else the account's shell) on a real
-PTY, so interactive programs, colors, Unicode, resizing and Ctrl-C behave as in
-Terminal. It starts with the same environment the app gives the engine (the
-usual tool directories appended to `PATH`, plus `TERM=xterm-256color` and a
-UTF-8 locale when none is set), and your shell profile runs as a login shell.
-
-- Terminals belong to the project they were opened in and start in its folder;
-  the panel header shows the project and directory. Switching projects shows
-  that project's terminals only: the others keep running, are never sent input
-  and never move. A project folder that no longer exists is reported instead of
-  starting the shell elsewhere.
-- Use + (or View > New Terminal Tab) for more tabs, up to 8 per project. A shell
-  that exits shows Relaunch; closing a tab ends its shell and everything it
-  started, after asking if something is still running. Hiding the panel never
-  stops a process.
-- Quitting RustCode hangs up every terminal and kills what remains after a
-  short grace period, so dev servers do not outlive the app.
-- Each terminal keeps 10,000 lines of scrollback; older lines are dropped.
-- A dev server started here works with the preview: click its
-  `http://localhost:PORT` link to load it in the preview (other web links open
-  in the browser), or type the address there. The preview works without the
-  terminal.
-- Start a composer message with `!` to run it in the terminal instead of
-  sending it to the agent: `! ls` (or `!ls`) types `ls` into the open project's
-  selected terminal tab and presses Return, so it uses that shell's folder,
-  environment and history, and its output appears there. It runs at once, even
-  while the chat is working. A line you had half typed in that shell is cleared
-  first (⌃Y brings it back in zsh and bash). With no terminal one is opened; an
-  exited shell is started again. If a program holds the terminal (an editor, a
-  REPL, a dev server not sent to the background) the command is refused rather
-  than typed into it; open another tab or finish the program. A lone `!` and
-  commands of more than one line are refused. To send the agent a message that
-  starts with `!`, begin it with `!!` (`!!important` sends `!important`). Only
-  you can issue these: the agent never runs `!` commands, and their output is
-  not sent to it.
-
-The terminal is not an agent tool. What you type runs directly as you, without
-the engine's sandbox or tool approvals, and the agent never sees its input or
-output. The agent's own shell commands still go through the engine, its
-sandbox and its permission prompts. The emulator is
-[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, pinned in
-`macos/Package.swift`; its license ships in the app's `Contents/Resources`).
-
 
 ## Updating
 
