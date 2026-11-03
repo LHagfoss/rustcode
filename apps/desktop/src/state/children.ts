@@ -59,14 +59,39 @@ export function orderChildren(children: ChildInfo[], selectedId: string | null):
 /**
  * Whether the children show as rows at all. Otherwise the group is one line:
  * a parent you are not reading, with nothing under it that wants you, has no
- * reason to spend five rows of the sidebar.
+ * reason to spend five rows of the sidebar. `collapsed` is the reader closing
+ * the group by hand: it overrides the parent (or a finished child) being open,
+ * so the chevron can always say what clicking it did. A child that wants you is
+ * listed whatever else is true: it is the one row that cannot be closed away.
  */
 export function childrenListed(
   children: ChildInfo[],
-  open: { expanded: boolean; parentSelected: boolean; selectedId: string | null },
+  open: {
+    expanded: boolean;
+    collapsed?: boolean;
+    parentSelected: boolean;
+    selectedId: string | null;
+  },
 ): boolean {
-  if (open.expanded || open.parentSelected) return true;
-  return children.some((c) => c.state === "needs" || c.id === open.selectedId);
+  if (open.expanded) return true;
+  if (children.some((c) => c.state === "needs")) return true;
+  if (open.collapsed) return false;
+  if (open.parentSelected) return true;
+  return children.some((c) => c.id === open.selectedId);
+}
+
+/**
+ * The groups the reader opened or closed, without the ones whose parent is no
+ * longer in the list: a record that keeps every id it ever saw grows forever.
+ */
+export function pruneOpenGroups(
+  groups: Record<string, boolean>,
+  listed: Iterable<string>,
+): Record<string, boolean> {
+  const keep = new Set(listed);
+  const next: Record<string, boolean> = {};
+  for (const [id, open] of Object.entries(groups)) if (keep.has(id)) next[id] = open;
+  return next;
 }
 
 /** The group's dot: one child finished unseen, or one failed there. */

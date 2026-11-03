@@ -14,7 +14,7 @@ import type {
 } from "../acp/types";
 import { unwrapShell } from "../lib/command";
 import type { ComposeExtras, SentAttachment } from "./compose";
-import { bareTool, displayTool, usefulSummary } from "./toolNames";
+import { displayTool, orchestrationTool, usefulSummary } from "./toolNames";
 
 export type TranscriptItem =
   | {
@@ -528,12 +528,17 @@ export function attachAutoAllowed(
   tool: string,
   mode: string,
 ): { state: ThreadState; attached: boolean } {
-  const want = bareTool(tool);
+  const want = orchestrationTool(tool);
+  if (!want) return { state, attached: false };
   for (let i = state.items.length - 1; i >= 0; i--) {
     const item = state.items[i]!;
     if (item.kind !== "tool") continue;
     if (item.status !== "pending" && item.status !== "in_progress") continue;
-    if (bareTool(item.title) !== want) continue;
+    // A row that already says why keeps its first answer: two calls in flight
+    // mark two rows, not the same one twice.
+    if (item.autoAllowed) continue;
+    // Only RustCode's own server, or a bare name: another server's tool is not ours.
+    if (orchestrationTool(item.title) !== want) continue;
     return {
       state: { ...state, items: replaceAt(state.items, i, { ...item, autoAllowed: mode }) },
       attached: true,

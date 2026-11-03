@@ -6,6 +6,7 @@ import {
   childSummary,
   childVisible,
   orderChildren,
+  pruneOpenGroups,
   unseenChild,
 } from "./children";
 
@@ -88,6 +89,24 @@ describe("when the group is a line", () => {
     expect(childrenListed(quiet, { expanded: true, parentSelected: false, selectedId: null })).toBe(true);
     expect(childrenListed(quiet, { expanded: false, parentSelected: true, selectedId: null })).toBe(true);
     expect(childrenListed(quiet, { expanded: false, parentSelected: false, selectedId: "a" })).toBe(true);
+  });
+
+  test("closing the group by hand overrides the parent, but never a child that wants you", () => {
+    const closed = { expanded: false, collapsed: true, parentSelected: true, selectedId: "a" } as const;
+    expect(childrenListed(quiet, closed)).toBe(false);
+    expect(childrenListed([...quiet, child("c", "needs")], closed)).toBe(true);
+    // Opening it again wins over an earlier close.
+    expect(childrenListed(quiet, { ...closed, expanded: true })).toBe(true);
+  });
+});
+
+describe("the groups the reader opened", () => {
+  test("writes leave out the parents that are no longer listed", () => {
+    const groups = { a: true, gone: false, b: true };
+    expect(pruneOpenGroups(groups, ["a", "b", "c"])).toEqual({ a: true, b: true });
+    expect(pruneOpenGroups(groups, [])).toEqual({});
+    // A parent that is still listed keeps the state it was given.
+    expect(pruneOpenGroups({ a: false }, ["a"])).toEqual({ a: false });
   });
 });
 

@@ -20,6 +20,13 @@ export const ORCHESTRATION_TOOLS = [
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
 const MCP_PREFIX = /^mcp__/;
 const IDENT = /^[A-Za-z][A-Za-z0-9_-]*$/;
+/**
+ * The servers whose dotted (or slashed, or colon-separated) spelling is a tool call.
+ * Only RustCode's own is known here: the other MCP servers come from the
+ * engine at runtime, and guessing turned titles like `bin/run_tests` into MCP
+ * calls.
+ */
+const KNOWN_SERVERS = new Set(["rustcode"]);
 
 /** An object input, for the tools whose title comes from their arguments. */
 const objectOf = (input: Json | undefined): Record<string, Json> =>
@@ -29,11 +36,13 @@ const text = (value: Json | undefined) => (typeof value === "string" ? value.tri
 
 /**
  * The server and tool a call's name holds, when it names one: `mcp__mail__send`
- * and `mail.send` both give `{ server: "mail", tool: "send" }`. A plain tool
- * name stays whole (`bash`).
+ * and `rustcode.start_session` both give `{ server, tool }`. A plain tool name
+ * stays whole (`bash`), and so does a title that only looks like a server and a
+ * tool (`bin/run_tests`, `foo.barBaz`): those are not MCP calls.
  */
 export function splitToolName(name: string): { server?: string; tool: string } {
   const trimmed = name.trim();
+  // The `mcp__` prefix is the MCP convention itself, so it always names a server.
   if (MCP_PREFIX.test(trimmed)) {
     const rest = trimmed.replace(MCP_PREFIX, "");
     const at = rest.indexOf("__");
@@ -43,24 +52,32 @@ export function splitToolName(name: string): { server?: string; tool: string } {
     if (IDENT.test(rest)) return { server: rest, tool: rest };
     return { tool: trimmed };
   }
+  // The other spellings are only a call when the server is one we know.
   const at = trimmed.search(/[./:]/);
   if (at > 0) {
     const server = trimmed.slice(0, at);
     const tool = trimmed.slice(at + 1);
-    // Only when both halves name things: `foo.md` is a file, `mail.send_mail` is a call.
-    if (IDENT.test(server) && IDENT.test(tool) && (tool.includes("_") || /[A-Z]/.test(tool))) {
-      return { server, tool };
-    }
+    if (KNOWN_SERVERS.has(server) && IDENT.test(tool)) return { server, tool };
   }
   const sep = trimmed.indexOf("__");
-  if (sep > 0 && IDENT.test(trimmed.slice(0, sep)) && IDENT.test(trimmed.slice(sep + 2))) {
-    return { server: trimmed.slice(0, sep), tool: trimmed.slice(sep + 2) };
+  if (sep > 0) {
+    const server = trimmed.slice(0, sep);
+    const tool = trimmed.slice(sep + 2);
+    if (KNOWN_SERVERS.has(server) && IDENT.test(tool)) return { server, tool };
   }
   return { tool: trimmed };
 }
 
-/** The tool a call names, stripped of its server: `start_session` for `mcp__rustcode__start_session`. */
-export const bareTool = (name: string) => splitToolName(name).tool;
+/**
+ * The RustCode orchestration tool a call names, when it names one: a bare
+ * `start_session`, or one from RustCode's own server. Another MCP server's
+ * `start_session` is its own tool, not ours.
+ */
+export function orchestrationTool(name: string): string | undefined {
+  const { server, tool } = splitToolName(name);
+  if (server && server !== "rustcode") return undefined;
+  return (ORCHESTRATION_TOOLS as readonly string[]).includes(tool) ? tool : undefined;
+}
 
 /** `start_session` reads `Start session`: underscores become spaces, the first letter goes up. */
 export const humanizeTool = (tool: string) =>
@@ -99,8 +116,9 @@ export interface ToolLabel {
 export function displayTool(name: string, input?: Json, status?: ToolStatus): ToolLabel {
   const { server, tool } = splitToolName(name);
   const args = objectOf(input);
-  if (server === "rustcode" || (!server && (ORCHESTRATION_TOOLS as readonly string[]).includes(tool))) {
-    const special = orchestrationLabel(tool, args, status);
+  const called = orchestrationTool(name);
+  if (called) {
+    const special = orchestrationLabel(called, args, status);
     if (special) return { ...special, source: server ?? "rustcode" };
     if (server) return { title: humanizeTool(tool), source: server };
   }

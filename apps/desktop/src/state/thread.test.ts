@@ -97,6 +97,22 @@ describe("thread reducer", () => {
     expect(attachAutoAllowed(s, "message_session", "Full access").attached).toBe(false);
   });
 
+  test("two calls in flight mark two rows, and only RustCode's own call is marked", () => {
+    const s = apply([
+      { kind: "user", text: "go" },
+      { kind: "toolCall", id: "a", title: "mcp__rustcode__start_session", diffs: [] },
+      { kind: "toolCall", id: "b", title: "mcp__rustcode__start_session", diffs: [] },
+      { kind: "toolCall", id: "other", title: "mcp__github__start_session", diffs: [] },
+    ]);
+    const first = attachAutoAllowed(s, "start_session", "Full access");
+    const second = attachAutoAllowed(first.state, "start_session", "Full access");
+    expect([first.attached, second.attached]).toEqual([true, true]);
+    const marked = second.state.items.flatMap((i) => (i.kind === "tool" ? [i.autoAllowed] : []));
+    expect(marked).toEqual(["Full access", "Full access", undefined]);
+    // Both rows are spoken for: a third call has no row of its own to mark.
+    expect(attachAutoAllowed(second.state, "start_session", "Full access").attached).toBe(false);
+  });
+
   test("replayed turn timing becomes a footer before the next user message and at the end of the load", () => {
     const s = finishLoad(
       apply([

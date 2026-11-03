@@ -48,7 +48,7 @@ import {
   type TurnCompletion,
   thoughtHeadings,
 } from "../state/thread";
-import { bareTool, displayTool, sessionIdOf, usefulSummary } from "../state/toolNames";
+import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
@@ -301,7 +301,11 @@ export const KIND_ICON: Record<string, typeof Wrench> = {
   fetch: Globe,
   agent: Users,
   skill: Book,
-  thread: MessagesSquare,
+  // RustCode's orchestration calls: threads started, messaged, read or listed, and waited on.
+  start: MessagesSquare,
+  message: MessagesSquare,
+  read_thread: MessagesSquare,
+  list_thread: MessagesSquare,
   wait: Hourglass,
   other: Wrench,
 };
@@ -445,7 +449,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   // The line that tells two calls apart; a lone fence marker is not one.
   const summary = usefulSummary(item.summary) ?? label.summary;
   // A `start_session` that answered with a thread: the row opens it, and shows how it is doing.
-  const startedId = bareTool(item.title) === "start_session" ? sessionIdOf(item.output) : undefined;
+  const startedId = orchestrationTool(item.title) === "start_session" ? sessionIdOf(item.output) : undefined;
   const link = useApp((s) => (startedId ? s.links.links.find((l) => l.target === startedId) : undefined));
   const linkState = useApp((s) => (link ? stateOf(s, link) : undefined));
   const opensThread = !!startedId && !!link;
@@ -463,65 +467,63 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const input = inputWithoutSummary(item.input);
   return (
     <div className="font-rounded">
-      <button
-        type="button"
-        aria-expanded={opensThread ? undefined : open}
-        onClick={() => (opensThread ? selectThread(startedId) : setOpen(!open))}
-        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
-      >
-        <span className="flex w-[18px] shrink-0 justify-center">
-          {running ? (
-            <Spinner size={12} />
-          ) : failed ? (
-            <CircleX size={13} className="text-danger" />
-          ) : (
-            <Icon size={13} className="text-fg-muted" />
-          )}
-        </span>
-        <span className="min-w-0 max-w-full shrink truncate text-callout text-fg-muted" title={item.title}>
-          {title}
-        </span>
-        {summary && <span className="min-w-0 shrink truncate text-callout text-fg-faint">{summary}</span>}
-        {shownDetail && (
-          <span
-            className={cx(
-              "min-w-0 max-w-[42ch] shrink truncate text-caption text-fg-faint",
-              detail.mono && "font-mono",
+      <div className="group flex items-center gap-0.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="-mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+        >
+          <span className="flex w-[18px] shrink-0 justify-center">
+            {running ? (
+              <Spinner size={12} />
+            ) : failed ? (
+              <CircleX size={13} className="text-danger" />
+            ) : (
+              <Icon size={13} className="text-fg-muted" />
             )}
-            dir="auto"
-          >
-            {shownDetail}
           </span>
-        )}
-        {failed && item.exitCode === undefined && (
-          <span
-            className="min-w-0 max-w-[45%] shrink truncate text-caption text-danger"
-            title={reason || undefined}
-          >
-            {reason || "Failed"}
+          <span className="min-w-0 max-w-full shrink truncate text-callout text-fg-muted" title={item.title}>
+            {title}
           </span>
-        )}
-        <DiffCount {...counts} />
-        {item.exitCode !== undefined && item.exitCode !== 0 && (
-          <span className="font-mono text-caption text-danger">exit {item.exitCode}</span>
-        )}
-        {item.autoAllowed && (
-          <Tooltip label={`Allowed by ${item.autoAllowed}`}>
-            <span className="flex shrink-0 items-center text-fg-faint">
-              <Shield size={11} />
+          {summary && <span className="min-w-0 shrink truncate text-callout text-fg-faint">{summary}</span>}
+          {shownDetail && (
+            <span
+              className={cx(
+                "min-w-0 max-w-[42ch] shrink truncate text-caption text-fg-faint",
+                detail.mono && "font-mono",
+              )}
+              dir="auto"
+            >
+              {shownDetail}
             </span>
-          </Tooltip>
-        )}
-        {linkState && (
-          <Tooltip label={`“${link?.targetTitle}” · ${LINK_LABEL[linkState]}`}>
-            <span className="flex shrink-0 items-center">
-              <LinkStateIcon state={linkState} size={11} />
+          )}
+          {failed && item.exitCode === undefined && (
+            <span
+              className="min-w-0 max-w-[45%] shrink truncate text-caption text-danger"
+              title={reason || undefined}
+            >
+              {reason || "Failed"}
             </span>
-          </Tooltip>
-        )}
-        {opensThread ? (
-          <ExternalLink size={11} className="shrink-0 text-fg-faint opacity-0 group-hover:opacity-100" />
-        ) : (
+          )}
+          <DiffCount {...counts} />
+          {item.exitCode !== undefined && item.exitCode !== 0 && (
+            <span className="font-mono text-caption text-danger">exit {item.exitCode}</span>
+          )}
+          {item.autoAllowed && (
+            <Tooltip label={`Allowed by ${item.autoAllowed}`}>
+              <span className="flex shrink-0 items-center text-fg-faint">
+                <Shield size={11} />
+              </span>
+            </Tooltip>
+          )}
+          {linkState && (
+            <Tooltip label={`“${link?.targetTitle}” · ${LINK_LABEL[linkState]}`}>
+              <span className="flex shrink-0 items-center">
+                <LinkStateIcon state={linkState} size={11} />
+              </span>
+            </Tooltip>
+          )}
           <ChevronRight
             size={11}
             className={cx(
@@ -529,8 +531,20 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
               open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
             )}
           />
+        </button>
+        {startedId && opensThread && (
+          <Tooltip label="Open thread">
+            <button
+              type="button"
+              aria-label="Open thread"
+              onClick={() => selectThread(startedId)}
+              className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
+            >
+              <ExternalLink size={11} />
+            </button>
+          </Tooltip>
         )}
-      </button>
+      </div>
       {tailLines.length > 0 && !open && (
         <pre className="m-0 mt-0.5 ml-[26px] overflow-hidden font-mono text-caption text-fg-muted leading-[15px] whitespace-pre-wrap">
           {tailLines.join("\n")}

@@ -1,23 +1,53 @@
 import { describe, expect, test } from "bun:test";
-import { bareTool, displayTool, humanizeTool, sessionIdOf, splitToolName, usefulSummary } from "./toolNames";
+import {
+  displayTool,
+  humanizeTool,
+  orchestrationTool,
+  sessionIdOf,
+  splitToolName,
+  usefulSummary,
+} from "./toolNames";
 
 describe("tool names", () => {
-  test("an MCP name splits into its server and tool, in every form the harnesses use", () => {
+  test("an `mcp__server__tool` name always splits into its server and tool", () => {
     expect(splitToolName("mcp__rustcode__start_session")).toEqual({
       server: "rustcode",
       tool: "start_session",
     });
     expect(splitToolName("mcp__mail__search_messages")).toEqual({ server: "mail", tool: "search_messages" });
+  });
+
+  test("a dotted name splits only for a server we know", () => {
+    expect(splitToolName("rustcode.start_session")).toEqual({ server: "rustcode", tool: "start_session" });
+    expect(splitToolName("rustcode/start_session")).toEqual({ server: "rustcode", tool: "start_session" });
+    expect(splitToolName("rustcode:start_session")).toEqual({ server: "rustcode", tool: "start_session" });
     expect(splitToolName("rustcode__start_session")).toEqual({ server: "rustcode", tool: "start_session" });
-    expect(splitToolName("mail.search_messages")).toEqual({ server: "mail", tool: "search_messages" });
-    expect(splitToolName("mail/search_messages")).toEqual({ server: "mail", tool: "search_messages" });
+    // Titles that happen to hold a separator are not MCP calls.
+    expect(splitToolName("bin/run_tests")).toEqual({ tool: "bin/run_tests" });
+    expect(splitToolName("foo.barBaz")).toEqual({ tool: "foo.barBaz" });
+    expect(splitToolName("mail.search_messages")).toEqual({ tool: "mail.search_messages" });
+    expect(splitToolName("mail__search_messages")).toEqual({ tool: "mail__search_messages" });
   });
 
   test("a plain title stays whole, and so does a file name", () => {
     expect(splitToolName("bash")).toEqual({ tool: "bash" });
+    expect(splitToolName("Bash")).toEqual({ tool: "Bash" });
     expect(splitToolName("Read")).toEqual({ tool: "Read" });
     expect(splitToolName("package.json")).toEqual({ tool: "package.json" });
-    expect(bareTool("mcp__rustcode__wait_session")).toBe("wait_session");
+    expect(splitToolName("mcp__rustcode__wait_session")).toEqual({
+      server: "rustcode",
+      tool: "wait_session",
+    });
+  });
+
+  test("an orchestration tool is RustCode's own, or a bare name", () => {
+    expect(orchestrationTool("start_session")).toBe("start_session");
+    expect(orchestrationTool("rustcode.start_session")).toBe("start_session");
+    expect(orchestrationTool("mcp__rustcode__wait_session")).toBe("wait_session");
+    // Another server's tool of the same name is not ours.
+    expect(orchestrationTool("mcp__github__list_sessions")).toBeUndefined();
+    expect(orchestrationTool("github.start_session")).toBeUndefined();
+    expect(orchestrationTool("bash")).toBeUndefined();
   });
 
   test("snake_case reads as a sentence", () => {
@@ -47,6 +77,14 @@ describe("displayTool", () => {
   test("a title with no server is left alone", () => {
     expect(displayTool("bash", { command: "ls" })).toEqual({ title: "bash", summary: undefined });
     expect(displayTool("Apply patch")).toEqual({ title: "Apply patch", summary: undefined });
+    expect(displayTool("bin/run_tests")).toEqual({ title: "bin/run_tests", summary: undefined });
+  });
+
+  test("another server's `start_session` is that server's tool", () => {
+    expect(displayTool("mcp__github__start_session")).toMatchObject({
+      title: "Start session",
+      source: "github",
+    });
   });
 
   test("orchestration calls say what they did", () => {

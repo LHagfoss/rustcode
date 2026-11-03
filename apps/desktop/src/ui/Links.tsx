@@ -147,6 +147,7 @@ function ManyLinks({ links }: { links: Link[] }) {
           side="top"
           align="start"
           sideOffset={8}
+          aria-label="Linked threads"
           className="elevated z-50 flex max-h-[min(420px,60vh)] w-[320px] flex-col overflow-y-auto rounded-xl p-1.5 rc-in"
         >
           {links.map((l) => (
@@ -261,14 +262,14 @@ export function GrantDialog() {
 
 /**
  * A sidebar badge: this thread works for another (↳), or has links under way
- * (count). `hidden` drops it where the sidebar already lists the children, which
- * say what the count would.
+ * (count). `childrenListed` says the sidebar already lists the threads this one
+ * started; only those leave the count, since a message to a thread shown
+ * elsewhere and the "working for" marker are still news.
  */
-export function LinkBadge({ threadId, hidden }: { threadId: string; hidden?: boolean }) {
+export function LinkBadge({ threadId, childrenListed }: { threadId: string; childrenListed?: boolean }) {
   const book = useApp((s) => s.links);
   const { driving, drivenBy } = linksOf(book, threadId);
-  const active = driving.filter((l) => isActive(l.state)).length;
-  if (hidden) return null;
+  const active = driving.filter((l) => isActive(l.state) && !(childrenListed && l.started)).length;
   if (drivenBy) {
     return (
       <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>

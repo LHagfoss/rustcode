@@ -19,6 +19,15 @@ const tool = (id: string, status: "completed" | "failed" = "completed", path?: s
   status,
   diffs: path ? [{ path, oldText: "a", newText: "b" } as never] : [],
 });
+/** A fan-out over `harnesses`, as the call's input holds it. */
+const fanOut = (id: string, harnesses: string[]): TranscriptItem => ({
+  kind: "tool",
+  id,
+  title: "mcp__rustcode__fan_out",
+  status: "completed",
+  input: { harnesses: harnesses.map((harness) => ({ harness })) },
+  diffs: [],
+});
 const end = (id: string, elapsedMs = 80_000): TranscriptItem => ({
   kind: "turnEnd",
   id,
@@ -157,24 +166,40 @@ describe("tool groups", () => {
     );
   });
 
-  test("orchestration calls read as threads started and threads waited for", () => {
-    expect(toolGroupLabel(["thread", "thread", "thread", "execute"])).toBe(
+  test("orchestration calls read as what each did to threads", () => {
+    expect(toolGroupLabel(["start", "start", "start", "execute"])).toBe(
       "Started 3 threads and ran 1 command",
     );
+    expect(toolGroupLabel(["message", "message"])).toBe("Messaged 2 threads");
     expect(toolGroupLabel(["wait", "wait"])).toBe("Waited for threads");
+    expect(toolGroupLabel(["read_thread", "list_thread"])).toBe("Read 1 thread and listed threads");
   });
 
-  test("an orchestration call's kind comes from its name, MCP prefix or not", () => {
+  test("a fan-out counts the threads it sent work to", () => {
+    const rows = live([user("u"), fanOut("f", ["a", "b", "c"]), kinded("a", "read"), kinded("b", "read")]);
+    const group = rows[1]!;
+    expect("group" in group && group.group.label).toBe("Started 3 threads and read 2 files");
+    const one = live([user("u"), fanOut("f", []), kinded("a", "read"), kinded("b", "read")]);
+    const oneGroup = one[1]!;
+    expect("group" in oneGroup && oneGroup.group.label).toBe("Read 2 files and started 1 thread");
+  });
+
+  test("an orchestration call's kind comes from its name, on RustCode's server or bare", () => {
     const kindOf = (title: string) => inferToolKind({ title });
-    expect(kindOf("mcp__rustcode__start_session")).toBe("thread");
-    expect(kindOf("message_session")).toBe("thread");
-    expect(kindOf("mcp__rustcode__fan_out")).toBe("thread");
+    expect(kindOf("mcp__rustcode__start_session")).toBe("start");
+    expect(kindOf("start_session")).toBe("start");
+    expect(kindOf("message_session")).toBe("message");
+    expect(kindOf("mcp__rustcode__fan_out")).toBe("start");
     expect(kindOf("mcp__rustcode__wait_session")).toBe("wait");
-    expect(kindOf("read_session")).toBe("wait");
-    expect(kindOf("mcp__rustcode__list_sessions")).toBe("wait");
+    expect(kindOf("read_session")).toBe("read_thread");
+    expect(kindOf("mcp__rustcode__list_sessions")).toBe("list_thread");
+    // Another server's tool of the same name is not RustCode's: it keeps its own reading.
+    expect(kindOf("mcp__github__list_sessions")).toBe("other");
+    expect(kindOf("mcp__github__start_session")).toBe("other");
     // Everything else reads as before.
     expect(kindOf("Read")).toBe("read");
     expect(kindOf("bash")).toBe("execute");
+    expect(kindOf("bin/run_tests")).toBe("other");
   });
 });
 

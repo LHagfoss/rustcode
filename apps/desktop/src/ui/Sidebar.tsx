@@ -50,6 +50,7 @@ import {
   childSummary,
   childVisible,
   orderChildren,
+  pruneOpenGroups,
   unseenChild,
 } from "../state/children";
 import { isActive } from "../state/orchestration";
@@ -451,7 +452,7 @@ const ThreadRow = memo(function ThreadRow({
               >
                 {session.title || "New thread"}
               </span>
-              <LinkBadge threadId={session.id} hidden={hasChildren} />
+              <LinkBadge threadId={session.id} childrenListed={hasChildren} />
               <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
                 {jump !== undefined ? (
                   <kbd className="rounded-sm bg-fill px-1 font-sans text-fg-muted">⌘{jump}</kbd>
@@ -588,13 +589,17 @@ function ChildThreads({
   parentId,
   selectedId,
   now,
+  groupOpen,
+  onGroupOpen,
 }: {
   items: SessionSummary[];
   parentId: string;
   selectedId: string | null;
   now: number;
+  /** The group's state as the reader left it: true opened, false closed by hand, unset never touched. */
+  groupOpen?: boolean;
+  onGroupOpen: (open: boolean) => void;
 }) {
-  const [openGroups, setOpenGroups] = useStored<Record<string, boolean>>("rustcode.sidebar.childrenOpen", {});
   const [openFinished, setOpenFinished] = useState(false);
   // One string, so the rows re-render only when a child's state changes. A child whose link is
   // still open is live even before its turn reports so (it was just started or messaged).
@@ -627,13 +632,20 @@ function ChildThreads({
       return info ? [info] : [];
     });
   }, [items, states]);
-  const expanded = !!openGroups[parentId];
-  const listed = childrenListed(children, { expanded, parentSelected: parentId === selectedId, selectedId });
+  const expanded = groupOpen === true;
+  const listed = childrenListed(children, {
+    expanded,
+    collapsed: groupOpen === false,
+    parentSelected: parentId === selectedId,
+    selectedId,
+  });
   const ordered = orderChildren(children, selectedId);
   const shown = ordered.filter((c) => childVisible(c, selectedId));
   const folded = ordered.filter((c) => !childVisible(c, selectedId));
   const dot = unseenChild(children);
-  const toggle = () => setOpenGroups({ ...openGroups, [parentId]: !expanded });
+  // What the reader sees is what the chevron says: a group listed because its parent is open (or
+  // because a child wants you) closes on a click, except where a child has to stay in view.
+  const toggle = () => onGroupOpen(!listed);
   const row = (child: ChildInfo) => {
     const session = items.find((c) => c.id === child.id);
     return session ? (
@@ -648,11 +660,11 @@ function ChildThreads({
         <button
           type="button"
           onClick={toggle}
-          aria-expanded={expanded}
+          aria-expanded={listed}
           title={childSummary(children)}
           className="flex h-7 w-full items-center gap-1 rounded-md py-0 pr-1.5 pl-2.5 text-left text-fg-muted hover:bg-fill-subtle hover:text-fg"
         >
-          <ChevronRight size={9} className={cx("shrink-0 transition-transform", expanded && "rotate-90")} />
+          <ChevronRight size={9} className={cx("shrink-0 transition-transform", listed && "rotate-90")} />
           <span className="min-w-0 flex-1 truncate text-caption">{childSummary(children)}</span>
           {dot && (
             <span
@@ -962,6 +974,12 @@ export function Sidebar() {
   const [byProject, setByProject] = useStored("rustcode.sidebar.groupByProject", false);
   const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
   const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", FOLDED_BY_DEFAULT);
+  // Which child groups are open, by parent: one record for the whole sidebar, written in one
+  // place. A copy per group wrote the whole record back, so opening one group erased another.
+  const [openGroups, setOpenGroups] = useStored<Record<string, boolean>>("rustcode.sidebar.childrenOpen", {});
+  const listedIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+  const setGroupOpen = (id: string, open: boolean) =>
+    setOpenGroups((groups) => ({ ...pruneOpenGroups(groups, listedIds), [id]: open }));
   const [width, setWidth] = useSidebarWidth();
   // The slot takes its new width at once, so the transcript reflows once per toggle, not every
   // frame (docs/design.md › Motion). The column beside it then slides from where it was with a
@@ -1165,7 +1183,14 @@ export function Sidebar() {
             hasChildren={!!childrenOf[s.id]?.length}
           />
           {childrenOf[s.id] && (
-            <ChildThreads items={childrenOf[s.id]!} parentId={s.id} selectedId={selectedId} now={now} />
+            <ChildThreads
+              items={childrenOf[s.id]!}
+              parentId={s.id}
+              selectedId={selectedId}
+              now={now}
+              groupOpen={openGroups[s.id]}
+              onGroupOpen={(open) => setGroupOpen(s.id, open)}
+            />
           )}
         </div>
       ))}
