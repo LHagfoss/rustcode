@@ -28,7 +28,7 @@ import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
-import { canUpdate, checkForUpdate, type UpdateInfo } from "../lib/updater";
+import { canUpdate } from "../lib/updater";
 import { validateDefault } from "../state/harness";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
@@ -52,12 +52,12 @@ import {
   toast,
   useApp,
 } from "../state/store";
-import { applyUpdate, showWhatsNew, useUpdates } from "../state/updates";
+import { applyUpdate, checkNow, installProgress, showWhatsNew, useUpdates } from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { cx, Kbd, Pill, Segments, Switch, Tooltip } from "./primitives";
+import { cx, Kbd, Pill, Segments, Spinner, Switch, Tooltip } from "./primitives";
 import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
 import { UsagePage } from "./UsagePage";
 
@@ -686,55 +686,64 @@ function BannerSetting() {
  * reopens) or Download X (the release page, where the installer updates).
  */
 function AppVersion() {
-  const [info, setInfo] = useState<UpdateInfo | null>(null);
-  const [busy, setBusy] = useState<"checking" | "installing" | null>(null);
+  const info = useUpdates((s) => s.info);
+  const installing = useUpdates((s) => s.installing);
+  const progress = useUpdates((s) => s.progress);
+  const background = useUpdates((s) => s.error);
+  const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const version = info?.current ?? APP_VERSION;
   const check = async () => {
-    setBusy("checking");
+    setChecking(true);
     setError(null);
-    try {
-      setInfo(await checkForUpdate());
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
+    await checkNow();
+    setChecking(false);
   };
   const install = async () => {
     if (!info?.canInstall) {
       if (info?.page) openExternal(info.page);
       return;
     }
-    setBusy("installing");
     setError(null);
-    // One install path: the sidebar row shows its progress and the next launch shows What's New.
-    useUpdates.setState({ info });
+    // One install path: the sidebar row shows the same progress when it is visible.
     const failed = await applyUpdate();
-    if (failed) {
-      setError(failed);
-      setBusy(null);
-    }
+    if (failed) setError(failed);
   };
-  // The background check's failure, until a check here says otherwise.
-  const background = useUpdates((s) => s.error);
-  const subtitle = error
-    ? error
-    : !info && background
-      ? `The last update check failed: ${background}`
-      : busy === "installing"
-        ? "Installing… RustCode reopens when it is done."
-        : info && !info.available
-          ? "RustCode is up to date."
-          : info?.development
-            ? "A development build; it does not update itself."
-            : undefined;
+  const { fraction, step } = installProgress(progress);
+  const failure = error ?? (info ? null : background);
+  const subtitle = failure
+    ? failure
+    : installing
+      ? step
+      : info && !info.available
+        ? "RustCode is up to date."
+        : info?.development
+          ? "A development build; it does not update itself."
+          : undefined;
   return (
     <Row
       title={`RustCode ${version}`}
       subtitle={
-        <span className={error || (!info && background) ? "text-warning" : undefined}>
+        <span className={failure ? "text-warning" : undefined}>
           {subtitle ?? "App version"}
+          {installing && (
+            <span
+              role="progressbar"
+              aria-label="Update progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={fraction === undefined ? undefined : Math.round(fraction * 100)}
+              className="mt-1.5 block h-[4px] max-w-[280px] overflow-hidden rounded-full bg-fill-strong"
+            >
+              <span
+                className={cx(
+                  "block h-full rounded-full bg-accent transition-[width] duration-200 ease-snappy",
+                  fraction === undefined && "w-1/3 animate-pulse",
+                )}
+                style={fraction === undefined ? undefined : { width: `max(4px, ${fraction * 100}%)` }}
+              />
+            </span>
+          )}
         </span>
       }
     >
@@ -742,12 +751,21 @@ function AppVersion() {
       {!canUpdate() ? (
         <Info size={14} className="text-fg-faint" />
       ) : info?.available && info.latest ? (
-        <Pill prominent disabled={busy !== null} onClick={() => void install()}>
-          {info.canInstall ? `Update to ${info.latest}` : `Download ${info.latest}`}
+        <Pill prominent disabled={installing} onClick={() => void install()}>
+          {installing ? (
+            <span className="flex items-center gap-1.5">
+              <Spinner size={12} />
+              {fraction === undefined ? "Updating…" : `Updating… ${Math.round(fraction * 100)}%`}
+            </span>
+          ) : info.canInstall ? (
+            `Update to ${info.latest}`
+          ) : (
+            `Download ${info.latest}`
+          )}
         </Pill>
       ) : (
-        <Pill disabled={busy !== null} onClick={() => void check()}>
-          {busy === "checking" ? "Checking…" : "Check for Updates"}
+        <Pill disabled={checking} onClick={() => void check()}>
+          {checking ? "Checking…" : "Check for Updates"}
         </Pill>
       )}
     </Row>

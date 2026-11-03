@@ -6,35 +6,16 @@ import { ArrowUpCircle, Sparkles } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { openExternal } from "../lib/native";
 import { toast } from "../state/store";
-import { applyUpdate, closeWhatsNew, useUpdates } from "../state/updates";
+import { applyUpdate, closeWhatsNew, installProgress, useUpdates } from "../state/updates";
 import { Markdown } from "./Markdown";
 import { cx, Pill, Spinner } from "./primitives";
-
-const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
 
 export function UpdateRow() {
   const info = useUpdates((s) => s.info);
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
   if (!info?.available || !info.latest || info.development) return null;
-  const fraction =
-    progress?.phase === "downloading"
-      ? progress.total
-        ? progress.received / progress.total
-        : undefined
-      : progress
-        ? 1
-        : 0;
-  const step =
-    progress?.phase === "verifying"
-      ? "Verifying the download…"
-      : progress?.phase === "installing"
-        ? "Installing · RustCode reopens"
-        : progress?.phase === "downloading"
-          ? progress.total
-            ? `Downloading · ${Math.round((fraction ?? 0) * 100)}% of ${mb(progress.total)}`
-            : `Downloading · ${mb(progress.received)}`
-          : "Starting the download…";
+  const { fraction, step } = installProgress(progress);
   return (
     <div className="shrink-0 px-2 pb-2">
       <button
