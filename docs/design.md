@@ -332,17 +332,19 @@ panels `rounded-xl`.
   tool rows, like they do. A tool row itself is quiet: its title in
   `text-fg-muted`, the summary in `text-fg-faint`, the chevron only on
   hover.
-- **Subagent row:** a Claude Code subagent (an `Agent`/`Task` call) is one
-  `rounded-full` row: its type (`Explore`, or `Agent`), the task in
-  `text-fg-muted`, and while it works an accent tint, the `Orb` (a 3×3 dot
-  ring whose light travels clockwise, a still centre; quieter than a
-  spinner) and its current step in `rc-shimmer`. Done, a `CircleCheck` pops
-  in and the tail reads `3 steps · 42s`. Its own steps (those carrying
-  `_meta.claudeCode.parentToolUseId`) never become transcript rows; the
-  chevron lists them as one-line labels with the agent's answer. Over the
-  composer, `● 2 agents working` (accent pill with the `Orb`) opens on hover
-  a card of each working agent and its step; the working line says the
-  same.
+- **Subagent row:** a subagent (Claude Code's `Agent`/`Task` call,
+  RustCode's `spawn_agent`) is one row in the tool rows' grammar: the `Orb`
+  (a 3×3 dot ring whose light travels clockwise) while it works, else a
+  `CircleCheck`/`CircleX`, in the 18px column; its type in `font-medium`,
+  the task in `text-fg-muted`, and while it works its current step in
+  `text-accent`, done `3 steps · 42s`. Its own steps never become
+  transcript rows; the chevron opens a bordered card
+  (`rounded-lg border bg-fill-subtle/30`) of one-line steps and its
+  answer. Two or more subagents in a row are one row, as T3 Code collapses
+  them: `3 subagents`, then `2 working · 42s` in accent (or `1 failed`,
+  `done`), opening to a card with each agent's row. Over the composer,
+  `● 2 agents working` (accent pill with the `Orb`) opens on hover a card
+  of each working agent and its step.
 - **Turn fold:** while a turn runs, `Working for 12s` heads it under the
   message that started it (`text-body text-fg-muted` over a
   `border-border/60` hairline), its replies and the call it makes now

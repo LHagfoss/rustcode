@@ -18,7 +18,7 @@ import {
   turnCompletion,
   workingLabel,
 } from "../state/thread";
-import { SubagentRow } from "./AgentViews";
+import { SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { cx } from "./primitives";
 import {
   AssistantRow,
@@ -41,6 +41,8 @@ type Row = {
   key: string;
   item?: TranscriptItem;
   working?: true;
+  /** Two or more subagents in a row, shown as one (T3 Code). */
+  agents?: { items: Extract<TranscriptItem, { kind: "tool" }>[]; open: boolean };
   /** The running turn's foot: what it does now, when no row of its own shows it. */
   activity?: string;
   /** The turn parked on this many background commands. */
@@ -161,7 +163,30 @@ export function Transcript({
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
     const shown = searching ? ALL_OPEN : open;
-    const out: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown);
+    const grouped: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown);
+    // Subagents started together read as one row: `3 subagents · 2 working`.
+    const isAgent = (r?: Row) =>
+      r?.item?.kind === "tool" && (!!subagentOf(r.item) || subagentSteps.has(r.item.id));
+    const out: Row[] = [];
+    for (let i = 0; i < grouped.length; ) {
+      let j = i;
+      while (j < grouped.length && isAgent(grouped[j]) && grouped[j]!.inFold === grouped[i]!.inFold) j++;
+      if (j - i >= 2) {
+        const key = `agents-${grouped[i]!.key}`;
+        out.push({
+          key,
+          inFold: grouped[i]!.inFold,
+          agents: {
+            items: grouped.slice(i, j).map((r) => r.item as Extract<TranscriptItem, { kind: "tool" }>),
+            open: shown.has(key),
+          },
+        });
+        i = j;
+      } else {
+        out.push(grouped[i]!);
+        i++;
+      }
+    }
     if (thread.running) {
       // T3 Code's grammar: `Working for 12s` heads the turn, under the message that started it.
       let at = out.length;
@@ -182,7 +207,7 @@ export function Transcript({
       if (!shows) out.push({ key: "activity", activity: workingLabel(visible) });
     } else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
     return out;
-  }, [visible, thread.running, thread.waiting, open, searching]);
+  }, [visible, subagentSteps, thread.running, thread.waiting, open, searching]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -533,7 +558,11 @@ export function Transcript({
               // T3 Code's rhythm: 16 between messages, 8 around work, steps of one run tight.
               const prev = rows[v.index - 1];
               const workLike = (r?: Row) =>
-                !!r?.group || !!r?.activity || r?.item?.kind === "tool" || r?.item?.kind === "thought";
+                !!r?.group ||
+                !!r?.agents ||
+                !!r?.activity ||
+                r?.item?.kind === "tool" ||
+                r?.item?.kind === "thought";
               const gap =
                 v.index === 0
                   ? 0
@@ -551,7 +580,15 @@ export function Transcript({
                     )}
                     style={{ paddingTop: gap }}
                   >
-                    {row.group ? (
+                    {row.agents ? (
+                      <SubagentGroupRow
+                        items={row.agents.items}
+                        stepsOf={(id) => subagentSteps.get(id) ?? NO_STEPS}
+                        threadId={thread.id}
+                        open={row.agents.open}
+                        onToggle={() => toggleFold(row.key)}
+                      />
+                    ) : row.group ? (
                       <ToolGroupRow group={row.group} onToggle={toggleFold} />
                     ) : row.waiting ? (
                       <WaitingRow count={row.waiting} />
