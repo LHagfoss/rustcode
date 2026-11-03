@@ -36,6 +36,15 @@ pub(crate) fn move_session(
     };
     crate::config::save_session_workspace(session_id, &workspace)
         .map_err(|error| invalid(format!("could not record the new folder: {error}")))?;
+    // A thread on an external harness loads from its own record, which checks
+    // the folder too: move it there as well, or the next `session/load` fails.
+    // The harness's own session id stays; a harness that cannot resume it in
+    // the new folder starts a new session.
+    if let Some(mut record) = crate::harness::store::load(session_id) {
+        record.cwd = cwd.clone();
+        record.updated_at = chrono::Utc::now().to_rfc3339();
+        crate::harness::store::save(session_id, &record);
+    }
     Ok(json!({ "cwd": cwd }))
 }
 
@@ -79,5 +88,30 @@ mod tests {
         let other = crate::config::load_session_workspace("acp-move-b").unwrap();
         assert_eq!(other.cwd, old.path());
         assert!(move_session("acp-move-missing", new.path().to_path_buf()).is_err());
+    }
+
+    #[test]
+    fn moves_an_external_harness_threads_record() {
+        let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let id = "acp-move-harness";
+        let store = rustcode_session::SessionStore::new(crate::config::get_config_dir().unwrap());
+        store.save_session_history(
+            id,
+            &vec![
+                crate::app::ChatMessage::new("user", "Move me"),
+                crate::app::ChatMessage::new("assistant", "Moved"),
+            ],
+        );
+        rustcode_session::flush_history();
+        let mut record = crate::harness::store::HarnessRecord::new("claude", old.path().into());
+        record.native_session_id = Some("native-1".into());
+        crate::harness::store::save(id, &record);
+
+        move_session(id, new.path().to_path_buf()).unwrap();
+
+        let moved = crate::harness::store::load(id).unwrap();
+        assert_eq!(moved.cwd, new.path());
+        assert_eq!(moved.harness, "claude");
+        assert_eq!(moved.native_session_id.as_deref(), Some("native-1"));
     }
 }
