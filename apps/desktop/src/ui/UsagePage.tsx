@@ -20,7 +20,7 @@ export interface PlanEntry {
   id: string;
   name: string;
   via?: string;
-  status: "ok" | "signedOut" | "unavailable" | "notAsked";
+  status: "ok" | "signedOut" | "notInstalled" | "unavailable" | "notAsked";
   plan?: string;
   error?: string;
   windows: (UsageWindow & { label: string })[];
@@ -140,15 +140,19 @@ export function UsagePage() {
               title={
                 p.status === "signedOut"
                   ? `Not signed in to ${p.via ?? p.name}`
-                  : p.status === "ok"
-                    ? "No plan windows reported"
-                    : "Could not read the usage"
+                  : p.status === "notInstalled"
+                    ? `${p.via ?? p.name} not found`
+                    : p.status === "ok"
+                      ? "No plan windows reported"
+                      : "Could not read the usage"
               }
               subtitle={
                 p.error ??
                 (p.status === "signedOut"
                   ? `Sign in with ${p.via ?? p.name} on this Mac to see this plan here.`
-                  : undefined)
+                  : p.status === "notInstalled"
+                    ? `Install ${p.via ?? p.name} and sign in to see this plan here.`
+                    : undefined)
               }
             />
           )}
