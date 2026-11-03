@@ -30,6 +30,7 @@ import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate, checkForUpdate, type UpdateInfo } from "../lib/updater";
 import { validateDefault } from "../state/harness";
+import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   APP_VERSION,
   createTheme,
@@ -41,6 +42,7 @@ import {
   setActiveTheme,
   setDefaultCwd,
   setDefaultHarness,
+  setDefaultPermissionMode,
   setOnboarding,
   setOrchestration,
   setSmartUi,
@@ -77,6 +79,7 @@ function General() {
   const smartUiPending = useApp((s) => s.smartUiPending);
   const orchestration = useApp((s) => s.orchestration);
   const orchestrationPending = useApp((s) => s.orchestrationPending);
+  const defaultAccess = useApp((s) => s.defaultPermissionMode);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const shortcuts: [string, string][] = [
     ["New thread", "⌘N"],
@@ -105,6 +108,17 @@ function General() {
       </Group>
       <Group title="Chat">
         <Row
+          title="Default access"
+          subtitle="New threads start here. The shield under the message box changes one thread only."
+        >
+          <Segments
+            label="Default access"
+            value={defaultAccess}
+            options={PERMISSION_MODES.map((m) => ({ value: m.id, label: m.label }))}
+            onChange={(value) => setDefaultPermissionMode(value as PermissionMode)}
+          />
+        </Row>
+        <Row
           title="Smart UI"
           subtitle="The agent can answer with a small interactive view (a filterable table, a chart with controls) that runs in the chat, sandboxed, with no network. Its buttons can send a message for you, only when you click them."
         >
@@ -122,7 +136,7 @@ function General() {
         )}
         <Row
           title="Threads can start and message other threads"
-          subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. You approve each first: Allow for This Thread, Allow Once or Don't Allow."
+          subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
         >
           <Switch
             label="Threads can start and message other threads"

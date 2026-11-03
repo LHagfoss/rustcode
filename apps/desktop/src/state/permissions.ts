@@ -21,6 +21,24 @@ export function parsePermissionMode(value: unknown): PermissionMode {
 const EDIT_KINDS = new Set(["read", "edit", "move", "search", "think", "fetch"]);
 
 /**
+ * Whether a thread at `mode` may delegate without a prompt. Starting or messaging
+ * another thread runs work somewhere else, so it needs Full access; reading one
+ * (or waiting for an answer) is part of normal reading, so Auto-edit has it too.
+ */
+export function delegationAllowed(
+  mode: PermissionMode,
+  kind: "read" | "start" | "message" | "fan_out",
+): boolean {
+  if (mode === "full") return true;
+  return mode === "edits" && kind === "read";
+}
+
+/** How a mode reads in a sentence: "allowed by Full access". */
+export function modeLabel(mode: PermissionMode): string {
+  return PERMISSION_MODES.find((m) => m.id === mode)?.label ?? "Ask";
+}
+
+/**
  * The option to answer `request` with under `mode`, or null to ask the user.
  * Questions always reach the user, and so does a plan's "switch mode" request:
  * that one is the user's review of the plan, not a safety prompt.

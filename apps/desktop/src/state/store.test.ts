@@ -28,6 +28,7 @@ import {
   setArchived,
   setDefaultCwd,
   setDefaultHarness,
+  setDefaultPermissionMode,
   setHarnessEnabled,
   setNewThreadChoice,
   setOrchestration,
@@ -585,7 +586,7 @@ describe("finished threads", () => {
   });
 });
 
-test("a mode chosen in one thread leaves the other listed threads as they were", async () => {
+test("a mode chosen in one thread leaves the default and the other threads alone", async () => {
   resetForTests();
   useApp.setState({
     sessions: [
@@ -594,9 +595,34 @@ test("a mode chosen in one thread leaves the other listed threads as they were",
     ] as never,
   });
   setPermissionMode("b", "full");
-  const s = useApp.getState();
+  let s = useApp.getState();
   expect(permissionModeOf(s, "b")).toBe("full");
   expect(permissionModeOf(s, "a")).toBe("ask");
-  expect(permissionModeOf(s, "new-thread")).toBe("full");
+  // The default is the Settings row, not the last pill: a new thread still starts at Ask.
+  expect(s.defaultPermissionMode).toBe("ask");
+  expect(permissionModeOf(s, "new-thread")).toBe("ask");
+  // The pill on a thread not started yet is for that next thread only.
+  setPermissionMode(undefined, "edits");
+  s = useApp.getState();
+  expect(permissionModeOf(s, undefined)).toBe("edits");
+  expect(s.defaultPermissionMode).toBe("ask");
+  resetForTests();
+});
+
+test("changing the default access leaves the listed threads as they were", () => {
+  resetForTests();
+  useApp.setState({
+    sessions: [
+      { id: "a", title: "A", cwd: "/tmp" },
+      { id: "b", title: "B", cwd: "/tmp" },
+    ] as never,
+  });
+  setPermissionMode("b", "full");
+  setDefaultPermissionMode("edits");
+  const s = useApp.getState();
+  expect(s.defaultPermissionMode).toBe("edits");
+  expect(permissionModeOf(s, "b")).toBe("full");
+  expect(permissionModeOf(s, "a")).toBe("ask");
+  expect(permissionModeOf(s, "a-new-one")).toBe("edits");
   resetForTests();
 });

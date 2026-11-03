@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionRequest } from "../acp/types";
-import { autoAnswer, parsePermissionMode } from "./permissions";
+import { autoAnswer, delegationAllowed, parsePermissionMode } from "./permissions";
 
 const request = (toolKind: string, extra: Partial<PermissionRequest> = {}): PermissionRequest => ({
   rpcId: 1,
@@ -62,4 +62,25 @@ test("unknown stored modes fall back to Ask", () => {
   expect(parsePermissionMode("full")).toBe("full");
   expect(parsePermissionMode("bogus")).toBe("ask");
   expect(parsePermissionMode(null)).toBe("ask");
+});
+
+describe("delegation policy", () => {
+  test("Ask still prompts for every delegation", () => {
+    for (const kind of ["read", "start", "message", "fan_out"] as const) {
+      expect(delegationAllowed("ask", kind)).toBe(false);
+    }
+  });
+
+  test("Auto-edit may read another thread, not start or message one", () => {
+    expect(delegationAllowed("edits", "read")).toBe(true);
+    expect(delegationAllowed("edits", "start")).toBe(false);
+    expect(delegationAllowed("edits", "message")).toBe(false);
+    expect(delegationAllowed("edits", "fan_out")).toBe(false);
+  });
+
+  test("Full access delegates without a prompt", () => {
+    for (const kind of ["read", "start", "message", "fan_out"] as const) {
+      expect(delegationAllowed("full", kind)).toBe(true);
+    }
+  });
 });

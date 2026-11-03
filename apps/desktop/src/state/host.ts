@@ -44,6 +44,7 @@ import {
   shownState,
   updateLink,
 } from "./orchestration";
+import { delegationAllowed, modeLabel } from "./permissions";
 import {
   type AppState,
   cancel,
@@ -59,7 +60,7 @@ import {
   updateThread,
   useApp,
 } from "./store";
-import { localId, type TranscriptItem, turnCompletion } from "./thread";
+import { appendNotice, localId, type TranscriptItem, turnCompletion } from "./thread";
 
 const BOOK_KEY = "rustcode.threadLinks";
 
@@ -139,8 +140,16 @@ export function resolveGrant(choice: GrantChoice) {
 
 async function permitted(caller: RuleThread, key: string, question: GrantAsk): Promise<Failure | null> {
   if (hasGrant(book(), caller.id, key)) return null;
-  // Full access: the user chose not to be asked, here as for the harness's own approvals.
-  if (permissionModeOf(useApp.getState(), caller.id) === "full") return null;
+  // The thread's access level answers for the user where it already allows the work: the same
+  // policy that answers the harness's own approvals, so a Full-access thread is not re-asked here.
+  const mode = permissionModeOf(useApp.getState(), caller.id);
+  if (delegationAllowed(mode, question.kind)) {
+    // Not silent: the transcript says what the thread did on its own, and why.
+    const text = `“${caller.title}” ${verb(question)}, allowed by ${modeLabel(mode)}`;
+    updateThread(caller.id, (t) => appendNotice(t, text));
+    toast(text, "info");
+    return null;
+  }
   const asked = ask(question);
   if (isFailure(asked)) return asked;
   const choice = await asked;
