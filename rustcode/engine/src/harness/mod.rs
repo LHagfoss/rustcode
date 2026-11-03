@@ -171,6 +171,18 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("opencode", &["--version"])),
         auth_probe: None,
     },
+    // Pi speaks its own RPC protocol; `pi-acp` adapts it to ACP, as claude-agent-acp does for
+    // Claude Code. Pi keeps its own models, logins, skills and sessions (~/.pi).
+    KnownHarness {
+        id: "pi",
+        name: "Pi",
+        kind: HarnessKind::Acp,
+        command: &["npx", "-y", "pi-acp"],
+        login_command: Some(&["pi"]),
+        install_hint: Some("npm install -g @earendil-works/pi-coding-agent"),
+        version: Some(("pi", &["--version"])),
+        auth_probe: None,
+    },
 ];
 
 pub(crate) fn known(id: &str) -> Option<&'static KnownHarness> {
@@ -864,6 +876,7 @@ mod tests {
                 "claude-code",
                 "gemini",
                 "opencode",
+                "pi",
                 "my-agent"
             ]
         );
@@ -871,8 +884,8 @@ mod tests {
         assert!(!all[1].enabled, "known harnesses start off");
         assert_eq!(all[3].command[0], "/opt/gemini");
         assert!(all[3].enabled);
-        assert_eq!(all[5].kind, HarnessKind::Acp);
-        assert!(all[5].enabled);
+        assert_eq!(all[6].kind, HarnessKind::Acp);
+        assert!(all[6].enabled);
         assert_eq!(
             resolve(&entries, "claude-code").unwrap().command,
             ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
