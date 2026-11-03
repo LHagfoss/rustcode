@@ -72,12 +72,6 @@ jobs:
         name: Desktop shell
         runs-on: macos-26
         timeout-minutes: 20
-        # The same compiler cache the Rust and release workflows use: the
-        # shell's dependencies (Tauri, objc2, WebKit bindings) compile once
-        # and are fetched from the cache on every later run.
-        env:
-            SCCACHE_GHA_ENABLED: "true"
-            RUSTC_WRAPPER: sccache
         steps:
             - uses: actions/checkout@v7
 
@@ -90,9 +84,6 @@ jobs:
               uses: Swatinem/rust-cache@v2
               with:
                   workspaces: apps/desktop/src-tauri
-
-            - name: Configure shared compiler cache
-              uses: mozilla-actions/sccache-action@v0.0.11
 
             - name: Format
               working-directory: apps/desktop/src-tauri
