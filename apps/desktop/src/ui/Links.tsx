@@ -148,7 +148,7 @@ function ManyLinks({ links }: { links: Link[] }) {
           align="start"
           sideOffset={8}
           aria-label="Linked threads"
-          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[320px] flex-col overflow-y-auto rounded-xl p-1.5 rc-in"
+          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[320px] flex-col overflow-y-auto p-1.5 rc-in"
         >
           {links.map((l) => (
             <LinkMenuRow key={l.id} link={l} />
