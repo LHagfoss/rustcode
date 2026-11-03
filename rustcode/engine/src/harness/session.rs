@@ -472,6 +472,8 @@ impl ExternalSession {
             .into_iter()
             .filter(|server| server.enabled)
             .collect();
+        // Signed in to in RustCode (Settings › MCP, `rustcode mcp login`): the harness gets the token.
+        let mcp = crate::mcp::with_saved_logins(mcp).await;
         let adapter = Adapter::start(
             &self.harness,
             &self.cwd,
