@@ -22,7 +22,7 @@ const MARGIN = 8;
 
 /** Where the rail sits for the chat's width (ChatColumnLayout.swift); null when too narrow. */
 export function railPlacement(width: number): { x: number; width: number } | null {
-  if (width >= 1072) return { x: Math.min(10, ((width - 980) / 2 - 28) / 2), width: 28 };
+  if (width >= 860) return { x: Math.min(10, ((width - 768) / 2 - 28) / 2), width: 28 };
   if (width >= 600) return { x: 5, width: 18 };
   if (width >= 360) return { x: 3, width: 14 };
   return null;

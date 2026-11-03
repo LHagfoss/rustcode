@@ -23,6 +23,7 @@ import { cx } from "./primitives";
 import {
   AssistantRow,
   HandoffRow,
+  LiveActivityRow,
   NoticeRow,
   ThoughtRow,
   ToolGroupRow,
@@ -40,6 +41,8 @@ type Row = {
   key: string;
   item?: TranscriptItem;
   working?: true;
+  /** The running turn's foot: what it does now, when no row of its own shows it. */
+  activity?: string;
   /** The turn parked on this many background commands. */
   waiting?: number;
   fold?: TurnFold;
@@ -159,14 +162,31 @@ export function Transcript({
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
     const shown = searching ? ALL_OPEN : open;
     const out: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown);
-    if (thread.running) out.push({ key: "working", working: true });
-    else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
+    if (thread.running) {
+      // T3 Code's grammar: `Working for 12s` heads the turn, under the message that started it.
+      let at = out.length;
+      for (let i = out.length - 1; i >= 0; i--) {
+        if (out[i]!.item?.kind === "user") {
+          at = i + 1;
+          break;
+        }
+      }
+      out.splice(at, 0, { key: "working", working: true });
+      // The foot says what it does now unless the last row already does (a call
+      // or thought still running, a reply streaming).
+      const last = out.at(-1)?.item;
+      const shows =
+        (last?.kind === "tool" && (last.status === "in_progress" || last.status === "pending")) ||
+        (last?.kind === "thought" && !last.done) ||
+        last?.kind === "assistant";
+      if (!shows) out.push({ key: "activity", activity: workingLabel(visible) });
+    } else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
     return out;
   }, [visible, thread.running, thread.waiting, open, searching]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
-    for (const row of rows) if (row.fold && !row.fold.live) set.add(row.fold.key.slice("fold-".length));
+    for (const row of rows) if (row.fold) set.add(row.fold.key.slice("fold-".length));
     return set;
   }, [rows]);
 
@@ -403,8 +423,8 @@ export function Transcript({
       f && matches.length ? { ...f, index: (f.index + delta + matches.length) % matches.length } : f,
     );
 
-  // The last item's row: the running turn never folds, so it is the last row before the working line.
-  const lastIndex = rows.length - (thread.running ? 2 : 1);
+  // The last item's row: the running turn never folds, so it is the last row before the live foot.
+  const lastIndex = rows.length - (rows.at(-1)?.item ? 1 : 2);
   // The first render draws no rows: the virtualizer has no scroll element yet and would pick the
   // thread's first rows. `attachScroll` then puts the view at the end, and the second render
   // (still before the first paint) draws the last rows straight away.
@@ -501,20 +521,32 @@ export function Transcript({
               if (row.fold) {
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
-                    <div className="mx-auto w-full max-w-[1036px] px-7" style={{ paddingTop: 18 }}>
+                    <div
+                      className="mx-auto w-full max-w-[824px] px-7"
+                      style={{ paddingTop: v.index === 0 ? 0 : 16 }}
+                    >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} />
                     </div>
                   </div>
                 );
               }
-              // Rows are 18 apart; consecutive tool calls (and their groups) sit tight.
-              const toolLike = (r?: Row) => !!r?.group || r?.item?.kind === "tool";
-              const gap = v.index === 0 ? 0 : toolLike(row) && toolLike(rows[v.index - 1]) ? 2 : 18;
+              // T3 Code's rhythm: 16 between messages, 8 around work, steps of one run tight.
+              const prev = rows[v.index - 1];
+              const workLike = (r?: Row) =>
+                !!r?.group || !!r?.activity || r?.item?.kind === "tool" || r?.item?.kind === "thought";
+              const gap =
+                v.index === 0
+                  ? 0
+                  : workLike(row) && workLike(prev)
+                    ? 2
+                    : prev?.working || prev?.fold || workLike(row) || workLike(prev)
+                      ? 10
+                      : 16;
               return (
                 <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                   <div
                     className={cx(
-                      "mx-auto w-full max-w-[1036px] px-7",
+                      "mx-auto w-full max-w-[824px] px-7",
                       row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
                     )}
                     style={{ paddingTop: gap }}
@@ -524,11 +556,9 @@ export function Transcript({
                     ) : row.waiting ? (
                       <WaitingRow count={row.waiting} />
                     ) : row.working ? (
-                      <WorkingRow
-                        label={workingLabel(thread.items)}
-                        startedAt={thread.turnStartedAt}
-                        now={now}
-                      />
+                      <WorkingRow startedAt={thread.turnStartedAt} now={now} />
+                    ) : row.activity ? (
+                      <LiveActivityRow label={row.activity} />
                     ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
                       <div className="flex items-center gap-2 text-caption text-fg-faint">
                         <span className="h-px flex-1 bg-border" />

@@ -287,7 +287,7 @@ function TranscriptSkeleton() {
   return (
     <div className="min-h-0 flex-1 overflow-hidden" role="status" aria-label="Loading thread">
       <div
-        className="mx-auto flex w-full max-w-[1036px] flex-col gap-[18px] px-7"
+        className="mx-auto flex w-full max-w-[824px] flex-col gap-[18px] px-7"
         style={{ paddingTop: HEADER_HEIGHT + 20 }}
       >
         {[0, 1].map((turn) => (
@@ -408,7 +408,7 @@ export function ChatView() {
       <div
         ref={stackRef}
         className={cx(
-          "absolute left-1/2 flex w-full max-w-[980px] -translate-x-1/2 flex-col gap-2.5 transition-[bottom,transform] duration-500 ease-snappy",
+          "absolute left-1/2 flex w-full max-w-[824px] -translate-x-1/2 flex-col gap-2.5 transition-[bottom,transform] duration-500 ease-snappy",
           isNew ? "bottom-[max(16px,calc(50%-150px))]" : "bottom-4",
         )}
         style={{ paddingLeft: side, paddingRight: side }}

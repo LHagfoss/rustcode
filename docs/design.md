@@ -323,11 +323,15 @@ panels `rounded-xl`.
   buttons have the same 6px above them (to the box's edge) as at its
   sides and foot. The transcript scrolls under both (its bottom padding is the
   stack's height) and fades out from 56px above the box.
-- **Tool group:** three or more finished tool calls in a row are one row:
-  a `Layers` icon in the 18px icon column, then `Read 4 files · Ran 2
-  commands` in `text-callout text-fg-muted`, the failed count in `danger`,
-  and the fold chevron. It sits 2px from neighbouring tool rows, like
-  they do.
+- **Tool group:** two or more finished tool calls in a row (with the
+  thoughts between them) are one row, as T3 Code's work log: the icon of
+  the kind most of them are in the 18px column, then a sentence of the two
+  most frequent actions, `Read 4 files and ran 2 commands`, the rest as
+  `performed N other actions`, in `text-callout text-fg-muted`, the failed
+  count in `danger`, and the fold chevron. It sits 2px from neighbouring
+  tool rows, like they do. A tool row itself is quiet: its title in
+  `text-fg-muted`, the summary in `text-fg-faint`, the chevron only on
+  hover.
 - **Subagent row:** a Claude Code subagent (an `Agent`/`Task` call) is one
   `rounded-full` row: its type (`Explore`, or `Agent`), the task in
   `text-fg-muted`, and while it works an accent tint, the `Orb` (a 3×3 dot
@@ -339,15 +343,19 @@ panels `rounded-xl`.
   composer, `● 2 agents working` (accent pill with the `Orb`) opens on hover
   a card of each working agent and its step; the working line says the
   same.
-- **Turn fold:** while a turn runs, every step shows as it streams
-  (thoughts, tool calls with status and output, subagents). When it ends,
-  its work folds into one summary row where the work began, above the
-  final answer: `Worked for 1m 20s · 14 steps · 3 files changed · 1 failed`
-  (`text-callout text-fg-faint`, hover `text-fg-muted`, a chevron that
-  turns 90° when open, a `CircleX` in `danger` when a step failed). What
-  stays visible: the message sent, the final answer (the replies after the
-  last step), warnings and errors, and the footer (time, copy, Changes),
-  which then leaves out the duration. Opening it shows the steps in order,
+- **Turn fold:** while a turn runs, `Working for 12s` heads it under the
+  message that started it (`text-body text-fg-muted` over a
+  `border-border/60` hairline), its replies and the call it makes now
+  stream below, finished calls fold into tool groups, and the foot shows
+  what it does now in `rc-shimmer` when no running row does. When it ends,
+  its work folds under one divider where the work began, above the final
+  answer: `Worked for 1m 3s ›` or `You stopped after 12s`, in the same
+  type over the same hairline, a `CircleX` in `danger` when a step failed.
+  What stays visible: the message sent (a `rounded-2xl` bubble at most 80%
+  wide; its time and actions on hover), the final answer (the replies after
+  the last step), warnings and errors, and the footer (time, copy,
+  Changes), which then leaves out the duration. The chat lane is 768px
+  wide, as T3 Code's. Opening it shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
   under a transition; Reduce motion makes it instant). A `<button
   aria-expanded>`, so ⏎ and Space toggle it. Opened turns are kept per

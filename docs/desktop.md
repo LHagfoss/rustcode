@@ -442,15 +442,16 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   harness's first.
 - **Turn folding.** A finished turn's work (thoughts, tool calls,
   subagents, the replies between steps) folds into one row above its final
-  answer, "Worked for 1m 20s · 14 steps · 3 files changed", which opens to
-  every step as it streamed; the running turn shows everything live, and
+  answer, "Worked for 1m 3s" (or "You stopped after 12s"), which opens to
+  every step as it streamed; the running turn shows "Working for 12s"
+  under its message and everything live below it, and
   replayed threads fold the same way (`src/state/fold.ts`, tests in
   `fold.test.ts`; recipe in [design.md](design.md)).
 - **Tool groups.** Inside what shows (the live turn, or an opened fold),
-  three or more finished tool calls in a row fold into one row in the tool
-  rows' grammar: "Read 4 files · Ran 2 commands · Searched once", counted
-  by ACP tool kind, most first, with a count of the rest and "N failed" in
-  danger. A call still running and a subagent keep their own rows; a
+  two or more finished tool calls in a row fold into one row in the tool
+  rows' grammar: "Read 4 files and ran 2 commands", the two most frequent
+  actions by tool kind and "performed N other actions" for the rest, with
+  "N failed" in danger. A call still running and a subagent keep their own rows; a
   search opens every group (`groupTools`, after T3 Code's timeline).
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
