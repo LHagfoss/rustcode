@@ -114,8 +114,8 @@
     --rc-surface: #18181a;
     --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
-    --rc-composer-bg: color-mix(in srgb, var(--rc-text) 7%, transparent);
-    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 10%, transparent);
+    --rc-composer-bg: color-mix(in srgb, var(--rc-text) 4%, transparent);
+    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 6%, transparent);
     --rc-border: #ffffff0f;
     --rc-border-strong: #ffffff1c;
     --rc-text: #ededed;
@@ -141,8 +141,8 @@
   --rc-surface: #18181a;
   --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
-  --rc-composer-bg: color-mix(in srgb, var(--rc-text) 7%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 10%, transparent);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-text) 4%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-text) 6%, transparent);
   --rc-border: #ffffff0f;
   --rc-border-strong: #ffffff1c;
   --rc-text: #ededed;
@@ -571,7 +571,7 @@
 .rc-composer {
   background: var(--rc-composer-bg);
   box-shadow:
-    inset 0 1px 0 0 color-mix(in srgb, var(--rc-text) 6%, transparent),
+    inset 0 1px 0 0 color-mix(in srgb, var(--rc-text) 4%, transparent),
     0 2px 8px -4px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-border);
 }

@@ -158,7 +158,7 @@ const components: Components = {
           if (ref) openRef(ref);
           else openExternal(href);
         }}
-        className="cursor-pointer rounded-xs text-accent underline decoration-accent/40 underline-offset-2 hover:bg-accent/10 hover:decoration-accent"
+        className="-mx-1 cursor-pointer rounded-full px-1 text-accent underline decoration-accent/30 underline-offset-2 transition-colors duration-150 hover:bg-accent/12 hover:decoration-transparent"
       >
         {href ? shortUrl(href, children) : children}
       </a>
@@ -196,9 +196,11 @@ const components: Components = {
           type="button"
           title={`Open ${ref.path}${ref.line ? ` at line ${ref.line}` : ""}`}
           onClick={() => openRef(ref)}
-          className="inline rounded-xs text-accent decoration-accent/45 underline-offset-2 hover:underline"
+          className="group inline rounded-full text-accent"
         >
-          <code className="rounded-xs bg-accent/10 px-1 py-px font-mono text-[0.9em]">{children}</code>
+          <code className="rounded-full bg-accent/10 px-1.5 py-px font-mono text-[0.9em] transition-colors duration-150 group-hover:bg-accent/20">
+            {children}
+          </code>
         </button>
       );
     return (

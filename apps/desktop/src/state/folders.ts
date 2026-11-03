@@ -17,6 +17,11 @@ export async function chooseFolder(asDefault: boolean): Promise<void> {
     return;
   }
   const id = s.selectedId;
+  // A running thread cannot move: say so before the picker, not after it.
+  if (id && s.threads[id]?.running) {
+    toast("Stop the running turn before moving this thread to another folder.");
+    return;
+  }
   const picked = await pickFolder((id ? s.threads[id]?.cwd : undefined) ?? s.projectCwd);
   if (!picked) return;
   if (id) void moveThread(id, picked);

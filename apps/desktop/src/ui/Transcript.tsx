@@ -299,6 +299,17 @@ export function Transcript({
     };
   }
   const turns = turnsKey.current.turns;
+  // Sending a message follows it down, even from a view scrolled up to read.
+  const sentTurns = useRef({ thread: thread.id, count: turns.length });
+  useLayoutEffect(() => {
+    const before = sentTurns.current;
+    sentTurns.current = { thread: thread.id, count: turns.length };
+    if (before.thread !== thread.id || turns.length <= before.count) return;
+    pinned.current = true;
+    setShowLatest(false);
+    virtualizer.scrollToIndex(Math.max(0, rows.length - 1), { align: "end" });
+    requestAnimationFrame(toBottom);
+  }, [turns.length, thread.id, rows.length, toBottom, virtualizer]);
   const [readTurn, setReadTurn] = useState(0);
   const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
