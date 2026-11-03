@@ -15,6 +15,7 @@ export const Method = {
   sessionList: "session/list",
   sessionClose: "session/close",
   sessionMove: "_rustcode/session/move",
+  sessionRepair: "_rustcode/session/repair",
   sessionPrompt: "session/prompt",
   sessionCancel: "session/cancel",
   sessionSetConfigOption: "session/set_config_option",
@@ -64,6 +65,8 @@ export interface AgentInfo {
   pullRequests: boolean;
   /** `_rustcode/session/move`: a closed thread can change folder. */
   sessionMove: boolean;
+  /** `_rustcode/session/repair`: Repair Thread for one that will not open. */
+  sessionRepair: boolean;
 }
 
 export function parseAgentInfo(result: Json): AgentInfo {
@@ -90,6 +93,7 @@ export function parseAgentInfo(result: Json): AgentInfo {
     rewind: num(meta?.rewind) !== undefined,
     pullRequests: num(meta?.pullRequests) !== undefined,
     sessionMove: num(meta?.sessionMove) !== undefined,
+    sessionRepair: num(meta?.sessionRepair) !== undefined,
   };
 }
 
