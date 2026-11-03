@@ -14,6 +14,7 @@ pub(crate) mod cache;
 pub(crate) mod codex;
 pub mod config;
 pub(crate) mod detect;
+pub(crate) mod handoff;
 pub(crate) mod process;
 pub(crate) mod rpc;
 pub(crate) mod session;
@@ -188,6 +189,14 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
 
 pub(crate) fn known(id: &str) -> Option<&'static KnownHarness> {
     KNOWN.iter().find(|harness| harness.id == id)
+}
+
+/// The name people know a harness by: a built-in one's, else its id.
+pub(crate) fn display_name(id: &str) -> String {
+    if id == BUILTIN_ID {
+        return "RustCode".to_owned();
+    }
+    known(id).map_or_else(|| id.to_owned(), |harness| harness.name.to_owned())
 }
 
 /// A harness with its configuration applied: what a thread starts.

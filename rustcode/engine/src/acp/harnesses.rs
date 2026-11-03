@@ -76,6 +76,20 @@ pub(crate) struct RememberHarnessRequest {
     pub effort: Option<String>,
 }
 
+/// Move a thread to another harness (`harness/handoff.rs`). The new harness
+/// starts with the thread's next prompt, which carries the conversation so far.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[request(method = "_rustcode/session/harness", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SwitchHarnessRequest {
+    pub session_id: String,
+    pub harness: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
 /// Mark first-run onboarding done.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
 #[request(method = "_rustcode/onboarding/complete", response = serde_json::Value)]
@@ -355,6 +369,110 @@ pub(crate) async fn get(
     session_id: &str,
 ) -> Option<Arc<ExternalSession>> {
     sessions.lock().await.get(session_id).cloned()
+}
+
+/// `_rustcode/session/harness`: the thread `request.session_id` goes on with
+/// `request.harness`. It was an external thread in `sessions`, or a built-in
+/// one in `builtin_cwd` that the caller already closed. Answers with the
+/// thread's new options and `_meta` (as `session/load` would).
+pub(crate) async fn switch(
+    sessions: &ExternalSessions,
+    request: SwitchHarnessRequest,
+    builtin_cwd: Option<std::path::PathBuf>,
+    connection: &ConnectionTo<Client>,
+    orchestration: u8,
+) -> Result<Value, agent_client_protocol::Error> {
+    let session_id = request.session_id.clone();
+    let to = request.harness.trim().to_owned();
+    if to == harness::BUILTIN_ID {
+        return Err(failure(
+            "RustCode cannot take over a thread from another harness yet; start a new thread on it"
+                .to_owned(),
+        ));
+    }
+    if crate::thread_status::is_running(&session_id) {
+        return Err(failure(
+            "stop the running turn before switching harness".to_owned(),
+        ));
+    }
+    let dir = harness::config::config_dir().map_err(failure)?;
+    let (defaults, entries) = harness::config::load_in(&dir);
+    let resolved = harness::resolve(&entries, &to)
+        .ok_or_else(|| failure(format!("unknown harness '{to}'")))?;
+    let current = get(sessions, &session_id).await;
+    let (from, mut record) = match (&current, builtin_cwd) {
+        (Some(current), _) => (current.harness.id.clone(), current.record()),
+        (None, Some(cwd)) => (
+            harness::BUILTIN_ID.to_owned(),
+            store::HarnessRecord::new(&to, cwd),
+        ),
+        (None, None) => return Err(failure(format!("unknown session '{session_id}'"))),
+    };
+    if from == to {
+        return Err(failure(format!(
+            "the thread already runs on {}",
+            resolved.name
+        )));
+    }
+    if current.is_some() {
+        close(sessions, &session_id).await;
+    }
+    let asked = harness::HarnessRequest {
+        harness: Some(to.clone()),
+        model: request.model,
+        effort: request.effort,
+    };
+    let (model, effort) = harness::starting_choice(
+        &to,
+        &asked,
+        &defaults,
+        &entries,
+        &harness::learned_for(&to).models.unwrap_or_default(),
+    );
+    record.harness = to.clone();
+    record.native_session_id = None;
+    record.model = model;
+    record.effort = effort;
+    record.usage = None;
+    // A thread switched twice before it prompted still owes the first harness's context.
+    record.handoff_from = record.handoff_from.take().or(Some(from.clone()));
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    store::save(&session_id, &record);
+
+    crate::config::flush_history();
+    let mut history = crate::config::load_session_by_id(&session_id)
+        .map(|(_, history)| history)
+        .unwrap_or_default();
+    let marker = harness::handoff::marker(&from, &to, record.model.as_deref());
+    let divider = harness::handoff::divider(&marker);
+    history.push(marker);
+
+    let sink = Arc::new(AcpClientSink {
+        connection: connection.clone(),
+        session_id: session_id.clone(),
+    });
+    let session = ExternalSession::new(
+        session_id.clone(),
+        resolved.clone(),
+        record,
+        history,
+        sink,
+        true,
+    );
+    session.save_now();
+    let orchestrated = attach_orchestrator(&session, orchestration, connection).await;
+    super::mark_acp_session(&session_id);
+    sessions
+        .lock()
+        .await
+        .insert(session_id.clone(), Arc::clone(&session));
+    if let Some(divider) = divider {
+        let _ = connection.send_notification(SessionNotification::new(session_id.clone(), divider));
+    }
+    Ok(serde_json::json!({
+        "configOptions": session.config_options().await,
+        "_meta": harness::session_meta(&resolved, orchestrated),
+    }))
 }
 
 /// Close one external thread; whether it was one.

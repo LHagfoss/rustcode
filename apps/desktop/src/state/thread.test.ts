@@ -417,6 +417,23 @@ describe("Claude Code subagents", () => {
   });
 });
 
+describe("a harness switch", () => {
+  test("draws a divider where the thread moved", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Switched from Claude Code to Codex" },
+        _meta: { rustcode: { kind: "handoff", from: "claude-code", to: "codex", model: "gpt-6-luna" } },
+      },
+    } as never);
+    const t = applyUpdate(emptyThread("s", "/p"), update);
+    expect(t.items).toEqual([
+      expect.objectContaining({ kind: "handoff", from: "claude-code", to: "codex", model: "gpt-6-luna" }),
+    ]);
+  });
+});
+
 describe("checkCommands", () => {
   test("finds the checks a command line runs", () => {
     expect(checkCommands("/bin/zsh -lc 'bun --version && bun test'")).toEqual(["bun test"]);

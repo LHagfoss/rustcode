@@ -3,6 +3,7 @@
 // tool rows that open to their diff or output, and a turn footer.
 
 import {
+  ArrowRight,
   Book,
   Brain,
   ChevronDown,
@@ -32,7 +33,7 @@ import { displayCommand } from "../lib/command";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
 import { foldLabel, type ToolGroup, type TurnFold } from "../state/fold";
-import { editMessage, retryMessage } from "../state/store";
+import { editMessage, retryMessage, useApp } from "../state/store";
 import {
   diffCounts,
   diffLines,
@@ -41,6 +42,7 @@ import {
   type TurnCompletion,
   thoughtHeadings,
 } from "../state/thread";
+import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { CopyButton, Markdown } from "./Markdown";
@@ -524,6 +526,32 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
     </div>
   );
 });
+
+/**
+ * Where the thread moved to another harness, as T3 Code draws its context
+ * handoff: a quiet divider, `Claude Code → Codex`, with the model it took.
+ */
+export function HandoffRow({ item }: { item: Item<"handoff"> }) {
+  const harnesses = useApp((s) => s.harnesses?.harnesses);
+  const name = (id: string) => harnesses?.find((h) => h.id === id)?.name ?? id;
+  return (
+    <div className="flex items-center gap-3 py-1 font-rounded text-caption text-fg-muted" role="separator">
+      <span className="h-px flex-1 bg-border" />
+      <span className="flex items-center gap-1.5">
+        <HarnessIcon id={item.from} size={12} />
+        {name(item.from)}
+        <ArrowRight size={11} className="text-fg-faint" />
+        <HarnessIcon id={item.to} size={12} />
+        <span className="text-fg">{name(item.to)}</span>
+        {item.model && <span className="text-fg-faint">· {item.model}</span>}
+      </span>
+      <Tooltip label="The new harness gets the conversation so far with your next message">
+        <span className="text-fg-faint">context handed over</span>
+      </Tooltip>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
 
 export function NoticeRow({ item, action }: { item: Item<"notice">; action?: ReactNode }) {
   return (

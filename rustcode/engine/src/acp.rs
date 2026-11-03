@@ -915,6 +915,35 @@ struct AcpServer {
     external: harnesses::ExternalSessions,
 }
 
+/// Close a built-in thread: its turn, remote share, tasks and background
+/// commands stop. Its working directory, when it was open.
+async fn close_builtin(server: &AcpServer, session_id: &str) -> Option<std::path::PathBuf> {
+    server
+        .remote
+        .stop_session(
+            session_id,
+            crate::remote::SessionCloseReason::SessionChanged,
+        )
+        .await;
+    server
+        .task_routes
+        .lock()
+        .expect("ACP task routes mutex poisoned")
+        .remove(session_id);
+    let session = server.sessions.lock().await.remove(session_id);
+    unmark_acp_session(session_id);
+    let cwd = match session {
+        Some(session) => {
+            session.turns.cancel_active().await;
+            Some(session.cwd.clone())
+        }
+        None => None,
+    };
+    crate::tools::abort_background_starts(session_id);
+    crate::tools::stop_background_tasks(session_id);
+    cwd
+}
+
 /// A built-in `session/new` honours `_meta.rustcode.model` and `effort` the
 /// same way external harnesses do (docs/harnesses.md). Model first, since
 /// the effort choices depend on it; an unknown value is ignored and the
@@ -1716,6 +1745,36 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: harnesses::SwitchHarnessRequest, responder, connection| {
+                    let server = server.clone();
+                    connection.clone().spawn(async move {
+                        let session_id = request.session_id.clone();
+                        let builtin = if harnesses::get(&server.external, &session_id).await.is_some() {
+                            None
+                        } else if crate::thread_status::is_running(&session_id) {
+                            return responder.respond_with_error(
+                                agent_client_protocol::Error::invalid_params()
+                                    .data("stop the running turn before switching harness"),
+                            );
+                        } else {
+                            close_builtin(&server, &session_id).await
+                        };
+                        let orchestration = server.client_has_orchestration.load(Ordering::Relaxed);
+                        match harnesses::switch(&server.external, request, builtin, &connection, orchestration)
+                            .await
+                        {
+                            Ok(value) => responder.respond(value)?,
+                            Err(error) => responder.respond_with_error(error)?,
+                        }
+                        Ok(())
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |_request: harnesses::OnboardingCompleteRequest, responder, connection| {
                 connection.spawn(async move {
                     match harnesses::complete_onboarding().await {
@@ -2152,26 +2211,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         server.presence.session_closed(&session_id);
                         return responder.respond(CloseSessionResponse::new());
                     }
-                    server
-                        .remote
-                        .stop_session(
-                            &session_id,
-                            crate::remote::SessionCloseReason::SessionChanged,
-                        )
-                        .await;
-                    server
-                        .task_routes
-                        .lock()
-                        .expect("ACP task routes mutex poisoned")
-                        .remove(&session_id);
-                    let session = server.sessions.lock().await.remove(&session_id);
-                    unmark_acp_session(&session_id);
-                    if let Some(session) = session {
-                        session.turns.cancel_active().await;
-                    }
+                    close_builtin(&server, &session_id).await;
                     server.presence.session_closed(&session_id);
-                    crate::tools::abort_background_starts(&session_id);
-                    crate::tools::stop_background_tasks(&session_id);
                     responder.respond(CloseSessionResponse::new())
                 }
             },

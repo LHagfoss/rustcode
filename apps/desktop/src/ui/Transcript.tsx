@@ -22,6 +22,7 @@ import { SubagentRow } from "./AgentViews";
 import { cx } from "./primitives";
 import {
   AssistantRow,
+  HandoffRow,
   NoticeRow,
   ThoughtRow,
   ToolGroupRow,
@@ -560,6 +561,8 @@ export function Transcript({
                       <ToolRow item={item} cwd={thread.cwd} />
                     ) : item?.kind === "notice" ? (
                       <NoticeRow item={item} />
+                    ) : item?.kind === "handoff" ? (
+                      <HandoffRow item={item} />
                     ) : item?.kind === "turnEnd" ? (
                       <TurnEndRow
                         item={item}

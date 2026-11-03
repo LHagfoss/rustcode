@@ -1155,6 +1155,26 @@ export class MockEngine {
           effort: str(params.effort) ?? null,
         };
         return this.snapshot();
+      case "_rustcode/session/harness": {
+        const thread = this.thread(params.sessionId);
+        const id = str(params.harness) ?? "";
+        const h = this.harnesses.harnesses.find((x) => x.id === id);
+        if (!h || h.builtin) throw Object.assign(new Error(`cannot switch to '${id}'`), { code: -32602 });
+        const from = thread.harness;
+        thread.harness = id;
+        thread.model = str(params.model) ?? h.models[0]?.id ?? thread.model;
+        const divider = update(thread.id, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: `Switched from ${from} to ${id}` },
+          _meta: { rustcode: { kind: "handoff", from, to: id, model: thread.model } },
+        });
+        thread.history.push(divider);
+        queueMicrotask(() => this.notify(divider));
+        return {
+          configOptions: configOptions(thread, this.harnesses),
+          _meta: { rustcode: { harness: { id, capabilities: h.capabilities as unknown as Json } } },
+        };
+      }
       case "_rustcode/harnesses/remember": {
         const id = str(params.harness) ?? "";
         const h = this.harnesses.harnesses.find((x) => x.id === id);

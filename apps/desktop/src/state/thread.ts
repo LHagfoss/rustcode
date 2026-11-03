@@ -63,6 +63,8 @@ export type TranscriptItem =
       background?: "agent" | "task";
     }
   | { kind: "notice"; id: string; text: string; tone: "warning" | "error" | "info"; resumable?: boolean }
+  /** Where the thread moved to another harness, which got the conversation so far. */
+  | { kind: "handoff"; id: string; from: string; to: string; model?: string }
   | {
       kind: "turnEnd";
       id: string;
@@ -363,6 +365,14 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
             text: update.text.split("\n")[0] ?? update.text,
             tone: "info",
           },
+        ],
+      };
+    case "handoff":
+      return {
+        ...state,
+        items: [
+          ...finishThoughts(state.items, now),
+          { kind: "handoff", id: localId("handoff"), from: update.from, to: update.to, model: update.model },
         ],
       };
     case "notice":
