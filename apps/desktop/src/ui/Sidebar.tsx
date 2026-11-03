@@ -20,6 +20,7 @@ import {
   FolderOpen,
   FolderX,
   GitBranch,
+  Hand,
   KanbanSquare,
   ListFilter,
   MessageCircleQuestion,
@@ -41,6 +42,17 @@ import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { openTerminalAt, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
+import {
+  type ChildInfo,
+  type ChildState,
+  childrenListed,
+  childState,
+  childSummary,
+  childVisible,
+  orderChildren,
+  unseenChild,
+} from "../state/children";
+import { isActive } from "../state/orchestration";
 import {
   askConfirm,
   featureMissing,
@@ -266,6 +278,8 @@ const ThreadRow = memo(function ThreadRow({
   now,
   snippet,
   jump,
+  compact,
+  hasChildren,
 }: {
   session: SessionSummary;
   selected: boolean;
@@ -275,6 +289,10 @@ const ThreadRow = memo(function ThreadRow({
   snippet?: string;
   /** While ⌘ is held: the digit that opens this row. */
   jump?: number;
+  /** A child of the thread above it: one line, its harness and what it is doing, no meta line. */
+  compact?: boolean;
+  /** The sidebar lists this thread's children under it, which already say what the links are. */
+  hasChildren?: boolean;
 }) {
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
@@ -327,6 +345,77 @@ const ThreadRow = memo(function ThreadRow({
     );
   }
   const done = status === "done";
+  if (compact) {
+    return (
+      <ContextMenu.Root>
+        <ContextMenu.Trigger asChild>
+          <div className="group relative">
+            <button
+              type="button"
+              onClick={() => selectThread(session.id)}
+              onDoubleClick={startRename}
+              onKeyDown={(e) => {
+                if (e.key === "F2") {
+                  e.preventDefault();
+                  startRename();
+                }
+              }}
+              aria-current={selected ? "page" : undefined}
+              className={cx(
+                "flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left",
+                selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
+              )}
+            >
+              <Tooltip label={meta.length ? meta.join(" · ") : (session.title ?? "Thread")}>
+                <span className="flex shrink-0 items-center">
+                  <HarnessIcon
+                    id={session.harness ?? "rustcode"}
+                    name={harness?.name}
+                    size={12}
+                    className={external ? "text-fg-muted" : "text-fg-faint"}
+                  />
+                </span>
+              </Tooltip>
+              <span
+                className={cx(
+                  "min-w-0 flex-1 truncate text-callout",
+                  selected || request || failed
+                    ? "font-medium text-fg"
+                    : running || status === "done"
+                      ? "text-fg/75"
+                      : "text-fg-muted",
+                )}
+              >
+                {session.title || "New thread"}
+              </span>
+              {running ? (
+                <span className="flex shrink-0 items-center gap-1 text-accent text-sub tabular">
+                  <Spinner size={10} />
+                  {startedAt ? <Elapsed since={startedAt} /> : null}
+                </span>
+              ) : request || status === "needs_input" ? (
+                <Hand size={12} className="shrink-0 text-warning" aria-label="Needs you" />
+              ) : failed ? (
+                <X size={12} className="shrink-0 text-danger" aria-label="Failed" />
+              ) : fresh || status === "done" ? (
+                <CircleCheck size={12} className="shrink-0 text-success" aria-label="Done" />
+              ) : null}
+            </button>
+          </div>
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content className={menuSurface}>
+            <ThreadMenuItems
+              session={session}
+              Item={ContextMenu.Item}
+              Separator={ContextMenu.Separator}
+              onRename={startRename}
+            />
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
+    );
+  }
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
@@ -362,7 +451,7 @@ const ThreadRow = memo(function ThreadRow({
               >
                 {session.title || "New thread"}
               </span>
-              <LinkBadge threadId={session.id} />
+              <LinkBadge threadId={session.id} hidden={hasChildren} />
               <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
                 {jump !== undefined ? (
                   <kbd className="rounded-sm bg-fill px-1 font-sans text-fg-muted">⌘{jump}</kbd>
@@ -489,9 +578,10 @@ const ThreadRow = memo(function ThreadRow({
 });
 
 /**
- * Threads this one started (start_session, fan_out), nested under it as ordinary thread rows.
- * One that is working, waits for you, is open or has just finished shows; the rest fold
- * behind "N finished", so delegated work leaves the list once it is done.
+ * Threads this one started (start_session, fan_out), under it. A parent you are not reading
+ * shows one line however many children it has; opening the group (or the parent) lists what
+ * works, what wants you and what you opened, and the rest stay behind "N finished" as soon
+ * as they finish, so delegated work leaves the list the moment it is done.
  */
 function ChildThreads({
   items,
@@ -504,41 +594,88 @@ function ChildThreads({
   selectedId: string | null;
   now: number;
 }) {
-  const [open, setOpen] = useState(false);
-  // A string, so the rows re-render only when which children are live changes.
-  const live = useApp((s) =>
-    items
-      .filter((c) => {
+  const [openGroups, setOpenGroups] = useStored<Record<string, boolean>>("rustcode.sidebar.childrenOpen", {});
+  const [openFinished, setOpenFinished] = useState(false);
+  // One string, so the rows re-render only when a child's state changes. A child whose link is
+  // still open is live even before its turn reports so (it was just started or messaged).
+  const states = useApp((s) => {
+    const linked = new Map(
+      s.links.links.filter((l) => l.orchestrator === parentId).map((l) => [l.target, l.state] as const),
+    );
+    return items
+      .map((c) => {
         const status = statusOf(s, c.id);
-        const finishedAt = s.finished[c.id];
-        const linked = s.links.links.some(
-          (l) => l.target === c.id && l.orchestrator === parentId && l.state === "working",
-        );
-        return status === "running" || status === "needs_input" || linked || !!finishedAt;
+        const link = linked.get(c.id);
+        const live = link && isActive(link) ? (link === "needs_user" ? "needs_input" : "running") : status;
+        const state = childState(live, !!s.failed[c.id]);
+        return `${c.id}:${state}:${s.finished[c.id] ? 1 : 0}`;
       })
-      .map((c) => c.id)
-      .join(" "),
-  );
-  const shown = items.filter((c) => open || c.id === selectedId || live.split(" ").includes(c.id));
-  const folded = items.length - shown.length;
+      .join(" ");
+  });
+  const children = useMemo(() => {
+    const by = new Map(
+      states
+        .split(" ")
+        .filter(Boolean)
+        .map((part) => {
+          const [id, state, unseen] = part.split(":");
+          return [id!, { id: id!, state: state as ChildState, unseen: unseen === "1" }] as const;
+        }),
+    );
+    return items.flatMap((c) => {
+      const info = by.get(c.id);
+      return info ? [info] : [];
+    });
+  }, [items, states]);
+  const expanded = !!openGroups[parentId];
+  const listed = childrenListed(children, { expanded, parentSelected: parentId === selectedId, selectedId });
+  const ordered = orderChildren(children, selectedId);
+  const shown = ordered.filter((c) => childVisible(c, selectedId));
+  const folded = ordered.filter((c) => !childVisible(c, selectedId));
+  const dot = unseenChild(children);
+  const toggle = () => setOpenGroups({ ...openGroups, [parentId]: !expanded });
+  const row = (child: ChildInfo) => {
+    const session = items.find((c) => c.id === child.id);
+    return session ? (
+      <div key={child.id} className="ml-[14px] border-border border-l pl-1 rc-in">
+        <ThreadRow session={session} selected={child.id === selectedId} scopeAll={false} now={now} compact />
+      </div>
+    ) : null;
+  };
   return (
     <>
-      {shown.map((child) => (
-        <div key={child.id} className="ml-[14px] border-border border-l pl-1 rc-in">
-          <ThreadRow session={child} selected={child.id === selectedId} scopeAll={false} now={now} />
-        </div>
-      ))}
-      {(folded > 0 || open) && (
+      <div className="ml-[14px] border-border border-l pl-1">
         <button
           type="button"
-          onClick={() => setOpen(!open)}
-          aria-expanded={open}
+          onClick={toggle}
+          aria-expanded={expanded}
+          title={childSummary(children)}
+          className="flex h-7 w-full items-center gap-1 rounded-md py-0 pr-1.5 pl-2.5 text-left text-fg-muted hover:bg-fill-subtle hover:text-fg"
+        >
+          <ChevronRight size={9} className={cx("shrink-0 transition-transform", expanded && "rotate-90")} />
+          <span className="min-w-0 flex-1 truncate text-caption">{childSummary(children)}</span>
+          {dot && (
+            <span
+              role="img"
+              aria-label={dot === "failed" ? "A child thread failed" : "A child thread finished"}
+              className={cx("size-1 shrink-0 rounded-full", dot === "failed" ? "bg-danger" : "bg-success")}
+            />
+          )}
+        </button>
+      </div>
+      {listed && shown.map(row)}
+      {listed && folded.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpenFinished(!openFinished)}
+          aria-expanded={openFinished}
           className="ml-[14px] flex h-[20px] items-center gap-1 rounded-sm px-2 text-caption text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
         >
-          <ChevronRight size={10} className={cx("transition-transform", open && "rotate-90")} />
-          {open ? "Hide finished" : `${folded} finished`}
+          <ChevronRight size={10} className={cx("transition-transform", openFinished && "rotate-90")} />
+          {openFinished ? "Hide finished" : `${folded.length} finished`}
         </button>
       )}
+      {listed && openFinished && folded.map(row)}
     </>
   );
 }
@@ -1025,6 +1162,7 @@ export function Sidebar() {
             now={now}
             snippet={query.trim() ? contentHits[s.id] : undefined}
             jump={jumpOf(s.id)}
+            hasChildren={!!childrenOf[s.id]?.length}
           />
           {childrenOf[s.id] && (
             <ChildThreads items={childrenOf[s.id]!} parentId={s.id} selectedId={selectedId} now={now} />

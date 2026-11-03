@@ -259,11 +259,16 @@ export function GrantDialog() {
   );
 }
 
-/** A sidebar badge: this thread works for another (↳), or has links under way (count). */
-export function LinkBadge({ threadId }: { threadId: string }) {
+/**
+ * A sidebar badge: this thread works for another (↳), or has links under way
+ * (count). `hidden` drops it where the sidebar already lists the children, which
+ * say what the count would.
+ */
+export function LinkBadge({ threadId, hidden }: { threadId: string; hidden?: boolean }) {
   const book = useApp((s) => s.links);
   const { driving, drivenBy } = linksOf(book, threadId);
   const active = driving.filter((l) => isActive(l.state)).length;
+  if (hidden) return null;
   if (drivenBy) {
     return (
       <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>
