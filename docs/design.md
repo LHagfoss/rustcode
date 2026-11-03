@@ -299,7 +299,7 @@ panels `rounded-xl`.
   that has a header uses this one (the chat, new or open; Settings).
 - **Settings:** the whole window (the shell stays mounted underneath,
   hidden). Header: Back (a ghost pill with a chevron) and the title, on
-  the traffic lights' line. Body: one centred column, `max-w-[760px]`, the
+  the traffic lights' line. Body: one centred column, `max-w-[840px]`, the
   section list (164px, sticky, rows per the Row recipe) at its left, the
   page (title2 heading, then groups) beside it.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
