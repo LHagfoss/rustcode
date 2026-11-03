@@ -14,6 +14,7 @@ import type { Transport } from "../acp/transport";
 import {
   type AgentInfo,
   byActivity,
+  displayPath,
   fallbackHarnessSnapshot,
   type HarnessLast,
   type HarnessSnapshot,
@@ -1999,8 +2000,8 @@ export async function removeWorktree(id: string): Promise<void> {
   askConfirm({
     title: `Remove the worktree of ${wt.branch}?`,
     message: reasons.length
-      ? `Careful: ${reasons.join(", and ")}. The folder ${wt.path.replace(/^\/Users\/[^/]+/, "~")} goes; the thread stays.`
-      : `The folder ${wt.path.replace(/^\/Users\/[^/]+/, "~")} goes; the thread and its history stay. The branch is deleted only when it is merged.`,
+      ? `Careful: ${reasons.join(", and ")}. The folder ${displayPath(wt.path)} goes; the thread stays.`
+      : `The folder ${displayPath(wt.path)} goes; the thread and its history stay. The branch is deleted only when it is merged.`,
     action: "Remove Worktree",
     destructive: true,
     run: () => void go(false),

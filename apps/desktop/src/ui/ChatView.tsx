@@ -18,6 +18,7 @@ import {
 import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { agentActive } from "../acp/rustcode";
+import { displayPath } from "../acp/types";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
@@ -164,7 +165,7 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
                 className="-mx-1 max-w-[260px] shrink-0 truncate rounded-sm px-1 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg"
                 dir="rtl"
               >
-                <bdi>{cwd.replace(/^\/Users\/[^/]+/, "~")}</bdi>
+                <bdi>{displayPath(cwd)}</bdi>
               </button>
             </Tooltip>
           )}
@@ -241,9 +242,7 @@ function EmptyState({ banner }: { banner: boolean }) {
       <h2 className="font-semibold text-title">What should we build?</h2>
       <div className="flex max-w-[560px] items-center gap-1.5 text-callout text-fg-muted">
         <Folder size={13} />
-        <span className="truncate">
-          {projectCwd ? projectCwd.replace(/^\/Users\/[^/]+/, "~") : "No folder chosen"}
-        </span>
+        <span className="truncate">{projectCwd ? displayPath(projectCwd) : "No folder chosen"}</span>
         <button
           type="button"
           onClick={() => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p))}

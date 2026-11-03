@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Json } from "./jsonrpc";
 import {
+  displayPath,
   fallbackHarnessSnapshot,
   initializeParams,
   parseAgentInfo,
@@ -165,5 +166,13 @@ describe("ACP types", () => {
     });
     expect(snapshot.default).toEqual({ harness: "codex", model: "m", effort: "low" });
     expect(fallbackHarnessSnapshot()).toMatchObject({ onboarded: true, unsupported: true });
+  });
+});
+
+describe("displayPath", () => {
+  test("home as ~ and /private/tmp as /tmp", () => {
+    expect(displayPath("/Users/me/code/app")).toBe("~/code/app");
+    expect(displayPath("/private/tmp/app")).toBe("/tmp/app");
+    expect(displayPath("/private/tmpx")).toBe("/private/tmpx");
   });
 });
