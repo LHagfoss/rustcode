@@ -59,7 +59,7 @@ describe("turn folding", () => {
     });
   });
 
-  test("the running turn shows every step", () => {
+  test("a short running turn shows every step", () => {
     const rows = foldTurns(items, true, new Set());
     expect(keys(rows).slice(4)).toEqual(["u2", "t2", "c4", "r3"]);
   });
@@ -142,5 +142,53 @@ describe("tool groups", () => {
     expect(toolGroupLabel(["read", "edit", "execute", "search", "fetch"])).toBe(
       "Read 1 file · Edited 1 file · Ran 1 command · 2 more",
     );
+  });
+});
+
+describe("the running turn", () => {
+  const long = [
+    user("u"),
+    thought("t"),
+    tool("a1", "completed", "src/x.ts"),
+    tool("a2", "failed"),
+    tool("a3"),
+    reply("r"),
+    tool("b1"),
+    tool("b2"),
+  ];
+
+  test("folds what came before its latest reply", () => {
+    const rows = foldTurns(long, true, new Set());
+    expect(keys(rows)).toEqual(["u", "[live-u]", "r", "b1", "b2"]);
+    const fold = rows.find((r) => "fold" in r);
+    expect(fold && "fold" in fold && fold.fold).toMatchObject({
+      steps: 4,
+      tools: 3,
+      failed: 1,
+      files: 1,
+      live: true,
+    });
+    expect(foldLabel((fold as { fold: Parameters<typeof foldLabel>[0] }).fold, String)).toBe(
+      "4 earlier steps · 1 file changed · 1 failed",
+    );
+  });
+
+  test("opens like a finished turn", () => {
+    const rows = foldTurns(long, true, new Set(["live-u"]));
+    expect(keys(rows)).toEqual(["u", "[live-u]", "t", "a1", "a2", "a3", "r", "b1", "b2"]);
+  });
+
+  test("with no reply yet, keeps only its last steps", () => {
+    const steps = [user("u"), ...Array.from({ length: 10 }, (_, i) => tool(`c${i}`))];
+    expect(keys(foldTurns(steps, true, new Set()))).toEqual([
+      "u",
+      "[live-u]",
+      "c4",
+      "c5",
+      "c6",
+      "c7",
+      "c8",
+      "c9",
+    ]);
   });
 });

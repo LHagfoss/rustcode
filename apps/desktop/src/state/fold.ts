@@ -18,6 +18,8 @@ export interface TurnFold {
   failed: number;
   /** Distinct files the turn's tool calls changed. */
   files: number;
+  /** The running turn's earlier steps, folded so the latest batch reads on its own. */
+  live?: boolean;
 }
 
 /** A run of finished tool calls shown as one row: `Read 4 files · Ran 2 commands`. */
@@ -80,7 +82,11 @@ function pushTurn(
     const item = items[i]!;
     if (!staysVisible(item) && i < answerFrom) work.push(i);
   }
-  if (live || !work.length) {
+  if (live) {
+    pushLiveTurn(items, from, to, open, rows);
+    return;
+  }
+  if (!work.length) {
     for (let i = from; i < to; i++) rows.push({ key: items[i]!.id, item: items[i]! });
     return;
   }
@@ -115,12 +121,73 @@ function pushTurn(
   }
 }
 
+/** At most this many of the running turn's latest steps show; the rest fold. */
+export const LIVE_TAIL = 6;
+
+/**
+ * The running turn: what it does now shows, everything before folds into one
+ * row. "Now" is the latest reply and the steps after it, at most `LIVE_TAIL`
+ * of them, else the last `LIVE_TAIL` steps.
+ */
+function pushLiveTurn(
+  items: TranscriptItem[],
+  from: number,
+  to: number,
+  open: ReadonlySet<string>,
+  rows: FoldRow[],
+) {
+  let tailFrom = Math.max(from, to - LIVE_TAIL);
+  for (let i = to - 1; i >= from; i--) {
+    if (items[i]!.kind === "assistant") {
+      tailFrom = Math.max(i, to - LIVE_TAIL - 1);
+      break;
+    }
+  }
+  const earlier: number[] = [];
+  for (let i = from; i < tailFrom; i++) if (!staysVisible(items[i]!)) earlier.push(i);
+  // One or two earlier steps read fine where they are.
+  if (earlier.length < 3) {
+    for (let i = from; i < to; i++) rows.push({ key: items[i]!.id, item: items[i]! });
+    return;
+  }
+  const key = `live-${items[from]!.id}`;
+  const files = new Set<string>();
+  let tools = 0;
+  let failed = 0;
+  for (const i of earlier) {
+    const item = items[i]!;
+    if (item.kind !== "tool") continue;
+    tools++;
+    if (item.status === "failed") failed++;
+    for (const diff of item.diffs) files.add(diff.path);
+  }
+  const fold: TurnFold = {
+    key,
+    open: open.has(key),
+    steps: earlier.length,
+    tools,
+    failed,
+    files: files.size,
+    live: true,
+  };
+  const first = earlier[0]!;
+  for (let i = from; i < to; i++) {
+    const item = items[i]!;
+    if (i === first) rows.push({ key, fold });
+    const folded = i < tailFrom && !staysVisible(item);
+    if (!folded) rows.push({ key: item.id, item });
+    else if (fold.open) rows.push({ key: item.id, item, inFold: key });
+  }
+}
+
 /** The summary row's words: `Worked for 1m 20s · 14 steps · 3 files changed · 1 failed`. */
 export function foldLabel(fold: TurnFold, formatDuration: (ms: number) => string): string {
-  const parts = [
-    fold.elapsedMs !== undefined ? `Worked for ${formatDuration(fold.elapsedMs)}` : "Worked",
-    `${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`,
-  ];
+  const parts = fold.live
+    ? [`${fold.steps} earlier ${fold.steps === 1 ? "step" : "steps"}`]
+    : [
+        fold.elapsedMs !== undefined ? `Worked for ${formatDuration(fold.elapsedMs)}` : "Worked",
+        `${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`,
+      ];
   if (fold.files) parts.push(`${fold.files} ${fold.files === 1 ? "file" : "files"} changed`);
   if (fold.failed) parts.push(`${fold.failed} failed`);
   return parts.join(" · ");

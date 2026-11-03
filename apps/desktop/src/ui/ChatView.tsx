@@ -19,6 +19,7 @@ import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { agentActive } from "../acp/rustcode";
 import { displayPath } from "../acp/types";
+import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
@@ -105,7 +106,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          aria-label="Thread status"
+          aria-label={`Thread status: ${STATUS_LABEL[status]}`}
           className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           {wt && (
@@ -114,7 +115,12 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
               <span className="truncate">{wt.branch}</span>
             </span>
           )}
-          {status === "idle" ? <CircleDashed size={12} /> : <StatusChip status={status} className="-mx-1" />}
+          {/* The icon says it; the sidebar and the working line say the rest. */}
+          {status === "idle" ? (
+            <CircleDashed size={12} />
+          ) : (
+            <StatusChip status={status} compact className="-mx-1" />
+          )}
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>

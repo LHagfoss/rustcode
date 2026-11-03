@@ -241,7 +241,9 @@ export const Composer = memo(function Composer({
     const el = field.current;
     if (!el) return;
     el.style.height = "0px";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE + 4), LINE * 10)}px`;
+    // scrollHeight includes the 2px padding above and below, which keeps the descenders of the
+    // last line (g, j, p, y in the rounded font) inside the box instead of clipped at its edge.
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE + 4), LINE * 10 + 4)}px`;
   }, [draft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
@@ -536,7 +538,7 @@ export const Composer = memo(function Composer({
               <div
                 ref={mirror}
                 aria-hidden
-                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-body text-fg leading-[19px]"
+                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-0.5 text-body text-fg leading-[19px]"
               >
                 {splitUrls(draft).map((part, i) =>
                   part.url ? (
@@ -567,7 +569,7 @@ export const Composer = memo(function Composer({
               aria-label="Message"
               spellCheck
               className={cx(
-                "relative block w-full resize-none bg-transparent text-body leading-[19px] outline-none placeholder:text-fg-faint",
+                "relative block w-full resize-none bg-transparent py-0.5 text-body leading-[19px] outline-none placeholder:text-fg-faint",
                 hasUrl && "text-transparent caret-fg selection:bg-accent/30",
               )}
             />
