@@ -55,6 +55,7 @@ import {
 import { dismissOverlays } from "../lib/overlays";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
+import { titleFrom } from "../lib/title";
 import { createBatcher, frameQueue } from "./batch";
 import {
   type ComposeExtras,
@@ -1092,7 +1093,7 @@ async function createThread(firstMessage = ""): Promise<string> {
   const wt = s.newWorktree;
   const worktree =
     wt.on && s.features.worktrees
-      ? { repo: cwd, branch: wt.branch.trim() || undefined, title: firstMessage.split("\n")[0]?.slice(0, 80) }
+      ? { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) }
       : undefined;
   const id = await createSession({
     cwd,
@@ -1547,7 +1548,7 @@ export async function runPrompt(
     sessions: byActivity(
       s.sessions.map((x) =>
         x.id === id
-          ? { ...x, updatedAt: Date.now(), title: x.title ?? (shown.split("\n")[0]?.slice(0, 80) || "Image") }
+          ? { ...x, updatedAt: Date.now(), title: x.title ?? (titleFrom(shown, 80) || "Image") }
           : x,
       ),
     ),

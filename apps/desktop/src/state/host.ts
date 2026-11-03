@@ -11,6 +11,7 @@
 import type { JsonObject } from "../acp/jsonrpc";
 import { projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
+import { titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
 import {
   capped,
@@ -449,7 +450,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   if (isFailure(harness)) return failureJson(harness);
   const model = await modelFor(harness.id, call.model);
   if (isFailure(model)) return failureJson(model);
-  const title = call.title ?? call.prompt.split("\n")[0]!.slice(0, 60);
+  const title = call.title ?? titleFrom(call.prompt, 60);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "start",
@@ -503,7 +504,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     chosen.push({ ...h, model, effort: entry.effort });
   }
   const project = projectOf(caller);
-  const title = call.title ?? call.prompt.split("\n")[0]!.slice(0, 60);
+  const title = call.title ?? titleFrom(call.prompt, 60);
   const no = await permitted(caller, "start", {
     kind: "fan_out",
     caller: caller.id,

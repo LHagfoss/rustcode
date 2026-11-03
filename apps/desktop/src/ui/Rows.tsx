@@ -538,6 +538,9 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
   const [open, setOpen] = useState(false);
   const failed = completion.checks.filter((c) => c.outcome === "failed");
   const passed = completion.checks.length > 0 && completion.checks.every((c) => c.outcome === "passed");
+  // The files are what RustCode's own tools edited. An external harness edits on its own, so an
+  // empty list does not mean nothing changed (the turn's Changes chip says what did): say nothing.
+  if (!completion.files.length && !completion.checks.length) return null;
   return (
     <div className="mb-2 rounded-md bg-fill-subtle font-rounded text-callout">
       <div className="flex min-h-8 items-center gap-2 px-2.5">
@@ -557,9 +560,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
               className={cx("text-fg-faint transition-transform duration-200", open && "rotate-90")}
             />
           </button>
-        ) : (
-          <span className="text-fg-muted">No files changed</span>
-        )}
+        ) : null}
         <span className="flex-1" />
         {failed.length > 0 ? (
           <Tooltip label={`Failed on its last run:\n${failed.map((c) => c.command).join("\n")}`}>

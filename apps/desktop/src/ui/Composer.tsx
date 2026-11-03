@@ -50,6 +50,7 @@ import {
   canSteer,
   featureMissing,
   moveQueued,
+  newThreadChoice,
   permissionModeOf,
   removeQueued,
   sendQueuedNow,
@@ -215,6 +216,12 @@ export const Composer = memo(function Composer({
   const harness = threadHarness(thread);
   const defaultHarness = useApp((s) => s.harnesses?.default.harness ?? "rustcode");
   const harnessName = harness?.name ?? "This harness";
+  // Who the message goes to: the thread's harness, or for a new thread the one it will start on.
+  const speakingTo = useApp((s) => {
+    if (harness) return harness.name;
+    const id = newThreadChoice(s)?.harness;
+    return s.harnesses?.harnesses.find((h) => h.id === id)?.name ?? "RustCode";
+  });
   const images = acceptsImages(thread);
   const cancelReason = controlDisabledReason("cancel", thread?.harness?.capabilities, harnessName);
   const cwd = thread?.cwd ?? projectCwd;
@@ -422,7 +429,7 @@ export const Composer = memo(function Composer({
       ? steerable
         ? "⏎ queues for the next turn, ⌘⏎ steers this one…"
         : "Queue a message…"
-      : "Message RustCode…";
+      : `Message ${speakingTo}…`;
 
   return (
     <div className="relative">

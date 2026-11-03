@@ -192,7 +192,12 @@ export interface RuleThread {
   status?: ThreadStatus;
 }
 
-const clean = (path: string) => path.replace(/\/+$/, "").replace(/\/\.\//g, "/");
+// macOS links /tmp, /var and /etc into /private, and the engine reports the resolved path: one place.
+const clean = (path: string) =>
+  path
+    .replace(/\/+$/, "")
+    .replace(/\/\.\//g, "/")
+    .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
 
 /** A thread's project: its worktree's repository, else its folder. */
 export const projectOf = (t: Pick<RuleThread, "folder" | "worktree">) => clean(t.worktree?.repo || t.folder);
