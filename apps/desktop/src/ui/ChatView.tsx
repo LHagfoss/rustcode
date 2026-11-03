@@ -25,6 +25,7 @@ import { observeSize } from "../lib/resize";
 import { chooseFolder } from "../state/folders";
 import {
   refreshSessions,
+  repairThread,
   setPanel,
   setProjectCwd,
   setTerminalOpen,
@@ -429,6 +430,13 @@ export function ChatView() {
         {error && (
           <ErrorBanner
             text={error}
+            action={
+              thread && error.startsWith("Could not open this thread") ? (
+                <Pill prominent onClick={() => void repairThread(thread.id)}>
+                  Repair Thread
+                </Pill>
+              ) : undefined
+            }
             onDismiss={() => {
               setDismissed(error);
               void refreshSessions();

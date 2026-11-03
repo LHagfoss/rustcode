@@ -1030,6 +1030,53 @@ export async function openThread(id: string) {
   }
 }
 
+/**
+ * Repair Thread: the engine checks a closed thread the way opening it does and
+ * puts right what it safely can (a harness record pointing at another folder).
+ * The thread is then opened again; what is left (a folder that is gone) is said.
+ */
+export async function repairThread(id: string): Promise<void> {
+  const conn = connection;
+  if (!conn || !get().agent?.sessionRepair) {
+    toast("This engine cannot repair threads. Update RustCode.", "error");
+    return;
+  }
+  if (get().threads[id]?.running) {
+    toast("Stop the running turn before repairing this thread.");
+    return;
+  }
+  await closeThread(id);
+  let answer: JsonObject;
+  try {
+    answer = ((await conn.request(Method.sessionRepair, { sessionId: id }, 10_000)) ?? {}) as JsonObject;
+  } catch (error) {
+    toast(`Could not repair the thread: ${errorText(error)}`, "error");
+    return;
+  }
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  const fixed = list(answer.fixed);
+  const problems = list(answer.problems);
+  const cwd = typeof answer.cwd === "string" ? answer.cwd : undefined;
+  set((s) => {
+    const { [id]: _old, ...threads } = s.threads;
+    return {
+      threads,
+      sessions: cwd ? s.sessions.map((x) => (x.id === id ? { ...x, cwd } : x)) : s.sessions,
+    };
+  });
+  if (problems.length) {
+    toast(problems.join(" "), "error", {
+      action: { label: "Move…", run: () => void import("./folders").then((f) => f.chooseFolder(false)) },
+    });
+  } else {
+    toast(
+      fixed.length ? `Repaired: ${fixed.join(" ")}` : "Nothing needed repair: the thread checks out.",
+      "success",
+    );
+  }
+  await openThread(id);
+}
+
 export async function closeThread(id: string) {
   try {
     await connection?.request(Method.sessionClose, { sessionId: id }, 10_000);

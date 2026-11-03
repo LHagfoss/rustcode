@@ -14,6 +14,7 @@ mod remote;
 mod rewind;
 mod session;
 mod session_move;
+mod session_repair;
 mod steer;
 mod streaming;
 mod themes;
@@ -121,6 +122,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "agents": agents::AGENTS_CAPABILITY_VERSION,
                 "rewind": 1,
                 "sessionMove": 1,
+                "sessionRepair": 1,
                 "sessionActivity": 1,
                 "pullRequests": 3,
                 "worktrees": 1,
@@ -1474,6 +1476,30 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         );
                     }
                     match session_move::move_session(&request.session_id, cwd) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(error),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: session_repair::RepairSessionRequest, responder, _connection| {
+                    if !valid_acp_session_id(&request.session_id) {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data("invalid session id"),
+                        );
+                    }
+                    if session_id_is_active(&*server.sessions.lock().await, &request.session_id) {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data("close the session before repairing it"),
+                        );
+                    }
+                    match session_repair::repair_session(&request.session_id) {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder.respond_with_error(error),
                     }

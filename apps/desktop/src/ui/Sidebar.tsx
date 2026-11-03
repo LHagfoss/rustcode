@@ -30,6 +30,7 @@ import {
   SquareTerminal,
   Trash2,
   Users,
+  Wrench,
   X,
 } from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
@@ -46,6 +47,7 @@ import {
   openAgent,
   removeWorktree,
   renameThread,
+  repairThread,
   searchThreads,
   selectThread,
   setThreadStatus,
@@ -140,6 +142,9 @@ function ThreadMenuItems({
       </Item>
       <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
         <Pencil size={13} /> Rename…
+      </Item>
+      <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
+        <Wrench size={13} /> Repair Thread
       </Item>
       {worktree && (
         <>
