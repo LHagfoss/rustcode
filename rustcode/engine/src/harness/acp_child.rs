@@ -408,7 +408,7 @@ impl AcpAdapter {
     /// Add `text` to the running turn through the agent's `_session/steering`
     /// extension. False when the agent has none or no turn is running (it
     /// answers `promptRequired`), so the client sends it as the next prompt.
-    pub(crate) async fn steer(&self, text: &str) -> bool {
+    pub(crate) async fn steer(&self, prompt: &[ContentBlock]) -> bool {
         if !self.steering {
             return false;
         }
@@ -418,7 +418,7 @@ impl AcpAdapter {
                 "_session/steering",
                 json!({
                     "sessionId": self.native_id,
-                    "prompt": [{"type": "text", "text": text}],
+                    "prompt": prompt,
                     "_meta": {"steering": {"idleBehavior": "promptRequired"}},
                 }),
                 STEER_TIMEOUT,
