@@ -551,10 +551,14 @@ phase_update_versions() {
         die "Could not discover any workspace crate manifests."
     fi
 
-    # The iOS app ships in the same release under the same version. Its build
-    # number is derived from the version so it always increases.
+    # The iOS app used to ship from ios/ under the same version. It is no
+    # longer part of this repository's releases (docs/mobile.md); a checkout
+    # that still has the project bumps its version and build number as before.
     local pbxproj="$REPO_ROOT/$IOS_PROJECT"
-    [[ -f "$pbxproj" ]] || die "iOS project not found: $pbxproj"
+    if [[ ! -f "$pbxproj" ]]; then
+        info "No iOS project; skipping its version bump."
+        return
+    fi
     tmp="$(mktemp)"
     # The App Store version is plain X.Y.Z; a beta's suffix
     # stays out of it (the build number already drops it).
@@ -1118,8 +1122,6 @@ phase_verify_release() {
         "RustCode-$VERSION-windows-x64-setup.exe"
         "RustCode-$VERSION-linux-x86_64.AppImage"
         "RustCode-$VERSION-linux-x86_64.deb"
-        "rustcode-ios-unsigned.xcarchive.zip"
-        "rustcode-ios-simulator.zip"
         "rustcode-windows-x86_64.zip"
         "SHA256SUMS"
     )

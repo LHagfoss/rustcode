@@ -3,9 +3,12 @@
 The native SwiftUI iOS client for RustCode. The repository root `AGENTS.md`
 governs workflow, naming and releases; these notes add what is specific to the
 app. Cargo commands do not cover it: run the checks below for changes here.
-The app ships in every RustCode release under the RustCode version, set by
-`scripts/release.sh`; do not bump its version or tag it separately. Use the
-`ios` scope for app changes.
+This app is kept as a reference: it no longer ships in RustCode releases and
+its CI job is gone (`docs/mobile.md`), so a change here is not built or tested
+by CI. Everything in this directory stays as it was last released; the phone
+app is being rebuilt in React Native in its own repository. Use the `ios` scope
+for changes here. `scripts/release.sh` still bumps the project's version when
+the directory is present.
 
 ## Search and architecture
 
