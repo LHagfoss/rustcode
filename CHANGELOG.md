@@ -1,3 +1,11 @@
+## [v1.7.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.7.0) - 2026-11-03
+
+### Features
+- Calmer chat for threads that orchestrate others: a small shield instead of "allowed by" notice cards, readable thread tools ("Started thread", "Waited for 3 threads"), linked threads collapsed into one chip, and a parent's children folded into one sidebar line. (#2947)
+- Replies fade in word by word while they stream (Settings › Appearance › Animate streaming text). (#2947)
+- A solid composer, the same corner radius on every popover, menu and dialog, a project-named new-thread heading, and skeleton loaders where content loads. (#2947)
+- Claude Code plan usage now shows in the composer, refreshed every 3 minutes while the app is open (turn it on in Settings › Usage). (#2947)
+- Claude Code, Codex, OpenCode and Pi threads can now answer with inline charts, tables and checklists. (#2948)
 ## [v1.6.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.6.0) - 2026-11-03
 
 ### Features
