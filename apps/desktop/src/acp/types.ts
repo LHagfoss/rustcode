@@ -179,6 +179,11 @@ export function byActivity(sessions: SessionSummary[]): SessionSummary[] {
     .map(({ session }) => session);
 }
 
+/** A folder as people read it: the home folder as `~`, and macOS's /private/tmp as /tmp. */
+export function displayPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
+}
+
 export function projectName(cwd: string): string {
   const parts = cwd.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? cwd;
