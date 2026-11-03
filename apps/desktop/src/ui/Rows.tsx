@@ -28,6 +28,7 @@ import {
 import { memo, type ReactNode, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import type { FileDiff } from "../acp/types";
+import { displayCommand } from "../lib/command";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
 import { foldLabel, type ToolGroup, type TurnFold } from "../state/fold";
@@ -202,19 +203,19 @@ export const AssistantRow = memo(function AssistantRow({
   // Each reply block copies on its own, from the margin: faint until the row is hovered, and out of
   // the text's flow so a streaming block never moves.
   const copy = copyable && item.text.trim() && (
-    <span className="absolute top-0 -right-7 opacity-50 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100">
+    <span className="absolute top-0 right-0 opacity-0 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100">
       <CopyButton text={item.text} iconOnly label="Copy this reply" />
     </span>
   );
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <div className="group/reply relative">
+      <div className={cx("group/reply relative", copy && "pr-7")}>
         <Markdown text={item.text} streaming={streaming} className={streaming ? "rc-stream" : undefined} />
         {copy}
       </div>
     );
   return (
-    <div className="group/reply relative flex flex-col gap-2.5">
+    <div className={cx("group/reply relative flex flex-col gap-2.5", copy && "pr-7")}>
       {copy}
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
@@ -438,10 +439,15 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const running = item.status === "pending" || item.status === "in_progress";
   const failed = item.status === "failed";
   const detail = toolDetail(item, kind);
-  const trimmed =
+  const title = displayCommand(item.title);
+  const relative =
     detail.text && cwd && detail.text.startsWith(`${cwd}/`) ? detail.text.slice(cwd.length + 1) : detail.text;
+  const trimmed = relative && displayCommand(relative);
   // A command whose title already is the command line shows it once.
-  const shownDetail = trimmed && !item.title.includes(trimmed) ? trimmed : undefined;
+  const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
+  // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
+  const reason =
+    failed && item.exitCode === undefined ? (item.output?.trim().split("\n")[0]?.slice(0, 120) ?? "") : "";
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
@@ -464,7 +470,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           )}
         </span>
         <span className="min-w-0 max-w-full shrink truncate font-medium text-callout" title={item.title}>
-          {item.title}
+          {title}
         </span>
         {item.summary && (
           <span className="min-w-0 shrink truncate text-callout text-fg-muted">{item.summary}</span>
@@ -478,6 +484,14 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           </span>
         )}
         {!shownDetail && <span className="flex-1" />}
+        {failed && item.exitCode === undefined && (
+          <span
+            className="min-w-0 max-w-[45%] shrink truncate text-caption text-danger"
+            title={reason || undefined}
+          >
+            {reason || "Failed"}
+          </span>
+        )}
         <DiffCount {...counts} />
         {item.exitCode !== undefined && item.exitCode !== 0 && (
           <span className="font-mono text-caption text-danger">exit {item.exitCode}</span>

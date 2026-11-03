@@ -18,6 +18,7 @@ import { DropdownMenu } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { isAllow, type PermissionOption, type PermissionRequest } from "../acp/types";
+import { displayCommand } from "../lib/command";
 import { answerPermission, answerQuestionOptions, answerQuestionText, approveAll } from "../state/store";
 import { cx, Kbd, Pill, Tooltip } from "./primitives";
 import { DiffView } from "./Rows";
@@ -82,6 +83,10 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
   const cwd = field(request.input, "cwd") ?? field(request.input, "workdir");
   const note = field(request.input, "reason");
   const expandable = request.input !== undefined || request.diffs.length > 0;
+  const title = displayCommand(request.title);
+  const shownCommand = command && displayCommand(command);
+  // The command once: harnesses that title the request with it get no second copy beside it.
+  const aside = summary ?? (shownCommand && !title.includes(shownCommand) ? shownCommand : undefined);
   return (
     <section
       aria-label="Approval needed"
@@ -96,12 +101,18 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
           onClick={() => setDetails(!details)}
           className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left enabled:hover:bg-fill-subtle"
         >
-          <span className="shrink-0 font-semibold text-body">{request.title}</span>
-          {(summary || command) && (
-            <span className={cx("min-w-0 truncate text-callout text-fg-muted", !summary && "font-mono")}>
-              {summary ?? command}
+          {/* A long command truncates inside the bar; Details shows it whole. */}
+          <span className="min-w-0 shrink truncate font-semibold text-body" title={request.title}>
+            {title}
+          </span>
+          {aside && (
+            <span
+              className={cx("min-w-0 flex-1 truncate text-callout text-fg-muted", !summary && "font-mono")}
+            >
+              {aside}
             </span>
           )}
+          {!aside && <span className="flex-1" />}
           {expandable && (
             <ChevronRight
               size={11}
