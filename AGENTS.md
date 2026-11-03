@@ -210,6 +210,23 @@ and remote protocol, "session" in ACP and internal identifiers. See
 - After the fix, re-run the originating task and compare rounds/calls/recoveries
   against the pre-fix session log.
 
+## Delegating to other threads
+
+When an orchestrator thread hands work to other threads (`start_session`,
+`message_session`), and especially to Pi on DeepSeek Flash:
+
+- Give each thread its own worktree and disjoint files, with file:line
+  pointers and concrete target values. Tell it to read this file first: a
+  thread started from another project does not load it on its own.
+- Wrap anything that can block (dev servers, browsers, scripts) in
+  `timeout 120`. A command that never exits stalls the thread for good.
+- Gate on `bun run check` and unit tests. Ask for screenshots only when the
+  change needs them; home-made CDP drivers were the main time sink.
+- Name a skill's `SKILL.md` path in the prompt if it matters. Listed skills
+  went unread.
+- Local notes, if present (git-excluded):
+  `research/orchestrator/pi-deepseek-subagents.md`.
+
 ## Tooling notes
 
 - `replace_file_content` only honors line anchoring when both `start_line` and
