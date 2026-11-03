@@ -1,5 +1,5 @@
 // The composer's meters, after UsageCapsule.swift and PlanUsageMeter.swift:
-// a small ring filling with the context window in use, and the plan's
+// a small ring draining as the context window fills, and the plan's
 // shortest window (5-hour) as a short bar with the percentage left. Clicking
 // the ring opens the context inspector; hovering the bar opens every plan
 // window at once. They read the store themselves: the composer does not
@@ -65,7 +65,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
       <HoverCard.Trigger asChild>
         <span
           role="img"
-          aria-label={`Context: ${formatTokens(usage.used)} of ${formatTokens(usage.size)} tokens used`}
+          aria-label={`Context: ${formatTokens(Math.max(0, usage.size - usage.used))} of ${formatTokens(usage.size)} tokens left`}
           className="flex size-[30px] cursor-default items-center justify-center rounded-full transition-colors hover:bg-fill data-[state=open]:bg-fill"
         >
           <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
@@ -79,7 +79,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
               strokeWidth="2"
               strokeLinecap="round"
               strokeDasharray={c}
-              strokeDashoffset={c * (1 - Math.max(fraction, 0.04))}
+              strokeDashoffset={c * Math.min(fraction, 0.96)}
               className="transition-[stroke-dashoffset] duration-300 ease-snappy"
             />
           </svg>
@@ -111,8 +111,11 @@ export function ContextInspector({ usage, onCompact }: { usage: SessionUsage; on
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <span className="font-semibold text-body">Context</span>
         <span className="text-callout text-fg-muted tabular">
-          {formatTokens(usage.used)} / {formatTokens(usage.size)}
-          <span className="text-fg-faint"> · {percentOf(usage.used, usage.size)}</span>
+          <span className="font-medium text-fg">{percentOf(free, usage.size)} left</span>
+          <span className="text-fg-faint">
+            {" "}
+            · {formatTokens(free)} of {formatTokens(usage.size)}
+          </span>
         </span>
       </div>
       <div
@@ -272,7 +275,7 @@ function PlanCard({ plan }: { plan: PlanUsage }) {
   );
 }
 
-/** One window: its name and reset, a bar of what is used with quarter ticks, the numbers. */
+/** One window: its name and reset, a bar of what is left (it drains) with quarter ticks, the numbers. */
 export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: string }) {
   const left = leftPercent(w);
   const used = 100 - left;
@@ -285,10 +288,11 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
       </div>
       <div
         role="meter"
-        aria-label={`${title ?? windowTitle(w)} usage`}
+        aria-label={`${title ?? windowTitle(w)} left`}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={used}
+        aria-valuenow={left}
+        aria-valuetext={`${left}% left`}
         className="relative h-[6px] overflow-hidden rounded-full bg-fill-strong"
       >
         <span
@@ -296,15 +300,15 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
             "absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 ease-snappy",
             planTint(left),
           )}
-          style={{ width: `max(${used > 0 ? 3 : 0}px, ${used}%)` }}
+          style={{ width: `max(${left > 0 ? 3 : 0}px, ${left}%)` }}
         />
         {[25, 50, 75].map((tick) => (
           <span key={tick} className="absolute inset-y-0 w-px bg-bg/70" style={{ left: `${tick}%` }} />
         ))}
       </div>
       <div className="flex justify-between text-caption tabular">
+        <span className={cx("font-medium", left < 20 ? "text-warning" : "text-fg")}>{left}% left</span>
         <span className="text-fg-faint">{used}% used</span>
-        <span className={left < 20 ? "text-warning" : "text-fg-muted"}>{left}% left</span>
       </div>
     </div>
   );
