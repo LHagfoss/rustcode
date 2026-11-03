@@ -218,6 +218,7 @@ export const AssistantRow = memo(function AssistantRow({
           text={item.text}
           streaming={streaming}
           reveal={reveal}
+          revealKey={item.id}
           // `.rc-stream` fades each block in. With the per-word reveal on, that would fade a block
           // again as it stops being the last one, so the reveal covers it instead.
           className={streaming && !reveal ? "rc-stream" : undefined}
@@ -235,6 +236,7 @@ export const AssistantRow = memo(function AssistantRow({
             text={segment.text}
             streaming={streaming && i === segments.length - 1}
             reveal={reveal}
+            revealKey={`${item.id}:${i}`}
           />
         ) : segment.kind === "ui" ? (
           <SmartUIView

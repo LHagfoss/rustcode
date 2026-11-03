@@ -20,7 +20,7 @@ import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/f
 import { highlight, peekHighlight } from "../lib/highlight";
 import { markdownBlocks } from "../lib/markdownBlocks";
 import { openExternal, openInEditor } from "../lib/native";
-import { rehypeReveal, revealedBefore } from "../lib/reveal";
+import { advance, newRevealState, type RevealState, rehypeReveal } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
 import { toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
@@ -241,70 +241,39 @@ export function renderBlock(text: string): ReactElement {
   return element;
 }
 
-const Block = memo(function Block({ text }: { text: string }) {
-  return renderBlock(text);
-});
+/**
+ * Where the reveal keeps each streaming block's word birth times, by reply and
+ * block, outside the component: a row the virtualizer drops and brings back,
+ * or a thread switched away and back, picks up where it was instead of fading
+ * its visible text in again. Entries go when the reply stops streaming.
+ */
+const revealStates = new Map<string, RevealState>();
 
-/** The block still being written, with the words that just arrived set to fade in. */
-function renderRevealed(text: string, revealed: number): { element: ReactElement; chars: number } {
-  let chars = revealed;
-  const element = ReactMarkdown({
+function forgetReveal(key: string) {
+  for (const k of revealStates.keys()) if (k.startsWith(`${key}\u0000`)) revealStates.delete(k);
+}
+
+/** The block being written, with the words still fading wrapped in spans (lib/reveal.ts). */
+function renderLive(text: string, stateKey: string): ReactElement {
+  const state = advance(revealStates.get(stateKey) ?? newRevealState(), text);
+  revealStates.set(stateKey, state);
+  return ReactMarkdown({
     children: text,
     remarkPlugins: plugins,
-    rehypePlugins: [
-      [
-        rehypeReveal,
-        {
-          revealed,
-          onRendered: (n: number) => {
-            chars = n;
-          },
-        },
-      ],
-    ],
+    rehypePlugins: [[rehypeReveal, { state, now: performance.now() }]],
     components,
     urlTransform,
   });
-  return { element, chars };
 }
 
 /**
- * The last block of a reply while it streams: only the words the chunk added
- * fade in, and the words already on screen are plain text. The block is not
- * cached (it changes with every chunk) and stops being rendered this way as
- * soon as the reply ends.
+ * One block of a reply. Every block, the one being written included, is this
+ * component, so when the tail finishes (or the reply ends) React keeps its
+ * elements: a code block keeps its highlighting, a diagram is not drawn again,
+ * and a selection inside it survives.
  */
-const StreamingTail = memo(function StreamingTail({ text }: { text: string }) {
-  const host = useRef<HTMLDivElement>(null);
-  // The block and its rendered length as the last frame left them.
-  const shown = useRef({ text: "", chars: 0 });
-  const fresh = useRef(true);
-  const revealed = revealedBefore(shown.current.text, shown.current.chars, text);
-  const { element, chars } = renderRevealed(text, revealed);
-  useLayoutEffect(() => {
-    shown.current = { text, chars };
-    const spans = host.current?.querySelectorAll<HTMLElement>(".rc-reveal");
-    if (fresh.current) {
-      fresh.current = false;
-      // A block with no words to reveal (code, a table, a picture) fades in whole, once.
-      const block = host.current?.firstElementChild;
-      if (!spans?.length && block instanceof HTMLElement) block.style.animation = "rc-fade 180ms ease-out";
-    }
-    // React reuses the span the previous word had when it sits at the same
-    // place, and that span's animation already ran. Rewind this chunk's spans
-    // from the top (delay included) before the frame paints.
-    for (const span of spans ?? [])
-      for (const animation of span.getAnimations()) {
-        animation.cancel();
-        animation.play();
-      }
-  }, [text, chars]);
-  return (
-    // Out of the layout (display: contents): the block stays a child of the reply.
-    <div ref={host} className="contents">
-      {element}
-    </div>
-  );
+const Block = memo(function Block({ text, live }: { text: string; live?: string }) {
+  return live ? renderLive(text, live) : renderBlock(text);
 });
 
 export const Markdown = memo(function Markdown({
@@ -312,6 +281,7 @@ export const Markdown = memo(function Markdown({
   className,
   streaming,
   reveal = false,
+  revealKey,
 }: {
   text: string;
   className?: string;
@@ -319,20 +289,39 @@ export const Markdown = memo(function Markdown({
   streaming?: boolean;
   /** Optional: fade in the words that arrive while it streams (a reply, not a rolling preview). */
   reveal?: boolean;
+  /** Which reply this is, so the reveal survives the row remounting; one per component without it. */
+  revealKey?: string;
 }) {
   // A finished text is one block (one parse, cached by its text); a streaming one is split so the
   // blocks above the one being written keep their elements. Splitting costs a parser per block.
   const blocks = useMemo(() => (streaming ? markdownBlocks(text) : [text]), [text, streaming]);
   const tail = blocks.length - 1;
+  const root = useRef<HTMLDivElement>(null);
+  const ownKey = useRef<string>(`reveal-${Math.random().toString(36).slice(2)}`);
+  const key = revealKey ?? ownKey.current;
+  const live = reveal && streaming;
+  const tailText = blocks[tail];
+  useLayoutEffect(() => {
+    if (!live || tailText === undefined) return;
+    // Each render sets a still-fading word's delay to `birth - now`. Restarting its animation makes
+    // that delay count from now, so it resumes where it was; a reused span would otherwise keep
+    // the timeline its first delay set.
+    for (const el of root.current?.querySelectorAll<HTMLElement>(".rc-reveal, .rc-reveal-block") ?? [])
+      for (const animation of el.getAnimations?.() ?? []) {
+        animation.cancel();
+        animation.play();
+      }
+    // Only when the tail changed: that is when Block drew new delays. An unrelated re-render keeps
+    // the running animations as they are.
+  }, [tailText, live]);
+  useEffect(() => {
+    if (!live) forgetReveal(key);
+  }, [live, key]);
   return (
-    <div className={cx("selectable flex flex-col gap-2.5 text-body break-words", className)}>
-      {blocks.map((block, i) =>
-        reveal && streaming && i === tail ? (
-          <StreamingTail key={i} text={block} />
-        ) : (
-          <Block key={i} text={block} />
-        ),
-      )}
+    <div ref={root} className={cx("selectable flex flex-col gap-2.5 text-body break-words", className)}>
+      {blocks.map((block, i) => (
+        <Block key={i} text={block} live={live && i === tail ? `${key}\u0000${i}` : undefined} />
+      ))}
     </div>
   );
 });
