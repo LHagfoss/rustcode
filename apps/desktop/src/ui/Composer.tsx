@@ -60,12 +60,12 @@ import {
   startNewThread,
   steerOrSubmit,
   submit,
+  takeQueued,
   threadHarness,
   toast,
-  updateQueued,
   useApp,
 } from "../state/store";
-import { localId, type ThreadState } from "../state/thread";
+import { localId, type QueuedPrompt, type ThreadState } from "../state/thread";
 import { AgentPill } from "./AgentViews";
 import { ContextRing, PlanMeter } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
@@ -243,6 +243,25 @@ export const Composer = memo(function Composer({
 
   const update = (text: string) => setDraft(key, text);
   const change = (fn: (e: ComposeExtras) => ComposeExtras) => setExtras(key, fn);
+  /**
+   * Take a queued message back into the composer (↑, or Edit on its row), whole: its text, command,
+   * links and attachments. A composer that already has something in it is left alone.
+   */
+  const takeBack = (q: QueuedPrompt) => {
+    if (draft || hasExtras(extras)) {
+      toast("Clear the message box first: it already has something in it");
+      field.current?.focus();
+      return;
+    }
+    const taken = takeQueued(thread?.id ?? "", q.id);
+    if (!taken) {
+      toast("This message answers another thread, so it stays queued");
+      return;
+    }
+    update(taken.text);
+    if (taken.extras) change(() => taken.extras!);
+    field.current?.focus();
+  };
   const attach = (more: Attachment[]) => {
     if (more.length) change((e) => ({ ...e, attachments: [...e.attachments, ...more] }));
   };
@@ -371,7 +390,15 @@ export const Composer = memo(function Composer({
       return;
     }
     if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread) {
-      const items = useApp.getState().threads[thread.id]?.items ?? thread.items;
+      // The latest queued message comes back first; with nothing queued, the last sent one.
+      const live = useApp.getState().threads[thread.id] ?? thread;
+      const queued = live.queue[live.queue.length - 1];
+      if (queued) {
+        e.preventDefault();
+        takeBack(queued);
+        return;
+      }
+      const items = live.items ?? thread.items;
       const last = [...items].reverse().find((i) => i.kind === "user");
       if (last && last.kind === "user") {
         e.preventDefault();
@@ -425,7 +452,7 @@ export const Composer = memo(function Composer({
         </div>
       )}
       {thread && thread.queue.length > 0 && (
-        <QueueStack thread={thread} steerable={steerable} onFocusField={() => field.current?.focus()} />
+        <QueueStack thread={thread} steerable={steerable} onTakeBack={(q) => takeBack(q)} />
       )}
       <div
         className={cx(
@@ -642,24 +669,18 @@ export const Composer = memo(function Composer({
 
 /**
  * Messages waiting for the running turn to end, as rows above the composer.
- * Each can be edited in place (⏎ saves, Esc cancels), moved, sent now as a
- * steer when the harness steers live, or removed.
+ * Each can be taken back into the composer to change it (↑, or Edit), moved,
+ * sent now as a steer when the harness steers live, or removed.
  */
 function QueueStack({
   thread,
   steerable,
-  onFocusField,
+  onTakeBack,
 }: {
   thread: ThreadState;
   steerable: boolean;
-  onFocusField: () => void;
+  onTakeBack: (q: QueuedPrompt) => void;
 }) {
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
-  const save = () => {
-    if (editing) updateQueued(thread.id, editing.id, editing.text);
-    setEditing(null);
-    onFocusField();
-  };
   return (
     <section className="mb-2 flex flex-col gap-1 px-2" aria-label="Queued messages">
       <div className="flex items-center gap-1.5 px-1 text-caption text-accent">
@@ -673,44 +694,23 @@ function QueueStack({
           className="elevated group flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 rc-in"
         >
           <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-faint">{i + 1}</span>
-          {editing?.id === q.id ? (
-            <textarea
-              autoFocus
-              rows={Math.min(6, Math.max(1, editing.text.split("\n").length))}
-              value={editing.text}
-              onChange={(e) => setEditing({ id: q.id, text: e.target.value })}
-              onBlur={save}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  save();
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  setEditing(null);
-                  onFocusField();
-                }
-              }}
-              aria-label="Edit queued message"
-              className="min-w-0 flex-1 resize-none rounded-sm bg-fill px-1.5 py-0.5 text-callout"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditing({ id: q.id, text: q.text })}
-              className="flex min-w-0 flex-1 cursor-text items-center gap-1.5 text-left"
-              aria-label="Edit queued message"
-            >
-              {!!q.extras?.attachments.length && (
-                <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-fill px-1 text-caption text-fg-muted">
-                  <Paperclip size={10} />
-                  {q.extras.attachments.length}
-                </span>
-              )}
-              <span className={cx("line-clamp-2 text-callout", !q.text && "text-fg-faint")}>
-                {q.text || "Attachments only"}
+          <button
+            type="button"
+            onClick={() => onTakeBack(q)}
+            className="flex min-w-0 flex-1 cursor-text items-center gap-1.5 text-left"
+            aria-label="Edit in the composer"
+            title="Edit in the composer (↑)"
+          >
+            {!!q.extras?.attachments.length && (
+              <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-fill px-1 text-caption text-fg-muted">
+                <Paperclip size={10} />
+                {q.extras.attachments.length}
               </span>
-            </button>
-          )}
+            )}
+            <span className={cx("line-clamp-2 text-callout", !q.text && "text-fg-faint")}>
+              {q.text || "Attachments only"}
+            </span>
+          </button>
           <span className="flex shrink-0 items-center gap-1.5 opacity-60 group-hover:opacity-100">
             {i > 0 && (
               <Tooltip label="Move up">
@@ -724,18 +724,16 @@ function QueueStack({
                 </button>
               </Tooltip>
             )}
-            {editing?.id !== q.id && (
-              <Tooltip label="Edit">
-                <button
-                  type="button"
-                  aria-label="Edit"
-                  onClick={() => setEditing({ id: q.id, text: q.text })}
-                  className="text-fg-muted hover:text-fg"
-                >
-                  <Pencil size={12} />
-                </button>
-              </Tooltip>
-            )}
+            <Tooltip label="Edit in the composer (↑)">
+              <button
+                type="button"
+                aria-label="Edit in the composer"
+                onClick={() => onTakeBack(q)}
+                className="text-fg-muted hover:text-fg"
+              >
+                <Pencil size={12} />
+              </button>
+            </Tooltip>
             {steerable &&
               (q.extras?.attachments.length ? (
                 <Tooltip label="Attachments go with the next turn: a running turn takes text only">
