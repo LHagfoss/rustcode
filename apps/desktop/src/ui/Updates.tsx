@@ -101,3 +101,5 @@ export function WhatsNewDialog() {
     </Dialog.Root>
   );
 }
+
+// (temporary) prove desktop-ci skips the shell for UI-only changes
