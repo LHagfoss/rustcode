@@ -169,6 +169,14 @@ fn parse_options(value: Option<&Value>) -> Vec<SessionConfigOption> {
         .unwrap_or_default()
 }
 
+/// `params` with the client system prompt, when the agent takes one.
+fn with_system_prompt(mut params: Value, system_prompt: Option<&Value>) -> Value {
+    if let Some(prompt) = system_prompt {
+        params["systemPrompt"] = prompt.clone();
+    }
+    params
+}
+
 /// The MCP servers the child's session gets: the orchestrator when the thread has one, then the
 /// workspace's own servers, so a Claude Code or OpenCode thread has the servers Settings · MCP
 /// shows (docs/configuration.md). A stdio server is `name`/`command`/`args`/`env`, a remote one
@@ -279,6 +287,20 @@ impl AcpAdapter {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let mcp_servers = mcp_servers(&options, http);
+        // An agent that takes a client system prompt (Claude Code's adapter)
+        // gets where it runs and how RustCode draws replies appended to its own.
+        let system_prompt = capabilities
+            .and_then(|capabilities| capabilities.pointer("/sessionCapabilities/systemPrompt"))
+            .is_some_and(|value| !value.is_null())
+            .then(|| {
+                json!({
+                    "mode": "append",
+                    "content": [{
+                        "type": "text",
+                        "text": crate::tools::schema::harness_instructions(&harness.name),
+                    }],
+                })
+            });
 
         let mut native = None;
         let mut session = Value::Null;
@@ -287,7 +309,10 @@ impl AcpAdapter {
             let loaded = peer
                 .request_within(
                     "session/load",
-                    json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": mcp_servers}),
+                    with_system_prompt(
+                        json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": mcp_servers}),
+                        system_prompt.as_ref(),
+                    ),
                     HANDSHAKE_TIMEOUT,
                 )
                 .await;
@@ -310,7 +335,10 @@ impl AcpAdapter {
             session = peer
                 .request_within(
                     "session/new",
-                    json!({"cwd": cwd_text, "mcpServers": mcp_servers}),
+                    with_system_prompt(
+                        json!({"cwd": cwd_text, "mcpServers": mcp_servers}),
+                        system_prompt.as_ref(),
+                    ),
                     HANDSHAKE_TIMEOUT,
                 )
                 .await

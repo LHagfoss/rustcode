@@ -2532,6 +2532,20 @@ pub(crate) fn harness_output_style() -> String {
     )
 }
 
+/// What an external harness adds to its own system prompt (as T3 Code's
+/// runtime instructions do): where it runs, so it can say so when asked and
+/// link what it makes so the app opens it, then [`harness_output_style`].
+pub(crate) fn harness_instructions(harness: &str) -> String {
+    let harness = harness.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!(
+        "<runtime_info>In case you're asked: you are running in RustCode through the {harness} harness. \
+         No need to mention this otherwise. You can embed images in your reply with Markdown image syntax \
+         and an absolute file path. Link any other file you produce by its absolute path so the user can \
+         open it from RustCode.</runtime_info>\n\n{}",
+        harness_output_style()
+    )
+}
+
 /// Append the output-style guidance to a root prompt. Subagent replies are
 /// read by the parent, not rendered, and compact prompts are for small
 /// models where every token counts.

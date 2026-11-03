@@ -38,8 +38,9 @@ either.
 | macOS app | 2 | per setting | rules + viz sentence | ~130 |
 | Other ACP clients (Zed, …) | 0 | none | rules only | ~110 |
 | Subagents, compact prompts (small local models) | any | any | none | 0 |
-| Codex harness | n/a | n/a | rules + citation rule, as `developerInstructions` | ~125 |
-| ACP harnesses (Claude Code, Gemini, OpenCode) | n/a | n/a | none | 0 |
+| Codex harness | n/a | n/a | runtime info + rules + citation rule, as `developerInstructions` | ~190 |
+| ACP harnesses that take a client system prompt (Claude Code) | n/a | n/a | runtime info + rules + citation rule, as `systemPrompt` (`append`) | ~190 |
+| Other ACP harnesses (Gemini, OpenCode) | n/a | n/a | none | 0 |
 
 Every RustCode frontend renders CommonMark with tables and highlighted
 fenced code, so the rules go to all root prompts. The section is appended

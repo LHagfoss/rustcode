@@ -9,8 +9,10 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronUp,
+  Copy,
   FileText,
   Folder,
+  FolderOpen,
   GitBranch,
   ListEnd,
   Paperclip,
@@ -21,6 +23,7 @@ import {
   ShieldOff,
   Square,
   SquarePen,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
@@ -29,7 +32,15 @@ import { createPortal } from "react-dom";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { haptic } from "../lib/haptics";
-import { onFileDrop, pickFiles, pickFolder, readImage } from "../lib/native";
+import {
+  canOpenTerminal,
+  onFileDrop,
+  openPath,
+  openTerminalAt,
+  pickFiles,
+  pickFolder,
+  readImage,
+} from "../lib/native";
 import {
   type Attachment,
   type ComposeExtras,
@@ -897,7 +908,11 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
   );
 }
 
-/** The folder a thread works in: a menu for a new thread, a label once it exists. */
+/**
+ * The folder a thread works in: for a new thread a menu of projects to start
+ * in; once the thread exists, what to do with its folder (Finder, Terminal,
+ * copy the path, another thread there).
+ */
 function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   const sessions = useApp((s) => s.sessions);
   const projects = useMemo(
@@ -924,7 +939,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         <button
           ref={trigger}
           type="button"
-          disabled={!!thread}
+          disabled={!!thread && !cwd}
           onClick={toggle}
           aria-haspopup="menu"
           aria-expanded={open}
@@ -932,7 +947,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         >
           <Folder size={12} />
           <span className="max-w-[220px] truncate">{cwd ? projectName(cwd) : "Choose a folder"}</span>
-          {!thread && <ChevronDown size={11} className="text-fg-faint" />}
+          <ChevronDown size={11} className="text-fg-faint" />
         </button>
       </Tooltip>
       {open &&
@@ -943,45 +958,92 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
             style={{ maxHeight, left: anchor.left, bottom: anchor.bottom }}
             onMouseLeave={() => setOpen(false)}
           >
-            {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
-            <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
-              {projects.map((p) => (
+            {thread ? (
+              <FolderActions cwd={cwd} close={() => setOpen(false)} />
+            ) : (
+              <>
+                {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
+                <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
+                  {projects.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setProjectCwd(p);
+                        setOpen(false);
+                      }}
+                      className={cx(
+                        "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left hover:bg-fill",
+                        p === cwd && "bg-fill",
+                      )}
+                    >
+                      <span className="text-body text-fg">{projectName(p)}</span>
+                      <span className="truncate text-caption text-fg-muted" dir="rtl">
+                        <bdi>{p}</bdi>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
                 <button
-                  key={p}
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setProjectCwd(p);
                     setOpen(false);
+                    void pickFolder(cwd).then((p) => p && setProjectCwd(p));
                   }}
-                  className={cx(
-                    "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left hover:bg-fill",
-                    p === cwd && "bg-fill",
-                  )}
+                  className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body hover:bg-fill"
                 >
-                  <span className="text-body text-fg">{projectName(p)}</span>
-                  <span className="truncate text-caption text-fg-muted" dir="rtl">
-                    <bdi>{p}</bdi>
-                  </span>
+                  Choose Folder…
                 </button>
-              ))}
-            </div>
-            {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                void pickFolder(cwd).then((p) => p && setProjectCwd(p));
-              }}
-              className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body hover:bg-fill"
-            >
-              Choose Folder…
-            </button>
+              </>
+            )}
           </div>,
           document.body,
         )}
     </div>
+  );
+}
+
+/** What the folder of an existing thread offers. */
+function FolderActions({ cwd, close }: { cwd: string; close: () => void }) {
+  const item = "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-body hover:bg-fill";
+  const run = (action: () => void) => () => {
+    close();
+    action();
+  };
+  return (
+    <>
+      <div className="truncate px-2.5 pt-1 pb-1.5 text-caption text-fg-muted" dir="rtl">
+        <bdi>{cwd}</bdi>
+      </div>
+      <button type="button" role="menuitem" className={item} onClick={run(() => openPath(cwd))}>
+        <FolderOpen size={13} className="text-fg-muted" /> Open in Finder
+      </button>
+      {canOpenTerminal() && (
+        <button
+          type="button"
+          role="menuitem"
+          className={item}
+          onClick={run(() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error")))}
+        >
+          <SquareTerminal size={13} className="text-fg-muted" /> Open in Terminal
+        </button>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        className={item}
+        onClick={run(() => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info")))}
+      >
+        <Copy size={13} className="text-fg-muted" /> Copy Path
+      </button>
+      <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
+      <button type="button" role="menuitem" className={item} onClick={run(() => startNewThread(cwd))}>
+        <SquarePen size={13} className="text-fg-muted" /> New Thread Here
+      </button>
+    </>
   );
 }
 
