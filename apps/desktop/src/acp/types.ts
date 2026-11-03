@@ -15,6 +15,7 @@ export const Method = {
   sessionList: "session/list",
   sessionClose: "session/close",
   sessionMove: "_rustcode/session/move",
+  sessionActivity: "_rustcode/session/activity",
   sessionPrompt: "session/prompt",
   sessionCancel: "session/cancel",
   sessionSetConfigOption: "session/set_config_option",

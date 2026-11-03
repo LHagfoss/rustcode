@@ -402,6 +402,22 @@
   animation: rc-in 0.2s var(--ease-snappy);
 }
 
+/* Something runs in the background: a slow breath, not a spinner. */
+@keyframes rc-breathe {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.6);
+  }
+}
+.rc-breathe {
+  animation: rc-breathe 2.4s ease-in-out infinite;
+}
+
 /* A status dot appearing (a thread just finished). */
 @keyframes rc-dot-in {
   from {

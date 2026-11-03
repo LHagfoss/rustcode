@@ -92,6 +92,7 @@ import {
   type ThreadState,
   truncateBefore,
   userIndexOf,
+  wakeTurn,
 } from "./thread";
 
 export const APP_VERSION = "0.1.0";
@@ -765,6 +766,26 @@ export async function restartEngine(): Promise<void> {
   await transport.restart().catch((error) => set({ status: "closed", statusDetail: errorText(error) }));
 }
 
+/**
+ * `_rustcode/session/activity`: a turn parked on background commands
+ * (`waiting`), woken when they finish (`running`), and that woken turn ending
+ * (`idle`). Only a woken turn is finished here; a prompt the app sent ends
+ * with its own response.
+ */
+function onSessionActivity(params: unknown) {
+  const p = obj(params);
+  const id = str(p?.sessionId);
+  const state = str(p?.state);
+  if (!id || !get().threads[id]) return;
+  const background = typeof p?.background === "number" ? p.background : 0;
+  updateThread(id, (t) => {
+    if (state === "running") return wakeTurn(t);
+    const ended = t.running && t.woken ? finishTurn(t, "completed") : t;
+    if (state === "waiting") return { ...ended, waiting: background || undefined };
+    return { ...ended, waiting: undefined };
+  });
+}
+
 async function handleInbound(message: Inbound) {
   switch (message.type) {
     case "closed":
@@ -781,6 +802,7 @@ async function handleInbound(message: Inbound) {
       return;
     case "notification":
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
+      else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       return;
     case "request":

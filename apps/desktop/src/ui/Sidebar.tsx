@@ -254,6 +254,7 @@ const ThreadRow = memo(function ThreadRow({
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
+  const waiting = useApp((s) => s.threads[session.id]?.waiting ?? 0);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const harnesses = useApp((s) => s.harnesses);
@@ -351,6 +352,17 @@ const ThreadRow = memo(function ThreadRow({
                       {startedAt ? <Elapsed since={startedAt} /> : "Working"}
                     </span>
                   </>
+                ) : waiting ? (
+                  <span
+                    className="flex items-center gap-1 text-fg-muted"
+                    title={`Waiting on ${waiting} background command${waiting === 1 ? "" : "s"}`}
+                  >
+                    <span className="relative flex size-2 items-center justify-center">
+                      <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
+                      <span className="size-1.5 rounded-full bg-accent" />
+                    </span>
+                    Waiting
+                  </span>
                 ) : (
                   <>
                     {status === "review" && <StatusChip status={status} compact />}
