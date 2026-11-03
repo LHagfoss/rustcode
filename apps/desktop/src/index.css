@@ -225,10 +225,20 @@
     font-size: 14px;
     line-height: 19px;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
     overflow: hidden;
     user-select: none;
     -webkit-user-select: none;
     cursor: default;
+  }
+  /* The interface reads rounder in SF Pro Rounded; Settings › Appearance turns it off. */
+  :root:not([data-font="standard"]) body {
+    font-family: var(--font-rounded);
+  }
+  /* Lucide's default stroke of 2 reads heavy next to text; 1.75 matches the type. */
+  :where(svg.lucide[stroke-width="2"]) {
+    stroke-width: 1.75;
   }
 
   /* Text people read or copy is selectable; chrome is not, as in a native app. */
@@ -390,6 +400,31 @@
 
 .rc-in {
   animation: rc-in 0.2s var(--ease-snappy);
+}
+
+/* A status dot appearing (a thread just finished). */
+@keyframes rc-dot-in {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+  60% {
+    transform: scale(1.4);
+  }
+}
+.rc-dot-in {
+  animation: rc-dot-in 320ms var(--ease-snappy);
+}
+
+/* A new transcript row: rises 6px and fades in, a touch slower than a popover. */
+@keyframes rc-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.rc-row-in {
+  animation: rc-row-in 260ms var(--ease-snappy) both;
 }
 
 @media (prefers-reduced-motion: reduce) {

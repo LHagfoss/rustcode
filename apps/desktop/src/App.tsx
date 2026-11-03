@@ -48,11 +48,18 @@ function useTheme() {
       const theme = resolveTheme(s.themes, s.themeActive, mode);
       applyTheme(theme);
       document.documentElement.dataset.theme = mode;
+      document.documentElement.dataset.font = s.roundedFont ? "rounded" : "standard";
     };
     paint();
     media.addEventListener("change", paint);
     const unsubscribe = useApp.subscribe((s, prev) => {
-      if (s.theme !== prev.theme || s.themeActive !== prev.themeActive || s.themes !== prev.themes) paint();
+      if (
+        s.theme !== prev.theme ||
+        s.themeActive !== prev.themeActive ||
+        s.themes !== prev.themes ||
+        s.roundedFont !== prev.roundedFont
+      )
+        paint();
     });
     return () => {
       media.removeEventListener("change", paint);

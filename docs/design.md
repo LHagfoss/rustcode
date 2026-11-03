@@ -168,7 +168,9 @@ gutter, between groups), 24 (between sections). The chat column is at most
 
 ## Type
 
-macOS text styles one point up (read at a laptop's distance), SF Pro / SF Mono:
+macOS text styles one point up (read at a laptop's distance), SF Pro Rounded
+(`ui-rounded`; Settings › Appearance › Rounded font switches to SF Pro) /
+SF Mono. Lucide icons draw at stroke 1.75, not 2:
 
 | Class | Size / line | Use |
 |---|---|---|
@@ -208,6 +210,10 @@ that change use `tabular`.
   something that moves every frame.
 - Toasts come in with `rc-in` (200ms, fade + 4px) and leave in 120ms
   `ease-in`; a swipe follows the pointer and snaps back in 160ms.
+- A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
+  rows there when the thread opened, or remounted by the virtualizer, do not.
+  A status dot that appears pops in (`rc-dot-in`); a segmented control's
+  selection slides (`transform`) to the new segment.
 - Skeletons sweep once every 1.6s (`transform` only, on the compositor).
 - `prefers-reduced-motion`: all durations collapse to ~0; shimmer and the
   skeleton sweep stop.

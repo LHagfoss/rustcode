@@ -323,7 +323,7 @@ const ThreadRow = memo(function ThreadRow({
                 <span
                   role="img"
                   aria-label="Finished"
-                  className="size-1.5 shrink-0 rounded-full bg-success"
+                  className="size-1.5 shrink-0 rc-dot-in rounded-full bg-success"
                 />
               )}
               {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-muted" />}
