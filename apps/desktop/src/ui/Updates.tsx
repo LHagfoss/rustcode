@@ -12,6 +12,7 @@ import { cx, Pill, Spinner } from "./primitives";
 
 const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
 
+// (temporary: a UI-only change, to check that desktop-ci skips the shell job)
 export function UpdateRow() {
   const info = useUpdates((s) => s.info);
   const installing = useUpdates((s) => s.installing);
