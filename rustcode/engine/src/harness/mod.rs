@@ -85,8 +85,9 @@ impl Capabilities {
 
     fn external(kind: HarnessKind) -> Self {
         Self {
-            // `turn/steer` adds input to Codex's running turn; ACP has no
-            // way to, so the client sends the message as the next prompt.
+            // `turn/steer` adds input to Codex's running turn. Plain ACP has no
+            // way to, so the client sends the message as the next prompt, unless
+            // the agent advertised `_session/steering` (learned at initialize).
             steer: if kind == HarnessKind::Codex {
                 "live"
             } else {
@@ -260,6 +261,8 @@ pub(crate) struct Learned {
     pub error: Option<String>,
     pub resume: Option<bool>,
     pub images: Option<bool>,
+    /// The ACP agent takes `_session/steering` (its initialize `_meta.steering.supported`).
+    pub steer: Option<bool>,
     pub effort: Option<bool>,
     /// Unix seconds of the last model listing.
     pub fetched_at: Option<i64>,
@@ -344,6 +347,9 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
     }
     if let Some(images) = learned.images {
         capabilities.images = images;
+    }
+    if harness.kind == HarnessKind::Acp && learned.steer == Some(true) {
+        capabilities.steer = "live";
     }
     if let Some(effort) = learned.effort {
         capabilities.effort = effort;

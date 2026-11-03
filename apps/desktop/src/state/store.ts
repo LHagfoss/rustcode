@@ -1386,7 +1386,9 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
   const id = get().selectedId;
   const thread = id ? get().threads[id] : undefined;
   const trimmed = text.trim();
-  if (!id || !thread?.running || !canSteer(thread)) return submit(text, extras);
+  // ⌘⏎ always tries: a harness learns it can steer when its first thread starts, so a thread
+  // started before that still reads "none" though the engine can steer it now.
+  if (!id || !thread?.running || !get().agent?.steer) return submit(text, extras);
   if (hasExtras(extras)) {
     const sent = await submit(text, extras);
     if (sent)
@@ -1404,7 +1406,11 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
   }
   if (await steer(id, trimmed)) return true;
   updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
-  toast("Queued: the turn is waiting for you");
+  toast(
+    canSteer(thread)
+      ? "Queued: the turn is waiting for you"
+      : `Queued: ${threadHarness(thread)?.name ?? "this harness"} can’t take a message mid-turn`,
+  );
   return true;
 }
 

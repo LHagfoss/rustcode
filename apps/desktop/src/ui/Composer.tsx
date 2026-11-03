@@ -717,6 +717,18 @@ function QueueStack({
                 </button>
               </Tooltip>
             )}
+            {editing?.id !== q.id && (
+              <Tooltip label="Edit">
+                <button
+                  type="button"
+                  aria-label="Edit"
+                  onClick={() => setEditing({ id: q.id, text: q.text })}
+                  className="text-fg-muted hover:text-fg"
+                >
+                  <Pencil size={12} />
+                </button>
+              </Tooltip>
+            )}
             {steerable &&
               (q.extras?.attachments.length ? (
                 <Tooltip label="Attachments go with the next turn: a running turn takes text only">

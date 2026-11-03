@@ -24,6 +24,8 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(90);
+/// The client waits this long (10 s) for `_rustcode/steer`; answer before it.
+const STEER_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Default)]
 struct State {
@@ -42,6 +44,8 @@ pub(crate) struct AcpAdapter {
     native_id: String,
     state: Arc<Mutex<State>>,
     killed: AtomicBool,
+    /// The agent takes `_session/steering`: a message added to the running turn.
+    steering: bool,
 }
 
 fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
@@ -217,6 +221,10 @@ impl AcpAdapter {
             .and_then(|capabilities| capabilities.pointer("/promptCapabilities/image"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let steering = initialized
+            .pointer("/_meta/steering/supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let cwd_text = cwd.to_string_lossy().into_owned();
         let mcp_servers = mcp_servers(&options);
 
@@ -285,6 +293,7 @@ impl AcpAdapter {
             native_id,
             state,
             killed: AtomicBool::new(false),
+            steering,
         };
         // Read before the thread's own choice is applied, so each model's
         // default effort is the harness's and not this thread's.
@@ -302,6 +311,7 @@ impl AcpAdapter {
         super::learn(&harness.id, |learned| {
             learned.resume = Some(load_session);
             learned.images = Some(images);
+            learned.steer = Some(steering);
             learned.effort = Some(has_effort);
             learned.error = None;
             if !models.is_empty() {
@@ -341,6 +351,28 @@ impl AcpAdapter {
     pub(crate) fn cancel(&self) {
         self.peer
             .notify("session/cancel", json!({"sessionId": self.native_id}));
+    }
+
+    /// Add `text` to the running turn through the agent's `_session/steering`
+    /// extension. False when the agent has none or no turn is running (it
+    /// answers `promptRequired`), so the client sends it as the next prompt.
+    pub(crate) async fn steer(&self, text: &str) -> bool {
+        if !self.steering {
+            return false;
+        }
+        let answer = self
+            .peer
+            .request_within(
+                "_session/steering",
+                json!({
+                    "sessionId": self.native_id,
+                    "prompt": [{"type": "text", "text": text}],
+                    "_meta": {"steering": {"idleBehavior": "promptRequired"}},
+                }),
+                STEER_TIMEOUT,
+            )
+            .await;
+        matches!(answer, Ok(answer) if answer.get("outcome").and_then(Value::as_str) == Some("injected"))
     }
 
     pub(crate) fn config_options(&self) -> Vec<SessionConfigOption> {
