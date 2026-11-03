@@ -8,7 +8,7 @@ export function displayCommand(text: string): string {
 
 const WRAPPER = /^(?:\/(?:usr\/)?bin\/)?(?:env\s+)?(?:zsh|bash|sh)\s+-l?c\s+([\s\S]+)$/;
 
-function unwrapShell(text: string): string {
+export function unwrapShell(text: string): string {
   const match = WRAPPER.exec(text);
   if (!match) return text;
   const arg = match[1]!.trim();

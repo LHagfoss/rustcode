@@ -487,95 +487,95 @@ export function Transcript({
         aria-busy={thread.running}
       >
         <div ref={innerRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-          {items.map((v) => {
-            const row = rows[v.index]!;
-            const item = row.item;
-            if (row.fold) {
+          {/* The rendered rows sit in normal flow under one offset: a row that grows pushes the
+              ones after it in the same frame. Each row placed at its own measured offset left
+              them overlapping it until the measurement landed a frame later (rows jumped). */}
+          <div
+            className="absolute top-0 left-0 w-full"
+            style={{ transform: `translateY(${items[0]?.start ?? 0}px)` }}
+          >
+            {items.map((v) => {
+              const row = rows[v.index]!;
+              const item = row.item;
+              if (row.fold) {
+                return (
+                  <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
+                    <div className="mx-auto w-full max-w-[1036px] px-7" style={{ paddingTop: 18 }}>
+                      <TurnFoldRow fold={row.fold} onToggle={toggleFold} />
+                    </div>
+                  </div>
+                );
+              }
+              // Rows are 18 apart; consecutive tool calls (and their groups) sit tight.
+              const toolLike = (r?: Row) => !!r?.group || r?.item?.kind === "tool";
+              const gap = v.index === 0 ? 0 : toolLike(row) && toolLike(rows[v.index - 1]) ? 2 : 18;
               return (
-                <div
-                  key={v.key}
-                  data-index={v.index}
-                  ref={measureRef}
-                  className="absolute top-0 left-0 w-full"
-                  style={{ transform: `translateY(${v.start}px)` }}
-                >
-                  <div className="mx-auto w-full max-w-[1036px] px-7" style={{ paddingTop: 18 }}>
-                    <TurnFoldRow fold={row.fold} onToggle={toggleFold} />
+                <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
+                  <div
+                    className={cx(
+                      "mx-auto w-full max-w-[1036px] px-7",
+                      row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
+                    )}
+                    style={{ paddingTop: gap }}
+                  >
+                    {row.group ? (
+                      <ToolGroupRow group={row.group} onToggle={toggleFold} />
+                    ) : row.waiting ? (
+                      <WaitingRow count={row.waiting} />
+                    ) : row.working ? (
+                      <WorkingRow
+                        label={workingLabel(thread.items)}
+                        startedAt={thread.turnStartedAt}
+                        now={now}
+                      />
+                    ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
+                      <div className="flex items-center gap-2 text-caption text-fg-faint">
+                        <span className="h-px flex-1 bg-border" />
+                        <RotateCw size={11} />
+                        Continued after a restart
+                        <span className="h-px flex-1 bg-border" />
+                      </div>
+                    ) : item?.kind === "user" ? (
+                      <UserRow
+                        item={item}
+                        threadId={thread.running ? undefined : thread.id}
+                        rewind={rewind}
+                      />
+                    ) : item?.kind === "assistant" ? (
+                      <AssistantRow
+                        item={item}
+                        threadId={thread.id}
+                        streaming={thread.running && v.index === lastIndex}
+                        copyable={!footerCopied.has(item.id)}
+                      />
+                    ) : item?.kind === "thought" ? (
+                      <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
+                    ) : item?.kind === "tool" && item.title === "spawn_agent" ? (
+                      <AgentSpawnRow item={item} threadId={thread.id} />
+                    ) : item?.kind === "tool" && (subagentOf(item) || subagentSteps.has(item.id)) ? (
+                      <SubagentRow item={item} steps={subagentSteps.get(item.id) ?? NO_STEPS} />
+                    ) : item?.kind === "tool" ? (
+                      <ToolRow item={item} cwd={thread.cwd} />
+                    ) : item?.kind === "notice" ? (
+                      <NoticeRow item={item} />
+                    ) : item?.kind === "turnEnd" ? (
+                      <TurnEndRow
+                        item={item}
+                        folded={foldedEnds.has(item.id)}
+                        reply={replyBefore[item.id]}
+                        completion={completions[item.id]}
+                        changes={
+                          turnCheckpoints[item.id] && (
+                            <TurnChanges threadId={thread.id} checkpoint={turnCheckpoints[item.id]!} />
+                          )
+                        }
+                      />
+                    ) : null}
                   </div>
                 </div>
               );
-            }
-            // Rows are 18 apart; consecutive tool calls (and their groups) sit tight.
-            const toolLike = (r?: Row) => !!r?.group || r?.item?.kind === "tool";
-            const gap = v.index === 0 ? 0 : toolLike(row) && toolLike(rows[v.index - 1]) ? 2 : 18;
-            return (
-              <div
-                key={v.key}
-                data-index={v.index}
-                ref={measureRef}
-                className="absolute top-0 left-0 w-full"
-                style={{ transform: `translateY(${v.start}px)` }}
-              >
-                <div
-                  className={cx(
-                    "mx-auto w-full max-w-[1036px] px-7",
-                    row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
-                  )}
-                  style={{ paddingTop: gap }}
-                >
-                  {row.group ? (
-                    <ToolGroupRow group={row.group} onToggle={toggleFold} />
-                  ) : row.waiting ? (
-                    <WaitingRow count={row.waiting} />
-                  ) : row.working ? (
-                    <WorkingRow
-                      label={workingLabel(thread.items)}
-                      startedAt={thread.turnStartedAt}
-                      now={now}
-                    />
-                  ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
-                    <div className="flex items-center gap-2 text-caption text-fg-faint">
-                      <span className="h-px flex-1 bg-border" />
-                      <RotateCw size={11} />
-                      Continued after a restart
-                      <span className="h-px flex-1 bg-border" />
-                    </div>
-                  ) : item?.kind === "user" ? (
-                    <UserRow item={item} threadId={thread.running ? undefined : thread.id} rewind={rewind} />
-                  ) : item?.kind === "assistant" ? (
-                    <AssistantRow
-                      item={item}
-                      threadId={thread.id}
-                      streaming={thread.running && v.index === lastIndex}
-                      copyable={!footerCopied.has(item.id)}
-                    />
-                  ) : item?.kind === "thought" ? (
-                    <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
-                  ) : item?.kind === "tool" && item.title === "spawn_agent" ? (
-                    <AgentSpawnRow item={item} threadId={thread.id} />
-                  ) : item?.kind === "tool" && (subagentOf(item) || subagentSteps.has(item.id)) ? (
-                    <SubagentRow item={item} steps={subagentSteps.get(item.id) ?? NO_STEPS} />
-                  ) : item?.kind === "tool" ? (
-                    <ToolRow item={item} cwd={thread.cwd} />
-                  ) : item?.kind === "notice" ? (
-                    <NoticeRow item={item} />
-                  ) : item?.kind === "turnEnd" ? (
-                    <TurnEndRow
-                      item={item}
-                      folded={foldedEnds.has(item.id)}
-                      reply={replyBefore[item.id]}
-                      completion={completions[item.id]}
-                      changes={
-                        turnCheckpoints[item.id] && (
-                          <TurnChanges threadId={thread.id} checkpoint={turnCheckpoints[item.id]!} />
-                        )
-                      }
-                    />
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
+            })}
+          </div>
         </div>
       </div>
       <TimelineRail

@@ -4,6 +4,7 @@ import {
   appendSteer,
   applyUpdate,
   beginTurn,
+  checkCommands,
   diffCounts,
   diffLines,
   emptyThread,
@@ -348,5 +349,24 @@ describe("Claude Code subagents", () => {
     let t = beginTurn(emptyThread("s", "/p"), "go");
     t = applyUpdate(t, step);
     expect(splitSubagentSteps(t.items).items.some((i) => i.id === "s1")).toBe(true);
+  });
+});
+
+describe("checkCommands", () => {
+  test("finds the checks a command line runs", () => {
+    expect(checkCommands("/bin/zsh -lc 'bun --version && bun test'")).toEqual(["bun test"]);
+    expect(checkCommands("cargo clippy --all-targets -- -D warnings")).toEqual([
+      "cargo clippy --all-targets -- -D warnings",
+    ]);
+    expect(checkCommands("bun run check")).toEqual(["bun run check"]);
+    expect(checkCommands("npx tsc --noEmit; pytest -q")).toEqual(["npx tsc --noEmit", "pytest -q"]);
+    expect(checkCommands("CI=1 cargo +nightly test -p x")).toEqual(["cargo +nightly test -p x"]);
+  });
+
+  test("a word in a path or an option is not a check", () => {
+    expect(checkCommands("/bin/zsh -lc 'nl -ba src/queue.test.ts'")).toEqual([]);
+    expect(checkCommands("git diff --check")).toEqual([]);
+    expect(checkCommands("cat build/test.log")).toEqual([]);
+    expect(checkCommands("bun --version")).toEqual([]);
   });
 });
