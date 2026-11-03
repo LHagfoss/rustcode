@@ -200,6 +200,8 @@ export interface AppState {
   orchestration: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
+  /** The interface in SF Pro Rounded (the default) or the standard system font. */
+  roundedFont: boolean;
   orchestrationPending: boolean;
   /** Links between threads, fan-outs and grants, kept in app storage. */
   links: LinkBook;
@@ -249,6 +251,7 @@ const STORAGE = {
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   /** The ids of the threads running a turn, kept while the engine is up. */
   runningThreads: "rustcode.runningThreads",
+  roundedFont: "rustcode.roundedFont",
   statusMarks: "rustcode.statusMarks",
   permissionMode: "rustcode.permissionMode",
   permissionModes: "rustcode.permissionModes",
@@ -295,6 +298,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // delegating is there to use without first finding the setting.
   orchestration: stored(STORAGE.orchestration) !== "0",
   resumeAfterRestart: stored(STORAGE.resumeAfterRestart) !== "0",
+  roundedFont: stored(STORAGE.roundedFont) !== "0",
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
@@ -1888,6 +1892,11 @@ export function switchNewThreadHarness(harness: string) {
 export function setResumeAfterRestart(on: boolean) {
   set({ resumeAfterRestart: on });
   store(STORAGE.resumeAfterRestart, on ? "1" : "0");
+}
+
+export function setRoundedFont(on: boolean) {
+  set({ roundedFont: on });
+  store(STORAGE.roundedFont, on ? "1" : "0");
 }
 
 export function setOrchestration(on: boolean) {
