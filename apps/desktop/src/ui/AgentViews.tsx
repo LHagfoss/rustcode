@@ -98,14 +98,9 @@ export function SubagentRow({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className={cx(
-          "group flex h-7 w-fit max-w-full items-center gap-2 rounded-full border px-2.5 text-left transition-colors duration-200",
-          running
-            ? "border-accent/25 bg-accent/[0.06]"
-            : "border-border bg-fill-subtle/60 hover:bg-fill-subtle",
-        )}
+        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
-        <span className="flex w-3.5 shrink-0 justify-center">
+        <span className="flex w-[18px] shrink-0 justify-center">
           {running ? (
             <Orb />
           ) : failed ? (
@@ -114,11 +109,11 @@ export function SubagentRow({
             <CircleCheck size={13} className="text-success rc-dot-in" />
           )}
         </span>
-        <span className="shrink-0 font-medium text-callout">{name}</span>
+        <span className="shrink-0 font-medium text-callout text-fg">{name}</span>
         <span className="min-w-0 shrink truncate text-callout text-fg-muted">{agent.task}</span>
         {running ? (
-          <span className="min-w-0 max-w-[40%] shrink truncate text-caption">
-            <span className="rc-shimmer">{current ? stepLabel(current) : "Starting"}</span>
+          <span className="min-w-0 max-w-[40%] shrink truncate text-caption text-accent">
+            {current ? stepLabel(current) : "Starting"}
           </span>
         ) : (
           done && <span className="shrink-0 text-caption text-fg-faint tabular">{done}</span>
@@ -126,12 +121,15 @@ export function SubagentRow({
         {(steps.length > 0 || output || agentId !== undefined) && (
           <ChevronRight
             size={11}
-            className={cx("shrink-0 text-fg-faint transition-transform duration-200", open && "rotate-90")}
+            className={cx(
+              "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
+              open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
+            )}
           />
         )}
       </button>
       {open && (
-        <div className="rc-expand mt-1.5 ml-3 flex flex-col gap-0.5 border-border border-l pl-3">
+        <div className="rc-expand mt-1 mb-1 ml-[26px] flex flex-col gap-0.5 rounded-lg border border-border bg-fill-subtle/30 px-3 py-2">
           {steps.map((step) => (
             <div key={step.id} className="flex h-5 min-w-0 items-center gap-1.5 text-caption text-fg-muted">
               {live(step) ? (
@@ -149,6 +147,86 @@ export function SubagentRow({
               <Markdown text={output} className="text-callout" />
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Two or more subagents a turn started together, as T3 Code collapses them:
+ * one line, `3 subagents`, with how many still work (or how long they took)
+ * and a chevron; open, a card with each agent's own row.
+ */
+export function SubagentGroupRow({
+  items,
+  stepsOf,
+  threadId,
+  open,
+  onToggle,
+}: {
+  items: ToolItem[];
+  stepsOf: (id: string) => readonly ToolItem[];
+  threadId: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const agents = useApp((s) => s.agents[threadId] ?? EMPTY);
+  const state = items.map((item) => {
+    const agentId =
+      item.title === "spawn_agent" && item.status !== "failed" ? spawnedAgentId(item.output) : undefined;
+    const info = agentId === undefined ? undefined : agents.find((a) => a.id === agentId);
+    return {
+      running: info ? agentActive(info) : live(item),
+      failed: info ? info.status === "failed" : item.status === "failed",
+    };
+  });
+  const working = state.filter((x) => x.running).length;
+  const failed = state.filter((x) => x.failed).length;
+  const now = useNow(working > 0);
+  const started = Math.min(...items.map((i) => i.startedAt ?? Number.POSITIVE_INFINITY));
+  const ended = Math.max(...items.map((i) => i.endedAt ?? 0));
+  const elapsedMs = Number.isFinite(started) ? (working ? now : ended || now) - started : undefined;
+  const status = working ? `${working} working` : failed ? `${failed} failed` : "done";
+  return (
+    <div className={cx("font-rounded", !working && !open && "opacity-80")}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+      >
+        <span className="flex w-[18px] shrink-0 justify-center">
+          {working ? (
+            <Orb />
+          ) : failed ? (
+            <CircleX size={13} className="text-danger" />
+          ) : (
+            <CircleCheck size={13} className="text-success" />
+          )}
+        </span>
+        <span className="shrink-0 font-medium text-callout text-fg">{items.length} subagents</span>
+        <span
+          className={cx(
+            "shrink-0 text-caption tabular",
+            working ? "text-accent" : failed ? "text-danger" : "text-fg-faint",
+          )}
+        >
+          {status}
+          {elapsedMs !== undefined &&
+            elapsedMs >= 1000 &&
+            ` · ${formatDuration(Math.floor(elapsedMs / 1000) * 1000)}`}
+        </span>
+        <ChevronRight
+          size={11}
+          className={cx("shrink-0 text-fg-faint transition-transform duration-200", open && "rotate-90")}
+        />
+      </button>
+      {open && (
+        <div className="rc-expand mt-1 mb-1 ml-[26px] flex flex-col gap-1 rounded-lg border border-border bg-fill-subtle/30 px-2.5 py-1.5">
+          {items.map((item) => (
+            <SubagentRow key={item.id} item={item} steps={stepsOf(item.id)} threadId={threadId} />
+          ))}
         </div>
       )}
     </div>
