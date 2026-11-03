@@ -36,7 +36,8 @@ jobs:
         # A release commit pushes main and its tag together, so the main run
         # would build the same commit as the tag run, at the same time, and
         # warm no cache for it. Skipping here skips every job after it.
-        if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore(ci): release v')) }}
+        # Quoted: the commit prefix's ": " would end a plain YAML scalar.
+        if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore(ci): release v')) }}"
         runs-on: ubuntu-latest
         steps:
             - name: Check out repository history
