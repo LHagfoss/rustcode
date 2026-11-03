@@ -95,6 +95,8 @@ pub fn run() {
         .expect("error while building the RustCode desktop app");
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
+            // The window opens where it was last left (webview.rs).
+            webview::remember_size_on_exit(handle);
             // The engine closes its sessions when its stdin closes.
             handle.state::<EngineState>().stop();
             handle.state::<pty::Ptys>().close_all();
