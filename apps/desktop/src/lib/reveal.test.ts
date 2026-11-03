@@ -24,12 +24,12 @@ function render(state: RevealState, source: string, children: ElementContent[], 
   return { tree, state: next };
 }
 
-const spans = (node: Root | Element): { word: string; delay: string }[] =>
+const spans = (node: Root | Element): { word: string; birth: number }[] =>
   node.children.flatMap((child) => {
     if (child.type !== "element") return [];
     if (child.tagName === "span" && (child.properties.className as string[]).includes("rc-reveal"))
       return [
-        { word: (child.children[0] as { value: string }).value, delay: String(child.properties.style) },
+        { word: (child.children[0] as { value: string }).value, birth: Number(child.properties.dataBirth) },
       ];
     return spans(child);
   });
@@ -61,18 +61,18 @@ describe("birth times", () => {
 });
 
 describe("wrapping words across chunks", () => {
-  test("a word still fading in the next chunk carries on with a negative delay", () => {
+  test("a word still fading in the next chunk keeps its birth, so its fade carries on", () => {
     const first = render(newRevealState(), "one two", [element("p", [text("one two")])], 1000);
     expect(spans(first.tree)).toEqual([
-      { word: "one", delay: "animation-delay:0ms" },
-      { word: "two", delay: `animation-delay:${REVEAL_STEP_MS}ms` },
+      { word: "one", birth: 1000 },
+      { word: "two", birth: 1000 + REVEAL_STEP_MS },
     ]);
     // 100 ms later "three" arrives: "one" is 100 ms into its fade, "two" 82 ms, "three" starts.
     const second = render(first.state, "one two three", [element("p", [text("one two three")])], 1100);
     expect(spans(second.tree)).toEqual([
-      { word: "one", delay: "animation-delay:-100ms" },
-      { word: "two", delay: `animation-delay:${REVEAL_STEP_MS - 100}ms` },
-      { word: "three", delay: "animation-delay:0ms" },
+      { word: "one", birth: 1000 },
+      { word: "two", birth: 1000 + REVEAL_STEP_MS },
+      { word: "three", birth: 1100 },
     ]);
   });
 
@@ -93,7 +93,7 @@ describe("wrapping words across chunks", () => {
   test("a word finished by the next chunk keeps its place and its fade", () => {
     const first = render(newRevealState(), "wor", [element("p", [text("wor")])], 0);
     const second = render(first.state, "world", [element("p", [text("world")])], 50);
-    expect(spans(second.tree)).toEqual([{ word: "world", delay: "animation-delay:-50ms" }]);
+    expect(spans(second.tree)).toEqual([{ word: "world", birth: 0 }]);
   });
 
   test("a link's text is counted but never split, so a bare URL stays one child", () => {
@@ -109,8 +109,8 @@ describe("wrapping words across chunks", () => {
     expect(a.children).toEqual([text("https://x.dev")]);
     // "now" is the third word: the link's word still counted, so the stagger lines up.
     expect(spans(tree)).toEqual([
-      { word: "see", delay: "animation-delay:0ms" },
-      { word: "now", delay: `animation-delay:${2 * REVEAL_STEP_MS}ms` },
+      { word: "see", birth: 0 },
+      { word: "now", birth: 2 * REVEAL_STEP_MS },
     ]);
   });
 

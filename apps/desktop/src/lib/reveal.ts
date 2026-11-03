@@ -1,11 +1,11 @@
 // Per-word reveal for the reply that is still being written. Each word of the
-// block being written gets a birth time the first time it is drawn; while it is
-// younger than the fade it is wrapped in a `.rc-reveal` span whose
-// `animation-delay` is `birth - now`, so a word that started fading one chunk
-// ago carries on where it was instead of restarting or snapping to full
-// opacity. Older words are plain text. Markdown.tsx restarts the spans' CSS
-// animations after each render, which is what makes the negative delay land
-// at the right point.
+// block being written gets a birth time (on the `performance.now()` clock,
+// which is the document timeline's) the first time it is drawn; while it is
+// younger than the fade it is wrapped in a `.rc-reveal` span carrying it as
+// `data-birth`. Markdown.tsx pins each span's CSS animation `startTime` to
+// that birth, so a word that started fading a chunk ago carries on where it
+// was, even when React hands its span to another word. Older words are plain
+// text.
 
 import type { Element, ElementContent, Root } from "hast";
 
@@ -85,7 +85,7 @@ export function rehypeReveal({ state, now }: { state: RevealState; now: number }
       state.born ??= now;
       if (stillFading(state.born, now, REVEAL_BLOCK_MS))
         for (const child of tree.children)
-          if (child.type === "element") addClass(child, "rc-reveal-block", state.born - now);
+          if (child.type === "element") addClass(child, "rc-reveal-block", state.born);
     }
   };
 }
@@ -130,7 +130,7 @@ function splitWords(text: string, state: RevealState, now: number, walk: Walk): 
     out.push({
       type: "element",
       tagName: "span",
-      properties: { className: ["rc-reveal"], style: `animation-delay:${Math.round(birth - now)}ms` },
+      properties: { className: ["rc-reveal"], dataBirth: Math.round(birth) },
       children: [{ type: "text", value: match[0] }],
     });
     at = from + match[0].length;
@@ -140,10 +140,9 @@ function splitWords(text: string, state: RevealState, now: number, walk: Walk): 
   return out;
 }
 
-function addClass(element: Element, name: string, delay: number) {
+function addClass(element: Element, name: string, birth: number) {
   const current = element.properties.className;
   const list = Array.isArray(current) ? current : typeof current === "string" ? [current] : [];
   element.properties.className = [...list.map(String), name];
-  const style = typeof element.properties.style === "string" ? `${element.properties.style};` : "";
-  element.properties.style = `${style}animation-delay:${Math.round(delay)}ms`;
+  element.properties.dataBirth = Math.round(birth);
 }

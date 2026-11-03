@@ -303,15 +303,15 @@ export const Markdown = memo(function Markdown({
   const tailText = blocks[tail];
   useLayoutEffect(() => {
     if (!live || tailText === undefined) return;
-    // Each render sets a still-fading word's delay to `birth - now`. Restarting its animation makes
-    // that delay count from now, so it resumes where it was; a reused span would otherwise keep
-    // the timeline its first delay set.
-    for (const el of root.current?.querySelectorAll<HTMLElement>(".rc-reveal, .rc-reveal-block") ?? [])
-      for (const animation of el.getAnimations?.() ?? []) {
-        animation.cancel();
-        animation.play();
-      }
-    // Only when the tail changed: that is when Block drew new delays. An unrelated re-render keeps
+    // Pin each fading word's animation to its birth (lib/reveal.ts): a span React reused for
+    // another word, or one that just mounted, then shows that word's point in its fade. Cheaper
+    // than restarting: an animation already at its birth is left alone.
+    for (const el of root.current?.querySelectorAll<HTMLElement>("[data-birth]") ?? []) {
+      const birth = Number(el.dataset.birth);
+      for (const animation of el.getAnimations?.() ?? [])
+        if (animation.startTime !== birth) animation.startTime = birth;
+    }
+    // Only when the tail changed: that is when Block drew new spans. An unrelated re-render keeps
     // the running animations as they are.
   }, [tailText, live]);
   useEffect(() => {
