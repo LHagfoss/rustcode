@@ -104,8 +104,10 @@ opt-level = 2
 
 [profile.release]
 opt-level = 3
-codegen-units = 1
-lto = "fat"
+# Thin LTO over 16 units: most of fat LTO's gain at a fraction of its link
+# time, which bounded every release build (each platform ~10 min).
+codegen-units = 16
+lto = "thin"
 strip = true
 incremental = false
 debug = false

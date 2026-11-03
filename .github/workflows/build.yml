@@ -1,5 +1,7 @@
 permissions:
     contents: write
+    # The desktop jobs poll this run's artifacts for the engine they bundle.
+    actions: read
 
 name: Build
 
@@ -78,24 +80,15 @@ jobs:
     # as its sidecar instead of compiling the engine again. A beta builds it
     # too.
     desktop-macos:
-        needs: build-macos
+        # Starts with the engine build, not after it: the shell compiles
+        # against a placeholder sidecar, then waits for the engine artifact
+        # and only bundles (a relink) once it lands.
+        needs: verify-tag
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         # Xcode 26's actool compiles the layered icon (apps/desktop/scripts/app-icon.ts).
         runs-on: macos-26
         steps:
             - uses: actions/checkout@v7
-
-            - name: Download arm64 engine archive
-              uses: actions/download-artifact@v8
-              with:
-                  name: rustcode-macos-aarch64
-                  path: engine
-
-            - name: Place the engine sidecar
-              run: |
-                  tar xzf engine/rustcode-macos-aarch64.tar.gz -C engine
-                  mkdir -p apps/desktop/src-tauri/binaries
-                  install -m 755 engine/rustcode-macos-aarch64 apps/desktop/src-tauri/binaries/rustcode-aarch64-apple-darwin
 
             - name: Set up Bun
               uses: oven-sh/setup-bun@v2
@@ -112,6 +105,43 @@ jobs:
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Compile the app while the engine builds
+              working-directory: apps/desktop
+              run: |
+                  mkdir -p src-tauri/binaries
+                  printf '#!/bin/sh\n' > src-tauri/binaries/rustcode-aarch64-apple-darwin
+                  chmod 755 src-tauri/binaries/rustcode-aarch64-apple-darwin
+                  bun install --frozen-lockfile
+                  bun run bundle:app --no-bundle
+
+            # Waits for the engine artifact of this run (the desktop app compiled meanwhile).
+            - name: Wait for the engine build
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  ARTIFACT: rustcode-macos-aarch64
+              run: |
+                  for _ in $(seq 1 160); do
+                      names="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].name')"
+                      if grep -qx "$ARTIFACT" <<<"$names"; then exit 0; fi
+                      failed="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select((.name | contains(env.ARTIFACT)) and (.conclusion == "failure" or .conclusion == "cancelled"))] | length')"
+                      if [ "$failed" != 0 ]; then echo "The engine build for $ARTIFACT failed."; exit 1; fi
+                      sleep 15
+                  done
+                  echo "The engine artifact $ARTIFACT did not appear in 40 minutes."
+                  exit 1
+
+            - name: Download arm64 engine archive
+              uses: actions/download-artifact@v8
+              with:
+                  name: rustcode-macos-aarch64
+                  path: engine
+
+            - name: Place the engine sidecar
+              run: |
+                  tar xzf engine/rustcode-macos-aarch64.tar.gz -C engine
+                  install -m 755 engine/rustcode-macos-aarch64 apps/desktop/src-tauri/binaries/rustcode-aarch64-apple-darwin
 
             # Without the MACOS_* secrets the app stays ad-hoc signed and
             # unnotarized (docs/macos-release-signing.md).
@@ -194,7 +224,8 @@ jobs:
     # The desktop app's Windows installer and Linux packages, from the engine
     # artifacts of the `build` job. Skipped for a beta, like `build`.
     desktop:
-        needs: build
+        # Starts with the engine build, like desktop-macos.
+        needs: verify-tag
         if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && !(startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-'))
         runs-on: ${{ matrix.os }}
         strategy:
@@ -223,24 +254,6 @@ jobs:
                   sudo apt-get update
                   sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
 
-            - name: Download engine archive
-              uses: actions/download-artifact@v8
-              with:
-                  name: ${{ matrix.engine }}
-                  path: engine
-
-            - name: Place the engine sidecar
-              shell: bash
-              run: |
-                  mkdir -p apps/desktop/src-tauri/binaries
-                  if [ "$RUNNER_OS" = Windows ]; then
-                      7z x -oengine engine/${{ matrix.engine }}.zip
-                      cp engine/${{ matrix.engine }}.exe apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}.exe
-                  else
-                      tar xzf engine/${{ matrix.engine }}.tar.gz -C engine
-                      install -m 755 engine/${{ matrix.engine }} apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}
-                  fi
-
             - name: Set up Bun
               uses: oven-sh/setup-bun@v2
               with:
@@ -256,6 +269,52 @@ jobs:
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Compile the app while the engine builds
+              shell: bash
+              working-directory: apps/desktop
+              run: |
+                  mkdir -p src-tauri/binaries
+                  sidecar=src-tauri/binaries/rustcode-${{ matrix.triple }}
+                  if [ "$RUNNER_OS" = Windows ]; then sidecar="$sidecar.exe"; fi
+                  printf 'placeholder\n' > "$sidecar"
+                  chmod 755 "$sidecar"
+                  bun install --frozen-lockfile
+                  bun run bundle:app --no-bundle
+
+            # Waits for the engine artifact of this run (the desktop app compiled meanwhile).
+            - name: Wait for the engine build
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  ARTIFACT: ${{ matrix.engine }}
+              run: |
+                  for _ in $(seq 1 160); do
+                      names="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].name')"
+                      if grep -qx "$ARTIFACT" <<<"$names"; then exit 0; fi
+                      failed="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select((.name | contains(env.ARTIFACT)) and (.conclusion == "failure" or .conclusion == "cancelled"))] | length')"
+                      if [ "$failed" != 0 ]; then echo "The engine build for $ARTIFACT failed."; exit 1; fi
+                      sleep 15
+                  done
+                  echo "The engine artifact $ARTIFACT did not appear in 40 minutes."
+                  exit 1
+
+            - name: Download engine archive
+              uses: actions/download-artifact@v8
+              with:
+                  name: ${{ matrix.engine }}
+                  path: engine
+
+            - name: Place the engine sidecar
+              shell: bash
+              run: |
+                  if [ "$RUNNER_OS" = Windows ]; then
+                      7z x -oengine engine/${{ matrix.engine }}.zip
+                      cp engine/${{ matrix.engine }}.exe apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}.exe
+                  else
+                      tar xzf engine/${{ matrix.engine }}.tar.gz -C engine
+                      install -m 755 engine/${{ matrix.engine }} apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}
+                  fi
 
             - name: Build the installer
               shell: bash

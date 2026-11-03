@@ -97,11 +97,13 @@ instructions for work in this repository.
 - One issue per PR, but issues that change the same code path go in one PR
   (for example two fixes to what happens when the chat changes): separate PRs
   there conflict with each other and each needs another CI run.
-- When the user asked for merging, merge once CI is green without polling in
-  a loop: `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash
-  --delete-branch`. (`gh pr merge --auto` needs required status checks on
-  `main`; without them it fails with "clean status", and a plain merge would
-  skip CI.)
+- When the user asked for merging, merge once CI is green with
+  `scripts/pr-merge.sh <n>` (run it in the background). It waits for every
+  check except the advisory Windows/macOS portability jobs, which take longest
+  and never block, catches path-filtered jobs that register late, and merges
+  with `--squash --delete-branch`. (`gh pr merge --auto` needs required status
+  checks on `main`; without them it fails with "clean status", and a plain
+  merge would skip CI.)
 - Before starting the next issue in files a queued PR touches, wait for that
   PR to merge and branch from the new `main`, instead of resolving the same
   conflict later.
