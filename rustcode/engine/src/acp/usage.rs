@@ -215,6 +215,25 @@ pub(crate) async fn limits(
     limits_json(limits.as_ref(), if chatgpt { "codex" } else { "provider" })
 }
 
+/// The harness of a thread that runs on another agent than RustCode's own
+/// (its record names one), else None.
+pub(crate) fn external_harness(session_id: &str) -> Option<String> {
+    crate::harness::store::load(session_id)
+        .map(|record| record.harness)
+        .filter(|harness| harness != "rustcode")
+}
+
+/// `_rustcode/usage/limits` for a thread on another harness: the Codex CLI's
+/// windows for Codex, nothing (null) for a harness whose plan the engine
+/// cannot read without asking (Claude Code's is in the Keychain).
+pub(crate) async fn harness_limits(harness: &str) -> serde_json::Value {
+    if harness != "codex" {
+        return serde_json::Value::Null;
+    }
+    let limits = crate::provider_auth::codex_usage::rate_limits().await;
+    limits_json(limits.as_ref(), "codex")
+}
+
 /// `_rustcode/usage/plans`: every subscription this machine is signed in to,
 /// with its windows, for Settings › Usage. Needs no session. Claude's numbers
 /// come from Claude Code's sign-in, which on macOS is in the Keychain, so it is
@@ -531,5 +550,30 @@ mod tests {
         let meta = context_reply_meta(&state);
         assert_eq!(meta["rustcode"]["kind"], "context");
         assert_eq!(meta["rustcode"]["context"], *context);
+    }
+}
+
+#[cfg(test)]
+mod harness_tests {
+    use super::{external_harness, harness_limits};
+    use crate::harness::store::{HarnessRecord, save};
+
+    #[tokio::test]
+    async fn a_thread_on_another_harness_answers_for_that_harness() {
+        save(
+            "usage-codex-thread",
+            &HarnessRecord::new("codex", "/tmp".into()),
+        );
+        save(
+            "usage-claude-thread",
+            &HarnessRecord::new("claude-code", "/tmp".into()),
+        );
+        assert_eq!(
+            external_harness("usage-codex-thread").as_deref(),
+            Some("codex")
+        );
+        assert_eq!(external_harness("usage-no-such-thread"), None);
+        // Claude Code's plan needs the user's consent to read: none here.
+        assert!(harness_limits("claude-code").await.is_null());
     }
 }
