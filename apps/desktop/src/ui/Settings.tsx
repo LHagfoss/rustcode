@@ -697,6 +697,8 @@ function AppVersion() {
     setChecking(true);
     setError(null);
     await checkNow();
+    // A check that failed says so, even when an earlier one found the app up to date.
+    setError(useUpdates.getState().error);
     setChecking(false);
   };
   const install = async () => {

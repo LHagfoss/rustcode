@@ -138,6 +138,8 @@ export function resolveGrant(choice: GrantChoice) {
   resolve?.(choice);
 }
 
+const toasted = new Set<string>();
+
 async function permitted(caller: RuleThread, key: string, question: GrantAsk): Promise<Failure | null> {
   if (hasGrant(book(), caller.id, key)) return null;
   // The thread's access level answers for the user where it already allows the work: the same
@@ -147,7 +149,13 @@ async function permitted(caller: RuleThread, key: string, question: GrantAsk): P
     // Not silent: the transcript says what the thread did on its own, and why.
     const text = `“${caller.title}” ${verb(question)}, allowed by ${modeLabel(mode)}`;
     updateThread(caller.id, (t) => appendNotice(t, text));
-    toast(text, "info");
+    // The transcript keeps every one; the toast comes once per thread and kind, so an orchestrator
+    // reading threads in a loop does not flood the screen.
+    const once = `${caller.id}:${question.kind}`;
+    if (!toasted.has(once)) {
+      toasted.add(once);
+      toast(text, "info");
+    }
     return null;
   }
   const asked = ask(question);

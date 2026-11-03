@@ -40,7 +40,7 @@ interface Choice {
  * The effort steps from lowest to highest, so `off` sits at the left of the slider whatever
  * order the harness listed them in. Unknown values follow the known ones, in the harness's order.
  */
-const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "high", "max", "xhigh"];
+const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export function orderEfforts(efforts: string[]): string[] {
   const rank = (value: string) => {

@@ -390,9 +390,10 @@ export const Composer = memo(function Composer({
       return;
     }
     if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread) {
-      // The latest queued message comes back first; with nothing queued, the last sent one.
+      // The latest queued message comes back first; with nothing queued, the last sent one. One
+      // that answers another thread stays queued, so the one before it comes back instead.
       const live = useApp.getState().threads[thread.id] ?? thread;
-      const queued = live.queue[live.queue.length - 1];
+      const queued = [...live.queue].reverse().find((q) => !q.link);
       if (queued) {
         e.preventDefault();
         takeBack(queued);

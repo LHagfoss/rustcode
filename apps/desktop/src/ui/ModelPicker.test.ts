@@ -21,6 +21,10 @@ describe("effort order", () => {
     expect(orderEfforts(["high", "default", "minimal"])).toEqual(["default", "minimal", "high"]);
   });
 
+  test("max is the top step, above xhigh", () => {
+    expect(orderEfforts(["low", "max", "xhigh", "high"])).toEqual(["low", "high", "xhigh", "max"]);
+  });
+
   test("unknown values keep the harness's order after the known ones", () => {
     expect(orderEfforts(["turbo", "high", "zeta", "off"])).toEqual(["off", "high", "turbo", "zeta"]);
   });
