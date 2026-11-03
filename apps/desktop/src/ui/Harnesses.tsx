@@ -105,6 +105,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   const [open, setOpen] = useState(false);
   const status = harnessStatus(harness);
   const local = harness.builtin;
+  // RustCode turns off only once another harness starts new threads: the engine refuses otherwise.
+  const isDefault = useApp((s) => s.harnesses?.default.harness === harness.id);
+  const pinned = local && isDefault && harness.enabled;
   const custom = !local && !["codex", "claude-code", "gemini", "opencode"].includes(harness.id);
   // Sign in stays out of the way once the harness is known to be signed in.
   const signIn = !local && harness.installed && harness.auth !== "ok" && !result?.ok;
@@ -137,23 +140,29 @@ export function HarnessCard({ harness }: { harness: Harness }) {
             Check
           </Pill>
         )}
-        {!local && (
-          <Tooltip label={!harness.installed ? "Install it first" : undefined}>
-            <span>
-              <Switch
-                label={`Use ${harness.name}`}
-                checked={harness.enabled}
-                disabled={!harness.installed}
-                onChange={(v) =>
-                  // Turning a harness on checks it at once, so its models are ready to pick.
-                  void setHarnessEnabled(harness.id, v).then((snap) => {
-                    if (v && snap) void check();
-                  })
-                }
-              />
-            </span>
-          </Tooltip>
-        )}
+        <Tooltip
+          label={
+            !harness.installed
+              ? "Install it first"
+              : pinned
+                ? "Choose another default harness first"
+                : undefined
+          }
+        >
+          <span>
+            <Switch
+              label={`Use ${harness.name}`}
+              checked={harness.enabled}
+              disabled={!harness.installed || pinned}
+              onChange={(v) =>
+                // Turning a harness on checks it at once, so its models are ready to pick.
+                void setHarnessEnabled(harness.id, v).then((snap) => {
+                  if (v && snap) void check();
+                })
+              }
+            />
+          </span>
+        </Tooltip>
       </div>
       {!harness.installed && harness.install_hint && (
         <div className="ml-11 flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">

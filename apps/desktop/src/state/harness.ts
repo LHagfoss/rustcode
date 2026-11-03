@@ -54,6 +54,7 @@ export function preferredDefault(snapshot: HarnessSnapshot): {
   const installed = (h: Harness) => h.installed && h.auth !== "needs_login" && !h.error;
   const pick =
     orderHarnesses(snapshot.harnesses).find((h) => !h.builtin && installed(h)) ??
+    snapshot.harnesses.find((h) => h.builtin && h.enabled) ??
     snapshot.harnesses.find((h) => h.builtin);
   return { harness: pick?.id ?? "rustcode", model: null, effort: null };
 }

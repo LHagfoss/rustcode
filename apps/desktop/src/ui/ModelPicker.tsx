@@ -579,7 +579,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
               {shownPane === "models" && <ModelList choices={models} current={model} onPick={pickModel} />}
               {shownPane === "harness" && harnesses && (
                 <HarnessList
-                  harnesses={harnesses.harnesses}
+                  // RustCode turned off in Settings › Harnesses leaves the list.
+                  harnesses={harnesses.harnesses.filter(
+                    (h) => !h.builtin || h.enabled || h.id === effective.harness,
+                  )}
                   current={effective.harness}
                   onPick={(id) => {
                     switchNewThreadHarness(id);

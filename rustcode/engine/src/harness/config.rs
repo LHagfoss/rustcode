@@ -69,6 +69,22 @@ fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
+/// Whether `change` may apply while `defaults` hold: the built-in harness turns off only once
+/// another harness starts new threads, so a new thread always has one that is on.
+pub(crate) fn check_default(
+    defaults: &HarnessDefaults,
+    change: &HarnessChange,
+) -> Result<(), String> {
+    let builtin_default = defaults
+        .harness
+        .as_deref()
+        .is_none_or(|harness| harness == super::BUILTIN_ID);
+    if change.id.trim() == super::BUILTIN_ID && change.enabled == Some(false) && builtin_default {
+        return Err("choose another default harness before turning RustCode off".to_owned());
+    }
+    Ok(())
+}
+
 /// Apply `change` to `harnesses`.
 pub(crate) fn apply_change(
     harnesses: &mut Vec<HarnessEntry>,
@@ -89,11 +105,21 @@ pub(crate) fn apply_change(
     }
     let known = super::known(&id);
     if id == super::BUILTIN_ID {
-        if change.enabled == Some(false) {
-            return Err("the built-in RustCode harness cannot be turned off".to_owned());
-        }
         if change.command.is_some() || change.kind.is_some() {
             return Err("the built-in RustCode harness has no command".to_owned());
+        }
+        // Turned off, it leaves the app's pickers; the engine itself stays, as it runs every
+        // harness. Only `enabled` is recorded, and only when it says off.
+        if let Some(enabled) = change.enabled {
+            match harnesses.iter_mut().find(|entry| entry.id == id) {
+                Some(entry) => entry.enabled = (!enabled).then_some(false),
+                None if !enabled => harnesses.push(HarnessEntry {
+                    id,
+                    enabled: Some(false),
+                    ..Default::default()
+                }),
+                None => {}
+            }
         }
         return Ok(());
     }
@@ -407,11 +433,12 @@ enabled = true
                 &mut harnesses,
                 HarnessChange {
                     id: "rustcode".into(),
-                    enabled: Some(false),
+                    command: Some(vec!["x".into()]),
                     ..Default::default()
                 }
             )
-            .is_err()
+            .is_err(),
+            "the built-in harness has no command"
         );
         assert!(
             apply_change(
@@ -451,5 +478,38 @@ enabled = true
         .unwrap();
         let (_, _, config) = crate::config::load_config_for_workspace(workspace.path());
         assert!(config.harnesses.iter().all(|entry| entry.id != "evil"));
+    }
+
+    #[test]
+    fn the_builtin_harness_turns_off_once_another_is_the_default() {
+        let off = |id: &str| HarnessChange {
+            id: id.into(),
+            enabled: Some(false),
+            ..Default::default()
+        };
+        let on_builtin = HarnessDefaults::default();
+        assert!(check_default(&on_builtin, &off("rustcode")).is_err());
+        let on_claude = HarnessDefaults {
+            harness: Some("claude-code".into()),
+            ..Default::default()
+        };
+        assert!(check_default(&on_claude, &off("rustcode")).is_ok());
+
+        let mut harnesses = Vec::new();
+        apply_change(&mut harnesses, off("rustcode")).unwrap();
+        assert_eq!(harnesses[0].id, "rustcode");
+        assert!(!harnesses[0].is_enabled());
+        assert!(!super::super::resolve_all(&harnesses)[0].enabled);
+        apply_change(
+            &mut harnesses,
+            HarnessChange {
+                id: "rustcode".into(),
+                enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(harnesses[0].is_enabled());
+        assert!(super::super::resolve_all(&harnesses)[0].enabled);
     }
 }
