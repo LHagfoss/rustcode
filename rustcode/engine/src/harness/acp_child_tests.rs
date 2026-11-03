@@ -51,7 +51,14 @@ async fn fake_agent(
             "initialize" => peer.respond(
                 id,
                 Ok(json!({"protocolVersion": 1, "agentCapabilities": {
-                    "loadSession": true, "promptCapabilities": {"image": true}}})),
+                    "loadSession": true, "promptCapabilities": {"image": true}},
+                    "_meta": {"steering": {"supported": true}}})),
+            ),
+            // As claude-agent-acp: injected into a running turn, else the
+            // client should send a prompt.
+            "_session/steering" => peer.respond(
+                id,
+                Ok(json!({"outcome": if cancelled.is_empty() { "promptRequired" } else { "injected" }})),
             ),
             "session/new" => peer.respond(
                 id,
@@ -406,4 +413,35 @@ async fn the_orchestrator_is_added_to_the_child_session() {
         .unwrap()
         .1;
     assert_eq!(new["mcpServers"], json!([]), "no orchestrator, no servers");
+}
+
+#[tokio::test]
+async fn steering_adds_a_message_to_the_running_turn() {
+    let (thread, mut seen) = start(None, StartOptions::default()).await;
+    assert!(!thread.session.steer("too early").await, "no turn yet");
+    let session = Arc::clone(&thread.session);
+    let turn = tokio::spawn(async move { session.prompt(text("wait")).await });
+    let mut steered = false;
+    for _ in 0..100 {
+        if thread.session.steer("also check tests").await {
+            steered = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(steered);
+    let steer = requests(&mut seen)
+        .into_iter()
+        .rfind(|(method, _)| method == "_session/steering")
+        .expect("a steering request");
+    assert_eq!(steer.1["sessionId"], "child-1");
+    assert_eq!(steer.1["prompt"][0]["text"], "also check tests");
+    assert_eq!(
+        steer.1["_meta"]["steering"]["idleBehavior"],
+        "promptRequired"
+    );
+    let harness = harness("fake-acp", HarnessKind::Acp);
+    assert_eq!(crate::harness::capabilities(&harness).steer, "live");
+    thread.session.cancel();
+    let _ = turn.await;
 }

@@ -152,7 +152,7 @@ impl Adapter {
 
     pub(crate) async fn steer(&self, text: &str) -> bool {
         match self {
-            Adapter::Acp(_) => false,
+            Adapter::Acp(adapter) => adapter.steer(text).await,
             Adapter::Codex(adapter) => adapter.steer(text).await,
         }
     }

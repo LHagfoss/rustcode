@@ -31,6 +31,8 @@ pub(crate) struct CachedHarness {
     pub resume: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steer: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -75,6 +77,7 @@ pub(crate) fn to_learned(entry: CachedHarness) -> Learned {
         error: None,
         resume: entry.resume,
         images: entry.images,
+        steer: entry.steer,
         effort: entry.effort,
         fetched_at: Some(entry.fetched_at),
         version: entry.version,
@@ -88,6 +91,7 @@ pub(crate) fn from_learned(learned: &Learned) -> Option<CachedHarness> {
         && learned.effort.is_none()
         && learned.resume.is_none()
         && learned.images.is_none()
+        && learned.steer.is_none()
     {
         return None;
     }
@@ -98,6 +102,7 @@ pub(crate) fn from_learned(learned: &Learned) -> Option<CachedHarness> {
         effort: learned.effort,
         resume: learned.resume,
         images: learned.images,
+        steer: learned.steer,
     })
 }
 
