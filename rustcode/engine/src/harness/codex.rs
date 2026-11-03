@@ -593,6 +593,31 @@ fn file_paths(item: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A Codex subagent call as a step title: "Start subagent: <first line of its task>".
+fn collab_title(item: &Value) -> String {
+    let action = match str_field(item, "tool").unwrap_or_default() {
+        "spawnAgent" => "Start subagent",
+        "sendInput" | "sendMessage" | "followupTask" => "Message subagent",
+        "resumeAgent" => "Resume subagent",
+        "wait" => "Wait for subagents",
+        "closeAgent" => "Close subagent",
+        "interruptAgent" => "Interrupt subagent",
+        "listAgents" => "List subagents",
+        _ => "Subagent",
+    };
+    match str_field(item, "prompt")
+        .and_then(|prompt| prompt.lines().find(|line| !line.trim().is_empty()))
+    {
+        Some(task) => {
+            let task = task.trim();
+            let short: String = task.chars().take(80).collect();
+            let more = if short.len() < task.len() { "…" } else { "" };
+            format!("{action}: {short}{more}")
+        }
+        None => action.to_owned(),
+    }
+}
+
 /// The tool card a Codex item starts, if it is a tool.
 fn tool_call_for(item: &Value) -> Option<ToolCall> {
     let id = str_field(item, "id")?.to_owned();
@@ -639,6 +664,15 @@ fn tool_call_for(item: &Value) -> Option<ToolCall> {
             format!("View {}", str_field(item, "path").unwrap_or("image")),
         )
         .kind(ToolKind::Read),
+        // Codex's own subagents: shown as a step, so the work they do is not invisible.
+        "collabAgentToolCall" => ToolCall::new(id, collab_title(item))
+            .kind(ToolKind::Other)
+            .raw_input(json!({
+                "tool": item.get("tool"),
+                "prompt": item.get("prompt"),
+                "model": item.get("model"),
+                "agents": item.get("receiverThreadIds"),
+            })),
         _ => return None,
     };
     Some(call.status(ToolCallStatus::InProgress))
@@ -711,7 +745,7 @@ fn tool_update_for(item: &Value) -> Option<ToolCallUpdate> {
                 })
                 .raw_output(result);
         }
-        "webSearch" | "imageView" => {
+        "webSearch" | "imageView" | "collabAgentToolCall" => {
             fields = fields.status(if failed {
                 ToolCallStatus::Failed
             } else {
