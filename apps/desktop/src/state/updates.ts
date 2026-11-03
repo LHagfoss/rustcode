@@ -107,11 +107,17 @@ async function whatsNewOnLaunch() {
     useUpdates.setState({ whatsNew: { version: current, notes } });
 }
 
-/** A failed check tries again after this, not after the full interval. */
-const RETRY_MS = 60_000;
+/**
+ * A failed check tries again sooner than the full interval — 30s, then doubling up to 5 minutes,
+ * so a check that ran while the network was still coming up on launch does not wait half an hour.
+ */
+const RETRY_FIRST_MS = 30_000;
+const RETRY_MAX_MS = 5 * 60_000;
 let retry: ReturnType<typeof setTimeout> | undefined;
+let retryDelay = RETRY_FIRST_MS;
 
-async function check() {
+/** Check now: on launch, on the interval, when the app comes back, and from Settings › Engine. */
+export async function checkNow(): Promise<void> {
   clearTimeout(retry);
   let info: UpdateInfo;
   try {
@@ -119,10 +125,30 @@ async function check() {
   } catch (error) {
     // Offline, GitHub busy, or the shell refused: say so in Settings and try again soon.
     useUpdates.setState({ error: error instanceof Error ? error.message : String(error) });
-    retry = setTimeout(() => void check(), RETRY_MS);
+    retry = setTimeout(() => void checkNow(), retryDelay);
+    retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
     return;
   }
+  retryDelay = RETRY_FIRST_MS;
   useUpdates.setState({ info, error: null, checkedAt: Date.now() });
+}
+
+/** How far an install is, for the sidebar row and Settings: a fraction when the size is known. */
+export function installProgress(progress: InstallProgress | null): {
+  fraction?: number;
+  step: string;
+} {
+  const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (!progress) return { fraction: 0, step: "Starting the download…" };
+  if (progress.phase === "verifying") return { fraction: 1, step: "Verifying the download…" };
+  if (progress.phase === "installing") return { fraction: 1, step: "Installing · RustCode reopens" };
+  const fraction = progress.total ? progress.received / progress.total : undefined;
+  return {
+    fraction,
+    step: progress.total
+      ? `Downloading · ${Math.round((fraction ?? 0) * 100)}% of ${mb(progress.total)}`
+      : `Downloading · ${mb(progress.received)}`,
+  };
 }
 
 let started = false;
@@ -151,12 +177,16 @@ export function startUpdateChecks() {
   if (started || !canUpdate()) return;
   started = true;
   void whatsNewOnLaunch();
-  setTimeout(() => void check(), 5_000);
-  setInterval(() => void check(), UPDATE_CHECK_MS);
-  // Back in front after a while away (a laptop that slept): check again.
-  window.addEventListener("focus", () => {
+  setTimeout(() => void checkNow(), 5_000);
+  setInterval(() => void checkNow(), UPDATE_CHECK_MS);
+  // Back in front after a while away (a laptop that slept), or the window revealed again: check.
+  const relaunched = () => {
     const last = useUpdates.getState().checkedAt;
-    if (!last || Date.now() - last > 10 * 60_000) void check();
+    if (!last || Date.now() - last > 10 * 60_000) void checkNow();
+  };
+  window.addEventListener("focus", relaunched);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") relaunched();
   });
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { newerVersion, shouldShowWhatsNew } from "./updates";
+import { installProgress, newerVersion, shouldShowWhatsNew } from "./updates";
 
 describe("updates", () => {
   test("versions compare by number, not text", () => {
@@ -23,5 +23,32 @@ describe("What's New after an in-app install", () => {
     expect(shouldShowWhatsNew("1.1.0", null, false, "1.0.0")).toBe(true);
     expect(shouldShowWhatsNew("1.0.0", null, false, "1.0.0")).toBe(false);
     expect(shouldShowWhatsNew("1.1.0", null, true, "1.0.0")).toBe(false);
+  });
+});
+
+describe("install progress", () => {
+  test("a download with a known size reports a fraction and a percentage", () => {
+    const { fraction, step } = installProgress({
+      phase: "downloading",
+      received: 1_048_576,
+      total: 4_194_304,
+    });
+    expect(fraction).toBe(0.25);
+    expect(step).toBe("Downloading · 25% of 4.0 MB");
+  });
+
+  test("a download of unknown size counts megabytes and shows no fraction", () => {
+    const { fraction, step } = installProgress({ phase: "downloading", received: 2_097_152, total: null });
+    expect(fraction).toBeUndefined();
+    expect(step).toBe("Downloading · 2.0 MB");
+  });
+
+  test("verifying and installing are full bars with their own words", () => {
+    expect(installProgress({ phase: "verifying" })).toEqual({
+      fraction: 1,
+      step: "Verifying the download…",
+    });
+    expect(installProgress({ phase: "installing" }).step).toMatch(/reopens/);
+    expect(installProgress(null)).toEqual({ fraction: 0, step: "Starting the download…" });
   });
 });
