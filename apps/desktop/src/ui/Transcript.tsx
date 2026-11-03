@@ -3,12 +3,12 @@
 // scrolled up, and a "Latest" button brings them back.
 
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
+import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
-import { useApp } from "../state/store";
+import { RESUME_TEXT, useApp } from "../state/store";
 import {
   type ThreadState,
   type TranscriptItem,
@@ -502,6 +502,13 @@ export function Transcript({
                       startedAt={thread.turnStartedAt}
                       now={now}
                     />
+                  ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
+                    <div className="flex items-center gap-2 text-caption text-fg-faint">
+                      <span className="h-px flex-1 bg-border" />
+                      <RotateCw size={11} />
+                      Continued after a restart
+                      <span className="h-px flex-1 bg-border" />
+                    </div>
                   ) : item?.kind === "user" ? (
                     <UserRow item={item} threadId={thread.running ? undefined : thread.id} rewind={rewind} />
                   ) : item?.kind === "assistant" ? (

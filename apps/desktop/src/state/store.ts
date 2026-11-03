@@ -198,6 +198,8 @@ export interface AppState {
   } | null;
   /** Threads can start and message other threads (Settings › General); the engine learns it at initialize. */
   orchestration: boolean;
+  /** Threads that were running when the app quit or the engine restarted continue on their own. */
+  resumeAfterRestart: boolean;
   orchestrationPending: boolean;
   /** Links between threads, fan-outs and grants, kept in app storage. */
   links: LinkBook;
@@ -244,6 +246,9 @@ const STORAGE = {
   archiveMigrated: "rustcode.archiveMigrated",
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
+  resumeAfterRestart: "rustcode.resumeAfterRestart",
+  /** The ids of the threads running a turn, kept while the engine is up. */
+  runningThreads: "rustcode.runningThreads",
   statusMarks: "rustcode.statusMarks",
   permissionMode: "rustcode.permissionMode",
   permissionModes: "rustcode.permissionModes",
@@ -289,6 +294,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // On unless turned off: an agent asks before it starts or messages a thread (Ask), so
   // delegating is there to use without first finding the setting.
   orchestration: stored(STORAGE.orchestration) !== "0",
+  resumeAfterRestart: stored(STORAGE.resumeAfterRestart) !== "0",
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
@@ -569,6 +575,8 @@ async function handshake(): Promise<void> {
       20_000,
     );
     const agent = parseAgentInfo(result);
+    // Read before the reset below marks every thread idle.
+    const interrupted = interruptedThreads();
     set({
       agent,
       status: "ready",
@@ -589,6 +597,7 @@ async function handshake(): Promise<void> {
     if (connection === conn) await syncPinsAndSettled(conn);
     const selected = get().selectedId;
     if (selected) void openThread(selected);
+    if (connection === conn) void resumeInterrupted(interrupted);
   } catch (error) {
     set({ status: "closed", statusDetail: errorText(error) });
   }
@@ -1876,6 +1885,11 @@ export function switchNewThreadHarness(harness: string) {
 
 // ---------------------------------------------------------------- subagents and usage
 
+export function setResumeAfterRestart(on: boolean) {
+  set({ resumeAfterRestart: on });
+  store(STORAGE.resumeAfterRestart, on ? "1" : "0");
+}
+
 export function setOrchestration(on: boolean) {
   set((s) => ({
     orchestration: on,
@@ -2308,4 +2322,67 @@ function isReportCommand(text: string, extras: ComposeExtras): boolean {
 
 export function closeReport() {
   set({ report: null });
+}
+
+// ---------------------------------------------------------------- resuming after a restart
+
+/** What an interrupted thread is told when it continues. */
+export const RESUME_TEXT =
+  "The app restarted while you were working, so your last turn stopped. Continue where you left off.";
+/** At most this many threads continue at once after a restart. */
+const RESUME_MAX = 8;
+
+const runningIds = (s: AppState) =>
+  Object.values(s.threads)
+    .filter((t) => t.running)
+    .map((t) => t.id)
+    .sort();
+
+// The running threads are written while the engine is up, so a quit, a crash, an update or an
+// engine restart leaves the list of turns it cut short. A turn that ends takes itself off it.
+let lastRunning = "";
+useApp.subscribe((s) => {
+  if (s.status !== "ready") return;
+  const ids = runningIds(s).join("\n");
+  if (ids === lastRunning) return;
+  lastRunning = ids;
+  store(STORAGE.runningThreads, JSON.stringify(ids ? ids.split("\n") : []));
+});
+
+/** The threads a restart cut off: the saved list, plus any this app still showed running. */
+function interruptedThreads(): string[] {
+  const saved = storedJson<unknown>(STORAGE.runningThreads, []);
+  const ids = new Set([
+    ...(Array.isArray(saved) ? saved.filter((x): x is string => typeof x === "string") : []),
+    ...runningIds(get()),
+  ]);
+  return [...ids];
+}
+
+/**
+ * Each thread a restart cut off is opened and sent {@link RESUME_TEXT}, so it carries on
+ * without the user pressing anything. Settings › General turns it off.
+ */
+async function resumeInterrupted(ids: string[]): Promise<void> {
+  store(STORAGE.runningThreads, "[]");
+  lastRunning = "";
+  if (!get().resumeAfterRestart || !ids.length) return;
+  const known = new Set(get().sessions.map((x) => x.id));
+  const resumable = ids.filter((id) => known.has(id)).slice(0, RESUME_MAX);
+  for (const id of resumable) {
+    await openThread(id);
+    // The selected thread may already be loading from the handshake: wait for it.
+    for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) await new Promise((r) => setTimeout(r, 100));
+    const thread = get().threads[id];
+    if (!thread?.loaded || thread.running) continue;
+    void runPrompt(id, RESUME_TEXT);
+  }
+  if (resumable.length) {
+    toast(
+      resumable.length === 1
+        ? "A thread the restart interrupted is continuing."
+        : `${resumable.length} threads the restart interrupted are continuing.`,
+      "success",
+    );
+  }
 }

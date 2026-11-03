@@ -47,6 +47,7 @@ import {
   setDefaultPermissionMode,
   setOnboarding,
   setOrchestration,
+  setResumeAfterRestart,
   setSmartUi,
   setTheme,
   toast,
@@ -145,6 +146,7 @@ function General() {
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
   const orchestration = useApp((s) => s.orchestration);
+  const resume = useApp((s) => s.resumeAfterRestart);
   const orchestrationPending = useApp((s) => s.orchestrationPending);
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
@@ -201,6 +203,16 @@ function General() {
             </Pill>
           </Row>
         )}
+        <Row
+          title="Continue threads after a restart"
+          subtitle="A thread whose turn was cut short by quitting, an update or an engine restart is sent “Continue where you left off” when the app is back."
+        >
+          <Switch
+            label="Continue threads after a restart"
+            checked={resume}
+            onChange={setResumeAfterRestart}
+          />
+        </Row>
         <Row
           title="Threads can start and message other threads"
           subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
