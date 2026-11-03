@@ -8,6 +8,7 @@
 // transcript and the tests share it; one pass over the items.
 
 import { subagentOf, type TranscriptItem } from "./thread";
+import { orchestrationTool } from "./toolNames";
 
 export interface TurnFold {
   /** Stable per turn: its footer's id, else its first step's. */
@@ -147,10 +148,25 @@ export const GROUP_MIN = 2;
 
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
 
+/** The calls that reach other threads, by what they do to them. */
+const ORCHESTRATION_KIND: Record<string, string> = {
+  start_session: "start",
+  fan_out: "start",
+  message_session: "message",
+  wait_session: "wait",
+  read_session: "read_thread",
+  list_sessions: "list_thread",
+};
+
 /** What a call does, from its ACP kind, else its title. */
 export function inferToolKind(item: { toolKind?: string; title: string }): string {
   if (item.toolKind && item.toolKind !== "other") return item.toolKind;
   const t = item.title.toLowerCase();
+  // Orchestration calls before the verbs: `read_session` is not a file read, and
+  // `start_session` is not a shell. Another server's `start_session` is its own
+  // tool, and reads as it always did.
+  const called = orchestrationTool(item.title);
+  if (called) return ORCHESTRATION_KIND[called]!;
   if (/^(glob|grep|rg|search|find|list|ls)/.test(t)) return "search";
   if (/^(read|cat|view|open)/.test(t)) return "read";
   if (/^(edit|write|apply|patch|create|replace)/.test(t)) return "edit";
@@ -180,7 +196,28 @@ function groupable(row: FoldRow): row is GroupRow {
   );
 }
 
+/**
+ * The tool kinds a row stands for. A fan-out is one call for as many threads as
+ * it was sent to harnesses, so it counts that many starts; anything else is one.
+ */
+function kindsOf(item: GroupRow["item"]): string[] {
+  if (item.kind === "thought") return ["think"];
+  if (item.kind === "tool" && orchestrationTool(item.title) === "fan_out") {
+    const input = item.input;
+    const harnesses =
+      input && typeof input === "object" && !Array.isArray(input) ? input.harnesses : undefined;
+    const n = Array.isArray(harnesses) ? harnesses.length : 0;
+    return Array.from({ length: Math.max(n, 1) }, () => "start");
+  }
+  return [inferToolKind(item)];
+}
+
 const VERBS: [kinds: string[], one: string, many: (n: number) => string][] = [
+  [["start"], "started 1 thread", (n) => `started ${n} threads`],
+  [["message"], "messaged 1 thread", (n) => `messaged ${n} threads`],
+  [["wait"], "waited for threads", () => "waited for threads"],
+  [["read_thread"], "read 1 thread", (n) => `read ${n} threads`],
+  [["list_thread"], "listed threads", () => "listed threads"],
   [["read"], "read 1 file", (n) => `read ${n} files`],
   [["edit", "delete", "move"], "edited 1 file", (n) => `edited ${n} files`],
   [["execute"], "ran 1 command", (n) => `ran ${n} commands`],
@@ -246,7 +283,7 @@ export function groupTools(rows: FoldRow[], open: ReadonlySet<string>): FoldRow[
       out.push(...run);
     } else {
       const key = `tools-${run[0]!.key}`;
-      const kinds = run.map((r) => (r.item.kind === "thought" ? "think" : inferToolKind(r.item)));
+      const kinds = run.flatMap((r) => kindsOf(r.item));
       const group: ToolGroup = {
         key,
         open: open.has(key),

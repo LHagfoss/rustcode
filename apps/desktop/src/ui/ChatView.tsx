@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
-import { displayPath } from "../acp/types";
+import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
@@ -63,7 +63,7 @@ function PlanButton({ thread }: { thread: ThreadState }) {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" sideOffset={6} className="elevated z-40 w-[380px] rounded-xl p-3 rc-in">
+        <Popover.Content align="end" sideOffset={6} className="elevated z-40 w-[380px] p-3 rc-in">
           <div className="mb-1 flex items-baseline justify-between px-1">
             <span className="font-semibold text-body">Plan</span>
             <span className="text-callout text-fg-muted">
@@ -122,11 +122,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          align="end"
-          sideOffset={6}
-          className="elevated z-50 min-w-[200px] rounded-xl p-1.5"
-        >
+        <DropdownMenu.Content align="end" sideOffset={6} className="elevated z-50 min-w-[200px] p-1.5">
           <DropdownMenu.Item className={item} onSelect={() => setView({ kind: "review", threadId })}>
             <FileDiff size={13} /> Review Changes
           </DropdownMenu.Item>
@@ -228,19 +224,36 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
 
 function EmptyState({ banner }: { banner: boolean }) {
   const projectCwd = useApp((s) => s.projectCwd);
+  const choose = () => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p));
   return (
     <div className="flex flex-col items-center gap-3.5 pb-6 text-center">
       {/* A banner is drawn behind the chat instead of the icon. */}
       {!banner && <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />}
-      <h2 className="font-semibold text-title">What should we build?</h2>
-      <div className="flex max-w-[560px] items-center gap-1.5 text-callout text-fg-muted">
+      <h2 className="font-semibold text-title tracking-tight">
+        {projectCwd ? (
+          <>
+            What should we build in{" "}
+            {/* The folder names itself here, and a click swaps it. The pill pads
+                the name on hover without widening the sentence. */}
+            <button
+              type="button"
+              onClick={choose}
+              title={`Change folder (${displayPath(projectCwd)})`}
+              className="-mx-1 inline-block max-w-full truncate rounded-md px-1 align-bottom text-fg hover:bg-fill"
+            >
+              {projectName(projectCwd)}
+              <span className="sr-only"> (change folder)</span>
+            </button>
+            ?
+          </>
+        ) : (
+          "What should we build?"
+        )}
+      </h2>
+      <div className="flex max-w-[560px] items-center gap-1.5 text-fg-faint text-sub">
         <Folder size={13} />
         <span className="truncate">{projectCwd ? displayPath(projectCwd) : "No folder chosen"}</span>
-        <button
-          type="button"
-          onClick={() => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p))}
-          className="text-accent hover:underline"
-        >
+        <button type="button" onClick={choose} className="text-accent hover:underline">
           {projectCwd ? "Change" : "Choose…"}
         </button>
       </div>
@@ -393,15 +406,15 @@ export function ChatView() {
       ) : (
         <div className="flex-1" />
       )}
-      {/* The transcript fades out under the composer. */}
+      {/* The transcript fades out at the composer's edge. */}
       {!isNew && (
         <div
           className="pointer-events-none absolute right-0 bottom-0 left-0"
-          // The transcript fades out as it nears the floating composer, which it then scrolls under.
+          // A short fade, then solid: the transcript scrolls under the composer, not through it.
           style={{
-            height: stackHeight + 72,
-            background:
-              "linear-gradient(to bottom, transparent 0, color-mix(in srgb, var(--rc-bg) 72%, transparent) 56px, color-mix(in srgb, var(--rc-bg) 80%, transparent) 100%)",
+            // The stack sits 16px up (bottom-4), so the fade ends above the composer's top edge.
+            height: stackHeight + 16 + 20,
+            background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 20px, var(--rc-bg) 100%)",
           }}
         />
       )}

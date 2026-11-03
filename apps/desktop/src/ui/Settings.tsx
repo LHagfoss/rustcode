@@ -42,6 +42,7 @@ import {
   restartEngine,
   type SettingsSection,
   setActiveTheme,
+  setAnimateStreaming,
   setDefaultCwd,
   setDefaultHarness,
   setDefaultPermissionMode,
@@ -548,6 +549,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 function Appearance() {
   const mode = useApp((s) => s.theme);
   const roundedFont = useApp((s) => s.roundedFont);
+  const animateStreaming = useApp((s) => s.animateStreaming);
   const active = useApp((s) => s.themeActive);
   const snapshot = useApp((s) => s.themes);
   const supported = useApp((s) => s.features.themes);
@@ -576,6 +578,12 @@ function Appearance() {
           subtitle="SF Pro Rounded for the interface and chat. Code stays monospaced."
         >
           <Switch label="Rounded font" checked={roundedFont} onChange={setRoundedFont} />
+        </Row>
+        <Row
+          title="Animate streaming text"
+          subtitle="A reply's new words fade in as the model writes them. Finished replies never animate."
+        >
+          <Switch label="Animate streaming text" checked={animateStreaming} onChange={setAnimateStreaming} />
         </Row>
       </Group>
       <Group

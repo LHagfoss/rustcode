@@ -20,6 +20,7 @@ import {
   FolderOpen,
   FolderX,
   GitBranch,
+  Hand,
   KanbanSquare,
   ListFilter,
   MessageCircleQuestion,
@@ -41,6 +42,18 @@ import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { openTerminalAt, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
+import {
+  type ChildInfo,
+  type ChildState,
+  childrenListed,
+  childState,
+  childSummary,
+  childVisible,
+  orderChildren,
+  pruneOpenGroups,
+  unseenChild,
+} from "../state/children";
+import { isActive } from "../state/orchestration";
 import {
   askConfirm,
   featureMissing,
@@ -93,7 +106,7 @@ function useSidebarWidth() {
 
 const menuItem =
   "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
-const menuSurface = "elevated z-50 min-w-[200px] rounded-xl p-1.5 rc-in";
+const menuSurface = "elevated z-50 min-w-[200px] p-1.5 rc-in";
 
 function ThreadMenuItems({
   session,
@@ -266,6 +279,8 @@ const ThreadRow = memo(function ThreadRow({
   now,
   snippet,
   jump,
+  compact,
+  hasChildren,
 }: {
   session: SessionSummary;
   selected: boolean;
@@ -275,6 +290,10 @@ const ThreadRow = memo(function ThreadRow({
   snippet?: string;
   /** While ⌘ is held: the digit that opens this row. */
   jump?: number;
+  /** A child of the thread above it: one line, its harness and what it is doing, no meta line. */
+  compact?: boolean;
+  /** The sidebar lists this thread's children under it, which already say what the links are. */
+  hasChildren?: boolean;
 }) {
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
@@ -327,6 +346,77 @@ const ThreadRow = memo(function ThreadRow({
     );
   }
   const done = status === "done";
+  if (compact) {
+    return (
+      <ContextMenu.Root>
+        <ContextMenu.Trigger asChild>
+          <div className="group relative">
+            <button
+              type="button"
+              onClick={() => selectThread(session.id)}
+              onDoubleClick={startRename}
+              onKeyDown={(e) => {
+                if (e.key === "F2") {
+                  e.preventDefault();
+                  startRename();
+                }
+              }}
+              aria-current={selected ? "page" : undefined}
+              className={cx(
+                "flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left",
+                selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
+              )}
+            >
+              <Tooltip label={meta.length ? meta.join(" · ") : (session.title ?? "Thread")}>
+                <span className="flex shrink-0 items-center">
+                  <HarnessIcon
+                    id={session.harness ?? "rustcode"}
+                    name={harness?.name}
+                    size={12}
+                    className={external ? "text-fg-muted" : "text-fg-faint"}
+                  />
+                </span>
+              </Tooltip>
+              <span
+                className={cx(
+                  "min-w-0 flex-1 truncate text-callout",
+                  selected || request || failed
+                    ? "font-medium text-fg"
+                    : running || status === "done"
+                      ? "text-fg/75"
+                      : "text-fg-muted",
+                )}
+              >
+                {session.title || "New thread"}
+              </span>
+              {running ? (
+                <span className="flex shrink-0 items-center gap-1 text-accent text-sub tabular">
+                  <Spinner size={10} />
+                  {startedAt ? <Elapsed since={startedAt} /> : null}
+                </span>
+              ) : request || status === "needs_input" ? (
+                <Hand size={12} className="shrink-0 text-warning" aria-label="Needs you" />
+              ) : failed ? (
+                <X size={12} className="shrink-0 text-danger" aria-label="Failed" />
+              ) : fresh || status === "done" ? (
+                <CircleCheck size={12} className="shrink-0 text-success" aria-label="Done" />
+              ) : null}
+            </button>
+          </div>
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content className={menuSurface}>
+            <ThreadMenuItems
+              session={session}
+              Item={ContextMenu.Item}
+              Separator={ContextMenu.Separator}
+              onRename={startRename}
+            />
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
+    );
+  }
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
@@ -362,7 +452,7 @@ const ThreadRow = memo(function ThreadRow({
               >
                 {session.title || "New thread"}
               </span>
-              <LinkBadge threadId={session.id} />
+              <LinkBadge threadId={session.id} childrenListed={hasChildren} />
               <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
                 {jump !== undefined ? (
                   <kbd className="rounded-sm bg-fill px-1 font-sans text-fg-muted">⌘{jump}</kbd>
@@ -489,56 +579,115 @@ const ThreadRow = memo(function ThreadRow({
 });
 
 /**
- * Threads this one started (start_session, fan_out), nested under it as ordinary thread rows.
- * One that is working, waits for you, is open or has just finished shows; the rest fold
- * behind "N finished", so delegated work leaves the list once it is done.
+ * Threads this one started (start_session, fan_out), under it. A parent you are not reading
+ * shows one line however many children it has; opening the group (or the parent) lists what
+ * works, what wants you and what you opened, and the rest stay behind "N finished" as soon
+ * as they finish, so delegated work leaves the list the moment it is done.
  */
 function ChildThreads({
   items,
   parentId,
   selectedId,
   now,
+  groupOpen,
+  onGroupOpen,
 }: {
   items: SessionSummary[];
   parentId: string;
   selectedId: string | null;
   now: number;
+  /** The group's state as the reader left it: true opened, false closed by hand, unset never touched. */
+  groupOpen?: boolean;
+  onGroupOpen: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  // A string, so the rows re-render only when which children are live changes.
-  const live = useApp((s) =>
-    items
-      .filter((c) => {
+  const [openFinished, setOpenFinished] = useState(false);
+  // One string, so the rows re-render only when a child's state changes. A child whose link is
+  // still open is live even before its turn reports so (it was just started or messaged).
+  const states = useApp((s) => {
+    const linked = new Map(
+      s.links.links.filter((l) => l.orchestrator === parentId).map((l) => [l.target, l.state] as const),
+    );
+    return items
+      .map((c) => {
         const status = statusOf(s, c.id);
-        const finishedAt = s.finished[c.id];
-        const linked = s.links.links.some(
-          (l) => l.target === c.id && l.orchestrator === parentId && l.state === "working",
-        );
-        return status === "running" || status === "needs_input" || linked || !!finishedAt;
+        const link = linked.get(c.id);
+        const live = link && isActive(link) ? (link === "needs_user" ? "needs_input" : "running") : status;
+        const state = childState(live, !!s.failed[c.id]);
+        return `${c.id}:${state}:${s.finished[c.id] ? 1 : 0}`;
       })
-      .map((c) => c.id)
-      .join(" "),
-  );
-  const shown = items.filter((c) => open || c.id === selectedId || live.split(" ").includes(c.id));
-  const folded = items.length - shown.length;
+      .join(" ");
+  });
+  const children = useMemo(() => {
+    const by = new Map(
+      states
+        .split(" ")
+        .filter(Boolean)
+        .map((part) => {
+          const [id, state, unseen] = part.split(":");
+          return [id!, { id: id!, state: state as ChildState, unseen: unseen === "1" }] as const;
+        }),
+    );
+    return items.flatMap((c) => {
+      const info = by.get(c.id);
+      return info ? [info] : [];
+    });
+  }, [items, states]);
+  const expanded = groupOpen === true;
+  const listed = childrenListed(children, {
+    expanded,
+    collapsed: groupOpen === false,
+    parentSelected: parentId === selectedId,
+    selectedId,
+  });
+  const ordered = orderChildren(children, selectedId);
+  const shown = ordered.filter((c) => childVisible(c, selectedId));
+  const folded = ordered.filter((c) => !childVisible(c, selectedId));
+  const dot = unseenChild(children);
+  // What the reader sees is what the chevron says: a group listed because its parent is open (or
+  // because a child wants you) closes on a click, except where a child has to stay in view.
+  const toggle = () => onGroupOpen(!listed);
+  const row = (child: ChildInfo) => {
+    const session = items.find((c) => c.id === child.id);
+    return session ? (
+      <div key={child.id} className="ml-[14px] border-border border-l pl-1 rc-in">
+        <ThreadRow session={session} selected={child.id === selectedId} scopeAll={false} now={now} compact />
+      </div>
+    ) : null;
+  };
   return (
     <>
-      {shown.map((child) => (
-        <div key={child.id} className="ml-[14px] border-border border-l pl-1 rc-in">
-          <ThreadRow session={child} selected={child.id === selectedId} scopeAll={false} now={now} />
-        </div>
-      ))}
-      {(folded > 0 || open) && (
+      <div className="ml-[14px] border-border border-l pl-1">
         <button
           type="button"
-          onClick={() => setOpen(!open)}
-          aria-expanded={open}
+          onClick={toggle}
+          aria-expanded={listed}
+          title={childSummary(children)}
+          className="flex h-7 w-full items-center gap-1 rounded-md py-0 pr-1.5 pl-2.5 text-left text-fg-muted hover:bg-fill-subtle hover:text-fg"
+        >
+          <ChevronRight size={9} className={cx("shrink-0 transition-transform", listed && "rotate-90")} />
+          <span className="min-w-0 flex-1 truncate text-caption">{childSummary(children)}</span>
+          {dot && (
+            <span
+              role="img"
+              aria-label={dot === "failed" ? "A child thread failed" : "A child thread finished"}
+              className={cx("size-1 shrink-0 rounded-full", dot === "failed" ? "bg-danger" : "bg-success")}
+            />
+          )}
+        </button>
+      </div>
+      {listed && shown.map(row)}
+      {listed && folded.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpenFinished(!openFinished)}
+          aria-expanded={openFinished}
           className="ml-[14px] flex h-[20px] items-center gap-1 rounded-sm px-2 text-caption text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
         >
-          <ChevronRight size={10} className={cx("transition-transform", open && "rotate-90")} />
-          {open ? "Hide finished" : `${folded} finished`}
+          <ChevronRight size={10} className={cx("transition-transform", openFinished && "rotate-90")} />
+          {openFinished ? "Hide finished" : `${folded.length} finished`}
         </button>
       )}
+      {listed && openFinished && folded.map(row)}
     </>
   );
 }
@@ -825,6 +974,12 @@ export function Sidebar() {
   const [byProject, setByProject] = useStored("rustcode.sidebar.groupByProject", false);
   const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
   const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", FOLDED_BY_DEFAULT);
+  // Which child groups are open, by parent: one record for the whole sidebar, written in one
+  // place. A copy per group wrote the whole record back, so opening one group erased another.
+  const [openGroups, setOpenGroups] = useStored<Record<string, boolean>>("rustcode.sidebar.childrenOpen", {});
+  const listedIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+  const setGroupOpen = (id: string, open: boolean) =>
+    setOpenGroups((groups) => ({ ...pruneOpenGroups(groups, listedIds), [id]: open }));
   const [width, setWidth] = useSidebarWidth();
   // The slot takes its new width at once, so the transcript reflows once per toggle, not every
   // frame (docs/design.md › Motion). The column beside it then slides from where it was with a
@@ -847,7 +1002,7 @@ export function Sidebar() {
   // Settled lists 10 threads, then 25 more at a time, as T3 Code does.
   const [settledShown, setSettledShown] = useState(10);
   // design-lint: allow (mask alpha, not a colour)
-  const fade = "linear-gradient(to bottom, #000 calc(100% - 28px), transparent)";
+  const fade = "linear-gradient(to bottom, #000 calc(100% - 12px), transparent)";
 
   // What was said in a thread matches too: the engine's index answers once the query has three
   // characters, a moment after typing stops.
@@ -1025,9 +1180,17 @@ export function Sidebar() {
             now={now}
             snippet={query.trim() ? contentHits[s.id] : undefined}
             jump={jumpOf(s.id)}
+            hasChildren={!!childrenOf[s.id]?.length}
           />
           {childrenOf[s.id] && (
-            <ChildThreads items={childrenOf[s.id]!} parentId={s.id} selectedId={selectedId} now={now} />
+            <ChildThreads
+              items={childrenOf[s.id]!}
+              parentId={s.id}
+              selectedId={selectedId}
+              now={now}
+              groupOpen={openGroups[s.id]}
+              onGroupOpen={(open) => setGroupOpen(s.id, open)}
+            />
           )}
         </div>
       ))}
@@ -1091,7 +1254,7 @@ export function Sidebar() {
           />
         </div>
         <nav
-          className="min-h-0 flex-1 overflow-y-auto px-2 pb-6"
+          className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
           {!sessionsLoaded && <ThreadRowsSkeleton />}
@@ -1111,7 +1274,7 @@ export function Sidebar() {
                 <section
                   key={section.id}
                   // Settled is a shelf at the foot of the list, as in T3 Code.
-                  className={cx("mt-2 first:mt-0", section.id === "settled" && "mt-auto pt-3")}
+                  className={cx("mt-2 first:mt-0", section.id === "settled" && "mt-auto pt-2")}
                   aria-label={section.label}
                 >
                   {/* One list, as T3 Code's: only the Settled shelf has a header. */}
@@ -1163,7 +1326,7 @@ export function Sidebar() {
                       </button>
                     )}
                     {section.id === "settled" && (
-                      <p className="px-2.5 pt-1 pb-1.5 text-fg-faint text-sub">
+                      <p className="px-2.5 pt-1 pb-1 text-fg-faint text-sub">
                         Done, or untouched for 3 days. A new message brings one back.
                       </p>
                     )}

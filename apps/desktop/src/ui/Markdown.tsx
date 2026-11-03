@@ -9,6 +9,7 @@ import {
   type ReactElement,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +20,7 @@ import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/f
 import { highlight, peekHighlight } from "../lib/highlight";
 import { markdownBlocks } from "../lib/markdownBlocks";
 import { openExternal, openInEditor } from "../lib/native";
+import { advance, newRevealState, type RevealState, rehypeReveal } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
 import { toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
@@ -239,27 +241,86 @@ export function renderBlock(text: string): ReactElement {
   return element;
 }
 
-const Block = memo(function Block({ text }: { text: string }) {
-  return renderBlock(text);
+/**
+ * Where the reveal keeps each streaming block's word birth times, by reply and
+ * block, outside the component: a row the virtualizer drops and brings back,
+ * or a thread switched away and back, picks up where it was instead of fading
+ * its visible text in again. Entries go when the reply stops streaming.
+ */
+const revealStates = new Map<string, RevealState>();
+
+function forgetReveal(key: string) {
+  for (const k of revealStates.keys()) if (k.startsWith(`${key}\u0000`)) revealStates.delete(k);
+}
+
+/** The block being written, with the words still fading wrapped in spans (lib/reveal.ts). */
+function renderLive(text: string, stateKey: string): ReactElement {
+  const state = advance(revealStates.get(stateKey) ?? newRevealState(), text);
+  revealStates.set(stateKey, state);
+  return ReactMarkdown({
+    children: text,
+    remarkPlugins: plugins,
+    rehypePlugins: [[rehypeReveal, { state, now: performance.now() }]],
+    components,
+    urlTransform,
+  });
+}
+
+/**
+ * One block of a reply. Every block, the one being written included, is this
+ * component, so when the tail finishes (or the reply ends) React keeps its
+ * elements: a code block keeps its highlighting, a diagram is not drawn again,
+ * and a selection inside it survives.
+ */
+const Block = memo(function Block({ text, live }: { text: string; live?: string }) {
+  return live ? renderLive(text, live) : renderBlock(text);
 });
 
 export const Markdown = memo(function Markdown({
   text,
   className,
   streaming,
+  reveal = false,
+  revealKey,
 }: {
   text: string;
   className?: string;
   /** Growing: parse it block by block, so a chunk re-parses only the last block. */
   streaming?: boolean;
+  /** Optional: fade in the words that arrive while it streams (a reply, not a rolling preview). */
+  reveal?: boolean;
+  /** Which reply this is, so the reveal survives the row remounting; one per component without it. */
+  revealKey?: string;
 }) {
   // A finished text is one block (one parse, cached by its text); a streaming one is split so the
   // blocks above the one being written keep their elements. Splitting costs a parser per block.
   const blocks = useMemo(() => (streaming ? markdownBlocks(text) : [text]), [text, streaming]);
+  const tail = blocks.length - 1;
+  const root = useRef<HTMLDivElement>(null);
+  const ownKey = useRef<string>(`reveal-${Math.random().toString(36).slice(2)}`);
+  const key = revealKey ?? ownKey.current;
+  const live = reveal && streaming;
+  const tailText = blocks[tail];
+  useLayoutEffect(() => {
+    if (!live || tailText === undefined) return;
+    // Pin each fading word's animation to its birth (lib/reveal.ts): a span React reused for
+    // another word, or one that just mounted, then shows that word's point in its fade. Cheaper
+    // than restarting: an animation already at its birth is left alone.
+    for (const el of root.current?.querySelectorAll<HTMLElement>("[data-birth]") ?? []) {
+      const birth = Number(el.dataset.birth);
+      for (const animation of el.getAnimations?.() ?? [])
+        if (animation.startTime !== birth) animation.startTime = birth;
+    }
+    // Only when the tail changed: that is when Block drew new spans. An unrelated re-render keeps
+    // the running animations as they are.
+  }, [tailText, live]);
+  useEffect(() => {
+    if (!live) forgetReveal(key);
+  }, [live, key]);
   return (
-    <div className={cx("selectable flex flex-col gap-2.5 text-body break-words", className)}>
+    <div ref={root} className={cx("selectable flex flex-col gap-2.5 text-body break-words", className)}>
       {blocks.map((block, i) => (
-        <Block key={i} text={block} />
+        <Block key={i} text={block} live={live && i === tail ? `${key}\u0000${i}` : undefined} />
       ))}
     </div>
   );

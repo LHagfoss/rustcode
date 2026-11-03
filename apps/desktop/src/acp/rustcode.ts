@@ -298,6 +298,66 @@ export function parsePlanUsage(result: Json | undefined): PlanUsage | null {
   return windows.length ? { source: str(o.source) ?? "provider", windows } : null;
 }
 
+/**
+ * One subscription in `_rustcode/usage/plans` (Settings › Usage): a harness
+ * this machine is signed in to, with its windows when they could be read.
+ */
+export type PlanStatus = "ok" | "signedOut" | "notInstalled" | "unavailable" | "notAsked";
+
+export interface UsagePlan {
+  /** The subscription's own id (`claude`, `codex`); see `planHarness`. */
+  id: string;
+  name: string;
+  /** The CLI it was read from ("Claude Code"). */
+  via?: string;
+  status: PlanStatus;
+  /** The tier the provider named ("max"). */
+  plan?: string;
+  error?: string;
+  windows: (UsageWindow & { label: string })[];
+}
+
+/** The harness a plan belongs to: a subscription's id is not always the harness id. */
+const PLAN_HARNESS: Record<string, string> = { claude: "claude-code" };
+
+export function planHarness(id: string): string {
+  return PLAN_HARNESS[id] ?? id;
+}
+
+export function parsePlans(result: Json | undefined): UsagePlan[] {
+  return arr(obj(result)?.plans).flatMap((p) => {
+    const o = obj(p);
+    const id = str(o?.id);
+    const status = str(o?.status);
+    if (!o || !id || !status) return [];
+    const windows = arr(o.windows).flatMap((w) => {
+      const x = obj(w);
+      const used = num(x?.usedPercent);
+      if (used === undefined) return [];
+      const resets = num(x?.resetsAt);
+      return [
+        {
+          label: str(x?.label) ?? "Usage",
+          usedPercent: used,
+          minutes: num(x?.windowMinutes),
+          resetsAt: resets ? resets * 1000 : undefined,
+        },
+      ];
+    });
+    return [
+      {
+        id,
+        name: str(o.name) ?? id,
+        via: str(o.via),
+        status: status as PlanStatus,
+        plan: str(o.plan),
+        error: str(o.error),
+        windows,
+      },
+    ];
+  });
+}
+
 export function windowTitle(w: UsageWindow): string {
   const m = w.minutes;
   if (m === undefined) return "Usage";

@@ -214,6 +214,13 @@ that change use `tabular`.
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
   selection slides (`transform`) to the new segment.
+- A streaming reply's new words fade in once each (`rc-reveal`, 280ms, from
+  `opacity: 0` and a 4px blur, 18ms apart, no word waiting past 180ms).
+  `lib/reveal.ts` wraps only the words that arrived in the chunk, and only in
+  the last block, so the text already on screen is plain text: nothing fades
+  twice, and a finished reply has no spans and no animation. The blur is the
+  one `filter` that animates: 280ms on a handful of words, never on a box that
+  moves. Settings › Appearance turns it off; reduced motion does too.
 - Skeletons sweep once every 1.6s (`transform` only, on the compositor).
 - `prefers-reduced-motion`: all durations collapse to ~0; shimmer and the
   skeleton sweep stop.

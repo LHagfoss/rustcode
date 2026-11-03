@@ -11,7 +11,7 @@ import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "..
 import { agentHistory, useApp } from "../state/store";
 import { formatDuration, stepLabel, subagentOf, type TranscriptItem } from "../state/thread";
 import { Markdown } from "./Markdown";
-import { cx, Orb, Spinner } from "./primitives";
+import { cx, Orb, Skeleton, Spinner } from "./primitives";
 
 const EMPTY: SubagentInfo[] = [];
 const NO_STEPS: ToolItem[] = [];
@@ -33,13 +33,20 @@ const live = (item: ToolItem) => item.status === "pending" || item.status === "i
 /** A RustCode agent's steps, read from its own conversation while it works or is open. */
 function useAgentSteps(threadId: string, agentId: number | undefined, active: boolean, open: boolean) {
   const [steps, setSteps] = useState<ToolItem[]>(NO_STEPS);
+  // The first read of a folded row is in flight: the steps are not known to be empty.
+  const [loading, setLoading] = useState(false);
   useEffect(() => {
     if (agentId === undefined || !(active || open)) return;
     let alive = true;
+    setLoading(true);
     const load = () =>
       agentHistory(threadId, agentId).then(
-        (h) => alive && setSteps(h.items.filter((i): i is ToolItem => i.kind === "tool")),
-        () => undefined,
+        (h) => {
+          if (!alive) return;
+          setSteps(h.items.filter((i): i is ToolItem => i.kind === "tool"));
+          setLoading(false);
+        },
+        () => alive && setLoading(false),
       );
     void load();
     const t = active ? setInterval(load, 2500) : undefined;
@@ -48,7 +55,7 @@ function useAgentSteps(threadId: string, agentId: number | undefined, active: bo
       if (t) clearInterval(t);
     };
   }, [threadId, agentId, active, open]);
-  return steps;
+  return { steps, loading };
 }
 
 /**
@@ -77,7 +84,8 @@ export function SubagentRow({
   const [open, setOpen] = useState(false);
   const now = useNow(running);
   const fetched = useAgentSteps(threadId, agentId, running, open);
-  const steps = agentId === undefined ? inline : fetched;
+  const steps = agentId === undefined ? inline : fetched.steps;
+  const loadingSteps = agentId !== undefined && fetched.loading && steps.length === 0;
   const current = running ? ([...steps].reverse().find(live) ?? steps.at(-1)) : undefined;
   const elapsedMs =
     info || item.startedAt === undefined || !(running || item.endedAt !== undefined)
@@ -130,6 +138,7 @@ export function SubagentRow({
       </button>
       {open && (
         <div className="rc-expand mt-1 mb-1 ml-[26px] flex flex-col gap-0.5 rounded-lg border border-border bg-fill-subtle/30 px-3 py-2">
+          {loadingSteps && <StepsSkeleton />}
           {steps.map((step) => (
             <div key={step.id} className="flex h-5 min-w-0 items-center gap-1.5 text-caption text-fg-muted">
               {live(step) ? (
@@ -289,10 +298,10 @@ export function AgentPill({ threadId }: { threadId?: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 flex w-[300px] flex-col gap-0.5 rounded-xl p-1.5 rc-in"
+          className="elevated z-40 flex w-[300px] flex-col gap-0.5 p-1.5 rc-in"
         >
           {working.map((w) => (
-            <div key={w.key} className="flex items-start gap-2 rounded-lg px-2 py-1.5">
+            <div key={w.key} className="flex items-start gap-2 rounded-lg px-3 py-[7px]">
               <span className="mt-[5px] flex w-3.5 justify-center">
                 <Orb />
               </span>
@@ -308,5 +317,19 @@ export function AgentPill({ threadId }: { threadId?: string }) {
         </HoverCard.Content>
       </HoverCard.Portal>
     </HoverCard.Root>
+  );
+}
+
+/** Where an agent's steps will be: rows the height of a step, its dot and label. */
+function StepsSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="flex flex-col gap-0.5">
+      {[52, 68, 40].map((w, i) => (
+        <div key={i} className="flex h-5 items-center gap-1.5">
+          <Skeleton className="size-1 shrink-0 rounded-full" />
+          <Skeleton className="h-2.5" style={{ width: `${w}%` }} />
+        </div>
+      ))}
+    </div>
   );
 }

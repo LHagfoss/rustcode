@@ -66,7 +66,7 @@ export function WhatsNewDialog() {
     <Dialog.Root open onOpenChange={(open) => !open && closeWhatsNew()}>
       <Dialog.Portal>
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
-        <Dialog.Content className="elevated fixed top-1/2 left-1/2 z-50 flex max-h-[min(640px,calc(100vh-80px))] w-[min(560px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl rc-in">
+        <Dialog.Content className="elevated fixed top-1/2 left-1/2 z-50 flex max-h-[min(640px,calc(100vh-80px))] w-[min(560px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col rc-in">
           <div className="flex items-center gap-3 px-5 pt-5 pb-3">
             <span className="flex size-9 items-center justify-center rounded-lg bg-accent/15 text-accent">
               <Sparkles size={17} />

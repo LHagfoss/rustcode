@@ -137,7 +137,7 @@ function ConfirmDialog() {
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="rc-confirm-title"
-        className="elevated w-[min(420px,calc(100vw-48px))] rounded-xl p-5 rc-in"
+        className="elevated w-[min(420px,calc(100vw-48px))] p-5 rc-in"
         onKeyDown={(e) => e.key === "Escape" && closeConfirm()}
       >
         <h2 id="rc-confirm-title" className="font-semibold text-body">

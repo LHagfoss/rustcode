@@ -282,7 +282,7 @@ export function CommandPalette() {
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-40 bg-bg/60" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="elevated fixed top-[max(72px,14vh)] left-1/2 z-50 flex w-[min(620px,calc(100vw-56px))] -translate-x-1/2 flex-col overflow-hidden rounded-xl rc-in"
+          className="elevated fixed top-[max(72px,14vh)] left-1/2 z-50 flex w-[min(620px,calc(100vw-56px))] -translate-x-1/2 flex-col overflow-hidden rc-in"
           onKeyDown={(e) => {
             if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();

@@ -5,10 +5,15 @@ import { create } from "zustand";
 import { AcpConnection, type Inbound, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import {
   agentActive,
+  nextPlanRefresh,
   type PlanUsage,
   parseAgentList,
+  parsePlans,
   parsePlanUsage,
+  planHarness,
   type SubagentInfo,
+  type UsagePlan,
+  type UsageWindow,
 } from "../acp/rustcode";
 import type { Transport } from "../acp/transport";
 import {
@@ -130,6 +135,17 @@ export interface NewThreadChoice {
   effort: string | null;
 }
 
+/**
+ * A harness's plan windows, with where they came from. `_rustcode/usage/plans`
+ * names the subscription; a thread's `_rustcode/usage/limits` only has numbers.
+ */
+export interface CachedPlan extends PlanUsage {
+  /** The subscription as Settings › Usage names it ("Claude"), when it was read there. */
+  name?: string;
+  /** Its tier ("max"), when the provider named one. */
+  plan?: string;
+}
+
 export interface AppState {
   status: "connecting" | "ready" | "closed";
   statusDetail?: string;
@@ -185,6 +201,12 @@ export interface AppState {
   agents: Record<string, SubagentInfo[]>;
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
   planUsage: Record<string, PlanUsage | null>;
+  /**
+   * Each harness's plan windows as last learnt, by harness id, from Settings'
+   * `_rustcode/usage/plans` and from any thread's `_rustcode/usage/limits`.
+   * The composer's meter reads it for a thread with no numbers of its own.
+   */
+  planCache: Record<string, CachedPlan>;
   /** An app-drawn confirmation (the webview has no native dialogs). */
   confirm: {
     title: string;
@@ -201,6 +223,8 @@ export interface AppState {
   resumeAfterRestart: boolean;
   /** The interface in SF Pro Rounded (the default) or the standard system font. */
   roundedFont: boolean;
+  /** A streaming reply's new words fade in as the model writes them. */
+  animateStreaming: boolean;
   orchestrationPending: boolean;
   /** Links between threads, fan-outs and grants, kept in app storage. */
   links: LinkBook;
@@ -238,6 +262,9 @@ export interface AppState {
   newWorktree: { on: boolean; branch: string; edited: boolean };
 }
 
+/** A cached plan older than this is dropped on launch: its windows have moved on. */
+export const PLAN_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
+
 const STORAGE = {
   smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
@@ -253,11 +280,14 @@ const STORAGE = {
   /** The ids of the threads running a turn, kept while the engine is up. */
   runningThreads: "rustcode.runningThreads",
   roundedFont: "rustcode.roundedFont",
+  animateStreaming: "rustcode.animateStreaming",
   statusMarks: "rustcode.statusMarks",
   permissionMode: "rustcode.permissionMode",
   permissionModes: "rustcode.permissionModes",
   /** Each harness's last new-thread choice, for an engine that does not remember it. */
   harnessChoices: "rustcode.harnessChoices",
+  /** Each harness's plan windows, so the composer's meter is there on launch. */
+  planCache: "rustcode.planCache",
 };
 
 function stored(key: string): string | null {
@@ -300,6 +330,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   orchestration: stored(STORAGE.orchestration) !== "0",
   resumeAfterRestart: stored(STORAGE.resumeAfterRestart) !== "0",
   roundedFont: stored(STORAGE.roundedFont) !== "0",
+  animateStreaming: stored(STORAGE.animateStreaming) !== "0",
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
@@ -319,6 +350,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   panel: null,
   agents: {},
   planUsage: {},
+  planCache: prunePlans(storedJson<Record<string, CachedPlan>>(STORAGE.planCache, {})),
   status: "connecting",
   engineLog: [],
   sessions: [],
@@ -541,6 +573,7 @@ export async function connect(next: Transport): Promise<void> {
   transport = next;
   setShellTransport(next);
   startAgentPolling();
+  startPlanPolling();
   bootProgress = 0.15;
   set({ status: "connecting", transport: next.name, statusDetail: undefined });
   watchEngine();
@@ -605,6 +638,8 @@ async function handshake(): Promise<void> {
       ),
     }));
     await Promise.all([refreshSessions(), refreshHarnesses(), probeFeatures(conn), refreshThemes(conn)]);
+    // The composer's meter is ready before the first thread opens.
+    void refreshPlanCache();
     if (connection === conn) await syncPinsAndSettled(conn);
     const selected = get().selectedId;
     if (selected) void openThread(selected);
@@ -2037,6 +2072,11 @@ export function setRoundedFont(on: boolean) {
   store(STORAGE.roundedFont, on ? "1" : "0");
 }
 
+export function setAnimateStreaming(on: boolean) {
+  set({ animateStreaming: on });
+  store(STORAGE.animateStreaming, on ? "1" : "0");
+}
+
 export function setOrchestration(on: boolean) {
   set((s) => ({
     orchestration: on,
@@ -2324,6 +2364,146 @@ export function startAgentPolling() {
 const planUsageInFlight = new Set<string>();
 
 /**
+ * The harness a thread runs on, as far as the app knows: its own record once
+ * opened, else the summary from the list. With no thread, the one the next
+ * thread will start on.
+ */
+export function harnessOf(
+  s: Pick<AppState, "threads" | "sessions" | "newThread" | "harnesses">,
+  threadId?: string,
+): string | undefined {
+  if (!threadId) return s.newThread?.harness ?? s.harnesses?.default.harness ?? "rustcode";
+  return s.threads[threadId]?.harness?.id ?? s.sessions.find((x) => x.id === threadId)?.harness;
+}
+
+/** How often the app asks for every plan while its window is visible. */
+export const PLAN_CACHE_POLL_MS = 180_000;
+
+/** True when a harness's numbers are missing or older than the poll interval. */
+export function planIsStale(plan: CachedPlan | undefined, now = Date.now()): boolean {
+  return !plan?.fetchedAt || now - plan.fetchedAt >= PLAN_CACHE_POLL_MS;
+}
+
+/** True when anything in the cache wants a refresh: an entry past the poll, or none at all. */
+export function planCacheStale(cache: Record<string, CachedPlan>, now = Date.now()): boolean {
+  const entries = Object.values(cache);
+  return !entries.length || entries.some((p) => planIsStale(p, now));
+}
+
+/** The persisted cache without entries from more than a day ago. */
+export function prunePlans(cache: Record<string, CachedPlan>, now = Date.now()): Record<string, CachedPlan> {
+  const kept = Object.entries(cache).filter(([, p]) => now - (p.fetchedAt ?? 0) < PLAN_CACHE_MAX_AGE_MS);
+  return kept.length === Object.keys(cache).length ? cache : Object.fromEntries(kept);
+}
+
+/** The cache without the harnesses a plans answer proved signed out or not installed. */
+export function forgetPlans(
+  cache: Record<string, CachedPlan>,
+  harnesses: string[],
+): Record<string, CachedPlan> {
+  const gone = harnesses.filter((h) => cache[h]);
+  if (!gone.length) return cache;
+  const next = { ...cache };
+  for (const h of gone) delete next[h];
+  return next;
+}
+
+/**
+ * A window whose reset passed since these numbers were read as reset: nothing
+ * used, and the stale reset time dropped, until the next read says otherwise.
+ */
+export function windowNow(w: UsageWindow, now = Date.now()): UsageWindow {
+  return w.resetsAt && w.resetsAt <= now ? { usedPercent: 0, minutes: w.minutes } : w;
+}
+
+/** The plan with every passed reset folded in; undefined when it has no windows. */
+export function planNow(plan: PlanUsage | null | undefined, now = Date.now()): PlanUsage | undefined {
+  if (!plan?.windows.length) return undefined;
+  const windows = plan.windows.map((w) => windowNow(w, now));
+  return windows.some((w, i) => w !== plan.windows[i]) ? { ...plan, windows } : plan;
+}
+
+/**
+ * Folds fresh numbers into the cache, one entry per harness: the newer of the
+ * two wins, so a slow plans answer never overwrites a thread's newer limits,
+ * and an answer without windows (a harness with no plan) never erases one.
+ */
+export function mergePlans(
+  cache: Record<string, CachedPlan>,
+  incoming: Record<string, CachedPlan>,
+): Record<string, CachedPlan> {
+  let next = cache;
+  for (const [harness, plan] of Object.entries(incoming)) {
+    if (!plan.windows.length) continue;
+    const known = next[harness];
+    if (known && (known.fetchedAt ?? 0) >= (plan.fetchedAt ?? 0)) continue;
+    if (next === cache) next = { ...cache };
+    next[harness] = plan;
+  }
+  return next;
+}
+
+/** The plans answer as cache entries, for each signed-in harness that reported windows. */
+export function plansToCache(plans: UsagePlan[], fetchedAt = Date.now()): Record<string, CachedPlan> {
+  const out: Record<string, CachedPlan> = {};
+  for (const p of plans) {
+    if (p.status !== "ok" || !p.windows.length) continue;
+    const harness = planHarness(p.id);
+    out[harness] = {
+      source: harness,
+      windows: p.windows.map((w) => ({
+        usedPercent: w.usedPercent,
+        minutes: w.minutes,
+        resetsAt: w.resetsAt,
+      })),
+      fetchedAt,
+      name: p.name,
+      plan: p.plan,
+    };
+  }
+  return out;
+}
+
+/**
+ * The one plan in the cache, for a thread whose harness the engine did not
+ * report: with a single subscription signed in, it is the one in use. With
+ * several, guessing would show another harness's numbers, so none is used.
+ */
+export function onlyCachedPlan(cache: Record<string, CachedPlan>): CachedPlan | undefined {
+  const plans = Object.values(cache).filter((p) => p.windows.length);
+  return plans.length === 1 ? plans[0] : undefined;
+}
+
+/**
+ * The plan the composer's meter shows. A thread's own limits are for the account
+ * it runs on, so they win whenever it has any; the harness's cache (marked
+ * `cached`) fills in where the engine answers none, as it does for Claude Code.
+ */
+export function shownPlan(
+  own: PlanUsage | null | undefined,
+  cached: CachedPlan | undefined,
+  now = Date.now(),
+): { plan: PlanUsage | undefined; cached: boolean } {
+  const live = planNow(own, now);
+  if (live) return { plan: live, cached: false };
+  const known = planNow(cached, now);
+  return { plan: known, cached: !!known };
+}
+
+/** Writes a cache into the store and app storage; no-op when it is the same map. */
+function setPlanCache(next: Record<string, CachedPlan>) {
+  if (next === get().planCache) return;
+  set({ planCache: next });
+  store(STORAGE.planCache, JSON.stringify(next));
+  schedulePlanReset(next);
+}
+
+/** Writes merged numbers into the store and app storage; no-op when nothing is newer. */
+function commitPlans(incoming: Record<string, CachedPlan>) {
+  setPlanCache(mergePlans(get().planCache, incoming));
+}
+
+/**
  * Asks the engine for the plan's usage windows. One request per thread at a
  * time; a failed one keeps the last good numbers (marked stale), and only an
  * answer without windows (the harness has no plan usage) clears them.
@@ -2333,7 +2513,17 @@ export async function refreshPlanUsage(id: string): Promise<void> {
   planUsageInFlight.add(id);
   try {
     const usage = parsePlanUsage(await connection.request(Method.usageLimits, { sessionId: id }, 10_000));
-    set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt: Date.now() } } }));
+    const fetchedAt = Date.now();
+    set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt } } }));
+    // The same numbers serve every thread on that harness; a thread that has
+    // none of its own (Claude Code's limits answer null) reads it from the cache.
+    // A native thread's numbers belong to the provider it runs on, which the
+    // harness id does not name (`rustcode`): they stay on the thread, so no
+    // other native thread reads them as its own.
+    const harness = harnessOf(get(), id);
+    if (usage && harness && harness !== "rustcode") {
+      commitPlans({ [harness]: { ...usage, fetchedAt, source: harness } });
+    }
   } catch {
     set((s) => {
       const last = s.planUsage[id];
@@ -2342,6 +2532,134 @@ export async function refreshPlanUsage(id: string): Promise<void> {
   } finally {
     planUsageInFlight.delete(id);
   }
+}
+
+let plansInFlight = false;
+/** Claude's answer could not be read: the background poll stops asking for it. */
+let claudePaused = false;
+
+/** The consent Settings › Usage keeps before Claude's sign-in is read from the Keychain. */
+export const CLAUDE_USAGE_KEY = "rustcode.claudeUsage";
+
+function claudeUsageAllowed(): boolean {
+  return stored(CLAUDE_USAGE_KEY) === "1";
+}
+
+/**
+ * Turns that consent on or off. Off forgets the numbers it read: the composer
+ * must not keep showing a plan the user asked the app to stop reading.
+ */
+export function setClaudeUsageAllowed(on: boolean): void {
+  store(CLAUDE_USAGE_KEY, on ? "1" : "0");
+  claudePaused = false;
+  if (!on) setPlanCache(forgetPlans(get().planCache, ["claude-code"]));
+}
+
+/**
+ * Folds a plans answer into the cache: a signed-in harness's windows go in, one
+ * that is signed out or gone loses its entry, and a Claude answer that could
+ * not be read stops the background poll asking again (a Deny in the Keychain
+ * must not prompt every three minutes). `asked` is Settings' own call, which
+ * is what unpauses it.
+ */
+export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
+  if (asked) claudePaused = false;
+  const gone = answers
+    .filter((p) => p.status === "signedOut" || p.status === "notInstalled")
+    .map((p) => planHarness(p.id));
+  const kept = forgetPlans(get().planCache, gone);
+  const learned = plansToCache(answers);
+  setPlanCache(mergePlans(kept, learned));
+  if (
+    answers.some(
+      (p) => planHarness(p.id) === "claude-code" && (p.status === "signedOut" || p.status === "unavailable"),
+    )
+  ) {
+    claudePaused = true;
+  }
+}
+
+/**
+ * Asks for every subscription's plan (`_rustcode/usage/plans`, no thread
+ * needed) and folds the answer into the cache. One request at a time; a failed
+ * one keeps the last numbers for the next poll. Claude is asked for only with
+ * consent and while the last answer could be read.
+ */
+export async function refreshPlanCache(): Promise<void> {
+  if (!connection || plansInFlight || get().status !== "ready") return;
+  plansInFlight = true;
+  try {
+    const result = await connection.request(
+      Method.usagePlans,
+      { claude: claudeUsageAllowed() && !claudePaused },
+      20_000,
+    );
+    commitPlansAnswer(parsePlans(result));
+  } catch {
+    // Cached numbers stay; the next poll tries again.
+  } finally {
+    plansInFlight = false;
+  }
+}
+
+let planTimer: ReturnType<typeof setInterval> | null = null;
+let planResetTimer: ReturnType<typeof setTimeout> | null = null;
+let planResetDue = 0;
+let plansOnVisible: (() => void) | null = null;
+
+/**
+ * Asks once more a few seconds after the soonest cached window resets, when
+ * that would otherwise be missed until the poll after next: a new window shows
+ * as it starts. Every poll re-arms it, and an earlier deadline already armed is
+ * kept, so a poll never pushes the reset back.
+ */
+function schedulePlanReset(cache: Record<string, CachedPlan>) {
+  const now = Date.now();
+  const windows = Object.values(cache).flatMap((p) => p.windows);
+  const delay = nextPlanRefresh({ source: "plan", windows }, now);
+  if (delay >= PLAN_CACHE_POLL_MS) return;
+  const due = now + delay;
+  if (planResetTimer && planResetDue <= due) return;
+  if (planResetTimer) clearTimeout(planResetTimer);
+  planResetDue = due;
+  planResetTimer = setTimeout(() => {
+    planResetTimer = null;
+    planResetDue = 0;
+    if (typeof document !== "undefined" && document.hidden) return;
+    void refreshPlanCache();
+  }, delay);
+}
+
+/**
+ * One poller for the app, not one per thread: every three minutes while the
+ * window is visible, and at once when it comes back after being hidden for
+ * longer than that. A hidden window asks for nothing.
+ */
+export function startPlanPolling() {
+  if (planTimer) return;
+  planTimer = setInterval(() => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    void refreshPlanCache();
+  }, PLAN_CACHE_POLL_MS);
+  if (typeof document === "undefined") return;
+  plansOnVisible = () => {
+    if (document.hidden) return;
+    // Back after a while: catch up now rather than at the next tick.
+    if (planCacheStale(get().planCache)) void refreshPlanCache();
+  };
+  document.addEventListener("visibilitychange", plansOnVisible);
+}
+
+function stopPlanPolling() {
+  if (planTimer) clearInterval(planTimer);
+  planTimer = null;
+  if (planResetTimer) clearTimeout(planResetTimer);
+  planResetTimer = null;
+  planResetDue = 0;
+  claudePaused = false;
+  if (plansOnVisible) document.removeEventListener("visibilitychange", plansOnVisible);
+  plansOnVisible = null;
+  plansInFlight = false;
 }
 
 // ---------------------------------------------------------------- UI
@@ -2382,6 +2700,7 @@ export async function request<T = Json>(
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
   clearTimeout(slowTimer);
+  stopPlanPolling();
   engineWatch?.();
   engineWatch = undefined;
   crashed = false;
@@ -2415,6 +2734,7 @@ export function resetForTests() {
     panel: null,
     agents: {},
     planUsage: {},
+    planCache: {},
     orchestration: false,
     orchestrationPending: false,
     links: { links: [], grants: {}, counters: {}, fanOuts: [] },

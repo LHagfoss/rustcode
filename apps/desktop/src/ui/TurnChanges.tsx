@@ -9,7 +9,7 @@ import { useState } from "react";
 import type { Checkpoint, PatchFile } from "../acp/v2";
 import { parsePatch } from "../state/diff";
 import { askConfirm, canRewind, restoreCheckpoint, setView, turnDiff, useApp } from "../state/store";
-import { cx, Pill, Spinner } from "./primitives";
+import { cx, Pill, Skeleton } from "./primitives";
 import { DiffCount } from "./Rows";
 
 function Patch({ file }: { file: PatchFile }) {
@@ -93,7 +93,7 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
           side="top"
           align="start"
           sideOffset={6}
-          className="elevated z-40 flex max-h-[min(520px,70vh)] w-[min(640px,80vw)] flex-col gap-2 rounded-xl p-3"
+          className="elevated z-40 flex max-h-[min(520px,70vh)] w-[min(640px,80vw)] flex-col gap-2 p-3"
         >
           <div className="flex items-center gap-2 px-1">
             <span className="font-semibold text-body">Turn {checkpoint.turn}</span>
@@ -108,11 +108,7 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
           </div>
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
             {error && <p className="px-1 text-callout text-fg-muted">{error}</p>}
-            {!files && !error && (
-              <div className="flex items-center gap-2 px-1 text-callout text-fg-muted">
-                <Spinner /> Reading the turn's changes…
-              </div>
-            )}
+            {!files && !error && <TurnFilesSkeleton />}
             {files?.map((f) => (
               <div key={f.path}>
                 <div className="mb-1 flex items-center gap-1.5 text-caption">
@@ -129,5 +125,33 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+/** The shape of two changed files: their header line, then the patch's lines. */
+function TurnFilesSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="flex flex-col gap-3">
+      {[
+        [72, 54, 88, 46, 62],
+        [40, 66, 30],
+      ].map((widths, file) => (
+        <div key={file}>
+          <div className="mb-1 flex items-center gap-1.5">
+            <Skeleton className="h-2.5 w-2.5 rounded-xs" />
+            <Skeleton className="h-2.5 w-40" />
+            <Skeleton className="ml-auto h-2.5 w-16" />
+          </div>
+          <div className="flex flex-col gap-[3px] rounded-md bg-fill-subtle py-1">
+            {widths.map((w, i) => (
+              <div key={i} className="flex items-center gap-2 pr-3">
+                <Skeleton className="h-[10px] w-[5ch] shrink-0 rounded-xs" />
+                <Skeleton className="h-[10px]" style={{ width: `${w}%` }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

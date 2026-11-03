@@ -6,11 +6,8 @@
 // re-render for usage.
 
 import { HoverCard } from "radix-ui";
-import { useEffect, useMemo } from "react";
 import {
   leftPercent,
-  nextPlanRefresh,
-  PLAN_REFRESH_MS,
   type PlanUsage,
   resetLabel,
   shownWindow,
@@ -18,7 +15,15 @@ import {
   windowTitle,
 } from "../acp/rustcode";
 import type { SessionUsage } from "../acp/types";
-import { refreshPlanUsage, submit, useApp } from "../state/store";
+import {
+  harnessOf,
+  onlyCachedPlan,
+  refreshPlanCache,
+  refreshPlanUsage,
+  shownPlan,
+  submit,
+  useApp,
+} from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
 import { cx, Pill } from "./primitives";
 
@@ -91,7 +96,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 w-[320px] rounded-xl p-3 rc-in"
+          className="elevated z-40 w-[320px] p-3 rc-in"
         >
           <ContextInspector usage={usage} onCompact={running ? undefined : () => void submit("/compact")} />
         </HoverCard.Content>
@@ -198,18 +203,18 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
 }
 
 /**
- * The plan's usage. A new thread shows what the last thread learnt, so the
- * limits are known before the first message. The numbers refresh on hover,
- * every few minutes while the app is in front, and right after a window resets.
+ * The plan's usage. A thread shows its own limits (`_rustcode/usage/limits`)
+ * when it has them; otherwise the harness's plan as last learnt, from Settings'
+ * plans call or another thread on that harness, marked with its age. (Claude
+ * Code's limits answer null: only the plans call can read its Keychain.) The
+ * numbers refresh on hover, on a turn's end, and from the app's three-minute
+ * poll, so a new thread knows the limits before its first message.
  */
 export function PlanMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
-  const all = useApp((s) => s.planUsage);
-  const plan: PlanUsage | null | undefined = useMemo(
-    () => own ?? Object.values(all).find((p): p is PlanUsage => !!p?.windows.length),
-    [own, all],
-  );
-  usePlanRefresh(threadId, plan);
+  const harness = useApp((s) => harnessOf(s, threadId));
+  const cached = useApp((s) => (harness ? s.planCache[harness] : onlyCachedPlan(s.planCache)));
+  const { plan, cached: fromCache } = shownPlan(own, cached);
   const shown = plan ? shownWindow(plan) : undefined;
   if (!plan || !shown) return null;
   const left = leftPercent(shown);
@@ -218,7 +223,13 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
     <HoverCard.Root
       openDelay={60}
       closeDelay={120}
-      onOpenChange={(open) => open && threadId && void refreshPlanUsage(threadId)}
+      onOpenChange={(open) => {
+        if (!open) return;
+        // The thread's own numbers, when it has any; for a harness that answers
+        // none (Claude Code) the plans call is the only way to refresh the cache.
+        if (threadId) void refreshPlanUsage(threadId);
+        if (fromCache) void refreshPlanCache();
+      }}
     >
       <HoverCard.Trigger asChild>
         <button
@@ -245,17 +256,22 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 w-[300px] rounded-xl p-3 rc-in"
+          className="elevated z-40 w-[300px] p-3 rc-in"
         >
-          <PlanCard plan={plan} />
+          <PlanCard plan={plan} cached={fromCache} />
         </HoverCard.Content>
       </HoverCard.Portal>
     </HoverCard.Root>
   );
 }
 
-function PlanCard({ plan }: { plan: PlanUsage }) {
+function PlanCard({ plan, cached }: { plan: PlanUsage; cached?: boolean }) {
   const windows = [...plan.windows].sort((a, b) => (a.minutes ?? Infinity) - (b.minutes ?? Infinity));
+  const age = plan.fetchedAt
+    ? Date.now() - plan.fetchedAt < 60_000
+      ? "just now"
+      : relativeAge(plan.fetchedAt)
+    : undefined;
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between gap-3 px-0.5">
@@ -268,7 +284,7 @@ function PlanCard({ plan }: { plan: PlanUsage }) {
       {plan.fetchedAt && (
         <span className={cx("px-0.5 text-caption", plan.stale ? "text-warning" : "text-fg-faint")}>
           {plan.stale ? "Could not refresh · " : ""}
-          Updated {Date.now() - plan.fetchedAt < 60_000 ? "just now" : relativeAge(plan.fetchedAt)}
+          {cached ? `Numbers from ${age}` : `Updated ${age}`}
         </span>
       )}
     </div>
@@ -312,29 +328,4 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
       </div>
     </div>
   );
-}
-
-/**
- * Keeps the plan numbers current while the app is in front: on the regular
- * interval and right after a window resets. A hidden or unfocused window waits
- * and catches up when it comes back.
- */
-function usePlanRefresh(threadId: string | undefined, plan: PlanUsage | null | undefined) {
-  useEffect(() => {
-    if (!threadId) return;
-    const inFront = () => !document.hidden && document.hasFocus();
-    const timer = setTimeout(() => inFront() && void refreshPlanUsage(threadId), nextPlanRefresh(plan));
-    const onBack = () => {
-      if (inFront() && (!plan?.fetchedAt || Date.now() - plan.fetchedAt >= PLAN_REFRESH_MS)) {
-        void refreshPlanUsage(threadId);
-      }
-    };
-    document.addEventListener("visibilitychange", onBack);
-    window.addEventListener("focus", onBack);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onBack);
-      window.removeEventListener("focus", onBack);
-    };
-  }, [threadId, plan]);
 }

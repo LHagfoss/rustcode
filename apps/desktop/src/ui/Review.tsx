@@ -39,7 +39,7 @@ import {
 } from "../state/store";
 import { ViewHeader } from "./Board";
 import { splitUnifiedDiff } from "./ChangesPanel";
-import { cx, Pill, Segments, Spinner, Tooltip } from "./primitives";
+import { cx, Pill, Segments, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 interface ReviewFile {
@@ -542,6 +542,7 @@ export function Review({ threadId }: { threadId: string }) {
           {files && !files.length && (
             <p className="px-2 py-3 text-callout text-fg-muted">No changes in {label}.</p>
           )}
+          {!files && loading && <ReviewFilesSkeleton />}
           {tree.map((group) => (
             <div key={group.dir} className="mb-1">
               {group.dir && (
@@ -604,16 +605,11 @@ export function Review({ threadId }: { threadId: string }) {
                 )}
               </>
             ) : (
-              !error &&
-              loading && (
-                <div className="flex items-center gap-2 text-callout text-fg-muted">
-                  <Spinner /> Reading changes…
-                </div>
-              )
+              !error && loading && <ReviewDiffSkeleton />
             )}
           </div>
           {(comments.length > 0 || note) && (
-            <div className="elevated mx-4 mb-4 flex flex-col gap-2 rounded-xl p-2.5 rc-in">
+            <div className="elevated mx-4 mb-4 flex flex-col gap-2 p-2.5 rc-in">
               <div className="flex items-center gap-2 px-1 text-callout">
                 <ChevronRight size={12} className="text-fg-faint" />
                 <b>
@@ -657,5 +653,41 @@ export function Review({ threadId }: { threadId: string }) {
         </section>
       </div>
     </main>
+  );
+}
+
+/** Where the diff will be: the file's header line, then lines with their gutter. */
+function ReviewDiffSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="flex flex-col gap-2">
+      <div className="mb-2 flex items-center gap-2">
+        <Skeleton className="h-3 w-3 rounded-xs" />
+        <Skeleton className="h-3 w-52" />
+        <Skeleton className="h-2.5 w-20" />
+      </div>
+      <div className="flex flex-col gap-[3px] rounded-lg bg-fill-subtle py-1">
+        {[64, 42, 78, 30, 55, 70, 48].map((w, i) => (
+          <div key={i} className="flex h-[18px] items-center gap-2 px-3">
+            <Skeleton className="h-[10px] w-[3ch] rounded-xs" />
+            <Skeleton className="h-[10px] w-[3ch] rounded-xs" />
+            <Skeleton className="h-[10px]" style={{ width: `${w}%` }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Where the file list will be: rows the height of a file, its status and counts. */
+function ReviewFilesSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="flex flex-col gap-[3px] px-1 pt-1">
+      {[62, 84, 48, 72, 56].map((w, i) => (
+        <div key={i} className="flex h-[26px] items-center gap-1.5 px-2">
+          <Skeleton className="h-[9px] w-2.5 rounded-xs" />
+          <Skeleton className="h-3" style={{ width: `${w}%` }} />
+        </div>
+      ))}
+    </div>
   );
 }

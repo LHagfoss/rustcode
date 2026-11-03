@@ -12,7 +12,7 @@ import {
   setDefaultHarness,
   useApp,
 } from "../state/store";
-import { DefaultsForm, HarnessList } from "./Harnesses";
+import { DefaultsForm, HarnessList, HarnessListSkeleton } from "./Harnesses";
 import { cx, Pill, Spinner } from "./primitives";
 
 export function Onboarding({ onClose }: { onClose: () => void }) {
@@ -43,7 +43,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
       <Dialog.Portal>
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
         <Dialog.Content
-          className="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-56px)] w-[min(640px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-bg shadow-2 rc-in"
+          className="elevated fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-56px)] w-[min(640px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col rc-in"
           onEscapeKeyDown={(e) => !snapshot?.onboarded && e.preventDefault()}
         >
           <div className="flex items-center gap-3 px-6 pt-6">
@@ -66,9 +66,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {!snapshot ? (
-              <div className="flex items-center gap-2 text-callout text-fg-muted">
-                <Spinner /> Looking for harnesses…
-              </div>
+              <HarnessListSkeleton />
             ) : step === 0 ? (
               <>
                 <HarnessList snapshot={snapshot} />

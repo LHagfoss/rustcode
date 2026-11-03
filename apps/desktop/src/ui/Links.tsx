@@ -4,6 +4,7 @@
 // the user before a thread reaches another one.
 
 import {
+  ChevronDown,
   CircleCheck,
   CircleX,
   Clock,
@@ -16,7 +17,7 @@ import {
   Rows3,
   X,
 } from "lucide-react";
-import { Dialog } from "radix-ui";
+import { Dialog, Popover } from "radix-ui";
 import { useEffect } from "react";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import { isActive, LINK_LABEL, type Link, type LinkState } from "../state/orchestration";
@@ -40,21 +41,28 @@ const TINT: Partial<Record<LinkState, string>> = {
   working: "text-accent",
 };
 
+/** A link's state as a small icon: the chips, the popover and a tool row all read it the same way. */
+export function LinkStateIcon({ state, size = 12 }: { state: LinkState; size?: number }) {
+  const Icon = ICON[state];
+  return (
+    <Icon size={size} className={cx(TINT[state] ?? "text-fg-muted", state === "working" && "animate-spin")} />
+  );
+}
+
 function LinkChipRow({ link }: { link: Link }) {
   const state = useApp((s) => stateOf(s, link));
-  const Icon = ICON[state];
   const active = isActive(state);
   return (
-    <span className="elevated flex h-[28px] shrink-0 items-center gap-1.5 rounded-full pr-1.5 pl-2.5 text-callout rc-in">
-      <Icon size={12} className={cx(TINT[state] ?? "text-fg-muted", state === "working" && "animate-spin")} />
+    <span className="elevated flex h-[28px] min-w-0 shrink items-center gap-1.5 rounded-full pr-1.5 pl-2.5 text-callout rc-in">
+      <LinkStateIcon state={state} />
       <Tooltip label={link.message.length > 300 ? `${link.message.slice(0, 300)}…` : link.message}>
         <button
           type="button"
           onClick={() => selectThread(link.target)}
           className="flex min-w-0 items-center gap-1 rounded-full hover:text-accent"
         >
-          <span className="max-w-[200px] truncate">{link.targetTitle}</span>
-          <span className="text-fg-muted">· {LINK_LABEL[state]}</span>
+          <span className="max-w-[180px] min-w-0 truncate">{link.targetTitle}</span>
+          <span className="shrink-0 text-fg-muted">· {LINK_LABEL[state]}</span>
         </button>
       </Tooltip>
       <Tooltip label={active ? "Stop this work in that thread" : "Remove"}>
@@ -62,12 +70,92 @@ function LinkChipRow({ link }: { link: Link }) {
           type="button"
           aria-label={active ? `Stop ${link.targetTitle}` : `Remove ${link.targetTitle}`}
           onClick={() => (active ? void stopLink(link.id) : dismissLink(link.id))}
-          className="flex size-5 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg"
+          className="flex size-5 shrink-0 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg"
         >
           <X size={11} strokeWidth={2.5} />
         </button>
       </Tooltip>
     </span>
+  );
+}
+
+/** One linked thread in the popover: its state, its title, and stop or dismiss as on a chip. */
+function LinkMenuRow({ link }: { link: Link }) {
+  const state = useApp((s) => stateOf(s, link));
+  const active = isActive(state);
+  return (
+    <div className="flex w-full items-center gap-2 rounded-lg px-3 py-[7px] hover:bg-fill">
+      <LinkStateIcon state={state} />
+      <button
+        type="button"
+        onClick={() => selectThread(link.target)}
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-callout"
+      >
+        <span className="min-w-0 flex-1 truncate">{link.targetTitle}</span>
+        <span className="shrink-0 text-fg-muted">{LINK_LABEL[state]}</span>
+      </button>
+      <Tooltip label={active ? "Stop this work in that thread" : "Remove"}>
+        <button
+          type="button"
+          aria-label={active ? `Stop ${link.targetTitle}` : `Remove ${link.targetTitle}`}
+          onClick={() => (active ? void stopLink(link.id) : dismissLink(link.id))}
+          className="flex size-5 shrink-0 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg"
+        >
+          <X size={11} strokeWidth={2.5} />
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
+
+/** The counts the collapsed chip shows, from the links' states. */
+const stateSummary = (states: LinkState[]) => ({
+  working: states.filter((s) => s === "working").length,
+  needs: states.filter((s) => s === "needs_user").length,
+});
+
+/**
+ * Three or more threads working for this one read as a single chip: the row
+ * above the composer has about 800px, and cut-off titles tell the reader
+ * nothing. Two stay as they are; they fit.
+ */
+function ManyLinks({ links }: { links: Link[] }) {
+  // Joined into one string so the selector's result is stable between renders.
+  const states = useApp((s) => links.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
+  const { working, needs } = stateSummary(states);
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className="elevated flex h-[28px] shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout data-[state=open]:bg-fill-strong"
+        >
+          <Link2 size={12} className="text-fg-muted" />
+          <span>{links.length} threads</span>
+          {working > 0 && <span className="text-fg-muted">· {working} working</span>}
+          {needs > 0 && (
+            <span className="flex items-center gap-1 text-warning">
+              <Hand size={12} />
+              {needs}
+            </span>
+          )}
+          <ChevronDown size={11} className="text-fg-faint" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="top"
+          align="start"
+          sideOffset={8}
+          aria-label="Linked threads"
+          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[320px] flex-col overflow-y-auto p-1.5 rc-in"
+        >
+          {links.map((l) => (
+            <LinkMenuRow key={l.id} link={l} />
+          ))}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -78,14 +166,16 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
   if (!driving.length && !drivenBy) return null;
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5 rounded-xl bg-bg">
       {drivenBy && <WorkingFor link={drivenBy} />}
       {driving.length > 0 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+        <div className="flex flex-nowrap items-center gap-1.5 overflow-hidden bg-bg">
           <Link2 size={12} className="ml-1 shrink-0 text-fg-faint" />
-          {driving.map((l) => (
-            <LinkChipRow key={l.id} link={l} />
-          ))}
+          {driving.length > 2 ? (
+            <ManyLinks links={driving} />
+          ) : (
+            driving.map((l) => <LinkChipRow key={l.id} link={l} />)
+          )}
           {fanOuts.map((f) => (
             <Pill key={f.id} onClick={() => setView({ kind: "compare", fanOut: f.id })} className="shrink-0">
               <Rows3 size={12} /> Compare
@@ -132,7 +222,7 @@ export function GrantDialog() {
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="elevated fixed top-1/2 left-1/2 z-50 flex w-[min(460px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl p-5 shadow-2"
+          className="elevated fixed top-1/2 left-1/2 z-50 flex w-[min(460px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 p-5"
         >
           <Dialog.Title className="font-semibold text-body">
             “{grant.callerTitle}” wants to {verb(grant)}
@@ -170,11 +260,16 @@ export function GrantDialog() {
   );
 }
 
-/** A sidebar badge: this thread works for another (↳), or has links under way (count). */
-export function LinkBadge({ threadId }: { threadId: string }) {
+/**
+ * A sidebar badge: this thread works for another (↳), or has links under way
+ * (count). `childrenListed` says the sidebar already lists the threads this one
+ * started; only those leave the count, since a message to a thread shown
+ * elsewhere and the "working for" marker are still news.
+ */
+export function LinkBadge({ threadId, childrenListed }: { threadId: string; childrenListed?: boolean }) {
   const book = useApp((s) => s.links);
   const { driving, drivenBy } = linksOf(book, threadId);
-  const active = driving.filter((l) => isActive(l.state)).length;
+  const active = driving.filter((l) => isActive(l.state) && !(childrenListed && l.started)).length;
   if (drivenBy) {
     return (
       <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>

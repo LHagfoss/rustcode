@@ -43,7 +43,7 @@ export function ReportPanel({ text }: { text: string }) {
     <section
       ref={panel}
       aria-label={view.title ?? "Command result"}
-      className="elevated flex max-h-[min(360px,45vh)] flex-col rounded-xl rc-in"
+      className="elevated flex max-h-[min(360px,45vh)] flex-col rc-in"
     >
       <header className="flex shrink-0 items-center gap-2 px-3.5 pt-2.5 pb-1.5">
         <span className="min-w-0 flex-1 truncate font-semibold text-body">{view.title ?? "Result"}</span>

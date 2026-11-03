@@ -11,15 +11,19 @@ import {
   ChevronUp,
   CircleCheck,
   CircleX,
+  ExternalLink,
   FilePlus,
   FileText,
   Globe,
+  Hourglass,
   Image as ImageIcon,
   Layers,
+  MessagesSquare,
   MoveRight,
   Pencil,
   RotateCcw,
   Search,
+  Shield,
   SquareStop,
   Terminal,
   Trash2,
@@ -33,7 +37,9 @@ import { displayCommand } from "../lib/command";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
-import { editMessage, retryMessage, useApp } from "../state/store";
+import { stateOf } from "../state/host";
+import { LINK_LABEL } from "../state/orchestration";
+import { editMessage, retryMessage, selectThread, useApp } from "../state/store";
 import {
   diffCounts,
   diffLines,
@@ -42,9 +48,11 @@ import {
   type TurnCompletion,
   thoughtHeadings,
 } from "../state/thread";
+import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
+import { LinkStateIcon } from "./Links";
 import { CopyButton, Markdown } from "./Markdown";
 import { Callout, cx, Spinner, Tooltip } from "./primitives";
 import { SmartUIView } from "./SmartUIView";
@@ -203,6 +211,7 @@ export const AssistantRow = memo(function AssistantRow({
   copyable?: boolean;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
+  const reveal = useApp((s) => s.animateStreaming);
   // Each reply block copies on its own, from the margin: faint until the row is hovered, and out of
   // the text's flow so a streaming block never moves.
   const copy = copyable && item.text.trim() && (
@@ -213,7 +222,15 @@ export const AssistantRow = memo(function AssistantRow({
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
       <div className={cx("group/reply relative", copy && "pr-7")}>
-        <Markdown text={item.text} streaming={streaming} className={streaming ? "rc-stream" : undefined} />
+        <Markdown
+          text={item.text}
+          streaming={streaming}
+          reveal={reveal}
+          revealKey={item.id}
+          // `.rc-stream` fades each block in. With the per-word reveal on, that would fade a block
+          // again as it stops being the last one, so the reveal covers it instead.
+          className={streaming && !reveal ? "rc-stream" : undefined}
+        />
         {copy}
       </div>
     );
@@ -222,7 +239,13 @@ export const AssistantRow = memo(function AssistantRow({
       {copy}
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
-          <Markdown key={i} text={segment.text} streaming={streaming && i === segments.length - 1} />
+          <Markdown
+            key={i}
+            text={segment.text}
+            streaming={streaming && i === segments.length - 1}
+            reveal={reveal}
+            revealKey={`${item.id}:${i}`}
+          />
         ) : segment.kind === "ui" ? (
           <SmartUIView
             key={`ui${segment.index}`}
@@ -293,6 +316,12 @@ export const KIND_ICON: Record<string, typeof Wrench> = {
   fetch: Globe,
   agent: Users,
   skill: Book,
+  // RustCode's orchestration calls: threads started, messaged, read or listed, and waited on.
+  start: MessagesSquare,
+  message: MessagesSquare,
+  read_thread: MessagesSquare,
+  list_thread: MessagesSquare,
+  wait: Hourglass,
   other: Wrench,
 };
 
@@ -429,7 +458,16 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const running = item.status === "pending" || item.status === "in_progress";
   const failed = item.status === "failed";
   const detail = toolDetail(item, kind);
-  const title = displayCommand(item.title);
+  // MCP calls come named `mcp__server__tool`: the row says what they did instead.
+  const label = displayTool(item.title, item.input, item.status);
+  const title = displayCommand(label.title);
+  // The line that tells two calls apart; a lone fence marker is not one.
+  const summary = usefulSummary(item.summary) ?? label.summary;
+  // A `start_session` that answered with a thread: the row opens it, and shows how it is doing.
+  const startedId = orchestrationTool(item.title) === "start_session" ? sessionIdOf(item.output) : undefined;
+  const link = useApp((s) => (startedId ? s.links.links.find((l) => l.target === startedId) : undefined));
+  const linkState = useApp((s) => (link ? stateOf(s, link) : undefined));
+  const opensThread = !!startedId && !!link;
   const relative =
     detail.text && cwd && detail.text.startsWith(`${cwd}/`) ? detail.text.slice(cwd.length + 1) : detail.text;
   const trimmed = relative && displayCommand(relative);
@@ -444,58 +482,84 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const input = inputWithoutSummary(item.input);
   return (
     <div className="font-rounded">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
-      >
-        <span className="flex w-[18px] shrink-0 justify-center">
-          {running ? (
-            <Spinner size={12} />
-          ) : failed ? (
-            <CircleX size={13} className="text-danger" />
-          ) : (
-            <Icon size={13} className="text-fg-muted" />
-          )}
-        </span>
-        <span className="min-w-0 max-w-full shrink truncate text-callout text-fg-muted" title={item.title}>
-          {title}
-        </span>
-        {item.summary && (
-          <span className="min-w-0 shrink truncate text-callout text-fg-faint">{item.summary}</span>
-        )}
-        {shownDetail && (
-          <span
-            className={cx(
-              "min-w-0 max-w-[42ch] shrink truncate text-caption text-fg-faint",
-              detail.mono && "font-mono",
+      <div className="group flex items-center gap-0.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="-mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+        >
+          <span className="flex w-[18px] shrink-0 justify-center">
+            {running ? (
+              <Spinner size={12} />
+            ) : failed ? (
+              <CircleX size={13} className="text-danger" />
+            ) : (
+              <Icon size={13} className="text-fg-muted" />
             )}
-            dir="auto"
-          >
-            {shownDetail}
           </span>
-        )}
-        {failed && item.exitCode === undefined && (
-          <span
-            className="min-w-0 max-w-[45%] shrink truncate text-caption text-danger"
-            title={reason || undefined}
-          >
-            {reason || "Failed"}
+          <span className="min-w-0 max-w-full shrink truncate text-callout text-fg-muted" title={item.title}>
+            {title}
           </span>
-        )}
-        <DiffCount {...counts} />
-        {item.exitCode !== undefined && item.exitCode !== 0 && (
-          <span className="font-mono text-caption text-danger">exit {item.exitCode}</span>
-        )}
-        <ChevronRight
-          size={11}
-          className={cx(
-            "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
-            open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
+          {summary && <span className="min-w-0 shrink truncate text-callout text-fg-faint">{summary}</span>}
+          {shownDetail && (
+            <span
+              className={cx(
+                "min-w-0 max-w-[42ch] shrink truncate text-caption text-fg-faint",
+                detail.mono && "font-mono",
+              )}
+              dir="auto"
+            >
+              {shownDetail}
+            </span>
           )}
-        />
-      </button>
+          {failed && item.exitCode === undefined && (
+            <span
+              className="min-w-0 max-w-[45%] shrink truncate text-caption text-danger"
+              title={reason || undefined}
+            >
+              {reason || "Failed"}
+            </span>
+          )}
+          <DiffCount {...counts} />
+          {item.exitCode !== undefined && item.exitCode !== 0 && (
+            <span className="font-mono text-caption text-danger">exit {item.exitCode}</span>
+          )}
+          {item.autoAllowed && (
+            <Tooltip label={`Allowed by ${item.autoAllowed}`}>
+              <span className="flex shrink-0 items-center text-fg-faint">
+                <Shield size={11} />
+              </span>
+            </Tooltip>
+          )}
+          {linkState && (
+            <Tooltip label={`“${link?.targetTitle}” · ${LINK_LABEL[linkState]}`}>
+              <span className="flex shrink-0 items-center">
+                <LinkStateIcon state={linkState} size={11} />
+              </span>
+            </Tooltip>
+          )}
+          <ChevronRight
+            size={11}
+            className={cx(
+              "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
+              open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
+            )}
+          />
+        </button>
+        {startedId && opensThread && (
+          <Tooltip label="Open thread">
+            <button
+              type="button"
+              aria-label="Open thread"
+              onClick={() => selectThread(startedId)}
+              className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
+            >
+              <ExternalLink size={11} />
+            </button>
+          </Tooltip>
+        )}
+      </div>
       {tailLines.length > 0 && !open && (
         <pre className="m-0 mt-0.5 ml-[26px] overflow-hidden font-mono text-caption text-fg-muted leading-[15px] whitespace-pre-wrap">
           {tailLines.join("\n")}

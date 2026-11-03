@@ -85,7 +85,7 @@ function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; 
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       className={cx(
-        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-grab touch-none items-start gap-2.5 overflow-hidden rounded-2xl py-1.5 pr-1.5 pl-3.5 text-callout active:cursor-grabbing",
+        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-grab touch-none items-start gap-2.5 overflow-hidden rounded-xl py-1.5 pr-1.5 pl-3.5 text-callout active:cursor-grabbing",
         toast.leaving ? "rc-toast-out" : "rc-toast-in",
       )}
     >

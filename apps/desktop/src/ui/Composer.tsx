@@ -446,7 +446,7 @@ export const Composer = memo(function Composer({
     <div className="relative">
       {list.length > 0 && (
         <div
-          className="elevated absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto rounded-xl p-1.5 rc-in"
+          className="elevated absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto p-1.5 rc-in"
           role="listbox"
           aria-label="Commands"
         >
@@ -954,7 +954,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         createPortal(
           <div
             role="menu"
-            className="elevated fixed z-50 flex w-[300px] flex-col rounded-xl p-1.5 rc-in"
+            className="elevated fixed z-50 flex w-[300px] flex-col p-1.5 rc-in"
             style={{ maxHeight, left: anchor.left, bottom: anchor.bottom }}
             onMouseLeave={() => setOpen(false)}
           >
@@ -1008,7 +1008,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
 
 /** What the folder of an existing thread offers. */
 function FolderActions({ cwd, close }: { cwd: string; close: () => void }) {
-  const item = "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-body hover:bg-fill";
+  const item = "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-left text-body hover:bg-fill";
   const run = (action: () => void) => () => {
     close();
     action();
@@ -1085,7 +1085,7 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
           side="top"
           align="start"
           sideOffset={8}
-          className="elevated z-50 w-[280px] rounded-xl p-1.5"
+          className="elevated z-50 w-[280px] p-1.5"
         >
           <DropdownMenu.RadioGroup
             value={mode}
@@ -1147,7 +1147,7 @@ function PlusMenu({
           side="top"
           align="start"
           sideOffset={8}
-          className="elevated z-50 min-w-[220px] rounded-xl p-1.5"
+          className="elevated z-50 min-w-[220px] p-1.5"
         >
           <DropdownMenu.Item className={item} onSelect={onAttach}>
             <Paperclip size={13} /> {attachLabel}

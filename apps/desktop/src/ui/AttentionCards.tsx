@@ -53,7 +53,7 @@ function useDigitKeys(count: number, pick: (index: number) => void) {
 
 function Shell({ children, label }: { children: React.ReactNode; label: string }) {
   return (
-    <section aria-label={label} className="elevated flex flex-col gap-3 rounded-xl p-4 rc-in">
+    <section aria-label={label} className="elevated flex flex-col gap-3 p-4 rc-in">
       {children}
     </section>
   );
@@ -88,10 +88,7 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
   // The command once: harnesses that title the request with it get no second copy beside it.
   const aside = summary ?? (shownCommand && !title.includes(shownCommand) ? shownCommand : undefined);
   return (
-    <section
-      aria-label="Approval needed"
-      className="elevated flex flex-col gap-2 rounded-xl px-2.5 py-2 rc-in"
-    >
+    <section aria-label="Approval needed" className="elevated flex flex-col gap-2 px-2.5 py-2 rc-in">
       <div className="flex min-h-[30px] items-center gap-2">
         <Hand size={14} className="ml-1 shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
         <button
@@ -177,7 +174,7 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
                 side="top"
                 align="end"
                 sideOffset={6}
-                className="elevated z-50 max-w-[360px] min-w-[220px] rounded-xl p-1.5 rc-in"
+                className="elevated z-50 max-w-[360px] min-w-[220px] p-1.5 rc-in"
               >
                 {always.map((o) => (
                   <DropdownMenu.Item
