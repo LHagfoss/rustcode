@@ -401,7 +401,11 @@ describe("Claude Code subagents", () => {
   test("a RustCode spawn_agent call is a subagent too", () => {
     const t = applyUpdate(
       emptyThread("s", "/p"),
-      call({ toolCallId: "r1", title: "spawn_agent", rawInput: { task: "Map the code\nmore", agent_type: "explorer" } }),
+      call({
+        toolCallId: "r1",
+        title: "spawn_agent",
+        rawInput: { task: "Map the code\nmore", agent_type: "explorer" },
+      }),
     );
     expect(subagentOf(t.items[0]!)).toEqual({ name: "explorer", task: "Map the code" });
   });
