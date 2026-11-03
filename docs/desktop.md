@@ -337,19 +337,20 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Sidebar.** Threads by where they are in their life (after T3 Code):
-  Pinned (always shown), Needs You, Working, Finished (a turn completed
-  while you were on another thread or app, with a green dot, until you
-  open it or 10 minutes pass: `finished` in the store), Threads, and Settled: threads
-  marked Done and, as in T3 Code, threads untouched for three days unless
-  they wait for review (`idleSettled`), folded by default and kept as a
-  shelf at the foot of the list, 10 at a time then *Show 25 more*. Each section folds with its chevron and remembers it; a folded
-  one shows a dot when a thread inside needs you (amber), works (pulsing
-  accent) or just finished (green), and a search opens them all. A row is the title and one meta
-  line (project when not grouped, worktree branch, harness, model) with a
-  single slot on the right: the age (`5m`, `3h`), a live clock while the
-  turn runs, or *Approval* / *Input* with the request on the meta line.
-  Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
+- **Sidebar.** One list, as T3 Code's: pinned threads first, then every
+  active thread, and Settled as a shelf at the foot: threads marked Done
+  and, as in T3 Code, threads untouched for three days unless they wait
+  for review (`idleSettled`), folded by default, 10 at a time then *Show
+  25 more*. A thread that works, waits or needs you stays in the list and
+  says so in its row. A row is the title and one meta line (project when
+  not grouped, worktree branch, harness, model) with a single slot on the
+  right: the age (`5m`, `3h`), a live clock while the turn runs, *Approval*
+  (amber) or *Input* (accent) with the request on the meta line, or, for a
+  turn that ended while you looked elsewhere, *Done* (green) or *Failed*
+  (red) until you open the thread (`finished`/`failed` in the store; *Mark
+  Unread* in the menu brings Done back). What wants you reads in medium
+  weight; what works, waits or is settled recedes. ⌘1–⌘9 open the first
+  nine rows, and holding ⌘ shows each row's digit in the slot. Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
   Double-click or F2 renames. Settling is marking a thread Done, with an
   Undo toast; a new message brings it back. The filter button by the
   search groups Threads by project (off by default, as in T3 Code; each
