@@ -542,8 +542,9 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
   // empty list does not mean nothing changed (the turn's Changes chip says what did): say nothing.
   if (!completion.files.length && !completion.checks.length) return null;
   return (
-    <div className="mb-2 rounded-md bg-fill-subtle font-rounded text-callout">
-      <div className="flex min-h-8 items-center gap-2 px-2.5">
+    // A pill at the left, as wide as what it says; the files open under it.
+    <div className="mb-2 font-rounded text-callout">
+      <div className="inline-flex h-7 items-center gap-2 rounded-full bg-fill-subtle px-3">
         {completion.files.length ? (
           <button
             type="button"
@@ -561,7 +562,11 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
             />
           </button>
         ) : null}
-        <span className="flex-1" />
+        {completion.files.length > 0 && (failed.length > 0 || passed) && (
+          <span aria-hidden className="text-fg-faint">
+            ·
+          </span>
+        )}
         {failed.length > 0 ? (
           <Tooltip label={`Failed on its last run:\n${failed.map((c) => c.command).join("\n")}`}>
             <span className="flex items-center gap-1 font-medium text-caption text-danger">
@@ -578,7 +583,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
         ) : null}
       </div>
       {open && (
-        <div className="px-2.5 pb-2">
+        <div className="mt-1 rounded-lg bg-fill-subtle px-3 py-1.5">
           {completion.files.map((f) => (
             <div key={f.path} className="flex h-[22px] items-center gap-2 text-caption">
               <FileText size={11} className="shrink-0 text-fg-muted" />
