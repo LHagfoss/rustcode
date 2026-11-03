@@ -297,6 +297,10 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   the new one is ready. It fades in, and does not move under Reduce motion.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
+- **Window.** The window opens at the size it was last closed with
+  (`webview.rs` keeps it as logical points in `window.json` under the app's
+  config folder; closing the window or quitting writes it, and a missing or
+  nonsense file falls back to the default in `tauri.conf.json`).
 - **Smart UI.** See below.
 - **Look.** Neutral and opaque, after [design.md](design.md): the
   sidebar and every surface paint solid token colours, so greys no longer

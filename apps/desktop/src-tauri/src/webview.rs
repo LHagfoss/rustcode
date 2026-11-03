@@ -15,7 +15,8 @@
 //! Low Power Mode is a separate cap (30 fps) WebKit applies whatever this
 //! says; `display_info` reports it so the dev overlay can tell the two apart.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -28,8 +29,81 @@ pub struct DisplayInfo {
     pub near_60fps: Option<bool>,
 }
 
+/// The window size as the app last closed with (docs/desktop.md), so a restart opens the same
+/// shape instead of the config's default. Only the size: position, screens and fullscreen do not
+/// belong to the window's own state here.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct WindowSize {
+    width: f64,
+    height: f64,
+}
+
+/// The smallest window the config allows, so a bad file cannot open something unusable.
+const MIN_SIZE: (f64, f64) = (640.0, 480.0);
+/// A window larger than any display is as wrong as one too small to use.
+const MAX_SIZE: (f64, f64) = (8192.0, 8192.0);
+
+fn size_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("window.json"))
+}
+
+fn clamped(width: f64, height: f64) -> (f64, f64) {
+    let fit = |value: f64, (min, max): (f64, f64)| {
+        if value.is_finite() {
+            value.clamp(min, max)
+        } else {
+            min
+        }
+    };
+    (
+        fit(width, (MIN_SIZE.0, MAX_SIZE.0)),
+        fit(height, (MIN_SIZE.1, MAX_SIZE.1)),
+    )
+}
+
+/// The size the window last had, when one was saved and it still makes sense.
+fn read_size(path: &std::path::Path) -> Option<(f64, f64)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let saved: WindowSize = serde_json::from_str(&text).ok()?;
+    Some(clamped(saved.width, saved.height))
+}
+
+fn saved_size(app: &tauri::AppHandle) -> Option<(f64, f64)> {
+    read_size(&size_file(app)?)
+}
+
+/// Remember the window's size for the next launch.
+pub fn remember_size(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    // Logical points, so a window moved between displays with different scales keeps its shape.
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let (width, height) = clamped(
+        f64::from(size.width) / scale,
+        f64::from(size.height) / scale,
+    );
+    let (Some(path), Ok(text)) = (
+        size_file(app),
+        serde_json::to_string(&WindowSize { width, height }),
+    ) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // A failed write only loses the remembered size.
+    let _ = std::fs::write(path, text);
+}
+
 /// Builds the main window from its tauri.conf.json entry, on a web view
-/// configuration that renders at the display's full rate.
+/// configuration that renders at the display's full rate, at the size it last had.
 pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
     let config = app
         .config()
@@ -39,13 +113,29 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         .find(|w| w.label == "main")
         .cloned()
         .unwrap_or_default();
-    let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    if let Some((width, height)) = saved_size(app.handle()) {
+        builder = builder.inner_size(width, height);
+    }
     #[cfg(target_os = "macos")]
     let builder = match macos::full_frame_rate_configuration() {
         Some(configuration) => builder.with_webview_configuration(configuration),
         None => builder,
     };
-    builder.build()
+    let window = builder.build()?;
+    // Closing the window (macOS keeps the app running) is the last chance to remember its size.
+    let handle = app.handle().clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            remember_size(&handle);
+        }
+    });
+    Ok(window)
+}
+
+/// Save the window's size on quit too, for a quit that does not come from closing the window.
+pub fn remember_size_on_exit(handle: &tauri::AppHandle) {
+    remember_size(handle);
 }
 
 /// The display's refresh rate, Low Power Mode and the web view's frame-rate preference.
@@ -171,5 +261,42 @@ mod macos {
         }
         let fps: isize = msg_send![screen, maximumFramesPerSecond];
         fps as i64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("rustcode-window-{}-{name}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("window.json")
+    }
+
+    #[test]
+    fn a_saved_size_is_read_back() {
+        let path = temp("round-trip");
+        std::fs::write(&path, r#"{"width":1512.0,"height":945.0}"#).unwrap();
+        assert_eq!(read_size(&path), Some((1512.0, 945.0)));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_size_too_small_or_nonsense_is_clamped_or_ignored() {
+        let path = temp("small");
+        std::fs::write(&path, r#"{"width":100.0,"height":50.0}"#).unwrap();
+        assert_eq!(read_size(&path), Some((640.0, 480.0)));
+        std::fs::write(&path, r#"{"width":999999.0,"height":999999.0}"#).unwrap();
+        assert_eq!(read_size(&path), Some((8192.0, 8192.0)));
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(read_size(&path), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_missing_file_is_no_size() {
+        assert_eq!(read_size(&temp("missing")), None);
     }
 }
