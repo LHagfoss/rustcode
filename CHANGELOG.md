@@ -1,3 +1,25 @@
+## [v1.3.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.3.0) - 2026-11-03
+
+### Features
+### Threads keep going
+- Threads that were working when you quit, updated or restarted the engine continue on their own when the app is back (Settings › General › Continue threads after a restart). (#2917)
+- A thread waiting on background commands says so, and when they finish and it carries on, it shows as working again with a note. (#2921)
+- A thread that will not open can be repaired: Repair Thread in its menu, or the button on the "Could not open this thread" error. (#2918)
+- Threads another thread started fold away under their parent once they finish; "N finished" shows them again. (#2919)
+
+### Look and feel
+- The app uses a rounder font (Settings › Appearance › Rounded font), and new messages, finished dots and segmented controls animate in. (#2916)
+- The composer is darker, links in chat are pills, sending scrolls to your message, and the context ring is back and opens on hover. (#2915)
+- Notifications show one at a time under the header and leave on their own: +N clears the rest, and a swipe, Escape or × dismisses. (#2922)
+- Native tooltips and macOS Writing Tools are off, and menus are rounder. (#2922)
+- ⌘+, ⌘- and ⌘0 make the app's text larger, smaller or actual size, and the level is kept. (#2920)
+- The composer tray no longer repeats the harness, and a turn's checks show as a small pill at the left. (#2923)
+
+### Fixes
+- Settings › Usage shows ChatGPT plan usage from the Codex CLI when the app is opened from the Dock, and says when the CLI is missing or failed instead of "Not signed in". (#2914)
+- A running thread's folder can't be changed by mistake: the folder button is disabled and ⌘O says why. (#2915)
+- Settings shows the app's real version at once and checks for an update when opened. (#2912)
+- Releases no longer publish the old SwiftUI app's update zip. (#2913)
 ## [v1.2.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.2.0) - 2026-11-03
 
 ### Features
