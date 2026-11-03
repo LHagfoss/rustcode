@@ -1,3 +1,11 @@
+## [v1.1.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.1.1) - 2026-11-03
+
+### Features
+- Codex threads can run MCP tools again, including delegating to other harnesses; other servers' tools ask with an approval card instead of failing. (#2855)
+- Choose Ask, Auto-edit or Full access under the composer to stop approving every command. (#2856)
+- Tidier chat: no stray copy icons, readable commands, failure reasons on the row, and approval bars that keep long commands inside. (#2857)
+- Lighter shadows across the app, and the chat now slides along when the sidebar opens or closes. (#2858)
+- ⌘⏎ steers a running Claude Code turn, and queued messages have an Edit button. (#2859)
 ## [v1.1.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.1.0) - 2026-11-02
 
 ### Features
