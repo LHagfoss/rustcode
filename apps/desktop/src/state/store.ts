@@ -52,6 +52,7 @@ import {
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import { dismissOverlays } from "../lib/overlays";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { createBatcher, frameQueue } from "./batch";
@@ -880,6 +881,7 @@ if (typeof window !== "undefined") {
 
 export function selectThread(id: string | null) {
   clearFinished(id);
+  dismissOverlays();
   set({ selectedId: id, switcherOpen: false, settings: null, view: { kind: "chat" } });
   if (id) void openThread(id);
 }
@@ -889,6 +891,7 @@ export function startNewThread(cwd?: string) {
   // The thread you were in, else the default folder; picking one here does not change the default.
   const projectCwd =
     cwd ?? (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? (s.defaultCwd || s.projectCwd);
+  dismissOverlays();
   set({
     selectedId: null,
     projectCwd,
@@ -1896,6 +1899,7 @@ export async function setThreadStatus(id: string, status: "review" | "done" | "i
 }
 
 export function setView(view: AppState["view"]) {
+  dismissOverlays();
   set({ view, switcherOpen: false, settings: null });
 }
 
@@ -2164,6 +2168,7 @@ export async function refreshPlanUsage(id: string): Promise<void> {
 // ---------------------------------------------------------------- UI
 
 export function openSettings(section: SettingsSection | null) {
+  dismissOverlays();
   set({ settings: section, switcherOpen: false });
 }
 
