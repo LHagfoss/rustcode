@@ -1127,6 +1127,9 @@ export class MockEngine {
           };
           this.harnesses.harnesses.push(h);
         }
+        // As the engine: RustCode turns off only once another harness is the default.
+        if (h.builtin && params.enabled === false && this.harnesses.default.harness === h.id)
+          throw new Error("choose another default harness before turning RustCode off");
         if (typeof params.enabled === "boolean") h.enabled = params.enabled;
         if (Array.isArray(params.command)) h.command = params.command.map(String);
         return this.snapshot();

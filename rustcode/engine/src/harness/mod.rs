@@ -199,10 +199,21 @@ fn builtin_resolved() -> ResolvedHarness {
     }
 }
 
+/// The built-in harness as `entries` leave it: on unless turned off in Settings › Harnesses.
+fn builtin_in(entries: &[config::HarnessEntry]) -> ResolvedHarness {
+    ResolvedHarness {
+        enabled: entries
+            .iter()
+            .find(|entry| entry.id == BUILTIN_ID)
+            .is_none_or(config::HarnessEntry::is_enabled),
+        ..builtin_resolved()
+    }
+}
+
 /// Every harness in snapshot order: the built-in one, the known ones, then
 /// custom entries in config order.
 pub(crate) fn resolve_all(entries: &[config::HarnessEntry]) -> Vec<ResolvedHarness> {
-    let mut all = vec![builtin_resolved()];
+    let mut all = vec![builtin_in(entries)];
     for known in KNOWN {
         let entry = entries.iter().find(|entry| entry.id == known.id);
         all.push(ResolvedHarness {
@@ -501,7 +512,10 @@ async fn futures_detect(harnesses: &[ResolvedHarness]) -> Vec<detect::Detection>
 pub(crate) async fn set(change: config::HarnessChange) -> Result<Value, String> {
     let dir = config::config_dir()?;
     let id = change.id.clone();
-    config::edit_in(&dir, |_, harnesses| config::apply_change(harnesses, change))?;
+    config::edit_in(&dir, |defaults, harnesses| {
+        config::check_default(defaults, &change)?;
+        config::apply_change(harnesses, change)
+    })?;
     detect::forget(&id);
     snapshot_in(&dir).await
 }
