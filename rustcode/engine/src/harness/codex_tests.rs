@@ -568,6 +568,11 @@ async fn the_orchestrator_is_added_to_the_codex_thread_config() {
         .unwrap()
         .1;
     assert!(started.get("config").is_none());
+    assert_eq!(
+        (&started["sandbox"], &started["approvalPolicy"]),
+        (&json!("workspace-write"), &json!("on-request")),
+        "Codex writes in the workspace and asks RustCode for more, trusted folder or not"
+    );
 }
 
 #[tokio::test]

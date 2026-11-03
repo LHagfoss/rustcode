@@ -136,6 +136,15 @@ fn parse_models(answer: &Value) -> Vec<CodexModel> {
         .unwrap_or_default()
 }
 
+/// The sandbox and approval policy for `thread/start` and `thread/resume`. RustCode answers
+/// approvals itself by the thread's access level (Ask, Auto-edit, Full access), so Codex writes
+/// in the workspace and asks for anything more. Left to Codex, a folder it does not trust runs
+/// read-only, and the agent cannot edit the project the thread was opened in.
+fn set_policy(params: &mut Value) {
+    params["sandbox"] = json!("workspace-write");
+    params["approvalPolicy"] = json!("on-request");
+}
+
 /// The `config` overrides for `thread/start` and `thread/resume`: the orchestrator when the thread
 /// has one, and the workspace's own MCP servers, so a Codex thread runs the servers Settings · MCP
 /// shows. Codex takes a stdio server as `command`/`args`/`env` and a remote one as
@@ -246,6 +255,7 @@ impl CodexAdapter {
                 "excludeTurns": true,
                 "developerInstructions": output_style,
             });
+            set_policy(&mut params);
             if let Some(model) = &options.model {
                 params["model"] = json!(model);
             }
@@ -268,6 +278,7 @@ impl CodexAdapter {
             Some(thread) => thread,
             None => {
                 let mut params = json!({"cwd": cwd_text, "developerInstructions": output_style});
+                set_policy(&mut params);
                 if let Some(model) = &options.model {
                     params["model"] = json!(model);
                 }
