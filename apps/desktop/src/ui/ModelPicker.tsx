@@ -37,6 +37,23 @@ interface Choice {
 }
 
 /**
+ * The effort steps from lowest to highest, so `off` sits at the left of the slider whatever
+ * order the harness listed them in. Unknown values follow the known ones, in the harness's order.
+ */
+const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "high", "max", "xhigh"];
+
+export function orderEfforts(efforts: string[]): string[] {
+  const rank = (value: string) => {
+    const at = EFFORT_ORDER.indexOf(value.toLowerCase());
+    return at < 0 ? EFFORT_ORDER.length : at;
+  };
+  return efforts
+    .map((value, index) => ({ value, index }))
+    .sort((a, b) => rank(a.value) - rank(b.value) || a.index - b.index)
+    .map((entry) => entry.value);
+}
+
+/**
  * Reasoning effort as one track of evenly spaced stops, after the SwiftUI
  * app's EffortSlider: the knob follows the pointer while dragged and snaps to
  * the nearest stop when let go; a click on the track glides there; ←→ step.
@@ -331,7 +348,7 @@ export function pickerModels(
       efforts = listed?.efforts ?? [];
       effort = defaultEffort(listed, efforts);
     }
-    return { models, model: m?.current, efforts, effort };
+    return { models, model: m?.current, efforts: orderEfforts(efforts), effort };
   }
   if (harness?.models.length) {
     // A stale default (a model the harness no longer lists) falls back to the model an open
@@ -347,7 +364,7 @@ export function pickerModels(
       effective.effort && efforts.includes(effective.effort)
         ? effective.effort
         : defaultEffort(entry, efforts);
-    return { models: listedModels(harness), model, efforts, effort };
+    return { models: listedModels(harness), model, efforts: orderEfforts(efforts), effort };
   }
   const m = selectOption(knownConfig, "model");
   const e = selectOption(knownConfig, "effort");
@@ -355,7 +372,7 @@ export function pickerModels(
   return {
     models: builtin ? (m?.choices ?? []) : [],
     model: effective.model ?? m?.current,
-    efforts: builtin ? (e?.choices.map((c) => c.value) ?? []) : [],
+    efforts: builtin ? orderEfforts(e?.choices.map((c) => c.value) ?? []) : [],
     effort: effective.effort ?? e?.current,
   };
 }
