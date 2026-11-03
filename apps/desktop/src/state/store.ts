@@ -85,6 +85,7 @@ import {
   foldingBatch,
   localId,
   messagesAfter,
+  type QueuedPrompt,
   requeueSteers,
   type ThreadState,
   truncateBefore,
@@ -1470,6 +1471,18 @@ export function removeQueued(id: string, queuedId: string) {
   const link = get().threads[id]?.queue.find((q) => q.id === queuedId)?.link;
   updateThread(id, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== queuedId) }));
   if (link) queuedLinkDropped(link);
+}
+
+/**
+ * Take a queued message back out of the queue, whole, for the composer (↑ or
+ * Edit in composer). A message delivered for another thread keeps its link and
+ * stays queued, since sending it again would lose the way back.
+ */
+export function takeQueued(id: string, queuedId: string): QueuedPrompt | undefined {
+  const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
+  if (!item || item.link) return undefined;
+  removeQueued(id, queuedId);
+  return item;
 }
 
 /** A queued message edited in place; an empty text removes it. */
