@@ -158,11 +158,16 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
       title={
         <>
           {cwd && (
-            <Tooltip label={`${cwd} · change folder (⌘O)`}>
+            <Tooltip
+              label={
+                thread?.running ? `${cwd} · stop the turn to change folder` : `${cwd} · change folder (⌘O)`
+              }
+            >
               <button
                 type="button"
+                disabled={thread?.running}
                 onClick={() => void chooseFolder(false)}
-                className="-mx-1 max-w-[260px] shrink-0 truncate rounded-sm px-1 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                className="-mx-1 max-w-[260px] shrink-0 truncate rounded-sm px-1 text-body text-fg-muted enabled:hover:bg-fill-subtle enabled:hover:text-fg disabled:cursor-default"
                 dir="rtl"
               >
                 <bdi>{displayPath(cwd)}</bdi>

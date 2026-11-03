@@ -5,7 +5,7 @@
 // window at once. They read the store themselves: the composer does not
 // re-render for usage.
 
-import { HoverCard, Popover } from "radix-ui";
+import { HoverCard } from "radix-ui";
 import { useEffect, useMemo } from "react";
 import {
   leftPercent,
@@ -20,7 +20,7 @@ import {
 import type { SessionUsage } from "../acp/types";
 import { refreshPlanUsage, submit, useApp } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
-import { cx, Pill, Tooltip } from "./primitives";
+import { cx, Pill } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
 function contextTint(fraction: number) {
@@ -56,38 +56,37 @@ export function ContextRing({ threadId }: { threadId: string }) {
   const running = useApp((s) => s.threads[threadId]?.running ?? false);
   if (!usage?.size) return null;
   const fraction = Math.min(1, usage.used / usage.size);
-  // A filled wedge in an outline, not an arc on a track: a short arc reads as a loading spinner.
-  const r = 2.75;
+  const r = 6.5;
   const c = 2 * Math.PI * r;
-  const percent = Math.round(fraction * 100);
+  // Opens on hover like the plan meter: a glance, not a click. A click target
+  // inside a tooltip trigger stopped receiving the click.
   return (
-    <Popover.Root>
-      <Tooltip label={`Context ${percent}% used`}>
-        <Popover.Trigger asChild>
-          <button
-            type="button"
-            aria-label={`Context: ${formatTokens(usage.used)} of ${formatTokens(usage.size)} tokens used`}
-            className="flex size-[30px] items-center justify-center rounded-full hover:bg-fill data-[state=open]:bg-fill-strong"
-          >
-            <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
-              <circle cx="8.5" cy="8.5" r="7" fill="none" stroke="var(--rc-text-faint)" strokeWidth="1.5" />
-              <circle
-                cx="8.5"
-                cy="8.5"
-                r={r}
-                fill="none"
-                stroke={contextTint(fraction)}
-                strokeWidth={r * 2}
-                strokeDasharray={c}
-                strokeDashoffset={c * (1 - Math.max(fraction, 0.03))}
-                className="transition-[stroke-dashoffset] duration-300 ease-snappy"
-              />
-            </svg>
-          </button>
-        </Popover.Trigger>
-      </Tooltip>
-      <Popover.Portal>
-        <Popover.Content
+    <HoverCard.Root openDelay={60} closeDelay={120}>
+      <HoverCard.Trigger asChild>
+        <span
+          role="img"
+          aria-label={`Context: ${formatTokens(usage.used)} of ${formatTokens(usage.size)} tokens used`}
+          className="flex size-[30px] cursor-default items-center justify-center rounded-full transition-colors hover:bg-fill data-[state=open]:bg-fill"
+        >
+          <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
+            <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-text-faint)" strokeWidth="2" />
+            <circle
+              cx="8.5"
+              cy="8.5"
+              r={r}
+              fill="none"
+              stroke={contextTint(fraction)}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeDasharray={c}
+              strokeDashoffset={c * (1 - Math.max(fraction, 0.04))}
+              className="transition-[stroke-dashoffset] duration-300 ease-snappy"
+            />
+          </svg>
+        </span>
+      </HoverCard.Trigger>
+      <HoverCard.Portal>
+        <HoverCard.Content
           side="top"
           align="end"
           sideOffset={8}
@@ -95,9 +94,9 @@ export function ContextRing({ threadId }: { threadId: string }) {
           className="elevated z-40 w-[320px] rounded-xl p-3 rc-in"
         >
           <ContextInspector usage={usage} onCompact={running ? undefined : () => void submit("/compact")} />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+        </HoverCard.Content>
+      </HoverCard.Portal>
+    </HoverCard.Root>
   );
 }
 
