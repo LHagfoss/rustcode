@@ -203,6 +203,7 @@ export const AssistantRow = memo(function AssistantRow({
   copyable?: boolean;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
+  const reveal = useApp((s) => s.animateStreaming);
   // Each reply block copies on its own, from the margin: faint until the row is hovered, and out of
   // the text's flow so a streaming block never moves.
   const copy = copyable && item.text.trim() && (
@@ -213,7 +214,14 @@ export const AssistantRow = memo(function AssistantRow({
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
       <div className={cx("group/reply relative", copy && "pr-7")}>
-        <Markdown text={item.text} streaming={streaming} className={streaming ? "rc-stream" : undefined} />
+        <Markdown
+          text={item.text}
+          streaming={streaming}
+          reveal={reveal}
+          // `.rc-stream` fades each block in. With the per-word reveal on, that would fade a block
+          // again as it stops being the last one, so the reveal covers it instead.
+          className={streaming && !reveal ? "rc-stream" : undefined}
+        />
         {copy}
       </div>
     );
@@ -222,7 +230,12 @@ export const AssistantRow = memo(function AssistantRow({
       {copy}
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
-          <Markdown key={i} text={segment.text} streaming={streaming && i === segments.length - 1} />
+          <Markdown
+            key={i}
+            text={segment.text}
+            streaming={streaming && i === segments.length - 1}
+            reveal={reveal}
+          />
         ) : segment.kind === "ui" ? (
           <SmartUIView
             key={`ui${segment.index}`}

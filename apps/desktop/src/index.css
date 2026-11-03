@@ -495,6 +495,10 @@
     color: var(--rc-text-muted);
     background: none;
   }
+  /* Off, not instant: `both` would hold the word invisible until its delay was up. */
+  .rc-reveal {
+    animation: none !important;
+  }
 }
 
 /* Find in thread (⌘F), painted with the CSS Custom Highlight API. */
@@ -603,9 +607,29 @@
   animation: rc-fade 120ms ease-in reverse forwards;
 }
 
-/* A streaming reply: each new block fades in instead of popping. */
+/* A streaming reply with the per-word reveal off: each new block fades in instead of popping. */
 .rc-stream > * {
   animation: rc-fade 180ms ease-out;
+}
+
+/*
+ * ...and inside the block being written, each new word fades in from a soft
+ * blur (lib/reveal.ts wraps them, staggered by `animation-delay`). Words already
+ * on screen are plain text, so nothing fades twice; `both` holds the blurred
+ * frame until the delay is up.
+ */
+@keyframes rc-reveal {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+.rc-reveal {
+  animation: rc-reveal 280ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
 /* Rows that open (tool calls, thoughts, completion cards): their body slides in. */

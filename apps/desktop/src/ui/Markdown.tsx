@@ -9,6 +9,7 @@ import {
   type ReactElement,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +20,7 @@ import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/f
 import { highlight, peekHighlight } from "../lib/highlight";
 import { markdownBlocks } from "../lib/markdownBlocks";
 import { openExternal, openInEditor } from "../lib/native";
+import { rehypeReveal, revealedBefore } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
 import { toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
@@ -243,24 +245,94 @@ const Block = memo(function Block({ text }: { text: string }) {
   return renderBlock(text);
 });
 
+/** The block still being written, with the words that just arrived set to fade in. */
+function renderRevealed(text: string, revealed: number): { element: ReactElement; chars: number } {
+  let chars = revealed;
+  const element = ReactMarkdown({
+    children: text,
+    remarkPlugins: plugins,
+    rehypePlugins: [
+      [
+        rehypeReveal,
+        {
+          revealed,
+          onRendered: (n: number) => {
+            chars = n;
+          },
+        },
+      ],
+    ],
+    components,
+    urlTransform,
+  });
+  return { element, chars };
+}
+
+/**
+ * The last block of a reply while it streams: only the words the chunk added
+ * fade in, and the words already on screen are plain text. The block is not
+ * cached (it changes with every chunk) and stops being rendered this way as
+ * soon as the reply ends.
+ */
+const StreamingTail = memo(function StreamingTail({ text }: { text: string }) {
+  const host = useRef<HTMLDivElement>(null);
+  // The block and its rendered length as the last frame left them.
+  const shown = useRef({ text: "", chars: 0 });
+  const fresh = useRef(true);
+  const revealed = revealedBefore(shown.current.text, shown.current.chars, text);
+  const { element, chars } = renderRevealed(text, revealed);
+  useLayoutEffect(() => {
+    shown.current = { text, chars };
+    const spans = host.current?.querySelectorAll<HTMLElement>(".rc-reveal");
+    if (fresh.current) {
+      fresh.current = false;
+      // A block with no words to reveal (code, a table, a picture) fades in whole, once.
+      const block = host.current?.firstElementChild;
+      if (!spans?.length && block instanceof HTMLElement) block.style.animation = "rc-fade 180ms ease-out";
+    }
+    // React reuses the span the previous word had when it sits at the same
+    // place, and that span's animation already ran. Rewind this chunk's spans
+    // from the top (delay included) before the frame paints.
+    for (const span of spans ?? [])
+      for (const animation of span.getAnimations()) {
+        animation.cancel();
+        animation.play();
+      }
+  }, [text, chars]);
+  return (
+    // Out of the layout (display: contents): the block stays a child of the reply.
+    <div ref={host} className="contents">
+      {element}
+    </div>
+  );
+});
+
 export const Markdown = memo(function Markdown({
   text,
   className,
   streaming,
+  reveal = false,
 }: {
   text: string;
   className?: string;
   /** Growing: parse it block by block, so a chunk re-parses only the last block. */
   streaming?: boolean;
+  /** Optional: fade in the words that arrive while it streams (a reply, not a rolling preview). */
+  reveal?: boolean;
 }) {
   // A finished text is one block (one parse, cached by its text); a streaming one is split so the
   // blocks above the one being written keep their elements. Splitting costs a parser per block.
   const blocks = useMemo(() => (streaming ? markdownBlocks(text) : [text]), [text, streaming]);
+  const tail = blocks.length - 1;
   return (
     <div className={cx("selectable flex flex-col gap-2.5 text-body break-words", className)}>
-      {blocks.map((block, i) => (
-        <Block key={i} text={block} />
-      ))}
+      {blocks.map((block, i) =>
+        reveal && streaming && i === tail ? (
+          <StreamingTail key={i} text={block} />
+        ) : (
+          <Block key={i} text={block} />
+        ),
+      )}
     </div>
   );
 });
