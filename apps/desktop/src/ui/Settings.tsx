@@ -158,6 +158,7 @@ function General() {
     ["Toggle sidebar", "⌘B"],
     ["Find in thread", "⌘F"],
     ["Terminal", "⌘J"],
+    ["Text larger, smaller, actual size", "⌘+  ⌘-  ⌘0"],
     ["Stop the turn", "Esc / ⌘."],
     ["Send · queue while running", "⏎"],
     ["Steer the running turn", "⌘⏎"],

@@ -1,6 +1,7 @@
 import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect } from "react";
 import { applyTheme, resolveTheme } from "./lib/themes";
+import { restoreZoom, stepZoom } from "./lib/zoom";
 import { chooseFolder } from "./state/folders";
 import {
   cancel,
@@ -11,6 +12,7 @@ import {
   setTerminalOpen,
   setView,
   startNewThread,
+  toast,
   toggleRightPanel,
   toggleSidebar,
   useApp,
@@ -73,7 +75,12 @@ function useShortcuts() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       const s = useApp.getState();
-      if (mod && !e.shiftKey && e.key.toLowerCase() === "n") {
+      if (mod && !e.altKey && (e.key === "=" || e.key === "+" || e.key === "-" || e.key === "0")) {
+        // Text zoom: ⌘+ / ⌘= larger, ⌘- smaller, ⌘0 actual size (also with focus in the composer).
+        e.preventDefault();
+        const direction = e.key === "0" ? 0 : e.key === "-" ? -1 : 1;
+        void stepZoom(direction).then((level) => toast(`Zoom ${Math.round(level * 100)}%`, "info"));
+      } else if (mod && !e.shiftKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         startNewThread();
       } else if (mod && e.key.toLowerCase() === "o") {
@@ -170,6 +177,7 @@ function ConfirmDialog() {
 export function App() {
   useTheme();
   useShortcuts();
+  useEffect(() => restoreZoom(), []);
   useEffect(() => startUpdateChecks(), []);
   const settings = useApp((s) => s.settings !== null);
   const onboarding = useApp((s) => s.onboardingOpen);
