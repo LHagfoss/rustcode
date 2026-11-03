@@ -30,6 +30,7 @@ import {
   setHarnessEnabled,
   setNewThreadChoice,
   setOrchestration,
+  setPermissionMode,
   setProjectCwd,
   setThreadStatus,
   startNewThread,
@@ -218,6 +219,26 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().defaultCwd).toBe("/tmp/default");
     startNewThread();
     expect(useApp.getState().projectCwd).toBe("/tmp/default");
+  });
+
+  test("Full access answers the edit approval itself and the turn finishes", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    setPermissionMode(undefined, "full");
+    try {
+      let asked = false;
+      const unsubscribe = useApp.subscribe(() => {
+        if (selected()?.permissions.length) asked = true;
+      });
+      await submit("change the greeting");
+      await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
+      unsubscribe();
+      expect(asked).toBe(false);
+      expect(selected()!.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "completed" });
+    } finally {
+      setPermissionMode(undefined, "ask");
+    }
   });
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {

@@ -51,6 +51,7 @@ import {
   ensureHarnessModels,
   errorText,
   openThread,
+  permissionModeOf,
   runPrompt,
   setThreadStatus,
   statusOf,
@@ -138,6 +139,8 @@ export function resolveGrant(choice: GrantChoice) {
 
 async function permitted(caller: RuleThread, key: string, question: GrantAsk): Promise<Failure | null> {
   if (hasGrant(book(), caller.id, key)) return null;
+  // Full access: the user chose not to be asked, here as for the harness's own approvals.
+  if (permissionModeOf(useApp.getState(), caller.id) === "full") return null;
   const asked = ask(question);
   if (isFailure(asked)) return asked;
   const choice = await asked;
