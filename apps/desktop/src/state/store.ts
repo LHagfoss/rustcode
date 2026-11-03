@@ -382,16 +382,17 @@ export function toast(
       text,
       tone,
       action: options.action,
-      persist: options.persist ?? tone === "error",
+      // Errors leave on their own too (after longer): a burst of them must not pile up for good.
+      persist: options.persist ?? false,
       progress: options.progress,
       at,
     };
     return {
       toasts: same
         ? s.toasts.map((t) => (t === same ? next : t))
-        : // The Toaster shows the newest three; older ones wait behind them.
+        : // The Toaster shows the newest; up to four older wait behind it, the rest are dropped.
           // A fading toast with the same id goes now, so the new one keeps its key.
-          [...s.toasts.filter((t) => !(t.leaving && t.id === id)).slice(-19), next],
+          [...s.toasts.filter((t) => !(t.leaving && t.id === id)).slice(-4), next],
     };
   });
   return id;
@@ -407,6 +408,11 @@ export function updateToast(id: string, patch: Partial<Pick<Toast, "text" | "pro
 }
 
 /** Fades a toast out, then drops it. */
+/** Every toast at once: the "+N" on the toast in front. */
+export function clearToasts() {
+  set((s) => ({ toasts: s.toasts.filter((t) => t.persist && t.progress !== undefined) }));
+}
+
 export function dismissToast(id: string) {
   if (!get().toasts.some((t) => t.id === id && !t.leaving)) return;
   set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) }));

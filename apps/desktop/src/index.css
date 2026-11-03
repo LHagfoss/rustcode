@@ -613,8 +613,24 @@
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
 }
+/* A toast drops in from under the header and lifts away. */
+@keyframes rc-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+}
+@keyframes rc-toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+.rc-toast-in {
+  animation: rc-toast-in 220ms var(--ease-snappy);
+}
 .rc-toast-out {
-  animation: rc-out 120ms ease-in forwards;
+  animation: rc-toast-out 140ms ease-in forwards;
 }
 
 /*

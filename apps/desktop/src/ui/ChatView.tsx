@@ -98,7 +98,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
   const status = useApp((s) => statusOf(s, threadId));
   const wt = useApp((s) => worktreeOf(s, threadId));
   const item =
-    "flex w-full items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill";
+    "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -120,7 +120,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
         <DropdownMenu.Content
           align="end"
           sideOffset={6}
-          className="elevated z-50 min-w-[190px] rounded-lg p-1"
+          className="elevated z-50 min-w-[200px] rounded-xl p-1.5"
         >
           <DropdownMenu.Item className={item} onSelect={() => setView({ kind: "review", threadId })}>
             <FileDiff size={13} /> Review Changes
@@ -364,16 +364,15 @@ export function ChatView() {
 
   const isNew = !selectedId;
 
-  // Toasts stack at the chat column's bottom right, just above the composer stack (ui/Toaster.tsx).
+  // Toasts sit centred at the top of the chat column, under its header (ui/Toaster.tsx).
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-place when the column resizes
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const r = root.getBoundingClientRect();
-    const below = window.innerHeight - r.bottom;
     const doc = document.documentElement.style;
-    doc.setProperty("--rc-toast-right", `${Math.round(window.innerWidth - r.right + 16)}px`);
-    doc.setProperty("--rc-toast-bottom", `${Math.round(below + (isNew ? 16 : 16 + stackHeight + 12))}px`);
+    doc.setProperty("--rc-toast-center", `${Math.round(r.left + r.width / 2)}px`);
+    doc.setProperty("--rc-toast-top", `${Math.round(r.top + HEADER_HEIGHT + 8)}px`);
   }, [isNew, stackHeight, width, height]);
   const request = thread?.permissions[0];
   const report = useApp((s) => s.report);

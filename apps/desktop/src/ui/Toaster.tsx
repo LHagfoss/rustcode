@@ -1,30 +1,31 @@
-// The one toast stack (docs/design.md, Toast): frosted like the composer,
-// stacked at the bottom right of the chat column just above the composer
-// stack (ChatView publishes where that is as `--rc-toast-right` and
-// `--rc-toast-bottom`), or the window's corner while Settings is open. The
-// newest sits lowest; at most three show and the rest wait. Info and success
-// leave after 4 s, errors stay until closed; the pointer over the stack
-// pauses every timer. A swipe to the right or the close button dismisses.
+// The one toast slot (docs/design.md, Toast): frosted like the composer,
+// centred at the top of the chat column under its header (ChatView publishes
+// `--rc-toast-center` and `--rc-toast-top`), or the window's top while
+// Settings is open. One toast shows at a time, the newest; older ones wait
+// behind it as "+N", which clears them all. Info and success leave after 3 s,
+// errors after 7 s; the pointer over it pauses the timer. A swipe up or to
+// either side, a click on ×, or Escape dismisses.
 
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { dismissToast, type Toast, useApp } from "../state/store";
+import { clearToasts, dismissToast, type Toast, useApp } from "../state/store";
 import { cx, Spinner } from "./primitives";
 
-const VISIBLE = 3;
-const DURATION_MS = 4000;
+const DURATION_MS = 3000;
+const ERROR_MS = 7000;
 /** How far a swipe must travel to dismiss. */
-const SWIPE_PX = 56;
+const SWIPE_PX = 48;
 
-function ToastCard({ toast, paused }: { toast: Toast; paused: boolean }) {
+function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; waiting: number }) {
   const ref = useRef<HTMLDivElement>(null);
-  const remaining = useRef(DURATION_MS);
-  const swipe = useRef<{ x: number; id: number; dx: number } | null>(null);
+  const duration = toast.tone === "error" ? ERROR_MS : DURATION_MS;
+  const remaining = useRef(duration);
+  const swipe = useRef<{ x: number; y: number; id: number; dx: number; dy: number } | null>(null);
 
   // A repeat (same text, or a replace by id) starts the full time again.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the toast is shown again
   useEffect(() => {
-    remaining.current = DURATION_MS;
+    remaining.current = duration;
   }, [toast.at]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: toast.at restarts the timer
@@ -39,20 +40,22 @@ function ToastCard({ toast, paused }: { toast: Toast; paused: boolean }) {
   }, [toast.persist, toast.leaving, paused, toast.at, toast.id]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest("button, .selectable")) return;
-    swipe.current = { x: e.clientX, id: e.pointerId, dx: 0 };
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId, dx: 0, dy: 0 };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const s = swipe.current;
     const el = ref.current;
     if (!s || !el || s.id !== e.pointerId) return;
-    // Follows the pointer to the right only; to the left it resists.
-    const dx = e.clientX - s.x;
-    s.dx = dx > 0 ? dx : dx / 6;
+    // Follows the pointer sideways and up; down it resists.
+    s.dx = e.clientX - s.x;
+    const dy = e.clientY - s.y;
+    s.dy = dy < 0 ? dy : dy / 6;
+    const away = Math.max(Math.abs(s.dx), -s.dy);
     el.style.transition = "none";
-    el.style.transform = `translateX(${s.dx}px)`;
-    el.style.opacity = String(Math.max(0.2, 1 - Math.max(0, s.dx) / 240));
+    el.style.transform = `translate(${s.dx}px, ${s.dy}px)`;
+    el.style.opacity = String(Math.max(0.2, 1 - away / 200));
   };
   const onPointerUp = () => {
     const s = swipe.current;
@@ -60,8 +63,9 @@ function ToastCard({ toast, paused }: { toast: Toast; paused: boolean }) {
     swipe.current = null;
     if (!s || !el) return;
     el.style.transition = "transform 160ms var(--ease-snappy), opacity 160ms ease-out";
-    if (s.dx > SWIPE_PX) {
-      el.style.transform = "translateX(120%)";
+    if (Math.abs(s.dx) > SWIPE_PX || s.dy < -SWIPE_PX / 2) {
+      el.style.transform =
+        Math.abs(s.dx) > -s.dy ? `translateX(${Math.sign(s.dx) * 120}%)` : "translateY(-140%)";
       el.style.opacity = "0";
       dismissToast(toast.id);
     } else {
@@ -81,8 +85,8 @@ function ToastCard({ toast, paused }: { toast: Toast; paused: boolean }) {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       className={cx(
-        "rc-toast pointer-events-auto relative flex w-[340px] max-w-[calc(100vw-32px)] touch-pan-y items-start gap-2.5 overflow-hidden rounded-lg py-2 pr-1.5 pl-3 text-callout",
-        toast.leaving ? "rc-toast-out" : "rc-in",
+        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-grab touch-none items-start gap-2.5 overflow-hidden rounded-2xl py-1.5 pr-1.5 pl-3.5 text-callout active:cursor-grabbing",
+        toast.leaving ? "rc-toast-out" : "rc-toast-in",
       )}
     >
       <span className="flex h-6 shrink-0 items-center">
@@ -95,7 +99,7 @@ function ToastCard({ toast, paused }: { toast: Toast; paused: boolean }) {
           />
         )}
       </span>
-      <p className="selectable line-clamp-4 min-w-0 flex-1 py-1 text-fg">{toast.text}</p>
+      <p className="line-clamp-3 min-w-0 flex-1 py-1 text-fg">{toast.text}</p>
       {toast.action && (
         <button
           type="button"
@@ -108,11 +112,21 @@ function ToastCard({ toast, paused }: { toast: Toast; paused: boolean }) {
           {toast.action.label}
         </button>
       )}
+      {waiting > 0 && (
+        <button
+          type="button"
+          aria-label={`Clear all ${waiting + 1} notifications`}
+          onClick={clearToasts}
+          className="h-6 shrink-0 rounded-full px-2 font-medium text-caption text-fg-muted tabular hover:bg-fill hover:text-fg"
+        >
+          +{waiting}
+        </button>
+      )}
       <button
         type="button"
         aria-label="Dismiss"
         onClick={() => dismissToast(toast.id)}
-        className="flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
+        className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
       >
         <X size={12} />
       </button>
@@ -132,27 +146,39 @@ export function Toaster() {
   const toasts = useApp((s) => s.toasts);
   const settings = useApp((s) => s.settings !== null);
   const [paused, setPaused] = useState(false);
-  const shown = toasts.slice(-VISIBLE);
-  // Nothing under the pointer any more: the timers must not stay paused.
+  const live = toasts.filter((t) => !t.leaving);
+  // The newest shows; one leaving keeps its place until it has faded.
+  const front = toasts.at(-1);
+  // Nothing under the pointer any more: the timer must not stay paused.
   useEffect(() => {
-    if (!shown.length) setPaused(false);
-  }, [shown.length]);
+    if (!front) setPaused(false);
+  }, [front]);
+  // Escape dismisses the toast in front, unless something else (a dialog, a field) takes it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || !front || front.leaving) return;
+      if ((e.target as HTMLElement | null)?.closest("input, textarea, [role=dialog]")) return;
+      dismissToast(front.id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [front]);
   return (
     <section
       aria-label="Notifications"
       aria-live="polite"
-      className="pointer-events-none fixed z-50 flex flex-col items-end gap-2"
+      className="pointer-events-none fixed z-50 flex -translate-x-1/2 flex-col items-center"
       style={
         settings
-          ? { right: 16, bottom: 16 }
-          : { right: "var(--rc-toast-right, 16px)", bottom: "var(--rc-toast-bottom, 16px)" }
+          ? { left: "50%", top: 16 }
+          : { left: "var(--rc-toast-center, 50%)", top: "var(--rc-toast-top, 56px)" }
       }
       onPointerEnter={() => setPaused(true)}
       onPointerLeave={() => setPaused(false)}
     >
-      {shown.map((t) => (
-        <ToastCard key={t.id} toast={t} paused={paused} />
-      ))}
+      {front && (
+        <ToastCard key={front.id} toast={front} paused={paused} waiting={Math.max(0, live.length - 1)} />
+      )}
     </section>
   );
 }
