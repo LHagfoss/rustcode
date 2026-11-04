@@ -13,6 +13,46 @@ export interface ChildInfo {
   state: ChildState;
   /** It finished (or failed) while you were looking elsewhere: the group's dot. */
   unseen?: boolean;
+  /**
+   * How far under the group's parent the row sits: 0 for its own child, 1 for a
+   * grandchild shown flat in the same group (see `flatChildren`).
+   */
+  level?: 0 | 1;
+  /**
+   * The most urgent state among the threads this one started, when they are
+   * drawn flat with it: a finished child whose own child still works stays a
+   * row, so that grandchild is not folded away.
+   */
+  below?: ChildState;
+}
+
+/**
+ * The one extra inset a grandchild's row takes: a step past the `pl-8` a child's
+ * row starts at. A grandchild has no group of its own to open, so it is drawn
+ * under the top-level parent's children, one level deeper, and not behind a
+ * second chevron.
+ */
+export const GRANDCHILD_INSET = "pl-10";
+
+/**
+ * The rows one group draws: its children in the order they are drawn, and
+ * right under the child that started it, a grandchild's row. A grandchild's
+ * own group would be a second chevron under a row that is already small, so it
+ * is shown flat with one level of extra inset instead of being lost — and
+ * never above the thread it works for. A grandchild whose own parent is not in
+ * this group (another project, a filtered list) stays out: its group is where
+ * it belongs.
+ */
+export function flatChildren(
+  children: readonly ChildInfo[],
+  childrenOf: (id: string) => readonly ChildInfo[] | undefined,
+): ChildInfo[] {
+  const out: ChildInfo[] = [];
+  for (const child of children) {
+    out.push({ ...child, level: 0 });
+    for (const grandchild of childrenOf(child.id) ?? []) out.push({ ...grandchild, level: 1 });
+  }
+  return out;
 }
 
 /**
@@ -59,7 +99,11 @@ export function childSummary(children: ChildInfo[]): string {
 
 /** The children that always stay as rows, whatever the group is doing. */
 export const childVisible = (child: ChildInfo, selectedId: string | null) =>
-  child.id === selectedId || child.state === "needs" || child.state === "working";
+  child.id === selectedId ||
+  child.state === "needs" ||
+  child.state === "working" ||
+  child.below === "needs" ||
+  child.below === "working";
 
 /** More finished children than this fold behind the group's last line. */
 export const FINISHED_FOLD_AT = 3;

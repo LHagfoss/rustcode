@@ -12,9 +12,10 @@ import { type Json, type JsonObject, RpcError } from "../acp/jsonrpc";
 import { parsePullError, parsePullList, pullErrorTitle } from "../acp/rustcode";
 import { Method, projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
-import { titleFrom } from "../lib/title";
+import { childTitle, titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
 import {
+  activeDescendants,
   activityOf,
   capped,
   checkManage,
@@ -27,6 +28,7 @@ import {
   type FanOut,
   failure,
   failureJson,
+  fillAnswers,
   type GrantAsk,
   type GrantChoice,
   grant,
@@ -37,6 +39,7 @@ import {
   type Link,
   type LinkBook,
   type LinkState,
+  latestReply,
   linkResult,
   linksLeft,
   listSessions,
@@ -53,10 +56,13 @@ import {
   parseCall,
   projectOf,
   prune,
+  quietTree,
   READ_BYTES,
   type RuleThread,
+  restateLinks,
   sameProject,
   shownState,
+  type TurnAnswer,
   updateLink,
   usageScope,
   type Wake,
@@ -176,9 +182,10 @@ export async function syncLinkBook(): Promise<void> {
     return;
   }
   if (answer.stored !== true) {
-    // Nothing saved yet: this window's book is the one to keep.
+    // Nothing saved yet: this window's book is the one to move in, once.
+    // `savedText` stays empty so the flush cannot decide it is already there.
+    savedText = undefined;
     const mine = book();
-    savedText = text(mine);
     if (mine.links.length || Object.keys(mine.grants).length || mine.fanOuts.length) await flushSave();
     return;
   }
@@ -620,11 +627,14 @@ async function interruptSession(caller: RuleThread, id: string): Promise<JsonObj
     caller: caller.id,
     callerTitle: caller.title,
     target: target.title,
-    detail: "Its current turn stops. The thread stays and can be messaged again.",
+    detail:
+      "Its current turn stops, and the threads it is working through stop with it. The thread stays and can be messaged again.",
   });
   if (no) return failureJson(no);
+  // What goes down with it, counted before the cascade starts.
+  const stopped = activeDescendants(book(), target.id).length;
   await cancel(target.id);
-  return { session_id: target.id, interrupted: true };
+  return { session_id: target.id, interrupted: true, stopped };
 }
 
 async function configureSession(caller: RuleThread, call: ConfigureCall): Promise<JsonObject> {
@@ -916,11 +926,15 @@ function projectFor(caller: RuleThread, asked: string | undefined): string | Fai
 async function newThread(
   project: string,
   harness: string,
-  options: { model?: string; effort?: string; title: string; worktree?: boolean },
+  options: { model?: string; effort?: string; title?: string; task: string; worktree?: boolean },
 ): Promise<string> {
-  const id = await createThreadFor(project, harness, options);
+  // The orchestrator names it when it gave a title, and the task itself does otherwise: a session
+  // made without one takes the message it is sent as its title, and the sidebar then shows
+  // "From thread “parent” (agent)…" for good.
+  const title = childTitle(options.title, options.task);
+  const id = await createThreadFor(project, harness, { ...options, title });
   // The orchestrator named it; without this the first message ("From thread …") would.
-  if (hasShell()) await shellCall("thread_rename", { id, title: options.title }).catch(() => undefined);
+  if (hasShell()) await shellCall("thread_rename", { id, title }).catch(() => undefined);
   return id;
 }
 
@@ -980,7 +994,9 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   if (again) return failureJson(again);
   let id: string;
   try {
-    id = await newThread(project, harness.id, { ...call, model, title });
+    // The task is the title's fallback: whatever the prompt starts with, a child never goes
+    // unnamed and so never takes the delivered message as its title.
+    id = await newThread(project, harness.id, { ...call, model, title, task: call.prompt });
   } catch (error) {
     return failureJson(failure("failed", `the thread could not start: ${errorText(error)}`));
   }
@@ -1037,7 +1053,12 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
   for (const h of chosen) {
     const threadTitle = `${title} · ${h.name}`;
     try {
-      const id = await newThread(project, h.id, { model: h.model, effort: h.effort, title: threadTitle });
+      const id = await newThread(project, h.id, {
+        model: h.model,
+        effort: h.effort,
+        title: threadTitle,
+        task: call.prompt,
+      });
       const link = addLink({
         orchestrator: caller.id,
         target: id,
@@ -1095,7 +1116,16 @@ async function wait(callerId: string, ids: string[], timeoutMs: number): Promise
     const s = useApp.getState();
     const now = Date.now();
     const activity = activityOf(s.threads[link.target]?.items ?? []);
-    return linkResult(link, stateOf(s, link), statusOf(s, link.target), { now, activity });
+    const state = stateOf(s, link);
+    // A child that settled but whose own subtree still works has not answered yet: say it works,
+    // and say how long it has been quiet, rather than hand back the answer of a turn that only
+    // started the work below it.
+    const shown = (state === "done" || state === "failed") && !subtreeQuiet(link.target) ? "working" : state;
+    // A settled link with no answer still has one: the target's last reply, read now.
+    const reply = link.answer?.trim()
+      ? link
+      : filledWith(link, latestReply(s.threads[link.target]?.items ?? []));
+    return linkResult(reply, shown, statusOf(s, link.target), { now, activity });
   };
   // The parent has this answer now: no wake may repeat it.
   const hand = (link: Link) => {
@@ -1113,6 +1143,11 @@ async function wait(callerId: string, ids: string[], timeoutMs: number): Promise
           continue;
         }
         const now = stateOf(s, link);
+        if (now === "done" || now === "failed") {
+          // Settled, but it works on: the answer is the one after its subtree is quiet.
+          if (subtreeQuiet(link.target)) return hand(link);
+          continue;
+        }
         if (!isActive(now) || now === "needs_user") return hand(link);
       }
       if (Date.now() >= deadline) {
@@ -1142,19 +1177,40 @@ function wakeContext(now: number): WakeContext {
   const s = useApp.getState();
   const states: Record<string, LinkState> = {};
   const pending: Record<string, string> = {};
-  const parents: Record<string, { title: string; running: boolean }> = {};
+  const threads: Record<string, { title: string; running: boolean }> = {};
+  /** Each finished link's target's latest reply, for a link that holds no answer. */
+  const answers: Record<string, string> = {};
   const said: Record<string, readonly string[]> = {};
+  // A parent and a child are both asked about: the parent hears, and the child's own subtree has
+  // to be quiet before it does.
+  const remember = (id: string) => {
+    if (threads[id]) return;
+    const thread = ruleThread(s, id);
+    if (thread) threads[id] = { title: thread.title, running: !!s.threads[id]?.running };
+  };
   for (const link of s.links.links) {
-    const thread = s.threads[link.target];
-    states[link.id] = shownState(link, !!thread?.permissions.length);
-    const request = thread?.permissions[0];
+    const target = s.threads[link.target];
+    states[link.id] = shownState(link, !!target?.permissions.length);
+    const request = target?.permissions[0];
     if (request) pending[link.id] = String(request.rpcId);
-    const parent = ruleThread(s, link.orchestrator);
-    if (parent)
-      parents[link.orchestrator] = { title: parent.title, running: !!s.threads[link.orchestrator]?.running };
+    remember(link.orchestrator);
+    remember(link.target);
+    if (!answers[link.target]) answers[link.target] = latestReply(target?.items ?? []);
   }
   for (const [id, ids] of waiting) said[id] = [...ids];
-  return { states, pending, waiting: said, parents, now };
+  return { states, pending, waiting: said, threads, now, answers };
+}
+
+/** A link with the target's last reply when it holds no answer of its own. */
+function filledWith(link: Link, reply: string): Link {
+  if (!reply.trim()) return link;
+  const { text, truncated } = capped(reply);
+  return { ...link, answer: text, truncated };
+}
+
+/** Whether a thread owes its parent nothing more: no child of it works, none waits to be told. */
+function subtreeQuiet(id: string): boolean {
+  return quietTree(book(), wakeContext(Date.now()), id);
 }
 
 /**
@@ -1169,13 +1225,17 @@ export function wakeTick(): void {
   const now = Date.now();
   if (!useApp.getState().orchestration) return;
   const ctx = wakeContext(now);
+  // A link that settled without an answer (its reply's rows came a moment later) is completed
+  // from the thread's own last reply before anyone reads it.
+  const filled = fillAnswers(book(), ctx.answers ?? {});
+  if (filled !== book()) setBook(() => filled);
   // A parent that is gone for good: its children's results are never delivered.
-  const orphaned = orphanedLinks(book(), ctx);
+  const orphaned = orphanedLinks(filled, ctx);
   if (orphaned.length) {
     setBook((b) => orphaned.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), b));
   }
-  for (const wake of wakesDue(book(), ctx)) sendWake(wake, ctx, now);
-  const at = nextWakeAt(book(), ctx);
+  for (const wake of wakesDue(filled, ctx)) sendWake(wake, ctx, now);
+  const at = nextWakeAt(filled, ctx);
   if (at !== null) scheduleWake(Math.max(250, at - now + 50));
 }
 
@@ -1189,7 +1249,9 @@ function scheduleWake(ms: number): void {
  * One message per parent, in a turn of its own: queued behind a running turn
  * (never interrupting its tools), started at once when the thread is idle.
  * Links are marked before it is sent, so a wake turn's own activity cannot
- * deliver the same result twice.
+ * deliver the same result twice. The wake turn carries no link, so waking a
+ * thread that is itself a child does not settle its own link in its parent's
+ * book while that turn runs: a wake is a message, not a delegation.
  */
 function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
   const parent = useApp.getState().threads[wake.parent];
@@ -1233,27 +1295,74 @@ export function linkStarted(id: string) {
   setBook((b) => updateLink(b, id, { state: "working" }));
 }
 
+/**
+ * What a turn answered: its last reply with something in it, bounded, and how
+ * many files it changed. An assistant row an empty chunk left behind (`"\n"`
+ * between two calls) is skipped, so it cannot win over the reply before it.
+ */
+function answerOf(items: TranscriptItem[], failed?: string): TurnAnswer {
+  const { text, truncated } = capped(latestReply(items));
+  return {
+    text: failed ? (text ? `${text}\n\n${failed}` : failed) : text,
+    truncated,
+    filesChanged: turnCompletion(items, items.length)?.files.length ?? 0,
+  };
+}
+
+/**
+ * A turn's answer, and the thread's last reply when the turn's own rows hold
+ * none. The rows of a reply reach the app a moment after the prompt returns (and
+ * a thread whose rows were replayed can leave the turn's window behind the
+ * reply), so a link must never settle on an empty answer while the thread knows
+ * one: the parent reads that answer, and nothing would ever fill it in.
+ */
+function answerFor(thread: string, items: TranscriptItem[], failed?: string, fallback = true): TurnAnswer {
+  const says = answerOf(items, failed);
+  if (!fallback || says.text.trim()) return says;
+  const { text, truncated } = capped(latestReply(useApp.getState().threads[thread]?.items ?? []));
+  return text ? { ...says, text, truncated } : says;
+}
+
 /** The link's turn ended: its answer is that turn's last reply, never an earlier one. */
 export function linkFinished(
   id: string,
-  _thread: string,
+  thread: string,
   outcome: "completed" | "cancelled" | "failed",
   failed: string | undefined,
   items: TranscriptItem[],
 ) {
-  const reply = [...items].reverse().find((i) => i.kind === "assistant");
-  const { text, truncated } = capped(reply?.kind === "assistant" ? reply.text : "");
-  const files = turnCompletion(items, items.length)?.files.length ?? 0;
   const now = Date.now();
   setBook((b) =>
     updateLink(b, id, {
       state: outcome === "cancelled" ? "cancelled" : outcome === "failed" ? "failed" : "done",
-      answer: failed ? (text ? `${text}\n\n${failed}` : failed) : text,
-      truncated,
-      filesChanged: files,
+      // A stopped link is not an answer: it takes only what its own turn said.
+      ...answerFor(thread, items, failed, outcome !== "cancelled"),
       settledAt: now,
     }),
   );
+  wakeTick();
+}
+
+/**
+ * A turn of `thread` ended, whichever way it was started. A parent's wake waits
+ * for the thread's own subtree to be quiet, so a link that settled but was not
+ * reported yet takes this turn's answer instead of the one that ended first
+ * (host.ts `wait` reads the same link). A link already reported is re-armed once
+ * when this turn was started by the wake from the thread's own child, so the
+ * real answer reaches the parent too.
+ */
+export function threadTurnEnded(
+  thread: string,
+  woken: boolean,
+  outcome: "completed" | "cancelled" | "failed",
+  failed: string | undefined,
+  items: TranscriptItem[],
+) {
+  // A stopped turn is not an answer: the link turns record their own, and nothing else does.
+  if (outcome === "cancelled") return;
+  const now = Date.now();
+  const says = answerFor(thread, items, outcome === "completed" ? undefined : failed);
+  setBook((b) => restateLinks(b, thread, says, now, woken));
   wakeTick();
 }
 
@@ -1267,20 +1376,44 @@ export function queuedLinkDropped(id: string) {
 }
 
 /** Stop a link: its queued message goes, or its running turn is cancelled. The user's own turns there go on. */
-export async function stopLink(id: string) {
+export async function stopLink(id: string): Promise<boolean> {
   const link = book().links.find((l) => l.id === id);
-  if (!link || !isActive(link.state)) return;
+  if (!link || !isActive(link.state)) return false;
   if (link.state === "queued") {
     updateThread(link.target, (t) => ({ ...t, queue: t.queue.filter((q) => q.link !== id) }));
     setBook((b) => updateLink(b, id, { state: "cancelled" }));
-    return;
+    return true;
   }
   await cancel(link.target);
+  return true;
 }
 
-export async function stopLinksFrom(orchestrator: string) {
-  for (const link of book().links) {
-    if (link.orchestrator === orchestrator && isActive(link.state)) await stopLink(link.id);
+/** The threads whose work is being stopped right now: a cascade stops each one once. */
+const stopping = new Set<string>();
+
+/**
+ * Stops the work `orchestrator` handed to other threads, and what those
+ * threads handed on: stopping a thread takes its whole delegation tree with
+ * it, because the thread above is no longer there to read the answers. A
+ * normal finish does not cascade: a child that settles leaves its own children
+ * running, they are woken and answer into the thread that started them.
+ *
+ * Each thread is stopped once ({@link stopping}), so a stop that also arrives
+ * from a child's own cancel cannot loop or count twice. Returns how many links
+ * it stopped, for a tool's answer to say.
+ */
+export async function stopLinksFrom(orchestrator: string): Promise<number> {
+  if (stopping.has(orchestrator)) return 0;
+  stopping.add(orchestrator);
+  try {
+    let stopped = 0;
+    for (const link of book().links) {
+      if (link.orchestrator !== orchestrator || !isActive(link.state)) continue;
+      if (await stopLink(link.id)) stopped += 1;
+    }
+    return stopped;
+  } finally {
+    stopping.delete(orchestrator);
   }
 }
 

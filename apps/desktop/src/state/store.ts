@@ -90,6 +90,7 @@ import {
   queuedLinkDropped,
   stopLinksFrom,
   syncLinkBook,
+  threadTurnEnded,
   wakeTick,
 } from "./host";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
@@ -1938,6 +1939,9 @@ export async function runPrompt(
   }
   if (options.link)
     linkFinished(options.link, id, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
+  // Every finished turn of a thread matters to a parent waiting on it: a middle thread's real
+  // answer is the one after the work it started (state/host.ts threadTurnEnded).
+  threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
   void refreshSessions();
   void refreshPlanUsage(id);
   void refreshAgents(id);

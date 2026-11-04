@@ -7,7 +7,9 @@ import {
   childSummary,
   childVisible,
   FINISHED_FOLD_AT,
+  flatChildren,
   foldFinished,
+  GRANDCHILD_INSET,
   orderChildren,
   pruneOpenGroups,
   unseenChild,
@@ -183,5 +185,52 @@ describe("the group's dot", () => {
     expect(unseenChild([child("a", "finished")])).toBeUndefined();
     expect(unseenChild([child("a", "finished", true)])).toBe("finished");
     expect(unseenChild([child("a", "finished", true), child("b", "failed", true)])).toBe("failed");
+  });
+});
+
+describe("a grandchild's row", () => {
+  test("is shown flat under the top-level group, one level in", () => {
+    const b = child("b", "working");
+    const c = child("c", "needs");
+    const grandkids: Record<string, ChildInfo[]> = { b: [c] };
+    const flat = flatChildren([b], (id) => grandkids[id]);
+    // It is a row of the same group, with one extra level of inset and no second chevron.
+    expect(flat).toEqual([
+      { ...b, level: 0 },
+      { ...c, level: 1 },
+    ]);
+    expect(GRANDCHILD_INSET).toBe("pl-10");
+    // A child with none of its own adds nothing.
+    expect(flatChildren([c], () => undefined)).toEqual([{ ...c, level: 0 }]);
+  });
+
+  test("keeps the group's order and folding, so nothing is lost", () => {
+    const children = [child("b", "finished"), child("c", "working")];
+    const grandkids: Record<string, ChildInfo[]> = { b: [child("d", "working")] };
+    const flat = flatChildren(children, (id) => grandkids[id]);
+    // What wants you first, then what works; the grandchild keeps its level.
+    expect(orderChildren(flat, null).map((x) => [x.id, x.level])).toEqual([
+      ["d", 1],
+      ["c", 0],
+      ["b", 0],
+    ]);
+    const { rows, folded, fold } = foldFinished(orderChildren(flat, null), null);
+    expect(rows.map((x) => x.id)).toEqual(["d", "c"]);
+    expect(folded.map((x) => x.id)).toEqual(["b"]);
+    expect(fold).toBe(true);
+    // The group's one line counts what it draws, grandchildren included.
+    expect(childSummary(flat)).toBe("3 threads · 2 working");
+  });
+
+  test("a finished child stays a row while a grandchild of its is still live", () => {
+    const finished: ChildInfo = { ...child("b", "finished"), below: "working" };
+    // Otherwise its working grandchild would be folded away with it.
+    expect(childVisible(finished, null)).toBe(true);
+    const { rows, folded } = foldFinished([finished], null);
+    expect(rows.map((x) => x.id)).toEqual(["b"]);
+    expect(folded).toEqual([]);
+    // A finished child with nothing live under it folds as it did before.
+    const quiet: ChildInfo = { ...child("d", "finished"), below: undefined };
+    expect(childVisible(quiet, null)).toBe(false);
   });
 });

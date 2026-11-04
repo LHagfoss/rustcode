@@ -8,30 +8,40 @@ import {
   validBranch,
 } from "../acp/v2";
 import {
+  activeDescendants,
+  activeInTree,
   activityOf,
   capped,
   checkManage,
   checkMessage,
   checkQueryData,
   checkStart,
+  depthOf,
   emptyBook,
   failureJson,
+  fillAnswers,
   forget,
   interruptActive,
   isActive,
   isFailure,
   type Link,
   type LinkBook,
+  latestReply,
   linkResult,
   listSessions,
   MAX_DATA_ROWS,
+  MAX_DEPTH,
+  MAX_TREE_LINKS,
   markWoken,
   mergeBooks,
   nextWakeAt,
   orphanedLinks,
   parseBook,
   parseCall,
+  pendingWakeUnder,
+  quietTree,
   type RuleThread,
+  restateLinks,
   sameProject,
   updateLink,
   usageScope,
@@ -135,7 +145,7 @@ describe("orchestration rules", () => {
     expect(!isFailure(wait) && wait.tool === "wait_session" && wait.timeoutMs).toBe(3_600_000);
   });
 
-  test("same project, no chains, four links, one orchestrator per target", () => {
+  test("same project, four links, one orchestrator per target", () => {
     const a = thread("a");
     expect(checkMessage(a, thread("b", "/other"), emptyBook())?.code).toBe("not_allowed");
     expect(checkMessage(a, a, emptyBook())?.code).toBe("not_allowed");
@@ -143,13 +153,85 @@ describe("orchestration rules", () => {
     // A worktree thread belongs to its repository's project.
     const wt = thread("w", "/wt/x", { worktree: { path: "/wt/x", branch: "b", repo: "/repo" } });
     expect(checkMessage(a, wt, emptyBook())).toBeNull();
-    expect(checkMessage(a, thread("b"), book([link("z", "a")]))?.code).toBe("not_allowed");
     expect(checkMessage(a, thread("b"), book([link("z", "b")]))?.code).toBe("target_linked");
     const four = ["c", "d", "e", "f"].map((t) => link("a", t));
     expect(checkMessage(a, thread("b"), book(four))?.code).toBe("busy");
     expect(checkStart(a, book(four.slice(0, 2)), 3)?.code).toBe("busy");
     expect(checkStart(a, book(four.slice(0, 2)), 2)).toBeNull();
-    expect(checkStart(a, book([link("z", "a")]), 1)?.code).toBe("not_allowed");
+  });
+
+  test("a child may delegate one level further, and a grandchild is told the limit", () => {
+    // a (depth 0) started b (depth 1): b may still start or message someone.
+    const one = book([link("a", "b")]);
+    expect(depthOf(one, "a")).toBe(0);
+    expect(depthOf(one, "b")).toBe(1);
+    expect(checkStart(thread("b"), one, 1)).toBeNull();
+    expect(checkMessage(thread("b"), thread("c"), one)).toBeNull();
+    // c is at the limit: it is refused, and the reason names the limit.
+    const two = book([link("a", "b"), link("b", "c")]);
+    expect(depthOf(two, "c")).toBe(MAX_DEPTH);
+    const refused = checkStart(thread("c"), two, 1)!;
+    expect(refused.code).toBe("not_allowed");
+    expect(refused.message).toContain(`delegation stops at ${MAX_DEPTH}`);
+    expect(checkMessage(thread("c"), thread("d"), two)?.code).toBe("not_allowed");
+    // Reading is never blocked by the depth: c can still read thread ids.
+    expect(checkMessage(thread("c"), thread("d"), two, true)).toBeNull();
+    // A cycle in the book is answered, not looped over.
+    const loop = book([link("a", "b"), link("b", "a")]);
+    expect(depthOf(loop, "a")).toBeGreaterThan(MAX_DEPTH);
+    expect(checkStart(thread("a"), loop, 1)?.code).toBe("not_allowed");
+  });
+
+  test("messaging a thread that already works for the caller would close a loop", () => {
+    const two = book([link("a", "b"), link("b", "c")]);
+    const refused = checkMessage(thread("c"), thread("a"), two)!;
+    expect(refused.code).toBe("not_allowed");
+    expect(refused.message).toContain("loop");
+    // The thread directly above is an ancestor too, and a sibling is not.
+    expect(checkMessage(thread("b"), thread("a"), two)?.code).toBe("not_allowed");
+    expect(checkMessage(thread("c"), thread("b"), two)?.code).toBe("not_allowed");
+    const sibling = book([link("a", "b"), link("a", "c")]);
+    expect(checkMessage(thread("b"), thread("c"), sibling)?.code).toBe("target_linked");
+  });
+
+  test("a whole tree holds at most eight active links", () => {
+    // Two levels of four: four under a, four under b (b is a's child).
+    const tree = book([
+      link("a", "b"),
+      ...["c", "d", "e"].map((t) => link("a", t)),
+      ...["f", "g", "h", "i"].map((t) => link("b", t)),
+    ]);
+    expect(activeInTree(tree, "b")).toBe(MAX_TREE_LINKS);
+    const refused = checkStart(thread("c"), tree, 1)!;
+    expect(refused.code).toBe("busy");
+    expect(refused.message).toContain(`tree holds at most ${MAX_TREE_LINKS}`);
+    expect(refused.linksLeft).toBe(0);
+    // A message to another thread opens a link too, so the tree cap holds for it as well.
+    expect(checkMessage(thread("c"), thread("j"), tree)?.code).toBe("busy");
+    // One less in the tree: the last slot is there, and a fan-out of two is not.
+    const room = book([
+      link("a", "b"),
+      ...["c", "d", "e"].map((t) => link("a", t)),
+      ...["f", "g", "h"].map((t) => link("b", t)),
+    ]);
+    expect(checkStart(thread("c"), room, 1)).toBeNull();
+    expect(checkStart(thread("c"), room, 2)?.code).toBe("busy");
+  });
+
+  test("stopping a thread takes its active descendants, and nothing on a finish", () => {
+    const tree = book([
+      link("a", "b"),
+      link("b", "c"),
+      link("c", "d"),
+      link("b", "e", "done"),
+      link("z", "y"),
+    ]);
+    expect(activeDescendants(tree, "a").map((l) => l.target)).toEqual(["b", "c", "d"]);
+    expect(activeDescendants(tree, "c").map((l) => l.target)).toEqual(["d"]);
+    expect(activeDescendants(tree, "d")).toEqual([]);
+    // A cycle would otherwise repeat forever.
+    const loop = book([link("a", "b"), link("b", "a")]);
+    expect(activeDescendants(loop, "a").map((l) => l.target)).toEqual(["b"]);
   });
 
   test("lists only the caller's project, with harness, status and worktree", () => {
@@ -340,7 +422,11 @@ describe("the link book kept in the data store", () => {
   });
 
   test("merges the store's copy with this window's", () => {
-    const shared = { ...emptyBook(), links: [link("a", "b", "working")], grants: { a: ["start"] } };
+    const shared = {
+      ...emptyBook(),
+      links: [{ ...link("a", "b", "working"), askedRequest: "7" }],
+      grants: { a: ["start"] },
+    };
     const mine = {
       ...emptyBook(),
       links: [
@@ -358,6 +444,8 @@ describe("the link book kept in the data store", () => {
       ["a/b", "done"],
       ["a/c", "working"],
     ]);
+    // A mark either copy has is kept: the question reported before is not reported again.
+    expect(merged.links.find((l) => l.id === "a/b")!.askedRequest).toBe("7");
     // Nothing is opened twice: the counter is the highest anyone saw, and a grant is kept.
     expect(merged.counters).toEqual({ a: 2 });
     expect(merged.grants).toEqual({ a: ["start", "a/c"], b: ["start"] });
@@ -389,7 +477,7 @@ describe("waking a parent", () => {
     states: {},
     pending: {},
     waiting: {},
-    parents: { a: { title: "Parent a", running: false } },
+    threads: { a: { title: "Parent a", running: false } },
     now: 10_000,
     ...over,
   });
@@ -424,14 +512,35 @@ describe("waking a parent", () => {
     expect(wakesDue(b, one)[0]!.settled.map((l) => l.target)).toEqual(["c"]);
   });
 
-  test("a child works for another thread, so it is not woken", () => {
+  test("a child parent is woken by its own children, and its parent hears only when it settles", () => {
+    // c started a, a started b: b's result is a's to read, not c's.
     const chain = book([link("c", "a", "working"), done("a", "b")]);
-    expect(wakesDue(chain, ctx({ parents: { a: { title: "A", running: false } } }))).toEqual([]);
+    const threads = {
+      a: { title: "A", running: false },
+      c: { title: "C", running: false },
+    };
+    const wakes = wakesDue(chain, ctx({ threads }));
+    expect(wakes.map((w) => w.parent)).toEqual(["a"]);
+    expect(wakes[0]!.settled.map((l) => l.target)).toEqual(["b"]);
+    // a's own link from c is still working, so c has nothing to hear yet.
+    expect(wakes.every((w) => w.parent !== "c")).toBe(true);
+    // A wake is not a delegation: marking b heard leaves a's own link alone.
+    const heard = markWoken(chain, wakes[0]!, ctx({ threads }), 10_000);
+    expect(heard.links.find((l) => l.id === "c/a")!.state).toBe("working");
+    expect(heard.links.find((l) => l.id === "a/b")!.notifiedAt).toBe(10_000);
+    // a's own turn ends: its parent hears about a, once.
+    const settledA = updateLink(heard, "c/a", { state: "done", settledAt: 9_500 });
+    const up = wakesDue(settledA, ctx({ threads }));
+    expect(up.map((w) => w.parent)).toEqual(["c"]);
+    expect(up[0]!.settled.map((l) => l.target)).toEqual(["a"]);
+    expect(
+      wakesDue(markWoken(settledA, up[0]!, ctx({ threads }), 20_000), ctx({ threads, now: 30_000 })),
+    ).toEqual([]);
   });
 
   test("a parent that is gone is dropped, and its links are marked", () => {
     const b = book([done("a", "b")]);
-    const gone = ctx({ parents: {} });
+    const gone = ctx({ threads: {} });
     expect(wakesDue(b, gone)).toEqual([]);
     expect(orphanedLinks(b, gone).map((l) => l.id)).toEqual(["a/b"]);
     // Nothing is orphaned while the parent exists.
@@ -482,6 +591,183 @@ describe("waking a parent", () => {
     expect(after.links).toHaveLength(1);
     expect(wakesDue(after, ctx({ now: 11_000 }))).toEqual([]);
     expect(isActive(after.links[0]!.state)).toBe(false);
+  });
+
+  // Top started Middle, and Middle started Leaf: the live shape this had to get right.
+  const chainCtx = (over: Partial<WakeContext> = {}) =>
+    ctx({
+      threads: {
+        top: { title: "Top", running: false },
+        middle: { title: "Middle", running: false },
+        leaf: { title: "Leaf", running: false },
+      },
+      ...over,
+    });
+  const said = (text: string) => ({ text, truncated: false, filesChanged: 0 });
+
+  test("a middle thread is not finished for its parent while its own child works", () => {
+    // Middle's first turn ended with "STARTED LEAF"; Leaf still works.
+    const started = book([
+      { ...done("top", "middle", 9_000), answer: "STARTED LEAF" },
+      link("middle", "leaf", "working"),
+    ]);
+    expect(quietTree(started, chainCtx(), "middle")).toBe(false);
+    expect(wakesDue(started, chainCtx())).toEqual([]);
+
+    // Leaf finishes: Middle has a child result to be told about, so it is not quiet yet either.
+    const leafDone = updateLink(started, "middle/leaf", { state: "done", settledAt: 9_500, answer: "leaf" });
+    const forMiddle = wakesDue(leafDone, chainCtx({ now: 9_600 }));
+    expect(forMiddle.map((w) => w.parent)).toEqual(["middle"]);
+    expect(wakesDue(leafDone, chainCtx({ now: 9_600 })).every((w) => w.parent !== "top")).toBe(true);
+
+    // Middle is woken: its own turn runs, and Top still waits.
+    const told = markWoken(leafDone, forMiddle[0]!, chainCtx({ now: 9_600 }), 9_600);
+    const running = chainCtx({
+      now: 9_700,
+      threads: { ...chainCtx().threads, middle: { title: "Middle", running: true } },
+    });
+    expect(quietTree(told, running, "middle")).toBe(false);
+    expect(wakesDue(told, running)).toEqual([]);
+
+    // That wake turn ends with the real answer: the settled link Top holds takes it.
+    const answered = restateLinks(
+      told,
+      "middle",
+      said("leaf is done; here is the real answer"),
+      10_000,
+      true,
+    );
+    expect(answered.links.find((l) => l.id === "top/middle")!.answer).toBe(
+      "leaf is done; here is the real answer",
+    );
+    expect(answered.links.find((l) => l.id === "top/middle")!.settledAt).toBe(10_000);
+    const up = wakesDue(answered, chainCtx({ now: 11_000 }));
+    expect(up.map((w) => w.parent)).toEqual(["top"]);
+    expect(wakeMessage(up[0]!, 11_000)).toContain("here is the real answer");
+    // Once only.
+    const after = markWoken(answered, up[0]!, chainCtx({ now: 11_000 }), 11_000);
+    expect(wakesDue(after, chainCtx({ now: 20_000 }))).toEqual([]);
+  });
+
+  test("two leaves, or a failed one, hold the middle back until they are all read", () => {
+    const leaves = book([
+      done("top", "middle", 9_000),
+      { ...done("middle", "leaf", 9_400) },
+      { ...done("middle", "other", 9_600, "failed"), answer: "it broke" },
+    ]);
+    const threads = { ...chainCtx().threads, leaf: { title: "Leaf", running: false } };
+    // A failed child is a result like any other: Middle has to read it before Top hears.
+    expect(quietTree(leaves, ctx({ threads, now: 9_900 }), "middle")).toBe(false);
+    expect(pendingWakeUnder(leaves, ctx({ threads, now: 9_900 }), "middle")).toBe(true);
+    expect(wakesDue(leaves, ctx({ threads, now: 9_900 })).map((w) => w.parent)).toEqual(["middle"]);
+    // Middle is told about both at once, and then Top hears once.
+    const told = wakesDue(leaves, ctx({ threads, now: 9_900 }))[0]!;
+    expect(told.settled.map((l) => l.target).sort()).toEqual(["leaf", "other"]);
+    const marked = markWoken(leaves, told, ctx({ threads, now: 9_900 }), 9_900);
+    // Being told starts Middle's own turn (that is how the wake is delivered): Top still waits.
+    const waking = ctx({
+      threads: { ...threads, middle: { title: "Middle", running: true } },
+      now: 9_950,
+    });
+    expect(wakesDue(marked, waking).every((w) => w.parent !== "top")).toBe(true);
+    const answered = restateLinks(marked, "middle", said("both leaves are read"), 10_000, true);
+    expect(wakesDue(answered, ctx({ threads, now: 10_100 })).map((w) => w.parent)).toEqual(["top"]);
+  });
+
+  test("a middle that never wakes does not leave its parent waiting: an interrupted child is no result", () => {
+    // Leaf was stopped, not finished: nothing will ever report it, so Middle is quiet and Top hears.
+    const stopped = book([
+      { ...done("top", "middle", 9_000), answer: "STARTED LEAF" },
+      link("middle", "leaf", "interrupted"),
+    ]);
+    expect(pendingWakeUnder(stopped, chainCtx(), "middle")).toBe(false);
+    expect(quietTree(stopped, chainCtx(), "middle")).toBe(true);
+    const up = wakesDue(stopped, chainCtx());
+    expect(up.map((w) => w.parent)).toEqual(["top"]);
+    expect(up[0]!.settled.map((l) => l.target)).toEqual(["middle"]);
+  });
+
+  test("a reported link is re-armed once for the turn its own child's wake started", () => {
+    const reported = book([{ ...done("top", "middle", 9_000), answer: "STARTED LEAF", notifiedAt: 9_100 }]);
+    // A user's own turn in Middle does not tell Top again.
+    const userTurn = restateLinks(reported, "middle", said("more work by hand"), 10_000, false);
+    expect(userTurn.links[0]!.notifiedAt).toBe(9_100);
+    expect(userTurn.links[0]!.answer).toBe("STARTED LEAF");
+    // A turn started by the wake from Middle's own child does, once.
+    const woken = restateLinks(reported, "middle", said("the real answer"), 10_000, true);
+    expect(woken.links[0]!.notifiedAt).toBeUndefined();
+    expect(woken.links[0]!.answerChangedAt).toBe(10_000);
+    expect(quietTree(woken, chainCtx({ now: 10_100 }), "middle")).toBe(true);
+    const up = wakesDue(woken, chainCtx({ now: 10_200 }));
+    expect(up.map((w) => w.parent)).toEqual(["top"]);
+    const after = markWoken(woken, up[0]!, chainCtx({ now: 10_200 }), 10_200);
+    // Another wake turn changes nothing more: no loop, no third message.
+    const again = restateLinks(after, "middle", said("and again"), 11_000, true);
+    expect(again.links[0]!.notifiedAt).toBe(10_200);
+    expect(wakesDue(again, chainCtx({ now: 12_000 }))).toEqual([]);
+  });
+
+  test("a finished link never loses its answer to a turn that said nothing", () => {
+    const good = book([{ ...done("top", "middle", 9_000), answer: "MIDDLE DONE" }]);
+    // A turn whose rows carried no reply (they arrived later, or the harness said nothing) must
+    // not blank the answer the parent is about to read.
+    const silent = restateLinks(good, "middle", said(""), 10_000, false);
+    expect(silent.links[0]!.answer).toBe("MIDDLE DONE");
+    const spaces = restateLinks(good, "middle", said("   \n "), 10_000, false);
+    expect(spaces.links[0]!.answer).toBe("MIDDLE DONE");
+    // A turn that answered does take over.
+    const again = restateLinks(good, "middle", said("the real answer"), 10_000, false);
+    expect(again.links[0]!.answer).toBe("the real answer");
+    // A reported link is re-armed once for a wake turn that answered, and not for one that did not.
+    const reported = book([{ ...done("top", "middle", 9_000), answer: "STARTED LEAF", notifiedAt: 9_100 }]);
+    const silentWake = restateLinks(reported, "middle", said(""), 10_000, true);
+    expect(silentWake.links[0]!.notifiedAt).toBe(9_100);
+    expect(silentWake.links[0]!.answer).toBe("STARTED LEAF");
+    const spoke = restateLinks(reported, "middle", said("MIDDLE DONE"), 10_000, true);
+    expect(spoke.links[0]!.notifiedAt).toBeUndefined();
+  });
+
+  test("a link that settled without an answer takes the thread's last reply", () => {
+    // The shapes the app's transcript holds: the reply can sit before the turn's own rows.
+    const items = [
+      { kind: "user", text: "From thread “Middle” (agent): …" },
+      { kind: "tool", text: "" },
+      { kind: "assistant", text: "LEAF OK" },
+      { kind: "turnEnd", text: "" },
+    ];
+    expect(latestReply(items)).toBe("LEAF OK");
+    expect(latestReply([{ kind: "assistant", text: "   " }, { kind: "turnEnd" }])).toBe("");
+    expect(latestReply([])).toBe("");
+    // An empty row a whitespace chunk left after the reply (a "\n" between two calls) loses.
+    expect(
+      latestReply([
+        { kind: "assistant", text: "LEAF OK" },
+        { kind: "tool", text: "" },
+        { kind: "assistant", text: "  \n " },
+      ]),
+    ).toBe("LEAF OK");
+
+    const empty = book([{ ...done("middle", "leaf", 9_000), answer: "" }]);
+    const filled = fillAnswers(empty, { leaf: latestReply(items) });
+    expect(filled.links[0]!.answer).toBe("LEAF OK");
+    // The wake message then carries that answer, not an empty line.
+    const threads = { middle: { title: "Middle", running: false } };
+    const up = wakesDue(filled, ctx({ threads }));
+    expect(up.map((w) => w.parent)).toEqual(["middle"]);
+    expect(wakeMessage(up[0]!, 10_000)).toContain("LEAF OK");
+
+    // A link that has an answer keeps it, and an active one is never filled.
+    const kept = book([
+      { ...done("middle", "leaf", 9_000), answer: "LEAF OK" },
+      link("middle", "other", "working"),
+    ]);
+    expect(fillAnswers(kept, { leaf: "other reply", other: "other reply" })).toBe(kept);
+  });
+
+  test("a link still working is left alone by a turn of its target", () => {
+    const working = book([link("top", "middle", "working")]);
+    const after = restateLinks(working, "middle", said("still going"), 10_000, false);
+    expect(after.links[0]).toEqual(working.links[0]);
   });
 });
 

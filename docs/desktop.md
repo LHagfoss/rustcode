@@ -506,16 +506,21 @@ composer's keys stay outside the table.
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only (another project only
-  for `start_session`, one the user has opened, with approval), no chains,
-  4 active links per thread, a 32-message mailbox, 8 KiB messages, 16 KiB
-  reads, waits up to 1 h. Each needs the user's *Allow for This Thread*,
-  *Allow Once* or *Don't Allow*; grants and links are kept in app storage
-  (`rustcode.threadLinks`), and after a restart active links are
-  *interrupted*. Started threads go through `session/new` with
-  `_meta.rustcode.harness` and `.worktree` and get the prompt as their first
-  message, headed `From thread "<title>" (agent):`. Chips above the composer
-  (state, open, stop), a *Working for* banner, sidebar badges. Stopping a
-  thread stops the work it gave others.
+  for `start_session`, one the user has opened, with approval), two levels of
+  delegation (a top-level thread, its children and their children — no
+  deeper, and no message that would close a loop), 4 active links per thread,
+  8 per delegation tree, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
+  waits up to 1 h. Each needs the user's *Allow for This Thread*,
+  *Allow Once* or *Don't Allow*; grants and links are kept in the local data
+  store (`data-store.md`), with local storage as the first paint and for an
+  older engine, and after a restart active links are *interrupted*. Started
+  threads go through `session/new` with `_meta.rustcode.harness` and
+  `.worktree` and get the prompt as their first message, headed
+  `From thread "<title>" (agent):`. A child the orchestrator did not name is
+  named from the task's first words (`childTitle` in `src/lib/title.ts`), so
+  that header never becomes a thread title in the sidebar. Chips above the composer (state, open,
+  stop), a *Working for* banner, sidebar badges. Stopping a thread stops the
+  work it gave others, and theirs, in one cascade.
 - **Worktree threads.** The new-thread composer's *Worktree* toggle starts
   the thread in its own worktree, with a branch name suggested from the
   message (`<type>/<slug>`) that can be edited. A worktree thread's menu

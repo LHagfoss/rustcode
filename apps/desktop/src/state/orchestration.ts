@@ -15,6 +15,14 @@ export const MAX_BYTES = 8 * 1024;
 export const READ_BYTES = 16 * 1024;
 export const MAILBOX = 32;
 export const MAX_ACTIVE_LINKS = 4;
+/**
+ * How deep delegation goes: a top-level thread (0) may start children (1), and
+ * they may start grandchildren (2). A thread at the limit is told so, with the
+ * limit in the reason, instead of being told it cannot delegate at all.
+ */
+export const MAX_DEPTH = 2;
+/** Active links one delegation tree may hold, whatever their depth. */
+export const MAX_TREE_LINKS = 8;
 export const DEFAULT_WAIT_MS = 60_000;
 export const MAX_WAIT_MS = 3_600_000;
 export const MAX_LAST_TURNS = 10;
@@ -62,6 +70,11 @@ export interface Link {
   notifiedAt?: number;
   /** The child's pending request (its rpc id, as text) the parent was told about. */
   askedRequest?: string;
+  /**
+   * When a reported link's answer was replaced by the turn its own child's wake
+   * started: the parent is told once more, and never a third time.
+   */
+  answerChangedAt?: number;
 }
 
 /** One prompt run on several harnesses at once, compared side by side. */
@@ -408,20 +421,6 @@ export function listSessions(
   };
 }
 
-const activeFrom = (book: LinkBook, id: string) =>
-  book.links.filter((l) => l.orchestrator === id && isActive(l.state));
-
-/** How many more links a thread may open at once, for an answer to say. */
-export const linksLeft = (book: LinkBook, id: string): number =>
-  Math.max(0, MAX_ACTIVE_LINKS - activeFrom(book, id).length);
-
-/** No chains: a thread working for another one cannot pass work on. */
-function chained(book: LinkBook, caller: RuleThread): Failure | null {
-  return book.links.some((l) => l.target === caller.id && isActive(l.state))
-    ? failure("not_allowed", "this thread is working for another thread and cannot involve others")
-    : null;
-}
-
 /**
  * Whether `caller` may message (or read) `target`, before the user is asked.
  * Reading reaches any project while the app allows it; everything that writes,
@@ -444,18 +443,13 @@ export function checkMessage(
     );
   }
   if (read) return null;
-  const chain = chained(book, caller);
+  const chain = chainRefusal(book, caller, target);
   if (chain) return chain;
   if (book.links.some((l) => l.target === target.id && l.orchestrator !== caller.id && isActive(l.state))) {
     return failure("target_linked", "another thread is already working with that one");
   }
-  if (activeFrom(book, caller.id).length >= MAX_ACTIVE_LINKS) {
-    return failure(
-      "busy",
-      `at most ${MAX_ACTIVE_LINKS} at once; wait_session on one first (this thread has ${MAX_ACTIVE_LINKS})`,
-      0,
-    );
-  }
+  const slots = slotRefusal(book, caller, 1);
+  if (slots) return slots;
   if (book.links.filter((l) => l.target === target.id && l.state === "queued").length >= MAILBOX) {
     return failure("mailbox_full", `that thread has ${MAILBOX} messages waiting`);
   }
@@ -499,18 +493,9 @@ export function checkQueryData(acrossProjects: boolean): Failure | null {
 
 /** Whether `caller` may start `count` threads, before the user is asked. */
 export function checkStart(caller: RuleThread, book: LinkBook, count: number): Failure | null {
-  const chain = chained(book, caller);
+  const chain = chainRefusal(book, caller);
   if (chain) return chain;
-  const active = activeFrom(book, caller.id).length;
-  if (active + count > MAX_ACTIVE_LINKS) {
-    const left = Math.max(0, MAX_ACTIVE_LINKS - active);
-    return failure(
-      "busy",
-      `at most ${MAX_ACTIVE_LINKS} at once; wait_session on one first (this thread has ${active}, so ${count} would not fit, and ${left} ${left === 1 ? "slot is" : "slots are"} left)`,
-      left,
-    );
-  }
-  return null;
+  return slotRefusal(book, caller, count);
 }
 
 /** The message as the other thread receives it: who it is from, then the text. */
@@ -613,6 +598,26 @@ export function parseBook(raw: Json | undefined): LinkBook | null {
 const settledAtOf = (link: Link) => (typeof link.settledAt === "number" ? link.settledAt : -1);
 
 /**
+ * One link in two copies: the record that settled (or settled last) says what
+ * the link is and what it answered. The marks that keep a wake from being
+ * delivered twice are kept from either copy, so a crash between a wake and its
+ * save does not repeat it after a restart.
+ */
+function mergedLink(shared: Link, mine: Link): Link {
+  const [base, other] = settledAtOf(mine) > settledAtOf(shared) ? [mine, shared] : [shared, mine];
+  return {
+    ...other,
+    ...base,
+    ...(base.notifiedAt === undefined && other.notifiedAt !== undefined
+      ? { notifiedAt: other.notifiedAt }
+      : {}),
+    ...(base.askedRequest === undefined && other.askedRequest !== undefined
+      ? { askedRequest: other.askedRequest }
+      : {}),
+  };
+}
+
+/**
  * Two copies of the book: the one the data store holds (shared with every
  * window) and this window's. A link is taken once: a record that settled beats
  * one that did not, and otherwise the store's is kept, so a second window
@@ -625,7 +630,7 @@ export function mergeBooks(shared: LinkBook, mine: LinkBook): LinkBook {
   for (const link of mine.links) {
     const seen = links.get(link.id);
     if (!seen) links.set(link.id, link);
-    else if (settledAtOf(link) > settledAtOf(seen)) links.set(link.id, link);
+    else links.set(link.id, mergedLink(seen, link));
   }
   const grants: Record<string, string[]> = { ...shared.grants };
   for (const [who, keys] of Object.entries(mine.grants)) {
@@ -641,7 +646,153 @@ export function mergeBooks(shared: LinkBook, mine: LinkBook): LinkBook {
   return { links: [...links.values()], grants, counters, fanOuts };
 }
 
-/** A thread deleted: links from it are forgotten, links to it fail. */
+/** The links a thread started that are still live. */
+const activeFrom = (book: LinkBook, id: string) =>
+  book.links.filter((l) => l.orchestrator === id && isActive(l.state));
+
+/** How many more links a thread may open at once, for an answer to say. */
+export const linksLeft = (book: LinkBook, id: string): number =>
+  Math.max(0, MAX_ACTIVE_LINKS - activeFrom(book, id).length);
+
+/** The thread working for `id` right now, if any (a target has at most one). */
+const parentLink = (book: LinkBook, id: string) =>
+  book.links.find((l) => l.target === id && isActive(l.state));
+
+/**
+ * Every thread above `id`: the ones it works for, directly or further up. Safe
+ * against a cycle in the book, which a broken record or an older release
+ * could leave: the walk stops at a thread it has already seen.
+ */
+export function ancestorsOf(book: LinkBook, id: string): Set<string> {
+  const above = new Set<string>();
+  let at = id;
+  for (;;) {
+    const parent = parentLink(book, at);
+    if (!parent || above.has(parent.orchestrator)) return above;
+    above.add(parent.orchestrator);
+    at = parent.orchestrator;
+  }
+}
+
+/**
+ * How far a thread sits under the top-level one: 0 when nobody is working for
+ * it, 1 for a child, 2 for a grandchild. A book with a cycle in it answers
+ * deeper than any limit rather than looping forever.
+ */
+export function depthOf(book: LinkBook, id: string): number {
+  const above = ancestorsOf(book, id);
+  // A cycle means the walk found its own start among the ancestors.
+  if (above.has(id)) return MAX_DEPTH + 1;
+  return above.size;
+}
+
+/** The top-level thread `id` works within: itself, or the highest thread above it. */
+export function rootOf(book: LinkBook, id: string): string {
+  let at = id;
+  for (;;) {
+    const parent = parentLink(book, at);
+    if (!parent || parent.orchestrator === id) return at;
+    at = parent.orchestrator;
+  }
+}
+
+/**
+ * The threads of `id`'s delegation tree, its root included: the whole tree is
+ * capped ({@link MAX_TREE_LINKS}) so one thread cannot fill the machine with
+ * grandchildren.
+ */
+export function treeOf(book: LinkBook, id: string): Set<string> {
+  const ids = new Set([rootOf(book, id)]);
+  for (let added = true; added; ) {
+    added = false;
+    for (const link of book.links) {
+      if (!isActive(link.state) || ids.has(link.target) || !ids.has(link.orchestrator)) continue;
+      ids.add(link.target);
+      added = true;
+    }
+  }
+  return ids;
+}
+
+/** Active links in `id`'s tree, which the tree cap counts. */
+export function activeInTree(book: LinkBook, id: string): number {
+  const ids = treeOf(book, id);
+  return book.links.filter((l) => isActive(l.state) && ids.has(l.orchestrator)).length;
+}
+
+/**
+ * Every active link under `id`, in tree order: what stopping `id` takes down
+ * with it. Safe against a cycle: a thread is walked once.
+ */
+export function activeDescendants(book: LinkBook, id: string): Link[] {
+  const out: Link[] = [];
+  const seen = new Set([id]);
+  let frontier = [id];
+  while (frontier.length) {
+    const next: string[] = [];
+    for (const link of book.links) {
+      if (!isActive(link.state) || seen.has(link.target)) continue;
+      if (!frontier.includes(link.orchestrator)) continue;
+      seen.add(link.target);
+      out.push(link);
+      next.push(link.target);
+    }
+    frontier = next;
+  }
+  return out;
+}
+
+/**
+ * The `busy` refusal when `count` more links would not fit: this thread's four
+ * at once, or its tree's eight. `links_left` says what does fit, so the agent
+ * can retry with fewer instead of guessing.
+ */
+function slotRefusal(book: LinkBook, caller: RuleThread, count: number): Failure | null {
+  const active = activeFrom(book, caller.id).length;
+  if (active + count > MAX_ACTIVE_LINKS) {
+    const left = Math.max(0, MAX_ACTIVE_LINKS - active);
+    return failure(
+      "busy",
+      `at most ${MAX_ACTIVE_LINKS} at once; wait_session on one first (this thread has ${active}, so ${count} would not fit, and ${left} ${left === 1 ? "slot is" : "slots are"} left)`,
+      left,
+    );
+  }
+  const tree = activeInTree(book, caller.id);
+  if (tree + count > MAX_TREE_LINKS) {
+    const left = Math.max(0, MAX_TREE_LINKS - tree);
+    return failure(
+      "busy",
+      `this thread's tree holds at most ${MAX_TREE_LINKS} active links and has ${tree}: ${left} ${left === 1 ? "slot is" : "slots are"} left, so ${count} would not fit`,
+      left,
+    );
+  }
+  return null;
+}
+
+/**
+ * Why `caller` may not hand work to another thread: it sits at the depth
+ * limit, or (messaging) `target` already works for it. Null when it may.
+ */
+function chainRefusal(book: LinkBook, caller: RuleThread, target?: RuleThread): Failure | null {
+  if (target && ancestorsOf(book, caller.id).has(target.id)) {
+    return failure(
+      "not_allowed",
+      `“${target.title}” already works for this thread: messaging it would close a loop`,
+    );
+  }
+  const depth = depthOf(book, caller.id);
+  if (depth > MAX_DEPTH) {
+    // A cycle left by a broken record says nothing useful; the depth does.
+    return failure("not_allowed", "this thread's links loop; no other thread can be involved", 0);
+  }
+  if (depth === MAX_DEPTH) {
+    return failure(
+      "not_allowed",
+      `this thread is ${depth} levels under the one that started the work, and delegation stops at ${MAX_DEPTH}: give the answer back instead, or ask the thread above you`,
+    );
+  }
+  return null;
+}
 export function forget(book: LinkBook, thread: string): LinkBook {
   const grants = Object.fromEntries(
     Object.entries(book.grants)
@@ -743,7 +894,7 @@ export interface Wake {
   asking: Link[];
 }
 
-/** What the decision needs of the app: states, pending requests, waits, parents. */
+/** What the decision needs of the app: states, pending requests, waits, threads. */
 export interface WakeContext {
   /** Each link's state as shown (`needs_user` while its child waits on the user). */
   states: Readonly<Record<string, LinkState>>;
@@ -751,22 +902,135 @@ export interface WakeContext {
   pending: Readonly<Record<string, string>>;
   /** The links each parent is blocked on in `wait_session` right now. */
   waiting: Readonly<Record<string, readonly string[]>>;
-  /** The parents that still exist, with their title and whether their turn runs. */
-  parents: Readonly<Record<string, { title: string; running: boolean }>>;
+  /**
+   * The threads these rules need, by id: every link's orchestrator and every
+   * link's target, with the title a wake message names and whether a turn runs.
+   * A thread that is missing is gone.
+   */
+  threads: Readonly<Record<string, { title: string; running: boolean }>>;
+  /** Each link target's latest reply, for a finished link that holds no answer. */
+  answers?: Readonly<Record<string, string>>;
   now: number;
 }
 
 const stateOfLink = (link: Link, ctx: WakeContext) => ctx.states[link.id] ?? link.state;
 
 /**
+ * Whether `id` still owes its parent an answer: a child of its own is active,
+ * its own child result was not reported to it yet, or one of its turns runs. A
+ * middle thread that ended its turn after starting a leaf has *not* finished
+ * for its parent while the leaf works, or while the wake from the leaf is still
+ * to come — the answer it gave was "I started it", not the real one.
+ */
+export function quietTree(book: LinkBook, ctx: WakeContext, id: string): boolean {
+  if (ctx.threads[id]?.running) return false;
+  if (book.links.some((l) => l.orchestrator === id && isActive(stateOfLink(l, ctx)))) return false;
+  return !pendingWakeUnder(book, ctx, id);
+}
+
+/**
+ * A child result `id` has not been told about yet: a wake for it is due or
+ * about to be. Only `done` and `failed` wake a parent, so an interrupted or
+ * stopped child is not a reason to wait: nothing will ever report it.
+ */
+export function pendingWakeUnder(book: LinkBook, ctx: WakeContext, id: string): boolean {
+  return book.links.some((link) => {
+    if (link.orchestrator !== id) return false;
+    const state = stateOfLink(link, ctx);
+    if (state === "done" || state === "failed") return link.notifiedAt === undefined;
+    if (state !== "needs_user") return false;
+    const request = ctx.pending[link.id];
+    return request !== undefined && link.askedRequest !== request;
+  });
+}
+
+/** What one turn of a thread answered. */
+export interface TurnAnswer {
+  text: string;
+  truncated: boolean;
+  filesChanged: number;
+}
+
+/** The last reply in a transcript, whatever turn it belongs to. */
+export function latestReply(items: readonly { kind: string; text?: string }[]): string {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    if (item.kind === "assistant" && item.text?.trim()) return item.text;
+  }
+  return "";
+}
+
+/**
+ * A finished link's answer, read from the thread as it is now. A turn's rows
+ * reach the app a moment after its prompt returns, and a link that settled on
+ * that turn can hold nothing; the target's last reply is still the answer, and
+ * the wake message and `wait_session` must carry it rather than an empty line.
+ */
+export function fillAnswers(book: LinkBook, answers: Readonly<Record<string, string>>): LinkBook {
+  let changed = false;
+  const links = book.links.map((link) => {
+    if (link.state !== "done" && link.state !== "failed") return link;
+    if (link.answer?.trim()) return link;
+    const reply = answers[link.target];
+    if (!reply) return link;
+    changed = true;
+    const { text, truncated } = capped(reply);
+    return { ...link, answer: text, truncated };
+  });
+  return changed ? { ...book, links } : book;
+}
+
+/**
+ * The book after a turn of `target` ended. A link from a parent that settled
+ * but was not reported yet takes this turn's answer: the parent's wake waits for
+ * the target's whole subtree to be quiet, so the answer it carries must be the
+ * last one, not the "I started a leaf" of a turn that ended first. A turn that
+ * answered nothing leaves the answer it had. A link already reported is re-armed
+ * once — and only when this turn was started by the wake from the target's own
+ * child — so the real answer reaches the parent too; `answerChangedAt` keeps
+ * that from repeating, so no wake loops.
+ */
+export function restateLinks(
+  book: LinkBook,
+  target: string,
+  says: TurnAnswer,
+  now: number,
+  woken: boolean,
+): LinkBook {
+  return {
+    ...book,
+    links: book.links.map((link) => {
+      if (link.target !== target) return link;
+      if (link.state !== "done" && link.state !== "failed") return link;
+      // A turn that answered nothing (its rows were applied later, or the harness said nothing)
+      // leaves the link as it is: it must not erase the answer the parent is about to read.
+      if (!says.text.trim()) return link;
+      const replaced = {
+        ...link,
+        answer: says.text,
+        truncated: says.truncated,
+        filesChanged: says.filesChanged,
+      };
+      if (link.notifiedAt === undefined) return { ...replaced, settledAt: now };
+      if (!woken || link.answerChangedAt !== undefined) return link;
+      return { ...replaced, settledAt: now, notifiedAt: undefined, answerChangedAt: now };
+    }),
+  };
+}
+
+/**
  * What to tell each parent, one message per parent: children that settled and
  * children waiting on the user. A link is reported once — the mark lives in the
  * book (`notifiedAt`, `askedRequest`), so a restart does not tell it again — and
  * a parent blocked on it in `wait_session` already has the answer. A thread
- * working for another is not woken (it cannot delegate, and its own parent is
- * the one to tell). Parallel children are coalesced: while any of a parent's
- * links still runs, a settled one waits up to `WAKE_COALESCE_MS` for its
- * siblings; with none active the message goes at once.
+ * that is itself a child is woken the same way its top-level parent is: its
+ * children's results are its own to read, and its parent hears from it when
+ * its own turn ends. A settled child is reported only once its own subtree is
+ * quiet ({@link quietTree}): a middle thread is not finished for its parent
+ * while the thread it started still works. Parallel children are coalesced:
+ * while any of a parent's links still runs, a settled one waits up to
+ * `WAKE_COALESCE_MS` for its siblings; with none active the message goes at
+ * once.
  */
 export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
   const byParent = new Map<string, Link[]>();
@@ -777,16 +1041,15 @@ export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
   }
   const out: Wake[] = [];
   for (const [parent, links] of byParent) {
-    const here = ctx.parents[parent];
+    const here = ctx.threads[parent];
     if (!here) continue;
-    // A child works for another thread: its parent hears about it, not it.
-    if (book.links.some((l) => l.target === parent && isActive(stateOfLink(l, ctx)))) continue;
     const waiting = new Set(ctx.waiting[parent] ?? []);
     const active = links.some((l) => isActive(stateOfLink(l, ctx)));
     const settled = links.filter((link) => {
       const state = stateOfLink(link, ctx);
       if (state !== "done" && state !== "failed") return false;
       if (link.notifiedAt !== undefined || waiting.has(link.id)) return false;
+      if (!quietTree(book, ctx, link.target)) return false;
       return !active || ctx.now - (link.settledAt ?? 0) >= WAKE_COALESCE_MS;
     });
     const asking = links.filter((link) => {
@@ -818,7 +1081,7 @@ export function markWoken(book: LinkBook, wake: Wake, ctx: WakeContext, now: num
 export function orphanedLinks(book: LinkBook, ctx: WakeContext): Link[] {
   return book.links.filter(
     (link) =>
-      !ctx.parents[link.orchestrator] &&
+      !ctx.threads[link.orchestrator] &&
       link.notifiedAt === undefined &&
       (stateOfLink(link, ctx) === "done" || stateOfLink(link, ctx) === "failed"),
   );
@@ -834,6 +1097,7 @@ export function nextWakeAt(book: LinkBook, ctx: WakeContext): number | null {
     const state = stateOfLink(link, ctx);
     if (state !== "done" && state !== "failed") continue;
     if (link.notifiedAt !== undefined) continue;
+    if (!quietTree(book, ctx, link.target)) continue;
     const at = (link.settledAt ?? 0) + WAKE_COALESCE_MS;
     if (at <= ctx.now) continue;
     if (next === null || at < next) next = at;
