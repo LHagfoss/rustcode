@@ -28,6 +28,8 @@ export const Method = {
   rewind: "_rustcode/rewind",
   usageLimits: "_rustcode/usage/limits",
   usagePlans: "_rustcode/usage/plans",
+  /** The slash-command catalog, for a client with no session to advertise it on. */
+  commands: "_rustcode/commands",
   dataUsage: "_rustcode/data/usage",
   dataQuery: "_rustcode/data/query",
   dataLinksLoad: "_rustcode/data/links/load",

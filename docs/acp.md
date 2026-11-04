@@ -188,6 +188,17 @@ worktree thread); a status or pin change is sent as `session/update`
 `session_info_update` with `_meta.rustcode.status` or
 `_meta.rustcode.pinned`.
 
+## Slash commands
+
+A session's commands arrive as `session/update` `available_commands_update`
+when it starts (`session/new`) and when it is reopened (`session/load`), with
+the RustCode action in `_meta.rustcode.action` and `_meta.rustcode.report` on
+the bare read-only ones. `_rustcode/commands` (`{}`) answers the same update
+as a single value (`sessionUpdate`, `availableCommands`), so a client can offer
+the commands before it has a session to advertise them on: the desktop app's
+new thread shows its drawer from it, then follows the harness that thread
+starts on.
+
 ## Themes
 
 `_rustcode/themes` (`{"cwd"?}`) answers `{"active", "themes": [{"name",

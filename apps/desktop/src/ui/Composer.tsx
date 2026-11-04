@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { haptic } from "../lib/haptics";
@@ -63,6 +64,7 @@ import {
   cancel,
   cancelEdit,
   canSteer,
+  commandsFor,
   featureMissing,
   moveQueued,
   newThreadChoice,
@@ -220,7 +222,8 @@ export const Composer = memo(function Composer({
   const draft = useApp((s) => s.drafts[key] ?? "");
   const extras = useApp((s) => s.extras[key] ?? emptyExtras);
   const editing = useApp((s) => s.editing[key]);
-  const commands = useApp((s) => s.commands);
+  // This thread's own session list, or else the menu of its harness (the engine's catalog for a new thread).
+  const commands = useApp(useShallow((s) => commandsFor(s, thread?.id ?? null)));
   const projectCwd = useApp((s) => s.projectCwd);
   useApp((s) => s.harnesses); // re-render when harness capabilities arrive
   const status = useApp((s) => s.status);

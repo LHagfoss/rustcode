@@ -11,6 +11,7 @@ import {
   type CachedPlan,
   cancel,
   closeReport,
+  commandsFor,
   commitPlansAnswer,
   completeOnboarding,
   connect,
@@ -111,7 +112,7 @@ describe("engine controller with the mock engine", () => {
     const first = useApp.getState().sessions[0]!;
     selectThread(first.id);
     await until(() => selected()?.loaded === true);
-    await until(() => useApp.getState().commands.some((c) => c.name === "/clear"));
+    await until(() => !!useApp.getState().sessionCommands[first.id]);
     const items = selected()!.items.length;
 
     expect(await submit("/model")).toBe(true);
@@ -139,6 +140,33 @@ describe("engine controller with the mock engine", () => {
     expect(s.selectedId).toBeNull();
     expect(s.newThread?.harness).toBe(first.harness ?? "rustcode");
     expect(s.threads[first.id]!.items.length).toBe(items);
+  });
+
+  test("a new thread's drawer has commands before it starts, and follows its harness", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    // The catalog is asked for on connect, so a thread with no session has a menu.
+    await until(() => commandsFor(useApp.getState(), null).some((c) => c.name === "/status"));
+    startNewThread();
+    expect(useApp.getState().selectedId).toBeNull();
+    expect(commandsFor(useApp.getState(), null).map((c) => c.name)).toContain("/clear");
+
+    // Opening a thread remembers what its harness offered, and its session list is the thread's.
+    const first = useApp.getState().sessions[0]!;
+    selectThread(first.id);
+    await until(() => !!useApp.getState().sessionCommands[first.id]);
+    expect(useApp.getState().harnessCommands[first.harness ?? "rustcode"]?.length).toBeGreaterThan(0);
+
+    // Back to a new thread, then to a harness that has not listed anything: only the app's own
+    // commands, never the list the last thread's harness left behind.
+    startNewThread();
+    switchNewThreadHarness("claude-code");
+    const menu = commandsFor(useApp.getState(), null).map((c) => c.name);
+    expect(menu).not.toContain("/status");
+    expect(menu).toContain("/clear");
+    expect(menu).toContain("/model");
+    // The open thread still reads its own session, whatever the new-thread picker shows.
+    expect(commandsFor(useApp.getState(), first.id).map((c) => c.name)).toContain("/status");
   });
 
   test("a message with images queues whole while a turn runs, and stays editable", async () => {
@@ -193,7 +221,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     selectThread(useApp.getState().sessions[0]!.id);
     await until(() => selected()?.loaded === true);
-    await until(() => useApp.getState().commands.some((c) => c.name === "/status"));
+    await until(() => !!useApp.getState().sessionCommands[useApp.getState().sessions[0]!.id]);
     const items = selected()!.items.length;
     await submit("/status");
     await until(() => !selected()!.running && (useApp.getState().report?.text.includes("Folder") ?? false));
