@@ -1,4 +1,4 @@
-// Turn folding (docs/design.md, Turn fold), as T3 Code's timeline does it:
+// Turn folding (docs/design.md, Turn fold):
 // while a turn runs, its replies and the call it makes now show, and each run
 // of finished calls reads as one line ("Read 4 files and ran 2 commands");
 // once it ends, its work (thoughts, tool calls, subagents, the replies written
@@ -236,7 +236,7 @@ export function dominantKind(kinds: (string | undefined)[]): string | undefined 
 }
 
 /**
- * What a run of calls did, as T3 Code says it: the two most frequent actions
+ * What a run of calls did: the two most frequent actions
  * in a sentence, then the rest as other actions. `Read 4 files and ran 2
  * commands`, `Ran 2 commands, read 1 file and performed 2 other actions`.
  */
@@ -255,7 +255,7 @@ export function toolGroupLabel(kinds: (string | undefined)[]): string {
 
 /**
  * Folds runs of `GROUP_MIN` or more finished tool calls (and the thoughts
- * between them) into one group row each, the way T3 Code's timeline does, so
+ * between them) into one group row each, so
  * a turn of fifty calls reads as a handful of lines. A call still running
  * stays in view. `open` holds the groups the reader opened; an open group
  * keeps its header above the calls.

@@ -349,7 +349,7 @@ impl CodexAdapter {
             (state.model.clone(), state.effort.clone())
         };
         // `/compact` alone is Codex's own compaction, not a message for the model
-        // (`thread/compact/start`, as T3 Code routes it); its `contextCompaction`
+        // (`thread/compact/start`); its `contextCompaction`
         // item becomes the chat's compaction card.
         let compact = is_compact_command(&prompt);
         lock(&self.state).compacting = compact;

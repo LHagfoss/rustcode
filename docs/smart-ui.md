@@ -224,7 +224,7 @@ Comparison:
   colors and a few lines of CSS were enough for the samples.
 - **Chart.js**: bundled (205 KB, inlined only into pages that name it).
   Hand-drawn SVG charts were the weakest part of agent-written pages, and
-  T3 Code's agents get chart libraries from CDNs. Ours can't reach a CDN, so
+  agents elsewhere get chart libraries from CDNs. Ours can't reach a CDN, so
   the library ships with the app. d3 isn't bundled: it is larger and harder
   for an agent to use well in one block.
 
@@ -239,5 +239,5 @@ It shipped limited: opt-in, experimental, a single live view, with the
 controls above. The cost is bounded and paid only when a block runs, and the
 isolation held in every check. Opt-in meant agents almost never used it, so
 it is now on by default, and the prompt asks for visuals even unasked.
-T3 Code saw the same thing: its rule "render a visual only when asked" took
-inline charts from 8 of 8 eval cases to 0 of 8 (pingdotgg/t3code#25766).
+Another orchestrator saw the same thing: its rule "render a visual only when
+asked" took inline charts from 8 of 8 eval cases to 0 of 8.

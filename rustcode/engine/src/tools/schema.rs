@@ -2544,8 +2544,7 @@ pub(crate) fn harness_output_style() -> String {
     )
 }
 
-/// What an external harness adds to its own system prompt (as T3 Code's
-/// runtime instructions do): where it runs, so it can say so when asked and
+/// What an external harness adds to its own system prompt: where it runs, so it can say so when asked and
 /// link what it makes so the app opens it, the `rustcode-viz` types the
 /// connected client draws (none at level 0), then [`harness_output_style`].
 pub(crate) fn harness_instructions(harness: &str, visualization_level: u8) -> String {

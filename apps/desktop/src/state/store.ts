@@ -952,8 +952,7 @@ export async function refreshSessions(): Promise<void> {
 }
 
 /**
- * A turn ended: flag the thread unless you are looking at it, as T3 Code's
- * sidebar does. The row says Done (or Failed) until you open the thread.
+ * A turn ended: flag the thread unless you are looking at it. The row says Done (or Failed) until you open the thread.
  */
 export function markFinished(id: string, now = Date.now(), failed = false) {
   const looking = get().selectedId === id && typeof document !== "undefined" && document.hasFocus();
@@ -2057,7 +2056,7 @@ export function switchNewThreadHarness(harness: string) {
 }
 
 /**
- * Move a thread to another harness, as T3 Code's context handoff does: the
+ * Move a thread to another harness: the
  * harness starts fresh and its first prompt carries the conversation so far
  * (`_rustcode/session/harness`). It starts on the model and effort it was
  * last left on; the thread shows a divider where it switched.

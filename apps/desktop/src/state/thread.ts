@@ -362,7 +362,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
     case "usage":
       return { ...state, usage: update.usage };
     case "compaction":
-      // One quiet row, whichever harness compacted (as T3 Code shows it).
+      // One quiet row, whichever harness compacted.
       return {
         ...state,
         items: [
@@ -708,7 +708,7 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/** How long a thread rests untouched before the sidebar settles it on its own, as T3 Code does. */
+/** How long a thread rests untouched before the sidebar settles it on its own. */
 export const SETTLE_AFTER_MS = 3 * 86_400_000;
 
 /** Whether a thread last active at `at` has been idle long enough to settle. */
@@ -760,8 +760,7 @@ export function relativeAge(at: number | undefined, now = Date.now()): string {
 /**
  * The live line under a running turn: what the agent does right now. The
  * newest step of the turn decides: a running tool (as "Running <command>" for
- * a shell), a thought still streaming (its latest bold heading, as T3 Code
- * shows it), a reply being written, else "Working".
+ * a shell), a thought still streaming (its latest bold heading), a reply being written, else "Working".
  */
 export function workingLabel(items: TranscriptItem[]): string {
   for (let i = items.length - 1; i >= 0; i--) {

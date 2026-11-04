@@ -157,7 +157,7 @@ export const UserRow = memo(function UserRow({
           </button>
         )}
       </div>
-      {/* Time and actions show on hover, as T3 Code keeps the bubble quiet. */}
+      {/* Time and actions show on hover. */}
       <div className="mt-1 flex h-[22px] items-center gap-1 text-caption text-fg-faint opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
@@ -583,8 +583,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
 });
 
 /**
- * Where the thread moved to another harness, as T3 Code draws its context
- * handoff: a quiet divider, `Claude Code → Codex`, with the model it took.
+ * Where the thread moved to another harness: a quiet divider, `Claude Code → Codex`, with the model it took.
  */
 export function HandoffRow({ item }: { item: Item<"handoff"> }) {
   const harnesses = useApp((s) => s.harnesses?.harnesses);
@@ -683,7 +682,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
 }
 
 /**
- * A finished turn's work, folded (state/fold.ts), as T3 Code's divider:
+ * A finished turn's work, folded (state/fold.ts):
  * `Worked for 1m 3s ›` over a hairline, and the steps as they streamed under
  * it when opened. The final answer, errors and the footer stay outside it.
  */

@@ -1,4 +1,4 @@
-//! A SQLite index over the thread folders, after T3 Code's `statev2.sqlite`:
+//! A SQLite index over the thread folders:
 //! one file (`index.sqlite` in the config directory) with a `threads` table
 //! and an FTS5 trigram index over what was said, so the app can search every
 //! thread by its words, not only its title.

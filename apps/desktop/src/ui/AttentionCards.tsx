@@ -1,7 +1,7 @@
 // Approval and question cards over the composer, after AttentionCards.swift.
 // Only the selected thread's first pending request shows. An approval offers
 // Decline and Allow (prominent); the rarer answers (always allow, always
-// reject, approve all) sit in a More menu, as T3 Code does. Keys (when no
+// reject, approve all) sit in a More menu. Keys (when no
 // text field has focus): 1–9 pick an option in the engine's order
 // reject → always → allow once, shown on each button's tooltip.
 

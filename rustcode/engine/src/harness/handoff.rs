@@ -1,4 +1,4 @@
-//! Switching a thread to another harness, as T3 Code does it: the new harness
+//! Switching a thread to another harness: the new harness
 //! starts its own session, and its first prompt carries the conversation so
 //! far, newest first back to a budget, inside `<context>` before the user's
 //! message. The thread shows a divider where the switch happened; the divider
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 pub(crate) const ROLE: &str = "handoff";
 
 /// How much of the conversation the new harness gets, in characters (about
-/// 16k tokens, T3 Code's default budget).
+/// 16k tokens).
 const BUDGET: usize = 64 * 1024;
 /// A tool call's result is cut to this much.
 const TOOL_LIMIT: usize = 600;

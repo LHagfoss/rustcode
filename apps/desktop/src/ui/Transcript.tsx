@@ -41,7 +41,7 @@ type Row = {
   key: string;
   item?: TranscriptItem;
   working?: true;
-  /** Two or more subagents in a row, shown as one (T3 Code). */
+  /** Two or more subagents in a row, shown as one. */
   agents?: { items: Extract<TranscriptItem, { kind: "tool" }>[]; open: boolean };
   /** The running turn's foot: what it does now, when no row of its own shows it. */
   activity?: string;
@@ -188,7 +188,7 @@ export function Transcript({
       }
     }
     if (thread.running) {
-      // T3 Code's grammar: `Working for 12s` heads the turn, under the message that started it.
+      // `Working for 12s` heads the turn, under the message that started it.
       let at = out.length;
       for (let i = out.length - 1; i >= 0; i--) {
         if (out[i]!.item?.kind === "user") {
@@ -555,7 +555,7 @@ export function Transcript({
                   </div>
                 );
               }
-              // T3 Code's rhythm: 16 between messages, 8 around work, steps of one run tight.
+              // 16 between messages, 8 around work, steps of one run tight.
               const prev = rows[v.index - 1];
               const workLike = (r?: Row) =>
                 !!r?.group ||
