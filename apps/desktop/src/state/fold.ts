@@ -50,6 +50,8 @@ function staysVisible(item: TranscriptItem): boolean {
     item.kind === "handoff" ||
     item.kind === "switch" ||
     item.kind === "notice" ||
+    // What was asked and answered is part of the record, folded turns or not.
+    item.kind === "question" ||
     // Who was sent off, and how it went: the row keeps saying after the turn ends.
     (item.kind === "tool" && (!!subagentOf(item) || orchestrationTool(item.title) === "start_session"))
   );

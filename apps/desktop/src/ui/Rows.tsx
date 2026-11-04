@@ -11,6 +11,7 @@ import {
   ChevronUp,
   CircleCheck,
   CircleX,
+  CornerDownRight,
   ExternalLink,
   FilePlus,
   FileText,
@@ -18,6 +19,7 @@ import {
   Hourglass,
   Image as ImageIcon,
   Layers,
+  MessageCircleQuestion,
   MessagesSquare,
   MoveRight,
   Pencil,
@@ -217,6 +219,31 @@ export const UserRow = memo(function UserRow({
             </Tooltip>
           </>
         )}
+      </div>
+    </div>
+  );
+});
+
+/**
+ * A question the harness asked, and the answer given: kept in the transcript after it resolves,
+ * so the thread says what was decided where the work went on. The engine's history has no
+ * permission events, so this row is the app's own record (`state/thread.ts` `questionItem`).
+ */
+export const QuestionRow = memo(function QuestionRow({
+  item,
+}: {
+  item: Extract<TranscriptItem, { kind: "question" }>;
+}) {
+  return (
+    <div className="flex flex-col gap-1 rounded-lg bg-fill-subtle px-3 py-2">
+      <div className="flex min-w-0 items-center gap-1.5 text-callout text-fg-muted">
+        <MessageCircleQuestion size={13} className="shrink-0 text-accent" />
+        <span className="min-w-0 truncate font-medium">{item.header || "Question"}</span>
+      </div>
+      <div className="selectable line-clamp-3 text-body text-fg-muted">{item.text}</div>
+      <div className="flex min-w-0 items-start gap-1.5 text-body text-fg">
+        <CornerDownRight size={13} className="mt-[3px] shrink-0 text-success" />
+        <span className="min-w-0 break-words">{item.answer}</span>
       </div>
     </div>
   );
