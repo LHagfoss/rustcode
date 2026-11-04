@@ -21,6 +21,8 @@ export const ORCHESTRATION_TOOLS = [
   "update_session",
   "interrupt_session",
   "configure_session",
+  "transfer_session",
+  "list_pending_requests",
   "list_projects",
   "list_pull_requests",
 ] as const;
@@ -169,6 +171,10 @@ function orchestrationLabel(
       return { title: "Searched threads", summary: text(args.query) || undefined };
     case "list_worktrees":
       return { title: "Listed worktrees" };
+    case "transfer_session":
+      return { title: "Moved thread", summary: text(args.harness) || undefined };
+    case "list_pending_requests":
+      return { title: "Listed waiting requests" };
     case "list_projects":
       return { title: "Listed projects" };
     case "list_pull_requests": {

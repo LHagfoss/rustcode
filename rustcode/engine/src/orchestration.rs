@@ -40,12 +40,14 @@ pub const INTERRUPT_SESSION: &str = "interrupt_session";
 pub const CONFIGURE_SESSION: &str = "configure_session";
 pub const LIST_PROJECTS: &str = "list_projects";
 pub const LIST_PULL_REQUESTS: &str = "list_pull_requests";
+pub const TRANSFER_SESSION: &str = "transfer_session";
+pub const LIST_PENDING_REQUESTS: &str = "list_pending_requests";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
 pub const V2_TOOL_NAMES: [&str; 3] = [READ_SESSION, START_SESSION, FAN_OUT];
 /// Added by version 3: discover what can run, find threads, and manage them.
-pub const V3_TOOL_NAMES: [&str; 8] = [
+pub const V3_TOOL_NAMES: [&str; 10] = [
     LIST_HARNESSES,
     SEARCH_SESSIONS,
     LIST_WORKTREES,
@@ -54,6 +56,8 @@ pub const V3_TOOL_NAMES: [&str; 8] = [
     CONFIGURE_SESSION,
     LIST_PROJECTS,
     LIST_PULL_REQUESTS,
+    TRANSFER_SESSION,
+    LIST_PENDING_REQUESTS,
 ];
 /// The newest version this engine speaks.
 pub const VERSION: u8 = 3;
@@ -91,7 +95,7 @@ pub const PROMPT_HINT: &str = "\n\nOther threads: `list_sessions` lists this pro
 pub const PROMPT_HINT_V2: &str = "\n\nOther threads: `list_sessions` and `read_session` show this project's threads; `message_session` messages one, `start_session` starts one, `fan_out` runs one task on 2-4 harnesses; `wait_session` returns their answers. The user approves first. Use them only when the user asks to involve other threads.";
 
 /// [`PROMPT_HINT_V2`] for version 3 clients.
-pub const PROMPT_HINT_V3: &str = "\n\nOther threads: `list_sessions`, `search_sessions`, `read_session` and `list_worktrees` show threads; `list_harnesses` shows what can run, `list_projects` the user's projects and `list_pull_requests` this project's pull requests. `start_session`, `fan_out` and `message_session` give threads work, `wait_session` returns their answers; `update_session`, `configure_session` and `interrupt_session` manage them. The user approves work on other threads. Use them only when the user asks.";
+pub const PROMPT_HINT_V3: &str = "\n\nOther threads: `list_sessions`, `search_sessions`, `read_session` and `list_worktrees` show threads; `list_harnesses` shows what can run, `list_projects` the user's projects and `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. The user approves work on other threads. Use them only when the user asks.";
 
 /// Every orchestration tool of any version.
 pub fn is_tool(name: &str) -> bool {
@@ -156,6 +160,13 @@ fn bounded_text(args: &Value, key: &str) -> Result<(), String> {
 }
 
 /// An optional field that, when present, must be a non-empty string.
+fn required_name(args: &Value, key: &str) -> Result<(), String> {
+    match args.get(key) {
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(()),
+        _ => Err(format!("{key} is required")),
+    }
+}
+
 fn optional_name(args: &Value, key: &str) -> Result<(), String> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(()),
@@ -177,7 +188,13 @@ fn optional_title(args: &Value) -> Result<(), String> {
 /// Check the arguments before they leave the engine.
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     match name {
-        LIST_SESSIONS | LIST_HARNESSES | LIST_WORKTREES | LIST_PROJECTS => Ok(()),
+        LIST_SESSIONS | LIST_HARNESSES | LIST_WORKTREES | LIST_PROJECTS | LIST_PENDING_REQUESTS => {
+            Ok(())
+        }
+        TRANSFER_SESSION => {
+            required_name(args, "session_id")?;
+            required_name(args, "harness")
+        }
         LIST_PULL_REQUESTS => match args.get("state") {
             None | Some(Value::Null) => Ok(()),
             Some(Value::String(state)) if PR_STATES.contains(&state.as_str()) => Ok(()),
@@ -517,7 +534,7 @@ mod tests {
                 .all(|name| !tool_names(2).contains(name))
         );
         let v3 = tool_names(3);
-        assert_eq!(v3.len(), 14);
+        assert_eq!(v3.len(), 16);
         for name in V3_TOOL_NAMES {
             assert!(v3.contains(&name), "{name}");
             assert!(is_tool(name) && is_v3_tool(name));
@@ -538,6 +555,13 @@ mod tests {
             CONFIGURE_SESSION,
             json!({"model": "m", "effort": "high"})
         ));
+        assert!(ok(LIST_PENDING_REQUESTS, json!({})));
+        assert!(ok(
+            TRANSFER_SESSION,
+            json!({"session_id": "a", "harness": "codex"})
+        ));
+        assert!(!ok(TRANSFER_SESSION, json!({"session_id": "a"})));
+        assert!(!ok(TRANSFER_SESSION, json!({"harness": "codex"})));
         assert!(ok(LIST_PROJECTS, json!({})));
         assert!(ok(LIST_PULL_REQUESTS, json!({})));
         assert!(ok(LIST_PULL_REQUESTS, json!({"state": "merged"})));

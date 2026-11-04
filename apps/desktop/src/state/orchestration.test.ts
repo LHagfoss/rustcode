@@ -73,6 +73,13 @@ describe("management tools", () => {
     expect(parseCall({ tool: "configure_session", args: { effort: "high" } })).toMatchObject({
       effort: "high",
     });
+    expect(parseCall({ tool: "transfer_session", args: { session_id: "a", harness: "codex" } })).toEqual({
+      tool: "transfer_session",
+      target: "a",
+      harness: "codex",
+    });
+    expect(isFailure(parseCall({ tool: "transfer_session", args: { session_id: "a" } }))).toBe(true);
+    expect(parseCall({ tool: "list_pending_requests", args: {} })).toEqual({ tool: "list_pending_requests" });
   });
 
   test("checkManage keeps a thread to its own project", () => {
