@@ -223,7 +223,9 @@ function ThreadMenuItems({
               {snoozePresets(Date.now()).map((p) => (
                 <Item key={p.label} className={menuItem} onSelect={() => snoozeThread(session.id, p.at)}>
                   <span className="flex-1">{p.label}</span>
-                  <span className="text-caption text-fg-faint">{wakeLabel(p.at, Date.now()).replace("Tomorrow ", "")}</span>
+                  <span className="text-caption text-fg-faint">
+                    {wakeLabel(p.at, Date.now()).replace("Tomorrow ", "")}
+                  </span>
                 </Item>
               ))}
               <Separator className={menuSeparator} />
