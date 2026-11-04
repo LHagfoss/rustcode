@@ -434,11 +434,13 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
   if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
   if (call.snoozedUntil !== undefined) snoozeThread(target.id, call.snoozedUntil);
   const after = ruleThread(useApp.getState(), target.id);
+  const until = useApp.getState().snoozed[target.id];
   return {
     session_id: target.id,
     title: after?.title ?? target.title,
     pinned: useApp.getState().pinned.includes(target.id),
     status: after?.status ?? "idle",
+    snoozed_until: until ? new Date(until).toISOString() : null,
   };
 }
 
