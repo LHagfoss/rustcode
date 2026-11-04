@@ -540,8 +540,25 @@ export function dismissToast(id: string) {
   );
 }
 
+/**
+ * What an error says in words. The engine answers a failed method with a
+ * generic name in `message` ("Invalid params") and the reason in `data` — a
+ * folder that is not a git repository, a session already active — so the
+ * reason wins when there is one.
+ */
 export function errorText(error: unknown): string {
+  if (error instanceof RpcError) {
+    const detail = rpcReason(error.data);
+    if (detail) return detail;
+  }
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The reason inside an error's `data`: its message field, or the data when it is text. */
+function rpcReason(data: Json | undefined): string | null {
+  const text = str(data) ?? str(obj(data)?.message) ?? str(obj(obj(data)?.error)?.message);
+  const trimmed = text?.trim();
+  return trimmed ? trimmed : null;
 }
 
 // ---------------------------------------------------------------- connection
