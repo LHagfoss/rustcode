@@ -203,6 +203,12 @@ a stdio MCP server (`tools/list`, `tools/call`, `ping`; server name
   thread only. `tool_timeout_sec` is 3660, since Codex stops MCP calls after
   60 s by default and `wait_session` may wait an hour.
 
+- Pi: `pi-acp` ignores `mcpServers`, so the engine starts it with
+  `PI_ACP_PI_COMMAND` set to a small script that runs `pi --extension`. The
+  extension (`harness/pi_extension.ts`) starts the same server and registers
+  what it lists as `mcp__rustcode__*`, and removes the token from the
+  environment the agent's shell commands inherit.
+
 Each tool call goes to the parent engine over a local unix socket,
 `<config>/run/orchestrator-<pid>.sock` (socket 0600, directory 0700; sockets
 of engines no longer running are removed). The engine binds it lazily, when
