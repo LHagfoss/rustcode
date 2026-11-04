@@ -297,6 +297,30 @@ What each part does for an external thread:
   `permission_modes` is empty for external harnesses: each applies its own
   configured approval rules.
 
+### Recorded tool output
+
+A thread on an external harness records each tool call in its
+`history.json` the way a built-in turn does: one `tool` message with the
+output in `content`, the exit code in `tool_result.exit_code`, and a long
+output cut to the shared limits with the full text saved under
+`tool_output/` (`full_output_artifact`). The output is taken wherever the
+harness delivers it, because adapters differ:
+
+- **`content`**: the card text and diffs a harness sends with
+  `tool_call`/`tool_call_update` (Codex's commands and file changes,
+  Claude Code's rendered calls, Opencode).
+- **`_meta.terminal_output.data`**: Pi's shell command output, which arrives
+  only as deltas over a pseudo-terminal, with its exit code in
+  `_meta.terminal_exit.exit_code`. Deltas are appended, not replaced.
+- **`rawOutput`**: the structured result Codex sends for `mcpToolCall` and
+  other non-terminal items, and the content blocks Claude Code's adapter
+  sends for calls its renderer does not describe. Only text is kept: images,
+  audio and other binary blocks are left out.
+
+`read_session` still gives a thread's turns without tool output, and the
+search index (`thread_index.rs`) still indexes only user and assistant
+messages, so neither grows with this.
+
 ## Switching a thread's harness
 
 `_rustcode/session/harness` `{ "sessionId", "harness", "model"?, "effort"? }`

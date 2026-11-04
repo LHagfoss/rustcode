@@ -6,33 +6,55 @@
 //! | --- | --- |
 //! | message and thought chunks | an `assistant` message (`<think>` for thoughts) |
 //! | `tool_call` | an `assistant` message naming the call, then a `tool` message |
-//! | `tool_call_update` | changes that `tool` message in place: status, output summary |
+//! | `tool_call_update` | changes that `tool` message in place: status, output |
 //! | `plan` | one `tool` message per turn (`tool_name` `plan`), a checklist |
 //! | `usage_update` | kept as the thread's latest usage |
 //!
-//! A tool message's `tool_result.tool_name` is the ACP tool kind, its
-//! content the text the card showed (capped at [`TOOL_SUMMARY_LIMIT`]).
+//! A tool message's `tool_result.tool_name` is the ACP tool kind. Its content
+//! is the output, wherever the harness put it: `content` text and diffs, the
+//! `terminal_output` deltas Pi sends for a shell command (with its exit code
+//! in `terminal_exit`), or the structured `rawOutput` Codex and Claude Code
+//! use for MCP and other non-terminal tools. Output is bounded exactly like a
+//! built-in tool result — one message, with the full text in
+//! `tool_output/` when it does not fit — so a replay or a post-mortem has the
+//! same evidence as a native turn. Images and other binary payloads stay out.
 
 use crate::app::ChatMessage;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate, TextContent,
-    ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdateFields, ToolKind,
+    ContentBlock, Meta, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate,
+    TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdateFields,
+    ToolKind,
 };
 use rustcode_core::{ToolCallRef, ToolResultRecord};
+use serde_json::Value;
 use std::collections::HashMap;
 
-/// Output text a recorded tool call keeps; the harness has the rest.
-pub(crate) const TOOL_SUMMARY_LIMIT: usize = 4 * 1024;
 const PLAN_TOOL: &str = "plan";
 const PLAN_ID_PREFIX: &str = "plan:";
+
+/// While a turn runs, one tool's output is accumulated up to this much before
+/// it is bounded for the message: enough that the live card keeps streaming,
+/// small enough that a runaway command cannot grow history without bound. The
+/// final message keeps the built-in limit (50 KiB or 1000 lines, the rest in
+/// `tool_output/`), applied when the turn ends.
+const TOOL_OUTPUT_ACCUMULATION_LIMIT: usize = 256 * 1024;
+
+/// Where one recorded tool call lives in `history`.
+#[derive(Debug, Clone, Copy)]
+struct ToolSlot {
+    /// The `assistant` message naming the call.
+    call: usize,
+    /// The `tool` message holding its result.
+    result: usize,
+}
 
 #[derive(Default)]
 pub(crate) struct Transcript {
     pub history: Vec<ChatMessage>,
     reply: String,
     thought: String,
-    /// Tool call id → (its `assistant` message, its `tool` message).
-    tools: HashMap<String, (usize, usize)>,
+    /// Tool call id → where its two messages are.
+    tools: HashMap<String, ToolSlot>,
     /// This turn's plan message.
     plan: Option<usize>,
     /// The latest `usage_update`, as JSON.
@@ -70,7 +92,7 @@ impl Transcript {
                     };
                     self.start_tool(&id, &title);
                 }
-                self.apply(&id, &update.fields);
+                self.apply(&id, &update.fields, update.meta.as_ref());
             }
             SessionUpdate::Plan(plan) => self.plan(plan),
             SessionUpdate::UsageUpdate(_) => {
@@ -94,7 +116,10 @@ impl Transcript {
         if let Some(input) = &call.raw_input {
             fields = fields.raw_input(input.clone());
         }
-        self.apply(&id, &fields);
+        if let Some(output) = &call.raw_output {
+            fields = fields.raw_output(output.clone());
+        }
+        self.apply(&id, &fields, call.meta.as_ref());
     }
 
     /// Close the text so far into an `assistant` message that names the
@@ -118,15 +143,20 @@ impl Transcript {
             ..ToolResultRecord::default()
         });
         self.history.push(result);
-        self.tools
-            .insert(id.to_owned(), (call, self.history.len() - 1));
+        self.tools.insert(
+            id.to_owned(),
+            ToolSlot {
+                call,
+                result: self.history.len() - 1,
+            },
+        );
     }
 
-    fn apply(&mut self, id: &str, fields: &ToolCallUpdateFields) {
-        let Some(&(call, result)) = self.tools.get(id) else {
+    fn apply(&mut self, id: &str, fields: &ToolCallUpdateFields, meta: Option<&Meta>) {
+        let Some(slot) = self.tools.get(id).copied() else {
             return;
         };
-        if let Some(reference) = self.history[call]
+        if let Some(reference) = self.history[slot.call]
             .tool_calls
             .iter_mut()
             .find(|reference| reference.id == id)
@@ -138,9 +168,36 @@ impl Transcript {
                 reference.arguments = input.to_string();
             }
         }
-        let message = &mut self.history[result];
-        if let Some(content) = &fields.content {
-            message.content = summary(content);
+        // The output, from wherever this harness delivers it.
+        let snapshot = fields
+            .content
+            .as_deref()
+            .map(summary)
+            .filter(|text| !text.is_empty());
+        let terminal_delta = meta.and_then(terminal_output);
+        let raw = fields
+            .raw_output
+            .as_ref()
+            .and_then(raw_output_text)
+            .filter(|text| !text.is_empty());
+        let exit_code = meta
+            .and_then(terminal_exit)
+            .or_else(|| fields.raw_output.as_ref().and_then(raw_exit_code));
+
+        let message = &mut self.history[slot.result];
+        if let Some(text) = snapshot {
+            // A harness sends the whole output each time for a non-terminal
+            // tool, so this replaces rather than appends.
+            message.content = text;
+        } else if let Some(delta) = terminal_delta {
+            // A terminal streams deltas: append, bounded while the turn runs.
+            append_capped(&mut message.content, &delta, TOOL_OUTPUT_ACCUMULATION_LIMIT);
+        } else if let Some(text) = raw
+            && message.content.is_empty()
+        {
+            // Structured output for an MCP or dynamic tool, which carries no
+            // card text of its own.
+            message.content = text;
         }
         let record = message.tool_result.get_or_insert_with(Default::default);
         if let Some(kind) = fields.kind {
@@ -149,6 +206,9 @@ impl Transcript {
         if let Some(status) = fields.status {
             record.pending = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
             record.success = matches!(status, ToolCallStatus::Completed);
+        }
+        if let Some(code) = exit_code {
+            record.exit_code = Some(code as i32);
         }
         if let Some(locations) = &fields.locations {
             record.changed_paths = locations
@@ -190,13 +250,8 @@ impl Transcript {
         if let Some(reply) = self.take_reply() {
             self.history.push(reply);
         }
-        for (_, (_, result)) in self.tools.drain() {
-            if let Some(record) = self.history[result].tool_result.as_mut()
-                && record.pending
-            {
-                record.pending = false;
-                record.success = false;
-            }
+        for (_, slot) in self.tools.drain() {
+            finalize_tool_message(&mut self.history[slot.result]);
         }
     }
 
@@ -229,7 +284,8 @@ fn parse_kind(name: &str) -> ToolKind {
     serde_json::from_value(serde_json::Value::String(name.to_owned())).unwrap_or(ToolKind::Other)
 }
 
-/// The text a tool card showed, capped.
+/// The text a tool card showed. Not capped here: the message is bounded once,
+/// when the turn ends, so the full text can reach its artifact.
 fn summary(content: &[ToolCallContent]) -> String {
     let mut parts = Vec::new();
     for item in content {
@@ -244,18 +300,160 @@ fn summary(content: &[ToolCallContent]) -> String {
             _ => {}
         }
     }
-    cap(&parts.join("\n"), TOOL_SUMMARY_LIMIT)
+    parts.join("\n")
 }
 
-fn cap(text: &str, limit: usize) -> String {
-    if text.len() <= limit {
-        return text.to_owned();
+/// `_meta.terminal_output.data`: the next chunk of a shell command's output,
+/// as the harness streams it.
+fn terminal_output(meta: &Meta) -> Option<String> {
+    meta.get("terminal_output")?
+        .get("data")?
+        .as_str()
+        .map(str::to_owned)
+        .filter(|data| !data.is_empty())
+}
+
+/// `_meta.terminal_exit.exit_code`: how the command ended.
+fn terminal_exit(meta: &Meta) -> Option<i64> {
+    meta.get("terminal_exit")?
+        .get("exit_code")
+        .and_then(Value::as_i64)
+}
+
+/// The exit code a structured `rawOutput` carries (`exitCode` or
+/// `exit_code`), for a harness that does not use terminal meta.
+fn raw_exit_code(raw: &Value) -> Option<i64> {
+    ["exitCode", "exit_code", "exit"]
+        .iter()
+        .find_map(|key| raw.get(*key).and_then(Value::as_i64))
+}
+
+/// The text inside a structured `rawOutput`.
+///
+/// Codex sends an MCP tool's result there, Claude Code sends a tool result's
+/// content blocks, and Pi sends a tool's structured result. Only text is
+/// taken: images, audio and other binary blocks are skipped rather than
+/// stringified.
+fn raw_output_text(raw: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut binary = false;
+    collect_raw_text(raw, &mut parts, 0, &mut binary);
+    let text = parts.join("\n");
+    if !text.trim().is_empty() {
+        return Some(text);
     }
-    let mut end = limit;
-    while !text.is_char_boundary(end) {
-        end -= 1;
+    // A payload that was only an image or a blob has no text to keep.
+    if binary {
+        return None;
     }
-    format!("{}\n… (truncated)", &text[..end])
+    // A small status object with no text of its own still tells the reader
+    // what happened; anything larger is left out.
+    let compact = serde_json::to_string(raw).ok()?;
+    (compact.len() <= 4 * 1024).then_some(compact)
+}
+
+fn collect_raw_text(value: &Value, parts: &mut Vec<String>, depth: usize, binary: &mut bool) {
+    if depth > 6 || parts.len() >= 64 {
+        return;
+    }
+    match value {
+        Value::String(text) => {
+            if looks_binary(text) {
+                *binary = true;
+            } else if !text.trim().is_empty() {
+                parts.push(text.clone());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_raw_text(item, parts, depth + 1, binary);
+            }
+        }
+        Value::Object(map) => {
+            let kind = map.get("type").and_then(Value::as_str).unwrap_or("");
+            if matches!(kind, "image" | "audio" | "blob") {
+                *binary = true;
+                return;
+            }
+            for key in [
+                "text",
+                "content",
+                "output",
+                "stdout",
+                "stderr",
+                "aggregatedOutput",
+                "result",
+                "data",
+                "message",
+                "error",
+            ] {
+                if let Some(inner) = map.get(key) {
+                    collect_raw_text(inner, parts, depth + 1, binary);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A string that is mostly base64 or a data URL is binary payload, not text.
+fn looks_binary(text: &str) -> bool {
+    if text.starts_with("data:") && text.contains(";base64,") {
+        return true;
+    }
+    let sample: String = text.chars().take(4_096).collect();
+    !sample.is_empty() && sample.bytes().filter(|byte| *byte == b'=').count() > sample.len() / 8
+}
+
+/// Appends `text`, stopping at `limit` with one truncation marker.
+fn append_capped(target: &mut String, text: &str, limit: usize) {
+    if target.len() >= limit {
+        return;
+    }
+    if target.len() + text.len() <= limit {
+        target.push_str(text);
+        return;
+    }
+    let mut room = limit - target.len();
+    while room > 0 && !text.is_char_boundary(room) {
+        room -= 1;
+    }
+    target.push_str(&text[..room]);
+    target.push_str("\n… (truncated)");
+}
+
+/// Bounds a finished tool message the way a built-in tool result is bounded:
+/// one message, long output cut to the shared limits with the full text saved
+/// under `tool_output/`, so a replay and the search index stay the same size
+/// as for a native turn.
+fn finalize_tool_message(message: &mut ChatMessage) {
+    if let Some(record) = message.tool_result.as_mut()
+        && record.pending
+    {
+        record.pending = false;
+        record.success = false;
+    }
+    if message.content.is_empty() {
+        return;
+    }
+    let name = message
+        .tool_result
+        .as_ref()
+        .map(|record| record.tool_name.as_str())
+        .unwrap_or("tool");
+    let bounded = crate::network::output::truncate_tool_output_for_message(
+        name,
+        std::mem::take(&mut message.content),
+        "",
+    );
+    message.content = bounded.content;
+    if let Some(record) = message.tool_result.as_mut() {
+        record.truncated |= bounded.truncated;
+        record.payload_truncated |= bounded.truncated;
+        if record.full_output_artifact.is_none() {
+            record.full_output_artifact = bounded.full_output_artifact;
+        }
+    }
 }
 
 fn plan_checklist(plan: &Plan) -> String {
@@ -380,6 +578,7 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol::schema::v1::ToolCallUpdate;
 
     #[test]
     fn a_call_still_running_when_the_turn_ends_replays_as_failed() {
@@ -420,12 +619,256 @@ mod tests {
         assert_eq!(back.entries[2].content, "Ship");
     }
 
+    fn tool_update(fields: ToolCallUpdateFields) -> SessionUpdate {
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("t1", fields))
+    }
+
+    /// Pi's shell command: the output only ever arrives as terminal deltas,
+    /// with the exit code in its own meta object.
     #[test]
-    fn long_output_is_capped() {
-        let long = "x".repeat(TOOL_SUMMARY_LIMIT + 10);
-        let content = vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(
-            long,
-        )))];
-        assert!(summary(&content).ends_with("… (truncated)"));
+    fn pi_terminal_deltas_become_the_tool_row_output() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "echo hello-from-tool")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::Pending)
+                .content(vec![ToolCallContent::Terminal(
+                    agent_client_protocol::schema::v1::Terminal::new("t1"),
+                )])
+                .meta(Meta::from_iter([(
+                    "terminal_info".to_owned(),
+                    serde_json::json!({"terminal_id": "t1", "cwd": "/tmp"}),
+                )])),
+        ));
+        let mut delta = |data: &str| {
+            transcript.observe(&SessionUpdate::ToolCallUpdate(
+                ToolCallUpdate::new(
+                    "t1",
+                    ToolCallUpdateFields::new().status(ToolCallStatus::InProgress),
+                )
+                .meta(Meta::from_iter([(
+                    "terminal_output".to_owned(),
+                    serde_json::json!({"terminal_id": "t1", "data": data}),
+                )])),
+            ));
+        };
+        delta("hello-");
+        delta("from-tool\n");
+        transcript.observe(&SessionUpdate::ToolCallUpdate(
+            ToolCallUpdate::new(
+                "t1",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )
+            .meta(Meta::from_iter([(
+                "terminal_exit".to_owned(),
+                serde_json::json!({"terminal_id": "t1", "exit_code": 0, "signal": null}),
+            )])),
+        ));
+        transcript.end_reply();
+
+        let message = &transcript.history[2];
+        assert_eq!(message.role, "tool");
+        assert_eq!(message.content, "hello-from-tool\n");
+        let record = message.tool_result.as_ref().unwrap();
+        assert_eq!(record.exit_code, Some(0));
+        assert!(record.success);
+
+        let replayed = serde_json::to_value(replay(&transcript.history, None)).unwrap();
+        let card = replayed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|update| update["sessionUpdate"] == "tool_call")
+            .expect("the call replays");
+        assert_eq!(card["content"][0]["content"]["text"], "hello-from-tool\n");
+    }
+
+    /// Pi's non-shell tools send the full output as card content each time.
+    #[test]
+    fn pi_content_snapshot_replaces_the_earlier_output() {
+        let text = |text: &str| {
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .content(vec![ToolCallContent::from(ContentBlock::Text(
+                    TextContent::new(text),
+                ))])
+        };
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "read").kind(ToolKind::Read),
+        ));
+        transcript.observe(&tool_update(text("partial")));
+        transcript.observe(&tool_update(text("the whole file")));
+        transcript.end_reply();
+        assert_eq!(transcript.history[2].content, "the whole file");
+    }
+
+    /// Codex's `mcpToolCall`: no card content, the result in `rawOutput`.
+    #[test]
+    fn codex_mcp_raw_output_becomes_the_tool_row_output() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "search_sessions").kind(ToolKind::Other),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({
+                    "content": [{"type": "text", "text": "found two threads"}],
+                    "isError": false,
+                })),
+        ));
+        transcript.end_reply();
+        assert_eq!(transcript.history[2].content, "found two threads");
+    }
+
+    /// Codex's `commandExecution`: content text plus a `rawOutput` with the
+    /// exit code. The text wins; the code is kept.
+    #[test]
+    fn codex_command_output_and_exit_code_are_kept() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "cargo test").kind(ToolKind::Execute),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Failed)
+                .content(vec![ToolCallContent::from(ContentBlock::Text(
+                    TextContent::new("test failed"),
+                ))])
+                .raw_output(serde_json::json!({"exitCode": 101, "output": "test failed"})),
+        ));
+        transcript.end_reply();
+        let record = transcript.history[2].tool_result.as_ref().unwrap();
+        assert_eq!(transcript.history[2].content, "test failed");
+        assert_eq!(record.exit_code, Some(101));
+        assert!(!record.success);
+    }
+
+    /// Claude Code's adapter puts a tool result's blocks in `rawOutput`, with
+    /// no card content, for calls its renderer does not describe.
+    #[test]
+    fn claude_raw_output_blocks_are_kept_as_text() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "Read /repo/AGENTS.md").kind(ToolKind::Read),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(serde_json::json!([
+                    {"type": "text", "text": "# Rules\nLine one."},
+                    {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},
+                ])),
+        ));
+        transcript.end_reply();
+        assert_eq!(transcript.history[2].content, "# Rules\nLine one.");
+    }
+
+    /// Opencode sends its output as card content, which already worked; the
+    /// row must keep it and not gain a raw dump on top.
+    #[test]
+    fn opencode_content_is_kept_without_a_raw_dump() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "bash").kind(ToolKind::Execute),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .content(vec![ToolCallContent::from(ContentBlock::Text(
+                    TextContent::new("done"),
+                ))])
+                .raw_output(serde_json::json!({"output": "done", "exitCode": 0})),
+        ));
+        transcript.end_reply();
+        assert_eq!(transcript.history[2].content, "done");
+        assert_eq!(
+            transcript.history[2]
+                .tool_result
+                .as_ref()
+                .unwrap()
+                .exit_code,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn an_image_only_raw_output_stores_no_text() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "screenshot").kind(ToolKind::Other),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({"content": [
+                    {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}
+                ]})),
+        ));
+        transcript.end_reply();
+        assert_eq!(transcript.history[2].content, "");
+    }
+
+    /// A command that floods the terminal cannot grow history without bound:
+    /// the row keeps the built-in limit and the full text goes to a file.
+    #[test]
+    fn a_flood_of_terminal_output_is_bounded_with_an_artifact() {
+        const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
+        // Artifacts go to the config directory, which a test build keeps to
+        // itself; nothing here touches a real one.
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "yes").kind(ToolKind::Execute),
+        ));
+        for _ in 0..8 {
+            transcript.observe(&SessionUpdate::ToolCallUpdate(
+                ToolCallUpdate::new(
+                    "t1",
+                    ToolCallUpdateFields::new().status(ToolCallStatus::InProgress),
+                )
+                .meta(Meta::from_iter([(
+                    "terminal_output".to_owned(),
+                    serde_json::json!({"data": "x".repeat(30 * 1024)}),
+                )])),
+            ));
+        }
+        transcript.end_reply();
+
+        let message = &transcript.history[2];
+        let record = message.tool_result.as_ref().unwrap();
+        assert!(
+            message.content.len() <= MAX_TOOL_OUTPUT_BYTES,
+            "message stayed {} bytes",
+            message.content.len()
+        );
+        assert!(record.truncated && record.payload_truncated);
+        let artifact = record.full_output_artifact.as_ref().expect("artifact");
+        let saved = std::fs::read_to_string(artifact).unwrap();
+        assert_eq!(saved.len(), 8 * 30 * 1024, "the whole flood was saved");
+        assert!(message.content.contains("Full output saved to"));
+    }
+
+    #[test]
+    fn a_turn_with_no_output_keeps_an_empty_row() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "sleep").kind(ToolKind::Other),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        ));
+        transcript.end_reply();
+        assert_eq!(transcript.history[2].content, "");
+        assert!(transcript.history[2].tool_result.as_ref().unwrap().success);
     }
 }
