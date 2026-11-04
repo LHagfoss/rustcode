@@ -22,7 +22,7 @@ rules are in [design.md](design.md), themes in [themes.md](themes.md), and
 reply formatting in [output-style.md](output-style.md).
 
 Shipped in **1.0.0** (2026-11-02, #2788 to #2837): the app on every harness,
-orchestration, worktree threads, checkpoints and review; a T3-style
+orchestration, worktree threads, checkpoints and review; a compact
 sidebar (live clock, Pin/Settle on hover, threads idle for three days settle,
 Settled paged); harness settings with live model lists (Claude Code first,
 RustCode as the local harness); approvals with Allow/Decline/More; tool-call
@@ -44,12 +44,12 @@ Next, in rough order:
    bar (`autoCompactThreshold`), Claude's idle compaction before the prompt
    cache expires.
 4. SQLite as the store, not only an index: pins and status first, then an
-   event table (T3's `orchestration_v2_events` with projections), the
+   event table with projections, the
    sidebar listed from the index, lazy transcript import.
 5. The rest of [Not yet ported](#not-yet-ported).
 
 Item 4 and the rest of the orchestration work move the domain model from
-sessions to a T3-style execution graph:
+sessions to an execution graph:
 [architecture/execution-graph.md](architecture/execution-graph.md) records that
 decision, the current → target mapping and the migration order (#2879).
 

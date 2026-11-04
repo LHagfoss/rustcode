@@ -7,7 +7,7 @@
 //! refreshed by folder modification time, and when it is missing or
 //! unreadable it is deleted and built again: losing it loses nothing.
 //! Migrations are numbered and recorded with their names; a recorded name
-//! that does not match refuses to open rather than skip a step (T3's lesson).
+//! that does not match refuses to open rather than skip a step.
 
 use std::path::{Path, PathBuf};
 

@@ -820,8 +820,8 @@ export function WaitingRow({ count }: { count: number }) {
 }
 
 /**
- * The running turn's header, right under the message that started it, as T3
- * Code draws it: `Working for 12s` over a hairline. What the turn does now
+ * The running turn's header, right under the message that started it:
+ * `Working for 12s` over a hairline. What the turn does now
  * shows at the foot ({@link LiveActivityRow}).
  */
 export function WorkingRow({ startedAt, now }: { startedAt?: number; now: number }) {
