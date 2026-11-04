@@ -551,6 +551,45 @@ pub const CONFIGURE_SESSION: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+pub const TRANSFER_SESSION: Tool = Tool {
+    name: crate::orchestration::TRANSFER_SESSION,
+    description: "Move an idle thread of this project to another harness; it takes the conversation so far with its next message. A thread cannot move itself. The user approves it. Use list_harnesses for the ids.",
+    arguments: r#"{"session_id": "id from list_sessions", "harness": "codex"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "harness": {"type": "string", "minLength": 1}
+            },
+            "required": ["session_id", "harness"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const LIST_PENDING_REQUESTS: Tool = Tool {
+    name: crate::orchestration::LIST_PENDING_REQUESTS,
+    description: "List the approvals and questions this project's open threads are waiting on from the user: session_id, thread title, whether it is an approval or a question, and what it asks. Only the user can answer them.",
+    arguments: r#"{}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 pub const LIST_PROJECTS: Tool = Tool {
     name: crate::orchestration::LIST_PROJECTS,
     description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Use a path as start_session's project.",

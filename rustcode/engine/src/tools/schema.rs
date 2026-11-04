@@ -843,6 +843,8 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::CONFIGURE_SESSION,
     crate::orchestration::LIST_PROJECTS,
     crate::orchestration::LIST_PULL_REQUESTS,
+    crate::orchestration::TRANSFER_SESSION,
+    crate::orchestration::LIST_PENDING_REQUESTS,
 ];
 
 /// Whether a read-only child agent's gate runs `tool`, so it is worth

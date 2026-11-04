@@ -91,7 +91,9 @@ describe("delegationAllowed for managing threads", () => {
     expect(delegationAllowed("edits", "organize")).toBe(true);
     expect(delegationAllowed("edits", "interrupt")).toBe(false);
     expect(delegationAllowed("edits", "configure")).toBe(false);
+    expect(delegationAllowed("edits", "transfer")).toBe(false);
     expect(delegationAllowed("full", "interrupt")).toBe(true);
     expect(delegationAllowed("full", "configure")).toBe(true);
+    expect(delegationAllowed("full", "transfer")).toBe(true);
   });
 });

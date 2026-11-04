@@ -193,6 +193,8 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, status? }`; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
+| `transfer_session` | `{ session_id, harness }` | `{ session_id, harness, moved, model?, effort? }`; the thread must be idle, and a thread cannot move itself | Asked, allowed by Full access |
+| `list_pending_requests` | none | `{ requests: [{ session_id, title, kind, asks }] }`: approvals and questions this project's open threads wait on. Agents cannot answer them | None |
 | `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
 

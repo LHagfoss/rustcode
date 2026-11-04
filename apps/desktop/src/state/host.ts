@@ -68,6 +68,7 @@ import {
   setThreadStatus,
   snoozeThread,
   statusOf,
+  switchThreadHarness,
   toast,
   togglePin,
   updateThread,
@@ -146,6 +147,8 @@ export function verb(q: GrantAsk): string {
       return `stop “${q.target}”`;
     case "configure":
       return `change the model of “${q.target}”`;
+    case "transfer":
+      return `move “${q.target}” to another harness`;
   }
 }
 
@@ -166,6 +169,7 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   organize: "update_session",
   interrupt: "interrupt_session",
   configure: "configure_session",
+  transfer: "transfer_session",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -177,6 +181,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   organize: "Changed a thread",
   interrupt: "Stopped a thread",
   configure: "Changed a thread's model",
+  transfer: "Moved a thread to another harness",
 };
 
 const toasted = new Set<string>();
@@ -269,6 +274,10 @@ async function answer(params: JsonObject): Promise<JsonObject> {
       return interruptSession(caller, call.target);
     case "configure_session":
       return configureSession(caller, call);
+    case "transfer_session":
+      return transferSession(caller, call.target, call.harness);
+    case "list_pending_requests":
+      return listPendingRequests(caller);
   }
 }
 
@@ -485,6 +494,55 @@ async function configureSession(caller: RuleThread, call: ConfigureCall): Promis
     access: permissionModeOf(useApp.getState(), target.id),
     ...ranWith(target.id),
   };
+}
+
+async function transferSession(caller: RuleThread, id: string, harness: string): Promise<JsonObject> {
+  const target = manageTarget(caller, id);
+  if (isFailure(target)) return failureJson(target);
+  if (target.id === caller.id) return failureJson(failure("not_allowed", "a thread cannot move itself"));
+  if (target.running)
+    return failureJson(failure("busy", `${target.title} is working; stop it or wait for it first`));
+  const listed = useApp.getState().harnesses?.harnesses ?? [];
+  const to = listed.find((h) => h.id === harness);
+  if (!to) {
+    return failureJson(
+      failure("invalid", `no harness “${harness}”; choose from ${listed.map((h) => h.id).join(", ")}`),
+    );
+  }
+  const reason = unavailableReason(to);
+  if (reason) return failureJson(failure("not_allowed", `${to.name} is not available: ${reason}`));
+  if (target.harness === harness) return { session_id: target.id, harness, moved: false };
+  const no = await permitted(caller, `transfer:${target.id}`, {
+    kind: "transfer",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail: `It would continue on ${to.name}, which gets the conversation so far with its next message.`,
+  });
+  if (no) return failureJson(no);
+  await openThread(target.id);
+  if (!(await switchThreadHarness(target.id, harness))) {
+    return failureJson(failure("failed", "the thread could not be moved"));
+  }
+  return { session_id: target.id, harness, moved: true, ...ranWith(target.id) };
+}
+
+/** What this project's open threads wait on. Only what they ask: answering stays with the user. */
+function listPendingRequests(caller: RuleThread): JsonObject {
+  const s = useApp.getState();
+  const requests = Object.values(s.threads)
+    .filter((t) => t.permissions.length)
+    .map((t) => ({ thread: t, rule: ruleThread(s, t.id) }))
+    .filter(({ rule }) => rule && sameProject(projectOf(rule), projectOf(caller)))
+    .flatMap(({ thread, rule }) =>
+      thread.permissions.map((p) => ({
+        session_id: thread.id,
+        title: rule?.title ?? "",
+        kind: p.question ? "question" : "approval",
+        asks: p.question?.text ?? p.title,
+      })),
+    );
+  return { requests };
 }
 
 async function read(caller: RuleThread, targetId: string, lastTurns: number): Promise<JsonObject> {

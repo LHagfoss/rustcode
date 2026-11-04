@@ -120,6 +120,8 @@ export type Call =
     }
   | { tool: "interrupt_session"; target: string }
   | { tool: "configure_session"; target?: string; model?: string; effort?: string }
+  | { tool: "transfer_session"; target: string; harness: string }
+  | { tool: "list_pending_requests" }
   | { tool: "list_projects" }
   | { tool: "list_pull_requests"; state: PullStateChoice };
 
@@ -167,6 +169,14 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (!target) return failure("invalid", "session_id is required");
       return { tool: "interrupt_session", target };
     }
+    case "transfer_session": {
+      const target = s(args.session_id) ?? "";
+      const harness = s(args.harness) ?? "";
+      if (!target || !harness) return failure("invalid", "session_id and harness are required");
+      return { tool: "transfer_session", target, harness };
+    }
+    case "list_pending_requests":
+      return { tool: "list_pending_requests" };
     case "configure_session":
       return {
         tool: "configure_session",
@@ -482,7 +492,7 @@ export function linkResult(link: Link, state: LinkState, status?: ThreadStatus):
 
 /** What the user is asked, in words. */
 export interface GrantAsk {
-  kind: "message" | "read" | "start" | "fan_out" | "organize" | "interrupt" | "configure";
+  kind: "message" | "read" | "start" | "fan_out" | "organize" | "interrupt" | "transfer" | "configure";
   caller: string;
   callerTitle: string;
   /** The thread messaged or read, or the new thread's title. */
