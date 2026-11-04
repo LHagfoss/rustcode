@@ -58,6 +58,10 @@ const MOCKS: Record<string, unknown> = {
   list_worktrees: {
     worktrees: [{ session_id: "t1", title: "Add the login form", branch: "feat/login-form", path: "/wt/login" }],
   },
+  list_pending_requests: {
+    requests: [{ session_id: "t1", title: "Add the login form", kind: "approval", asks: "Run: cargo test" }],
+  },
+  transfer_session: { session_id: "t1", harness: "codex", moved: true },
   list_projects: {
     projects: [{ path: "/Users/you/code/rustcode", name: "rustcode", threads: 3, working: false }],
   },
