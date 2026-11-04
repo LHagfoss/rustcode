@@ -142,17 +142,26 @@ function shortUrl(href: string, children: ReactNode): ReactNode {
   }
 }
 
+/** Starts the inline code that stands for a sent message's leading command: drawn as a chip. */
+export const COMMAND_MARK = "\u2063";
+
 const components: Components = {
-  h1: ({ children }) => <h1 className="mt-1 font-bold text-title2">{children}</h1>,
-  h2: ({ children }) => <h2 className="mt-1 font-bold text-title3">{children}</h2>,
-  h3: ({ children }) => <h3 className="font-semibold text-body">{children}</h3>,
-  h4: ({ children }) => <h4 className="font-semibold text-body">{children}</h4>,
-  p: ({ children }) => <p className="leading-[20px]">{children}</p>,
+  h1: ({ children }) => (
+    <h1 className="mt-2.5 font-semibold text-[20px] text-fg leading-[1.3]">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mt-2.5 font-semibold text-title2 text-fg leading-[1.3]">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mt-1.5 font-semibold text-title3 text-fg leading-[1.3]">{children}</h3>
+  ),
+  h4: ({ children }) => <h4 className="mt-1 font-semibold text-body text-fg leading-[1.3]">{children}</h4>,
+  p: ({ children }) => <p className="leading-[1.625]">{children}</p>,
   ul: ({ children }) => <ul className="ml-[1.1em] list-disc space-y-0.5 marker:text-fg-muted">{children}</ul>,
   ol: ({ children }) => (
     <ol className="ml-[1.4em] list-decimal space-y-0.5 marker:text-fg-muted">{children}</ol>
   ),
-  li: ({ children }) => <li className="pl-0.5 leading-[20px] [&>ol]:mt-0.5 [&>ul]:mt-0.5">{children}</li>,
+  li: ({ children }) => <li className="pl-0.5 leading-[1.625] [&>ol]:mt-0.5 [&>ul]:mt-0.5">{children}</li>,
   a: ({ href, children }) =>
     // A bare link (autolinked, or `<url>`) reads as a chip; a link with its own words stays a link.
     href && /^https?:\/\//i.test(href) && typeof children === "string" && children === href ? (
@@ -199,6 +208,12 @@ const components: Components = {
       return <MermaidBlock code={source} fallback={<CodeBlock code={source} lang={lang} />} />;
     }
     if (block) return <CodeBlock code={text.replace(/\n$/, "")} lang={lang} />;
+    if (text.startsWith(COMMAND_MARK))
+      return (
+        <span className="rounded-md bg-accent/12 px-1.5 py-0.5 font-medium font-mono text-[0.85em] text-accent">
+          {text.slice(COMMAND_MARK.length)}
+        </span>
+      );
     const ref = parseInlineRef(text);
     if (ref)
       return (
@@ -214,7 +229,7 @@ const components: Components = {
         </button>
       );
     return (
-      <code className="rounded-xs bg-fill px-1 py-px font-mono text-[0.9em] [box-decoration-break:clone]">
+      <code className="rounded-sm bg-fill px-[0.35em] py-[0.1em] font-mono text-[0.85em] [box-decoration-break:clone]">
         {children}
       </code>
     );
@@ -326,7 +341,10 @@ export const Markdown = memo(function Markdown({
     if (!live) forgetReveal(key);
   }, [live, key]);
   return (
-    <div ref={root} className={cx("selectable flex flex-col gap-2.5 text-body break-words", className)}>
+    <div
+      ref={root}
+      className={cx("selectable flex flex-col gap-2.5 text-body text-fg/90 break-words", className)}
+    >
       {blocks.map((block, i) => (
         <Block key={i} text={block} live={live && i === tail ? `${key}\u0000${i}` : undefined} />
       ))}

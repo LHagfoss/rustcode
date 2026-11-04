@@ -608,7 +608,7 @@ function Appearance() {
         </Row>
         <Row
           title="Rounded font"
-          reset={roundedFont ? undefined : () => setRoundedFont(true)}
+          reset={roundedFont ? () => setRoundedFont(false) : undefined}
           subtitle="SF Pro Rounded for the interface and chat. Code stays monospaced."
         >
           <Switch label="Rounded font" checked={roundedFont} onChange={setRoundedFont} />

@@ -232,8 +232,8 @@
     -webkit-user-select: none;
     cursor: default;
   }
-  /* The interface reads rounder in SF Pro Rounded; Settings › Appearance turns it off. */
-  :root:not([data-font="standard"]) body {
+  /* SF Pro by default; Settings › Appearance turns on SF Pro Rounded. */
+  :root[data-font="rounded"] body {
     font-family: var(--font-rounded);
   }
   /* Lucide's default stroke of 2 reads heavy next to text; 1.75 matches the type. */

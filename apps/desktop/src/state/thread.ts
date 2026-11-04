@@ -740,6 +740,24 @@ export function formatClock(ms: number): string {
   return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
+/** When a message was sent: the time today, then `yesterday at 12:33`, then the date with the time. */
+export function messageTime(at: number | undefined, now = Date.now()): string {
+  if (!at) return "";
+  const date = new Date(at);
+  const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((midnight(new Date(now)) - midnight(date)) / 86_400_000);
+  if (days <= 0) return time;
+  if (days === 1) return `yesterday at ${time}`;
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  const day = date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  return `${day}, ${time}`;
+}
+
 /** The sidebar's compact age: `now`, `5m`, `3h`, `2d`, then the date. */
 export function shortAge(at: number | undefined, now = Date.now()): string {
   if (!at) return "";
