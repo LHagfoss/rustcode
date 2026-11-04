@@ -417,12 +417,13 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   the last theme is cached so a restart does not flash the default.
   Without the methods the app shows its two built-in themes. Theme files
   are described in [themes.md](themes.md).
-- **Timeline rail.** After the SwiftUI app's `TimelineRail`: a tick per
-  message you sent, in the gutter left of the chat, the turn being read
-  widest and in the accent, the rest narrowing with distance; a click goes
-  to that turn, hover shows its first words. The current turn comes from
-  the virtualizer's row offsets on scroll, and the rail re-renders only
-  when it or the turns change (`src/ui/TimelineRail.tsx`).
+- **Timeline minimap.** A strip per message you sent in the gutter left of
+  the chat, evenly spaced and squeezed to fit. Strips of the turns on screen
+  read brighter. Hovering widens the strips around the pointer and previews
+  the message and its answer; clicking jumps there, chevrons step a turn, and
+  arrows, Home and End move it from the keyboard. With under 48px of gutter it
+  shows on hover. It reads the virtualizer's row offsets on scroll and
+  re-renders only when the turns on screen change (`src/ui/TimelineRail.tsx`).
 - **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
   (no fetch, no dependency), in the model pill, the harness picker and list
   (onboarding, Settings), the tray, the sidebar's rows and the thread's
