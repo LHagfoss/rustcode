@@ -828,8 +828,38 @@ export class MockEngine {
       case "session/set_config_option": {
         const thread = this.thread(params.sessionId);
         const value = str(params.value);
+        const before = { model: thread.model, effort: thread.effort };
         if (params.configId === "model" && value) thread.model = value;
         if (params.configId === "effort" && value) thread.effort = value;
+        // Like the engine: a change after the first message marks the place.
+        if (thread.history.length && (before.model !== thread.model || before.effort !== thread.effort)) {
+          const last = thread.history.at(-1) as
+            | {
+                update?: {
+                  _meta?: { rustcode?: { kind?: string; model_from?: string; effort_from?: string } };
+                };
+              }
+            | undefined;
+          const pending = last?.update?._meta?.rustcode;
+          const from =
+            pending?.kind === "switch" ? { model: pending.model_from, effort: pending.effort_from } : before;
+          if (pending?.kind === "switch") thread.history.pop();
+          const divider = update(thread.id, {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Changed the model or effort" },
+            _meta: {
+              rustcode: {
+                kind: "switch",
+                model_from: from.model ?? null,
+                model_to: thread.model,
+                effort_from: from.effort ?? null,
+                effort_to: thread.effort,
+              },
+            },
+          });
+          if (from.model !== thread.model || from.effort !== thread.effort) thread.history.push(divider);
+          queueMicrotask(() => this.notify(divider));
+        }
         // Like the engine: a thread's pick is also its harness's next new-thread choice.
         const picked = this.harnesses.harnesses.find((x) => x.id === thread.harness);
         if (picked && (params.configId === "model" || params.configId === "effort")) {

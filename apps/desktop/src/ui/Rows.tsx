@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { memo, type ReactNode, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
-import type { FileDiff } from "../acp/types";
+import { effortLabel, type FileDiff, modelName } from "../acp/types";
 import { displayCommand } from "../lib/command";
 import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
@@ -581,6 +581,44 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
     </div>
   );
 });
+
+/** Where the thread's model or effort changed: a quiet divider, `gpt-6-luna → gpt-6 · Low → High`. */
+export function SwitchRow({ item }: { item: Item<"switch"> }) {
+  const { modelFrom, modelTo, effortFrom, effortTo } = item.change;
+  const models = modelFrom !== modelTo && modelTo;
+  const efforts = effortFrom !== effortTo && effortTo;
+  return (
+    <div className="flex items-center gap-3 py-1 font-rounded text-caption text-fg-muted" role="separator">
+      <span className="h-px flex-1 bg-border" />
+      <span className="flex items-center gap-1.5">
+        {models && (
+          <>
+            {modelFrom && (
+              <>
+                {modelName(modelFrom)}
+                <ArrowRight size={11} className="text-fg-faint" />
+              </>
+            )}
+            <span className="text-fg">{modelName(modelTo)}</span>
+          </>
+        )}
+        {models && efforts && <span className="text-fg-faint">·</span>}
+        {efforts && (
+          <>
+            {effortFrom && (
+              <>
+                {effortLabel(effortFrom)}
+                <ArrowRight size={11} className="text-fg-faint" />
+              </>
+            )}
+            <span className="text-fg">{effortLabel(effortTo)}</span>
+          </>
+        )}
+      </span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
 
 /**
  * Where the thread moved to another harness: a quiet divider, `Claude Code → Codex`, with the model it took.

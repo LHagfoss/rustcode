@@ -20,6 +20,7 @@ pub(crate) mod process;
 pub(crate) mod rpc;
 pub(crate) mod session;
 pub(crate) mod store;
+pub(crate) mod switch;
 pub(crate) mod transcript;
 
 use serde::{Deserialize, Serialize};

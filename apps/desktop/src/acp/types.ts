@@ -249,6 +249,14 @@ export function effortLabel(effort: string): string {
 
 // ---------------------------------------------------------------- usage
 
+/** A change of model or effort, as the transcript shows it. */
+export interface ChoiceChange {
+  modelFrom?: string;
+  modelTo?: string;
+  effortFrom?: string;
+  effortTo?: string;
+}
+
 export interface SessionUsage {
   used: number;
   size: number;
@@ -379,6 +387,8 @@ export type SessionUpdate =
   | { kind: "compaction"; text: string }
   /** The thread moved to another harness here (`_meta.rustcode.kind == "handoff"`). */
   | { kind: "handoff"; from: string; to: string; model?: string }
+  /** The thread's model or effort changed here (`_meta.rustcode.kind == "switch"`). */
+  | { kind: "switch"; change: ChoiceChange }
   | {
       kind: "toolCall";
       id: string;
@@ -470,6 +480,17 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
           from: str(meta?.from) ?? "",
           to: str(meta?.to) ?? "",
           model: str(meta?.model),
+        };
+      }
+      if (str(meta?.kind) === "switch") {
+        return {
+          kind: "switch",
+          change: {
+            modelFrom: str(meta?.model_from),
+            modelTo: str(meta?.model_to),
+            effortFrom: str(meta?.effort_from),
+            effortTo: str(meta?.effort_to),
+          },
         };
       }
       if (str(meta?.kind) === "notice") {

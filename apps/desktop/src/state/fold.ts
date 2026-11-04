@@ -47,6 +47,7 @@ function staysVisible(item: TranscriptItem): boolean {
     item.kind === "user" ||
     item.kind === "turnEnd" ||
     item.kind === "handoff" ||
+    item.kind === "switch" ||
     (item.kind === "notice" && (item.tone === "error" || item.tone === "warning"))
   );
 }

@@ -308,6 +308,7 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
             &message.tool_call_id,
         ) {
             (super::handoff::ROLE, _, _) => updates.extend(super::handoff::divider(message)),
+            (super::switch::ROLE, _, _) => updates.extend(super::switch::divider(message)),
             ("tool", Some(record), Some(_)) if record.tool_name == PLAN_TOOL => {
                 updates.push(SessionUpdate::Plan(parse_checklist(&message.content)));
             }

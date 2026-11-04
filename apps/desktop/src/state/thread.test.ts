@@ -466,6 +466,41 @@ describe("Claude Code subagents", () => {
   });
 });
 
+describe("a model or effort change", () => {
+  const change = (from: string, to: string) =>
+    parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `Changed model to ${to}` },
+        _meta: {
+          rustcode: { kind: "switch", model_from: from, model_to: to, effort_from: "low", effort_to: "low" },
+        },
+      },
+    } as never);
+
+  test("draws a divider where it happened, not reply text", () => {
+    const t = applyUpdate(emptyThread("s", "/p"), change("a", "b"));
+    expect(t.items).toEqual([
+      expect.objectContaining({
+        kind: "switch",
+        change: expect.objectContaining({ modelFrom: "a", modelTo: "b" }),
+      }),
+    ]);
+  });
+
+  test("picks in a row show as the latest one", () => {
+    const t = applyUpdate(applyUpdate(emptyThread("s", "/p"), change("a", "b")), change("a", "c"));
+    expect(t.items).toHaveLength(1);
+    expect(t.items[0]).toMatchObject({ change: { modelFrom: "a", modelTo: "c" } });
+  });
+
+  test("undoing the pick removes the divider", () => {
+    const t = applyUpdate(applyUpdate(emptyThread("s", "/p"), change("a", "b")), change("a", "a"));
+    expect(t.items).toEqual([]);
+  });
+});
+
 describe("a harness switch", () => {
   test("draws a divider where the thread moved", () => {
     const update = parseSessionUpdate({
