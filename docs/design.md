@@ -160,8 +160,12 @@ the same filter tinted with the pane instead of a surface
 banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar
 stay opaque.
 
+The composer floats over the transcript in two parts: the main box (field and send), and a tray
+tucked behind its foot with every other control. Its slash and `@` menus are an opaque drawer
+attached to the box's top edge.
+
 The composer is its own, lighter pair, because it is the one surface text
-scrolls under all day: `surface-2` at **80%** (88% focused), its own
+scrolls under all day: `surface-2` at **92%** (96% focused), its own
 `--rc-composer-filter` (`saturate(1.14) blur(12px)`; `saturate(1.08)
 blur(16px)` in dark), and a 1px `--rc-composer-outline` (`black` at 8% in
 light, `white` at 5% in dark) with a 3% `white` inner highlight in dark.

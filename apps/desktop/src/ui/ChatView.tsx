@@ -353,7 +353,7 @@ function releaseComposer(e: React.MouseEvent) {
   if (!active?.matches('textarea[aria-label="Message"]')) return;
   if (
     target.closest(
-      'button, a, input, textarea, select, label, [role="button"], [contenteditable], .rc-composer',
+      'button, a, input, textarea, select, label, [role="button"], [contenteditable], .rc-composer, .rc-composer-tray, .rc-composer-drawer',
     )
   )
     return;
@@ -435,30 +435,27 @@ export function ChatView() {
       <Header thread={thread} overBanner={showsBanner} />
       {thread && !thread.loading ? (
         // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
-        <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} topInset={HEADER_HEIGHT} />
+        <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 32} topInset={HEADER_HEIGHT} />
       ) : thread?.loading ? (
         <TranscriptSkeleton />
       ) : (
         <div className="flex-1" />
       )}
-      {/* The transcript fades out at the composer's edge. */}
+      {/* The transcript scrolls the whole pane height and passes under the composer's glass.
+          The strip the tray sits on is scrimmed, so small footer labels never fight the text
+          behind them; the box above it keeps the text coming through. */}
       {!isNew && (
         <div
-          className="pointer-events-none absolute right-0 bottom-0 left-0"
-          // A short fade, then solid: the transcript scrolls under the composer, not through it.
-          style={{
-            // The stack sits 16px up (bottom-4), so the fade ends above the composer's top edge.
-            height: stackHeight + 16 + 20,
-            background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 20px, var(--rc-bg) 100%)",
-          }}
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[72px]"
+          style={{ background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 16px)" }}
         />
       )}
       <div
         ref={stackRef}
-        className={cx(
-          "absolute left-1/2 flex w-full max-w-[var(--rc-chat-content-max-width)] -translate-x-1/2 flex-col gap-2.5 px-3 transition-[bottom,transform] duration-500 ease-snappy sm:px-5",
-          isNew ? "bottom-[max(16px,calc(50%-150px))]" : "bottom-4",
-        )}
+        className="absolute bottom-4 left-1/2 flex w-full max-w-[var(--rc-chat-content-max-width)] -translate-x-1/2 flex-col gap-2.5 px-3 transition-[bottom,transform] duration-500 ease-snappy sm:px-5"
+        // An empty thread keeps its greeting and composer centred: half the stack up from the
+        // middle of the pane, measured, so a taller composer does not push it off centre.
+        style={isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined}
       >
         {isNew && <EmptyState banner={showsBanner} />}
         {error && (
