@@ -342,15 +342,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   header's edge, as the transcript fades above the composer. Every view
   that has a header uses this one (the chat, new or open); the Settings
   panel brings its own.
-- **Settings:** a panel over the dimmed app, the shell mounted and inert
-  behind it: `elevated rounded-2xl`, `fixed inset-8` and at most 1180px
-  wide, over a `bg-bg/60` scrim. A 220px nav column in `bg-fill-subtle`
-  holds the search field, then the sections (rows per the Row recipe), or
-  the results while there is a query. Beside it the page scrolls on its
-  own in a centred `max-w-[760px]` column, under the section's name and a
-  `ChromeButton` close. Picking a result opens its section and lights the
-  row it found (`rc-setting-hit`, a `fill` fading out over 1.2s). Rows
-  show their description in full.
+- **Settings:** a page of the window, not a dialog: `fixed inset-0` in
+  `bg-bg` with no scrim, radius or shadow, the shell mounted and inert
+  behind it. A 224px nav column in `bg-fill-subtle` with a hairline on its
+  right holds the search field, then the pages under short headings
+  (`Setup`, `App`, `System`), or the results while there is a query. One
+  page shows at a time beside it, scrolling on its own in a centred
+  `max-w-[760px]` column under its name and a `ChromeButton` close. Picking
+  a result opens its page and lights the row it found (`rc-setting-hit`, a
+  `fill` fading out over 1.2s). Rows show their description in full, take a
+  container query so the control stacks under the text when the window is
+  narrow, and keep the reset button of the bullet below where the value
+  differs from its default.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer rounded-2xl`, with no padding of
@@ -421,6 +424,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   Logic: `state/fold.ts` (`foldTurns`).
 - **Settings reset:** a row whose value differs from its default shows a small
   reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).
+  When the control stacks under the text, the icon leaves the flow for the
+  row's top right, so stacked controls share one left edge.
 - **Right panel:** one `RightPanel` for every side view (Changes, Agents,
 - **Right panel:** one `RightPanel` for every side view (Details, Changes,
   Pull requests): floating, inset 8px from the window's top, right and

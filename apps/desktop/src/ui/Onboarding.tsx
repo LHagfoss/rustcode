@@ -1,4 +1,4 @@
-// First-run onboarding (and Settings › Harnesses › Set up again): pick the
+// First-run onboarding (and Settings › Advanced › Set up again): pick the
 // harnesses to use, sign in with each one's own login, test it, then choose
 // the default harness, model and effort for new threads.
 

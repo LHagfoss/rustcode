@@ -27,7 +27,7 @@ export function harnessStatus(h: Harness): HarnessStatus {
 export function unavailableReason(h: Harness): string | undefined {
   if (!h.installed)
     return h.install_hint ? `Not installed. Install with: ${h.install_hint}` : "Not installed";
-  if (!h.enabled) return "Turned off in Settings › Harnesses";
+  if (!h.enabled) return "Turned off in Settings › Agents";
   if (h.auth === "needs_login") return "Sign in first";
   return undefined;
 }

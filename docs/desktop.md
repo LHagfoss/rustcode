@@ -111,7 +111,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
 - **Sidecar** (`src-tauri/src/engine.rs`). The shell starts `rustcode --acp`,
   relays each stdout line to the webview over a Tauri `Channel`, takes
   outgoing lines with the `engine_send` command, and forwards stderr as `log`
-  events (Settings › Engine shows them). When the engine exits it restarts
+  events (Settings › Advanced shows them). When the engine exits it restarts
   with backoff (0.5 s doubling to 30 s, reset after a minute up) and the UI
   initializes a fresh connection. Quitting closes the engine's stdin so it
   cleans up its sessions, then kills it after 2 s. The shell does not read or
@@ -181,7 +181,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   Claude Code (`PREFERRED_HARNESS`) is listed first and suggested on a
   first run, and RustCode's own engine is listed last as the *Local*
   harness, kept for the TUI, testing and local models.
-- **Settings › Harnesses.** Every harness is detected again (installed, signed in, version) each time the page opens, and on *Refresh*. *New threads start on* comes first and saves as
+- **Settings › Agents.** Every harness is detected again (installed, signed in, version) each time the page opens, and on *Refresh*. *New threads start on* comes first and saves as
   it changes (no Save button); picking an external harness lists its
   models at once (`ensureHarnessModels`). Under it, *Coding agents*: one
   card per harness with its mark, status and version, *Sign in* only until
@@ -238,7 +238,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries
-  the plain URL. Settings › General › Chat › Link previews turns fetching off.
+  the plain URL. Settings › Chat › Link previews turns fetching off.
 - **Thread actions.** A row's ⋯ menu or right-click: Mark for Review,
   Mark Done, Pin, Rename, Move to Trash. Pins go to the engine
   (`_rustcode/session/pin`, read back from `_meta.rustcode.pinned`) when it
@@ -371,16 +371,17 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   where the lights hide, the rows start at the edge.
 - **One shell.** The sidebar and the main header (`src/ui/MainHeader.tsx`)
   stay mounted for every view. The header floats in glass over its view
-  (the chat, new or open, and Settings), with a soft fade at its foot, and
-  content scrolls under it; views leave `HEADER_HEIGHT` (42 px) at their
-  top.
+  (the chat, new or open), with a soft fade at its foot, and content
+  scrolls under it; views leave `HEADER_HEIGHT` (42 px) at their top.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the
-  thread comes back exactly where it was (scroll, drafts, open rows). Its
-  header has Back on the traffic lights' line; Back, Esc and ⌘, return.
-  The pages sit in one centred 760 px column, the section list at its left
-  (sticky) and the page beside it; they open with the last engine answers
-  and refresh behind them, with skeleton rows the first time.
+  thread comes back exactly where it was (scroll, drafts, open rows). A
+  224 px nav on the left holds the search field and then the pages, under
+  short headings; one page shows at a time in a centred 760 px column
+  under its name and a close button, and Esc, ⌘, and that button return.
+  Pages open with the last engine answers and refresh behind them, with
+  skeleton rows the first time; a row whose value differs from its default
+  offers a reset on hover.
 - **Loading.** Skeletons stand where content will appear: the sidebar's
   thread rows, the model pill, an opening thread's transcript and Settings'
   lists (`Skeleton` in `src/ui/primitives.tsx`; the sweep stops under
@@ -484,7 +485,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
-  On by default (Settings › General turns it off). The app answers `_rustcode/orchestration`
+  On by default (Settings › Agents turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only (another project only
@@ -572,7 +573,7 @@ frame's `srcdoc`. In the app it cannot be: a `srcdoc` frame inherits the
 app's CSP, which allows no inline script, so the page is handed to the
 shell (`smartui_page`) and served once from `rcui://localhost/<id>` with
 its own CSP header. The app advertises `smartUi = 1` while Settings ›
-General › Chat › Smart UI is on (default), else 0; the engine reads it at
+Settings › Chat › Smart UI is on (default), else 0; the engine reads it at
 `initialize`, so Settings offers Restart Engine after a change.
 `rustcode-viz` blocks are drawn by the app itself (Features, Visualizations).
 
@@ -866,11 +867,11 @@ launch and the `rustcode.updatedFrom` marker an in-app install writes, so it
 shows even offline or after a failed check; the notes are  the GitHub release body that
 `scripts/release-notes.sh` writes from each PR's Changelog line, fetched by
 the shell's `release_notes` command. A first install and a dev build skip
-it; Settings › Engine opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
+it; Settings › Advanced opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
 shows both with sample data.
 
 `src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›
-Engine shows the version with **Check for Updates**. It reads the tag that
+Advanced shows the version with **Check for Updates**. It reads the tag that
 `github.com/LHagfoss/rustcode/releases/latest` redirects to (betas are
 prereleases, never latest) and offers the update when it is newer and its
 app zip is uploaded. On macOS **Update to X** downloads

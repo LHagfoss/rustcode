@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SETTINGS_SECTIONS, settingsSection } from "../state/store";
 import { SETTINGS_INDEX, SETTINGS_RESULTS, searchSettings } from "./settingsIndex";
 
 describe("settings search", () => {
@@ -27,7 +28,7 @@ describe("settings search", () => {
     expect(searchSettings("zzzz")).toEqual([]);
   });
 
-  test("an empty query returns nothing, so the nav shows the sections", () => {
+  test("an empty query returns nothing, so the nav shows the pages", () => {
     expect(searchSettings("")).toEqual([]);
     expect(searchSettings("   ")).toEqual([]);
   });
@@ -39,18 +40,25 @@ describe("settings search", () => {
     expect(searchSettings("shortcut").length).toBe(SETTINGS_RESULTS);
   });
 
-  test("every entry names a section and a title", () => {
+  test("every entry names a page the panel shows, and a title", () => {
     for (const entry of SETTINGS_INDEX) {
       expect(entry.title.trim()).not.toBe("");
-      expect([
-        "general",
-        "harnesses",
-        "connections",
-        "capabilities",
-        "appearance",
-        "usage",
-        "engine",
-      ]).toContain(entry.section);
+      expect(SETTINGS_SECTIONS).toContain(entry.section);
     }
+  });
+
+  test("every page has something to find", () => {
+    for (const section of SETTINGS_SECTIONS) {
+      expect(SETTINGS_INDEX.some((entry) => entry.section === section)).toBe(true);
+    }
+  });
+
+  test("a page id from an older build still opens a page", () => {
+    // Harnesses became Agents and Engine became Advanced; nothing else moved.
+    expect(settingsSection("harnesses")).toBe("agents");
+    expect(settingsSection("engine")).toBe("advanced");
+    expect(settingsSection("usage")).toBe("usage");
+    expect(settingsSection("no-such-page")).toBe("general");
+    expect(settingsSection(null)).toBeNull();
   });
 });

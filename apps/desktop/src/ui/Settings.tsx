@@ -1,9 +1,10 @@
-// Settings, a panel floating over the app: the shell stays mounted behind it,
-// dimmed and inert, so closing Settings shows the thread exactly where it was.
-// A nav column searches every row's title and keywords (settingsIndex.ts);
-// picking a result opens its section and lights the row. After SettingsView.swift.
-// Engine-backed pages (Harnesses, Connections, Capabilities, Appearance's
-// themes) read and write through `_rustcode/*` requests.
+// Settings, a full panel inside the window: the shell stays mounted behind it,
+// hidden and inert, so closing Settings shows the thread exactly where it was.
+// A grouped nav on the left searches every row's title and keywords
+// (settingsIndex.ts) and shows one page at a time beside it; picking a result
+// opens its page and lights the row. After SettingsView.swift.
+// Engine-backed pages (Agents, Connections, Capabilities, Appearance's
+// themes, Usage) read and write through `_rustcode/*` requests.
 
 import {
   Blocks,
@@ -12,8 +13,10 @@ import {
   Gauge,
   Settings as Gear,
   Info,
+  Keyboard,
   KeyRound,
   Layers,
+  MessageSquare,
   Palette,
   Plus,
   RefreshCw,
@@ -24,15 +27,22 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
-import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
-import { haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
-import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
+import {
+  BANNER_NAME_DEFAULT,
+  BANNER_STYLE_DEFAULT,
+  chooseBanner,
+  removeBanner,
+  setBannerStyle,
+  useBanner,
+} from "../lib/banner";
+import { HAPTICS_DEFAULT, haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
+import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { validateDefault } from "../state/harness";
-import { PERMISSION_MODES, type PermissionMode, parsePermissionMode } from "../state/permissions";
+import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   APP_VERSION,
   createTheme,
@@ -42,6 +52,7 @@ import {
   refreshHarnesses,
   request,
   restartEngine,
+  SETTINGS_DEFAULTS,
   type SettingsSection,
   setActiveTheme,
   setAnimateStreaming,
@@ -73,20 +84,49 @@ import { type SettingEntry, searchSettings } from "./settingsIndex";
 import { Group, Loading, Row, useEngineData } from "./settingsKit";
 import { UsagePage } from "./UsagePage";
 
-/** Where a new thread's access starts when nothing was picked. */
-const DEFAULT_ACCESS = parsePermissionMode(null);
+interface Page {
+  id: SettingsSection;
+  label: string;
+  icon: typeof Gear;
+}
 
-const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
-  { id: "general", label: "General", icon: Gear },
-  { id: "harnesses", label: "Harnesses", icon: Layers },
-  { id: "connections", label: "Connections", icon: KeyRound },
-  { id: "capabilities", label: "Capabilities", icon: Blocks },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "usage", label: "Usage", icon: Gauge },
-  { id: "engine", label: "Engine", icon: TerminalSquare },
+/**
+ * The nav, top to bottom: pages, then groups of pages under a heading. One
+ * page shows at a time (Settings.tsx renders it), so a long list of settings
+ * never lives in one scroll.
+ */
+const NAV: { heading?: string; pages: Page[] }[] = [
+  {
+    pages: [
+      { id: "general", label: "General", icon: Gear },
+      { id: "chat", label: "Chat", icon: MessageSquare },
+    ],
+  },
+  {
+    heading: "Setup",
+    pages: [
+      { id: "agents", label: "Agents", icon: Layers },
+      { id: "connections", label: "Connections", icon: KeyRound },
+      { id: "capabilities", label: "Capabilities", icon: Blocks },
+    ],
+  },
+  {
+    heading: "App",
+    pages: [
+      { id: "appearance", label: "Appearance", icon: Palette },
+      { id: "keyboard", label: "Keyboard", icon: Keyboard },
+      { id: "usage", label: "Usage", icon: Gauge },
+    ],
+  },
+  {
+    heading: "System",
+    pages: [{ id: "advanced", label: "Advanced", icon: TerminalSquare }],
+  },
 ];
 
-const sectionLabel = (id: SettingsSection) => SECTIONS.find((s) => s.id === id)?.label ?? id;
+const PAGES: Page[] = NAV.flatMap((group) => group.pages);
+
+const pageLabel = (id: SettingsSection) => PAGES.find((p) => p.id === id)?.label ?? id;
 
 // ---------------------------------------------------------------- pages
 
@@ -141,55 +181,39 @@ function PresenceRow() {
         : state.discordDetected
           ? "Shares the open project's folder name and whether a turn is running. Discord is running."
           : "Shares the open project's folder name and whether a turn is running. Discord's desktop app is not running right now.";
+  // Off is the default: presence shares what you work on, so turning it on is the user's call.
+  const reset = state?.enabled ? () => setEnabled(false) : undefined;
   return (
-    <Row title="Discord Rich Presence" subtitle={subtitle}>
+    <Row title="Discord Rich Presence" subtitle={subtitle} reset={reset}>
       {state && <Switch label="Discord Rich Presence" checked={state.enabled} onChange={setEnabled} />}
     </Row>
   );
 }
 
-function General() {
+function GeneralPage() {
   const defaultCwd = useApp((s) => s.defaultCwd);
-  const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
-  const [haptics, setHapticsState] = useState(hapticsEnabled);
-  const smartUi = useApp((s) => s.smartUi);
-  const smartUiPending = useApp((s) => s.smartUiPending);
-  const orchestration = useApp((s) => s.orchestration);
   const resume = useApp((s) => s.resumeAfterRestart);
-  const orchestrationPending = useApp((s) => s.orchestrationPending);
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
-  const shortcuts: [string, string][] = [
-    ["New thread", "⌘N"],
-    ["Folder of this thread (a new one, or move this one)", "⌘O"],
-    ["Default folder for new threads", "⌘⇧O"],
-    ["Command palette: threads, actions", "⌘K"],
-    ["Settings", "⌘,"],
-    ["Toggle sidebar", "⌘B"],
-    ["Find in thread", "⌘F"],
-    ["Terminal", "⌘J"],
-    ["Text larger, smaller, actual size", "⌘+  ⌘-  ⌘0"],
-    ["Stop the turn", "Esc / ⌘."],
-    ["Send · queue while running", "⏎"],
-    ["Steer the running turn", "⌘⏎"],
-    ["New line", "⇧⏎"],
-    ["Answer an approval", "1–9"],
-  ];
+  const [haptics, setHapticsState] = useState(hapticsEnabled);
   return (
     <>
       <Group title="New threads">
-        <Row title="Default project folder" subtitle={defaultCwd || "None chosen"}>
+        <Row
+          title="Default project folder"
+          subtitle="Where a new thread starts unless the composer's folder was changed."
+          status={defaultCwd || "None chosen"}
+        >
           <Pill onClick={() => void pickFolder(defaultCwd).then((p) => p && setDefaultCwd(p))}>Choose…</Pill>
         </Row>
         <Row title="Harness, model and effort" subtitle="Which agent runs a new thread by default.">
-          <Pill onClick={() => openSettings("harnesses")}>Harnesses…</Pill>
+          <Pill onClick={() => openSettings("agents")}>Agents…</Pill>
         </Row>
-      </Group>
-      <Group title="Chat">
         <Row
           title="Default access"
           reset={
-            defaultAccess !== DEFAULT_ACCESS ? () => setDefaultPermissionMode(DEFAULT_ACCESS) : undefined
+            defaultAccess !== SETTINGS_DEFAULTS.defaultPermissionMode
+              ? () => setDefaultPermissionMode(SETTINGS_DEFAULTS.defaultPermissionMode)
+              : undefined
           }
           subtitle="New threads start here. The shield under the message box changes one thread only."
         >
@@ -200,26 +224,11 @@ function General() {
             onChange={(value) => setDefaultPermissionMode(value as PermissionMode)}
           />
         </Row>
-        <Row
-          title="Smart UI"
-          reset={smartUi ? undefined : () => setSmartUi(true)}
-          subtitle="The agent can answer with a small interactive view (a filterable table, a chart with controls) that runs in the chat, sandboxed, with no network. Its buttons can send a message for you, only when you click them."
-        >
-          <Switch label="Smart UI" checked={smartUi} onChange={setSmartUi} />
-        </Row>
-        {smartUiPending && (
-          <Row
-            title="Restart the engine to apply"
-            subtitle="The engine learns the Smart UI setting when it starts."
-          >
-            <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-              Restart Engine
-            </Pill>
-          </Row>
-        )}
+      </Group>
+      <Group title="Threads">
         <Row
           title="Continue threads after a restart"
-          reset={resume ? undefined : () => setResumeAfterRestart(true)}
+          reset={resume ? undefined : () => setResumeAfterRestart(SETTINGS_DEFAULTS.resumeAfterRestart)}
           subtitle="A thread whose turn was cut short by quitting, an update or an engine restart is sent “Continue where you left off” when the app is back."
         >
           <Switch
@@ -228,53 +237,17 @@ function General() {
             onChange={setResumeAfterRestart}
           />
         </Row>
-        <Row
-          title="Threads can start and message other threads"
-          reset={orchestration ? undefined : () => setOrchestration(true)}
-          subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
-        >
-          <Switch
-            label="Threads can start and message other threads"
-            checked={orchestration}
-            onChange={setOrchestration}
-          />
-        </Row>
-        {orchestrationPending && (
-          <Row title="Restart the engine to apply" subtitle="The engine learns this setting when it starts.">
-            <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-              Restart Engine
-            </Pill>
-          </Row>
-        )}
-        <Row
-          title="Link previews"
-          reset={
-            linkPreviews
-              ? undefined
-              : () => {
-                  setLinkPreviews(true);
-                  setLinkPreviewsState(true);
-                }
-          }
-          subtitle="Links show as chips with the page's title, icon and colour. The app fetches them itself, with no cookies, from public hosts only."
-        >
-          <Switch
-            label="Link previews"
-            checked={linkPreviews}
-            onChange={(v) => {
-              setLinkPreviews(v);
-              setLinkPreviewsState(v);
-            }}
-          />
-        </Row>
+      </Group>
+      <Group title="This Mac">
+        <PresenceRow />
         <Row
           title="Trackpad haptics"
           reset={
             haptics
               ? undefined
               : () => {
-                  setHaptics(true);
-                  setHapticsState(true);
+                  setHaptics(HAPTICS_DEFAULT);
+                  setHapticsState(HAPTICS_DEFAULT);
                 }
           }
           subtitle="A light tap on the Force Touch trackpad when you send, stop a turn, or rest on Send."
@@ -289,20 +262,61 @@ function General() {
             }}
           />
         </Row>
-        <PresenceRow />
-      </Group>
-      <Group title="Keyboard">
-        {shortcuts.map(([label, keys]) => (
-          <Row key={label} title={label}>
-            <Kbd>{keys}</Kbd>
-          </Row>
-        ))}
       </Group>
     </>
   );
 }
 
-function Harnesses() {
+function ChatPage() {
+  const smartUi = useApp((s) => s.smartUi);
+  const smartUiPending = useApp((s) => s.smartUiPending);
+  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
+  return (
+    <Group title="Chat">
+      <Row
+        title="Smart UI"
+        reset={smartUi ? undefined : () => setSmartUi(SETTINGS_DEFAULTS.smartUi)}
+        subtitle="The agent can answer with a small interactive view (a filterable table, a chart with controls) that runs in the chat, sandboxed, with no network. Its buttons can send a message for you, only when you click them."
+      >
+        <Switch label="Smart UI" checked={smartUi} onChange={setSmartUi} />
+      </Row>
+      {smartUiPending && (
+        <Row
+          title="Restart the engine to apply"
+          subtitle="The engine learns the Smart UI setting when it starts."
+        >
+          <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
+            Restart Engine
+          </Pill>
+        </Row>
+      )}
+      <Row
+        title="Link previews"
+        reset={
+          linkPreviews
+            ? undefined
+            : () => {
+                setLinkPreviews(LINK_PREVIEWS_DEFAULT);
+                setLinkPreviewsState(LINK_PREVIEWS_DEFAULT);
+              }
+        }
+        subtitle="Links show as chips with the page's title, icon and colour. The app fetches them itself, with no cookies, from public hosts only."
+      >
+        <Switch
+          label="Link previews"
+          checked={linkPreviews}
+          onChange={(v) => {
+            setLinkPreviews(v);
+            setLinkPreviewsState(v);
+          }}
+        />
+      </Row>
+    </Group>
+  );
+}
+
+function AgentsPage() {
   const snapshot = useApp((s) => s.harnesses);
   const [saved, setSaved] = useState(false);
   const [rechecking, setRechecking] = useState(false);
@@ -367,18 +381,41 @@ function Harnesses() {
             {rechecking ? "Checking…" : "Refresh"}
           </button>
         }
-        footer={
-          <>
-            Each agent signs in on its own; RustCode never stores its credentials.{" "}
-            <button type="button" onClick={() => setOnboarding(true)} className="text-accent hover:underline">
-              Run setup again
-            </button>
-          </>
-        }
+        footer="Each agent signs in on its own; RustCode never stores its credentials. Advanced runs setup again."
       >
         <HarnessList snapshot={snapshot} />
       </Group>
+      <OrchestrationGroup />
     </>
+  );
+}
+
+/** Threads that start and message other threads (`state/host.ts`, docs/orchestrator.md). */
+function OrchestrationGroup() {
+  const orchestration = useApp((s) => s.orchestration);
+  const pending = useApp((s) => s.orchestrationPending);
+  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  return (
+    <Group title="Orchestration">
+      <Row
+        title="Threads can start and message other threads"
+        reset={orchestration ? undefined : () => setOrchestration(SETTINGS_DEFAULTS.orchestration)}
+        subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
+      >
+        <Switch
+          label="Threads can start and message other threads"
+          checked={orchestration}
+          onChange={setOrchestration}
+        />
+      </Row>
+      {pending && (
+        <Row title="Restart the engine to apply" subtitle="The engine learns this setting when it starts.">
+          <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
+            Restart Engine
+          </Pill>
+        </Row>
+      )}
+    </Group>
   );
 }
 
@@ -575,7 +612,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
   );
 }
 
-function Appearance() {
+function AppearancePage() {
   const mode = useApp((s) => s.theme);
   const roundedFont = useApp((s) => s.roundedFont);
   const animateStreaming = useApp((s) => s.animateStreaming);
@@ -592,7 +629,7 @@ function Appearance() {
       <Group title="Mode">
         <Row
           title="Light or dark"
-          reset={mode !== "system" ? () => setTheme("system") : undefined}
+          reset={mode !== SETTINGS_DEFAULTS.theme ? () => setTheme(SETTINGS_DEFAULTS.theme) : undefined}
           subtitle="System follows macOS. Picking a theme sets its mode."
         >
           <Segments
@@ -608,14 +645,14 @@ function Appearance() {
         </Row>
         <Row
           title="Rounded font"
-          reset={roundedFont ? () => setRoundedFont(false) : undefined}
+          reset={roundedFont ? () => setRoundedFont(SETTINGS_DEFAULTS.roundedFont) : undefined}
           subtitle="SF Pro Rounded for the interface and chat. Code stays monospaced."
         >
           <Switch label="Rounded font" checked={roundedFont} onChange={setRoundedFont} />
         </Row>
         <Row
           title="Animate streaming text"
-          reset={animateStreaming ? undefined : () => setAnimateStreaming(true)}
+          reset={animateStreaming ? undefined : () => setAnimateStreaming(SETTINGS_DEFAULTS.animateStreaming)}
           subtitle="A reply's new words fade in as the model writes them. Finished replies never animate."
         >
           <Switch label="Animate streaming text" checked={animateStreaming} onChange={setAnimateStreaming} />
@@ -669,7 +706,7 @@ function Appearance() {
 function TokenList() {
   const [open, setOpen] = useState(false);
   return (
-    <section className="mb-6">
+    <section className="mb-7">
       <button
         type="button"
         onClick={() => setOpen(!open)}
@@ -702,10 +739,16 @@ function BannerSetting() {
     void chooseBanner().catch((e) =>
       toast(`Could not use that picture: ${e instanceof Error ? e.message : e}`, "error"),
     );
+  // No picture is the default: choosing one is the user's call, so removing it is the reset.
+  const reset = () => {
+    void removeBanner();
+    setBannerStyle(BANNER_STYLE_DEFAULT);
+  };
   return (
     <div>
       <Row
         title="New thread banner"
+        reset={banner.name !== BANNER_NAME_DEFAULT ? reset : undefined}
         subtitle={
           banner.name
             ? "Behind the top of new threads, fading toward the message field"
@@ -838,7 +881,40 @@ function AppVersion() {
   );
 }
 
-function Engine() {
+/** The shortcuts the app answers, for reference: they are not remappable yet. */
+const SHORTCUTS: [string, string][] = [
+  ["New thread", "⌘N"],
+  ["Folder of this thread (a new one, or move this one)", "⌘O"],
+  ["Default folder for new threads", "⌘⇧O"],
+  ["Command palette: threads, actions", "⌘K"],
+  ["Settings", "⌘,"],
+  ["Toggle sidebar", "⌘B"],
+  ["Find in thread", "⌘F"],
+  ["Terminal", "⌘J"],
+  ["Text larger, smaller, actual size", "⌘+  ⌘-  ⌘0"],
+  ["Stop the turn", "Esc / ⌘."],
+  ["Send · queue while running", "⏎"],
+  ["Steer the running turn", "⌘⏎"],
+  ["New line", "⇧⏎"],
+  ["Answer an approval", "1–9"],
+];
+
+function KeyboardPage() {
+  return (
+    <Group
+      title="Shortcuts"
+      footer="Fixed for now: nothing to remap here yet. ⌘K runs the same actions from the keyboard."
+    >
+      {SHORTCUTS.map(([label, keys]) => (
+        <Row key={label} title={label}>
+          <Kbd>{keys}</Kbd>
+        </Row>
+      ))}
+    </Group>
+  );
+}
+
+function AdvancedPage() {
   const status = useApp((s) => s.status);
   const detail = useApp((s) => s.statusDetail);
   const transport = useApp((s) => s.transport);
@@ -848,38 +924,51 @@ function Engine() {
       <Group title="Engine">
         <Row
           title={status === "ready" ? "Running" : status === "connecting" ? "Starting…" : "Stopped"}
-          subtitle={
+          subtitle="rustcode --acp is the engine every thread runs on."
+          status={
             detail ??
             (transport === "tauri"
-              ? "rustcode --acp, run by the app"
+              ? "Run by the app"
               : transport === "websocket"
-                ? "rustcode --acp through the dev bridge"
+                ? "Through the dev bridge"
                 : "Mock engine (no real turns)")
           }
         >
           <Pill onClick={() => void restartEngine()}>Restart</Pill>
         </Row>
-        <AppVersion />
       </Group>
       <Group title="Engine log" footer="The engine's stderr; turns log to each thread's logs/debug.log.">
         <pre className="selectable m-0 max-h-[320px] overflow-auto p-3 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
           {log.length ? log.slice(-200).join("\n") : "Nothing yet."}
         </pre>
       </Group>
+      <Group title="About">
+        <AppVersion />
+      </Group>
+      <Group title="Setup" footer="Each agent signs in on its own; RustCode never stores its credentials.">
+        <Row
+          title="Set up your agents again"
+          subtitle="Walks through finding each agent, signing it in and checking that it runs."
+        >
+          <Pill onClick={() => setOnboarding(true)}>Run setup again</Pill>
+        </Row>
+      </Group>
     </>
   );
 }
 
+// ---------------------------------------------------------------- the panel
+
 /**
- * Settings as a panel over the whole window (docs/design.md › Settings): a nav
- * column with the search field at its top, and the page beside it scrolling on
- * its own under the section's name and a close button. Esc, ⌘, and the close
- * button put you back where you were; the thread underneath stayed mounted
- * (App.tsx).
+ * Settings as a page of the window (docs/design.md › Settings): a grouped nav
+ * column with the search field at its top, and one page beside it scrolling on
+ * its own under the page's name and a close button. Esc, ⌘, and the close
+ * button put you back where you were; the thread underneath stayed mounted and
+ * inert (App.tsx).
  */
 export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
-  const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
+  const current = PAGES.find((s) => s.id === section) ?? PAGES[0]!;
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const field = useRef<HTMLInputElement>(null);
@@ -956,118 +1045,118 @@ export function Settings() {
   };
 
   return (
-    <>
-      <div
-        className="fixed inset-0 z-20 bg-bg/60"
-        onMouseDown={(e) => e.target === e.currentTarget && openSettings(null)}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-        className="elevated fixed inset-8 z-30 mx-auto flex max-w-[1180px] overflow-hidden rounded-2xl rc-in"
+    <div role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-30 flex bg-bg">
+      <nav
+        aria-label="Settings sections"
+        className="flex w-[224px] shrink-0 flex-col gap-1.5 border-border border-r bg-fill-subtle p-2.5"
       >
-        <nav
-          aria-label="Settings sections"
-          className="flex w-[220px] shrink-0 flex-col gap-1.5 bg-fill-subtle p-2.5"
-        >
-          <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill px-2.5 text-callout focus-within:bg-fill-strong">
-            <Search size={13} className="shrink-0 text-fg-faint" />
-            <input
-              ref={field}
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setActive(0);
+        <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill px-2.5 text-callout focus-within:bg-fill-strong">
+          <Search size={13} className="shrink-0 text-fg-faint" />
+          <input
+            ref={field}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActive(0);
+            }}
+            onKeyDown={onFieldKey}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-faint"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                clear();
+                field.current?.focus();
               }}
-              onKeyDown={onFieldKey}
-              placeholder="Search settings"
-              aria-label="Search settings"
-              className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-faint"
-            />
-            {query && (
-              <button
-                type="button"
-                aria-label="Clear search"
-                onClick={() => {
-                  clear();
-                  field.current?.focus();
-                }}
-                className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
-              >
-                <X size={11} strokeWidth={2.5} />
-              </button>
-            )}
-          </div>
-          <div className="scroll-stable flex min-h-0 flex-1 flex-col gap-0.5">
-            {query.trim() ? (
-              results.length ? (
-                <div role="listbox" aria-label="Settings results" className="flex flex-col gap-0.5">
-                  {results.map((r, i) => (
-                    <button
-                      key={`${r.section}:${r.title}`}
-                      type="button"
-                      role="option"
-                      aria-selected={i === active}
-                      onMouseMove={() => setActive(i)}
-                      onClick={() => pick(r)}
-                      className={cx(
-                        "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
-                        i === active ? "bg-fill" : "hover:bg-fill",
-                      )}
-                    >
-                      <span className="w-full truncate text-body">{r.title}</span>
-                      <span className="text-caption text-fg-faint">{sectionLabel(r.section)}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="px-2 py-1.5 text-caption text-fg-muted">Nothing matches “{query.trim()}”.</p>
-              )
+              className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
+            >
+              <X size={11} strokeWidth={2.5} />
+            </button>
+          )}
+        </div>
+        <div className="scroll-stable flex min-h-0 flex-1 flex-col gap-2 pb-1">
+          {query.trim() ? (
+            results.length ? (
+              <div role="listbox" aria-label="Settings results" className="flex flex-col gap-0.5">
+                {results.map((r, i) => (
+                  <button
+                    key={`${r.section}:${r.title}`}
+                    type="button"
+                    role="option"
+                    aria-selected={i === active}
+                    onMouseMove={() => setActive(i)}
+                    onClick={() => pick(r)}
+                    className={cx(
+                      "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
+                      i === active ? "bg-fill" : "hover:bg-fill",
+                    )}
+                  >
+                    <span className="w-full truncate text-body">{r.title}</span>
+                    <span className="text-caption text-fg-faint">{pageLabel(r.section)}</span>
+                  </button>
+                ))}
+              </div>
             ) : (
-              SECTIONS.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  aria-current={s.id === section ? "page" : undefined}
-                  onClick={() => openSettings(s.id)}
-                  className={cx(
-                    "flex h-8 items-center gap-2 rounded-md px-2 text-left text-body",
-                    s.id === section
-                      ? "bg-fill font-medium text-fg"
-                      : "text-fg-muted hover:bg-fill hover:text-fg",
-                  )}
-                >
-                  <s.icon size={14} className="shrink-0" />
-                  {s.label}
-                </button>
-              ))
-            )}
+              <p className="px-2 py-1.5 text-caption text-fg-muted">Nothing matches “{query.trim()}”.</p>
+            )
+          ) : (
+            NAV.map((group) => (
+              <div key={group.heading ?? group.pages[0]?.id} className="flex flex-col gap-0.5">
+                {group.heading && (
+                  <div className="px-2 pt-1 pb-0.5 font-semibold text-caption text-fg-faint">
+                    {group.heading}
+                  </div>
+                )}
+                {group.pages.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    aria-current={s.id === section ? "page" : undefined}
+                    onClick={() => openSettings(s.id)}
+                    className={cx(
+                      "flex h-8 items-center gap-2 rounded-md px-2 text-left text-body",
+                      s.id === section
+                        ? "bg-fill font-medium text-fg"
+                        : "text-fg-muted hover:bg-fill hover:text-fg",
+                    )}
+                  >
+                    <s.icon size={14} className="shrink-0" />
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      </nav>
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="shrink-0 border-border border-b">
+          <div className="mx-auto flex h-12 w-full max-w-[760px] items-center gap-3 px-[clamp(16px,4%,32px)]">
+            <h1 className="min-w-0 flex-1 truncate font-semibold text-title2">{current.label}</h1>
+            <ChromeButton label="Close Settings" tooltip="Close (Esc)" onClick={() => openSettings(null)}>
+              <X size={16} />
+            </ChromeButton>
           </div>
-        </nav>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="shrink-0">
-            <div className="mx-auto flex h-12 w-full max-w-[760px] items-center gap-3 px-[clamp(16px,4%,32px)]">
-              <h1 className="min-w-0 flex-1 truncate font-semibold text-title2">{current.label}</h1>
-              <ChromeButton label="Close Settings" tooltip="Close (Esc)" onClick={() => openSettings(null)}>
-                <X size={16} />
-              </ChromeButton>
-            </div>
-          </header>
-          <div className="scroll-stable min-h-0 flex-1">
-            <div className="mx-auto w-full max-w-[760px] px-[clamp(16px,4%,32px)] pt-2 pb-16">
-              {section === "general" && <General />}
-              {section === "harnesses" && <Harnesses />}
-              {section === "connections" && <ConnectionsPage />}
-              {section === "capabilities" && <CapabilitiesPage />}
-              {section === "appearance" && <Appearance />}
-              {section === "usage" && <UsagePage />}
-              {section === "engine" && <Engine />}
-            </div>
+        </header>
+        <div className="scroll-stable min-h-0 flex-1">
+          <div className="mx-auto w-full max-w-[760px] px-[clamp(16px,4%,32px)] pt-5 pb-16">
+            {section === "general" && <GeneralPage />}
+            {section === "chat" && <ChatPage />}
+            {section === "agents" && <AgentsPage />}
+            {section === "connections" && <ConnectionsPage />}
+            {section === "capabilities" && <CapabilitiesPage />}
+            {section === "appearance" && <AppearancePage />}
+            {section === "keyboard" && <KeyboardPage />}
+            {section === "usage" && <UsagePage />}
+            {section === "advanced" && <AdvancedPage />}
           </div>
         </div>
-      </div>
-    </>
+      </main>
+    </div>
   );
 }
 

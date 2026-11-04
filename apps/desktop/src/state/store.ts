@@ -105,12 +105,43 @@ export const APP_VERSION = "0.1.0";
 
 export type SettingsSection =
   | "general"
-  | "harnesses"
+  | "chat"
+  | "agents"
   | "connections"
   | "capabilities"
   | "appearance"
+  | "keyboard"
   | "usage"
-  | "engine";
+  | "advanced";
+
+/** Every Settings page, in the order the panel's nav lists them. */
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  "general",
+  "chat",
+  "agents",
+  "connections",
+  "capabilities",
+  "appearance",
+  "keyboard",
+  "usage",
+  "advanced",
+];
+
+/**
+ * What an older build's section id opens: Harnesses became Agents and Engine
+ * became Advanced. An id no build knows opens General.
+ */
+const LEGACY_SECTIONS: Record<string, SettingsSection> = {
+  harnesses: "agents",
+  engine: "advanced",
+};
+
+/** A section id as the panel shows it, with the fallbacks a stored old one needs. */
+export function settingsSection(id: string | null | undefined): SettingsSection | null {
+  if (!id) return null;
+  if ((SETTINGS_SECTIONS as readonly string[]).includes(id)) return id as SettingsSection;
+  return LEGACY_SECTIONS[id] ?? "general";
+}
 
 export type ToastTone = "info" | "success" | "error";
 
@@ -190,7 +221,7 @@ export interface AppState {
   archived: Record<string, number>;
   /** A sent message being edited in the composer: sending rewinds the thread to it first. */
   editing: Record<string, { itemId: string; userIndex: number; original: string }>;
-  /** Smart UI blocks run in the transcript (Settings › General › Chat). */
+  /** Smart UI blocks run in the transcript (Settings › Chat). */
   smartUi: boolean;
   /** The engine learned a different Smart UI setting at initialize: a restart applies the new one. */
   smartUiPending: boolean;
@@ -220,7 +251,7 @@ export interface AppState {
     /** A second, less prominent action (e.g. "Files and conversation"). */
     alt?: { action: string; run: () => void };
   } | null;
-  /** Threads can start and message other threads (Settings › General); the engine learns it at initialize. */
+  /** Threads can start and message other threads (Settings › Agents); the engine learns it at initialize. */
   orchestration: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
@@ -298,12 +329,34 @@ const STORAGE = {
   planCache: "rustcode.planCache",
 };
 
+/**
+ * What Settings' reset puts a value back to, and what a fresh install starts
+ * with: the initial state below and every reset row read this one table, so
+ * the two cannot drift apart. Rows with no default (a folder, an engine-chosen
+ * model) offer no reset.
+ */
+export const SETTINGS_DEFAULTS = {
+  theme: "system" as AppState["theme"],
+  roundedFont: false,
+  animateStreaming: true,
+  resumeAfterRestart: true,
+  orchestration: true,
+  smartUi: true,
+  defaultPermissionMode: parsePermissionMode(null),
+};
+
 function stored(key: string): string | null {
   try {
     return localStorage.getItem(key);
   } catch {
     return null;
   }
+}
+
+/** A boolean kept as "1"/"0", or the default when it was never set. */
+function storedFlag(key: string, fallback: boolean): boolean {
+  const raw = stored(key);
+  return raw === null ? fallback : raw === "1";
 }
 
 export function store(key: string, value: string) {
@@ -335,10 +388,10 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   confirm: null,
   // On unless turned off: an agent asks before it starts or messages a thread (Ask), so
   // delegating is there to use without first finding the setting.
-  orchestration: stored(STORAGE.orchestration) !== "0",
-  resumeAfterRestart: stored(STORAGE.resumeAfterRestart) !== "0",
-  roundedFont: stored(STORAGE.roundedFont) === "1",
-  animateStreaming: stored(STORAGE.animateStreaming) !== "0",
+  orchestration: storedFlag(STORAGE.orchestration, SETTINGS_DEFAULTS.orchestration),
+  resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
+  roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
+  animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
@@ -354,7 +407,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   view: { kind: "chat" },
   checkpoints: {},
   newWorktree: { on: false, branch: "", edited: false },
-  smartUi: stored(STORAGE.smartUi) !== "0",
+  smartUi: storedFlag(STORAGE.smartUi, SETTINGS_DEFAULTS.smartUi),
   smartUiPending: false,
   terminalOpen: false,
   panel: null,
@@ -382,7 +435,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   onboardingOpen: false,
   sidebarHidden: stored(STORAGE.sidebar) === "1",
   toasts: [],
-  theme: (stored(STORAGE.theme) as AppState["theme"]) ?? "system",
+  theme: (stored(STORAGE.theme) as AppState["theme"] | null) ?? SETTINGS_DEFAULTS.theme,
   themes: null,
   themeActive: stored(STORAGE.themeActive) ?? "rustcode",
 }));
@@ -516,7 +569,7 @@ const inbound = frameQueue<string>((lines) =>
     }),
   ),
 );
-/** Engine stderr, kept for Settings › Engine; appended once a frame, not per line. */
+/** Engine stderr, kept for Settings › Advanced; appended once a frame, not per line. */
 const logs = frameQueue<string>((lines) =>
   set((s) => ({ engineLog: [...s.engineLog, ...lines].slice(-400) })),
 );
@@ -2590,8 +2643,12 @@ let claudePaused = false;
 /** The consent Settings › Usage keeps before Claude's sign-in is read from the Keychain. */
 export const CLAUDE_USAGE_KEY = "rustcode.claudeUsage";
 
-function claudeUsageAllowed(): boolean {
-  return stored(CLAUDE_USAGE_KEY) === "1";
+/** Off until the user says yes: reading the Keychain is theirs to allow. */
+export const CLAUDE_USAGE_DEFAULT = false;
+
+export function claudeUsageAllowed(): boolean {
+  const raw = stored(CLAUDE_USAGE_KEY);
+  return raw === null ? CLAUDE_USAGE_DEFAULT : raw === "1";
 }
 
 /**
@@ -2713,9 +2770,13 @@ function stopPlanPolling() {
 
 // ---------------------------------------------------------------- UI
 
-export function openSettings(section: SettingsSection | null) {
+/**
+ * Opens Settings on a page (null closes it). An id from an older build still
+ * lands somewhere sensible, so a caller that names Harnesses or Engine works.
+ */
+export function openSettings(section: SettingsSection | string | null) {
   dismissOverlays();
-  set({ settings: section, switcherOpen: false });
+  set({ settings: settingsSection(section), switcherOpen: false });
 }
 
 export function setSwitcher(open: boolean) {

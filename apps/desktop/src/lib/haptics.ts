@@ -9,11 +9,15 @@ const KEY = "rustcode.haptics";
 
 export type HapticKind = "generic" | "alignment" | "level";
 
+/** Felt on a Force Touch trackpad, until the user turns them off (Settings › General). */
+export const HAPTICS_DEFAULT = true;
+
 export function hapticsEnabled(): boolean {
   try {
-    return localStorage.getItem(KEY) !== "0";
+    const raw = localStorage.getItem(KEY);
+    return raw === null ? HAPTICS_DEFAULT : raw === "1";
   } catch {
-    return true;
+    return HAPTICS_DEFAULT;
   }
 }
 

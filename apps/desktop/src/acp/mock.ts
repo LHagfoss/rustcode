@@ -1378,7 +1378,7 @@ export class MockEngine {
           : null;
     if (!tool) return null;
     if (this.orchestration < (tool === "message_session" ? 1 : 2)) {
-      return "I can't reach other threads here: turn on Settings › General › Threads can start and message other threads, then restart the engine.";
+      return "I can't reach other threads here: turn on Settings › Agents › Threads can start and message other threads, then restart the engine.";
     }
     const call = (name: string, args: JsonObject) => {
       const callId = `orch-${++this.counter}`;

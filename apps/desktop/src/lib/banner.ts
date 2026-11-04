@@ -16,6 +16,10 @@ const STYLE_KEY = "rustcode.newThreadBannerStyle";
 const DATA_KEY = "rustcode.newThreadBannerData";
 const BROWSER_NAME = "browser";
 
+/** No picture until one is chosen, and then drawn in text (Settings › Appearance). */
+export const BANNER_NAME_DEFAULT = "";
+export const BANNER_STYLE_DEFAULT: BannerStyle = "ascii";
+
 function read(key: string): string {
   try {
     return localStorage.getItem(key) ?? "";
