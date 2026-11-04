@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { composedText, emptyExtras, promptBlocks, splitImageMarkers, splitUrls } from "./compose";
+import {
+  composedText,
+  emptyExtras,
+  messageCollapses,
+  promptBlocks,
+  splitImageMarkers,
+  splitSlashCommand,
+  splitUrls,
+} from "./compose";
 
 const command = { name: "/review", description: "", takesArguments: true, report: false, action: "execute" };
 
@@ -57,5 +65,21 @@ describe("compose", () => {
       { url: "https://a.dev/x" },
       { text: ". ok" },
     ]);
+  });
+});
+
+describe("a sent message", () => {
+  test("a leading command splits off; a path or a later slash does not", () => {
+    expect(splitSlashCommand("/review the diff")).toEqual({ command: "/review", rest: "the diff" });
+    expect(splitSlashCommand("/compact")).toEqual({ command: "/compact", rest: "" });
+    expect(splitSlashCommand("/plugin:cmd\nnext")).toEqual({ command: "/plugin:cmd", rest: "next" });
+    expect(splitSlashCommand("/usr/bin/env is missing")).toBeNull();
+    expect(splitSlashCommand("run /review")).toBeNull();
+  });
+
+  test("it folds by its drawn height, and never to hide a line or two", () => {
+    expect(messageCollapses(176)).toBe(false);
+    expect(messageCollapses(176 + 44)).toBe(false);
+    expect(messageCollapses(176 + 67)).toBe(true);
   });
 });

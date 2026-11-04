@@ -15,6 +15,7 @@ import {
   formatClock,
   formatDuration,
   idleSettled,
+  messageTime,
   requeueSteers,
   shortAge,
   splitSubagentSteps,
@@ -534,5 +535,17 @@ describe("checkCommands", () => {
     expect(checkCommands("git diff --check")).toEqual([]);
     expect(checkCommands("cat build/test.log")).toEqual([]);
     expect(checkCommands("bun --version")).toEqual([]);
+  });
+});
+
+describe("messageTime", () => {
+  const now = new Date(2026, 10, 4, 15, 0).getTime();
+  test("says the day once it is not today", () => {
+    const at = (d: Date) => messageTime(d.getTime(), now);
+    expect(at(new Date(2026, 10, 4, 9, 30))).not.toMatch(/yesterday|Nov/);
+    expect(at(new Date(2026, 10, 3, 23, 59))).toMatch(/^yesterday at /);
+    expect(at(new Date(2026, 9, 20, 9, 30))).toMatch(/Oct/);
+    expect(at(new Date(2025, 9, 20, 9, 30))).toMatch(/2025/);
+    expect(messageTime(undefined, now)).toBe("");
   });
 });

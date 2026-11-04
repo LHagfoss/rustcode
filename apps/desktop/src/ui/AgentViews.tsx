@@ -101,7 +101,7 @@ export function SubagentRow({
   const done = [count, elapsed].filter(Boolean).join(" · ");
   const name = info?.agentType && info.agentType !== "default" ? info.agentType : agent.name;
   return (
-    <div className="font-rounded">
+    <div>
       <button
         type="button"
         aria-expanded={open}
@@ -198,7 +198,7 @@ export function SubagentGroupRow({
   const elapsedMs = Number.isFinite(started) ? (working ? now : ended || now) - started : undefined;
   const status = working ? `${working} working` : failed ? `${failed} failed` : "done";
   return (
-    <div className={cx("font-rounded", !working && !open && "opacity-80")}>
+    <div className={cx(!working && !open && "opacity-80")}>
       <button
         type="button"
         aria-expanded={open}

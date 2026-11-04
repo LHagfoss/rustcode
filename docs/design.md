@@ -171,9 +171,10 @@ gutter, between groups), 24 (between sections). The chat column is at most
 
 ## Type
 
-macOS text styles one point up (read at a laptop's distance), SF Pro Rounded
-(`ui-rounded`; Settings › Appearance › Rounded font switches to SF Pro) /
-SF Mono:
+macOS text styles one point up (read at a laptop's distance), SF Pro
+(Settings › Appearance › Rounded font switches to SF Pro Rounded) / SF Mono.
+Replies read at 14px on a 1.625 line height, in `fg` at 90%, with headings at
+20/18/16/14 in semibold:
 
 | Class | Size / line | Use |
 |---|---|---|

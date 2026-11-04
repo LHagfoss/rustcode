@@ -335,7 +335,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // delegating is there to use without first finding the setting.
   orchestration: stored(STORAGE.orchestration) !== "0",
   resumeAfterRestart: stored(STORAGE.resumeAfterRestart) !== "0",
-  roundedFont: stored(STORAGE.roundedFont) !== "0",
+  roundedFont: stored(STORAGE.roundedFont) === "1",
   animateStreaming: stored(STORAGE.animateStreaming) !== "0",
   orchestrationPending: false,
   links: loadBook(),

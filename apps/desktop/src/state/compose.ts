@@ -5,6 +5,23 @@
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { SlashCommand } from "../acp/types";
 
+/**
+ * A message that starts with a command (`/review the diff`), as the name and what follows. A path
+ * (`/usr/bin/env`) is not a command: the name stops at a space.
+ */
+export function splitSlashCommand(text: string): { command: string; rest: string } | null {
+  const match = /^(\/[A-Za-z][\w:-]*)(?:\s+|$)/.exec(text);
+  return match ? { command: match[1]!, rest: text.slice(match[0].length) } : null;
+}
+
+/** A message folds under this height (px)... */
+export const COLLAPSED_MESSAGE_HEIGHT = 176;
+/** ...only when folding hides more than this: three lines. Hiding one line behind a button helps nobody. */
+const COLLAPSE_SLACK = 66;
+
+/** Whether a message this tall folds. By how tall it draws, so a fold always opens to something. */
+export const messageCollapses = (height: number) => height > COLLAPSED_MESSAGE_HEIGHT + COLLAPSE_SLACK;
+
 /** The engine refuses larger images (`ImageAttachment.maxBytes` in the SwiftUI app). */
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 /** A file without a path (the browser) is sent inline only up to this size. */

@@ -30,12 +30,13 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
-import { memo, type ReactNode, useMemo, useState } from "react";
+import { memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, type FileDiff, modelName } from "../acp/types";
 import { displayCommand } from "../lib/command";
+import { observeSize } from "../lib/resize";
 import { splitReply } from "../smartui/parse";
-import { splitImageMarkers, splitUrls } from "../state/compose";
+import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
 import { LINK_LABEL } from "../state/orchestration";
@@ -44,6 +45,7 @@ import {
   diffCounts,
   diffLines,
   formatDuration,
+  messageTime,
   type TranscriptItem,
   type TurnCompletion,
   thoughtHeadings,
@@ -51,21 +53,18 @@ import {
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
-import { LinkChip } from "./LinkChip";
 import { LinkStateIcon } from "./Links";
-import { CopyButton, Markdown } from "./Markdown";
+import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
 import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 
 type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K }>;
 
-const timeLabel = (at?: number) =>
-  at ? new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
-
-function TextWithLinks({ text }: { text: string }) {
-  const parts = useMemo(() => splitUrls(text), [text]);
-  return <>{parts.map((p, i) => (p.url ? <LinkChip key={i} url={p.url} className="mx-px" /> : p.text))}</>;
+/** What a sent message reads as in Markdown: a leading command becomes the chip Markdown draws for it. */
+function messageMarkdown(text: string): string {
+  const slash = splitSlashCommand(text);
+  return slash ? `\`${COMMAND_MARK}${slash.command}\` ${slash.rest}` : text;
 }
 
 export const UserRow = memo(function UserRow({
@@ -80,7 +79,16 @@ export const UserRow = memo(function UserRow({
 }) {
   const [open, setOpen] = useState(false);
   const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
-  const long = text.length > 600 || text.split("\n").length > 12;
+  const markdown = useMemo(() => messageMarkdown(text), [text]);
+  const body = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(false);
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    const measure = () => setLong(messageCollapses(el.scrollHeight));
+    measure();
+    return observeSize(el, measure);
+  }, []);
   const attachments = item.attachments ?? [];
   const placeholders = attachments.some((a) => a.kind === "image") ? 0 : markers;
   return (
@@ -137,28 +145,31 @@ export const UserRow = memo(function UserRow({
       )}
       <div className={cx("relative max-w-[80%] rounded-2xl bg-fill px-3.5 py-2.5", !text && "hidden")}>
         <div
+          ref={body}
           className={cx(
-            "selectable text-body leading-[20px] whitespace-pre-wrap break-words",
             long &&
               !open &&
-              "max-h-[240px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
+              "max-h-[176px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)]",
           )}
         >
-          <TextWithLinks text={text} />
+          <Markdown
+            text={markdown}
+            className="text-fg [&_li]:whitespace-pre-wrap [&_p]:whitespace-pre-wrap"
+          />
         </div>
         {long && (
           <Pill quiet className="mt-1.5 -mr-1 ml-auto" onClick={() => setOpen(!open)}>
-            {open ? "Show less" : "Show more"}
+            {open ? "Show less" : "Show full message"}
             {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </Pill>
         )}
       </div>
       {/* Time and actions show on hover. */}
-      <div className="mt-1 flex h-[22px] items-center gap-1 text-caption text-fg-faint opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
+      <div className="mt-0.5 flex h-[22px] items-center gap-1 text-caption text-fg-faint opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
-          <span className="tabular">{timeLabel(item.at)}</span>
+          <span className="tabular">{messageTime(item.at)}</span>
         </Tooltip>
         <CopyButton text={item.text} iconOnly label="Copy message" />
         {threadId && (
@@ -352,7 +363,9 @@ export function DiffCount({ added, removed }: { added: number; removed: number }
 function TextBox({ text, label }: { text: string; label: string }) {
   const [all, setAll] = useState(false);
   const lines = text.replace(/\n$/, "").split("\n");
-  const shown = all || lines.length <= 14 ? lines : lines.slice(0, 14);
+  // Folds only when that hides a few lines, not one.
+  const folds = lines.length > 17;
+  const shown = all || !folds ? lines : lines.slice(0, 14);
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -362,7 +375,7 @@ function TextBox({ text, label }: { text: string; label: string }) {
       <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
         {shown.join("\n")}
       </pre>
-      {lines.length > 14 && (
+      {folds && (
         <button
           type="button"
           onClick={() => setAll(!all)}
@@ -477,7 +490,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
   const input = inputWithoutSummary(item.input);
   return (
-    <div className="font-rounded">
+    <div>
       <div className="group flex items-center gap-0.5">
         <button
           type="button"
@@ -584,7 +597,7 @@ export function SwitchRow({ item }: { item: Item<"switch"> }) {
   const models = modelFrom !== modelTo && modelTo;
   const efforts = effortFrom !== effortTo && effortTo;
   return (
-    <div className="flex items-center gap-3 py-1 font-rounded text-caption text-fg-muted" role="separator">
+    <div className="flex items-center gap-3 py-1 text-caption text-fg-muted" role="separator">
       <span className="h-px flex-1 bg-border" />
       <span className="flex items-center gap-1.5">
         {models && (
@@ -623,7 +636,7 @@ export function HandoffRow({ item }: { item: Item<"handoff"> }) {
   const harnesses = useApp((s) => s.harnesses?.harnesses);
   const name = (id: string) => harnesses?.find((h) => h.id === id)?.name ?? id;
   return (
-    <div className="flex items-center gap-3 py-1 font-rounded text-caption text-fg-muted" role="separator">
+    <div className="flex items-center gap-3 py-1 text-caption text-fg-muted" role="separator">
       <span className="h-px flex-1 bg-border" />
       <span className="flex items-center gap-1.5">
         <HarnessIcon id={item.from} size={12} />
@@ -642,6 +655,18 @@ export function HandoffRow({ item }: { item: Item<"handoff"> }) {
 }
 
 export function NoticeRow({ item, action }: { item: Item<"notice">; action?: ReactNode }) {
+  // Something that happened to the thread (it compacted), not a problem: a divider, like a switch.
+  if (item.tone === "info")
+    return (
+      <div className="flex items-center gap-3 py-1 text-caption text-fg-muted" role="separator">
+        <span className="h-px flex-1 bg-border" />
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Layers size={11} className="shrink-0 text-fg-faint" />
+          <span className="truncate">{item.text}</span>
+        </span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    );
   return (
     <Callout tone="warning" action={action}>
       {item.text}
@@ -659,7 +684,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
   if (!completion.files.length && !completion.checks.length) return null;
   return (
     // A pill at the left, as wide as what it says; the files open under it.
-    <div className="mb-2 font-rounded text-callout">
+    <div className="mb-2 text-callout">
       <div className="inline-flex h-7 items-center gap-2 rounded-full bg-fill-subtle px-3">
         {completion.files.length ? (
           <button
@@ -763,7 +788,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({
   onToggle: (key: string) => void;
 }) {
   return (
-    <div className="font-rounded">
+    <div>
       <button
         type="button"
         aria-expanded={group.open}
@@ -820,7 +845,7 @@ export function TurnEndRow({
         : item.elapsedMs !== undefined && !folded
           ? `Worked for ${formatDuration(item.elapsedMs)}`
           : undefined,
-    timeLabel(item.at),
+    messageTime(item.at),
   ].filter(Boolean);
   return (
     <div className="-mt-2">
