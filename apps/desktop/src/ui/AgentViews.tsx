@@ -1,16 +1,16 @@
-// Subagents, one way for every harness: a row per
-// agent a turn started, where it started it, that says what it does while it
-// works and how long it took once done; and a pill over the composer while
-// agents work. RustCode's own agents (`spawn_agent`) take the same row, fed
-// by `_rustcode/agents`.
+// Subagents, one way for every harness: a row per agent a turn started (the
+// same row the threads this one delegated to get), that says what it is doing
+// while it works and what it answered once done, and how long it took; and a
+// pill over the composer while agents work. RustCode's own agents
+// (`spawn_agent`) take the same row, fed by `_rustcode/agents`.
 
-import { Bot, ChevronRight, CircleCheck, CircleX, PanelRight } from "lucide-react";
+import { Bot, Check, ChevronRight, CircleCheck, CircleX, Minus, PanelRight, X } from "lucide-react";
 import { HoverCard } from "radix-ui";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
 import { stateOf } from "../state/host";
-import { isActive, LINK_LABEL, type Link, type LinkState } from "../state/orchestration";
+import { isActive, type Link, type LinkState } from "../state/orchestration";
 import { agentHistory, peekThread, selectThread, useApp } from "../state/store";
 import { formatDuration, stepLabel, subagentOf, type TranscriptItem } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
@@ -62,17 +62,9 @@ function useAgentSteps(threadId: string, agentId: number | undefined, active: bo
   return { steps, loading };
 }
 
-type AgentState = "working" | "needs" | "done" | "failed" | "stopped";
+export type AgentState = "working" | "needs" | "done" | "failed" | "stopped";
 
-const AGENT_DOT: Record<AgentState, string> = {
-  working: "bg-accent rc-breathe",
-  needs: "bg-warning",
-  done: "bg-success",
-  failed: "bg-danger",
-  stopped: "bg-fg-faint",
-};
-
-const LINK_AGENT_STATE: Record<LinkState, AgentState> = {
+export const LINK_AGENT_STATE: Record<LinkState, AgentState> = {
   queued: "working",
   working: "working",
   needs_user: "needs",
@@ -82,25 +74,177 @@ const LINK_AGENT_STATE: Record<LinkState, AgentState> = {
   interrupted: "stopped",
 };
 
-/** Who is doing the work, and a dot for how it goes. The dot pops in when the state changes. */
-function AgentAvatar({ harness, state }: { harness?: string; state: AgentState }) {
+const AGENT_LABEL: Record<AgentState, string> = {
+  working: "Working",
+  needs: "Needs you",
+  done: "Done",
+  failed: "Failed",
+  stopped: "Stopped",
+};
+
+/** Who is doing the work, and a badge for how it goes. The badge pops in when the state changes. */
+function AgentAvatar({
+  harness,
+  state,
+  className,
+}: {
+  harness?: string;
+  state: AgentState;
+  className?: string;
+}) {
   return (
-    <span className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full bg-fill">
-      {harness ? <HarnessIcon id={harness} size={11} /> : <Bot size={11} className="text-fg-muted" />}
-      <span
-        key={state}
-        aria-hidden
-        className={cx(
-          "-right-0.5 -bottom-0.5 absolute size-2 rounded-full ring-2 ring-bg",
-          AGENT_DOT[state],
-          state !== "working" && "rc-dot-in",
-        )}
-      />
+    <span
+      aria-hidden
+      className={cx(
+        "relative flex size-6 shrink-0 items-center justify-center rounded-full bg-fill",
+        className,
+      )}
+    >
+      {harness ? <HarnessIcon id={harness} size={13} /> : <Bot size={13} className="text-fg-muted" />}
+      {state === "needs" ? (
+        <span
+          key={state}
+          className="-right-0.5 -bottom-0.5 absolute size-2 rounded-full bg-warning ring-2 ring-bg rc-dot-in"
+        />
+      ) : (
+        <span
+          key={state}
+          className="-right-1 -bottom-1 absolute flex size-3 items-center justify-center rounded-full bg-bg ring-2 ring-bg"
+        >
+          {state === "working" ? (
+            <Spinner size={8} className="text-accent" />
+          ) : state === "failed" ? (
+            <X size={9} strokeWidth={3} className="text-danger" />
+          ) : state === "stopped" ? (
+            <Minus size={9} strokeWidth={3} className="text-fg-faint" />
+          ) : (
+            <Check size={9} strokeWidth={3} className="text-success rc-dot-in" />
+          )}
+        </span>
+      )}
     </span>
   );
 }
 
-/** `Claude Code · haiku`: what runs the agent, on the row itself. */
+/** The first line of a result, without the markdown around it. */
+function firstLine(text: string | null | undefined): string | undefined {
+  const line = text
+    ?.split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!line) return undefined;
+  const plain = line
+    .replace(/^[>\-*+\s]+/, "")
+    .replace(/[*`]/g, "")
+    .trim();
+  return plain || undefined;
+}
+
+/** What a hover on an agent row says: what it was asked, in full, and what runs it. */
+export function AgentTip({ title, meta, task }: { title: string; meta?: string; task?: string }) {
+  const asked = task?.trim();
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="font-medium">{title}</span>
+      {meta && <span className="text-fg-muted">{meta}</span>}
+      {asked && asked !== title.trim() && (
+        <span className="mt-0.5 line-clamp-6 break-words whitespace-pre-wrap text-fg-muted">{asked}</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Every agent row, one shape: subagents, the threads this one delegated to, and
+ * the header of a group of them. A mark of the harness with a badge for how it
+ * goes, the name over the line it is on, then how long, and a chevron. What it
+ * was asked and the model are in the hover tip, not the row.
+ */
+export function AgentRow({
+  harness,
+  state,
+  title,
+  detail,
+  elapsed,
+  tooltip,
+  label,
+  onClick,
+  expanded,
+  action,
+}: {
+  harness?: string;
+  state: AgentState;
+  title: string;
+  /** The line under the name: the step it is on, what it answered, or nothing for the status. */
+  detail?: string;
+  elapsed?: string;
+  tooltip?: ReactNode;
+  label?: string;
+  onClick?: () => void;
+  expanded?: boolean;
+  /** A control beside the row, after the chevron: stop this work, show it beside this thread. */
+  action?: ReactNode;
+}) {
+  const word = detail !== undefined && state !== "done" ? AGENT_LABEL[state] : undefined;
+  const bottom = detail ?? AGENT_LABEL[state];
+  const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left";
+  const body = (
+    <>
+      <AgentAvatar harness={harness} state={state} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="min-w-0 truncate font-medium text-fg text-sub">{title}</span>
+        <span
+          className={cx("block truncate text-caption", state === "failed" ? "text-danger" : "text-fg-muted")}
+        >
+          {bottom}
+        </span>
+      </span>
+      {word && (
+        <span
+          className={cx(
+            "shrink-0 text-caption",
+            state === "failed" ? "text-danger" : state === "needs" ? "text-warning" : "text-fg-muted",
+          )}
+        >
+          {word}
+        </span>
+      )}
+      {elapsed && <span className="shrink-0 text-caption text-fg-faint tabular">{elapsed}</span>}
+      {(onClick !== undefined || expanded !== undefined) && (
+        <ChevronRight
+          size={14}
+          aria-hidden
+          className={cx(
+            "shrink-0 text-fg-faint transition-transform duration-200 group-hover:text-fg",
+            expanded && "rotate-90",
+          )}
+        />
+      )}
+    </>
+  );
+  return (
+    <div className="group flex w-full min-w-0 items-center">
+      <Tooltip label={tooltip}>
+        {onClick === undefined ? (
+          <div className={rowClass}>{body}</div>
+        ) : (
+          <button
+            type="button"
+            aria-label={label}
+            aria-expanded={expanded}
+            onClick={onClick}
+            className={cx(rowClass, "hover:bg-fill-subtle")}
+          >
+            {body}
+          </button>
+        )}
+      </Tooltip>
+      {action}
+    </div>
+  );
+}
+
+/** `Claude Code · haiku`: what runs the agent, for the row's hover tip. */
 function useAgentMeta(harness: string | undefined, model: string | undefined): string {
   const name = useApp((s) =>
     harness ? (s.harnesses?.harnesses.find((h) => h.id === harness)?.name ?? harness) : undefined,
@@ -109,73 +253,63 @@ function useAgentMeta(harness: string | undefined, model: string | undefined): s
 }
 
 /**
- * A thread this one started (`start_session`), as a subagent: which harness and model it runs on,
- * how it goes, and for how long. Clicking opens it.
+ * A thread this one started (`start_session`), messaged, or is waiting on, as
+ * an agent row: which harness and model it runs on, what it was asked (or what
+ * it answered), how it goes, and for how long. Clicking opens it.
  */
-export function ThreadAgentRow({ link, model }: { link: Link; model?: string }) {
+export function ThreadAgentRow({
+  link,
+  model,
+  action,
+}: {
+  link: Link;
+  model?: string;
+  /** A control of the caller's, after the row's own: stop this work, or dismiss it. */
+  action?: ReactNode;
+}) {
   const state = useApp((s) => stateOf(s, link));
   const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
   const active = isActive(state);
   const now = useNow(active);
-  const meta = useAgentMeta(link.harness ?? session?.harness, session?.model ?? model);
+  const harness = link.harness ?? session?.harness;
+  const meta = useAgentMeta(harness, session?.model ?? model);
   const end = active ? now : session?.updatedAt;
-  const elapsed = end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
-  const agent = LINK_AGENT_STATE[state];
+  const elapsedMs = end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
+  const title = session?.title || link.targetTitle;
   return (
-    <div className="group flex items-center gap-0.5">
-      <button
-        type="button"
-        aria-label={`Open ${link.targetTitle}`}
-        onClick={() => selectThread(link.target)}
-        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
-      >
-        <AgentAvatar harness={link.harness ?? session?.harness} state={agent} />
-        <span className="min-w-0 shrink truncate font-medium text-callout text-fg">
-          {session?.title || link.targetTitle}
-        </span>
-        {meta && (
-          <span className="min-w-0 max-w-[40%] shrink truncate text-caption text-fg-faint">{meta}</span>
-        )}
-        <span
-          className={cx(
-            "shrink-0 text-caption tabular",
-            agent === "working"
-              ? "text-accent"
-              : agent === "failed"
-                ? "text-danger"
-                : agent === "needs"
-                  ? "text-warning"
-                  : agent === "done"
-                    ? "text-success"
-                    : "text-fg-faint",
-          )}
-        >
-          {LINK_LABEL[state]}
-          {elapsed !== undefined && (
-            <span className="text-fg-faint"> · {formatDuration(Math.floor(elapsed / 1000) * 1000)}</span>
-          )}
-        </span>
-        <ChevronRight size={11} className="shrink-0 text-fg-faint opacity-0 group-hover:opacity-100" />
-      </button>
-      <Tooltip label="Show beside this thread">
-        <button
-          type="button"
-          aria-label={`Show ${link.targetTitle} beside this thread`}
-          onClick={() => peekThread(link.target)}
-          className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-        >
-          <PanelRight size={11} />
-        </button>
-      </Tooltip>
-    </div>
+    <AgentRow
+      harness={harness}
+      state={LINK_AGENT_STATE[state]}
+      title={title}
+      detail={active ? firstLine(link.message) : firstLine(link.answer)}
+      elapsed={elapsedMs === undefined ? undefined : formatDuration(Math.floor(elapsedMs / 1000) * 1000)}
+      label={`Open ${title}`}
+      tooltip={<AgentTip title={title} meta={meta} task={link.message} />}
+      onClick={() => selectThread(link.target)}
+      action={
+        <>
+          <Tooltip label="Show beside this thread">
+            <button
+              type="button"
+              aria-label={`Show ${title} beside this thread`}
+              onClick={() => peekThread(link.target)}
+              className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+            >
+              <PanelRight size={12} />
+            </button>
+          </Tooltip>
+          {action}
+        </>
+      }
+    />
   );
 }
 
 /**
- * A subagent, drawn as one line: what it was asked, and while it works the
- * step it is on; once done, how many steps it took and how long. Its steps
- * stay folded; the chevron lists them. Claude Code's `Agent`/`Task` calls carry
- * their steps in the thread; a RustCode agent's come from its own conversation.
+ * A subagent, as an agent row: the step it is on while it works, what it
+ * answered once done; its steps stay folded behind the chevron. Claude Code's
+ * `Agent`/`Task` calls carry their steps in the thread; a RustCode agent's come
+ * from its own conversation.
  */
 export function SubagentRow({
   item,
@@ -210,8 +344,6 @@ export function SubagentRow({
       ? formatDuration(elapsedMs)
       : undefined;
   const output = info ? info.completion : item.title === "spawn_agent" ? undefined : item.output;
-  const count = steps.length ? `${steps.length} step${steps.length === 1 ? "" : "s"}` : undefined;
-  const done = [count, elapsed].filter(Boolean).join(" · ");
   const name = info?.agentType && info.agentType !== "default" ? info.agentType : agent.name;
   // A subagent runs on its parent's harness, and on its model unless the call chose another.
   const parentHarness = useApp((s) => s.threads[threadId]?.harness?.id);
@@ -222,44 +354,22 @@ export function SubagentRow({
     parentHarness,
     info?.model ?? (typeof asked === "string" && asked ? asked : parentModel),
   );
+  const state: AgentState = running ? "working" : failed ? "failed" : "done";
   return (
     <div>
-      <button
-        type="button"
-        aria-expanded={open}
+      <AgentRow
+        harness={parentHarness}
+        state={state}
+        title={name}
+        detail={running ? (current ? stepLabel(current) : "Starting") : firstLine(output)}
+        elapsed={elapsed}
+        label={`${name}: ${agent.task}`}
+        expanded={open}
         onClick={() => setOpen(!open)}
-        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
-      >
-        <span className="flex w-[18px] shrink-0 justify-center">
-          <AgentAvatar harness={parentHarness} state={running ? "working" : failed ? "failed" : "done"} />
-        </span>
-        <span className="shrink-0 font-medium text-callout text-fg">{name}</span>
-        <span className="min-w-0 shrink truncate text-callout text-fg-muted">{agent.task}</span>
-        {meta && (
-          <span className="min-w-0 max-w-[30%] shrink truncate text-caption text-fg-faint">{meta}</span>
-        )}
-        {running ? (
-          <span className="min-w-0 max-w-[40%] shrink truncate text-caption text-accent">
-            {current ? stepLabel(current) : "Starting"}
-          </span>
-        ) : (
-          <span className={cx("shrink-0 text-caption tabular", failed ? "text-danger" : "text-success")}>
-            {failed ? "Failed" : "Done"}
-            {done && <span className="text-fg-faint"> · {done}</span>}
-          </span>
-        )}
-        {(steps.length > 0 || output || agentId !== undefined) && (
-          <ChevronRight
-            size={11}
-            className={cx(
-              "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
-              open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
-            )}
-          />
-        )}
-      </button>
+        tooltip={<AgentTip title={name} meta={meta} task={agent.task} />}
+      />
       {open && (
-        <div className="rc-expand mt-1 mb-1 ml-[26px] flex flex-col gap-0.5 rounded-lg border border-border bg-fill-subtle/30 px-3 py-2">
+        <div className="rc-expand mt-0.5 mb-1 ml-[42px] flex flex-col rounded-xl border border-border bg-surface-2 px-3 py-2">
           {loadingSteps && <StepsSkeleton />}
           {steps.map((step) => (
             <div key={step.id} className="flex h-5 min-w-0 items-center gap-1.5 text-caption text-fg-muted">
@@ -273,7 +383,10 @@ export function SubagentRow({
               <span className="min-w-0 truncate">{stepLabel(step)}</span>
             </div>
           ))}
-          {output && !running && (
+          {!loadingSteps && steps.length === 0 && !output && (
+            <span className="text-caption text-fg-faint">No steps recorded.</span>
+          )}
+          {output && !running && output.includes("\n") && (
             <div className="mt-1.5 max-h-64 overflow-y-auto rounded-lg bg-fill-subtle p-2.5">
               <Markdown text={output} className="text-callout" />
             </div>
@@ -285,9 +398,9 @@ export function SubagentRow({
 }
 
 /**
- * Two or more subagents a turn started together:
- * one line, `3 subagents`, with how many still work (or how long they took)
- * and a chevron; open, a card with each agent's own row.
+ * Two or more subagents a turn started together, as one soft card: a header of
+ * stacked marks, `3 agents · 2 working` and how long; open, each agent's own
+ * row inside it.
  */
 export function SubagentGroupRow({
   items,
@@ -303,58 +416,60 @@ export function SubagentGroupRow({
   onToggle: () => void;
 }) {
   const agents = useApp((s) => s.agents[threadId] ?? EMPTY);
-  const state = items.map((item) => {
+  const parentHarness = useApp((s) => s.threads[threadId]?.harness?.id);
+  const states = items.map((item) => {
     const agentId =
       item.title === "spawn_agent" && item.status !== "failed" ? spawnedAgentId(item.output) : undefined;
     const info = agentId === undefined ? undefined : agents.find((a) => a.id === agentId);
-    return {
-      running: info ? agentActive(info) : live(item),
-      failed: info ? info.status === "failed" : item.status === "failed",
-    };
+    const running = info ? agentActive(info) : live(item);
+    const failed = info ? info.status === "failed" : item.status === "failed";
+    return (running ? "working" : failed ? "failed" : "done") as AgentState;
   });
-  const working = state.filter((x) => x.running).length;
-  const failed = state.filter((x) => x.failed).length;
+  const working = states.filter((x) => x === "working").length;
+  const failed = states.filter((x) => x === "failed").length;
+  // One mark for the lot: they all run on this thread's harness, so a stack of them says nothing.
+  const groupState: AgentState = working ? "working" : failed ? "failed" : "done";
   const now = useNow(working > 0);
   const started = Math.min(...items.map((i) => i.startedAt ?? Number.POSITIVE_INFINITY));
   const ended = Math.max(...items.map((i) => i.endedAt ?? 0));
   const elapsedMs = Number.isFinite(started) ? (working ? now : ended || now) - started : undefined;
   const status = working ? `${working} working` : failed ? `${failed} failed` : "done";
   return (
-    <div className={cx(!working && !open && "opacity-80")}>
+    <div className={cx("rounded-xl border border-border bg-surface p-1", !working && !open && "opacity-80")}>
       <button
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+        className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1 text-left hover:bg-fill-subtle"
       >
-        <span className="flex w-[18px] shrink-0 justify-center">
-          {working ? (
-            <Orb />
-          ) : failed ? (
-            <CircleX size={13} className="text-danger" />
-          ) : (
-            <CircleCheck size={13} className="text-success" />
-          )}
+        <AgentAvatar harness={parentHarness} state={groupState} />
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="shrink-0 font-medium text-fg text-sub">{items.length} agents</span>
+          <span
+            className={cx(
+              "min-w-0 truncate text-caption",
+              working ? "text-accent" : failed ? "text-danger" : "text-fg-muted",
+            )}
+          >
+            · {status}
+          </span>
         </span>
-        <span className="shrink-0 font-medium text-callout text-fg">{items.length} subagents</span>
-        <span
-          className={cx(
-            "shrink-0 text-caption tabular",
-            working ? "text-accent" : failed ? "text-danger" : "text-fg-faint",
-          )}
-        >
-          {status}
-          {elapsedMs !== undefined &&
-            elapsedMs >= 1000 &&
-            ` · ${formatDuration(Math.floor(elapsedMs / 1000) * 1000)}`}
-        </span>
+        {elapsedMs !== undefined && elapsedMs >= 1000 && (
+          <span className="shrink-0 text-caption text-fg-faint tabular">
+            {formatDuration(Math.floor(elapsedMs / 1000) * 1000)}
+          </span>
+        )}
         <ChevronRight
-          size={11}
-          className={cx("shrink-0 text-fg-faint transition-transform duration-200", open && "rotate-90")}
+          size={14}
+          aria-hidden
+          className={cx(
+            "shrink-0 text-fg-faint transition-transform duration-200 group-hover:text-fg",
+            open && "rotate-90",
+          )}
         />
       </button>
       {open && (
-        <div className="rc-expand mt-1 mb-1 ml-[26px] flex flex-col gap-1 rounded-lg border border-border bg-fill-subtle/30 px-2.5 py-1.5">
+        <div className="rc-expand mt-0.5 flex flex-col gap-0.5 pb-0.5">
           {items.map((item) => (
             <SubagentRow key={item.id} item={item} steps={stepsOf(item.id)} threadId={threadId} />
           ))}
