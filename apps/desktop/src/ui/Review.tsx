@@ -1,11 +1,21 @@
 // The Review screen for one thread: its changes as a file tree and a diff
-// (unified or side by side, highlighted by Shiki), from the working tree,
-// the worktree's branch, one turn's checkpoint, or the branch's pull
-// request. Click a line number to draft a comment; the drafts go to the
-// agent as one message, or to the pull request as one review with line
-// comments (`_rustcode/pulls/review`).
+// (unified or side by side, highlighted, with the words that changed marked
+// inside each line), from the working tree, the worktree's branch, one turn's
+// checkpoint, or the branch's pull request. The tree takes the left column on
+// a wide window and folds into a picker below that. Click a line number to
+// draft a comment; the drafts go to the agent as one message, or to the pull
+// request as one review with line comments (`_rustcode/pulls/review`).
 
-import { ChevronRight, FileDiff, MessageSquarePlus, RefreshCw, Send, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileDiff,
+  Folder,
+  MessageSquarePlus,
+  RefreshCw,
+  Send,
+  X,
+} from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
 import {
@@ -16,8 +26,9 @@ import {
   repositoryOf,
 } from "../acp/rustcode";
 import { Method } from "../acp/types";
+import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { gitChanges } from "../lib/native";
-import { useHighlightedLines } from "../lib/useHighlightedLines";
+import { type Piece, runWordMarks } from "../lib/wordDiff";
 import {
   fileTree,
   type PatchLine,
@@ -38,7 +49,8 @@ import {
   worktreeOf,
 } from "../state/store";
 import { ViewHeader } from "./Board";
-import { splitUnifiedDiff } from "./ChangesPanel";
+import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
+import { Fragments, useMarkedFragments } from "./DiffView";
 import { cx, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
@@ -141,15 +153,26 @@ function Gutter({ line, side, onComment, commented }: Omit<LineProps, "html">) {
   );
 }
 
-function Code({ line, html }: { line: PatchLine; html: string | null | undefined }) {
-  return html ? (
-    // Shiki escapes the code; the HTML holds only spans with colour variables.
-    // biome-ignore lint/security/noDangerouslySetInnerHtml: highlighted, escaped output
-    <span className="shiki min-w-0 flex-1 whitespace-pre" dangerouslySetInnerHTML={{ __html: html || " " }} />
-  ) : (
-    <span className="min-w-0 flex-1 whitespace-pre">{line.text || " "}</span>
+function Code({
+  pieces,
+  html,
+  start,
+  tint,
+}: {
+  pieces: Piece[];
+  html: (string | null)[];
+  start: number;
+  tint?: "add" | "del";
+}) {
+  return (
+    <span className="min-w-0 flex-1">
+      <Fragments pieces={pieces} html={html} start={start} tint={tint} />
+    </span>
   );
 }
+
+const wordTint = (kind: PatchLine["kind"]) =>
+  kind === "add" ? ("add" as const) : kind === "del" ? ("del" as const) : undefined;
 
 const tint = (kind: PatchLine["kind"] | undefined) =>
   kind === "add" ? "bg-[var(--rc-diff-add)]" : kind === "del" ? "bg-[var(--rc-diff-del)]" : "";
@@ -168,22 +191,15 @@ const FileDiffView = memo(function FileDiffView({
   onRemove: (c: ReviewComment) => void;
 }) {
   const [editing, setEditing] = useState<{ side: "LEFT" | "RIGHT"; line: number; code: string } | null>(null);
-  // The two sides as text, so Shiki colours each as code.
-  const newSide = useMemo(() => file.lines.filter((l) => l.kind === "add" || l.kind === "ctx"), [file.lines]);
-  const oldSide = useMemo(() => file.lines.filter((l) => l.kind === "del" || l.kind === "ctx"), [file.lines]);
-  const newHtml = useHighlightedLines(
-    newSide.map((l) => l.text),
-    file.path,
-  );
-  const oldHtml = useHighlightedLines(
-    oldSide.map((l) => l.text),
-    file.path,
-  );
-  const htmlOf = useCallback(
-    (line: PatchLine, side: "LEFT" | "RIGHT") =>
-      side === "RIGHT" ? newHtml[newSide.indexOf(line)] : oldHtml[oldSide.indexOf(line)],
-    [newHtml, oldHtml, newSide, oldSide],
-  );
+  // Every line highlighted once, split around the words that changed on it.
+  const texts = useMemo(() => file.lines.map((line) => line.text), [file.lines]);
+  const marks = useMemo(() => runWordMarks(file.lines), [file.lines]);
+  const { pieces, html, starts } = useMarkedFragments(texts, marks, file.path);
+  const where = useMemo(() => new Map(file.lines.map((line, i) => [line, i])), [file.lines]);
+  const code = (line: PatchLine) => {
+    const i = where.get(line) ?? 0;
+    return <Code pieces={pieces[i]!} html={html} start={starts[i]!} tint={wordTint(line.kind)} />;
+  };
   const at = (side: "LEFT" | "RIGHT", n?: number) =>
     n === undefined ? [] : comments.filter((c) => c.side === side && c.line === n);
   const start = (line: PatchLine, side: "LEFT" | "RIGHT") => {
@@ -256,7 +272,7 @@ const FileDiffView = memo(function FileDiffView({
                     >
                       {line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}
                     </span>
-                    <Code line={line} html={htmlOf(line, line.kind === "del" ? "LEFT" : "RIGHT")} />
+                    {code(line)}
                   </div>
                   {after(line, line.kind === "del" ? "LEFT" : "RIGHT")}
                   {line.kind === "ctx" && after(line, "LEFT")}
@@ -287,7 +303,7 @@ const FileDiffView = memo(function FileDiffView({
                                 onComment={() => start(shown, side)}
                                 commented={at(side, side === "LEFT" ? shown.old : shown.new).length > 0}
                               />
-                              <Code line={shown} html={htmlOf(shown, side)} />
+                              {code(shown)}
                             </>
                           ) : (
                             <span className="h-[18px] flex-1 bg-fill-subtle/50" />
@@ -315,7 +331,10 @@ export function Review({ threadId }: { threadId: string }) {
   const cwd = thread?.cwd ?? summary?.cwd ?? "";
   const title = thread?.title ?? summary?.title ?? "Thread";
   const [source, setSource] = useState<Source>(wt ? { kind: "branch" } : { kind: "uncommitted" });
-  const [mode, setMode] = useState<"unified" | "split">("unified");
+  // The diff column's own width decides: the file tree takes its share of the window.
+  const [diffRef, diffWidth] = useDiffWidth<HTMLElement>();
+  const { mode, wide } = useDiffLayout(diffWidth);
+  const [collapsed, setCollapsed] = useState(false);
   const [files, setFiles] = useState<ReviewFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -329,6 +348,12 @@ export function Review({ threadId }: { threadId: string }) {
   useEffect(() => {
     void refreshCheckpoints(threadId);
   }, [threadId]);
+
+  // A folded file opens again for the next one, and for another source.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a fold belongs to one file of one source
+  useEffect(() => {
+    setCollapsed(false);
+  }, [selected, sourceKey(source)]);
 
   // The branch's pull request, when the project has one open for it.
   useEffect(() => {
@@ -490,15 +515,19 @@ export function Review({ threadId }: { threadId: string }) {
             </Tooltip>
           )
         )}
-        <Segments
-          label="Layout"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: "unified", label: "Unified" },
-            { value: "split", label: "Split" },
-          ]}
-        />
+        <Tooltip label={wide ? "Unified or side by side" : "Side by side needs a wider view"}>
+          <span>
+            <Segments
+              label="Layout"
+              value={mode}
+              onChange={(v) => setDiffMode(v)}
+              options={[
+                { value: "unified", label: "Unified" },
+                { value: "split", label: "Split", disabled: !wide },
+              ]}
+            />
+          </span>
+        </Tooltip>
         <Tooltip label="Reload">
           <button
             type="button"
@@ -514,8 +543,12 @@ export function Review({ threadId }: { threadId: string }) {
       <div className="flex min-h-0 flex-1">
         <nav
           aria-label="Files"
-          className="w-[260px] shrink-0 overflow-y-auto border-border border-r px-2 pb-4"
+          className="w-[260px] shrink-0 overflow-y-auto border-border border-r px-2 pb-4 max-[1099px]:hidden"
         >
+          <div className="flex h-9 items-center gap-2 px-2">
+            <span className="font-semibold text-body">Files</span>
+            <span className="text-caption text-fg-faint tabular">{files?.length ?? 0}</span>
+          </div>
           {error && <p className="px-2 py-3 text-callout text-fg-muted">{error}</p>}
           {files && !files.length && (
             <p className="px-2 py-3 text-callout text-fg-muted">No changes in {label}.</p>
@@ -524,8 +557,9 @@ export function Review({ threadId }: { threadId: string }) {
           {tree.map((group) => (
             <div key={group.dir} className="mb-1">
               {group.dir && (
-                <div className="truncate px-2 pt-2 pb-0.5 font-mono text-caption text-fg-faint" dir="rtl">
-                  <bdi>{group.dir}/</bdi>
+                <div className="flex items-center gap-1.5 px-2 pt-2 pb-0.5 text-caption text-fg-faint">
+                  <Folder size={11} className="shrink-0" />
+                  <span className="truncate font-mono">{group.dir}/</span>
                 </div>
               )}
               {group.files.map((path) => {
@@ -537,14 +571,13 @@ export function Review({ threadId }: { threadId: string }) {
                     type="button"
                     onClick={() => setSelected(path)}
                     aria-current={selected === path ? "true" : undefined}
+                    title={path}
                     className={cx(
                       "flex w-full items-center gap-1.5 rounded-md px-2 py-[5px] text-left",
                       selected === path ? "bg-fill" : "hover:bg-fill-subtle",
                     )}
                   >
-                    <span className="w-3 shrink-0 font-bold font-mono text-[9px] text-fg-muted">
-                      {f?.status}
-                    </span>
+                    {f ? <StatusMark status={f.status} /> : <span className="size-4 shrink-0" />}
                     <span className="min-w-0 flex-1 truncate font-mono text-callout">
                       {path.split("/").pop()}
                     </span>
@@ -558,29 +591,62 @@ export function Review({ threadId }: { threadId: string }) {
             </div>
           ))}
         </nav>
-        <section className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <section ref={diffRef} className="flex min-w-0 flex-1 flex-col">
+          {files && files.length > 0 && (
+            <div className="shrink-0 px-4 pt-3 min-[1100px]:hidden">
+              <Select
+                label="File"
+                size="sm"
+                className="max-w-full"
+                value={selected ?? ""}
+                onChange={setSelected}
+                options={files.map((f) => ({
+                  value: f.path,
+                  label: `${f.path} +${f.added} −${f.removed}`,
+                }))}
+              />
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {file ? (
               <>
-                <div className="mb-2 flex items-center gap-2 text-callout">
-                  <FileDiff size={13} className="text-fg-muted" />
-                  <span className="selectable truncate font-mono">{file.path}</span>
+                {/* The file's own header holds its place while the diff scrolls under it. */}
+                <div className="sticky top-0 z-10 flex items-center gap-2 bg-bg px-4 py-2 text-callout">
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    aria-label={collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`}
+                    onClick={() => setCollapsed(!collapsed)}
+                    className="-ml-1.5 flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+                  >
+                    {collapsed ? (
+                      <ChevronRight size={13} strokeWidth={2.5} />
+                    ) : (
+                      <ChevronDown size={13} strokeWidth={2.5} />
+                    )}
+                  </button>
+                  <FileDiff size={13} className="shrink-0 text-fg-muted" />
+                  <span className="selectable min-w-0 truncate font-mono">{file.path}</span>
                   <DiffCount added={file.added} removed={file.removed} />
                   <span className="flex-1" />
-                  <span className="text-caption text-fg-faint">Click a line number to comment</span>
+                  <span className="shrink-0 text-caption text-fg-faint max-[1099px]:hidden">
+                    Click a line number to comment
+                  </span>
                 </div>
-                {file.lines.length ? (
-                  <FileDiffView
-                    key={`${sourceKey(source)}|${file.path}`}
-                    file={file}
-                    mode={mode}
-                    comments={comments.filter((c) => c.path === file.path)}
-                    onAdd={(c) => setComments((all) => [...all, c])}
-                    onRemove={(c) => setComments((all) => all.filter((x) => x !== c))}
-                  />
-                ) : (
-                  <p className="text-callout text-fg-muted">No text diff (binary or untracked file).</p>
-                )}
+                <div className="px-4 pb-4">
+                  {collapsed ? null : file.lines.length ? (
+                    <FileDiffView
+                      key={`${sourceKey(source)}|${file.path}`}
+                      file={file}
+                      mode={mode}
+                      comments={comments.filter((c) => c.path === file.path)}
+                      onAdd={(c) => setComments((all) => [...all, c])}
+                      onRemove={(c) => setComments((all) => all.filter((x) => x !== c))}
+                    />
+                  ) : (
+                    <p className="text-callout text-fg-muted">No text diff (binary or untracked file).</p>
+                  )}
+                </div>
               </>
             ) : (
               !error && loading && <ReviewDiffSkeleton />

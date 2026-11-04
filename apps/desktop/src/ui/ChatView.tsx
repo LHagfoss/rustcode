@@ -57,6 +57,7 @@ import {
   Tooltip,
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
+import { DETAILS_CARD } from "./RightPanel";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
 
@@ -361,6 +362,23 @@ function releaseComposer(e: React.MouseEvent) {
   active.blur();
 }
 
+/** The chat lane's cap: `--rc-chat-content-max-width` (46rem) in index.css. */
+const LANE_MAX = 736;
+
+/**
+ * How far the lane moves left to clear the details card, and no further than
+ * the room beside it: the card floats over the pane's end, so a lane that
+ * would run under it is shifted, never narrowed. When the pane has no room to
+ * give, the lane stays put and the card overlays it.
+ */
+export function laneShift(pane: number, card = DETAILS_CARD): number {
+  if (pane <= 0) return 0;
+  const lane = Math.min(LANE_MAX, pane);
+  const needed = (lane - pane) / 2 + card.width + card.gap * 2;
+  const slack = Math.max(0, (pane - lane) / 2);
+  return Math.round(Math.max(0, Math.min(needed, slack)));
+}
+
 export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
@@ -370,6 +388,9 @@ export function ChatView() {
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(800);
   const banner = useBanner();
+  const detailsOpen = useApp((s) => s.panel === "details");
+  // The transcript's rows and the composer both read this in ui/Transcript.tsx and below.
+  const laneInset = detailsOpen ? laneShift(width) : 0;
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -382,10 +403,14 @@ export function ChatView() {
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    return observeSize(el, () => {
+    // Measured once on mount as well as on resize: the lane clears the details
+    // card from the first frame, not only after the first resize.
+    const measure = () => {
       setWidth(el.offsetWidth);
       setHeight(el.offsetHeight);
-    });
+    };
+    measure();
+    return observeSize(el, measure);
   }, []);
 
   const isNew = !selectedId;
@@ -423,6 +448,7 @@ export function ChatView() {
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
       aria-label="Chat"
       onMouseDown={releaseComposer}
+      style={{ "--rc-lane-inset-end": `${laneInset}px` } as React.CSSProperties}
     >
       {showsBanner && (
         <NewThreadBanner
@@ -453,10 +479,14 @@ export function ChatView() {
       )}
       <div
         ref={stackRef}
-        className="absolute bottom-4 left-1/2 flex w-full max-w-[var(--rc-chat-content-max-width)] -translate-x-1/2 flex-col gap-2.5 px-3 transition-[bottom,transform] duration-500 ease-snappy sm:px-5"
-        // An empty thread keeps its greeting and composer centred: half the stack up from the
-        // middle of the pane, measured, so a taller composer does not push it off centre.
-        style={isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined}
+        className="absolute bottom-4 left-1/2 flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5 px-3 sm:px-5"
+        // The lane clears the details card and comes back with it, at the card's own pace;
+        // an empty thread sits half the stack up from the middle of the pane, measured.
+        style={{
+          translate: "calc(-50% - var(--rc-lane-inset-end, 0px))",
+          transition: "bottom 500ms var(--ease-snappy), translate 200ms var(--ease-snappy)",
+          ...(isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined),
+        }}
       >
         {isNew && <EmptyState banner={showsBanner} />}
         {error && (

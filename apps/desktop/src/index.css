@@ -181,6 +181,10 @@
   --rc-message: color-mix(in srgb, var(--rc-text) 8.5%, var(--rc-bg));
   --rc-diff-add: color-mix(in srgb, var(--rc-success) 14%, transparent);
   --rc-diff-del: color-mix(in srgb, var(--rc-danger) 14%, transparent);
+  /* Word marks inside a changed line: the line tints mixed stronger, so the edited
+     words read on top of the line's own wash (lib/wordDiff.ts). */
+  --rc-diff-add-word: color-mix(in srgb, var(--rc-success) 34%, transparent);
+  --rc-diff-del-word: color-mix(in srgb, var(--rc-danger) 34%, transparent);
   /* Shadows lift, they do not loom: about half a theme's shadow colour, kept close to the edge. */
   --rc-shadow-soft: color-mix(in srgb, var(--rc-shadow-color) 50%, transparent);
   --rc-shadow-1: 0 1px 1px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);

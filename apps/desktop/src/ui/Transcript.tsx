@@ -136,6 +136,14 @@ function paintMatches(root: HTMLElement | null, query: string, current: HTMLElem
   highlights.set("rc-find-current", new HighlightCtor(...mine));
 }
 
+/**
+ * Rows ride left with the composer when the details card needs the lane's end.
+ * The `translate` property, not `transform`: a row's own rise-in animation
+ * animates `transform`, and the two must not overwrite each other.
+ */
+const LANE_SHIFT = { translate: "calc(-1 * var(--rc-lane-inset-end, 0px))" } as const;
+const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
+
 export function Transcript({
   thread,
   bottomInset,
@@ -654,8 +662,11 @@ export function Transcript({
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                     <div
-                      className="mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5"
-                      style={{ paddingTop: v.index === 0 ? 0 : 16 }}
+                      className={cx(
+                        "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
+                        LANE_MOTION,
+                      )}
+                      style={{ paddingTop: v.index === 0 ? 0 : 16, ...LANE_SHIFT }}
                     >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} />
                     </div>
@@ -684,9 +695,10 @@ export function Transcript({
                   <div
                     className={cx(
                       "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
+                      LANE_MOTION,
                       row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
                     )}
-                    style={{ paddingTop: gap }}
+                    style={{ paddingTop: gap, ...LANE_SHIFT }}
                   >
                     {row.approval ? (
                       <ApprovalRow request={row.approval} pending={approvals} number={row.approvalNumber} />
@@ -789,10 +801,10 @@ export function Transcript({
         tabIndex={showLatest ? 0 : -1}
         className={cx(
           // Above the floating composer (its top is `bottomInset - 20` up) and over it in z.
-          "rc-glass rc-glass-strong absolute left-1/2 z-30 flex h-[30px] max-w-[min(360px,calc(100%-32px))] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,transform] duration-200 ease-snappy hover:bg-surface-3",
+          "rc-glass rc-glass-strong absolute z-30 flex h-[30px] max-w-[min(360px,calc(100%-32px))] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,translate,left] duration-200 ease-snappy hover:bg-surface-3",
           showLatest ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0",
         )}
-        style={{ bottom: bottomInset - 8 }}
+        style={{ bottom: bottomInset - 8, left: "calc(50% - var(--rc-lane-inset-end, 0px))" }}
       >
         <ArrowDown size={13} />
         Latest
