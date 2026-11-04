@@ -28,6 +28,8 @@ export const Method = {
   rewind: "_rustcode/rewind",
   usageLimits: "_rustcode/usage/limits",
   usagePlans: "_rustcode/usage/plans",
+  dataUsage: "_rustcode/data/usage",
+  dataQuery: "_rustcode/data/query",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",

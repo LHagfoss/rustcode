@@ -485,51 +485,26 @@ fn run_storage_command(
 /// Disk usage is `storage usage`; this never prices requests.
 fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     let since = match since {
-        Some(value) => Some(
-            chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
-                .map_err(|_| format!("--since must be a day, YYYY-MM-DD, not {value:?}"))?
-                .format("%Y-%m-%d")
-                .to_string(),
-        ),
+        Some(value) => Some(rustcode::data_store::parse_since(value)?),
         None => None,
     };
     rustcode::data_store::ensure_ready()?;
-    let filter = since
-        .as_ref()
-        .map(|day| format!("WHERE date(started_at) >= '{day}'"))
+    // One aggregation, shared with the engine's `thread_usage` tool.
+    let answer =
+        rustcode::data_store::usage(since.as_deref(), rustcode::data_store::GroupBy::Model, None)?;
+    let rows = answer
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
         .unwrap_or_default();
-    // SUM() keeps NULL when every turn of a row reported nothing: a harness
-    // with no token source prints an em dash, not a zero.
-    let sql = format!(
-        "SELECT COALESCE(harness, 'unknown') AS harness,
-                COALESCE(model, '') AS model,
-                SUM(input_tokens) AS input_tokens,
-                SUM(output_tokens) AS output_tokens,
-                SUM(cached_tokens) AS cached_tokens,
-                SUM(cache_write_tokens) AS cache_write_tokens,
-                SUM(cost_usd) AS cost_usd,
-                COUNT(*) AS turns,
-                SUM(CASE WHEN input_tokens IS NULL AND output_tokens IS NULL THEN 1 ELSE 0 END)
-                    AS turns_without_tokens
-         FROM turns {filter}
-         GROUP BY harness, model
-         ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC,
-                  harness, model"
-    );
-    let result = rustcode::data_store::query(&sql, rustcode::data_store::MAX_ROWS)?;
     if json {
-        let body = serde_json::json!({
-            "since": since,
-            "rows": result.rows,
-            "truncated": result.truncated,
-        });
         println!(
             "{}",
-            serde_json::to_string_pretty(&body).map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&answer).map_err(|error| error.to_string())?
         );
         return Ok(());
     }
-    if result.rows.is_empty() {
+    if rows.is_empty() {
         println!(
             "No turns recorded yet. Run a turn, or open the app once so existing threads are collected."
         );
@@ -553,8 +528,7 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
         Some(count) => thousands(count),
         None => "—".to_owned(),
     };
-    let rows: Vec<Vec<String>> = result
-        .rows
+    let table_body: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
             let model = row
@@ -606,34 +580,29 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
             ]
         })
         .collect();
-    let turns: i64 = result.rows.iter().map(|row| count(row, "turns")).sum();
-    let missing: i64 = result
-        .rows
+    let turns: i64 = rows.iter().map(|row| count(row, "turns")).sum();
+    let missing: i64 = rows
         .iter()
         .map(|row| count(row, "turns_without_tokens"))
         .sum();
-    let input: i64 = result
-        .rows
+    let input: i64 = rows
         .iter()
         .map(|row| maybe_count(row, "input_tokens").unwrap_or(0))
         .sum();
-    let output: i64 = result
-        .rows
+    let output: i64 = rows
         .iter()
         .map(|row| maybe_count(row, "output_tokens").unwrap_or(0))
         .sum();
-    let cached: i64 = result
-        .rows
+    let cached: i64 = rows
         .iter()
         .map(|row| maybe_count(row, "cached_tokens").unwrap_or(0))
         .sum();
-    let cache_write: i64 = result
-        .rows
+    let cache_write: i64 = rows
         .iter()
         .map(|row| maybe_count(row, "cache_write_tokens").unwrap_or(0))
         .sum();
-    let cost: f64 = result.rows.iter().filter_map(maybe_cost).sum();
-    let any_cost = result.rows.iter().any(|row| maybe_cost(row).is_some());
+    let cost: f64 = rows.iter().filter_map(maybe_cost).sum();
+    let any_cost = rows.iter().any(|row| maybe_cost(row).is_some());
     match &since {
         Some(day) => println!("RustCode usage · tokens per harness and model · since {day}"),
         None => println!("RustCode usage · tokens per harness and model"),
@@ -650,7 +619,7 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     println!(
         "Cost is reported by the harness, blank when it reports none; RustCode does not price requests.\n"
     );
-    let mut table_rows = rows;
+    let mut table_rows = table_body;
     table_rows.push(vec![
         "total".to_owned(),
         String::new(),

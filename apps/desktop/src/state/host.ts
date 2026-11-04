@@ -19,6 +19,7 @@ import {
   capped,
   checkManage,
   checkMessage,
+  checkQueryData,
   checkStart,
   delivered,
   emptyBook,
@@ -55,6 +56,7 @@ import {
   sameProject,
   shownState,
   updateLink,
+  usageScope,
   type Wake,
   type WakeContext,
   wakeMessage,
@@ -309,6 +311,33 @@ async function answer(params: JsonObject): Promise<JsonObject> {
       return transferSession(caller, call.target, call.harness);
     case "list_pending_requests":
       return listPendingRequests(caller);
+    case "thread_usage": {
+      const scope = usageScope(caller, acrossProjects(), call.project);
+      if (isFailure(scope)) return failureJson(scope);
+      try {
+        const answer = await request<JsonObject>(
+          Method.dataUsage,
+          {
+            ...(call.since ? { since: call.since } : {}),
+            groupBy: call.groupBy,
+            ...(scope.project ? { project: scope.project } : {}),
+          },
+          20_000,
+        );
+        return { ...answer, scope: scope.scope };
+      } catch (error) {
+        return failureJson(failure("failed", `the data store did not answer: ${errorText(error)}`));
+      }
+    }
+    case "query_data": {
+      const refused = checkQueryData(acrossProjects());
+      if (refused) return failureJson(refused);
+      try {
+        return await request<JsonObject>(Method.dataQuery, { sql: call.sql, limit: call.limit }, 20_000);
+      } catch (error) {
+        return failureJson(failure("failed", `the data store did not answer: ${errorText(error)}`));
+      }
+    }
   }
 }
 

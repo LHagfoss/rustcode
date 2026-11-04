@@ -269,6 +269,157 @@ pub struct QueryResult {
     pub truncated: bool,
 }
 
+/// How `thread_usage` groups its rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupBy {
+    Harness,
+    Model,
+    Day,
+    Project,
+    Thread,
+}
+
+impl GroupBy {
+    pub const ALL: [&'static str; 5] = ["harness", "model", "day", "project", "thread"];
+
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "" | "harness" => Some(Self::Harness),
+            "model" => Some(Self::Model),
+            "day" => Some(Self::Day),
+            "project" => Some(Self::Project),
+            "thread" => Some(Self::Thread),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Harness => "harness",
+            Self::Model => "model",
+            Self::Day => "day",
+            Self::Project => "project",
+            Self::Thread => "thread",
+        }
+    }
+}
+
+/// A day for `thread_usage`'s `since`: `YYYY-MM-DD` or `YYYY-MM`.
+pub fn parse_since(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    let day = if value.len() == 7 {
+        chrono::NaiveDate::parse_from_str(&format!("{value}-01"), "%Y-%m-%d")
+    } else {
+        chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+    };
+    day.map(|day| {
+        if value.len() == 7 {
+            value.to_owned()
+        } else {
+            day.format("%Y-%m-%d").to_string()
+        }
+    })
+    .map_err(|_| format!("since must be a day or month, YYYY-MM-DD or YYYY-MM, not {value:?}"))
+}
+
+/// Tokens and reported cost over `turns`, grouped as asked, for `thread_usage`.
+/// Read-only, like [`query`], and bounded to [`MAX_ROWS`] groups. A cost is
+/// only ever the USD a harness reported: nothing here prices a request.
+pub fn usage(
+    since: Option<&str>,
+    group_by: GroupBy,
+    project: Option<&str>,
+) -> Result<Value, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    usage_at(&path, since, group_by, project)
+}
+
+/// [`usage`] against one store file, so a test can read a temporary one.
+pub fn usage_at(
+    path: &Path,
+    since: Option<&str>,
+    group_by: GroupBy,
+    project: Option<&str>,
+) -> Result<Value, String> {
+    // The key column is the one grouped on, so a row says what it is.
+    let (key, group) = match group_by {
+        GroupBy::Harness => ("COALESCE(t.harness, 'unknown') AS harness", "1"),
+        GroupBy::Model => (
+            "COALESCE(t.harness, 'unknown') AS harness, COALESCE(t.model, '') AS model",
+            "1, 2",
+        ),
+        GroupBy::Day => ("date(t.started_at) AS day", "1"),
+        GroupBy::Project => ("COALESCE(th.project, th.cwd, '') AS project", "1"),
+        GroupBy::Thread => (
+            "t.thread_id AS thread, th.title AS title, \
+             COALESCE(th.project, th.cwd, '') AS project, COALESCE(th.harness, t.harness) AS harness",
+            "1",
+        ),
+    };
+    let mut sql = format!(
+        "SELECT {key}, \
+                SUM(t.input_tokens) AS input_tokens, SUM(t.output_tokens) AS output_tokens, \
+                SUM(t.cached_tokens) AS cached_tokens, \
+                SUM(t.cache_write_tokens) AS cache_write_tokens, SUM(t.cost_usd) AS cost_usd, \
+                COUNT(*) AS turns, \
+                SUM(CASE WHEN t.input_tokens IS NULL AND t.output_tokens IS NULL THEN 1 ELSE 0 END) \
+                    AS turns_without_tokens \
+         FROM turns t LEFT JOIN threads th ON th.id = t.thread_id"
+    );
+    let mut filters: Vec<String> = Vec::new();
+    if let Some(since) = since.filter(|since| !since.trim().is_empty()) {
+        // RFC 3339 in UTC sorts by string, so a day or a month both work and
+        // the column's index still can.
+        filters.push(format!("t.started_at >= '{}'", since.replace('\'', "")));
+    }
+    if let Some(project) = project.filter(|project| !project.trim().is_empty()) {
+        filters.push(format!(
+            "COALESCE(th.project, th.cwd, '') = '{}'",
+            project.replace('\'', "''")
+        ));
+    }
+    if !filters.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&filters.join(" AND "));
+    }
+    sql.push_str(&format!(
+        " GROUP BY {group} \
+         ORDER BY (COALESCE(SUM(t.input_tokens), 0) + COALESCE(SUM(t.output_tokens), 0)) DESC, 1 \
+         LIMIT {}",
+        MAX_ROWS
+    ));
+    let result = query_path(path, &sql, MAX_ROWS)?;
+    let number = |row: &Value, key: &str| row.get(key).and_then(Value::as_f64);
+    let sum = |key: &str| {
+        result
+            .rows
+            .iter()
+            .filter_map(|row| number(row, key))
+            .sum::<f64>()
+    };
+    let any_cost = result
+        .rows
+        .iter()
+        .any(|row| number(row, "cost_usd").is_some());
+    let totals = json!({
+        "input_tokens": sum("input_tokens"),
+        "output_tokens": sum("output_tokens"),
+        "cached_tokens": sum("cached_tokens"),
+        "cache_write_tokens": sum("cache_write_tokens"),
+        "cost_usd": any_cost.then(|| sum("cost_usd")),
+        "turns": sum("turns"),
+    });
+    Ok(json!({
+        "group_by": group_by.name(),
+        "since": since,
+        "project": project,
+        "rows": result.rows,
+        "totals": totals,
+        "truncated": result.truncated,
+        "note": "tokens are what each harness reported; cost is the USD a harness reported, never a price RustCode computed",
+    }))
+}
+
 pub fn data_path() -> Option<PathBuf> {
     crate::config::get_config_dir().map(|dir| dir.join(DATA_FILE))
 }
@@ -1072,6 +1223,194 @@ mod tests {
                 at: Some(started.to_owned()),
             }],
         }
+    }
+
+    /// A store with two threads in two projects and three turns, one of them
+    /// with no reported tokens and none with a cost.
+    fn usage_store(dir: &Path) -> PathBuf {
+        let path = dir.join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        for (id, project) in [("a", "/repo/a"), ("b", "/repo/b")] {
+            upsert_thread(
+                &connection,
+                &ThreadRow {
+                    id: id.to_owned(),
+                    title: Some(format!("Thread {id}")),
+                    project: Some(project.to_owned()),
+                    cwd: Some(project.to_owned()),
+                    harness: Some("codex".to_owned()),
+                    model: Some("gpt-6-luna".to_owned()),
+                    effort: None,
+                    created_at: Some("2026-11-01T10:00:00Z".to_owned()),
+                    updated_at: Some("2026-11-01T10:00:00Z".to_owned()),
+                },
+            )
+            .unwrap();
+        }
+        for spent in [
+            turn("a", "2026-11-01T10:00:00Z", (100, 10), "completed"),
+            turn("b", "2026-11-02T10:00:00Z", (200, 20), "completed"),
+        ] {
+            write_turn(&connection, &spent).unwrap();
+        }
+        // A turn whose harness reported nothing at all.
+        write_turn(
+            &connection,
+            &TurnRow {
+                thread_id: "b".to_owned(),
+                started_at: "2026-11-03T10:00:00Z".to_owned(),
+                finished_at: Some("2026-11-03T10:00:01Z".to_owned()),
+                harness: Some("claude-code".to_owned()),
+                model: Some("sonnet".to_owned()),
+                input_tokens: None,
+                output_tokens: None,
+                cached_tokens: None,
+                cache_write_tokens: None,
+                cost_usd: None,
+                status: "completed".to_owned(),
+                tool_calls: Vec::new(),
+            },
+        )
+        .unwrap();
+        path
+    }
+
+    fn rows(answer: &Value) -> Vec<Value> {
+        answer["rows"].as_array().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn usage_groups_totals_and_scopes_by_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = usage_store(dir.path());
+
+        let by_harness = usage_at(&path, None, GroupBy::Harness, None).unwrap();
+        let listed = rows(&by_harness);
+        let harnesses: Vec<&str> = listed
+            .iter()
+            .map(|row| row["harness"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(harnesses, ["codex", "claude-code"], "{by_harness}");
+        let codex = &rows(&by_harness)[0];
+        assert_eq!(codex["input_tokens"], 300);
+        assert_eq!(codex["output_tokens"], 30);
+        assert_eq!(codex["turns"], 2);
+        assert_eq!(codex["turns_without_tokens"], 0);
+        // A harness that reported nothing is NULL, never a made-up zero.
+        let claude = &rows(&by_harness)[1];
+        assert!(claude["input_tokens"].is_null(), "{claude}");
+        assert_eq!(claude["turns_without_tokens"], 1);
+        assert!(
+            by_harness["totals"]["cost_usd"].is_null(),
+            "nothing was priced"
+        );
+        assert_eq!(by_harness["totals"]["input_tokens"], 300.0);
+        assert_eq!(by_harness["totals"]["turns"], 3.0);
+        assert!(
+            by_harness["note"]
+                .as_str()
+                .unwrap()
+                .contains("never a price")
+        );
+
+        // One project, read from `threads`.
+        let scoped = usage_at(&path, None, GroupBy::Project, Some("/repo/a")).unwrap();
+        assert_eq!(rows(&scoped).len(), 1);
+        assert_eq!(rows(&scoped)[0]["project"], "/repo/a");
+        assert_eq!(rows(&scoped)[0]["input_tokens"], 100);
+
+        // `since` is "from that day on", and a month works too, comparing the
+        // RFC 3339 timestamp's prefix.
+        let day = usage_at(&path, Some("2026-11-02"), GroupBy::Day, None).unwrap();
+        assert_eq!(rows(&day).len(), 2, "{day}");
+        assert_eq!(rows(&day)[0]["day"], "2026-11-02");
+        let month = usage_at(&path, Some("2026-11"), GroupBy::Day, None).unwrap();
+        assert_eq!(rows(&month).len(), 3);
+        let later = usage_at(&path, Some("2026-12"), GroupBy::Day, None).unwrap();
+        assert!(rows(&later).is_empty());
+
+        // Per thread, with its title so a row says which thread it is.
+        let threads = usage_at(&path, None, GroupBy::Thread, None).unwrap();
+        let first = &rows(&threads)[0];
+        assert_eq!(first["thread"], "b");
+        assert_eq!(first["title"], "Thread b");
+        assert_eq!(first["project"], "/repo/b");
+    }
+
+    #[test]
+    fn query_answers_which_tools_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        upsert_thread(
+            &connection,
+            &ThreadRow {
+                id: "a".to_owned(),
+                title: Some("Thread a".to_owned()),
+                project: Some("/repo/a".to_owned()),
+                cwd: Some("/repo/a".to_owned()),
+                harness: Some("codex".to_owned()),
+                model: None,
+                effort: None,
+                created_at: None,
+                updated_at: None,
+            },
+        )
+        .unwrap();
+        let mut first = turn("a", "2026-11-01T10:00:00Z", (10, 1), "completed");
+        first.tool_calls = vec![
+            ToolCallRow {
+                tool_name: "run_command".to_owned(),
+                success: Some(false),
+                exit_code: Some(1),
+                at: None,
+            },
+            ToolCallRow {
+                tool_name: "run_command".to_owned(),
+                success: Some(true),
+                exit_code: Some(0),
+                at: None,
+            },
+            ToolCallRow {
+                tool_name: "replace_file_content".to_owned(),
+                success: Some(false),
+                exit_code: None,
+                at: None,
+            },
+        ];
+        write_turn(&connection, &first).unwrap();
+        // The question an agent asks of `query_data`, through the same guards
+        // the tool uses.
+        let answer = query_path(
+            &path,
+            "SELECT tool_name, SUM(success = 0) AS failures, COUNT(*) AS calls \
+             FROM tool_calls GROUP BY tool_name HAVING failures > 0 \
+             ORDER BY failures DESC, calls DESC",
+            MAX_ROWS,
+        )
+        .unwrap();
+        assert_eq!(answer.columns, ["tool_name", "failures", "calls"]);
+        assert_eq!(
+            answer.rows,
+            [
+                json!({"tool_name": "run_command", "failures": 1, "calls": 2}),
+                json!({"tool_name": "replace_file_content", "failures": 1, "calls": 1}),
+            ]
+        );
+    }
+
+    #[test]
+    fn usage_reports_a_missing_store_and_a_bad_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let error =
+            usage_at(&dir.path().join(DATA_FILE), None, GroupBy::Harness, None).unwrap_err();
+        assert!(error.contains("no data store yet"), "{error}");
+        assert!(parse_since("last week").is_err());
+        assert_eq!(parse_since("2026-11").unwrap(), "2026-11");
+        assert_eq!(parse_since("2026-11-05").unwrap(), "2026-11-05");
+        assert_eq!(GroupBy::parse("day"), Some(GroupBy::Day));
+        assert_eq!(GroupBy::parse(""), Some(GroupBy::Harness));
+        assert_eq!(GroupBy::parse("tool"), None);
     }
 
     #[test]

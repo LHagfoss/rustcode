@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::orchestration::hub::{Launch, ORCHESTRATOR_TOKEN_ENV, SMART_UI_ENV};
+use crate::orchestration::hub::{
+    Launch, ORCHESTRATION_VERSION_ENV, ORCHESTRATOR_TOKEN_ENV, SMART_UI_ENV,
+};
 
 const EXTENSION: &str = include_str!("pi_extension.ts");
 const WRAPPER: &str = "#!/bin/sh\nexec pi --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n";
@@ -54,7 +56,12 @@ pub(crate) fn environment(launch: &Launch, dir: &Path) -> Vec<(String, String)> 
         ),
         (ORCHESTRATOR_TOKEN_ENV.to_owned(), launch.token.clone()),
     ];
-    // The extension hands it to the server, and takes it out of the agent's shell.
+    // The extension hands these to the server, and takes them out of the
+    // agent's shell.
+    env.push((
+        ORCHESTRATION_VERSION_ENV.to_owned(),
+        launch.version.to_string(),
+    ));
     if launch.smart_ui {
         env.push((SMART_UI_ENV.to_owned(), "1".to_owned()));
     }
@@ -73,6 +80,7 @@ mod tests {
             args: vec!["mcp-orchestrator".into(), "--session".into(), "t".into()],
             token: "secret".into(),
             smart_ui: false,
+            version: crate::orchestration::VERSION,
         };
         let env = environment(&launch, dir.path());
         let get = |name: &str| {
@@ -81,6 +89,10 @@ mod tests {
                 .map(|(_, value)| value.as_str())
         };
         assert_eq!(get(ORCHESTRATOR_TOKEN_ENV), Some("secret"));
+        assert_eq!(
+            get(ORCHESTRATION_VERSION_ENV),
+            Some(crate::orchestration::VERSION.to_string().as_str())
+        );
         assert!(!get("RUSTCODE_PI_MCP_ARGS").unwrap().contains("secret"));
         assert!(Path::new(get("PI_ACP_PI_COMMAND").unwrap()).is_file());
         assert!(

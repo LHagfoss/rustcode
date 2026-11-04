@@ -60,10 +60,10 @@ pub struct Identity {
     pub token: String,
 }
 
-/// The tools the server lists, as MCP tool entries. `smart_ui` adds the block
-/// check the thread's client can use, when the user has Smart UI on.
-pub fn tools(smart_ui: bool) -> Vec<Value> {
-    let names = super::tool_names(super::VERSION).into_iter().chain(
+/// The tools the server lists, as MCP tool entries, for a client of
+/// `version`. `smart_ui` adds the block check, when the user has it on.
+pub fn tools(version: u8, smart_ui: bool) -> Vec<Value> {
+    let names = super::tool_names(version).into_iter().chain(
         smart_ui
             .then_some(crate::smart_ui::CHECK_TOOL_NAME)
             .into_iter(),
@@ -82,14 +82,19 @@ pub fn tools(smart_ui: bool) -> Vec<Value> {
 
 /// Run on stdin/stdout until the harness closes stdin.
 pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(), String> {
-    // Set by the engine when the thread's client runs Smart UI blocks
-    // (`hub::Launch`): the check needs no client, only that setting.
+    // Set by the engine from the thread's client (`hub::Launch`): the tools it
+    // can answer, and whether its Smart UI blocks run.
+    let orchestration = std::env::var(super::hub::ORCHESTRATION_VERSION_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .map_or(super::VERSION, |version| version.min(super::VERSION));
     let smart_ui = std::env::var(super::hub::SMART_UI_ENV).is_ok_and(|on| on == "1");
     serve(
         tokio::io::stdin(),
         tokio::io::stdout(),
         Identity { session_id, token },
         Arc::new(SocketForward { socket }),
+        orchestration,
         smart_ui,
     )
     .await
@@ -101,6 +106,8 @@ pub async fn serve<R, W>(
     mut output: W,
     identity: Identity,
     forward: Arc<dyn Forward>,
+    // The client's orchestration version: which tools and hint it can answer.
+    orchestration: u8,
     smart_ui: bool,
 ) -> Result<(), String>
 where
@@ -157,7 +164,7 @@ where
                             "title": "RustCode threads",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": super::PROMPT_HINT_V3.trim(),
+                        "instructions": super::prompt_hint(orchestration).trim(),
                     }),
                 ));
             }
@@ -165,14 +172,24 @@ where
                 let _ = sender.send(result(id, json!({})));
             }
             "tools/list" => {
-                let _ = sender.send(result(id, json!({ "tools": tools(smart_ui) })));
+                let _ = sender.send(result(
+                    id,
+                    json!({ "tools": tools(orchestration, smart_ui) }),
+                ));
             }
             "tools/call" => {
                 let sender = sender.clone();
                 let forward = Arc::clone(&forward);
                 let identity = identity.clone();
                 calls.spawn(async move {
-                    let answer = call(forward.as_ref(), &identity, &params, smart_ui).await;
+                    let answer = call(
+                        forward.as_ref(),
+                        &identity,
+                        &params,
+                        orchestration,
+                        smart_ui,
+                    )
+                    .await;
                     let _ = sender.send(result(
                         id,
                         json!({
@@ -199,6 +216,7 @@ async fn call(
     forward: &dyn Forward,
     identity: &Identity,
     params: &Value,
+    version: u8,
     smart_ui: bool,
 ) -> CallAnswer {
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
@@ -219,7 +237,7 @@ async fn call(
             content: output.content,
         };
     }
-    if !super::tool_names(super::VERSION).contains(&tool) {
+    if !super::tool_names(version).contains(&tool) {
         return CallAnswer {
             success: false,
             content: format!("error: unknown tool '{tool}'"),
@@ -292,6 +310,16 @@ mod tests {
         messages: &[Value],
         smart_ui: bool,
     ) -> Vec<Value> {
+        exchange_versioned(identity, socket, messages, super::super::VERSION, smart_ui).await
+    }
+
+    async fn exchange_versioned(
+        identity: Identity,
+        socket: PathBuf,
+        messages: &[Value],
+        orchestration: u8,
+        smart_ui: bool,
+    ) -> Vec<Value> {
         let expected = messages
             .iter()
             .filter(|message| message.get("id").is_some())
@@ -303,6 +331,7 @@ mod tests {
             server_write,
             identity,
             Arc::new(SocketForward { socket }),
+            orchestration,
             smart_ui,
         ));
         let mut input = String::new();
@@ -327,7 +356,7 @@ mod tests {
     #[test]
     fn the_block_check_is_listed_only_while_smart_ui_is_on() {
         let names = |smart_ui| {
-            tools(smart_ui)
+            tools(super::super::VERSION, smart_ui)
                 .into_iter()
                 .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
                 .collect::<Vec<_>>()

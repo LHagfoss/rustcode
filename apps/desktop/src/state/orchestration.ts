@@ -10,7 +10,7 @@ import type { ThreadStatus, Worktree } from "../acp/v2";
 import { snoozeAt } from "./snooze";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 3;
+export const CAPABILITY_VERSION = 4;
 export const MAX_BYTES = 8 * 1024;
 export const READ_BYTES = 16 * 1024;
 export const MAILBOX = 32;
@@ -146,7 +146,9 @@ export type Call =
   | { tool: "transfer_session"; target: string; harness: string }
   | { tool: "list_pending_requests" }
   | { tool: "list_projects" }
-  | { tool: "list_pull_requests"; state: PullStateChoice };
+  | { tool: "list_pull_requests"; state: PullStateChoice }
+  | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
+  | { tool: "query_data"; sql: string; limit: number };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -155,6 +157,12 @@ const SESSION_STATUSES: readonly string[] = ["active", "review", "settled"];
 /** What `list_pull_requests` may ask for. */
 export type PullStateChoice = "open" | "closed" | "merged" | "all";
 const PULL_STATES: readonly string[] = ["open", "closed", "merged", "all"];
+/** How `thread_usage` groups its rows. */
+export type UsageGroup = "harness" | "model" | "day" | "project" | "thread";
+const USAGE_GROUPS: readonly string[] = ["harness", "model", "day", "project", "thread"];
+/** Rows `query_data` may bring back in one answer. */
+export const MAX_DATA_ROWS = 1000;
+
 /** Pull requests listed, and projects: an agent's context pays for each. */
 export const MAX_PULL_REQUESTS = 30;
 export const MAX_PROJECTS = 50;
@@ -202,6 +210,28 @@ export function parseCall(params: JsonObject): Call | Failure {
     }
     case "list_pending_requests":
       return { tool: "list_pending_requests" };
+    case "thread_usage": {
+      const since = s(args.since)?.trim() || undefined;
+      if (since && !/^\d{4}-\d{2}(-\d{2})?$/.test(since)) {
+        return failure("invalid", "since must be YYYY-MM-DD or YYYY-MM");
+      }
+      const group = s(args.group_by) ?? "harness";
+      if (!USAGE_GROUPS.includes(group)) {
+        return failure("invalid", `group_by must be one of ${USAGE_GROUPS.join(", ")}`);
+      }
+      return {
+        tool: "thread_usage",
+        since,
+        groupBy: group as UsageGroup,
+        project: s(args.project)?.trim() || undefined,
+      };
+    }
+    case "query_data": {
+      const sql = (s(args.sql) ?? "").trim();
+      if (!sql) return failure("invalid", "sql is required");
+      const asked = typeof args.limit === "number" ? Math.floor(args.limit) : MAX_DATA_ROWS;
+      return { tool: "query_data", sql, limit: Math.min(Math.max(asked, 1), MAX_DATA_ROWS) };
+    }
     case "configure_session":
       return {
         tool: "configure_session",
@@ -430,6 +460,41 @@ export function checkMessage(
     return failure("mailbox_full", `that thread has ${MAILBOX} messages waiting`);
   }
   return null;
+}
+
+/**
+ * The project `thread_usage` reads: the one asked for, the caller's while
+ * "Let agents read threads in other projects" is off, or none (every project)
+ * while it is on. A failure when the setting is off and another project was
+ * asked for by name — better than quietly answering about a different scope.
+ */
+export function usageScope(
+  caller: RuleThread,
+  acrossProjects: boolean,
+  asked?: string,
+): { project?: string; scope: "this project" | "every project" } | Failure {
+  if (acrossProjects) return asked ? { project: asked, scope: "this project" } : { scope: "every project" };
+  const own = projectOf(caller);
+  if (asked && !sameProject(asked, own)) {
+    return failure(
+      "not_allowed",
+      "reading usage across projects is off; turn on “Let agents read threads in other projects” in Settings › Agents",
+    );
+  }
+  return { project: own, scope: "this project" };
+}
+
+/**
+ * Whether `query_data` may run at all. SQL over the store cannot be narrowed to
+ * one project safely (a join, a subquery, a view), so it needs the setting.
+ */
+export function checkQueryData(acrossProjects: boolean): Failure | null {
+  return acrossProjects
+    ? null
+    : failure(
+        "not_allowed",
+        "SQL reads every project, so it needs “Let agents read threads in other projects” in Settings › Agents",
+      );
 }
 
 /** Whether `caller` may start `count` threads, before the user is asked. */

@@ -5025,6 +5025,11 @@ fn harness_instructions_teach_the_viz_types_the_client_draws() {
     assert!(none.contains("owns this machine's threads"));
     assert!(none.contains("rustcode threads list --all"));
     assert!(none.contains("~/.config/rustcode/threads"));
+    // It knows where usage and the recorded turns are, and that a shell can ask.
+    assert!(none.contains("`thread_usage`"));
+    assert!(none.contains("`rustcode usage`"));
+    assert!(none.contains("`query_data`"));
+    assert!(none.contains("`rustcode data query"));
     assert!(!none.contains("rustcode-viz"));
     assert!(none.ends_with(&harness_output_style()));
 

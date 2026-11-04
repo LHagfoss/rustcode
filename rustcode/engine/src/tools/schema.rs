@@ -153,6 +153,7 @@ pub struct ToolSchemaPolicy {
     /// advertises orchestration version 2.
     pub(crate) include_orchestration_v2_tools: bool,
     pub(crate) include_orchestration_v3_tools: bool,
+    pub(crate) include_orchestration_v4_tools: bool,
     pub(crate) profile: ToolSchemaProfile,
     pub(crate) compact_text_prompt: bool,
 }
@@ -215,6 +216,7 @@ impl ToolSchemaPolicy {
             include_orchestration_tools: false,
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
+            include_orchestration_v4_tools: false,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
         }
@@ -239,6 +241,7 @@ impl ToolSchemaPolicy {
             include_orchestration_tools: false,
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
+            include_orchestration_v4_tools: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
         }
@@ -256,6 +259,7 @@ impl ToolSchemaPolicy {
             include_orchestration_tools: false,
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
+            include_orchestration_v4_tools: false,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
         }
@@ -310,6 +314,7 @@ impl ToolSchemaPolicy {
             self.profile == ToolSchemaProfile::Coding && version >= 1;
         self.include_orchestration_v2_tools = self.include_orchestration_tools && version >= 2;
         self.include_orchestration_v3_tools = self.include_orchestration_tools && version >= 3;
+        self.include_orchestration_v4_tools = self.include_orchestration_tools && version >= 4;
         self
     }
 
@@ -684,7 +689,15 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
         .filter(|v| *v >= 4096)
         .unwrap_or(MAX_MCP_NATIVE_SCHEMA_BYTES)
 }
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 32 * 1024;
+/// The hard cap before the menu is pruned from the specialised end. The
+/// orchestration tools are the tail and the biggest: a client advertising
+/// version 4 gets 37,216 bytes of built-in schema with all of them, and 32 KiB
+/// already pruned five v3 tools (`list_projects`, `configure_session`,
+/// `transfer_session`, …) that the client could answer — the model then never
+/// saw them. Version- and setting-gated tools are not worth silently dropping,
+/// so the cap clears the whole menu (`schema_budget_tests` keeps it that way);
+/// the 25 KiB budget below still keeps a plain root prompt lean.
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 38 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -882,6 +895,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
         || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (crate::orchestration::is_v3_tool(tool.name) && !policy.include_orchestration_v3_tools)
+        || (crate::orchestration::is_v4_tool(tool.name) && !policy.include_orchestration_v4_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
@@ -2571,7 +2585,9 @@ pub(crate) fn harness_instructions(
          settings: when the `rustcode` tools (or `mcp__rustcode__*`) are listed, they answer what the user \
          asks about them; without them, `rustcode threads list --all` and `rustcode threads path <id>` do \
          the same from a shell. Thread data lives in `~/.config/rustcode/threads`, not in another tool's \
-         database.</runtime_info>\n\n{}{}{}",
+         database. Tokens and reported cost are `thread_usage` (or `rustcode usage`), and what the \
+         harnesses recorded of turns and tool calls is `query_data` (or `rustcode data query \"<sql>\"`); \
+         its description lists the tables.</runtime_info>\n\n{}{}{}",
         visualization_prompt_hint(visualization_level),
         harness_smart_ui_hint(smart_ui),
         harness_output_style()
@@ -2716,7 +2732,9 @@ pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy)
     if policy.include_smart_ui_preview_tool {
         prompt.push_str(crate::smart_ui::PREVIEW_PROMPT_HINT);
     }
-    if policy.include_orchestration_v3_tools {
+    if policy.include_orchestration_v4_tools {
+        prompt.push_str(crate::orchestration::PROMPT_HINT_V4);
+    } else if policy.include_orchestration_v3_tools {
         prompt.push_str(crate::orchestration::PROMPT_HINT_V3);
     } else if policy.include_orchestration_v2_tools {
         prompt.push_str(crate::orchestration::PROMPT_HINT_V2);
@@ -2791,6 +2809,7 @@ pub(crate) fn tool_system_prompt_for_policy(
         include_orchestration_tools: false,
         include_orchestration_v2_tools: false,
         include_orchestration_v3_tools: false,
+        include_orchestration_v4_tools: false,
         ..policy
     };
     let mut p = String::new();
@@ -3106,6 +3125,32 @@ mod schema_budget_tests {
             .collect::<Vec<_>>();
         sizes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         sizes
+    }
+
+    #[test]
+    fn the_orchestration_tools_fit_the_hard_cap() {
+        // A client at the newest version gets every orchestration tool in its
+        // built-in schema; the hard cap must not start withholding any of them
+        // (which would drop tools the client can answer).
+        for version in [1, 2, 3, 4] {
+            let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
+            let advertised = crate::tools::TOOLS
+                .iter()
+                .filter(|tool| builtin_is_advertised(tool, policy))
+                .count();
+            let (tools, withheld) = build_builtin_native_tools_schema(policy);
+            let bytes = serialized_schema_bytes(&tools);
+            println!(
+                "orchestration v{version}: {bytes} bytes, {} of {advertised} tools, withheld {withheld:?}",
+                tools.len()
+            );
+            assert_eq!(tools.len(), advertised, "v{version} lost a tool to the cap");
+            assert!(withheld.is_empty(), "v{version} withheld: {withheld:?}");
+            assert!(
+                bytes < MAX_BUILTIN_NATIVE_SCHEMA_BYTES,
+                "v{version} is {bytes} bytes, over the hard cap"
+            );
+        }
     }
 
     #[test]

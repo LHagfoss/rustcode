@@ -6,8 +6,10 @@ RustCode is the orchestrator: the app and the CLI that own threads, projects,
 settings and usage data, and run each thread on a harness (Codex, Claude Code,
 Gemini CLI, OpenCode, Pi, or the built-in harness in
 `rustcode/engine/src/network/turn`). Query it from an agent with the
-`mcp__rustcode__*` tools, `rustcode threads list --all` and
-`rustcode threads path <id>`; on disk it is `~/.config/rustcode/threads`.
+`mcp__rustcode__*` tools, `rustcode threads list --all`,
+`rustcode threads path <id>`, `rustcode usage` (tokens and the cost each
+harness reported) and `rustcode data query "<sql>"` (the local data store,
+`docs/data-store.md`); threads are on disk in `~/.config/rustcode/threads`.
 
 ## Instruction priority
 
