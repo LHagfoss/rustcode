@@ -12,6 +12,7 @@ import {
   GitBranch,
   GitPullRequest,
   ListChecks,
+  PanelRight,
   SquareTerminal,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
@@ -215,6 +216,14 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
               onClick={() => setTerminalOpen(!terminalOpen)}
             >
               <SquareTerminal size={14} />
+            </ClusterButton>
+            <ClusterButton
+              label="Thread details"
+              tooltip="Thread details"
+              on={panel === "details"}
+              onClick={() => setPanel("details")}
+            >
+              <PanelRight size={14} />
             </ClusterButton>
             <ClusterButton
               label="Changes"

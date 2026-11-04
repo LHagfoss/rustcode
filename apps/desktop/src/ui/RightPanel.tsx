@@ -1,5 +1,5 @@
 // The right panel (docs/design.md, Right panel): one floating frame for
-// every side view (Changes, Agents, Pull requests), inset from the window's
+// every side view (Details, Changes, Pull requests), inset from the window's
 // edges, with tabs between them, a close button and a draggable left edge.
 // Its slot takes its width at once (one reflow of the chat column, not one
 // per frame), and the frame slides and fades in and out on the compositor;
@@ -11,6 +11,7 @@ import { type AppState, setPanel, showPanel, useApp } from "../state/store";
 import { cx, Segments, Tooltip } from "./primitives";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
+const ThreadDetails = lazy(() => import("./ThreadDetails").then((m) => ({ default: m.ThreadDetails })));
 const PullsPanel = lazy(() => import("./PullRequests").then((m) => ({ default: m.PullsPanel })));
 
 type Kind = NonNullable<AppState["panel"]>;
@@ -65,6 +66,7 @@ export function RightPanel() {
   };
 
   const tabs: { value: Kind; label: string }[] = [
+    { value: "details", label: "Details" },
     { value: "changes", label: "Changes" },
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
   ];
@@ -106,6 +108,7 @@ export function RightPanel() {
             </Tooltip>
           </div>
           <Suspense fallback={<div className="flex-1" />}>
+            {kind === "details" && <ThreadDetails />}
             {kind === "changes" && <ChangesPanel />}
             {kind === "pulls" && <PullsPanel />}
           </Suspense>
