@@ -4,18 +4,18 @@
 // agents work. RustCode's own agents (`spawn_agent`) take the same row, fed
 // by `_rustcode/agents`.
 
-import { Bot, ChevronRight, CircleCheck, CircleX } from "lucide-react";
+import { Bot, ChevronRight, CircleCheck, CircleX, PanelRight } from "lucide-react";
 import { HoverCard } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
 import { stateOf } from "../state/host";
 import { isActive, LINK_LABEL, type Link, type LinkState } from "../state/orchestration";
-import { agentHistory, selectThread, useApp } from "../state/store";
+import { agentHistory, peekThread, selectThread, useApp } from "../state/store";
 import { formatDuration, stepLabel, subagentOf, type TranscriptItem } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
 import { Markdown } from "./Markdown";
-import { cx, Orb, Skeleton, Spinner } from "./primitives";
+import { cx, Orb, Skeleton, Spinner, Tooltip } from "./primitives";
 
 const EMPTY: SubagentInfo[] = [];
 const NO_STEPS: ToolItem[] = [];
@@ -122,38 +122,52 @@ export function ThreadAgentRow({ link, model }: { link: Link; model?: string }) 
   const elapsed = end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
   const agent = LINK_AGENT_STATE[state];
   return (
-    <button
-      type="button"
-      aria-label={`Open ${link.targetTitle}`}
-      onClick={() => selectThread(link.target)}
-      className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
-    >
-      <AgentAvatar harness={link.harness ?? session?.harness} state={agent} />
-      <span className="min-w-0 shrink truncate font-medium text-callout text-fg">
-        {session?.title || link.targetTitle}
-      </span>
-      {meta && <span className="min-w-0 max-w-[40%] shrink truncate text-caption text-fg-faint">{meta}</span>}
-      <span
-        className={cx(
-          "shrink-0 text-caption tabular",
-          agent === "working"
-            ? "text-accent"
-            : agent === "failed"
-              ? "text-danger"
-              : agent === "needs"
-                ? "text-warning"
-                : agent === "done"
-                  ? "text-success"
-                  : "text-fg-faint",
-        )}
+    <div className="group flex items-center gap-0.5">
+      <button
+        type="button"
+        aria-label={`Open ${link.targetTitle}`}
+        onClick={() => selectThread(link.target)}
+        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
-        {LINK_LABEL[state]}
-        {elapsed !== undefined && (
-          <span className="text-fg-faint"> · {formatDuration(Math.floor(elapsed / 1000) * 1000)}</span>
+        <AgentAvatar harness={link.harness ?? session?.harness} state={agent} />
+        <span className="min-w-0 shrink truncate font-medium text-callout text-fg">
+          {session?.title || link.targetTitle}
+        </span>
+        {meta && (
+          <span className="min-w-0 max-w-[40%] shrink truncate text-caption text-fg-faint">{meta}</span>
         )}
-      </span>
-      <ChevronRight size={11} className="shrink-0 text-fg-faint opacity-0 group-hover:opacity-100" />
-    </button>
+        <span
+          className={cx(
+            "shrink-0 text-caption tabular",
+            agent === "working"
+              ? "text-accent"
+              : agent === "failed"
+                ? "text-danger"
+                : agent === "needs"
+                  ? "text-warning"
+                  : agent === "done"
+                    ? "text-success"
+                    : "text-fg-faint",
+          )}
+        >
+          {LINK_LABEL[state]}
+          {elapsed !== undefined && (
+            <span className="text-fg-faint"> · {formatDuration(Math.floor(elapsed / 1000) * 1000)}</span>
+          )}
+        </span>
+        <ChevronRight size={11} className="shrink-0 text-fg-faint opacity-0 group-hover:opacity-100" />
+      </button>
+      <Tooltip label="Show beside this thread">
+        <button
+          type="button"
+          aria-label={`Show ${link.targetTitle} beside this thread`}
+          onClick={() => peekThread(link.target)}
+          className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <PanelRight size={11} />
+        </button>
+      </Tooltip>
+    </div>
   );
 }
 

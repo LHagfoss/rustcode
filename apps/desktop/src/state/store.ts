@@ -197,7 +197,9 @@ export interface AppState {
   /** The workspace terminal under the chat (⌘J). */
   terminalOpen: boolean;
   /** The panel on the right of the chat. */
-  panel: "details" | "changes" | "pulls" | null;
+  panel: "details" | "changes" | "pulls" | "peek" | null;
+  /** The thread shown beside this one in the panel's Thread tab. */
+  peekId: string | null;
   /** Each thread's subagents, as `_rustcode/agents` last listed them. */
   agents: Record<string, SubagentInfo[]>;
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
@@ -356,6 +358,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   smartUiPending: false,
   terminalOpen: false,
   panel: null,
+  peekId: null,
   agents: {},
   planUsage: {},
   planCache: prunePlans(storedJson<Record<string, CachedPlan>>(STORAGE.planCache, {})),
@@ -2340,6 +2343,13 @@ export function setPanel(panel: AppState["panel"]) {
 }
 
 /** Shows `panel` (the panel's tabs): never closes. */
+/** Shows a thread in the side panel, next to the one you are in. */
+export function peekThread(id: string) {
+  set({ peekId: id });
+  showPanel("peek");
+  void openThread(id);
+}
+
 export function showPanel(panel: NonNullable<AppState["panel"]>) {
   lastPanel = panel;
   set({ panel });

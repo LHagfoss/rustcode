@@ -128,12 +128,15 @@ export function Transcript({
   thread,
   bottomInset,
   topInset = 0,
+  peek = false,
 }: {
   thread: ThreadState;
   /** Room the floating composer stack takes at the foot. */
   bottomInset: number;
   /** Room the glass header takes at the top: the rows scroll under it. */
   topInset?: number;
+  /** Shown beside another thread (ui/ThreadPeek.tsx): it reads, and leaves ⌘F and editing to the open thread. */
+  peek?: boolean;
 }) {
   const [find, setFind] = useState<{ query: string; index: number } | null>(null);
   const findField = useRef<HTMLInputElement>(null);
@@ -439,6 +442,7 @@ export function Transcript({
 
   // ⌘F opens find in this thread; Esc closes it.
   useEffect(() => {
+    if (peek) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
         e.preventDefault();
@@ -448,7 +452,7 @@ export function Transcript({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [peek]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the current match changes
   useEffect(() => {
@@ -627,7 +631,7 @@ export function Transcript({
                     ) : item?.kind === "user" ? (
                       <UserRow
                         item={item}
-                        threadId={thread.running ? undefined : thread.id}
+                        threadId={thread.running || peek ? undefined : thread.id}
                         rewind={rewind}
                       />
                     ) : item?.kind === "assistant" ? (

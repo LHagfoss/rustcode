@@ -417,6 +417,9 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   the last theme is cached so a restart does not flash the default.
   Without the methods the app shows its two built-in themes. Theme files
   are described in [themes.md](themes.md).
+- **Thread peek.** Hover a thread this one started and press *Show beside this
+  thread*: the side panel's Thread tab reads it live, and *Open* goes there
+  (`src/ui/ThreadPeek.tsx`). It does not write; a full pane layout is not built.
 - **Timeline minimap.** A strip per message you sent in the gutter left of
   the chat, evenly spaced and squeezed to fit. Strips of the turns on screen
   read brighter. Hovering widens the strips around the pointer and previews
