@@ -1,6 +1,6 @@
-// What the thread is waiting on: an approval is a row in the transcript (ApprovalRow) named by
-// one slim bar over the composer (ApprovalNotice), which owns the keys (when no text field has
-// focus): 1–9 pick an option in the engine's order reject → always → allow once, and ⏎ approves
+// What the thread is waiting on: an approval is a row in the transcript (ApprovalRow) saying what
+// it wants, answered from one slim bar over the composer (ApprovalNotice), which owns the buttons
+// and the keys (when no text field has focus): 1–9 pick an option in the engine's order reject → always → allow once, and ⏎ approves
 // while esc declines. A question keeps its form in the bar, because the answer is a choice, and
 // leaves a row in the transcript once it is answered (Rows.tsx QuestionRow).
 
@@ -169,9 +169,9 @@ function Shell({ children, label }: { children: React.ReactNode; label: string }
 
 /**
  * An approval as a row in the transcript, at the call it is about: the command it wants to run
- * (at most 160px, then it scrolls), any change it wants to make, and the answers. The keys (1–9,
- * ⏎, esc) belong to the bar over the composer, so answering twice is impossible; the row says
- * which key picks which answer.
+ * (at most 160px, then it scrolls) and any change it wants to make. The bar over the composer
+ * answers the first one waiting, so only a later approval, which the bar does not show yet, has
+ * its own buttons here.
  */
 export function ApprovalRow({
   request,
@@ -184,6 +184,7 @@ export function ApprovalRow({
   number?: number;
 }) {
   const answers = useApproval(request);
+  const inBar = number === 1;
   const command = field(request.input, "command") ?? field(request.input, "cmd");
   const note = field(request.input, "reason");
   return (
@@ -227,17 +228,18 @@ export function ApprovalRow({
           {note}
         </div>
       )}
-      <div className="ml-[26px] flex items-center gap-1.5">
-        <ApprovalActions request={request} pending={pending} answers={answers} />
-      </div>
+      {!inBar && (
+        <div className="ml-[26px] flex items-center gap-1.5">
+          <ApprovalActions request={request} pending={pending} answers={answers} />
+        </div>
+      )}
     </div>
   );
 }
 
 /**
- * The bar over the composer: one slim line naming the approval that waits, with the same answers
- * as the row. It is the keyboard target (1–9, ⏎, esc), so the question is answered from one
- * place while it is read in the other.
+ * The bar over the composer: one slim line naming the approval that waits, with its answers. It is
+ * also the keyboard target (1–9, ⏎, esc), so it can be answered from anywhere in the thread.
  */
 export function ApprovalNotice({
   request,
@@ -264,11 +266,11 @@ export function ApprovalNotice({
       <Hand size={14} className="ml-1 shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
       {from && <span className="max-w-[30%] shrink-0 truncate text-callout text-fg-muted">From {from}</span>}
       <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">
-        Waiting for approval
-        <span className="text-fg-faint"> · </span>
+        Allow{" "}
         <span className="font-medium text-body text-fg" title={request.title}>
           {displayCommand(request.title)}
         </span>
+        ?
       </span>
       {pending > 1 && <span className="shrink-0 text-caption text-fg-muted tabular">1 of {pending}</span>}
       <span className="flex shrink-0 items-center gap-1">
