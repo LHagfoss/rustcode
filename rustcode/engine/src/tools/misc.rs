@@ -486,7 +486,7 @@ pub const LIST_WORKTREES: Tool = Tool {
 
 pub const UPDATE_SESSION: Tool = Tool {
     name: crate::orchestration::UPDATE_SESSION,
-    description: "Rename, pin, mark unread, snooze or change the status of a thread. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: an ISO 8601 time it leaves the list until, or null to bring it back.",
+    description: "Rename, pin, mark unread, snooze or change the status of a thread. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",
     arguments: r#"{"title": "Fix login", "pinned": true, "status": "settled"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -499,7 +499,7 @@ pub const UPDATE_SESSION: Tool = Tool {
                 "pinned": {"type": "boolean"},
                 "unread": {"type": "boolean"},
                 "status": {"type": "string", "enum": crate::orchestration::SESSION_STATUSES},
-                "snoozed_until": {"type": ["string", "null"], "format": "date-time"}
+                "snoozed_until": {"type": ["string", "null"], "description": "1h, evening, tomorrow, next_week, an ISO 8601 time, or null"}
             },
             "required": [],
             "additionalProperties": false

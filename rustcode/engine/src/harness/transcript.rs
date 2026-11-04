@@ -291,6 +291,21 @@ fn parse_checklist(text: &str) -> Plan {
     Plan::new(entries)
 }
 
+/// The history without the startup banner older Pi threads recorded as their
+/// first reply: its version, context files and every skill path.
+pub(crate) fn without_startup_banner(history: &[ChatMessage]) -> &[ChatMessage] {
+    match history.first() {
+        Some(first)
+            if first.role == "assistant"
+                && first.content.starts_with("pi v")
+                && first.content.contains("\n## Skills\n") =>
+        {
+            &history[1..]
+        }
+        _ => history,
+    }
+}
+
 /// The updates that show a recorded external transcript again: text as the
 /// built-in replay sends it, each tool call as one finished card, each plan
 /// as a `plan`.
@@ -301,7 +316,7 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
         .map(|call| (call.id.as_str(), call))
         .collect::<HashMap<_, _>>();
     let mut updates = Vec::new();
-    for message in history {
+    for message in without_startup_banner(history) {
         match (
             message.role.as_str(),
             &message.tool_result,

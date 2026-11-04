@@ -190,7 +190,7 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, models?, omitted_models? }] }`, at most 25 models each | None |
 | `search_sessions` | `{ query }` | `{ sessions: [{ session_id, title, status, snippet? }] }`: this project, title and full text, at most 30 | None |
 | `list_worktrees` | none | `{ worktrees: [{ session_id, title, branch, path }] }`: this project | None |
-| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
+| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, status? }`; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
 | `transfer_session` | `{ session_id, harness }` | `{ session_id, harness, moved, model?, effort? }`; the thread must be idle, and a thread cannot move itself | Asked, allowed by Full access |

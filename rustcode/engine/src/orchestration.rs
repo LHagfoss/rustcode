@@ -232,7 +232,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             }
             match args.get("snoozed_until") {
                 None | Some(Value::Null | Value::String(_)) => {}
-                Some(_) => return Err("snoozed_until must be an ISO 8601 time or null".to_owned()),
+                Some(_) => return Err("snoozed_until must be 1h, evening, tomorrow, next_week, an ISO 8601 time or null".to_owned()),
             }
             // `snoozed_until: null` is a change: it brings the thread back.
             if args.get("snoozed_until").is_some() {

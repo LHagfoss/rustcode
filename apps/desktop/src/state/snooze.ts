@@ -27,6 +27,27 @@ export function snoozePresets(now: number): SnoozePreset[] {
   return presets;
 }
 
+/**
+ * What `update_session`'s `snoozed_until` means, in ms: a named choice, as an
+ * agent without a clock can give, or an ISO 8601 time. `NaN` for anything else.
+ */
+export function snoozeAt(value: string, now: number): number {
+  const today = new Date(now);
+  const pick = (label: string) => snoozePresets(now).find((p) => p.label === label)?.at;
+  switch (value) {
+    case "1h":
+      return now + 3_600_000;
+    case "evening":
+      return pick("This evening") ?? at(today, 1, 18);
+    case "tomorrow":
+      return at(today, 1, 9);
+    case "next_week":
+      return pick("Next week") ?? Number.NaN;
+    default:
+      return Date.parse(value);
+  }
+}
+
 /** When a snoozed thread comes back, short: `18:00`, `Tomorrow 09:00`, `Mon 09:00`, `20 Nov`. */
 export function wakeLabel(time: number, now: number): string {
   const days = Math.round((at(new Date(time), 0, 0) - at(new Date(now), 0, 0)) / 86_400_000);

@@ -7,6 +7,7 @@
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
+import { snoozeAt } from "./snooze";
 
 /** What the client advertises in `initialize` while the setting is on. */
 export const CAPABILITY_VERSION = 3;
@@ -195,8 +196,12 @@ export function parseCall(params: JsonObject): Call | Failure {
       let snoozedUntil: number | null | undefined;
       if (args.snoozed_until === null) snoozedUntil = null;
       else if (args.snoozed_until !== undefined) {
-        snoozedUntil = Date.parse(s(args.snoozed_until) ?? "");
-        if (Number.isNaN(snoozedUntil)) return failure("invalid", "snoozed_until must be an ISO 8601 time");
+        snoozedUntil = snoozeAt(s(args.snoozed_until) ?? "", Date.now());
+        if (Number.isNaN(snoozedUntil))
+          return failure(
+            "invalid",
+            "snoozed_until must be 1h, evening, tomorrow, next_week or an ISO 8601 time",
+          );
       }
       if (!title && pinned === undefined && unread === undefined && !status && snoozedUntil === undefined) {
         return failure("invalid", "give at least one of title, pinned, unread, status or snoozed_until");

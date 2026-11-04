@@ -56,7 +56,10 @@ pub(crate) fn context(history: &[ChatMessage], from: &str, to: &str) -> Option<S
     let mut lines = Vec::new();
     let mut used = 0;
     let mut omitted = 0;
-    for message in history.iter().rev() {
+    for message in super::transcript::without_startup_banner(history)
+        .iter()
+        .rev()
+    {
         let Some(line) = render(message) else {
             continue;
         };
@@ -161,6 +164,21 @@ mod tests {
         assert!(text.contains("message 199"));
         assert!(!text.contains("message 0 "));
         assert!(text.contains("earlier messages did not fit"));
+    }
+
+    #[test]
+    fn a_stored_startup_banner_is_not_handed_over() {
+        let history = vec![
+            ChatMessage::new(
+                "assistant",
+                "pi v1.5.0\n---\n\n## Skills\n- /a/SKILL.md".to_owned(),
+            ),
+            ChatMessage::new("user", "hello".to_owned()),
+        ];
+        let text = context(&history, "pi", "codex").unwrap();
+        assert!(!text.contains("SKILL.md"));
+        assert!(text.contains("hello"));
+        assert_eq!(super::super::transcript::replay(&history, None).len(), 1);
     }
 
     #[test]
