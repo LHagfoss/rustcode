@@ -30,8 +30,8 @@ env:
     # linking them for ephemeral checks and test binaries.
     CARGO_PROFILE_DEV_DEBUG: "0"
     CARGO_PROFILE_TEST_DEBUG: "0"
-    SCCACHE_GHA_ENABLED: "true"
-    RUSTC_WRAPPER: "sccache"
+    # No sccache: it stores each object through the Actions cache API, which
+    # throttled about 80% of its writes and then rust-cache's own save.
 
 permissions:
     contents: read
@@ -108,14 +108,12 @@ jobs:
               with:
                   # Its own key: clippy's check-only artifacts are no use to
                   # `cargo test`, and with one shared key lint finished first
-                  # and test could not save. sccache still shares between them.
+                  # and test could not save.
                   shared-key: linux
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
                   save-if: ${{ github.ref == 'refs/heads/main' }}
-
-            - name: Configure shared compiler cache
-              if: env.AFFECTED_PACKAGES != ''
-              uses: mozilla-actions/sccache-action@v0.0.11
+                  # A failing test says nothing about the compiled dependencies.
+                  cache-on-failure: true
 
             - name: Install bubblewrap
               if: env.AFFECTED_PACKAGES != ''
@@ -165,10 +163,6 @@ jobs:
                   shared-key: linux-lint
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
                   save-if: ${{ github.ref == 'refs/heads/main' }}
-
-            - name: Configure shared compiler cache
-              if: env.AFFECTED_PACKAGES != ''
-              uses: mozilla-actions/sccache-action@v0.0.11
 
             - name: Check formatting
               if: env.AFFECTED_PACKAGES != ''
@@ -224,9 +218,7 @@ jobs:
                   shared-key: macos-seatbelt
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
                   save-if: ${{ github.ref == 'refs/heads/main' }}
-
-            - name: Configure shared compiler cache
-              uses: mozilla-actions/sccache-action@v0.0.11
+                  cache-on-failure: true
 
             # `cargo test` compiles what it runs; a separate `cargo check --tests`
             # first compiled the crate a second time (~5 of this job's 10 min).
@@ -282,9 +274,6 @@ jobs:
               with:
                   shared-key: ${{ matrix.cache_key }}
                   save-if: ${{ github.ref == 'refs/heads/main' }}
-
-            - name: Configure shared compiler cache
-              uses: mozilla-actions/sccache-action@v0.0.11
 
             - name: Check platform compilation
               # Linux runs the behavioral suite. These advisory jobs verify the
