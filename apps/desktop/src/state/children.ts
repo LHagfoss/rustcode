@@ -44,8 +44,8 @@ export function childInfo(
 }
 
 /**
- * The group's one line: `5 threads · 2 working · 1 needs you`, with nothing
- * said about the parts that are zero.
+ * The group's one line, for the parent row's title: `5 threads · 2 working ·
+ * 1 needs you`, with nothing said about the parts that are zero.
  */
 export function childSummary(children: ChildInfo[]): string {
   const n = children.length;
@@ -60,6 +60,33 @@ export function childSummary(children: ChildInfo[]): string {
 /** The children that always stay as rows, whatever the group is doing. */
 export const childVisible = (child: ChildInfo, selectedId: string | null) =>
   child.id === selectedId || child.state === "needs" || child.state === "working";
+
+/** More finished children than this fold behind the group's last line. */
+export const FINISHED_FOLD_AT = 3;
+
+/**
+ * A group's rows: the children it lists, and the finished ones behind its last
+ * line. That line appears only when folding buys something: finished children
+ * beside rows that are still live, or more than three of them. A quiet parent
+ * with two finished children simply shows the two.
+ *
+ * `collapsed` is the reader closing the group by hand: it still lists the rows
+ * that cannot be closed away (one that wants you, one that works, the one they
+ * opened), so the chevron always answers with something.
+ */
+export function foldFinished(
+  children: ChildInfo[],
+  selectedId: string | null,
+  collapsed = false,
+): { rows: ChildInfo[]; folded: ChildInfo[]; fold: boolean } {
+  const live = children.filter((c) => childVisible(c, selectedId));
+  const done = children.filter((c) => !childVisible(c, selectedId));
+  const fold = done.length > 0 && (live.length > 0 || done.length > FINISHED_FOLD_AT);
+  const rows = collapsed
+    ? live.filter((c) => c.state === "needs" || c.state === "working" || c.id === selectedId)
+    : live;
+  return fold ? { rows, folded: done, fold } : { rows: collapsed ? rows : children, folded: [], fold };
+}
 
 /**
  * The children in the order to show them: what wants you, then what works,

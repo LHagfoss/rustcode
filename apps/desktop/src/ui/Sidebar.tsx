@@ -1,8 +1,9 @@
 // The sidebar: a toolbar clear of the traffic lights, a
 // search field with a filter menu, then one list: pinned threads first, then
 // every active thread (by project when asked), each saying in its right slot
-// what it does (Working, Approval, Input, Failed, Done until you open it), and
-// Settled (threads marked Done) as a shelf at the foot.
+// what it does (Working, Approval, Input, Failed, Done until you open it), the
+// threads it started folded under it as slim rows, and Settled (threads marked
+// Done) as a shelf at the foot.
 
 import {
   Check,
@@ -20,7 +21,6 @@ import {
   FolderOpen,
   FolderX,
   GitBranch,
-  Hand,
   KanbanSquare,
   ListFilter,
   MessageCircleQuestion,
@@ -47,7 +47,7 @@ import {
   childInfo,
   childrenListed,
   childSummary,
-  childVisible,
+  foldFinished,
   orderChildren,
   pruneOpenGroups,
   unseenChild,
@@ -465,8 +465,9 @@ const ThreadRow = memo(function ThreadRow({
   scopeAll,
   now,
   snippet,
-  compact,
-  hasChildren,
+  slim,
+  state,
+  fold,
   navActive,
   picked,
   bulk,
@@ -478,10 +479,22 @@ const ThreadRow = memo(function ThreadRow({
   now: number;
   /** While searching: the words around the match in what was said. */
   snippet?: string;
-  /** A child of the thread above it: one line, its harness and what it is doing, no meta line. */
-  compact?: boolean;
-  /** The sidebar lists this thread's children under it, which already say what the links are. */
-  hasChildren?: boolean;
+  /** A child of the thread above it: one line, no meta line, what it is doing and its age. */
+  slim?: boolean;
+  /** A child's state as its parent's group reads it (state/children.ts), for its dot. */
+  state?: ChildInfo["state"];
+  /**
+   * Threads this one started, which the sidebar lists under it: the chevron that
+   * folds them into the row, and the dot for what the fold hides.
+   */
+  fold?: {
+    open: boolean;
+    /** How the group reads in one line, for the chevron's tooltip. */
+    summary: string;
+    /** Children waiting to be read, when the fold is closed over them. */
+    dot?: "finished" | "failed";
+    onToggle: () => void;
+  };
   /** The row the keyboard is on: it holds the list's one tab stop, ↑ ↓ move it. */
   navActive?: boolean;
   /** In the sidebar's multi-selection (⌘-click), which is not the same as the thread being open. */
@@ -546,7 +559,18 @@ const ThreadRow = memo(function ThreadRow({
     );
   }
   const done = status === "done";
-  if (compact) {
+  if (slim) {
+    // A child's row: one line and no meta line, a dot (or a spinner) where a harness mark would
+    // be, its title in the secondary label and its age at the end.
+    const mark =
+      state ??
+      (request || status === "needs_input"
+        ? "needs"
+        : running || waiting
+          ? "working"
+          : failedAt
+            ? "failed"
+            : "finished");
     return (
       <ContextMenu.Root>
         <ContextMenu.Trigger asChild>
@@ -566,44 +590,38 @@ const ThreadRow = memo(function ThreadRow({
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
               className={cx(
-                "flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left",
+                "flex h-8 w-full items-center gap-1.5 rounded-lg px-2.5 text-left",
                 picked ? "bg-accent/12" : selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
               )}
             >
-              <Tooltip label={meta.length ? meta.join(" · ") : (session.title ?? "Thread")}>
-                <span className="flex shrink-0 items-center">
-                  <HarnessIcon
-                    id={session.harness ?? "rustcode"}
-                    name={harness?.name}
-                    size={12}
-                    className={external ? "text-fg-muted" : "text-fg-faint"}
+              <span className="flex size-2 shrink-0 items-center justify-center">
+                {mark === "working" ? (
+                  <Spinner size={10} className="text-accent" />
+                ) : (
+                  <span
+                    role="img"
+                    aria-label={mark === "needs" ? "Needs you" : mark === "failed" ? "Failed" : "Finished"}
+                    className={cx(
+                      "rounded-full",
+                      mark === "finished" ? "size-1 bg-fg-faint" : "size-1.5",
+                      mark === "needs" ? "bg-warning" : mark === "failed" ? "bg-danger" : "bg-fg-faint",
+                    )}
                   />
-                </span>
-              </Tooltip>
+                )}
+              </span>
               <span
                 className={cx(
-                  "min-w-0 flex-1 truncate text-callout",
-                  selected || picked || request || failed
+                  "min-w-0 flex-1 truncate text-body",
+                  selected || picked || mark === "needs" || mark === "working"
                     ? "font-medium text-fg"
-                    : running || status === "done"
-                      ? "text-fg/75"
-                      : "text-fg-muted",
+                    : "text-fg-muted",
                 )}
               >
                 {session.title || "New thread"}
               </span>
-              {running ? (
-                <span className="flex shrink-0 items-center gap-1 text-accent text-sub tabular">
-                  <Spinner size={10} />
-                  {startedAt ? <Elapsed since={startedAt} /> : null}
-                </span>
-              ) : request || status === "needs_input" ? (
-                <Hand size={12} className="shrink-0 text-warning" aria-label="Needs you" />
-              ) : failed ? (
-                <X size={12} className="shrink-0 text-danger" aria-label="Failed" />
-              ) : fresh || status === "done" ? (
-                <CircleCheck size={12} className="shrink-0 text-success" aria-label="Done" />
-              ) : null}
+              <span className="shrink-0 text-fg-faint text-sub tabular">
+                {running && startedAt ? <Elapsed since={startedAt} /> : shortAge(session.updatedAt, now)}
+              </span>
             </button>
           </div>
         </ContextMenu.Trigger>
@@ -627,6 +645,31 @@ const ThreadRow = memo(function ThreadRow({
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
         <div className="group relative">
+          {fold && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                fold.onToggle();
+              }}
+              aria-expanded={fold.open}
+              aria-label={
+                fold.open ? "Hide the threads this one started" : "Show the threads this one started"
+              }
+              title={fold.summary}
+              tabIndex={-1}
+              className="absolute top-2.5 left-1.5 z-10 flex size-4 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+            >
+              <ChevronRight
+                size={12}
+                strokeWidth={2.5}
+                className={cx(
+                  "shrink-0 transition-transform duration-200 ease-snappy",
+                  fold.open && "rotate-90",
+                )}
+              />
+            </button>
+          )}
           <button
             type="button"
             data-row-id={session.id}
@@ -638,30 +681,48 @@ const ThreadRow = memo(function ThreadRow({
                 e.preventDefault();
                 startRename();
               }
+              // → opens what the row holds and ← closes it, the same two keys a file tree takes.
+              if (fold && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+                if ((e.key === "ArrowRight") !== fold.open) {
+                  e.preventDefault();
+                  fold.onToggle();
+                }
+              }
             }}
             aria-current={selected ? "page" : undefined}
             aria-pressed={picked || undefined}
             className={cx(
-              "flex w-full flex-col gap-px rounded-md px-2.5 py-[5px] text-left",
+              "flex w-full flex-col rounded-lg py-1.5 pr-2.5 text-left",
+              fold ? "pl-6" : "pl-2.5",
               picked ? "bg-accent/12" : selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
             )}
           >
-            <span className="flex w-full items-center gap-1.5 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
-              {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-muted" />}
+            <span className="flex h-6 w-full items-center gap-2 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
+              {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-muted" />}
               <span
                 className={cx(
                   "min-w-0 flex-1 truncate text-body",
-                  // What wants you reads strong; what works, waits or is seen recedes.
+                  // What wants you reads strong; what works, waits or has been read recedes.
                   selected || picked || request || fresh || failed
                     ? "font-medium text-fg"
                     : done || running || waiting
-                      ? "text-fg/75"
-                      : "text-fg",
+                      ? "font-normal text-fg/75 group-hover:text-fg"
+                      : "font-medium text-fg",
                 )}
               >
                 {session.title || "New thread"}
               </span>
-              <LinkBadge threadId={session.id} childrenListed={hasChildren} />
+              {fold?.dot && (
+                <span
+                  role="img"
+                  aria-label={fold.dot === "failed" ? "A child thread failed" : "A child thread finished"}
+                  className={cx(
+                    "size-1.5 shrink-0 rounded-full",
+                    fold.dot === "failed" ? "bg-danger" : "bg-success",
+                  )}
+                />
+              )}
+              <LinkBadge threadId={session.id} childrenListed={!!fold} />
               <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
                 {request ? (
                   <>
@@ -705,7 +766,7 @@ const ThreadRow = memo(function ThreadRow({
                 ) : (
                   <>
                     {status === "review" && <StatusChip status={status} compact />}
-                    <span className="text-fg-faint">
+                    <span className="text-fg-muted">
                       {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
                     </span>
                   </>
@@ -713,41 +774,45 @@ const ThreadRow = memo(function ThreadRow({
               </span>
             </span>
             {snippet ? (
-              <span className="truncate text-fg-muted text-sub">“{snippet}”</span>
+              <span className="mt-0.5 truncate text-fg-muted text-sub">“{snippet}”</span>
             ) : request ? (
-              <span className="truncate text-fg-muted text-sub">
+              <span className="mt-0.5 truncate text-fg-muted text-sub">
                 {request.question ? request.question.text : request.title}
               </span>
             ) : (
               (meta.length > 0 || worktree || external || diff) && (
-                <span className="flex items-center gap-1 truncate text-fg-faint text-sub">
+                <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-fg-muted text-sub">
                   {worktree && (
                     <span className="flex min-w-0 shrink items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
                       <GitBranch size={9} className="shrink-0" />
                       <span className="truncate">{worktree.branch}</span>
                     </span>
                   )}
-                  {diff && (
-                    <span className="shrink-0 font-mono text-sub tabular">
-                      {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                      {diff.added > 0 && diff.removed > 0 && " "}
-                      {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                  <span className="min-w-0 flex-1 truncate">{meta.join(" · ")}</span>
+                  {(diff || external) && (
+                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                      {diff && (
+                        <span className="font-mono tabular">
+                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+                          {diff.added > 0 && diff.removed > 0 && " "}
+                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                        </span>
+                      )}
+                      {external && (
+                        <HarnessIcon
+                          id={session.harness!}
+                          name={harness?.name}
+                          size={12}
+                          className="shrink-0 text-fg-muted"
+                        />
+                      )}
                     </span>
                   )}
-                  {external && (
-                    <HarnessIcon
-                      id={session.harness!}
-                      name={harness?.name}
-                      size={10}
-                      className="text-fg-muted"
-                    />
-                  )}
-                  <span className="truncate">{meta.join(" · ")}</span>
                 </span>
               )
             )}
           </button>
-          <div className="absolute top-[3px] right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
+          <div className="absolute top-2 right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
             <RowAction label={pinned ? "Unpin" : "Pin"} onClick={() => togglePin(session.id)}>
               {pinned ? <PinOff size={12} /> : <Pin size={12} />}
             </RowAction>
@@ -800,142 +865,86 @@ const ThreadRow = memo(function ThreadRow({
   );
 });
 
+/** A parent's children as the list draws them: its rows, the fold and what it hides. */
+interface ChildGroup {
+  /** The children's threads, for their rows. */
+  items: SessionSummary[];
+  /** What the group lists, in draw order: what wants you, what works, what you opened. */
+  rows: ChildInfo[];
+  /** The finished ones behind the group's last line. */
+  folded: ChildInfo[];
+  /** Whether that line is drawn at all. */
+  fold: boolean;
+  /** Whether the reader opened it. */
+  foldOpen: boolean;
+  /** Whether the group lists anything: what its parent row's chevron says. */
+  listed: boolean;
+  /** A child finished (or failed) while you were reading elsewhere. */
+  dot?: "finished" | "failed";
+  /** How the group reads in one line, for the chevron's tooltip. */
+  summary: string;
+  /** Folds the whole group away, or lists it again. */
+  toggle: () => void;
+  onFold: (open: boolean) => void;
+}
+
 /**
- * Threads this one started (start_session, fan_out), under it. A parent you are not reading
- * shows one line however many children it has; opening the group (or the parent) lists what
- * works, what wants you and what you opened, and the rest stay behind "N finished" as soon
- * as they finish, so delegated work leaves the list the moment it is done.
+ * Threads this one started (start_session, fan_out), under it, as slim rows: what wants you,
+ * then what works, then the one you opened, and the finished ones behind one quiet last line
+ * ("Show 3 finished") once folding them saves something. The parent row's chevron folds the lot
+ * away (state/children.ts).
  */
 function ChildThreads({
-  items,
-  parentId,
+  group,
   selectedId,
   now,
-  groupOpen,
-  onGroupOpen,
-  finishedOpen,
-  onFinishedOpen,
   activeId,
   picked,
   bulk,
   onClearSelection,
 }: {
-  items: SessionSummary[];
-  parentId: string;
+  group: ChildGroup;
   selectedId: string | null;
   now: number;
-  /** The group's state as the reader left it: true opened, false closed by hand, unset never touched. */
-  groupOpen?: boolean;
-  onGroupOpen: (open: boolean) => void;
-  /** The finished children are shown under the group's "N finished" toggle. */
-  finishedOpen?: boolean;
-  onFinishedOpen: (open: boolean) => void;
   /** The row the keyboard is on, the picked threads and how to clear them (ui/Sidebar.tsx). */
   activeId: string | null;
   picked: ReadonlySet<string>;
   bulk: SessionSummary[];
   onClearSelection: () => void;
 }) {
-  // One string, so the rows re-render only when a child's state changes. A child whose link is
-  // still open is live even before its turn reports so (it was just started or messaged).
-  const states = useApp((s) => {
-    const linked = new Map(
-      s.links.links.filter((l) => l.orchestrator === parentId).map((l) => [l.target, l.state] as const),
-    );
-    return items
-      .map((c) => {
-        const info = childInfo(c.id, {
-          status: statusOf(s, c.id),
-          link: linked.get(c.id),
-          failed: !!s.failed[c.id],
-          unseen: !!s.finished[c.id],
-        });
-        return `${info.id}:${info.state}:${info.unseen ? 1 : 0}`;
-      })
-      .join(" ");
-  });
-  const children = useMemo(() => {
-    const by = new Map(
-      states
-        .split(" ")
-        .filter(Boolean)
-        .map((part) => {
-          const [id, state, unseen] = part.split(":");
-          return [id!, { id: id!, state: state as ChildInfo["state"], unseen: unseen === "1" }] as const;
-        }),
-    );
-    return items.flatMap((c) => {
-      const info = by.get(c.id);
-      return info ? [info] : [];
-    });
-  }, [items, states]);
-  const expanded = groupOpen === true;
-  const listed = childrenListed(children, {
-    expanded,
-    collapsed: groupOpen === false,
-    parentSelected: parentId === selectedId,
-    selectedId,
-  });
-  const ordered = orderChildren(children, selectedId);
-  const shown = ordered.filter((c) => childVisible(c, selectedId));
-  const folded = ordered.filter((c) => !childVisible(c, selectedId));
-  const dot = unseenChild(children);
-  // What the reader sees is what the chevron says: a group listed because its parent is open (or
-  // because a child wants you) closes on a click, except where a child has to stay in view.
-  const toggle = () => onGroupOpen(!listed);
   const row = (child: ChildInfo) => {
-    const session = items.find((c) => c.id === child.id);
+    const session = group.items.find((c) => c.id === child.id);
     return session ? (
-      <div key={child.id} className="ml-[14px] border-border border-l pl-1 rc-in">
-        <ThreadRow
-          session={session}
-          selected={child.id === selectedId}
-          scopeAll={false}
-          now={now}
-          compact
-          navActive={child.id === activeId}
-          picked={picked.has(child.id)}
-          bulk={bulk.length > 1 && picked.has(child.id) ? bulk : undefined}
-          onClearSelection={onClearSelection}
-        />
-      </div>
+      <ThreadRow
+        key={child.id}
+        session={session}
+        selected={child.id === selectedId}
+        scopeAll={false}
+        now={now}
+        slim
+        state={child.state}
+        navActive={child.id === activeId}
+        picked={picked.has(child.id)}
+        bulk={bulk.length > 1 && picked.has(child.id) ? bulk : undefined}
+        onClearSelection={onClearSelection}
+      />
     ) : null;
   };
   return (
-    <>
-      <div className="ml-[14px] border-border border-l pl-1">
+    <div className="flex flex-col gap-px pb-1">
+      {group.rows.map(row)}
+      {group.fold && (
         <button
           type="button"
-          onClick={toggle}
-          aria-expanded={listed}
-          title={childSummary(children)}
-          className="flex h-7 w-full items-center gap-1 rounded-md py-0 pr-1.5 pl-2.5 text-left text-fg-muted hover:bg-fill-subtle hover:text-fg"
+          onClick={() => group.onFold(!group.foldOpen)}
+          aria-expanded={group.foldOpen}
+          className="flex h-7 w-full items-center rounded-lg pr-2.5 pl-6 text-left text-fg-faint text-sub hover:bg-fill-subtle hover:text-fg-muted"
         >
-          <ChevronRight size={9} className={cx("shrink-0 transition-transform", listed && "rotate-90")} />
-          <span className="min-w-0 flex-1 truncate text-caption">{childSummary(children)}</span>
-          {dot && (
-            <span
-              role="img"
-              aria-label={dot === "failed" ? "A child thread failed" : "A child thread finished"}
-              className={cx("size-1 shrink-0 rounded-full", dot === "failed" ? "bg-danger" : "bg-success")}
-            />
-          )}
-        </button>
-      </div>
-      {listed && shown.map(row)}
-      {listed && folded.length > 0 && (
-        <button
-          type="button"
-          onClick={() => onFinishedOpen(!finishedOpen)}
-          aria-expanded={!!finishedOpen}
-          className="ml-[14px] flex h-[20px] items-center gap-1 rounded-sm px-2 text-caption text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
-        >
-          <ChevronRight size={10} className={cx("transition-transform", finishedOpen && "rotate-90")} />
-          {finishedOpen ? "Hide finished" : `${folded.length} finished`}
+          {group.foldOpen ? "Hide finished" : `Show ${group.folded.length} finished`}
         </button>
       )}
-      {listed && finishedOpen && folded.map(row)}
-    </>
+      {group.fold && group.foldOpen && group.folded.map(row)}
+    </div>
   );
 }
 
@@ -1052,8 +1061,7 @@ function SectionHeader({
       onClick={onToggle}
       aria-expanded={open}
       className={cx(
-        "group/h flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left font-semibold text-callout hover:bg-fill-subtle",
-        "text-fg-muted",
+        "group/h flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle",
       )}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
@@ -1072,12 +1080,12 @@ function SectionHeader({
         {!open && (
           <span className="flex items-center gap-1.5 [grid-area:1/1]">
             <span className="font-normal text-fg-faint tabular">{section.items.length}</span>
-            <ChevronRight size={11} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
+            <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
           </span>
         )}
         {open && (
           <ChevronRight
-            size={11}
+            size={12}
             strokeWidth={2.5}
             className="shrink-0 rotate-90 text-fg-faint opacity-0 [grid-area:1/1] group-hover/h:opacity-100 group-focus-visible/h:opacity-100"
           />
@@ -1172,7 +1180,7 @@ function FilterMenu({
             type="button"
             aria-label="Filter and view"
             className={cx(
-              "flex size-[30px] shrink-0 items-center justify-center rounded-full hover:bg-fill data-[state=open]:bg-fill",
+              "flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-fill data-[state=open]:bg-fill",
               on ? "text-accent" : "text-fg-muted",
             )}
           >
@@ -1251,8 +1259,11 @@ export function Sidebar() {
   // place. A copy per group wrote the whole record back, so opening one group erased another.
   const [openGroups, setOpenGroups] = useStored<Record<string, boolean>>("rustcode.sidebar.childrenOpen", {});
   const listedIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
-  const setGroupOpen = (id: string, open: boolean) =>
-    setOpenGroups((groups) => ({ ...pruneOpenGroups(groups, listedIds), [id]: open }));
+  const setGroupOpen = useCallback(
+    (id: string, open: boolean) =>
+      setOpenGroups((groups) => ({ ...pruneOpenGroups(groups, listedIds), [id]: open })),
+    [listedIds, setOpenGroups],
+  );
   const [width, setWidth] = useSidebarWidth();
   // The slot takes its new width at once, so the transcript reflows once per toggle, not every
   // frame (docs/design.md › Motion). The column beside it then slides from where it was with a
@@ -1420,23 +1431,44 @@ export function Sidebar() {
     return by;
   }, [childStates]);
 
-  // The order the list draws its rows in, so ↑ ↓ move through what is on screen: a shut section
-  // or group contributes nothing, and a parent's children follow it (state/sidebarRows.ts).
-  const order = useMemo<OrderSection[]>(() => {
-    const open = (id: string) => !!query.trim() || !folded.includes(id);
-    const kids = (parentId: string): string[] => {
-      const all = (childrenOf[parentId] ?? []).flatMap((c) => infos.get(c.id) ?? []);
+  // A parent's children as the list draws them: one place, so the parent row's chevron, the rows
+  // under it and the keyboard order all agree on what is on screen.
+  const group = useCallback(
+    (parentId: string): ChildGroup => {
+      const items = childrenOf[parentId] ?? [];
+      const all = items.flatMap((c) => infos.get(c.id) ?? []);
       const listed = childrenListed(all, {
         expanded: openGroups[parentId] === true,
         collapsed: openGroups[parentId] === false,
         parentSelected: parentId === selectedId,
         selectedId,
       });
-      if (!listed) return [];
-      const ordered = orderChildren(all, selectedId);
-      const shown = ordered.filter((c) => childVisible(c, selectedId));
-      const rest = ordered.filter((c) => !childVisible(c, selectedId));
-      const under = finishedOpen[parentId] ? [...shown, ...rest] : shown;
+      const closed = openGroups[parentId] === false;
+      const { rows, folded, fold } = foldFinished(orderChildren(all, selectedId), selectedId, closed);
+      return {
+        items,
+        rows,
+        folded,
+        fold,
+        foldOpen: !!finishedOpen[parentId],
+        listed,
+        dot: unseenChild(all),
+        summary: childSummary(all),
+        toggle: () => setGroupOpen(parentId, !listed),
+        onFold: (open) => setFinishedOpen((m) => ({ ...m, [parentId]: open })),
+      };
+    },
+    [childrenOf, finishedOpen, infos, openGroups, selectedId, setGroupOpen],
+  );
+
+  // The order the list draws its rows in, so ↑ ↓ move through what is on screen: a shut section
+  // or group contributes nothing, and a parent's children follow it (state/sidebarRows.ts).
+  const order = useMemo<OrderSection[]>(() => {
+    const open = (id: string) => !!query.trim() || !folded.includes(id);
+    const kids = (parentId: string): string[] => {
+      const g = group(parentId);
+      if (!g.listed) return [];
+      const under = g.fold && g.foldOpen ? [...g.rows, ...g.folded] : g.rows;
       return under.map((c) => c.id);
     };
     const toOrder = (items: SessionSummary[]): OrderRow[] =>
@@ -1458,7 +1490,7 @@ export function Sidebar() {
             limit: section.id === "settled" && !query.trim() ? settledShown : undefined,
           },
     );
-  }, [childrenOf, finishedOpen, folded, infos, openGroups, query, sections, selectedId, settledShown]);
+  }, [folded, group, query, sections, settledShown]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
   // The row the keyboard is on: where it was left, else the open thread, else the first row.
@@ -1557,38 +1589,43 @@ export function Sidebar() {
 
   const rows = (items: SessionSummary[], scopeAll: boolean) => (
     <div className="flex flex-col gap-px">
-      {items.map((s) => (
-        <div key={s.id} className="flex flex-col gap-px">
-          <ThreadRow
-            session={s}
-            selected={s.id === selectedId}
-            scopeAll={scopeAll}
-            now={now}
-            snippet={query.trim() ? contentHits[s.id] : undefined}
-            hasChildren={!!childrenOf[s.id]?.length}
-            navActive={s.id === currentId}
-            picked={picked.has(s.id)}
-            bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
-            onClearSelection={clearSelection}
-          />
-          {childrenOf[s.id] && (
-            <ChildThreads
-              items={childrenOf[s.id]!}
-              parentId={s.id}
-              selectedId={selectedId}
+      {items.map((s) => {
+        const kids = childrenOf[s.id]?.length ? group(s.id) : undefined;
+        return (
+          <div key={s.id} className="flex flex-col gap-px">
+            <ThreadRow
+              session={s}
+              selected={s.id === selectedId}
+              scopeAll={scopeAll}
               now={now}
-              groupOpen={openGroups[s.id]}
-              onGroupOpen={(open) => setGroupOpen(s.id, open)}
-              finishedOpen={!!finishedOpen[s.id]}
-              onFinishedOpen={(open) => setFinishedOpen((m) => ({ ...m, [s.id]: open }))}
-              activeId={currentId}
-              picked={picked}
-              bulk={pickedSessions}
+              snippet={query.trim() ? contentHits[s.id] : undefined}
+              fold={
+                kids && {
+                  open: kids.listed,
+                  summary: kids.summary,
+                  dot: kids.dot,
+                  onToggle: kids.toggle,
+                }
+              }
+              navActive={s.id === currentId}
+              picked={picked.has(s.id)}
+              bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
               onClearSelection={clearSelection}
             />
-          )}
-        </div>
-      ))}
+            {kids?.listed && (
+              <ChildThreads
+                group={kids}
+                selectedId={selectedId}
+                now={now}
+                activeId={currentId}
+                picked={picked}
+                bulk={pickedSessions}
+                onClearSelection={clearSelection}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -1627,9 +1664,9 @@ export function Sidebar() {
             <SettingsButton />
           </Cluster>
         </TitlebarRow>
-        <div className="mx-2.5 mt-2.5 mb-1.5 flex shrink-0 items-center gap-1">
-          <label className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-full bg-fill-subtle px-3 focus-within:bg-fill hover:bg-fill">
-            <Search size={13} className="shrink-0 text-fg-muted" />
+        <div className="mx-2 mt-2 mb-1.5 flex shrink-0 items-center gap-1">
+          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full bg-fill-subtle px-2.5 focus-within:bg-fill hover:bg-fill">
+            <Search size={14} className="shrink-0 text-fg-muted" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -1731,14 +1768,14 @@ export function Sidebar() {
                       <button
                         type="button"
                         onClick={() => setSettledShown((n) => n + 25)}
-                        className="flex h-7 w-full items-center gap-1 rounded-md px-2.5 text-left text-fg-muted text-sub hover:bg-fill-subtle hover:text-fg"
+                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
                       >
-                        <ChevronDown size={11} />
+                        <ChevronDown size={14} className="shrink-0" />
                         Show {Math.min(25, section.items.length - settledShown)} more
                       </button>
                     )}
                     {section.id === "settled" && (
-                      <p className="px-2.5 pt-1 pb-1 text-fg-faint text-sub">
+                      <p className="px-2.5 pt-1 pb-2 text-caption text-fg-faint">
                         Done, or untouched for 3 days. A new message brings one back.
                       </p>
                     )}
