@@ -15,6 +15,7 @@ import { titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
 import {
   capped,
+  checkManage,
   checkMessage,
   checkStart,
   delivered,
@@ -52,12 +53,17 @@ import {
   createSession,
   ensureHarnessModels,
   errorText,
+  markUnread,
   openThread,
   permissionModeOf,
+  renameThread,
   runPrompt,
+  searchThreads,
+  setConfigOption,
   setThreadStatus,
   statusOf,
   toast,
+  togglePin,
   updateThread,
   useApp,
 } from "./store";
@@ -128,6 +134,12 @@ export function verb(q: GrantAsk): string {
       return "start a thread";
     case "fan_out":
       return `run one task on ${q.harnesses?.length ?? 2} harnesses`;
+    case "organize":
+      return `change “${q.target}”`;
+    case "interrupt":
+      return `stop “${q.target}”`;
+    case "configure":
+      return `change the model of “${q.target}”`;
   }
 }
 
@@ -145,6 +157,9 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   message: "message_session",
   start: "start_session",
   fan_out: "fan_out",
+  organize: "update_session",
+  interrupt: "interrupt_session",
+  configure: "configure_session",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -153,6 +168,9 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   message: "Messaged a thread",
   start: "Started a thread",
   fan_out: "Fanned out across harnesses",
+  organize: "Changed a thread",
+  interrupt: "Stopped a thread",
+  configure: "Changed a thread's model",
 };
 
 const toasted = new Set<string>();
@@ -229,7 +247,182 @@ async function answer(params: JsonObject): Promise<JsonObject> {
       return start(caller, call);
     case "fan_out":
       return fanOut(caller, call);
+    case "list_harnesses":
+      return listHarnesses(caller);
+    case "search_sessions":
+      return searchSessions(threads(), caller, call.query);
+    case "list_worktrees":
+      return listWorktrees(threads(), caller);
+    case "update_session":
+      return updateSession(caller, call);
+    case "interrupt_session":
+      return interruptSession(caller, call.target);
+    case "configure_session":
+      return configureSession(caller, call);
   }
+}
+
+// ---------------------------------------------------------------- reads: no approval
+
+/** Models listed per harness: an agent's context pays for each one. */
+const LISTED_MODELS = 25;
+
+async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
+  const snapshot = useApp.getState().harnesses;
+  const harnesses = snapshot?.harnesses ?? [];
+  await Promise.all(harnesses.filter((h) => !unavailableReason(h)).map((h) => ensureHarnessModels(h.id)));
+  const fresh = useApp.getState().harnesses?.harnesses ?? harnesses;
+  return {
+    current: { harness: caller.harness ?? "rustcode", ...ranWith(caller.id) },
+    harnesses: fresh.map((h) => {
+      const reason = unavailableReason(h);
+      const models = h.models.slice(0, LISTED_MODELS).map((m) => ({
+        id: m.id,
+        name: m.name,
+        ...(m.efforts.length ? { efforts: m.efforts } : {}),
+      }));
+      return {
+        id: h.id,
+        name: h.name,
+        available: !reason,
+        ...(reason ? { reason } : { models }),
+        ...(!reason && h.models.length > LISTED_MODELS
+          ? { omitted_models: h.models.length - LISTED_MODELS }
+          : {}),
+      };
+    }),
+  };
+}
+
+async function searchSessions(all: RuleThread[], caller: RuleThread, query: string): Promise<JsonObject> {
+  const said = await searchThreads(query);
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = all
+    .filter((t) => sameProject(projectOf(t), projectOf(caller)))
+    .filter((t) => t.id in said || words.every((w) => t.title.toLowerCase().includes(w)))
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .slice(0, 30);
+  return {
+    sessions: matches.map((t) => ({
+      session_id: t.id,
+      title: t.title,
+      status: t.status ?? (t.running ? "running" : "idle"),
+      ...(said[t.id] ? { snippet: said[t.id] } : {}),
+    })),
+  };
+}
+
+function listWorktrees(all: RuleThread[], caller: RuleThread): JsonObject {
+  return {
+    worktrees: all.flatMap((t) =>
+      t.worktree && sameProject(projectOf(t), projectOf(caller))
+        ? [{ session_id: t.id, title: t.title, branch: t.worktree.branch, path: t.worktree.path }]
+        : [],
+    ),
+  };
+}
+
+// ---------------------------------------------------------------- managing threads
+
+type UpdateCall = Extract<ReturnType<typeof parseCall>, { tool: "update_session" }>;
+type ConfigureCall = Extract<ReturnType<typeof parseCall>, { tool: "configure_session" }>;
+
+const STATUS_OF_CHOICE = { active: "idle", review: "review", settled: "done" } as const;
+
+/** The thread a management tool acts on: the caller's own when none is named. */
+function manageTarget(caller: RuleThread, id: string | undefined): RuleThread | Failure {
+  const target = id ? ruleThread(useApp.getState(), id) : caller;
+  return checkManage(caller, target) ?? (target as RuleThread);
+}
+
+async function updateSession(caller: RuleThread, call: UpdateCall): Promise<JsonObject> {
+  const target = manageTarget(caller, call.target);
+  if (isFailure(target)) return failureJson(target);
+  if (target.id !== caller.id) {
+    const changes = [
+      call.title && `rename it to “${call.title}”`,
+      call.pinned !== undefined && (call.pinned ? "pin it" : "unpin it"),
+      call.unread && "mark it unread",
+      call.status && `set its status to ${call.status}`,
+    ].filter(Boolean);
+    const no = await permitted(caller, `organize:${target.id}`, {
+      kind: "organize",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: target.title,
+      detail: `It would ${changes.join(", ")}.`,
+    });
+    if (no) return failureJson(no);
+  }
+  if (call.title && !(await renameThread(target.id, call.title))) {
+    return failureJson(failure("failed", "the thread could not be renamed"));
+  }
+  if (call.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== call.pinned) {
+    togglePin(target.id);
+  }
+  if (call.unread) markUnread(target.id);
+  if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
+  const after = ruleThread(useApp.getState(), target.id);
+  return {
+    session_id: target.id,
+    title: after?.title ?? target.title,
+    pinned: useApp.getState().pinned.includes(target.id),
+    status: after?.status ?? "idle",
+  };
+}
+
+async function interruptSession(caller: RuleThread, id: string): Promise<JsonObject> {
+  const target = manageTarget(caller, id);
+  if (isFailure(target)) return failureJson(target);
+  if (target.id === caller.id) return failureJson(failure("not_allowed", "a thread cannot stop itself"));
+  if (!target.running) return { session_id: target.id, interrupted: false, status: target.status ?? "idle" };
+  const no = await permitted(caller, `interrupt:${target.id}`, {
+    kind: "interrupt",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail: "Its current turn stops. The thread stays and can be messaged again.",
+  });
+  if (no) return failureJson(no);
+  await cancel(target.id);
+  return { session_id: target.id, interrupted: true };
+}
+
+async function configureSession(caller: RuleThread, call: ConfigureCall): Promise<JsonObject> {
+  const target = manageTarget(caller, call.target);
+  if (isFailure(target)) return failureJson(target);
+  await openThread(target.id);
+  const options = () => useApp.getState().threads[target.id]?.configOptions ?? [];
+  const changes: [string, string][] = [];
+  if (call.model) changes.push(["model", call.model]);
+  if (call.effort) changes.push(["effort", call.effort]);
+  for (const [id, value] of changes) {
+    const option = selectOption(options(), id);
+    if (!option) return failureJson(failure("not_allowed", `${target.title} has no ${id} setting`));
+    const known = option.choices.map((c) => c.value);
+    if (!known.includes(value)) {
+      return failureJson(
+        failure("invalid", `no ${id} “${value}”; choose from ${known.slice(0, 25).join(", ")}`),
+      );
+    }
+  }
+  if (changes.length && target.id !== caller.id) {
+    const no = await permitted(caller, `configure:${target.id}`, {
+      kind: "configure",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: target.title,
+      detail: `Its next turn would run on ${changes.map(([, value]) => value).join(" · ")}.`,
+    });
+    if (no) return failureJson(no);
+  }
+  for (const [id, value] of changes) await setConfigOption(target.id, id, value);
+  return {
+    session_id: target.id,
+    harness: target.harness ?? "rustcode",
+    access: permissionModeOf(useApp.getState(), target.id),
+    ...ranWith(target.id),
+  };
 }
 
 async function read(caller: RuleThread, targetId: string, lastTurns: number): Promise<JsonObject> {

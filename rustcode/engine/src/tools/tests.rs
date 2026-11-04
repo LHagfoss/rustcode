@@ -5647,4 +5647,7 @@ fn thread_messaging_tools_are_offered_only_with_a_host() {
     let mut prompt = String::new();
     super::schema::append_preview_hint(&mut prompt, regular.with_orchestration_tools(2));
     assert_eq!(prompt, crate::orchestration::PROMPT_HINT_V2);
+    let mut prompt = String::new();
+    super::schema::append_preview_hint(&mut prompt, regular.with_orchestration_tools(3));
+    assert_eq!(prompt, crate::orchestration::PROMPT_HINT_V3);
 }

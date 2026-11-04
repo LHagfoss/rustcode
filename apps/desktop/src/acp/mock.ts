@@ -1311,6 +1311,32 @@ export class MockEngine {
     prompt: string,
     push: (body: JsonObject) => void,
   ): Promise<string | null> {
+    if (/manage (this|the) thread/i.test(prompt) && this.orchestration >= 3) {
+      const call = async (name: string, args: JsonObject) => {
+        const callId = `orch-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: callId,
+          title: name,
+          kind: "other",
+          status: "in_progress",
+          rawInput: args,
+        });
+        const result = await this.orchestrate(sid, name, args);
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: callId,
+          status: obj(result.error) ? "failed" : "completed",
+          rawOutput: { content: JSON.stringify(result) },
+        });
+      };
+      await call("list_harnesses", {});
+      await call("search_sessions", { query: "login" });
+      await call("list_worktrees", {});
+      await call("update_session", { title: "Managed by its agent", pinned: true });
+      await call("configure_session", { effort: "high" });
+      return "Renamed and pinned this thread, and raised its effort.";
+    }
     const tool = /fan.?out/i.test(prompt)
       ? "fan_out"
       : /start (a |another )?thread/i.test(prompt)

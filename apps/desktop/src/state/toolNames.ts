@@ -15,6 +15,12 @@ export const ORCHESTRATION_TOOLS = [
   "wait_session",
   "list_sessions",
   "fan_out",
+  "list_harnesses",
+  "search_sessions",
+  "list_worktrees",
+  "update_session",
+  "interrupt_session",
+  "configure_session",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -155,6 +161,20 @@ function orchestrationLabel(
       return { title: "Read thread" };
     case "list_sessions":
       return { title: "Listed threads" };
+    case "list_harnesses":
+      return { title: "Listed harnesses" };
+    case "search_sessions":
+      return { title: "Searched threads", summary: text(args.query) || undefined };
+    case "list_worktrees":
+      return { title: "Listed worktrees" };
+    case "update_session":
+      return { title: "Updated thread", summary: text(args.title) || text(args.status) || undefined };
+    case "interrupt_session":
+      return { title: "Stopped thread" };
+    case "configure_session": {
+      const change = [text(args.model), text(args.effort)].filter(Boolean).join(" · ");
+      return change ? { title: "Changed thread model", summary: change } : { title: "Read thread settings" };
+    }
     case "fan_out": {
       const n = Array.isArray(args.harnesses) ? args.harnesses.length : 0;
       return { title: `Fanned out to ${n || 2} harnesses` };

@@ -32,12 +32,29 @@ pub const WAIT_SESSION: &str = "wait_session";
 pub const READ_SESSION: &str = "read_session";
 pub const START_SESSION: &str = "start_session";
 pub const FAN_OUT: &str = "fan_out";
+pub const LIST_HARNESSES: &str = "list_harnesses";
+pub const SEARCH_SESSIONS: &str = "search_sessions";
+pub const LIST_WORKTREES: &str = "list_worktrees";
+pub const UPDATE_SESSION: &str = "update_session";
+pub const INTERRUPT_SESSION: &str = "interrupt_session";
+pub const CONFIGURE_SESSION: &str = "configure_session";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
 pub const V2_TOOL_NAMES: [&str; 3] = [READ_SESSION, START_SESSION, FAN_OUT];
+/// Added by version 3: discover what can run, find threads, and manage them.
+pub const V3_TOOL_NAMES: [&str; 6] = [
+    LIST_HARNESSES,
+    SEARCH_SESSIONS,
+    LIST_WORKTREES,
+    UPDATE_SESSION,
+    INTERRUPT_SESSION,
+    CONFIGURE_SESSION,
+];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
+/// What `update_session` may set a thread's status to.
+pub const SESSION_STATUSES: [&str; 3] = ["active", "review", "settled"];
 
 /// Turns `read_session` returns by default, and at most.
 pub const DEFAULT_LAST_TURNS: u64 = 3;
@@ -67,9 +84,12 @@ pub const PROMPT_HINT: &str = "\n\nOther threads: `list_sessions` lists this pro
 /// [`PROMPT_HINT`] for version 2 clients.
 pub const PROMPT_HINT_V2: &str = "\n\nOther threads: `list_sessions` and `read_session` show this project's threads; `message_session` messages one, `start_session` starts one, `fan_out` runs one task on 2-4 harnesses; `wait_session` returns their answers. The user approves first. Use them only when the user asks to involve other threads.";
 
+/// [`PROMPT_HINT_V2`] for version 3 clients.
+pub const PROMPT_HINT_V3: &str = "\n\nOther threads: `list_sessions`, `search_sessions`, `read_session` and `list_worktrees` show threads; `list_harnesses` shows what can run. `start_session`, `fan_out` and `message_session` give threads work, `wait_session` returns their answers; `update_session`, `configure_session` and `interrupt_session` manage them. The user approves work on other threads. Use them only when the user asks.";
+
 /// Every orchestration tool of any version.
 pub fn is_tool(name: &str) -> bool {
-    TOOL_NAMES.contains(&name) || V2_TOOL_NAMES.contains(&name)
+    TOOL_NAMES.contains(&name) || V2_TOOL_NAMES.contains(&name) || V3_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -77,12 +97,17 @@ pub fn is_v2_tool(name: &str) -> bool {
     V2_TOOL_NAMES.contains(&name)
 }
 
+/// Whether `name` needs a version 3 client.
+pub fn is_v3_tool(name: &str) -> bool {
+    V3_TOOL_NAMES.contains(&name)
+}
+
 /// The tools a client of `version` gets, in order.
 pub fn tool_names(version: u8) -> Vec<&'static str> {
     match version {
         0 => Vec::new(),
         1 => TOOL_NAMES.to_vec(),
-        _ => [
+        2 => [
             LIST_SESSIONS,
             READ_SESSION,
             MESSAGE_SESSION,
@@ -91,6 +116,11 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             FAN_OUT,
         ]
         .to_vec(),
+        _ => {
+            let mut names = tool_names(2);
+            names.extend(V3_TOOL_NAMES);
+            names
+        }
     }
 }
 
@@ -141,7 +171,46 @@ fn optional_title(args: &Value) -> Result<(), String> {
 /// Check the arguments before they leave the engine.
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     match name {
-        LIST_SESSIONS => Ok(()),
+        LIST_SESSIONS | LIST_HARNESSES | LIST_WORKTREES => Ok(()),
+        SEARCH_SESSIONS => {
+            if text(args, "query").unwrap_or("").trim().is_empty() {
+                return Err("query is required".to_owned());
+            }
+            Ok(())
+        }
+        INTERRUPT_SESSION => {
+            if text(args, "session_id").unwrap_or("").trim().is_empty() {
+                return Err("session_id is required".to_owned());
+            }
+            Ok(())
+        }
+        CONFIGURE_SESSION => {
+            optional_name(args, "session_id")?;
+            optional_name(args, "model")?;
+            optional_name(args, "effort")
+        }
+        UPDATE_SESSION => {
+            optional_name(args, "session_id")?;
+            optional_title(args)?;
+            for key in ["pinned", "unread"] {
+                if !matches!(args.get(key), None | Some(Value::Null | Value::Bool(_))) {
+                    return Err(format!("{key} must be true or false"));
+                }
+            }
+            match args.get("status") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(status)) if SESSION_STATUSES.contains(&status.as_str()) => {}
+                Some(_) => return Err(format!("status must be one of {SESSION_STATUSES:?}")),
+            }
+            let changes = ["title", "pinned", "unread", "status"];
+            if !changes
+                .iter()
+                .any(|key| !matches!(args.get(*key), None | Some(Value::Null)))
+            {
+                return Err("give at least one of title, pinned, unread or status".to_owned());
+            }
+            Ok(())
+        }
         MESSAGE_SESSION => {
             let target = args.get("session_id").and_then(Value::as_str).unwrap_or("");
             let message = args.get("message").and_then(Value::as_str).unwrap_or("");
@@ -416,6 +485,45 @@ mod tests {
         }
         assert!(V2_TOOL_NAMES.iter().all(|name| is_v2_tool(name)));
         assert!(!TOOL_NAMES.iter().any(|name| is_v2_tool(name)));
+    }
+
+    #[test]
+    fn version_three_adds_the_management_tools_only_for_its_clients() {
+        assert!(
+            V3_TOOL_NAMES
+                .iter()
+                .all(|name| !tool_names(2).contains(name))
+        );
+        let v3 = tool_names(3);
+        assert_eq!(v3.len(), 12);
+        for name in V3_TOOL_NAMES {
+            assert!(v3.contains(&name), "{name}");
+            assert!(is_tool(name) && is_v3_tool(name));
+            assert!(PROMPT_HINT_V3.contains(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn version_three_arguments_are_checked() {
+        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        assert!(ok(LIST_HARNESSES, json!({})));
+        assert!(ok(SEARCH_SESSIONS, json!({"query": "login"})));
+        assert!(!ok(SEARCH_SESSIONS, json!({"query": " "})));
+        assert!(ok(INTERRUPT_SESSION, json!({"session_id": "b"})));
+        assert!(!ok(INTERRUPT_SESSION, json!({})));
+        assert!(ok(CONFIGURE_SESSION, json!({})));
+        assert!(ok(
+            CONFIGURE_SESSION,
+            json!({"model": "m", "effort": "high"})
+        ));
+        assert!(ok(UPDATE_SESSION, json!({"pinned": true})));
+        assert!(ok(
+            UPDATE_SESSION,
+            json!({"session_id": "b", "status": "settled"})
+        ));
+        assert!(!ok(UPDATE_SESSION, json!({"session_id": "b"})));
+        assert!(!ok(UPDATE_SESSION, json!({"status": "gone"})));
+        assert!(!ok(UPDATE_SESSION, json!({"pinned": "yes"})));
     }
 
     #[test]
