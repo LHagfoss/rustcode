@@ -4897,7 +4897,8 @@ fn smart_ui_hint_needs_the_capability_and_a_root_prompt() {
     assert!(crate::network::compaction::estimate_tokens(SMART_UI_OFF_PROMPT_HINT) < 80);
     assert!(SMART_UI_PROMPT_HINT.contains("```rustcode-ui v1"));
     assert!(SMART_UI_PROMPT_HINT.contains("`use_skill` with `smart-ui` directly"));
-    assert!(SMART_UI_OFF_PROMPT_HINT.contains("Settings › General › Chat › Smart UI"));
+    assert!(SMART_UI_OFF_PROMPT_HINT.contains("Settings › Chat › Smart UI"));
+    assert!(!SMART_UI_OFF_PROMPT_HINT.contains("General"));
     let with = |policy: ToolSchemaPolicy, on: SmartUi| {
         let mut prompt = String::new();
         append_smart_ui_hint(&mut prompt, policy, on);
@@ -5018,7 +5019,7 @@ fn output_style_reaches_root_prompts_within_budget() {
 #[test]
 fn harness_instructions_teach_the_viz_types_the_client_draws() {
     use super::schema::{harness_instructions, harness_output_style};
-    let none = harness_instructions("Claude Code", 0);
+    let none = harness_instructions("Claude Code", 0, crate::app::SmartUi::Unsupported);
     assert!(none.contains("through the Claude Code harness"));
     // It knows the app is what owns its threads, and where to ask or look.
     assert!(none.contains("owns this machine's threads"));
@@ -5027,12 +5028,70 @@ fn harness_instructions_teach_the_viz_types_the_client_draws() {
     assert!(!none.contains("rustcode-viz"));
     assert!(none.ends_with(&harness_output_style()));
 
-    let level_1 = harness_instructions("Codex", 1);
+    let level_1 = harness_instructions("Codex", 1, crate::app::SmartUi::Unsupported);
     assert!(level_1.contains("```rustcode-viz") && !level_1.contains("line_chart"));
     assert!(level_1.ends_with(&harness_output_style()));
 
-    let level_2 = harness_instructions("Pi", 2);
+    let level_2 = harness_instructions("Pi", 2, crate::app::SmartUi::Unsupported);
     assert!(level_2.contains("line_chart") && level_2.contains("checklist"));
+}
+
+#[test]
+fn harness_instructions_teach_smart_ui_from_the_setting() {
+    use super::schema::{
+        SMART_UI_HARNESS_HINT, SMART_UI_OFF_PROMPT_HINT, harness_instructions, harness_output_style,
+    };
+    use crate::app::SmartUi;
+    let instructions = |smart_ui| harness_instructions("Codex", 2, smart_ui);
+
+    // On: the fence, the runtime names, the design rule and what the card refuses.
+    let on = instructions(SmartUi::On);
+    for part in [
+        "```rustcode-ui v1",
+        "inline <style> and <script>",
+        "rustcode-lib:chart.js",
+        "--rc-series-8",
+        ".rc-num",
+        "a real design",
+        "big numbers where the point is a number",
+        "Keep rustcode-viz for a quick plain chart or table",
+        "No card chrome",
+        "no vh or viewport heights",
+        "smart_ui_check",
+    ] {
+        assert!(on.contains(part), "{part}");
+    }
+    assert!(on.ends_with(&harness_output_style()));
+
+    // Off: the off note, and no format to write.
+    let off = instructions(SmartUi::Off);
+    assert!(off.contains(SMART_UI_OFF_PROMPT_HINT.trim()));
+    assert!(!off.contains("```rustcode-ui v1"));
+
+    // A client that cannot run the blocks hears nothing about them.
+    let absent = instructions(SmartUi::Unsupported);
+    assert!(!absent.contains("Smart UI"));
+    assert!(!absent.contains("rustcode-ui"));
+
+    // It rides in every prompt: Codex sends it as `developerInstructions`, so
+    // keep the whole thing (runtime info, viz, Smart UI, style) under 4 KB.
+    let bytes = on.len();
+    let tokens = crate::network::compaction::estimate_tokens(&on);
+    // Unsupported is byte-for-byte the text this function produced before Smart UI.
+    let before = crate::network::compaction::estimate_tokens(&absent);
+    println!(
+        "harness instructions: {} bytes before, {bytes} with Smart UI on ({before} -> {tokens} tokens); \
+         the root Smart UI hint is {} tokens, its off note {}",
+        absent.len(),
+        crate::network::compaction::estimate_tokens(super::schema::SMART_UI_PROMPT_HINT),
+        crate::network::compaction::estimate_tokens(super::schema::SMART_UI_OFF_PROMPT_HINT),
+    );
+    assert!(bytes < 4_096, "{bytes} bytes");
+    assert!(
+        SMART_UI_HARNESS_HINT.len() < 1_600,
+        "{}",
+        SMART_UI_HARNESS_HINT.len()
+    );
 }
 
 #[test]

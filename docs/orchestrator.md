@@ -266,6 +266,16 @@ The per-thread token travels in the server's environment (ACP `env`, Codex
 `env`), never in its arguments, so other local users cannot read it from the
 process list. `--token` still works for manual testing.
 
+While the user has Smart UI on, the same environment carries
+`RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
+(`smart_ui::CHECK_TOOL_NAME`): a static check of a `rustcode-ui v1` block — its
+size, a missing title, unclosed tags, an unbundled `rustcode-lib`, and what the
+page's sandbox refuses (network, storage, `vh`, system colours on a canvas),
+each with its line. The server answers it itself, without the socket, so it
+works on a thread whose client never advertised Smart UI at all; the engine and
+the harness pay one tool description for it. It does not run the page, so it
+returns no script errors, height or screenshot (`docs/smart-ui.md`).
+
 a stdio MCP server (`tools/list`, `tools/call`, `ping`; server name
 `rustcode`), started by the harness with the engine's own executable:
 

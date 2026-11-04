@@ -250,6 +250,7 @@ impl CodexAdapter {
         let output_style = crate::tools::schema::harness_instructions(
             &harness.name,
             super::client_visualization_level(),
+            super::client_smart_ui(),
         );
         let mut thread = None;
         if let Some(resume) = &options.resume {

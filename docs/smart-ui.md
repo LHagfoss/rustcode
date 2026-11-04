@@ -86,9 +86,9 @@ A client that runs blocks advertises `clientCapabilities._meta.rustcode.smartUi 
 at `initialize` while the setting is on. Sessions of that engine then get a
 short `# Smart UI` section in the root system prompt: when to use Smart UI,
 the fence name, and to call `use_skill` with `smart-ui` directly before
-writing one. Agents used to call `list_skills` first, a wasted round. It is 93
-estimated tokens (`estimate_tokens`; 96 before, 139 when the format lived
-there, #2625).
+writing one. Agents used to call `list_skills` first, a wasted round. It is 96
+estimated tokens (`estimate_tokens`; 93 before the "asked for a visualization"
+rule, 139 when the format lived there, #2625).
 
 The `smart-ui` skill is built into the engine
 (`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,063 estimated tokens
@@ -111,6 +111,26 @@ no `smartUi` gets neither. It tells the agent to use Smart UI only when the user
 for an interactive view or controls clearly help, and to use Markdown or
 `rustcode-viz` otherwise. Subagent prompts and compact prompts never carry it.
 The engine announces `agentCapabilities._meta.rustcode.smartUi = 1`.
+
+### External harnesses
+
+A thread on Codex, Claude Code or another external harness never sees the root
+prompt and has no `use_skill`, so it learns Smart UI from
+`harness_instructions` (`rustcode/engine/src/tools/schema.rs`), which Codex
+takes as `developerInstructions` and a Claude Code adapter as its appended
+system prompt. While the setting is on it carries a `# Smart UI` block with
+the one thing the skill would have given: the fence, inline `<style>` and
+`<script>`, `rustcode-lib:chart.js`, the `--rc-*` variables and `.rc-*`
+classes, no card chrome, no `vh`, and the rule that a request for a
+visualization, a graph or a dashboard gets a real design rather than a plain
+`rustcode-viz` chart. While the setting is off it carries the same off note as
+the root prompt, so the agent points at Settings › Chat instead of inventing a
+fence. A client that never advertised `smartUi` hears nothing about it.
+
+The block costs 1,180 bytes (302 estimated tokens): the whole
+`harness_instructions` text goes from 1,997 bytes / 496 tokens to 3,177 / 798
+with Smart UI on. It is paid on every turn of every external thread, so the
+test in `rustcode/engine/src/tools/tests.rs` caps the whole text at 4 KB.
 
 ## Agent preview (`smart_ui_preview`)
 
@@ -139,6 +159,36 @@ view that is torn down when it answers. A load over 5 s, a page that doesn't
 answer in 3 s (a busy loop) or more than 5,000 elements is a failed render
 with its reason. Nothing is shown to the user, so no approval is asked.
 Older apps (`smartUi = 1`) and other clients never see the tool.
+
+Built for the macOS app, which has been removed: the desktop app answers
+neither `_rustcode/smartUi/preview` nor `_rustcode/preview`, and advertises
+`smartUi = 1`, so no client reaches `smartUi = 2` today and the tool is not
+offered to any thread. Giving the card a real offscreen renderer in the
+desktop app (`apps/desktop/src-tauri`) is the work that brings it back; then
+the client advertises `2` and both the native tool and the MCP one below start
+working.
+
+## Block check (`smart_ui_check`)
+
+What an external harness can have instead, without a renderer: while Smart UI
+is on, the `rustcode` MCP server it already has lists `smart_ui_check`
+(`rustcode/engine/src/smart_ui.rs`, `orchestration/mcp_server.rs`). The call
+is answered by the MCP server itself, so it needs no app, no socket and no
+approval, and it works on a thread whose client never advertised `smartUi` at
+all. It reports:
+
+- the block's byte size and about how many elements it builds (counted tags,
+  not a DOM);
+- a missing `<title>`, an unclosed `<script>` or `<style>`;
+- a `rustcode-lib:` name the app does not bundle (only `chart.js` is);
+- what the page cannot do, with the line: network loads, `fetch`,
+  `XMLHttpRequest`, sockets, storage, `document.write`, `@import`, `vh` units,
+  and `CanvasText`/`AccentColor` inside a script (a canvas draws nothing with a
+  system colour).
+
+It does **not** run the page: no script errors, no fitted height, no
+screenshot. It is a lint for the mistakes agents actually make, and the
+instructions tell the harness to run it before writing the fence.
 
 ## Runtime and lifecycle
 

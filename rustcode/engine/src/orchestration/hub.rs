@@ -46,7 +46,7 @@ pub struct CallAnswer {
 }
 
 impl CallAnswer {
-    fn failure(content: impl Into<String>) -> Self {
+    pub(crate) fn failure(content: impl Into<String>) -> Self {
         Self {
             success: false,
             content: content.into(),
@@ -62,10 +62,16 @@ pub struct Launch {
     /// Passed in the environment (`ORCHESTRATOR_TOKEN_ENV`), never in
     /// `args`, so other local users cannot read it from the process list.
     pub token: String,
+    /// The user has Smart UI on, so the server also offers `smart_ui_check`.
+    pub smart_ui: bool,
 }
 
 /// The environment variable `rustcode mcp-orchestrator` reads its token from.
 pub const ORCHESTRATOR_TOKEN_ENV: &str = "RUSTCODE_ORCHESTRATOR_TOKEN";
+
+/// Set to `1` when the thread's client runs Smart UI blocks: the server then
+/// also lists `smart_ui_check` (`smart_ui::CHECK_TOOL_NAME`).
+pub const SMART_UI_ENV: &str = "RUSTCODE_SMART_UI";
 
 /// How long a harness should let one call run: the longest
 /// `wait_session` plus room for the app to answer.
@@ -86,16 +92,28 @@ impl Launch {
                 socket.to_string_lossy().into_owned(),
             ],
             token: token.to_owned(),
+            smart_ui: false,
         }
+    }
+
+    /// Also offer `smart_ui_check`, for a thread whose client runs Smart UI blocks.
+    pub fn with_smart_ui(mut self, on: bool) -> Self {
+        self.smart_ui = on;
+        self
     }
 
     /// One ACP `McpServer` (stdio) entry for `session/new`'s `mcpServers`.
     pub fn acp_server(&self) -> Value {
+        let mut env =
+            vec![serde_json::json!({ "name": ORCHESTRATOR_TOKEN_ENV, "value": self.token })];
+        if self.smart_ui {
+            env.push(serde_json::json!({ "name": SMART_UI_ENV, "value": "1" }));
+        }
         serde_json::json!({
             "name": SERVER_NAME,
             "command": self.command.to_string_lossy(),
             "args": self.args,
-            "env": [{ "name": ORCHESTRATOR_TOKEN_ENV, "value": self.token }],
+            "env": env,
         })
     }
 
@@ -106,7 +124,11 @@ impl Launch {
             format!("mcp_servers.{SERVER_NAME}"): {
                 "command": self.command.to_string_lossy(),
                 "args": self.args,
-                "env": { ORCHESTRATOR_TOKEN_ENV: self.token },
+                "env": if self.smart_ui {
+                    serde_json::json!({ ORCHESTRATOR_TOKEN_ENV: self.token, SMART_UI_ENV: "1" })
+                } else {
+                    serde_json::json!({ ORCHESTRATOR_TOKEN_ENV: self.token })
+                },
                 // Codex stops an MCP call after 60 s by default; a call
                 // can wait for the user, and `wait_session` up to an hour.
                 "tool_timeout_sec": TOOL_TIMEOUT_SECS,
@@ -381,7 +403,9 @@ pub async fn launch_for(session_id: &str, client: Arc<dyn PreviewClient>) -> Opt
         };
         let command = std::env::current_exe().ok()?;
         let token = hub.register(session_id, client);
-        Some(Launch::new(command, session_id, hub.path(), &token))
+        // Smart UI is the client's setting, not the thread's: an engine serves one client.
+        let smart_ui = crate::harness::client_smart_ui() == crate::app::SmartUi::On;
+        Some(Launch::new(command, session_id, hub.path(), &token).with_smart_ui(smart_ui))
     }
     #[cfg(not(unix))]
     {

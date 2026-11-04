@@ -1260,10 +1260,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     .visualization_level
                     .store(visualization_level, Ordering::Relaxed);
                 crate::harness::set_client_visualization_level(visualization_level);
-                server.client_smart_ui.store(
-                    client_smart_ui(&request.client_capabilities).as_u8(),
-                    Ordering::Relaxed,
-                );
+                let smart_ui = client_smart_ui(&request.client_capabilities);
+                server
+                    .client_smart_ui
+                    .store(smart_ui.as_u8(), Ordering::Relaxed);
+                // External harnesses have no root prompt or skill: they are taught the fence from this.
+                crate::harness::set_client_smart_ui(smart_ui);
                 let status_connection = _connection.clone();
                 crate::thread_status::set_notifier(move |session_id, update| {
                     let _ = status_connection

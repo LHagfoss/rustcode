@@ -49,8 +49,13 @@ export default async function (pi: {
       parameters: tool.inputSchema ?? empty(),
       async execute(_id, params) {
         if (log) appendFileSync(log, `${JSON.stringify({ tool: tool.name, args: params })}\n`);
+        // A string mock is a tool's prose answer (the block check); anything
+        // else is JSON, as the orchestration tools answer.
+        const canned = mocks[tool.name] ?? {};
         return {
-          content: [{ type: "text", text: JSON.stringify(mocks[tool.name] ?? {}) }],
+          content: [
+            { type: "text", text: typeof canned === "string" ? canned : JSON.stringify(canned) },
+          ],
           details: {},
         };
       },

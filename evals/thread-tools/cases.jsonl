@@ -18,3 +18,4 @@
 {"id":"move-login-to-codex","kind":"bad","prompt":"move the login form thread over to codex","must":["transfer_session"],"mustNot":[]}
 {"id":"what-did-i-do-elsewhere","kind":"bad","prompt":"what did I do in my paral-x project last week","must":[],"oneOf":["list_projects","list_sessions","search_sessions"],"mustNot":["start_session","message_session","fan_out"]}
 {"id":"read-a-thread-by-id","kind":"bad","prompt":"read thread t1 and tell me what we settled on","must":["read_session"],"mustNot":["start_session","message_session","fan_out"]}
+{"id":"check-a-smart-ui-block","kind":"bad","prompt":"before you write it, check this block: ```rustcode-ui v1\n<title>Costs</title>\n<div style=\"height:40vh\">x</div>\n```","must":["smart_ui_check"],"mustNot":["rustcode-viz","smart_ui_preview"]}
