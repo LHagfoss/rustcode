@@ -35,7 +35,7 @@ import {
   WaitingRow,
   WorkingRow,
 } from "./Rows";
-import { TimelineRail, type Turn, turnTitle } from "./TimelineRail";
+import { plainPreview, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
 type Row = {
@@ -370,6 +370,19 @@ export function Transcript({
     requestAnimationFrame(toBottom);
   }, [turns.length, thread.id, rows.length, toBottom, virtualizer]);
   const [readTurn, setReadTurn] = useState(0);
+  const [lastOnScreen, setLastOnScreen] = useState(0);
+  // How a turn was answered, read when the minimap asks: the rail does not redraw as a reply streams.
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const replyOf = useCallback((row: number) => {
+    let reply: string | undefined;
+    for (let i = row + 1; i < rowsRef.current.length; i++) {
+      const item = rowsRef.current[i]!.item;
+      if (item?.kind === "user") break;
+      if (item?.kind === "assistant") reply = item.text;
+    }
+    return reply && plainPreview(reply);
+  }, []);
   const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
     const el = scrollRef.current;
@@ -387,13 +400,18 @@ export function Transcript({
     // The turn being read: the last one whose first line is above 30% of the visible part.
     const reading = el.scrollTop + topInset + (el.clientHeight - bottomInset - topInset) * 0.3;
     const starts = virtualizer.measurementsCache;
+    const bottom = el.scrollTop + el.clientHeight - bottomInset;
     let at = 0;
+    let onScreen = 0;
     for (let t = 0; t < turns.length; t++) {
       const start = starts[turns[t]!.row]?.start;
-      if (start !== undefined && start + 16 <= reading) at = t;
-      else if (start !== undefined) break;
+      if (start === undefined) continue;
+      if (start + 16 <= reading) at = t;
+      if (start >= bottom) break;
+      onScreen = t;
     }
     setReadTurn(at);
+    setLastOnScreen(onScreen);
   };
 
   const jumpToTurn = useCallback(
@@ -404,6 +422,8 @@ export function Transcript({
     },
     [virtualizer],
   );
+
+  const railCurrent = showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1;
 
   const onWheel = (e: React.WheelEvent) => {
     // Scrolling up during a stream unpins at once, before the next chunk pulls the view down.
@@ -655,11 +675,13 @@ export function Transcript({
       </div>
       <TimelineRail
         turns={turns}
-        current={showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1}
+        current={railCurrent}
+        last={showLatest ? Math.max(railCurrent, Math.min(lastOnScreen, turns.length - 1)) : turns.length - 1}
         width={size.width}
         visible={size.height - bottomInset + 20 - topInset}
         offset={topInset}
         onJump={jumpToTurn}
+        replyOf={replyOf}
       />
       <button
         type="button"
