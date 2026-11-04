@@ -79,6 +79,12 @@ const STORES: &[Store] = &[
         entries: &["debug.log", "debug.log.1"],
     },
     Store {
+        name: "data store",
+        holds: "threads, turns and tool calls for `rustcode usage` and `data query` (metadata only)",
+        retention: "kept; the per-turn token deltas cannot be rebuilt",
+        entries: &["data.sqlite*"],
+    },
+    Store {
         name: "indexes",
         holds: "the symbol index and saved memory",
         retention: "kept",
@@ -240,6 +246,7 @@ mod tests {
         std::fs::write(root.join("debug.log"), vec![0; 50]).unwrap();
         std::fs::write(root.join("config.json.before-x.bak"), vec![0; 7]).unwrap();
         std::fs::write(root.join("config.toml"), vec![0; 20]).unwrap();
+        std::fs::write(root.join("data.sqlite"), vec![0; 11]).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("threads"), root.join("sessions")).unwrap();
 
@@ -256,10 +263,12 @@ mod tests {
         assert_eq!(store("threads").files, 1);
         assert_eq!(store("tool output").bytes, 1000);
         assert_eq!(store("logs").paths, vec!["debug.log"]);
+        assert_eq!(store("data store").bytes, 11);
+        assert_eq!(store("data store").files, 1);
         assert_eq!(store("backups").paths, vec!["config.json.before-x.bak"]);
         // The renamed folder's link counts nothing; only config.toml is other.
         assert_eq!(store("other").bytes, 20);
-        assert_eq!(usage.total_bytes, 300 + 1000 + 50 + 7 + 20);
+        assert_eq!(usage.total_bytes, 300 + 1000 + 50 + 7 + 20 + 11);
         assert_eq!(usage.stores[0].name, "tool output", "largest first");
         let text = usage.render();
         assert!(text.contains("Nothing was changed"));
