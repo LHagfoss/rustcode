@@ -160,7 +160,7 @@ const components: Components = {
           if (ref) openRef(ref);
           else openExternal(href);
         }}
-        className="-mx-1 cursor-pointer rounded-full px-1 text-accent underline decoration-accent/30 underline-offset-2 transition-colors duration-150 hover:bg-accent/12 hover:decoration-transparent"
+        className="-mx-1 cursor-pointer rounded-full px-1 text-accent underline decoration-accent/30 underline-offset-2 hover:bg-accent/12 hover:decoration-transparent"
       >
         {href ? shortUrl(href, children) : children}
       </a>
@@ -200,7 +200,7 @@ const components: Components = {
           onClick={() => openRef(ref)}
           className="group inline rounded-full text-accent"
         >
-          <code className="rounded-full bg-accent/10 px-1.5 py-px font-mono text-[0.9em] transition-colors duration-150 group-hover:bg-accent/20">
+          <code className="rounded-full bg-accent/10 px-1.5 py-px font-mono text-[0.9em] group-hover:bg-accent/20">
             {children}
           </code>
         </button>

@@ -19,8 +19,8 @@ import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { askConfirm, request, toast, useApp } from "../state/store";
-import { cx, Pill, Switch, Tooltip } from "./primitives";
-import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
+import { cx, inputClass, Pill, Switch, Tooltip } from "./primitives";
+import { Group, Loading, Row, useEngineData } from "./settingsKit";
 
 interface Skill {
   name: string;

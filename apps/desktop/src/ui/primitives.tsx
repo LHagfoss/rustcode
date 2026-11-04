@@ -1,8 +1,8 @@
 // Small building blocks shared by every view, matching the SwiftUI app's
 // ChromeButton, ToolbarCluster, PillButtonStyle and mini spinner.
 
-import { CircleAlert, TriangleAlert } from "lucide-react";
-import { Tooltip as RadixTooltip } from "radix-ui";
+import { Check, ChevronDown, CircleAlert, TriangleAlert } from "lucide-react";
+import { Select as RadixSelect, Tooltip as RadixTooltip } from "radix-ui";
 import {
   type ButtonHTMLAttributes,
   forwardRef,
@@ -161,23 +161,34 @@ export const ClusterButton = forwardRef<HTMLButtonElement, ButtonProps & { on?: 
   },
 );
 
-/** The SwiftUI app's PillButtonStyle: callout medium, height 26, capsule. */
+/**
+ * The labelled button (docs/design.md › Component recipes): a capsule, 24, 26 or 30 high.
+ * Secondary by default; `prominent` for the one primary action, `danger` for a destructive one,
+ * `quiet` for an action that rests without a fill (a section header's "Add").
+ */
 export const Pill = forwardRef<
   HTMLButtonElement,
-  ButtonHTMLAttributes<HTMLButtonElement> & { prominent?: boolean; danger?: boolean; size?: "md" | "lg" }
->(function Pill({ prominent, danger, size = "md", className, children, ...rest }, ref) {
+  ButtonHTMLAttributes<HTMLButtonElement> & {
+    prominent?: boolean;
+    danger?: boolean;
+    quiet?: boolean;
+    size?: "sm" | "md" | "lg";
+  }
+>(function Pill({ prominent, danger, quiet, size = "md", className, children, ...rest }, ref) {
   return (
     <button
       ref={ref}
       type="button"
       className={cx(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full px-3 font-medium text-callout whitespace-nowrap disabled:opacity-40",
-        size === "lg" ? "h-[30px] px-3.5" : "h-[26px]",
+        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium text-callout whitespace-nowrap disabled:opacity-40",
+        size === "lg" ? "h-[30px] px-3.5" : size === "sm" ? "h-6 px-2.5" : "h-[26px] px-3",
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
           : danger
             ? "bg-danger/12 text-danger enabled:hover:bg-danger/18 enabled:active:bg-danger/24"
-            : "bg-fill text-fg enabled:hover:bg-fill-strong enabled:active:bg-fill-strong",
+            : quiet
+              ? "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong"
+              : "bg-fill text-fg enabled:hover:bg-fill-strong enabled:active:bg-fill-strong",
         className,
       )}
       {...rest}
@@ -186,6 +197,98 @@ export const Pill = forwardRef<
     </button>
   );
 });
+
+/** A menu's surface and rows, for `DropdownMenu` and `ContextMenu` alike. */
+export const menuSurface = "elevated z-50 min-w-[200px] p-1.5 rc-in";
+export const menuItem =
+  "flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-[7px] text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
+export const menuItemDanger = "text-danger data-[highlighted]:bg-danger/12";
+export const menuSeparator = "mx-1.5 my-1 h-px shrink-0 bg-border";
+export const menuLabel = "px-3 pt-1.5 pb-1 text-caption text-fg-faint";
+
+/** A popover's surface: width and anything else its content needs goes after it. */
+export const popoverSurface = "elevated z-50 p-3 rc-in";
+
+/** A small text field, per the Input recipe. */
+export const inputClass =
+  "h-8 rounded-md bg-fill-subtle px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill";
+
+export interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+// Radix keeps the empty string for "nothing selected", so an option for "" travels under this.
+const EMPTY_OPTION = "__empty__";
+
+/** One choice from a list: every picker that is not a `Segments` or the composer's own. */
+export function Select({
+  label,
+  value,
+  options,
+  onChange,
+  disabled,
+  size = "md",
+  className,
+}: {
+  label: string;
+  value: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  return (
+    <RadixSelect.Root
+      value={value || EMPTY_OPTION}
+      disabled={disabled}
+      onValueChange={(next) => onChange(next === EMPTY_OPTION ? "" : next)}
+    >
+      <RadixSelect.Trigger
+        aria-label={label}
+        className={cx(
+          "inline-flex max-w-[260px] min-w-0 items-center gap-1.5 rounded-full bg-fill font-medium text-callout text-fg outline-none enabled:hover:bg-fill-strong disabled:opacity-40 data-[state=open]:bg-fill-strong",
+          size === "sm" ? "h-6 pr-2 pl-2.5" : "h-[26px] pr-2.5 pl-3",
+          className,
+        )}
+      >
+        <span className="min-w-0 truncate">
+          <RadixSelect.Value />
+        </span>
+        <RadixSelect.Icon className="shrink-0 text-fg-faint">
+          <ChevronDown size={11} strokeWidth={2.5} />
+        </RadixSelect.Icon>
+      </RadixSelect.Trigger>
+      <RadixSelect.Portal>
+        <RadixSelect.Content
+          position="popper"
+          align="end"
+          sideOffset={6}
+          collisionPadding={8}
+          className="elevated z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-1.5 rc-in"
+        >
+          <RadixSelect.Viewport>
+            {options.map((o) => (
+              <RadixSelect.Item
+                key={o.value}
+                value={o.value || EMPTY_OPTION}
+                disabled={o.disabled}
+                className={menuItem}
+              >
+                <RadixSelect.ItemText>{o.label}</RadixSelect.ItemText>
+                <RadixSelect.ItemIndicator className="ml-auto shrink-0 text-fg-muted">
+                  <Check size={13} />
+                </RadixSelect.ItemIndicator>
+              </RadixSelect.Item>
+            ))}
+          </RadixSelect.Viewport>
+        </RadixSelect.Content>
+      </RadixSelect.Portal>
+    </RadixSelect.Root>
+  );
+}
 
 export function Kbd({ children }: { children: ReactNode }) {
   return (

@@ -67,8 +67,8 @@ import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { cx, Kbd, Pill, Segments, Spinner, Switch, Tooltip } from "./primitives";
-import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
+import { cx, inputClass, Kbd, Pill, Segments, Spinner, Switch, Tooltip } from "./primitives";
+import { Group, Loading, Row, useEngineData } from "./settingsKit";
 import { UsagePage } from "./UsagePage";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [

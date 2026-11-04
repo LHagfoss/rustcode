@@ -27,7 +27,7 @@ import {
 } from "../state/store";
 import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
-import { cx, Pill, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
+import { cx, Pill, Select, type SelectOption, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
 
 function StatusDot({ tone }: { tone: "ok" | "warn" | "off" }) {
   return (
@@ -273,35 +273,21 @@ export function HarnessList({ snapshot }: { snapshot: HarnessSnapshot }) {
   );
 }
 
-function Select({
+function SelectRow({
   label,
-  value,
-  options,
-  onChange,
-  disabled,
+  ...select
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string; disabled?: boolean }[];
+  options: SelectOption[];
   onChange: (v: string) => void;
   disabled?: boolean;
 }) {
   return (
-    <label className="flex items-center justify-between gap-4 px-3.5 py-[11px]">
+    <div className="flex items-center justify-between gap-4 px-3.5 py-[11px]">
       <span className="text-body">{label}</span>
-      <select
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-[26px] max-w-[260px] rounded-full bg-fill px-3 text-callout outline-none disabled:opacity-45"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value} disabled={o.disabled}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+      <Select label={label} {...select} />
+    </div>
   );
 }
 
@@ -351,7 +337,7 @@ export function DefaultsForm({
   return (
     <div className="flex flex-col">
       <div className="divide-y divide-border overflow-hidden rounded-lg bg-fill-subtle">
-        <Select
+        <SelectRow
           label="Harness"
           value={value.harness}
           onChange={(harnessId) => set({ harness: harnessId, model: null, effort: null })}
@@ -361,7 +347,7 @@ export function DefaultsForm({
             return { value: h.id, label: reason ? `${name} — ${reason}` : name, disabled: !!reason };
           })}
         />
-        <Select
+        <SelectRow
           label="Model"
           value={value.model ?? ""}
           disabled={!models.length}
@@ -385,22 +371,15 @@ export function DefaultsForm({
           {harness && !harness.capabilities.effort ? (
             <span className="text-callout text-fg-faint">{harness.name} has no effort setting</span>
           ) : efforts.length ? (
-            <div className="flex rounded-full bg-fill-subtle p-0.5">
-              {efforts.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  aria-pressed={e === value.effort}
-                  onClick={() => set({ effort: e })}
-                  className={cx(
-                    "h-[22px] rounded-full px-3 font-medium text-callout",
-                    e === value.effort ? "bg-surface-3 text-fg" : "text-fg-muted hover:text-fg",
-                  )}
-                >
-                  {effortLabel(e)}
-                </button>
-              ))}
-            </div>
+            <Select
+              label="Effort"
+              value={value.effort ?? ""}
+              onChange={(effort) => set({ effort: effort || null })}
+              options={[
+                ...(value.effort ? [] : [{ value: "", label: "Default" }]),
+                ...efforts.map((e) => ({ value: e, label: effortLabel(e) })),
+              ]}
+            />
           ) : (
             <span className="text-callout text-fg-faint">Model default</span>
           )}

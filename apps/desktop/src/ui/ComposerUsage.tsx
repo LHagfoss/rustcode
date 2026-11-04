@@ -71,7 +71,7 @@ export function ContextRing({ threadId }: { threadId: string }) {
         <span
           role="img"
           aria-label={`Context: ${percentOf(usage.used, usage.size)} used, ${formatTokens(usage.used)} of ${formatTokens(usage.size)} tokens`}
-          className="flex size-[30px] cursor-default items-center justify-center rounded-full transition-colors hover:bg-fill data-[state=open]:bg-fill"
+          className="flex size-[30px] cursor-default items-center justify-center rounded-full hover:bg-fill data-[state=open]:bg-fill"
         >
           <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
             <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-fill-strong)" strokeWidth="2" />

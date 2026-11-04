@@ -20,7 +20,7 @@ import type { Json } from "../acp/jsonrpc";
 import { isAllow, type PermissionOption, type PermissionRequest } from "../acp/types";
 import { displayCommand } from "../lib/command";
 import { answerPermission, answerQuestionOptions, answerQuestionText, approveAll } from "../state/store";
-import { cx, Kbd, Pill, Tooltip } from "./primitives";
+import { cx, Kbd, menuItem, Pill, Tooltip } from "./primitives";
 import { DiffView } from "./Rows";
 
 function orderedOptions(options: PermissionOption[]): PermissionOption[] {
@@ -180,17 +180,14 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
                   <DropdownMenu.Item
                     key={o.id}
                     onSelect={() => pick(options.indexOf(o))}
-                    className="flex items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill"
+                    className={menuItem}
                   >
                     <span className="min-w-0 flex-1 break-words">{o.name}</span>
                     <Kbd>{options.indexOf(o) + 1}</Kbd>
                   </DropdownMenu.Item>
                 ))}
                 {pending > 1 && (
-                  <DropdownMenu.Item
-                    onSelect={() => approveAll(request.sessionId)}
-                    className="flex items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill"
-                  >
+                  <DropdownMenu.Item onSelect={() => approveAll(request.sessionId)} className={menuItem}>
                     <CheckCheck size={13} /> Allow all {pending} waiting
                   </DropdownMenu.Item>
                 )}
@@ -301,7 +298,7 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
           onChange={(e) => setText(e.target.value)}
           placeholder="Or write your own answer…"
           aria-label="Your own answer"
-          className="h-[30px] flex-1 rounded-full bg-fill-subtle px-3.5 text-body outline-none ring-1 ring-border placeholder:text-fg-faint focus:ring-accent/50"
+          className="h-[30px] flex-1 rounded-full bg-fill-subtle px-3.5 text-body outline-none placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
         />
         <Pill prominent type="submit" disabled={!text.trim()}>
           Send

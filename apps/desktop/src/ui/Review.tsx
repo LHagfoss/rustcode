@@ -39,7 +39,7 @@ import {
 } from "../state/store";
 import { ViewHeader } from "./Board";
 import { splitUnifiedDiff } from "./ChangesPanel";
-import { cx, Pill, Segments, Skeleton, Spinner, Tooltip } from "./primitives";
+import { cx, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 interface ReviewFile {
@@ -120,7 +120,7 @@ function CommentBox({
         }}
         placeholder="Comment on this line (⌘⏎ to save)"
         aria-label="Comment"
-        className="w-full resize-y rounded-md bg-fill-subtle px-2 py-1.5 text-callout outline-none ring-1 ring-border focus:ring-accent/50"
+        className="w-full resize-y rounded-md bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
       />
       <div className="flex justify-end gap-1.5">
         <Pill onClick={onCancel}>Cancel</Pill>
@@ -222,7 +222,7 @@ const FileDiffView = memo(function FileDiffView({
         {saved.map((c, i) => (
           <div
             key={i}
-            className="my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 font-sans text-callout rc-in"
+            className="my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-lg bg-accent/10 px-2.5 py-1.5 font-sans text-callout rc-in"
           >
             <span className="selectable flex-1 whitespace-pre-wrap">{c.body}</span>
             <button
@@ -492,19 +492,20 @@ export function Review({ threadId }: { threadId: string }) {
           }
         />
         {checkpoints && checkpoints.length > 0 ? (
-          <select
-            aria-label="A turn's changes"
+          <Select
+            label="A turn's changes"
+            size="sm"
+            className="max-w-[180px]"
             value={source.kind === "turn" ? String(source.turn) : ""}
-            onChange={(e) => e.target.value && setSource({ kind: "turn", turn: Number(e.target.value) })}
-            className="h-6 max-w-[180px] rounded-full bg-fill-subtle px-2 text-caption outline-none hover:bg-fill"
-          >
-            <option value="">Turn…</option>
-            {checkpoints.map((c) => (
-              <option key={c.turn} value={c.turn}>
-                {c.turn}. {c.prompt.slice(0, 40)}
-              </option>
-            ))}
-          </select>
+            onChange={(turn) => turn && setSource({ kind: "turn", turn: Number(turn) })}
+            options={[
+              { value: "", label: "Turn…" },
+              ...checkpoints.map((c) => ({
+                value: String(c.turn),
+                label: `${c.turn}. ${c.prompt.slice(0, 40)}`,
+              })),
+            ]}
+          />
         ) : (
           checkpointsMissing && (
             <Tooltip label={checkpointsMissing}>
@@ -623,7 +624,7 @@ export function Review({ threadId }: { threadId: string }) {
                 onChange={(e) => setNote(e.target.value)}
                 placeholder="A note for the whole review (optional)"
                 aria-label="Review note"
-                className="resize-y rounded-lg bg-fill-subtle px-2.5 py-1.5 text-callout outline-none ring-1 ring-border focus:ring-accent/50"
+                className="resize-y rounded-lg bg-fill-subtle px-2.5 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
               />
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Pill onClick={() => setComments([])}>Discard</Pill>

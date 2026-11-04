@@ -77,10 +77,6 @@ export function Loading({ error }: { error: string | null }) {
   );
 }
 
-/** A small text field, per the Input recipe. */
-export const inputClass =
-  "h-8 rounded-md bg-fill-subtle px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill";
-
 /** The last answer per method: a page opens with it at once and refreshes behind it. */
 const cache = new Map<string, unknown>();
 

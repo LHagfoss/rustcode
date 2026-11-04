@@ -83,7 +83,7 @@ import { ContextRing, PlanMeter } from "./ComposerUsage";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
-import { cx, Tooltip } from "./primitives";
+import { cx, menuItem, menuSeparator, menuSurface, Tooltip } from "./primitives";
 
 function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
   if (!draft.startsWith("/") || /\s/.test(draft)) return [];
@@ -953,24 +953,19 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
                   <DropdownMenu.Item
                     key={p}
                     onSelect={() => setProjectCwd(p)}
-                    className={cx(
-                      "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left outline-none data-[highlighted]:bg-fill",
-                      p === cwd && "bg-fill",
-                    )}
+                    className={cx(menuItem, "flex-col items-start gap-0", p === cwd && "bg-fill")}
                   >
                     <span className="text-body text-fg">{projectName(p)}</span>
-                    <span className="truncate text-caption text-fg-muted" dir="rtl">
+                    <span className="w-full truncate text-caption text-fg-muted" dir="rtl">
                       <bdi>{p}</bdi>
                     </span>
                   </DropdownMenu.Item>
                 ))}
               </div>
-              {projects.length > 0 && (
-                <DropdownMenu.Separator className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-              )}
+              {projects.length > 0 && <DropdownMenu.Separator className={menuSeparator} />}
               <DropdownMenu.Item
                 onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}
-                className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body outline-none data-[highlighted]:bg-fill"
+                className={cx(menuItem, "shrink-0")}
               >
                 Choose Folder…
               </DropdownMenu.Item>
@@ -984,32 +979,30 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
 
 /** What the folder of an existing thread offers. */
 function FolderActions({ cwd }: { cwd: string }) {
-  const item =
-    "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-left text-body outline-none data-[highlighted]:bg-fill";
   return (
     <>
       <div className="truncate px-2.5 pt-1 pb-1.5 text-caption text-fg-muted" dir="rtl">
         <bdi>{cwd}</bdi>
       </div>
-      <DropdownMenu.Item className={item} onSelect={() => openPath(cwd)}>
+      <DropdownMenu.Item className={menuItem} onSelect={() => openPath(cwd)}>
         <FolderOpen size={13} className="text-fg-muted" /> Open in Finder
       </DropdownMenu.Item>
       {canOpenTerminal() && (
         <DropdownMenu.Item
-          className={item}
+          className={menuItem}
           onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}
         >
           <SquareTerminal size={13} className="text-fg-muted" /> Open in Terminal
         </DropdownMenu.Item>
       )}
       <DropdownMenu.Item
-        className={item}
+        className={menuItem}
         onSelect={() => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info"))}
       >
         <Copy size={13} className="text-fg-muted" /> Copy Path
       </DropdownMenu.Item>
-      <DropdownMenu.Separator className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-      <DropdownMenu.Item className={item} onSelect={() => startNewThread(cwd)}>
+      <DropdownMenu.Separator className={menuSeparator} />
+      <DropdownMenu.Item className={menuItem} onSelect={() => startNewThread(cwd)}>
         <SquarePen size={13} className="text-fg-muted" /> New Thread Here
       </DropdownMenu.Item>
     </>
@@ -1054,7 +1047,7 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
           side="top"
           align="start"
           sideOffset={8}
-          className="elevated z-50 w-[280px] p-1.5"
+          className={cx(menuSurface, "w-[280px]")}
         >
           <DropdownMenu.RadioGroup
             value={mode}
@@ -1066,7 +1059,7 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
                 <DropdownMenu.RadioItem
                   key={m.id}
                   value={m.id}
-                  className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2 outline-none data-[highlighted]:bg-fill data-[state=checked]:bg-fill-subtle"
+                  className={cx(menuItem, "items-start gap-2.5 py-2 data-[state=checked]:bg-fill-subtle")}
                 >
                   <ItemIcon
                     size={13}
@@ -1096,8 +1089,6 @@ function PlusMenu({
   attachLabel: string;
   cwd: string;
 }) {
-  const item =
-    "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
   return (
     <DropdownMenu.Root>
       <Tooltip label="Attach and more">
@@ -1116,17 +1107,17 @@ function PlusMenu({
           side="top"
           align="start"
           sideOffset={8}
-          className="elevated z-50 min-w-[220px] p-1.5"
+          className={cx(menuSurface, "min-w-[220px]")}
         >
-          <DropdownMenu.Item className={item} onSelect={onAttach}>
+          <DropdownMenu.Item className={menuItem} onSelect={onAttach}>
             <Paperclip size={13} /> {attachLabel}
           </DropdownMenu.Item>
-          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-border" />
-          <DropdownMenu.Item className={item} onSelect={() => startNewThread()}>
+          <DropdownMenu.Separator className={menuSeparator} />
+          <DropdownMenu.Item className={menuItem} onSelect={() => startNewThread()}>
             <SquarePen size={13} /> New Thread
           </DropdownMenu.Item>
           <DropdownMenu.Item
-            className={item}
+            className={menuItem}
             onSelect={() =>
               void pickFolder(cwd).then((p) => {
                 if (!p) return;
