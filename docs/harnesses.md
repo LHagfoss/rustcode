@@ -1,10 +1,11 @@
 # Harnesses
 
-A **harness** is the agent runtime that runs a thread. RustCode's own engine is
-the built-in harness, and it stays the default with the most features. Other
-coding agents — Codex, Claude Code, Gemini CLI, OpenCode, Pi, or any ACP agent —
-can run a thread as external harnesses. Each owns its own sign-in, model
-catalog, tools and permission rules. RustCode never stores their credentials.
+A **harness** is the agent runtime that runs a thread. RustCode's built-in
+harness is the engine's own turn loop, and it stays the default with the most
+features. Other coding agents — Codex, Claude Code, Gemini CLI, OpenCode, Pi, or
+any ACP agent — can run a thread as external harnesses. Each owns its own
+sign-in, model catalog, tools and permission rules. RustCode never stores their
+credentials.
 
 Terms (see [terminology.md](terminology.md)):
 
@@ -16,8 +17,8 @@ Terms (see [terminology.md](terminology.md)):
 ## Where it lives
 
 The harness layer is in the engine (`rustcode/engine/src/harness/`), not in a
-frontend. Every client of `rustcode --acp` (the desktop app, the SwiftUI app)
-gets external harnesses through the same ACP connection it already uses.
+frontend. Every client of `rustcode --acp`, the desktop app first of all, gets
+external harnesses through the same ACP connection it already uses.
 
 ```
 client ──ACP──▶ rustcode --acp ──▶ built-in turn loop          (harness "rustcode")
@@ -35,7 +36,7 @@ built-in one.
 
 | Kind | Driven through | Examples |
 | --- | --- | --- |
-| `builtin` | RustCode's turn loop | `rustcode` |
+| `builtin` | The built-in harness's turn loop | `rustcode` |
 | `acp` | ACP v1 over the child's stdio; RustCode is the ACP client | `opencode acp`, `gemini --experimental-acp`, Claude Code through `claude-agent-acp`, Codex through `codex-acp` |
 | `codex` | `codex app-server` JSON-RPC over stdio | `codex` |
 

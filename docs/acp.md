@@ -129,7 +129,7 @@ Semantics and scope are described in
 ## Harnesses
 
 A thread can run on an external coding agent (Codex, Claude Code, Gemini
-CLI, OpenCode, any ACP agent) instead of RustCode's own turn loop. The
+CLI, OpenCode, any ACP agent) instead of the built-in harness. The
 contract is in [harnesses.md](harnesses.md); the requests are:
 
 - `_rustcode/harnesses` (`{}`): every harness with its detection,

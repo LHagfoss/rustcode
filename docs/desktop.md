@@ -179,7 +179,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   Before an engine implements `_rustcode/harnesses`, the app shows only the
   built-in harness and says so in Settings. One product choice names an id:
   Claude Code (`PREFERRED_HARNESS`) is listed first and suggested on a
-  first run, and RustCode's own engine is listed last as the *Local*
+  first run, and the built-in harness is listed last as the *Local*
   harness, kept for the TUI, testing and local models.
 - **Settings › Agents.** Every harness is detected again (installed, signed in, version) each time the page opens, and on *Refresh*. *New threads start on* comes first and saves as
   it changes (no Save button); picking an external harness lists its
