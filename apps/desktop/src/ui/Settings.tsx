@@ -20,6 +20,7 @@ import {
   Palette,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   TerminalSquare,
   X,
@@ -80,10 +81,21 @@ import {
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { cx, Kbd, Spinner, Switch } from "./primitives";
+import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
 import { ShortcutsPage } from "./ShortcutSettings";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
-import { Action, Choice, fieldClass, Group, Loading, Row, useEngineData } from "./settingsKit";
+import {
+  Action,
+  Choice,
+  fieldClass,
+  Group,
+  Loading,
+  Row,
+  RowResets,
+  SectionTitle,
+  useEngineData,
+  useRowResets,
+} from "./settingsKit";
 import { UsagePage } from "./UsagePage";
 
 interface Page {
@@ -122,7 +134,10 @@ const NAV: { heading?: string; pages: Page[] }[] = [
   },
   {
     heading: "System",
-    pages: [{ id: "advanced", label: "Advanced", icon: TerminalSquare }],
+    pages: [
+      { id: "advanced", label: "Advanced", icon: TerminalSquare },
+      { id: "about", label: "About", icon: Info },
+    ],
   },
 ];
 
@@ -725,20 +740,20 @@ function TokenList() {
   const [open, setOpen] = useState(false);
   return (
     <section className="mb-8">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="mb-2.5 flex min-h-7 items-center rounded-sm font-semibold text-fg text-title3 hover:text-fg-muted"
-      >
-        {open ? "Hide" : "Show"} tokens
-      </button>
+      <SectionTitle
+        title="Tokens"
+        action={
+          <Action quiet size="sm" onClick={() => setOpen(!open)} aria-expanded={open}>
+            {open ? "Hide" : "Show"}
+          </Action>
+        }
+      />
       {open && (
-        <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2">
+        <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 rounded-xl border border-border-strong bg-surface-2/40 p-3">
           {TOKENS.map((t) => (
             <div
               key={t}
-              className="flex items-center gap-2 rounded-lg border border-border-strong bg-surface-2/40 px-2.5 py-1.5"
+              className="flex items-center gap-2 rounded-lg border border-border-strong bg-surface-2/60 px-2.5 py-1.5"
             >
               <span
                 className="size-4 shrink-0 rounded-xs shadow-1"
@@ -930,9 +945,6 @@ function AdvancedPage() {
           {log.length ? log.slice(-200).join("\n") : "Nothing yet."}
         </pre>
       </Group>
-      <Group title="About">
-        <AppVersion />
-      </Group>
       <Group title="Setup" footer="Each agent signs in on its own; RustCode never stores its credentials.">
         <Row
           title="Set up your agents again"
@@ -945,14 +957,25 @@ function AdvancedPage() {
   );
 }
 
+function AboutPage() {
+  return (
+    <Group
+      title="Version"
+      footer="RustCode is open source. The licences of everything it ships are in its release."
+    >
+      <AppVersion />
+    </Group>
+  );
+}
+
 // ---------------------------------------------------------------- the panel
 
 /**
- * Settings as a page of the window (docs/design.md › Settings): a nav column
- * with the search field at its top and a Close row at its foot, and one page
- * beside it scrolling on its own, its name going up with the content. Esc, ⌘,
- * and the Close row put you back where you were; the thread underneath stayed
- * mounted and inert (App.tsx).
+ * Settings as a floating panel over the app (docs/design.md › Settings): a
+ * nav column with the search field at its top, then one page beside it under
+ * the panel's own header (breadcrumb, "Restore defaults", close). The app
+ * stays mounted and inert behind a scrim; a press on the scrim, Esc or ⌘, puts
+ * you back where you were.
  */
 export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
@@ -963,6 +986,12 @@ export function Settings() {
   const results = useMemo(() => searchSettings(query), [query]);
   // The row to land on, set when a result is picked and cleared once it is lit.
   const [landing, setLanding] = useState<{ section: SettingsSection; title: string } | null>(null);
+  // The panel takes focus when it opens: keys then land inside it, never on the
+  // shell it covers. Not its first control, so no stray ring in the search field.
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panel.current?.focus({ preventScroll: true });
+  }, []);
 
   const clear = () => {
     setQuery("");
@@ -1033,118 +1062,175 @@ export function Settings() {
   };
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-30 flex bg-bg">
-      <nav
-        aria-label="Settings sections"
-        className="flex w-60 shrink-0 flex-col gap-3 border-border border-e bg-sidebar px-2 py-3"
+    <div role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-30">
+      {/* The app behind, dimmed; a press on it (not on the panel) closes Settings. */}
+      <div aria-hidden className="absolute inset-0 bg-bg/60" />
+      <div
+        className="absolute inset-0 flex items-center justify-center p-1 sm:p-6 lg:p-10"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) openSettings(null);
+        }}
       >
-        <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
-          <Search size={16} className="shrink-0 text-fg-faint" />
-          <input
-            ref={field}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setActive(0);
-            }}
-            onKeyDown={onFieldKey}
-            placeholder="Search settings"
-            aria-label="Search settings"
-            className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
-          />
-          {query ? (
-            <button
-              type="button"
-              aria-label="Clear search"
-              onClick={() => {
-                clear();
-                field.current?.focus();
-              }}
-              className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
-            >
-              <X size={12} strokeWidth={2.5} />
-            </button>
-          ) : (
-            <Kbd>/</Kbd>
-          )}
-        </div>
-        <div className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
-          {query.trim() ? (
-            results.length ? (
-              <div role="listbox" aria-label="Settings results" className="flex flex-col gap-0.5">
-                {results.map((r, i) => (
-                  <button
-                    key={`${r.section}:${r.title}`}
-                    type="button"
-                    role="option"
-                    aria-selected={i === active}
-                    onMouseMove={() => setActive(i)}
-                    onClick={() => pick(r)}
-                    className={cx(
-                      "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
-                      i === active ? "bg-fill" : "hover:bg-fill",
-                    )}
-                  >
-                    <span className="w-full truncate font-medium text-body">{r.title}</span>
-                    <span className="text-caption text-fg-faint">{pageLabel(r.section)}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="px-2 py-1.5 text-caption text-fg-muted">Nothing matches “{query.trim()}”.</p>
-            )
-          ) : (
-            NAV.map((group) => (
-              <div key={group.heading ?? group.pages[0]?.id} className="flex flex-col gap-1">
-                {group.heading && (
-                  <div className="px-2 pb-0.5 font-medium text-caption text-fg-muted">{group.heading}</div>
-                )}
-                {group.pages.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    aria-current={s.id === section ? "page" : undefined}
-                    onClick={() => openSettings(s.id)}
-                    className={cx(
-                      "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
-                      s.id === section ? "bg-fill text-fg" : "text-fg-muted hover:bg-fill hover:text-fg",
-                    )}
-                  >
-                    <s.icon size={16} className="shrink-0" />
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            ))
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => openSettings(null)}
-          className="flex h-8 shrink-0 items-center gap-2 rounded-md px-2 text-left font-medium text-body text-fg-muted hover:bg-fill hover:text-fg"
+        <div
+          ref={panel}
+          tabIndex={-1}
+          className="relative flex size-full max-h-[60rem] max-w-[80rem] overflow-hidden rounded-3xl border border-border bg-bg shadow-2 outline-none"
         >
-          <X size={16} className="shrink-0" />
-          Close
-          <Kbd>Esc</Kbd>
-        </button>
-      </nav>
-      <main className="flex min-w-0 flex-1 flex-col">
-        <div className="scroll-stable min-h-0 flex-1">
-          <div className="mx-auto w-full max-w-[768px] px-6 pt-10 pb-24">
-            <h1 className="mb-8 px-3 font-semibold text-title2 sm:px-4">{current.label}</h1>
-            {section === "general" && <GeneralPage />}
-            {section === "chat" && <ChatPage />}
-            {section === "agents" && <AgentsPage />}
-            {section === "connections" && <ConnectionsPage />}
-            {section === "capabilities" && <CapabilitiesPage />}
-            {section === "appearance" && <AppearancePage />}
-            {section === "keyboard" && <ShortcutsPage />}
-            {section === "usage" && <UsagePage />}
-            {section === "advanced" && <AdvancedPage />}
-          </div>
+          <RowResets>
+            <nav
+              aria-label="Settings sections"
+              className="flex w-60 shrink-0 flex-col gap-3 border-border border-e bg-sidebar px-2 py-3"
+            >
+              <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
+                <Search size={16} className="shrink-0 text-fg-faint" />
+                <input
+                  ref={field}
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setActive(0);
+                  }}
+                  onKeyDown={onFieldKey}
+                  placeholder="Search settings"
+                  aria-label="Search settings"
+                  className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
+                />
+                {query ? (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    onClick={() => {
+                      clear();
+                      field.current?.focus();
+                    }}
+                    className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
+                  >
+                    <X size={12} strokeWidth={2.5} />
+                  </button>
+                ) : (
+                  <Kbd>/</Kbd>
+                )}
+              </div>
+              <div className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
+                {query.trim() ? (
+                  results.length ? (
+                    <div role="listbox" aria-label="Settings results" className="flex flex-col gap-0.5">
+                      {results.map((r, i) => (
+                        <button
+                          key={`${r.section}:${r.title}`}
+                          type="button"
+                          role="option"
+                          aria-selected={i === active}
+                          onMouseMove={() => setActive(i)}
+                          onClick={() => pick(r)}
+                          className={cx(
+                            "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
+                            i === active ? "bg-fill" : "hover:bg-fill",
+                          )}
+                        >
+                          <span className="w-full truncate font-medium text-body">{r.title}</span>
+                          <span className="text-caption text-fg-faint">{pageLabel(r.section)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="px-2 py-1.5 text-caption text-fg-muted">
+                      Nothing matches “{query.trim()}”.
+                    </p>
+                  )
+                ) : (
+                  NAV.map((group) => (
+                    <div key={group.heading ?? group.pages[0]?.id} className="flex flex-col gap-1">
+                      {group.heading && (
+                        <div className="px-2 pb-0.5 font-medium text-callout text-fg-muted">
+                          {group.heading}
+                        </div>
+                      )}
+                      {group.pages.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          aria-current={s.id === section ? "page" : undefined}
+                          onClick={() => openSettings(s.id)}
+                          className={cx(
+                            "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
+                            s.id === section
+                              ? "bg-fill text-fg"
+                              : "text-fg-muted hover:bg-fill hover:text-fg",
+                          )}
+                        >
+                          <s.icon size={16} className="shrink-0" />
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  ))
+                )}
+              </div>
+            </nav>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <PanelHeader label={current.label} />
+              <main className="scroll-stable min-h-0 flex-1">
+                <div className="mx-auto w-full max-w-[760px] px-4 pt-5 pb-24">
+                  {section === "general" && <GeneralPage />}
+                  {section === "chat" && <ChatPage />}
+                  {section === "agents" && <AgentsPage />}
+                  {section === "connections" && <ConnectionsPage />}
+                  {section === "capabilities" && <CapabilitiesPage />}
+                  {section === "appearance" && <AppearancePage />}
+                  {section === "keyboard" && <ShortcutsPage />}
+                  {section === "usage" && <UsagePage />}
+                  {section === "advanced" && <AdvancedPage />}
+                  {section === "about" && <AboutPage />}
+                </div>
+              </main>
+            </div>
+          </RowResets>
         </div>
-      </main>
+      </div>
     </div>
+  );
+}
+
+/**
+ * The panel's own header: where you are, then the page's whole-page action and
+ * the close button. "Restore defaults" only shows while a row on this page can
+ * go back to its default, and puts back everything that changed at once
+ * (settingsKit.tsx › RowResets).
+ */
+function PanelHeader({ label }: { label: string }) {
+  const resets = useRowResets();
+  return (
+    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-5 pe-2">
+      <nav aria-label="Settings breadcrumb" className="min-w-0">
+        <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
+          <li className="shrink-0 font-medium text-fg-muted">Settings</li>
+          <li aria-hidden className="shrink-0 text-fg-faint">
+            /
+          </li>
+          <li aria-current="page" className="min-w-0 truncate font-medium text-fg">
+            {label}
+          </li>
+        </ol>
+      </nav>
+      <div className="ms-auto flex shrink-0 items-center gap-1">
+        {resets.count > 0 && (
+          <Action
+            quiet
+            onClick={() => {
+              resets.restore();
+              toast("Restored defaults", "success");
+            }}
+          >
+            <RotateCcw size={13} />
+            Restore defaults
+          </Action>
+        )}
+        <ChromeButton label="Close settings" tooltip="Close (Esc)" onClick={() => openSettings(null)}>
+          <X size={16} />
+        </ChromeButton>
+      </div>
+    </header>
   );
 }
 

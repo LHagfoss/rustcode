@@ -149,10 +149,10 @@ export function App() {
   return (
     <Tooltip.Provider delayDuration={400} skipDelayDuration={300} disableHoverableContent>
       {/*
-        One shell, never unmounted. Settings takes the whole window over it
-        (docs/design.md › Settings): the shell stays mounted and laid out
-        underneath, inert, so closing Settings shows the thread exactly where it
-        was (scroll, drafts, open rows) in one frame.
+        One shell, never unmounted. Settings floats over it (docs/design.md ›
+        Settings): the shell stays mounted and laid out underneath, inert, so
+        closing Settings shows the thread exactly where it was (scroll, drafts,
+        open rows) in one frame.
       */}
       <div className="relative h-full w-full overflow-hidden">
         <div className="flex h-full w-full overflow-hidden bg-sidebar" inert={settings}>
