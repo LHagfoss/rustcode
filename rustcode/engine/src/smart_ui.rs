@@ -30,6 +30,9 @@ pub const PREVIEW_METHOD: &str = "_rustcode/smartUi/preview";
 pub const PREVIEW_CAPABILITY_VERSION: u64 = 2;
 /// The app's own limit on a block's source (`SmartUI.maxSourceBytes`).
 pub const MAX_SOURCE_BYTES: usize = 64 * 1024;
+/// The app's own limit on the elements a block builds (`MAX_ELEMENTS` in
+/// `apps/desktop/src/smartui/parse.ts`); a check cannot count them exactly.
+pub const MAX_ELEMENTS: usize = 5_000;
 /// Rendering waits for the page to load and settle; the app bounds its own
 /// waits well under this.
 const PREVIEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -53,6 +56,177 @@ pub(crate) fn schema() -> Value {
         "required": ["html"],
         "additionalProperties": false
     })
+}
+
+/// `smart_ui_check`: what the app's sandbox will refuse in a block, without
+/// running it. The macOS host's offscreen renderer ([`PREVIEW_TOOL_NAME`]) is
+/// gone, so no client can screenshot a block; what every client can answer is
+/// static, and an external harness needs it most (it cannot see the chat).
+pub const CHECK_TOOL_NAME: &str = "smart_ui_check";
+
+pub(crate) fn check_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "html": {
+                "type": "string",
+                "description": "The block's body: the self-contained HTML that goes between the ```rustcode-ui v1 fences."
+            }
+        },
+        "required": ["html"],
+        "additionalProperties": false
+    })
+}
+
+/// What one line of the block does that the sandbox or the card refuses.
+fn line_problem(line: &str, in_script: bool) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    // The page is sandboxed: CSP `default-src 'none'`, no navigation. The API
+    // comes first, so a line that also names a URL says what it was doing.
+    for (needle, what) in [
+        ("fetch(", "fetch"),
+        ("xmlhttprequest", "XMLHttpRequest"),
+        ("websocket", "a socket"),
+        ("localstorage", "storage"),
+        ("sessionstorage", "storage"),
+        ("indexeddb", "storage"),
+        ("document.write", "document.write"),
+        ("@import", "a stylesheet import"),
+        ("url(http", "a remote image or font"),
+        ("http://", "a network load"),
+        ("https://", "a network load"),
+    ] {
+        if lower.contains(needle) {
+            return Some(format!(
+                "the page cannot reach the network, storage or navigation (its CSP blocks them): {what}"
+            ));
+        }
+    }
+    // Viewport heights do not exist in a card that sizes to its content.
+    let bytes = lower.as_bytes();
+    for (i, _) in lower.match_indices("vh") {
+        let before = i.checked_sub(1).and_then(|j| bytes.get(j));
+        if before.is_some_and(|b| b.is_ascii_digit()) {
+            return Some(
+                "vh units do not fit the card, which sizes to its content: use px or relative sizes"
+                    .to_owned(),
+            );
+        }
+    }
+    if in_script {
+        for colour in ["CanvasText", "AccentColor"] {
+            if lower.contains(&colour.to_ascii_lowercase()) {
+                return Some(format!(
+                    "a canvas draws nothing with the system colour {colour}: read a --rc-* variable instead"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// A static check of one block: its size, the elements it builds, the
+/// libraries it names and everything the sandbox will refuse, each with its
+/// line. It does not run the page, so it reports no script errors and no
+/// screenshot.
+pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
+    let html = match parse(args) {
+        Ok(html) => html,
+        Err(reason) => {
+            return ToolExecutionOutput::failure_with_kind(
+                format!("error: invalid {CHECK_TOOL_NAME} call: {reason}. Nothing was checked."),
+                ToolErrorKind::InvalidArguments,
+                false,
+            );
+        }
+    };
+    let mut problems: Vec<String> = Vec::new();
+    let (mut elements, mut scripts, mut styles) = (0usize, 0i32, 0i32);
+    let mut in_script = false;
+    for (index, line) in html.lines().enumerate() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(problem) = line_problem(line, in_script) {
+            problems.push(format!("line {}: {problem}", index + 1));
+        }
+        // Only the bundled library loads; any other name stays as written and is blocked.
+        for (at, _) in lower.match_indices("rustcode-lib:") {
+            let name: String = line[at + "rustcode-lib:".len()..]
+                .chars()
+                .take_while(|c| !matches!(c, '"' | '\'' | '>' | ' '))
+                .collect();
+            if name != "chart.js" {
+                problems.push(format!(
+                    "line {}: `rustcode-lib:{name}` is not bundled; the only library is `rustcode-lib:chart.js`",
+                    index + 1
+                ));
+            }
+        }
+        elements += line
+            .match_indices('<')
+            .filter(|(at, _)| line[at + 1..].starts_with(|c: char| c.is_ascii_alphabetic()))
+            .count();
+        scripts +=
+            lower.matches("<script").count() as i32 - lower.matches("</script").count() as i32;
+        styles += lower.matches("<style").count() as i32 - lower.matches("</style").count() as i32;
+        if lower.contains("<script") && !lower.contains("</script") {
+            in_script = true;
+        }
+        if lower.contains("</script") {
+            in_script = false;
+        }
+    }
+    if scripts != 0 {
+        problems.push(format!(
+            "a <script> tag is not closed ({} more opening than closing)",
+            scripts
+        ));
+    }
+    if styles != 0 {
+        problems.push(format!(
+            "a <style> tag is not closed ({} more opening than closing)",
+            styles
+        ));
+    }
+    if elements > MAX_ELEMENTS {
+        problems.push(format!(
+            "{elements} elements; the app stops a block over {MAX_ELEMENTS} (estimated by counting tags)"
+        ));
+    }
+    let title = html
+        .split("<title")
+        .nth(1)
+        .and_then(|rest| rest.split('>').nth(1))
+        .and_then(|rest| rest.split("</title").next())
+        .map(|title| one_line(title.trim()))
+        .filter(|title| !title.is_empty());
+    if title.is_none() {
+        problems.push(
+            "no <title>: the card would be titled \u{201c}Interactive view\u{201d}, and the reply would not say what it shows"
+                .to_owned(),
+        );
+    }
+    let size = html.len();
+    let mut out = if problems.is_empty() {
+        format!("No problems found in a {size}-byte block")
+    } else {
+        format!(
+            "{size}-byte block: {} problem{}",
+            problems.len(),
+            if problems.len() == 1 { "" } else { "s" }
+        )
+    };
+    if let Some(title) = title {
+        out.push_str(&format!(" titled \u{201c}{title}\u{201d}"));
+    }
+    out.push_str(&format!(", about {elements} elements."));
+    for problem in &problems {
+        out.push_str("\n- ");
+        out.push_str(problem);
+    }
+    out.push_str(
+        "\nThis is a static check: it does not run the page, so it cannot report script errors, the fitted height or a screenshot. Write the fence only after these problems are gone.",
+    );
+    ToolExecutionOutput::success(out)
 }
 
 /// The session's client for [`PREVIEW_METHOD`], when it advertised one.
@@ -406,5 +580,86 @@ mod tests {
         .await;
         assert!(!output.success);
         assert!(output.content.contains("without a screenshot"));
+    }
+
+    fn checked(html: &str) -> ToolExecutionOutput {
+        check(&json!({"html": html}))
+    }
+
+    #[test]
+    fn a_clean_block_has_no_problems() {
+        let output = checked(
+            "<title>Costs</title>\n<p>Two plans, one year.</p>\n<style>p{color:var(--rc-muted)}</style>\n\
+             <script src=\"rustcode-lib:chart.js\"></script>",
+        );
+        assert!(output.success, "{}", output.content);
+        assert!(
+            output.content.starts_with("No problems found"),
+            "{}",
+            output.content
+        );
+        assert!(output.content.contains("titled \u{201c}Costs\u{201d}"));
+        assert!(output.content.contains("static check"));
+    }
+
+    #[test]
+    fn the_check_names_what_the_sandbox_refuses() {
+        let output = checked(
+            "<title>Prices</title>\n<div style=\"height:40vh\">x</div>\n\
+             <script src=\"https://cdn.example.com/chart.js\"></script>\n\
+             <script>fetch(\"https://api.example.com\").then(r => r.text());</script>",
+        );
+        assert!(output.success, "the check ran");
+        let text = &output.content;
+        // One finding per line, each with the line it is on.
+        assert!(text.contains("line 2:"), "{text}");
+        assert!(text.contains("vh units"), "{text}");
+        assert!(text.contains("line 3:"), "{text}");
+        assert!(text.contains("network"), "{text}");
+        assert!(text.contains("line 4:"), "{text}");
+        assert!(text.contains("fetch"), "{text}");
+    }
+
+    #[test]
+    fn the_check_catches_a_library_the_app_does_not_bundle() {
+        let output = checked(
+            "<title>X</title><script src=\"rustcode-lib:d3.js\"></script>\n\
+             <script>chart = new Chart(c);</script>",
+        );
+        let text = &output.content;
+        assert!(
+            text.contains("`rustcode-lib:d3.js` is not bundled"),
+            "{text}"
+        );
+        assert!(!text.contains("chart.js` is not bundled"), "{text}");
+    }
+
+    #[test]
+    fn the_check_catches_the_blank_canvas_and_an_unclosed_tag() {
+        let output = checked(
+            "<title>X</title>\n<script>\nChart.defaults.color = \"CanvasText\";\n</script>\n\
+             <style>p{color:red}",
+        );
+        let text = &output.content;
+        assert!(text.contains("CanvasText"), "{text}");
+        assert!(text.contains("<style> tag is not closed"), "{text}");
+    }
+
+    #[test]
+    fn the_check_wants_a_title_and_refuses_a_block_over_the_limit() {
+        let text = checked("<p>just prose</p>").content;
+        assert!(text.contains("no <title>"), "{text}");
+        let big = format!(
+            "{}{}",
+            "<title>Big</title>",
+            "<p>x</p>".repeat(MAX_SOURCE_BYTES / 8 + 1)
+        );
+        let output = checked(&big);
+        assert!(!output.success);
+        assert!(
+            output.content.contains("at most 64 KB"),
+            "{}",
+            output.content
+        );
     }
 }

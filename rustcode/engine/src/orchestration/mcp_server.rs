@@ -60,10 +60,15 @@ pub struct Identity {
     pub token: String,
 }
 
-/// The tools the server lists, as MCP tool entries.
-pub fn tools() -> Vec<Value> {
-    super::tool_names(super::VERSION)
-        .into_iter()
+/// The tools the server lists, as MCP tool entries. `smart_ui` adds the block
+/// check the thread's client can use, when the user has Smart UI on.
+pub fn tools(smart_ui: bool) -> Vec<Value> {
+    let names = super::tool_names(super::VERSION).into_iter().chain(
+        smart_ui
+            .then_some(crate::smart_ui::CHECK_TOOL_NAME)
+            .into_iter(),
+    );
+    names
         .filter_map(|name| crate::tools::TOOLS.iter().find(|tool| tool.name == name))
         .map(|tool| {
             json!({
@@ -77,11 +82,15 @@ pub fn tools() -> Vec<Value> {
 
 /// Run on stdin/stdout until the harness closes stdin.
 pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(), String> {
+    // Set by the engine when the thread's client runs Smart UI blocks
+    // (`hub::Launch`): the check needs no client, only that setting.
+    let smart_ui = std::env::var(super::hub::SMART_UI_ENV).is_ok_and(|on| on == "1");
     serve(
         tokio::io::stdin(),
         tokio::io::stdout(),
         Identity { session_id, token },
         Arc::new(SocketForward { socket }),
+        smart_ui,
     )
     .await
 }
@@ -92,6 +101,7 @@ pub async fn serve<R, W>(
     mut output: W,
     identity: Identity,
     forward: Arc<dyn Forward>,
+    smart_ui: bool,
 ) -> Result<(), String>
 where
     R: AsyncRead + Unpin,
@@ -155,14 +165,14 @@ where
                 let _ = sender.send(result(id, json!({})));
             }
             "tools/list" => {
-                let _ = sender.send(result(id, json!({ "tools": tools() })));
+                let _ = sender.send(result(id, json!({ "tools": tools(smart_ui) })));
             }
             "tools/call" => {
                 let sender = sender.clone();
                 let forward = Arc::clone(&forward);
                 let identity = identity.clone();
                 calls.spawn(async move {
-                    let answer = call(forward.as_ref(), &identity, &params).await;
+                    let answer = call(forward.as_ref(), &identity, &params, smart_ui).await;
                     let _ = sender.send(result(
                         id,
                         json!({
@@ -185,8 +195,30 @@ where
     Ok(())
 }
 
-async fn call(forward: &dyn Forward, identity: &Identity, params: &Value) -> CallAnswer {
+async fn call(
+    forward: &dyn Forward,
+    identity: &Identity,
+    params: &Value,
+    smart_ui: bool,
+) -> CallAnswer {
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
+    // The block check is answered here: it needs no client and no thread, only
+    // the user's Smart UI setting, and it forwards nothing.
+    if tool == crate::smart_ui::CHECK_TOOL_NAME {
+        if !smart_ui {
+            return CallAnswer::failure(format!("error: unknown tool '{tool}'"));
+        }
+        let args = params
+            .get("arguments")
+            .cloned()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        let output = crate::smart_ui::check(&args);
+        return CallAnswer {
+            success: output.success,
+            content: output.content,
+        };
+    }
     if !super::tool_names(super::VERSION).contains(&tool) {
         return CallAnswer {
             success: false,
@@ -251,6 +283,15 @@ mod tests {
     /// Drive the server with `messages` and collect its answers by id; one
     /// answer is expected for each message that has an id.
     async fn exchange(identity: Identity, socket: PathBuf, messages: &[Value]) -> Vec<Value> {
+        exchange_with(identity, socket, messages, false).await
+    }
+
+    async fn exchange_with(
+        identity: Identity,
+        socket: PathBuf,
+        messages: &[Value],
+        smart_ui: bool,
+    ) -> Vec<Value> {
         let expected = messages
             .iter()
             .filter(|message| message.get("id").is_some())
@@ -262,6 +303,7 @@ mod tests {
             server_write,
             identity,
             Arc::new(SocketForward { socket }),
+            smart_ui,
         ));
         let mut input = String::new();
         for message in messages {
@@ -280,6 +322,54 @@ mod tests {
         server.await.unwrap().unwrap();
         answers.sort_by_key(|answer| answer["id"].as_i64());
         answers
+    }
+
+    #[test]
+    fn the_block_check_is_listed_only_while_smart_ui_is_on() {
+        let names = |smart_ui| {
+            tools(smart_ui)
+                .into_iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert!(!names(false).contains(&crate::smart_ui::CHECK_TOOL_NAME.to_owned()));
+        let with = names(true);
+        assert_eq!(
+            with.last().map(String::as_str),
+            Some(crate::smart_ui::CHECK_TOOL_NAME)
+        );
+        // Everything else a Smart UI thread gets is what every thread gets.
+        assert_eq!(with.len(), names(false).len() + 1);
+    }
+
+    #[tokio::test]
+    async fn the_block_check_is_answered_by_the_server_without_the_app() {
+        // A socket nothing listens on: the check must not need one.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.sock");
+        let identity = || Identity {
+            session_id: "thread-1".into(),
+            token: "t".into(),
+        };
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": crate::smart_ui::CHECK_TOOL_NAME,
+                                     "arguments": {"html": "<title>X</title><p>hi</p>"}}});
+        let answers = exchange_with(identity(), missing.clone(), &[call.clone()], true).await;
+        let result = &answers[0]["result"];
+        assert_eq!(result["isError"], false, "{result}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("No problems found"), "{text}");
+        assert!(text.contains("titled"), "{text}");
+
+        // With Smart UI off the tool does not exist, so its name is unknown.
+        let answers = exchange_with(identity(), missing, &[call], false).await;
+        assert_eq!(answers[0]["result"]["isError"], true);
+        assert!(
+            answers[0]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("unknown tool")
+        );
     }
 
     #[tokio::test]

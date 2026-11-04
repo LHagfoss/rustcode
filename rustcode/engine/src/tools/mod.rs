@@ -1518,6 +1518,7 @@ pub const TOOLS: &[Tool] = &[
     misc::LOCALHOST_PREVIEW,
     misc::DESKTOP_CONTROL,
     misc::SMART_UI_PREVIEW,
+    misc::SMART_UI_CHECK,
     misc::LIST_SESSIONS,
     misc::MESSAGE_SESSION,
     misc::WAIT_SESSION,

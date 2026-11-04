@@ -14,7 +14,7 @@ use super::{HarnessModel, ResolvedHarness, process::HarnessProcess};
 use agent_client_protocol::schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOptions, SessionUpdate, StopReason,
+    SessionConfigSelectOptions, SessionUpdate, StopReason, TextContent,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -26,6 +26,38 @@ use tokio::sync::{mpsc, oneshot};
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(90);
 /// The client waits this long (10 s) for `_rustcode/steer`; answer before it.
 const STEER_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// What is left of a `user_message_chunk` once RustCode's own setup block is
+/// taken out of it; `None` drops the chunk. Some agents (pi-acp, OpenCode) echo
+/// the prompt they were given back as user content, and the block at the head
+/// of a first prompt is RustCode's, not the user's. `reminder` is that exact
+/// block, `pending` holds a chunk's tail that could still become its start, so
+/// an agent that echoes in pieces never leaks half a tag into the thread.
+pub(crate) fn strip_runtime_echo(
+    text: &str,
+    pending: &mut String,
+    reminder: &str,
+) -> Option<String> {
+    let mut seen = std::mem::take(pending);
+    seen.push_str(text);
+    let kept = seen.replace(reminder, "");
+    // Hold back the longest tail that is still the beginning of the block: the
+    // next chunk may complete it. Only whole characters can be a tag's start.
+    let mut hold = 0;
+    for (at, _) in seen.char_indices() {
+        let tail = &seen[at..];
+        if tail.len() < reminder.len() && reminder.starts_with(tail) {
+            hold = tail.len();
+        }
+    }
+    let mut kept = kept;
+    if hold > 0 {
+        pending.push_str(&seen[seen.len() - hold..]);
+        // The held tail is what is left at the end of the text.
+        kept.truncate(kept.len().saturating_sub(hold));
+    }
+    (!kept.trim().is_empty()).then_some(kept)
+}
 
 #[derive(Default)]
 struct State {
@@ -40,6 +72,14 @@ struct State {
     muted: bool,
     /// Claude Code's async tasks that still run.
     background: super::background::Background,
+    /// The setup text a first prompt still owes the agent, for one with no
+    /// `sessionCapabilities.systemPrompt` (`docs/harnesses.md`).
+    reminder: Option<String>,
+    /// The exact setup block this child was sent: its echo is stripped
+    /// (`strip_runtime_echo`). `None` until a first prompt carries one.
+    echo_reminder: Option<String>,
+    /// A tail of the echo that may still become the start of that block.
+    echo_pending: String,
 }
 
 pub(crate) struct AcpAdapter {
@@ -289,22 +329,27 @@ impl AcpAdapter {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let mcp_servers = mcp_servers(&options, http);
+        let instructions = crate::tools::schema::harness_instructions(
+            &harness.name,
+            super::client_visualization_level(),
+            super::client_smart_ui(),
+        );
         // An agent that takes a client system prompt (Claude Code's adapter)
         // gets where it runs and how RustCode draws replies appended to its own.
-        let system_prompt = capabilities
+        let takes_system_prompt = capabilities
             .and_then(|capabilities| capabilities.pointer("/sessionCapabilities/systemPrompt"))
-            .is_some_and(|value| !value.is_null())
-            .then(|| {
-                json!({
-                    "mode": "append",
-                    "content": [{
-                        "type": "text",
-                        "text": crate::tools::schema::harness_instructions(&harness.name, super::client_visualization_level()),
-                    }],
-                })
-            });
+            .is_some_and(|value| !value.is_null());
+        let system_prompt = takes_system_prompt.then(|| {
+            json!({
+                "mode": "append",
+                "content": [{ "type": "text", "text": instructions }],
+            })
+        });
 
         let mut native = None;
+        // Whether this process created the session. A loaded one already holds
+        // the setup text in the agent's own history.
+        let mut created = false;
         let mut session = Value::Null;
         if let Some(resume) = options.resume.as_ref().filter(|_| load_session) {
             lock(&state).muted = true;
@@ -334,6 +379,7 @@ impl AcpAdapter {
             }
         }
         if native.is_none() {
+            created = true;
             session = peer
                 .request_within(
                     "session/new",
@@ -368,6 +414,13 @@ impl AcpAdapter {
                 .get("models")
                 .cloned()
                 .filter(|models| !models.is_null());
+            // No `systemPrompt` field on `session/new`: the same text rides at
+            // the head of the first prompt instead, once, on this new session.
+            if created && !takes_system_prompt {
+                let reminder = crate::tools::schema::runtime_reminder(&instructions);
+                state.echo_reminder = Some(reminder.clone());
+                state.reminder = Some(reminder);
+            }
         }
         let adapter = Self {
             peer,
@@ -412,7 +465,17 @@ impl AcpAdapter {
     }
 
     pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
-        lock(&self.state).prompted = true;
+        let mut prompt = prompt;
+        {
+            let mut state = lock(&self.state);
+            state.prompted = true;
+            // An agent with no client system prompt reads RustCode's setup text
+            // here instead: once, at the head of the first prompt. The user's
+            // own text is already recorded, so this never reaches history.
+            if let Some(reminder) = state.reminder.take() {
+                prompt.insert(0, ContentBlock::Text(TextContent::new(reminder)));
+            }
+        }
         let answer = self
             .peer
             .request(
@@ -424,6 +487,8 @@ impl AcpAdapter {
         // The turn's last updates arrived before its answer; pass them on
         // first.
         self.peer.barrier().await;
+        // A half-read echo does not outlive the turn that carried it.
+        lock(&self.state).echo_pending.clear();
         Ok(answer
             .get("stopReason")
             .cloned()
@@ -599,6 +664,28 @@ async fn relay(
                     }
                 };
                 let update = match update {
+                    SessionUpdate::UserMessageChunk(mut chunk)
+                        if lock(&state).echo_reminder.is_some() =>
+                    {
+                        let ContentBlock::Text(text) = &mut chunk.content else {
+                            let _ =
+                                out.send(Output::Update(SessionUpdate::UserMessageChunk(chunk)));
+                            continue;
+                        };
+                        let mut state = lock(&state);
+                        let reminder = state.echo_reminder.clone().unwrap_or_default();
+                        let kept =
+                            strip_runtime_echo(&text.text, &mut state.echo_pending, &reminder);
+                        drop(state);
+                        match kept {
+                            Some(kept) => {
+                                text.text = kept;
+                                SessionUpdate::UserMessageChunk(chunk)
+                            }
+                            // All of it was RustCode's block: no user message.
+                            None => continue,
+                        }
+                    }
                     SessionUpdate::ConfigOptionUpdate(changed) => {
                         let mut state = lock(&state);
                         state.options = changed.config_options;

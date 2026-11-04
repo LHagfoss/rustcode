@@ -77,6 +77,9 @@ const MOCKS: Record<string, unknown> = {
     ],
   },
   read_session: { title: "Add the login form", status: "idle", turns: [] },
+  smart_ui_check:
+    "No problems found in a 180-byte block titled \u201cCosts\u201d, about 4 elements.\nThis is a static check: it does not run the page.",
+
   update_session: { session_id: "self", title: "Renamed thread", pinned: false, status: "settled" },
   interrupt_session: { session_id: "t1", interrupted: true },
   configure_session: { session_id: "self", harness: "rustcode", access: "auto", effort: "high" },
@@ -206,7 +209,12 @@ async function toolList(scratch: string): Promise<{ name: string; description?: 
     ["mcp-orchestrator", "--session", "s", "--socket", "/nonexistent"],
     {
       cwd: scratch,
-      env: { RUSTCODE_ORCHESTRATOR_TOKEN: "x", RUSTCODE_CONFIG_DIR: scratch },
+      // Smart UI on, so the server also lists the block check.
+      env: {
+        RUSTCODE_ORCHESTRATOR_TOKEN: "x",
+        RUSTCODE_CONFIG_DIR: scratch,
+        RUSTCODE_SMART_UI: "1",
+      },
       stdin: session,
       timeoutMs: LIST_TIMEOUT_MS,
     },

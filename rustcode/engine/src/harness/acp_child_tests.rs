@@ -20,12 +20,33 @@ fn options(effort: &str) -> Value {
     ])
 }
 
+/// What the fake agent advertises and does.
+#[derive(Clone, Copy)]
+struct Fake {
+    /// `sessionCapabilities.systemPrompt`: takes RustCode's text appended to
+    /// its own system prompt, as `claude-agent-acp` does.
+    system_prompt: bool,
+    /// Echo the prompt it was given back as `user_message_chunk`, as pi-acp
+    /// and OpenCode do.
+    echo: bool,
+}
+
+impl Default for Fake {
+    fn default() -> Self {
+        Self {
+            system_prompt: true,
+            echo: false,
+        }
+    }
+}
+
 /// A fake ACP agent. Every request and notification it gets is reported on
 /// `seen`; `stubborn` makes it ignore `session/cancel`.
 async fn fake_agent(
     peer: Arc<RpcPeer>,
     mut incoming: mpsc::UnboundedReceiver<Incoming>,
     seen: mpsc::UnboundedSender<(String, Value)>,
+    fake: Fake,
 ) {
     let update = |session: &str, update: Value| json!({"sessionId": session, "update": update});
     let mut cancelled = Vec::new();
@@ -48,13 +69,20 @@ async fn fake_agent(
             continue;
         };
         match method.as_str() {
-            "initialize" => peer.respond(
-                id,
-                Ok(json!({"protocolVersion": 1, "agentCapabilities": {
+            "initialize" => {
+                let mut capabilities = json!({
                     "loadSession": true, "promptCapabilities": {"image": true},
-                    "mcpCapabilities": {"http": true}},
-                    "_meta": {"steering": {"supported": true}}})),
-            ),
+                    "mcpCapabilities": {"http": true},
+                });
+                if fake.system_prompt {
+                    capabilities["sessionCapabilities"] = json!({"systemPrompt": {}});
+                }
+                peer.respond(
+                    id,
+                    Ok(json!({"protocolVersion": 1, "agentCapabilities": capabilities,
+                              "_meta": {"steering": {"supported": true}}})),
+                );
+            }
             // As claude-agent-acp: injected into a running turn, else the
             // client should send a prompt.
             "_session/steering" => peer.respond(
@@ -93,8 +121,19 @@ async fn fake_agent(
                 Ok(json!({"configOptions": options(params["value"].as_str().unwrap_or("low"))})),
             ),
             "session/prompt" => {
-                let text = params["prompt"][0]["text"]
-                    .as_str()
+                if fake.echo && let Some(echoed) = params["prompt"][0]["text"].as_str() {
+                    peer.notify(
+                        "session/update",
+                        update(
+                            "child-1",
+                            json!({"sessionUpdate": "user_message_chunk",
+                            "content": {"type": "text", "text": echoed}}),
+                        ),
+                    );
+                }
+                let last = params["prompt"].as_array().and_then(|blocks| blocks.last());
+                let text = last
+                    .and_then(|block| block["text"].as_str())
                     .unwrap_or_default()
                     .to_owned();
                 if text == "wait" {
@@ -178,10 +217,21 @@ async fn start(
     crate::harness::session::test_support::Thread,
     mpsc::UnboundedReceiver<(String, Value)>,
 ) {
+    start_with(Fake::default(), choice, options).await
+}
+
+async fn start_with(
+    fake: Fake,
+    choice: Option<&str>,
+    options: StartOptions,
+) -> (
+    crate::harness::session::test_support::Thread,
+    mpsc::UnboundedReceiver<(String, Value)>,
+) {
     let harness = harness("fake-acp", HarnessKind::Acp);
     let ((ours, our_incoming), (theirs, their_incoming)) = pipe();
     let (seen_tx, seen) = mpsc::unbounded_channel();
-    tokio::spawn(fake_agent(theirs, their_incoming, seen_tx));
+    tokio::spawn(fake_agent(theirs, their_incoming, seen_tx, fake));
     let thread = thread(&harness, choice);
     let adapter = Adapter::connect(
         &harness,
@@ -590,5 +640,191 @@ fn remote_servers_need_the_childs_http_support_and_the_orchestrator_keeps_its_na
     assert_eq!(
         server_list[0]["command"], "/opt/rustcode/bin/rustcode",
         "the orchestrator, not the user's server of the same name"
+    );
+}
+
+/// The `session/prompt` blocks the fake agent was sent, in order.
+fn prompts(seen: &mut mpsc::UnboundedReceiver<(String, Value)>) -> Vec<Vec<Value>> {
+    requests(seen)
+        .into_iter()
+        .filter(|(method, _)| method == "session/prompt")
+        .map(|(_, params)| params["prompt"].as_array().cloned().unwrap_or_default())
+        .collect()
+}
+
+#[tokio::test]
+async fn an_agent_without_a_system_prompt_gets_the_setup_block_on_its_first_prompt() {
+    let fake = Fake {
+        system_prompt: false,
+        echo: false,
+    };
+    let (thread, mut seen) = start_with(fake, Some("allow"), StartOptions::default()).await;
+    assert_eq!(
+        thread.session.prompt(text("first")).await,
+        Ok(StopReason::EndTurn)
+    );
+    assert_eq!(
+        thread.session.prompt(text("second")).await,
+        Ok(StopReason::EndTurn)
+    );
+    let sent = prompts(&mut seen);
+    assert_eq!(sent.len(), 2);
+    // Once, at the head of the first prompt, as its own text block.
+    assert_eq!(sent[0].len(), 2, "{:?}", sent[0]);
+    let reminder = sent[0][0]["text"].as_str().unwrap();
+    assert!(reminder.starts_with("<rustcode_runtime>"), "{reminder}");
+    assert!(
+        reminder.contains("running in RustCode through the fake-acp harness"),
+        "{reminder}"
+    );
+    assert!(reminder.trim_end().ends_with("</rustcode_runtime>"));
+    assert_eq!(
+        sent[0][1]["text"], "first",
+        "the user's own words follow it"
+    );
+    // Not again, and nothing else changes.
+    assert_eq!(sent[1].len(), 1, "{:?}", sent[1]);
+    assert_eq!(sent[1][0]["text"], "second");
+    // The thread's history is the conversation, not the setup text.
+    let history = thread.session.history();
+    assert_eq!(history[0].role, "user");
+    assert_eq!(history[0].content, "first");
+    assert!(
+        !serde_json::to_string(&history)
+            .unwrap()
+            .contains("<rustcode_runtime>")
+    );
+}
+
+#[tokio::test]
+async fn a_loaded_session_gets_no_setup_block() {
+    let fake = Fake {
+        system_prompt: false,
+        echo: false,
+    };
+    let (thread, mut seen) = start_with(
+        fake,
+        None,
+        StartOptions {
+            resume: Some("child-1".to_owned()),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        thread.session.prompt(text("carry on")).await,
+        Ok(StopReason::EndTurn)
+    );
+    let requests = requests(&mut seen);
+    assert!(
+        requests.iter().any(|(method, _)| method == "session/load"),
+        "the session was loaded, not created"
+    );
+    let sent = requests
+        .into_iter()
+        .filter(|(method, _)| method == "session/prompt")
+        .map(|(_, params)| params["prompt"].as_array().cloned().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(sent[0].len(), 1, "{:?}", sent[0]);
+    assert_eq!(sent[0][0]["text"], "carry on");
+}
+
+#[tokio::test]
+async fn an_agent_with_a_system_prompt_gets_no_block() {
+    let (thread, mut seen) = start(Some("allow"), StartOptions::default()).await;
+    assert_eq!(
+        thread.session.prompt(text("first")).await,
+        Ok(StopReason::EndTurn)
+    );
+    let requests = requests(&mut seen);
+    let new = requests
+        .iter()
+        .find(|(method, _)| method == "session/new")
+        .unwrap();
+    assert!(
+        new.1["systemPrompt"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("running in RustCode through the fake-acp harness"),
+        "{:?}",
+        new.1["systemPrompt"]
+    );
+    let sent = requests
+        .iter()
+        .filter(|(method, _)| method == "session/prompt")
+        .map(|(_, params)| params["prompt"].as_array().cloned().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(sent[0].len(), 1, "no block, no double delivery");
+}
+
+#[tokio::test]
+async fn the_agents_echo_of_the_setup_block_is_not_a_user_message() {
+    let fake = Fake {
+        system_prompt: false,
+        echo: true,
+    };
+    let (mut thread, mut seen) = start_with(fake, Some("allow"), StartOptions::default()).await;
+    assert_eq!(
+        thread.session.prompt(text("first")).await,
+        Ok(StopReason::EndTurn)
+    );
+    let updates = drain(&mut thread.updates);
+    let echoed = updates
+        .iter()
+        .filter(|update| update["sessionUpdate"] == "user_message_chunk")
+        .collect::<Vec<_>>();
+    assert!(echoed.is_empty(), "{echoed:?}");
+    // Everything else the turn produced still arrives.
+    assert_eq!(
+        kinds(&updates),
+        [
+            "agent_thought_chunk",
+            "tool_call",
+            "tool_call_update",
+            "agent_message_chunk",
+            "usage_update"
+        ]
+    );
+    // And what the agent was sent still began with the block.
+    let sent = prompts(&mut seen);
+    assert!(
+        sent[0][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("<rustcode_runtime>")
+    );
+}
+
+#[test]
+fn the_echo_filter_takes_the_block_and_keeps_the_user_text() {
+    let whole = crate::tools::schema::runtime_reminder("setup text");
+    let strip = |text: &str, pending: &mut String| super::strip_runtime_echo(text, pending, &whole);
+
+    // The whole block in one chunk, alone: nothing to show.
+    let mut pending = String::new();
+    assert_eq!(strip(&whole, &mut pending), None);
+    assert!(pending.is_empty());
+    // Ordinary user content is untouched, whatever chunk it arrives in.
+    assert_eq!(
+        strip("fix the build", &mut pending).as_deref(),
+        Some("fix the build")
+    );
+    assert!(pending.is_empty());
+    // Split anywhere in the block, even inside a tag: the pieces go, the text
+    // after the block stays, and no half tag reaches the thread.
+    for split in [1, 10, 18, 19, 64, whole.len() - 1] {
+        let mut pending = String::new();
+        let (head, tail) = whole.split_at(split);
+        assert_eq!(strip(head, &mut pending), None, "split at {split}");
+        let kept = strip(&format!("{tail}fix the build"), &mut pending);
+        assert_eq!(kept.as_deref(), Some("fix the build"), "split at {split}");
+        assert!(pending.is_empty(), "split at {split}");
+    }
+    // A block the agent quoted in the middle of its own user message: only the
+    // block goes.
+    let mut pending = String::new();
+    assert_eq!(
+        strip(&format!("before {whole} after"), &mut pending).as_deref(),
+        Some("before  after")
     );
 }

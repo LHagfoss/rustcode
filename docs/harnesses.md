@@ -239,16 +239,21 @@ What each part does for an external thread:
 - **Reply style and runtime info.** An external harness never sees
   RustCode's system prompt. It gets a
   `<runtime_info>` line (it runs in RustCode through that harness; embed
-  images and link files by absolute path so the app opens them) and the
-  output-style rules ([output-style.md](output-style.md)). Codex gets them as
+  images and link files by absolute path so the app opens them), the
+  output-style rules ([output-style.md](output-style.md)) and, while the user
+  has Smart UI on, the `rustcode-ui v1` fence it would otherwise never hear of
+  ([smart-ui.md](smart-ui.md#external-harnesses)). Codex gets them as
   `developerInstructions` on `thread/start` and `thread/resume`, which Codex
   adds as a developer message after its own instructions. That field replaces
   a `developer_instructions` set in the user's Codex `config.toml` for that
   thread. An ACP agent that advertises `sessionCapabilities.systemPrompt`
   (Claude Code's adapter) gets them as `systemPrompt` in `append` mode on
-  `session/new` and `session/load`, after its own system prompt. Other ACP
-  agents get none: wrapping the prompt would show in the thread's own history
-  and in the agent's replay.
+  `session/new` and `session/load`, after its own system prompt. An agent with
+  no such capability (pi-acp, OpenCode) gets the same text as a
+  `<rustcode_runtime>` block at the head of the first prompt of a session
+  RustCode created — once, never after `session/load`. It never reaches the
+  thread's history, title or search index, and the agent's own echo of it as
+  `user_message_chunk` is stripped.
 - **Codex events.** Message deltas are `agent_message_chunk`, reasoning
   summaries `agent_thought_chunk`, command, file-change, MCP and web-search
   items `tool_call`/`tool_call_update` (command output and diffs as text

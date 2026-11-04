@@ -45,6 +45,19 @@ pub(crate) fn client_visualization_level() -> u8 {
     CLIENT_VISUALIZATION_LEVEL.load(Ordering::Relaxed)
 }
 
+/// The client's Smart UI state (`acp.rs` `client_smart_ui`). A RustCode thread
+/// learns Smart UI from its root prompt and the `smart-ui` skill; an external
+/// harness has neither, so it is taught the fence from this.
+static CLIENT_SMART_UI: AtomicU8 = AtomicU8::new(0);
+
+pub(crate) fn set_client_smart_ui(smart_ui: crate::app::SmartUi) {
+    CLIENT_SMART_UI.store(smart_ui.as_u8(), Ordering::Relaxed);
+}
+
+pub(crate) fn client_smart_ui() -> crate::app::SmartUi {
+    crate::app::SmartUi::from_u8(CLIENT_SMART_UI.load(Ordering::Relaxed))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessKind {

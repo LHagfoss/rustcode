@@ -7,15 +7,17 @@ keywords: interactive, widget, component, html, chart, slider, filter, sort, tog
 
 # Smart UI
 
-One small HTML component inside a chat reply. It should read like the rest of
-the reply: no card, border or background of its own.
+One small HTML component inside a chat reply, reading like the rest of the
+reply: no card, border or background of its own.
 
 ## When
 
-- Read once: Markdown. A static chart, table or tree: `rustcode-viz`.
-- Smart UI when a control changes what the reader sees (filter, sort, slider,
-  toggle, step) or a button asks a follow-up. If you cannot name the control,
-  do not write one.
+- Read once: Markdown. A quick plain chart, table or tree: `rustcode-viz`.
+- Smart UI when the user asks for a visualization, a graph, a dashboard or
+  anything you would design: give it a real design, a short title, the finding
+  in a sentence and big numbers where the point is a number.
+- Also when a control changes what the reader sees (filter, sort, slider,
+  toggle, step) or a button asks a follow-up.
 - One component per question. Put the key finding in a sentence before it.
 
 ## Format
@@ -47,7 +49,7 @@ document.getElementById("d").onclick = () => window.rustcode?.send("Show Tuesday
 
 ## Runtime (already on the page)
 
-- Transparent body. Headings, tables, inputs, buttons and code already use the
+- Headings, tables, inputs, buttons and code are already styled with the
   app's typography, so write little CSS.
 - CSS variables: `--rc-text --rc-muted --rc-faint --rc-accent --rc-surface
   --rc-separator --rc-danger --rc-success --rc-warning --rc-font --rc-mono
@@ -71,7 +73,7 @@ document.getElementById("d").onclick = () => window.rustcode?.send("Show Tuesday
 
 - No outer card, border, background, shadow or title banner.
 - Compact (aim under 300 px tall) and fits a 320 px column: relative widths,
-  wrapping rows, no horizontal scrolling.
+  wrapping rows.
 - The first state is useful without interaction; a control's effect shows
   next to it.
 - Accessible: real `<button>`, `<select>`, `<input>` and `<label>`,
@@ -81,5 +83,5 @@ document.getElementById("d").onclick = () => window.rustcode?.send("Show Tuesday
 
 ## Before you send
 
-When `smart_ui_preview` is offered, render the HTML once, fix what the
-screenshot or errors show, then write the fence with that HTML.
+When a `smart_ui_check` tool is listed, run it on the HTML, fix what it
+reports, then write the fence with that HTML.

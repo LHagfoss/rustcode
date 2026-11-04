@@ -656,6 +656,27 @@ fn smart_ui_preview_unavailable(_args: &Value) -> Result<String, String> {
     Err(crate::smart_ui::UNAVAILABLE_MESSAGE.to_owned())
 }
 
+/// Checks a `rustcode-ui v1` block without running it. Offered to external
+/// harnesses through the `rustcode` MCP server, which answers it itself
+/// (`orchestration/mcp_server.rs`); a RustCode thread uses its preview instead.
+pub const SMART_UI_CHECK: Tool = Tool {
+    name: crate::smart_ui::CHECK_TOOL_NAME,
+    description: "Check a ```rustcode-ui v1 block before you write it: its size, about how many elements it builds, a missing title, an unclosed script or style tag, a rustcode-lib the app does not bundle, and what the page cannot do (network, storage, vh heights, system colours on a canvas), each with its line. It does not run the page, so it reports no script errors, no fitted height and no screenshot.",
+    arguments: r##"{"html": "<title>…</title><script src=\"rustcode-lib:chart.js\"></script>…"}"##,
+    handler: smart_ui_check_unavailable,
+    requires_confirmation: false,
+    schema: crate::smart_ui::check_schema,
+    capabilities: &[],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn smart_ui_check_unavailable(_args: &Value) -> Result<String, String> {
+    Err(
+        "error: smart_ui_check is answered by the rustcode MCP server; this thread does not have it"
+            .to_owned(),
+    )
+}
+
 fn localhost_preview_unavailable(_args: &Value) -> Result<String, String> {
     Err(crate::preview::UNAVAILABLE_MESSAGE.to_owned())
 }

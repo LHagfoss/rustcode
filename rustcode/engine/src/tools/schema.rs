@@ -875,6 +875,10 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (tool.name == crate::desktop_control::TOOL_NAME && !policy.include_desktop_tool)
         || (tool.name == crate::smart_ui::PREVIEW_TOOL_NAME
             && !policy.include_smart_ui_preview_tool)
+        // Answered by the `rustcode` MCP server an external harness runs
+        // (`orchestration/mcp_server.rs`); a RustCode turn has no renderer for
+        // it, so it never reaches a built-in schema.
+        || tool.name == crate::smart_ui::CHECK_TOOL_NAME
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
         || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (crate::orchestration::is_v3_tool(tool.name) && !policy.include_orchestration_v3_tools)
@@ -2550,8 +2554,14 @@ pub(crate) fn harness_output_style() -> String {
 
 /// What an external harness adds to its own system prompt: where it runs, so it can say so when asked and
 /// link what it makes so the app opens it, that RustCode is what owns its threads and projects, the
-/// `rustcode-viz` types the connected client draws (none at level 0), then [`harness_output_style`].
-pub(crate) fn harness_instructions(harness: &str, visualization_level: u8) -> String {
+/// `rustcode-viz` types the connected client draws (none at level 0), Smart UI when the user has it on,
+/// then [`harness_output_style`]. Codex takes this as `developerInstructions` and Claude Code's adapter
+/// as its `systemPrompt`: it goes in every prompt, so every byte here is paid on every turn.
+pub(crate) fn harness_instructions(
+    harness: &str,
+    visualization_level: u8,
+    smart_ui: crate::app::SmartUi,
+) -> String {
     let harness = harness.split_whitespace().collect::<Vec<_>>().join(" ");
     format!(
         "<runtime_info>In case you're asked: you are running in RustCode through the {harness} harness. \
@@ -2561,10 +2571,49 @@ pub(crate) fn harness_instructions(harness: &str, visualization_level: u8) -> St
          settings: when the `rustcode` tools (or `mcp__rustcode__*`) are listed, they answer what the user \
          asks about them; without them, `rustcode threads list --all` and `rustcode threads path <id>` do \
          the same from a shell. Thread data lives in `~/.config/rustcode/threads`, not in another tool's \
-         database.</runtime_info>\n\n{}{}",
+         database.</runtime_info>\n\n{}{}{}",
         visualization_prompt_hint(visualization_level),
+        harness_smart_ui_hint(smart_ui),
         harness_output_style()
     )
+}
+
+/// The tag [`runtime_reminder`] wraps [`harness_instructions`] in, and the
+/// engine strips from an echo of it (`harness/acp_child.rs`).
+pub(crate) const RUNTIME_REMINDER_START: &str = "<rustcode_runtime>";
+pub(crate) const RUNTIME_REMINDER_END: &str = "</rustcode_runtime>";
+
+/// [`harness_instructions`] as the opening block of a first prompt, for an
+/// agent that has no `sessionCapabilities.systemPrompt` (pi-acp, OpenCode): it
+/// still has to hear where it runs, what the client draws and what RustCode
+/// owns. Tagged and labelled so the model does not read it as the user's
+/// words; the engine drops the agent's echo of it (`strip_runtime_echo`).
+pub(crate) fn runtime_reminder(instructions: &str) -> String {
+    format!(
+        "{RUNTIME_REMINDER_START}\nRustCode's setup instructions for this thread, not the user's message.\n\n{instructions}{RUNTIME_REMINDER_END}"
+    )
+}
+
+/// Smart UI for a harness that has no root prompt and no `use_skill`: the
+/// fence, the lib and theme names, what the sandbox blocks, and when a view
+/// beats a `rustcode-viz` chart. The format itself is `docs/smart-ui.md`.
+pub(crate) const SMART_UI_HARNESS_HINT: &str = "\
+# Smart UI
+This app runs small designs of yours in the chat. A reply may carry one ```rustcode-ui v1 fence: a self-contained HTML fragment with inline <style> and <script>, no imports and no network, at most 64 KB and 5,000 elements. \
+Asked for a visualization, a graph, a chart, a dashboard or anything you would design, write such a view with a real design: a short title, the finding in a sentence, big numbers where the point is a number, spacing and labels. Keep rustcode-viz for a quick plain chart or table. \
+Colours and fonts come from the app's variables (--rc-text --rc-muted --rc-faint --rc-accent --rc-surface --rc-separator --rc-danger --rc-success --rc-warning --rc-font --rc-mono --rc-radius --rc-series-1 … --rc-series-8) and its classes (.rc-row .rc-col .rc-grid .rc-gap-1 … .rc-gap-4 .rc-muted .rc-mono .rc-num .rc-card .rc-scroll). Chart.js is bundled: <script src=\"rustcode-lib:chart.js\"></script>, and its defaults are themed, so set no colours. \
+No card chrome: no outer border, background or repeated title. Size to a narrow column: relative widths, no vh or viewport heights. When the rustcode tools list `smart_ui_check`, check the block with it first.
+
+";
+
+/// [`SMART_UI_HARNESS_HINT`] when the setting is off, else the off note the
+/// root prompt uses; nothing for a client that cannot run the blocks.
+pub(crate) fn harness_smart_ui_hint(smart_ui: crate::app::SmartUi) -> &'static str {
+    match smart_ui {
+        crate::app::SmartUi::On => SMART_UI_HARNESS_HINT,
+        crate::app::SmartUi::Off => SMART_UI_OFF_PROMPT_HINT,
+        crate::app::SmartUi::Unsupported => "",
+    }
 }
 
 /// Append the output-style guidance to a root prompt. Subagent replies are
@@ -2623,16 +2672,16 @@ pub(crate) fn append_visualization_hint(
 /// Guidance for `rustcode-ui v1` blocks (#2484), sent only to frontends that
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
-This app runs small interactive components in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat output. \
-Use one, even unasked, when controls (sort, filter, sliders, toggles, follow-up buttons) let the reader explore what a static chart cannot; \
-otherwise use rustcode-viz or Markdown. First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
+This app runs small interactive designs in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat. \
+Use one, even unasked, when the user asks for a visualization, a graph or a dashboard, or when controls (sort, filter, sliders) help; \
+keep rustcode-viz for a quick plain chart or table. First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
 
 /// Sent instead of [`SMART_UI_PROMPT_HINT`] when the frontend could run the
 /// blocks but the user has the setting off. Without it an agent asked for
 /// "Smart UI" guesses a fence the app shows as source.
 pub(crate) const SMART_UI_OFF_PROMPT_HINT: &str = "# Smart UI\n\
 This app has Smart UI (interactive HTML components in the chat), but it is turned off. \
-If the user asks for Smart UI or an interactive view, tell them to turn on Settings › General › Chat › Smart UI \
+If the user asks for Smart UI or an interactive view, tell them to turn on Settings › Chat › Smart UI \
 and restart the engine; until then answer with Markdown or rustcode-viz, never an HTML fence.\n\n";
 
 /// The Smart UI hint, if any, for a root prompt.
@@ -3057,6 +3106,29 @@ mod schema_budget_tests {
             .collect::<Vec<_>>();
         sizes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         sizes
+    }
+
+    #[test]
+    fn the_block_check_is_not_a_built_in_tool() {
+        // It is listed by the `rustcode` MCP server an external harness runs,
+        // and answered there; a RustCode turn would only get the error handler.
+        assert!(
+            crate::tools::TOOLS
+                .iter()
+                .any(|tool| tool.name == crate::smart_ui::CHECK_TOOL_NAME)
+        );
+        for policy in [
+            ToolSchemaPolicy::root(true),
+            ToolSchemaPolicy::read_only_inspection(),
+        ] {
+            let (tools, _) = build_builtin_native_tools_schema(policy);
+            assert!(
+                !tools
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == crate::smart_ui::CHECK_TOOL_NAME),
+                "the block check is never a built-in tool"
+            );
+        }
     }
 
     #[test]
