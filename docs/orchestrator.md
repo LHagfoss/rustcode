@@ -179,11 +179,29 @@ and the user approves it; at most 4 active links per thread; no chains; the
 user can stop any link; nothing starts without the user's approval (*Allow for
 This Thread* / *Allow Once* / *Don't Allow*).
 
+## Orchestration tools v3
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 3` also get these,
+so an agent can see what can run, find threads and manage them. Forwarded and
+validated like the others; the client carries them out (`state/host.ts`).
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, models?, omitted_models? }] }`, at most 25 models each | None |
+| `search_sessions` | `{ query }` | `{ sessions: [{ session_id, title, status, snippet? }] }`: this project, title and full text, at most 30 | None |
+| `list_worktrees` | none | `{ worktrees: [{ session_id, title, branch, path }] }`: this project | None |
+| `update_session` | `{ session_id?, title?, pinned?, unread?, status? }` (`active`, `review`, `settled`) | `{ session_id, title, pinned, status }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
+| `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, status? }`; a thread cannot stop itself | Asked, allowed by Full access |
+| `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
+
+Every tool stays within the caller's project. A grant is per thread and per
+kind of change (*Allow for This Thread*).
+
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
 client advertises orchestration `>= 2`, an external harness thread gets the
-same six tools through an MCP server the engine injects into its session:
+same tools through an MCP server the engine injects into its session:
 
 ```
 RUSTCODE_ORCHESTRATOR_TOKEN=<t> rustcode mcp-orchestrator --session <thread id> --socket <path>

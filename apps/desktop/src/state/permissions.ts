@@ -27,10 +27,10 @@ const EDIT_KINDS = new Set(["read", "edit", "move", "search", "think", "fetch"])
  */
 export function delegationAllowed(
   mode: PermissionMode,
-  kind: "read" | "start" | "message" | "fan_out",
+  kind: "read" | "start" | "message" | "fan_out" | "organize" | "interrupt" | "configure",
 ): boolean {
   if (mode === "full") return true;
-  return mode === "edits" && kind === "read";
+  return mode === "edits" && (kind === "read" || kind === "organize");
 }
 
 /** How a mode reads in a sentence: "allowed by Full access". */
