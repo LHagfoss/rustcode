@@ -1,13 +1,13 @@
-// Settings, inside the app's shell: the sidebar stays as it is and the main
-// column shows a section list beside the page, so opening Settings remounts
-// nothing and does not flash. After SettingsView.swift. Engine-backed pages
-// (Harnesses, Connections, Capabilities, Appearance's themes) read and
-// write through `_rustcode/*` requests.
+// Settings, a panel floating over the app: the shell stays mounted behind it,
+// dimmed and inert, so closing Settings shows the thread exactly where it was.
+// A nav column searches every row's title and keywords (settingsIndex.ts);
+// picking a result opens its section and lights the row. After SettingsView.swift.
+// Engine-backed pages (Harnesses, Connections, Capabilities, Appearance's
+// themes) read and write through `_rustcode/*` requests.
 
 import {
   Blocks,
   Check,
-  ChevronLeft,
   FolderOpen,
   Gauge,
   Settings as Gear,
@@ -17,9 +17,11 @@ import {
   Palette,
   Plus,
   RefreshCw,
+  Search,
   TerminalSquare,
+  X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
@@ -65,9 +67,9 @@ import {
 } from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
-import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { cx, inputClass, Kbd, Pill, Segments, Spinner, Switch, Tooltip } from "./primitives";
+import { ChromeButton, cx, inputClass, Kbd, Pill, Segments, Spinner, Switch } from "./primitives";
+import { type SettingEntry, searchSettings } from "./settingsIndex";
 import { Group, Loading, Row, useEngineData } from "./settingsKit";
 import { UsagePage } from "./UsagePage";
 
@@ -80,6 +82,8 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
   { id: "usage", label: "Usage", icon: Gauge },
   { id: "engine", label: "Engine", icon: TerminalSquare },
 ];
+
+const sectionLabel = (id: SettingsSection) => SECTIONS.find((s) => s.id === id)?.label ?? id;
 
 // ---------------------------------------------------------------- pages
 
@@ -836,75 +840,216 @@ function Engine() {
 }
 
 /**
- * Settings over the whole window: the shared glass header (Back, the title)
- * clear of the traffic lights, and one calm centred column with the section
- * list at its left and the page beside it. The page scrolls under the header.
- * Back, Esc and ⌘, return to where you were; the thread underneath stayed
- * mounted (App.tsx).
+ * Settings as a panel over the whole window (docs/design.md › Settings): a nav
+ * column with the search field at its top, and the page beside it scrolling on
+ * its own under the section's name and a close button. Esc, ⌘, and the close
+ * button put you back where you were; the thread underneath stayed mounted
+ * (App.tsx).
  */
 export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const field = useRef<HTMLInputElement>(null);
+  const results = useMemo(() => searchSettings(query), [query]);
+  // The row to land on, set when a result is picked and cleared once it is lit.
+  const [landing, setLanding] = useState<{ section: SettingsSection; title: string } | null>(null);
+
+  const clear = () => {
+    setQuery("");
+    setActive(0);
+  };
+
+  const pick = (entry: SettingEntry) => {
+    setLanding({ section: entry.section, title: entry.title });
+    openSettings(entry.section);
+    clear();
+    field.current?.blur();
+  };
+
+  // The picked row lands: scroll to it once the page is on screen, then light it
+  // for a moment. The class comes off in a timer of its own, so the effect can
+  // clear its target at once without leaving a row lit.
+  useEffect(() => {
+    if (!landing || landing.section !== section) return;
+    let frame = 0;
+    let again = 0;
+    frame = requestAnimationFrame(() => {
+      again = requestAnimationFrame(() => {
+        setLanding(null);
+        const target = findSetting(landing.title);
+        if (!target) return;
+        target.scrollIntoView({ block: "center" });
+        target.classList.add("rc-setting-hit");
+        window.setTimeout(() => target.classList.remove("rc-setting-hit"), 1200);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(again);
+    };
+  }, [landing, section]);
+
+  // "/" puts the cursor in the search field, unless a field already has it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      e.preventDefault();
+      field.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ↑↓ move through the results, ⏎ picks one. The first Esc clears the search and
+  // stops there; with nothing left to clear it closes the panel instead.
+  const onFieldKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!results.length) return;
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActive((i) => (i + step + results.length) % results.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const entry = results[active];
+      if (entry) pick(entry);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (query) clear();
+      else openSettings(null);
+    }
+  };
+
   return (
-    <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg" aria-label="Settings">
-      <MainHeader
-        lights
-        title={
-          <>
-            <Tooltip label="Back (Esc)">
-              <button
-                type="button"
-                onClick={() => openSettings(null)}
-                className="flex h-7 items-center gap-1 rounded-full pr-2.5 pl-1.5 font-medium text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-              >
-                <ChevronLeft size={14} />
-                Back
-              </button>
-            </Tooltip>
-            <h1 className="min-w-0 truncate font-semibold text-body">Settings</h1>
-          </>
-        }
+    <>
+      <div
+        className="fixed inset-0 z-20 bg-bg/60"
+        onMouseDown={(e) => e.target === e.currentTarget && openSettings(null)}
       />
-      <div className="scroll-stable min-h-0 flex-1">
-        <div
-          className="mx-auto flex w-full max-w-[840px] gap-8 px-[clamp(16px,4%,32px)] pb-16"
-          style={{ paddingTop: HEADER_HEIGHT + 20 }}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        className="elevated fixed inset-8 z-30 mx-auto flex max-w-[1180px] overflow-hidden rounded-2xl rc-in"
+      >
+        <nav
+          aria-label="Settings sections"
+          className="flex w-[220px] shrink-0 flex-col gap-1.5 bg-fill-subtle p-2.5"
         >
-          <nav
-            className="sticky flex w-[164px] shrink-0 flex-col gap-0.5 self-start"
-            style={{ top: HEADER_HEIGHT + 20 }}
-            aria-label="Settings sections"
-          >
-            {SECTIONS.map((s) => (
+          <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill px-2.5 text-callout focus-within:bg-fill-strong">
+            <Search size={13} className="shrink-0 text-fg-faint" />
+            <input
+              ref={field}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setActive(0);
+              }}
+              onKeyDown={onFieldKey}
+              placeholder="Search settings"
+              aria-label="Search settings"
+              className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-faint"
+            />
+            {query && (
               <button
-                key={s.id}
                 type="button"
-                aria-current={s.id === section ? "page" : undefined}
-                onClick={() => openSettings(s.id)}
-                className={cx(
-                  "flex h-8 items-center gap-2 rounded-md px-2 text-left text-body",
-                  s.id === section
-                    ? "bg-fill font-medium text-fg"
-                    : "text-fg-muted hover:bg-fill-subtle hover:text-fg",
-                )}
+                aria-label="Clear search"
+                onClick={() => {
+                  clear();
+                  field.current?.focus();
+                }}
+                className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
               >
-                <s.icon size={14} className="shrink-0" />
-                {s.label}
+                <X size={11} strokeWidth={2.5} />
               </button>
-            ))}
-          </nav>
-          <div className="min-w-0 flex-1">
-            <h2 className="pt-1 pb-4 font-semibold text-title2">{current.label}</h2>
-            {section === "general" && <General />}
-            {section === "harnesses" && <Harnesses />}
-            {section === "connections" && <ConnectionsPage />}
-            {section === "capabilities" && <CapabilitiesPage />}
-            {section === "appearance" && <Appearance />}
-            {section === "usage" && <UsagePage />}
-            {section === "engine" && <Engine />}
+            )}
+          </div>
+          <div className="scroll-stable flex min-h-0 flex-1 flex-col gap-0.5">
+            {query.trim() ? (
+              results.length ? (
+                <div role="listbox" aria-label="Settings results" className="flex flex-col gap-0.5">
+                  {results.map((r, i) => (
+                    <button
+                      key={`${r.section}:${r.title}`}
+                      type="button"
+                      role="option"
+                      aria-selected={i === active}
+                      onMouseMove={() => setActive(i)}
+                      onClick={() => pick(r)}
+                      className={cx(
+                        "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
+                        i === active ? "bg-fill" : "hover:bg-fill",
+                      )}
+                    >
+                      <span className="w-full truncate text-body">{r.title}</span>
+                      <span className="text-caption text-fg-faint">{sectionLabel(r.section)}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-2 py-1.5 text-caption text-fg-muted">Nothing matches “{query.trim()}”.</p>
+              )
+            ) : (
+              SECTIONS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-current={s.id === section ? "page" : undefined}
+                  onClick={() => openSettings(s.id)}
+                  className={cx(
+                    "flex h-8 items-center gap-2 rounded-md px-2 text-left text-body",
+                    s.id === section
+                      ? "bg-fill font-medium text-fg"
+                      : "text-fg-muted hover:bg-fill hover:text-fg",
+                  )}
+                >
+                  <s.icon size={14} className="shrink-0" />
+                  {s.label}
+                </button>
+              ))
+            )}
+          </div>
+        </nav>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="shrink-0">
+            <div className="mx-auto flex h-12 w-full max-w-[760px] items-center gap-3 px-[clamp(16px,4%,32px)]">
+              <h1 className="min-w-0 flex-1 truncate font-semibold text-title2">{current.label}</h1>
+              <ChromeButton label="Close Settings" tooltip="Close (Esc)" onClick={() => openSettings(null)}>
+                <X size={16} />
+              </ChromeButton>
+            </div>
+          </header>
+          <div className="scroll-stable min-h-0 flex-1">
+            <div className="mx-auto w-full max-w-[760px] px-[clamp(16px,4%,32px)] pt-2 pb-16">
+              {section === "general" && <General />}
+              {section === "harnesses" && <Harnesses />}
+              {section === "connections" && <ConnectionsPage />}
+              {section === "capabilities" && <CapabilitiesPage />}
+              {section === "appearance" && <Appearance />}
+              {section === "usage" && <UsagePage />}
+              {section === "engine" && <Engine />}
+            </div>
           </div>
         </div>
       </div>
-    </main>
+    </>
+  );
+}
+
+/**
+ * The row (or group) the search index named, by its title. A few titles carry
+ * live state after them (the engine's status, the app's version), so the index
+ * names the part that stays and a prefix finds it.
+ */
+function findSetting(title: string): Element | null {
+  const nodes = [...document.querySelectorAll("[data-setting]")];
+  return (
+    nodes.find((n) => n.getAttribute("data-setting") === title) ??
+    nodes.find((n) => (n.getAttribute("data-setting") ?? "").startsWith(title)) ??
+    null
   );
 }

@@ -643,6 +643,26 @@
 }
 
 /*
+ * Landing on a setting from the panel's search (Settings.tsx): the row the
+ * search found holds a `fill` that fades away, so the eye finds it. Colour
+ * only, once; off under reduced motion.
+ */
+@keyframes rc-setting-hit {
+  from {
+    background-color: var(--rc-fill);
+  }
+}
+.rc-setting-hit {
+  animation: rc-setting-hit 1.2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-setting-hit {
+    animation: none;
+    background-color: transparent;
+  }
+}
+
+/*
  * Glass: the one translucency every floating surface shares (composer,
  * popovers, menus, dialogs, toasts, the right panel). `--rc-glass-bg` and
  * `--rc-glass-filter` are the token pair; Reduce transparency makes them
