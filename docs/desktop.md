@@ -349,8 +349,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   turn that ended while you looked elsewhere, *Done* (green) or *Failed*
   (red) until you open the thread (`finished`/`failed` in the store; *Mark
   Unread* in the menu brings Done back). What wants you reads in medium
-  weight; what works, waits or is settled recedes. ⌘1–⌘9 open the first
-  nine rows, and holding ⌘ shows each row's digit in the slot. Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
+  weight; what works, waits or is settled recedes. Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
   Double-click or F2 renames. Settling is marking a thread Done, with an
   Undo toast; a new message brings it back. The filter button by the
   search groups Threads by project (off by default; each
