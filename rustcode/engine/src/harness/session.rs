@@ -79,11 +79,19 @@ impl Adapter {
         options: StartOptions,
         out: OutputSender,
     ) -> Result<Self, String> {
+        let env = match (&options.orchestrator, harness.id.as_str()) {
+            (Some(launch), "pi") => match super::config::config_dir() {
+                Ok(config) => super::pi_mcp::environment(launch, &config.join("run").join("pi")),
+                Err(_) => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
         let (child, stdout, stdin) = process::spawn(
             &harness.id,
             &harness.command,
             cwd,
             options.log_session.clone(),
+            &env,
         )?;
         let (peer, incoming) = RpcPeer::start(stdout, stdin);
         let started = tokio::time::timeout(

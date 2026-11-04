@@ -327,12 +327,17 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   view (`absolute`, z 10): the view starts its content `HEADER_HEIGHT`
   down and scrolls under it, and the glass fades out over 24px below the
   header's edge, as the transcript fades above the composer. Every view
-  that has a header uses this one (the chat, new or open; Settings).
-- **Settings:** the whole window (the shell stays mounted underneath,
-  hidden). Header: Back (a ghost pill with a chevron) and the title, on
-  the traffic lights' line. Body: one centred column, `max-w-[840px]`, the
-  section list (164px, sticky, rows per the Row recipe) at its left, the
-  page (title2 heading, then groups) beside it.
+  that has a header uses this one (the chat, new or open); the Settings
+  panel brings its own.
+- **Settings:** a panel over the dimmed app, the shell mounted and inert
+  behind it: `elevated rounded-2xl`, `fixed inset-8` and at most 1180px
+  wide, over a `bg-bg/60` scrim. A 220px nav column in `bg-fill-subtle`
+  holds the search field, then the sections (rows per the Row recipe), or
+  the results while there is a query. Beside it the page scrolls on its
+  own in a centred `max-w-[760px]` column, under the section's name and a
+  `ChromeButton` close. Picking a result opens its section and lights the
+  row it found (`rc-setting-hit`, a `fill` fading out over 1.2s). Rows
+  show their description in full.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** `.rc-composer rounded-2xl p-2.5` in the denser glass
@@ -396,6 +401,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   slim toolbar (`h-9`) under it. The left edge drags (320–760px, kept);
   its slot takes its width at once and the panel slides and fades in 200ms
   (see Motion). ⌘⌥B toggles it with the last view.
+- **Approval:** over the composer, `elevated rounded-2xl`: what it wants (`From
+  <thread>` when a thread this one started is asking), the command in a code
+  well, then Always allow, More, Decline `esc`, Approve `⏎` (the keys work when
+  no field, menu or dialog has the keyboard). A message sent from the composer
+  meanwhile declines it and tells the agent what to do instead.
 - **Jump to latest:** `.rc-glass rounded-full shadow-1`, centred 12px
   above the composer stack, above it in z.
 - **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`

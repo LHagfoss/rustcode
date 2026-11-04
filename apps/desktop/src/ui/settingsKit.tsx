@@ -1,6 +1,9 @@
 // The pieces every Settings page is built from (docs/design.md, Card and
 // Row recipes): a titled group card, a row, the loading state, and engine
 // data loaded once the engine is ready.
+//
+// Groups and rows carry `data-setting` with their title, so the panel's search
+// can scroll to the row it found (Settings.tsx) and light it once.
 
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
@@ -20,7 +23,7 @@ export function Group({
   action?: ReactNode;
 }) {
   return (
-    <section className="mb-6">
+    <section className="mb-6" data-setting={typeof title === "string" ? title : undefined}>
       {(title || action) && (
         <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
           <h3 className="flex-1 font-semibold text-callout text-fg-muted">{title}</h3>
@@ -45,10 +48,13 @@ export function Row({
   className?: string;
 }) {
   return (
-    <div className={cx("flex min-h-11 items-center gap-4 px-3.5 py-2.5", className)}>
+    <div
+      className={cx("flex min-h-11 items-center gap-4 px-3.5 py-2.5", className)}
+      data-setting={typeof title === "string" ? title : undefined}
+    >
       <div className="min-w-0 flex-1">
         <div className="text-body">{title}</div>
-        {subtitle && <div className="line-clamp-3 text-caption text-fg-muted">{subtitle}</div>}
+        {subtitle && <div className="text-caption text-fg-muted">{subtitle}</div>}
       </div>
       {children}
     </div>

@@ -55,6 +55,7 @@ import { controlDisabledReason } from "../state/harness";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   acceptsImages,
+  answerPermission,
   cancel,
   cancelEdit,
   canSteer,
@@ -303,11 +304,19 @@ export const Composer = memo(function Composer({
     };
   }, []);
 
+  const approval = thread?.permissions.find((p) => !p.question);
   const send = (steer: boolean) => {
     haptic("generic");
     const text = draft;
     const sentExtras = extras;
     if (!text.trim() && !hasExtras(sentExtras) && !(steer && running)) return;
+    // A message sent while an approval waits declines it: the message says what to do instead.
+    if (approval && (text.trim() || hasExtras(sentExtras))) {
+      const decline =
+        approval.options.find((o) => o.kind === "reject_once") ??
+        approval.options.find((o) => o.kind === "reject_always");
+      if (decline) answerPermission(approval, decline);
+    }
     update("");
     change(() => emptyExtras);
     const sending = steer ? steerOrSubmit(text, sentExtras) : submit(text, sentExtras);
@@ -435,11 +444,13 @@ export const Composer = memo(function Composer({
 
   const placeholder = extras.command
     ? extras.command.description || "Arguments…"
-    : running
-      ? steerable
-        ? "⏎ queues for the next turn, ⌘⏎ steers this one…"
-        : "Queue a message…"
-      : `Message ${speakingTo}…`;
+    : approval
+      ? "Send a message to decline and redirect the agent…"
+      : running
+        ? steerable
+          ? "⏎ queues for the next turn, ⌘⏎ steers this one…"
+          : "Queue a message…"
+        : `Message ${speakingTo}…`;
 
   return (
     <div className="relative">
