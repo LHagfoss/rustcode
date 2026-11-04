@@ -1,3 +1,25 @@
+## [v1.7.1-beta.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.7.1-beta.1) - 2026-11-04
+
+### Features
+- Fix the composer's folder menu staying open after Esc or a click elsewhere. (#2951)
+- Make buttons, pickers and menus consistent across the app, with real dropdowns in Settings. (#2952)
+- Let agents find harnesses and threads, and rename, pin, stop and reconfigure threads, through RustCode's MCP tools. (#2953)
+- Fix Pi threads not being able to start, message or manage other threads. (#2954)
+- Answer approvals with Enter and Esc, redirect the agent by typing, and answer a child thread's approval from its parent. (#2955)
+- Open Settings as a floating panel and search every setting with `/`. (#2957)
+- Snooze threads until later, and see running threads in their own section of the sidebar. (#2956)
+- none (#2959)
+- Let agents list your projects and pull requests through RustCode's MCP tools. (#2958)
+- Add a Details view to the right panel: harness, workspace, linked threads, subagents with elapsed time, plan and usage. (#2961)
+- None (internal wording only). (#2960)
+- Make the remaining action buttons match in shape, size and hover. (#2962)
+- Reset a changed setting to its default from its own row. (#2964)
+- Show model and effort changes in the transcript, and add Check again to harness errors. (#2963)
+- Agents can move a thread to another harness and see which threads are waiting on you. (#2965)
+- Finished and failed toasts name the thread and open it. (#2967)
+- Reference project files with `@` in the composer. (#2968)
+- Keep titles given when an agent starts a thread, and stop showing Pi's startup banner in threads. (#2966)
+- Agents can snooze a thread until "tomorrow" or "next week", and older Pi threads no longer open with the startup banner. (#2969)
 ## [v1.7.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.7.0) - 2026-11-03
 
 ### Features
