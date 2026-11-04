@@ -394,6 +394,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   folded; find in thread opens them all while it searches. Folded steps are
   not rows at all, so the virtualizer and the timeline rail have fewer.
   Logic: `state/fold.ts` (`foldTurns`).
+- **Settings reset:** a row whose value differs from its default shows a small
+  reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).
 - **Right panel:** one `RightPanel` for every side view (Changes, Agents,
   Pull requests): floating, inset 8px from the window's top, right and
   bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has
