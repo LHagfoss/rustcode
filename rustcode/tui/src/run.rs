@@ -481,6 +481,333 @@ fn run_storage_command(
     Ok(())
 }
 
+/// `rustcode usage`: tokens per harness and model from the local data store.
+/// Disk usage is `storage usage`; this never prices requests.
+fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
+    let since = match since {
+        Some(value) => Some(
+            chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+                .map_err(|_| format!("--since must be a day, YYYY-MM-DD, not {value:?}"))?
+                .format("%Y-%m-%d")
+                .to_string(),
+        ),
+        None => None,
+    };
+    rustcode::data_store::ensure_ready()?;
+    let filter = since
+        .as_ref()
+        .map(|day| format!("WHERE date(started_at) >= '{day}'"))
+        .unwrap_or_default();
+    // SUM() keeps NULL when every turn of a row reported nothing: a harness
+    // with no token source prints an em dash, not a zero.
+    let sql = format!(
+        "SELECT COALESCE(harness, 'unknown') AS harness,
+                COALESCE(model, '') AS model,
+                SUM(input_tokens) AS input_tokens,
+                SUM(output_tokens) AS output_tokens,
+                SUM(cached_tokens) AS cached_tokens,
+                SUM(cache_write_tokens) AS cache_write_tokens,
+                SUM(cost_usd) AS cost_usd,
+                COUNT(*) AS turns,
+                SUM(CASE WHEN input_tokens IS NULL AND output_tokens IS NULL THEN 1 ELSE 0 END)
+                    AS turns_without_tokens
+         FROM turns {filter}
+         GROUP BY harness, model
+         ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC,
+                  harness, model"
+    );
+    let result = rustcode::data_store::query(&sql, rustcode::data_store::MAX_ROWS)?;
+    if json {
+        let body = serde_json::json!({
+            "since": since,
+            "rows": result.rows,
+            "truncated": result.truncated,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if result.rows.is_empty() {
+        println!(
+            "No turns recorded yet. Run a turn, or open the app once so existing threads are collected."
+        );
+        return Ok(());
+    }
+    let count = |row: &serde_json::Value, key: &str| {
+        row.get(key)
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0)
+    };
+    let maybe_count =
+        |row: &serde_json::Value, key: &str| row.get(key).and_then(serde_json::Value::as_i64);
+    let maybe_cost =
+        |row: &serde_json::Value| row.get("cost_usd").and_then(serde_json::Value::as_f64);
+    let money = |cost: Option<f64>| match cost {
+        Some(cost) if cost > 0.0 && cost < 0.01 => "$<0.01".to_owned(),
+        Some(cost) => format!("${cost:.2}"),
+        None => "—".to_owned(),
+    };
+    let tokens = |row: &serde_json::Value, key: &str| match maybe_count(row, key) {
+        Some(count) => thousands(count),
+        None => "—".to_owned(),
+    };
+    let rows: Vec<Vec<String>> = result
+        .rows
+        .iter()
+        .map(|row| {
+            let model = row
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let has_tokens = [
+                "input_tokens",
+                "output_tokens",
+                "cached_tokens",
+                "cache_write_tokens",
+            ]
+            .iter()
+            .any(|key| maybe_count(row, key).is_some());
+            let dash = "—".to_owned();
+            vec![
+                row.get("harness")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                if model.is_empty() {
+                    dash.clone()
+                } else {
+                    model.to_owned()
+                },
+                if has_tokens {
+                    tokens(row, "input_tokens")
+                } else {
+                    dash.clone()
+                },
+                if has_tokens {
+                    tokens(row, "output_tokens")
+                } else {
+                    dash.clone()
+                },
+                if has_tokens {
+                    tokens(row, "cached_tokens")
+                } else {
+                    dash.clone()
+                },
+                if has_tokens {
+                    tokens(row, "cache_write_tokens")
+                } else {
+                    dash.clone()
+                },
+                money(maybe_cost(row)),
+                thousands(count(row, "turns")),
+                thousands(count(row, "turns_without_tokens")),
+            ]
+        })
+        .collect();
+    let turns: i64 = result.rows.iter().map(|row| count(row, "turns")).sum();
+    let missing: i64 = result
+        .rows
+        .iter()
+        .map(|row| count(row, "turns_without_tokens"))
+        .sum();
+    let input: i64 = result
+        .rows
+        .iter()
+        .map(|row| maybe_count(row, "input_tokens").unwrap_or(0))
+        .sum();
+    let output: i64 = result
+        .rows
+        .iter()
+        .map(|row| maybe_count(row, "output_tokens").unwrap_or(0))
+        .sum();
+    let cached: i64 = result
+        .rows
+        .iter()
+        .map(|row| maybe_count(row, "cached_tokens").unwrap_or(0))
+        .sum();
+    let cache_write: i64 = result
+        .rows
+        .iter()
+        .map(|row| maybe_count(row, "cache_write_tokens").unwrap_or(0))
+        .sum();
+    let cost: f64 = result.rows.iter().filter_map(maybe_cost).sum();
+    let any_cost = result.rows.iter().any(|row| maybe_cost(row).is_some());
+    match &since {
+        Some(day) => println!("RustCode usage · tokens per harness and model · since {day}"),
+        None => println!("RustCode usage · tokens per harness and model"),
+    }
+    println!(
+        "{turns} turn{}{}",
+        if turns == 1 { "" } else { "s" },
+        if missing > 0 {
+            format!(" ({missing} with no reported token counts)")
+        } else {
+            String::new()
+        }
+    );
+    println!(
+        "Cost is reported by the harness, blank when it reports none; RustCode does not price requests.\n"
+    );
+    let mut table_rows = rows;
+    table_rows.push(vec![
+        "total".to_owned(),
+        String::new(),
+        thousands(input),
+        thousands(output),
+        thousands(cached),
+        thousands(cache_write),
+        if any_cost {
+            money(Some(cost))
+        } else {
+            "—".to_owned()
+        },
+        thousands(turns),
+        thousands(missing),
+    ]);
+    print_rows(
+        &[
+            "harness",
+            "model",
+            "input",
+            "output",
+            "cached",
+            "cache write",
+            "cost (USD)",
+            "turns",
+            "no tokens",
+        ],
+        &table_rows,
+    );
+    Ok(())
+}
+
+/// `rustcode data ...`: read-only access to the local data store.
+fn run_data_command(command: &crate::cli::DataCommands) -> Result<(), String> {
+    use crate::cli::DataCommands;
+    rustcode::data_store::ensure_ready()?;
+    match command {
+        DataCommands::Query { sql, json } => {
+            let result = rustcode::data_store::query(sql, rustcode::data_store::MAX_ROWS)?;
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?
+                );
+                return Ok(());
+            }
+            let columns: Vec<String> = result.columns.clone();
+            let rows: Vec<Vec<String>> = result
+                .rows
+                .iter()
+                .map(|row| {
+                    columns
+                        .iter()
+                        .map(|column| {
+                            row.get(column)
+                                .map(cell_text)
+                                .unwrap_or_else(|| "NULL".to_owned())
+                        })
+                        .collect()
+                })
+                .collect();
+            if rows.is_empty() {
+                println!("No rows.");
+            } else {
+                let headers: Vec<&str> = columns.iter().map(String::as_str).collect();
+                print_rows(&headers, &rows);
+            }
+            if result.truncated {
+                println!(
+                    "\nAt most {} rows are shown; narrow the query with LIMIT or WHERE.",
+                    rustcode::data_store::MAX_ROWS
+                );
+            }
+        }
+        DataCommands::Schema => {
+            let result = rustcode::data_store::query(
+                "SELECT type, name, sql FROM sqlite_master
+                 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+                 ORDER BY rowid",
+                200,
+            )?;
+            for row in &result.rows {
+                let kind = row
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("table");
+                let name = row
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let sql = row
+                    .get("sql")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                println!("-- {kind} {name}\n{sql};\n");
+            }
+            println!(
+                "Metadata only: no message text, tool arguments or tool output. \
+                 Writes are refused; reads take one statement, at most {} rows and 2 s.",
+                rustcode::data_store::MAX_ROWS
+            );
+        }
+    }
+    Ok(())
+}
+
+fn cell_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_owned(),
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Thousands separators, so a token total is readable at a glance.
+fn thousands(number: i64) -> String {
+    let digits = number.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if number < 0 { format!("-{out}") } else { out }
+}
+
+/// Left-aligned columns, two spaces apart.
+fn print_rows(headers: &[&str], rows: &[Vec<String>]) {
+    let mut widths: Vec<usize> = headers.iter().map(|header| header.len()).collect();
+    for row in rows {
+        for (index, cell) in row.iter().enumerate() {
+            if let Some(width) = widths.get_mut(index) {
+                *width = (*width).max(cell.chars().count());
+            }
+        }
+    }
+    let line = |cells: &mut dyn Iterator<Item = &str>| {
+        let mut out = String::new();
+        for (index, cell) in cells.enumerate() {
+            if index > 0 {
+                out.push_str("  ");
+            }
+            out.push_str(cell);
+            if index + 1 < widths.len() {
+                let pad = widths[index].saturating_sub(cell.chars().count());
+                out.push_str(&" ".repeat(pad));
+            }
+        }
+        out
+    };
+    println!("{}", line(&mut headers.iter().copied()));
+    for row in rows {
+        println!("{}", line(&mut row.iter().map(String::as_str)));
+    }
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = crate::cli::Cli::parse();
     // Started by an external harness on the engine's behalf: it speaks MCP
@@ -511,10 +838,26 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         run_storage_command(command)?;
         return Ok(());
     }
+
     // Apply user-data migrations a newer release introduced, once, before
     // anything reads the config directory (#2599). A failure is reported and
     // retried next start; it never stops startup.
     rustcode::storage_migrations::run_at_startup();
+
+    if let Some(crate::cli::Commands::Usage { since, json }) = cli_args.command.as_ref() {
+        if let Err(error) = run_usage_command(since.as_deref(), *json) {
+            eprintln!("rustcode usage: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if let Some(crate::cli::Commands::Data { command }) = cli_args.command.as_ref() {
+        if let Err(error) = run_data_command(command) {
+            eprintln!("rustcode data: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if run_daemon_or_cron_command(&cli_args).await? {
         return Ok(());
     }

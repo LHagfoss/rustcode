@@ -1237,6 +1237,9 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
     // an engine for chats that may never run one (#2503).
     crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
     crate::thread_index::warm();
+    // Metadata for `rustcode usage` and `rustcode data query`; a background
+    // backfill of the existing threads runs once, on first open.
+    crate::data_store::warm();
 
     let server = AcpServer::new(auto_approve)?;
     // However the connection ends, no harness process outlives the engine.

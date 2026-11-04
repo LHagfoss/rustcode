@@ -111,6 +111,23 @@ pub enum Commands {
         command: StorageCommands,
     },
 
+    /// Show tokens per harness and model from the local data store; cost is
+    /// not computed (for disk space, see `storage usage`)
+    Usage {
+        /// Only turns started on or after this day, YYYY-MM-DD
+        #[arg(long)]
+        since: Option<String>,
+        /// Print the totals as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Inspect the local data store: threads, turns and tool calls, metadata only
+    Data {
+        #[command(subcommand)]
+        command: DataCommands,
+    },
+
     /// Configure RustCode's optional local Discord Rich Presence publisher
     Discord {
         /// Enable Rich Presence and print desktop Discord setup guidance
@@ -533,7 +550,8 @@ pub enum StorageCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Show how much space each store of RustCode's data takes, without changing files
+    /// Show how much disk space each store of RustCode's data takes, without
+    /// changing files (`rustcode usage` reports tokens, not bytes)
     Usage {
         /// Print the report as JSON, with each store's paths
         #[arg(long)]
@@ -548,6 +566,24 @@ pub enum StorageCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum DataCommands {
+    /// Run one read-only SQL query over the data store (one statement, at most
+    /// 1000 rows or 2 s)
+    #[command(after_help = "Examples:
+  rustcode data query \"SELECT * FROM threads LIMIT 5\"
+  rustcode data query \"SELECT * FROM daily_usage ORDER BY day DESC LIMIT 10\" --json")]
+    Query {
+        /// The statement, quoted; only reads, and only the data store
+        sql: String,
+        /// Print the rows as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the tables and views of the data store with their columns
+    Schema,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1314,6 +1350,43 @@ mod tests {
         ] {
             assert!(mcp_add(args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn parses_usage_and_data_commands() {
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "usage"]).unwrap().command,
+            Some(Commands::Usage {
+                since: None,
+                json: false
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "usage", "--since", "2026-11-01", "--json"])
+                .unwrap()
+                .command,
+            Some(Commands::Usage { since: Some(day), json: true }) if day == "2026-11-01"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "data", "schema"])
+                .unwrap()
+                .command,
+            Some(Commands::Data {
+                command: DataCommands::Schema
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "data", "query", "SELECT 1", "--json"])
+                .unwrap()
+                .command,
+            Some(Commands::Data {
+                command: DataCommands::Query { sql, json: true }
+            }) if sql == "SELECT 1"
+        ));
+        assert!(
+            Cli::try_parse_from(["rustcode", "data", "query"]).is_err(),
+            "the statement is required"
+        );
     }
 
     #[test]

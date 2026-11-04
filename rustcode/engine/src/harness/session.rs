@@ -605,6 +605,13 @@ impl ExternalSession {
             .cancel
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&cancel));
+        let started_at = chrono::Utc::now();
+        let history_from = self
+            .transcript
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .history
+            .len();
         let result = self.run_turn(prompt, &cancel).await;
         *self
             .cancel
@@ -616,7 +623,111 @@ impl ExternalSession {
             .unwrap_or_else(|error| error.into_inner())
             .end_reply();
         self.save_history();
+        self.record_turn_in_data_store(started_at, history_from, &result)
+            .await;
         result
+    }
+
+    /// One row per turn in `data.sqlite` (`crate::data_store`): what the
+    /// session spent, its outcome and its tool calls. Metadata only; a failure
+    /// is logged there and never fails the turn.
+    ///
+    /// The harness reports cumulative session usage, so the row keeps the
+    /// growth over what this thread already has for the harness. When the
+    /// `usage_update` carries no token totals (the context gauge is not one),
+    /// the harness's own log is read for them, off the async runtime.
+    async fn record_turn_in_data_store(
+        &self,
+        started_at: chrono::DateTime<chrono::Utc>,
+        history_from: usize,
+        result: &Result<StopReason, String>,
+    ) {
+        if !self.persist {
+            return;
+        }
+        let (usage, tool_calls) = {
+            let transcript = self
+                .transcript
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let usage = transcript.usage.clone();
+            let calls = transcript
+                .history
+                .get(history_from.min(transcript.history.len())..)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|message| {
+                    let recorded = message.tool_result.as_ref()?;
+                    if recorded.pending {
+                        return None;
+                    }
+                    Some(crate::data_store::ToolCallRow {
+                        tool_name: recorded.tool_name.clone(),
+                        success: Some(recorded.success),
+                        exit_code: recorded.exit_code.map(i64::from),
+                        at: (!message.timestamp.is_empty()).then(|| message.timestamp.clone()),
+                    })
+                })
+                .collect::<Vec<_>>();
+            (usage, calls)
+        };
+        let record = self.record();
+        let mut cumulative = crate::data_store::SessionUsage {
+            tokens: usage
+                .as_ref()
+                .and_then(crate::data_store::totals)
+                .unwrap_or_default(),
+            cost_usd: usage.as_ref().and_then(crate::data_store::cost_usd),
+            at: None,
+        };
+        if cumulative.tokens.is_empty() {
+            let harness = self.harness.id.clone();
+            let native = record.native_session_id.clone();
+            let cwd = self.cwd.clone();
+            let scanned = tokio::task::spawn_blocking(move || {
+                crate::harness_usage::session_usage(
+                    &harness,
+                    native.as_deref(),
+                    Some(cwd.as_path()),
+                )
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(logged) = scanned {
+                cumulative.tokens = logged.tokens;
+                if cumulative.cost_usd.is_none() {
+                    cumulative.cost_usd = logged.cost_usd;
+                }
+                cumulative.at = logged.at;
+            }
+        }
+        let finished_at = chrono::Utc::now();
+        crate::data_store::record_cumulative_turn(
+            &crate::data_store::TurnRow {
+                thread_id: self.id.clone(),
+                started_at: started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                finished_at: Some(finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+                harness: Some(self.harness.id.clone()),
+                model: record.model.clone(),
+                input_tokens: None,
+                output_tokens: None,
+                cached_tokens: None,
+                cache_write_tokens: None,
+                cost_usd: None,
+                status: match result {
+                    Ok(StopReason::EndTurn) => "completed".to_owned(),
+                    Ok(StopReason::Cancelled) => "cancelled".to_owned(),
+                    Ok(StopReason::MaxTokens) => "max_tokens".to_owned(),
+                    Ok(StopReason::MaxTurnRequests) => "max_turn_requests".to_owned(),
+                    Ok(StopReason::Refusal) => "refused".to_owned(),
+                    Ok(_) => "completed".to_owned(),
+                    Err(_) => "failed".to_owned(),
+                },
+                tool_calls,
+            },
+            cumulative,
+        );
     }
 
     async fn run_turn(

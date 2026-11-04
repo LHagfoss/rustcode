@@ -151,3 +151,17 @@ numbered and recorded with their names, and a name mismatch refuses to open
 instead of skipping a step. `_rustcode/threads/search { query, limit? }`
 answers `{ results: [{ session_id, title, snippet, updated_at }] }`.
 
+## Local data store
+
+`~/.config/rustcode/data.sqlite` (`engine/src/data_store.rs`) keeps the
+metadata the folders cannot answer cheaply: threads, turns (tokens, cost,
+outcome, tool-call count) and tool calls, plus a `daily_usage` view by day,
+harness and model. It is not a cache like the thread index: per-turn token
+deltas of an external harness cannot be rebuilt, so the file is kept.
+Metadata only — no message text, tool arguments or output. The engine writes
+it beside `track_usage` for its own turns and when an external harness's
+prompt returns (reading Claude Code's and Pi's own session logs for the token
+counts their `usage_update` omits), backfills existing folders once in the
+background, and exposes reads through `rustcode usage` and
+`rustcode data query`. See [data store](data-store.md).
+

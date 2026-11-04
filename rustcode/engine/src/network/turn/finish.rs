@@ -331,6 +331,17 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     if let Some(u) = &turn_usage {
         crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
     }
+    // The turn, its tokens and its tool calls, as metadata only, for the local
+    // data store (`docs/data-store.md`). A failure there is logged and cannot
+    // fail the turn.
+    record_data_store_turn(
+        &s,
+        &active_id,
+        turn_started_at,
+        turn_usage.as_ref(),
+        outcome,
+        latest_user_index,
+    );
     s.current_token_usage = usage;
     drop(s);
 
@@ -342,6 +353,61 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     let notification = finished_notification_status(&ctx, cancel_token.is_cancelled());
     let _ = crate::notifications::notify_finished(notification);
     ctx
+}
+
+/// Writes one finished turn to `data.sqlite` (`crate::data_store`): its
+/// tokens, its outcome and the tool calls made after its last user message.
+/// Metadata only: no message text, tool arguments or output.
+fn record_data_store_turn(
+    s: &AppState,
+    session_id: &str,
+    turn_started_at: std::time::Instant,
+    usage: Option<&rustcode_core::TokenUsage>,
+    outcome: Option<crate::app::TurnOutcome>,
+    latest_user_index: Option<usize>,
+) {
+    // A turn that only resumes work later (a pending background task) has no
+    // outcome yet; its next finish writes the row.
+    let Some(outcome) = outcome else { return };
+    let finished_at = chrono::Utc::now();
+    let started_at =
+        finished_at - chrono::Duration::from_std(turn_started_at.elapsed()).unwrap_or_default();
+    let tool_calls = latest_user_index
+        .map(|index| &s.history[index + 1..])
+        .unwrap_or(&s.history)
+        .iter()
+        .filter_map(|message| {
+            let result = message.tool_result.as_ref()?;
+            if result.pending {
+                return None;
+            }
+            Some(crate::data_store::ToolCallRow {
+                tool_name: result.tool_name.clone(),
+                success: Some(result.success),
+                exit_code: result.exit_code.map(i64::from),
+                at: (!message.timestamp.is_empty()).then(|| message.timestamp.clone()),
+            })
+        })
+        .collect();
+    crate::data_store::record_turn(&crate::data_store::TurnRow {
+        thread_id: session_id.to_owned(),
+        started_at: started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        finished_at: Some(finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        harness: Some(crate::harness::BUILTIN_ID.to_owned()),
+        model: s.active_model_profile().map(|profile| profile.model),
+        input_tokens: usage.map(|tokens| i64::from(tokens.prompt_tokens)),
+        output_tokens: usage.map(|tokens| i64::from(tokens.completion_tokens)),
+        cached_tokens: usage.and_then(|tokens| tokens.cached_tokens).map(i64::from),
+        cache_write_tokens: None,
+        cost_usd: None,
+        status: match outcome {
+            crate::app::TurnOutcome::Completed => "completed",
+            crate::app::TurnOutcome::Cancelled => "cancelled",
+            crate::app::TurnOutcome::Failed => "failed",
+        }
+        .to_owned(),
+        tool_calls,
+    });
 }
 
 fn finished_notification_status(
