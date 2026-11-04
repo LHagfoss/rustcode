@@ -4,10 +4,11 @@
 // usable. The model's name drills into the model list. What the thread's
 // harness cannot do is greyed out with the reason, from capability flags.
 
-import { ChevronLeft, ChevronRight, ChevronUp, Lock, Zap } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronUp, Lock, Search, Zap } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type ConfigOption, effortLabel, type Harness, modelName } from "../acp/types";
+import { matchModels } from "../lib/modelSearch";
 import {
   controlDisabledReason,
   defaultEffort,
@@ -178,98 +179,155 @@ function EffortSlider({
   );
 }
 
-function ModelList({
+/**
+ * The model browser: providers (harnesses) in a column on the left, their
+ * models at the right under a search that opens focused. A model's name and
+ * its id both match; hundreds of models show a window, and the rest wait
+ * behind a `keep typing` line.
+ */
+function ModelBrowser({
+  providers,
+  provider,
   choices,
   current,
+  canSwitch,
+  onProvider,
   onPick,
 }: {
+  providers: Harness[];
+  /** The harness the models below belong to. */
+  provider: string;
   choices: Choice[];
   current?: string | null;
+  /** A running turn keeps its harness: then the column only shows where they came from. */
+  canSwitch: boolean;
+  onProvider: (id: string) => void;
   onPick: (v: string) => void;
 }) {
   const [filter, setFilter] = useState("");
-  const shown = useMemo(() => {
-    const f = filter.toLowerCase();
-    return f ? choices.filter((c) => `${c.name} ${c.description ?? ""}`.toLowerCase().includes(f)) : choices;
-  }, [choices, filter]);
+  const [active, setActive] = useState(0);
+  const field = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const { shown, total } = useMemo(() => matchModels(filter, choices), [filter, choices]);
+  const columns = providers.length > 1;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new query or provider starts at the top
+  useEffect(() => setActive(0), [filter, provider]);
+  useEffect(() => {
+    field.current?.focus();
+  }, []);
+  useEffect(() => {
+    list.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, []);
+  const move = (by: number) => setActive((i) => Math.min(Math.max(i + by, 0), Math.max(shown.length - 1, 0)));
   return (
-    <div className="flex flex-col gap-1">
-      {choices.length > 8 && (
+    <div
+      className="flex flex-col gap-1.5"
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          move(1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          move(-1);
+        } else if (e.key === "Enter") {
+          const pick = shown[active];
+          if (pick) {
+            e.preventDefault();
+            onPick(pick.value);
+          }
+        }
+      }}
+    >
+      <div className="flex h-8 items-center gap-1.5 rounded-full bg-fill-subtle px-3">
+        <Search size={13} className="shrink-0 text-fg-faint" />
         <input
-          autoFocus
+          ref={field}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter models"
-          aria-label="Filter models"
-          className="mb-1 h-[34px] rounded-full bg-fill-subtle px-3.5 text-body outline-none placeholder:text-fg-faint"
+          placeholder="Search models"
+          aria-label="Search models"
+          aria-controls="model-list"
+          aria-activedescendant={shown[active] ? `model-${shown[active]!.value}` : undefined}
+          className="h-full min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-fg-faint"
         />
-      )}
-      <div className="max-h-[260px] overflow-y-auto" role="listbox" aria-label="Models">
-        {shown.map((c) => (
-          <button
-            key={c.value}
-            type="button"
-            role="option"
-            aria-selected={c.value === current}
-            onClick={() => onPick(c.value)}
-            className={cx(
-              "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-fill",
-              c.value === current && "bg-accent/15",
-            )}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-body">{modelName(c.name)}</span>
-              {c.description && c.description !== modelName(c.name) && (
-                <span className="block truncate text-caption text-fg-muted">{c.description}</span>
-              )}
-            </span>
-            {c.value === current && <span className="text-accent">✓</span>}
-          </button>
-        ))}
-        {!shown.length && (
-          <div className="px-2.5 py-3 text-center text-callout text-fg-muted">No matching models</div>
-        )}
       </div>
-    </div>
-  );
-}
-
-function HarnessList({
-  harnesses,
-  current,
-  onPick,
-}: {
-  harnesses: Harness[];
-  current: string;
-  onPick: (id: string) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5" role="listbox" aria-label="Harness">
-      {harnesses.map((h) => {
-        const reason = unavailableReason(h);
-        return (
-          <Tooltip key={h.id} label={reason} side="left">
+      <div className="flex min-h-0 gap-1.5">
+        {columns && (
+          <div
+            className="flex w-[124px] shrink-0 flex-col gap-0.5 overflow-y-auto border-border/60 border-r pr-1.5"
+            role="listbox"
+            aria-label="Providers"
+          >
+            {providers.map((h) => {
+              const reason = unavailableReason(h);
+              const blocked =
+                reason ?? (!canSwitch && h.id !== provider ? "Stop the turn to switch harness" : undefined);
+              return (
+                <Tooltip key={h.id} label={reason ?? blocked ?? `${h.name} models`} side="left">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={h.id === provider}
+                    aria-disabled={!!blocked}
+                    onClick={() => !blocked && onProvider(h.id)}
+                    className={cx(
+                      "flex h-7 shrink-0 items-center gap-1.5 rounded-sm px-2 text-left text-callout",
+                      h.id === provider
+                        ? "bg-fill font-medium text-fg"
+                        : blocked
+                          ? "text-fg-muted opacity-45"
+                          : "text-fg-muted hover:bg-fill-subtle hover:text-fg",
+                    )}
+                  >
+                    <HarnessIcon id={h.id} name={h.name} size={13} className="shrink-0" />
+                    <span className="min-w-0 truncate">{h.name}</span>
+                  </button>
+                </Tooltip>
+              );
+            })}
+          </div>
+        )}
+        <div
+          ref={list}
+          id="model-list"
+          className="max-h-[268px] min-w-0 flex-1 overflow-y-auto"
+          role="listbox"
+          aria-label="Models"
+        >
+          {shown.map((c, i) => (
             <button
+              key={c.value}
+              id={`model-${c.value}`}
               type="button"
               role="option"
-              aria-selected={h.id === current}
-              aria-disabled={!!reason}
-              onClick={() => !reason && onPick(h.id)}
+              aria-selected={c.value === current}
+              data-active={i === active}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => onPick(c.value)}
               className={cx(
-                "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left",
-                reason ? "opacity-45" : "hover:bg-fill",
-                h.id === current && "bg-fill",
+                "flex w-full items-center gap-2 rounded-lg px-2.5 py-[7px] text-left",
+                i === active ? "bg-fill" : "hover:bg-fill-subtle",
               )}
             >
-              <HarnessIcon id={h.id} name={h.name} size={16} className="text-fg" />
-              <span className="flex-1 text-body">{h.name}</span>
-              <span className="text-caption text-fg-muted">
-                {reason ? "Unavailable" : h.builtin ? "Built in" : h.kind.toUpperCase()}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-body">{modelName(c.name)}</span>
+                {c.description && c.description !== modelName(c.name) && (
+                  <span className="block truncate text-caption text-fg-muted">{c.description}</span>
+                )}
               </span>
+              {c.value === current && <span className="shrink-0 text-accent">✓</span>}
             </button>
-          </Tooltip>
-        );
-      })}
+          ))}
+          {!shown.length && (
+            <div className="px-2.5 py-3 text-center text-callout text-fg-muted">No matching models</div>
+          )}
+          {total > shown.length && (
+            <p className="px-2.5 pt-1 pb-0.5 text-caption text-fg-faint">
+              Keep typing · {total - shown.length} more
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -392,7 +450,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     seenAsk.current = ask;
     setOpen(true);
   }, [ask]);
-  const [pane, setPane] = useState<"main" | "models" | "harness">("main");
+  const [pane, setPane] = useState<"main" | "models">("main");
   const [preview, setPreview] = useState<string | null>(null);
 
   const isNew = !thread;
@@ -433,6 +491,22 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const pickEffort = (value: string) => {
     if (thread) void setConfigOption(thread.id, "effort", value);
     else setChoice({ effort: value });
+  };
+
+  // The providers worth listing: RustCode turned off in Settings › Agents leaves the list, and a
+  // thread moves only to an external harness (RustCode cannot take one over yet).
+  const providers = (harnesses?.harnesses ?? []).filter((h) =>
+    isNew ? !h.builtin || h.enabled || h.id === effective.harness : !h.builtin || h.id === harness?.id,
+  );
+  const providerId = isNew ? effective.harness : (harness?.id ?? "rustcode");
+  const canSwitch = isNew || !thread?.running;
+  const pickProvider = (id: string) => {
+    if (id === providerId) return;
+    if (isNew) switchNewThreadHarness(id);
+    else if (thread) void switchThreadHarness(thread.id, id);
+    // A harness lists its models only when asked; the browser says so until it does.
+    const next = providers.find((h) => h.id === id);
+    if (next && !next.models.length) void ensureHarnessModels(id);
   };
 
   const effortReason = controlDisabledReason("effort", caps, harnessName);
@@ -489,7 +563,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 w-[min(340px,calc(100vw-40px))] overflow-hidden p-1.5"
+          className="elevated z-40 w-[min(420px,calc(100vw-40px))] overflow-hidden p-1.5"
         >
           {shownPane === "main" && (
             <div key="main" className="flex flex-col gap-2 rc-drill-back">
@@ -545,28 +619,21 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
               {showHarness && (
                 <button
                   type="button"
-                  disabled={!isNew && !!thread?.running}
-                  onClick={() => setPane("harness")}
-                  className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-left hover:bg-fill disabled:hover:bg-transparent"
+                  onClick={() => setPane("models")}
+                  className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-left hover:bg-fill"
                 >
                   <span className="text-callout text-fg-muted">Harness</span>
                   <span className="flex flex-1 items-center justify-end gap-1.5 truncate font-medium text-callout">
                     <HarnessIcon id={harness?.id ?? "rustcode"} name={harnessName} size={14} />
                     {harnessName}
                   </span>
-                  {isNew || !thread?.running ? (
-                    <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
-                  ) : (
-                    <Tooltip label="Stop the turn to switch harness">
-                      <Lock size={11} className="text-fg-faint" />
-                    </Tooltip>
-                  )}
+                  <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
                 </button>
               )}
             </div>
           )}
-          {shownPane !== "main" && (
-            <div key={shownPane} className="flex flex-col gap-1.5 rc-drill">
+          {shownPane === "models" && (
+            <div key="models" className="flex flex-col gap-1.5 rc-drill">
               {!listOnly && (
                 <button
                   type="button"
@@ -574,27 +641,18 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                   className="flex h-7 items-center gap-1 self-start rounded-full px-2 font-semibold text-callout text-fg-muted hover:bg-fill"
                 >
                   <ChevronLeft size={13} />
-                  {shownPane === "models" ? "Models" : "Harness"}
+                  Models
                 </button>
               )}
-              {shownPane === "models" && <ModelList choices={models} current={model} onPick={pickModel} />}
-              {shownPane === "harness" && harnesses && (
-                <HarnessList
-                  // RustCode turned off in Settings › Agents leaves the list.
-                  // A thread moves only to an external harness: RustCode cannot take one over yet.
-                  harnesses={harnesses.harnesses.filter((h) =>
-                    isNew
-                      ? !h.builtin || h.enabled || h.id === effective.harness
-                      : !h.builtin || h.id === harness?.id,
-                  )}
-                  current={isNew ? effective.harness : (harness?.id ?? "rustcode")}
-                  onPick={(id) => {
-                    if (isNew) switchNewThreadHarness(id);
-                    else if (thread && id !== harness?.id) void switchThreadHarness(thread.id, id);
-                    setPane("main");
-                  }}
-                />
-              )}
+              <ModelBrowser
+                providers={providers}
+                provider={providerId}
+                choices={models}
+                current={model}
+                canSwitch={canSwitch}
+                onProvider={pickProvider}
+                onPick={pickModel}
+              />
             </div>
           )}
         </Popover.Content>

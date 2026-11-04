@@ -19,6 +19,7 @@ import remarkGfm from "remark-gfm";
 import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/fileRefs";
 import { highlight, peekHighlight } from "../lib/highlight";
 import { markdownBlocks } from "../lib/markdownBlocks";
+import { remarkMathAsCode, remarkMoneySafeMath } from "../lib/markdownMath";
 import { openExternal, openInEditor } from "../lib/native";
 import { advance, newRevealState, type RevealState, rehypeReveal } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
@@ -145,6 +146,65 @@ function shortUrl(href: string, children: ReactNode): ReactNode {
 /** Starts the inline code that stands for a sent message's leading command: drawn as a chip. */
 export const COMMAND_MARK = "\u2063";
 
+// ---------------------------------------------------------------- math
+
+let katex: Promise<typeof import("katex")> | undefined;
+
+/**
+ * KaTeX and its stylesheet, the first time a reply holds math: neither is in the app's
+ * startup bundle, and a thread without formulas never downloads them.
+ */
+function loadKatex(): Promise<typeof import("katex")> {
+  katex ??= (async () => {
+    const [mod] = await Promise.all([import("katex"), import("katex/dist/katex.min.css")]);
+    return mod;
+  })();
+  return katex;
+}
+
+/** A formula: TeX until KaTeX arrives (or forever, if it cannot parse it). */
+const Formula = memo(function Formula({ tex, display }: { tex: string; display: boolean }) {
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadKatex().then(
+      (k) => {
+        if (!live) return;
+        try {
+          setHtml(
+            k.default.renderToString(tex, { displayMode: display, throwOnError: false, strict: false }),
+          );
+        } catch {
+          setHtml(null);
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [tex, display]);
+  if (html)
+    return (
+      <span
+        // KaTeX escapes what it writes; the HTML holds only its own spans and MathML.
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: rendered by KaTeX from escaped input
+        dangerouslySetInnerHTML={{ __html: html }}
+        className={display ? "block overflow-x-auto py-0.5" : "inline-block align-middle"}
+      />
+    );
+  return (
+    <code
+      className={cx(
+        "rounded-sm bg-fill px-[0.35em] py-[0.1em] font-mono text-[0.85em] [box-decoration-break:clone]",
+        display && "block overflow-x-auto whitespace-pre",
+      )}
+    >
+      {tex}
+    </code>
+  );
+});
+
 const components: Components = {
   h1: ({ children }) => (
     <h1 className="mt-2.5 font-semibold text-[20px] text-fg leading-[1.3]">{children}</h1>
@@ -203,6 +263,9 @@ const components: Components = {
     // A fenced block has a language class or spans lines; inline code has neither.
     const block = lang !== undefined || text.includes("\n");
     void node;
+    // remark-math's formulas, as `remarkMathAsCode` hands them over.
+    if (lang === "math" || lang === "inline-math")
+      return <Formula tex={text.replace(/\n$/, "")} display={lang === "math"} />;
     if (block && lang === "mermaid") {
       const source = text.replace(/\n$/, "");
       return <MermaidBlock code={source} fallback={<CodeBlock code={source} lang={lang} />} />;
@@ -236,7 +299,7 @@ const components: Components = {
   },
 };
 
-const plugins = [remarkGfm];
+const plugins = [remarkGfm, remarkMoneySafeMath, remarkMathAsCode];
 
 /** react-markdown's safe URLs, plus `file://` and `data:image/` for pictures (MarkdownMedia.tsx checks them). */
 export function urlTransform(url: string, key: string): string {
