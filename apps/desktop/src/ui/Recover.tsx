@@ -6,6 +6,7 @@
 import { RotateCw } from "lucide-react";
 import { Component, type ReactNode, useEffect, useState } from "react";
 import { refreshHarnesses, toast } from "../state/store";
+import { Pill } from "./primitives";
 
 const listeners = new Set<() => void>();
 
@@ -35,13 +36,9 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
         <pre className="selectable m-0 max-w-[560px] overflow-auto rounded-md bg-code-bg p-2.5 text-left font-mono text-caption text-fg-muted">
           {error.message}
         </pre>
-        <button
-          type="button"
-          onClick={softReload}
-          className="flex h-8 items-center gap-1.5 rounded-full bg-fg px-4 font-medium text-bg text-callout"
-        >
+        <Pill prominent size="lg" onClick={softReload}>
           <RotateCw size={13} /> Reload view <span className="text-bg/60">⌘R</span>
-        </button>
+        </Pill>
       </div>
     );
   }

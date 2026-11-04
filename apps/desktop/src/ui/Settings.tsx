@@ -591,22 +591,13 @@ function Appearance() {
         action={
           <div className="flex items-center gap-1">
             {hasShell() && (
-              <button
-                type="button"
-                onClick={() => revealPath(userDir)}
-                className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-              >
+              <Pill quiet size="sm" onClick={() => revealPath(userDir)}>
                 <FolderOpen size={12} /> Open themes folder
-              </button>
+              </Pill>
             )}
-            <button
-              type="button"
-              onClick={() => setCreating(!creating)}
-              aria-expanded={creating}
-              className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-            >
+            <Pill quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
               <Plus size={12} /> New theme…
-            </button>
+            </Pill>
           </div>
         }
         footer={
