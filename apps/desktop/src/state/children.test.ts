@@ -6,6 +6,8 @@ import {
   childState,
   childSummary,
   childVisible,
+  FINISHED_FOLD_AT,
+  foldFinished,
   orderChildren,
   pruneOpenGroups,
   unseenChild,
@@ -127,6 +129,52 @@ describe("the groups the reader opened", () => {
     expect(pruneOpenGroups(groups, [])).toEqual({});
     // A parent that is still listed keeps the state it was given.
     expect(pruneOpenGroups({ a: false }, ["a"])).toEqual({ a: false });
+  });
+});
+
+describe("the finished ones behind the group's last line", () => {
+  test("a few finished children with nothing live beside them simply show", () => {
+    const two = [child("a", "finished"), child("b", "finished")];
+    expect(foldFinished(two, null)).toEqual({ rows: two, folded: [], fold: false });
+    expect(foldFinished([child("a", "failed"), child("b", "finished")], null).fold).toBe(false);
+  });
+
+  test("finished children beside a live one fold, however few they are", () => {
+    const mixed = [child("needs", "needs"), child("done", "finished")];
+    expect(foldFinished(mixed, null)).toEqual({
+      rows: [mixed[0]!],
+      folded: [mixed[1]!],
+      fold: true,
+    });
+  });
+
+  test("more than three finished ones fold on their own", () => {
+    const many = [
+      child("a", "finished"),
+      child("b", "finished"),
+      child("c", "finished"),
+      child("d", "finished"),
+    ];
+    expect(many.length).toBeGreaterThan(FINISHED_FOLD_AT);
+    expect(foldFinished(many, null).fold).toBe(true);
+    // Exactly three still show: the line costs more than it saves.
+    expect(foldFinished(many.slice(0, FINISHED_FOLD_AT), null).fold).toBe(false);
+  });
+
+  test("a group closed by hand still lists what cannot be closed away", () => {
+    const children = [child("needs", "needs"), child("work", "working"), child("done", "finished")];
+    const closed = foldFinished(children, null, true);
+    expect(closed.rows.map((c) => c.id)).toEqual(["needs", "work"]);
+    expect(closed.folded.map((c) => c.id)).toEqual(["done"]);
+    // The one they opened stays too, so closing the group never hides the thread in the pane.
+    expect(foldFinished([child("open", "finished")], "open", true).rows.map((c) => c.id)).toEqual(["open"]);
+  });
+
+  test("the thread you opened stays a row, and keeps its place in the fold", () => {
+    const children = [child("work", "working"), child("open", "finished"), child("shut", "finished")];
+    const { rows, folded } = foldFinished(children, "open");
+    expect(rows.map((c) => c.id)).toEqual(["work", "open"]);
+    expect(folded.map((c) => c.id)).toEqual(["shut"]);
   });
 });
 
