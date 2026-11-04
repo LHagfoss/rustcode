@@ -2,8 +2,7 @@
 // search field with a filter menu, then one list: pinned threads first, then
 // every active thread (by project when asked), each saying in its right slot
 // what it does (Working, Approval, Input, Failed, Done until you open it), and
-// Settled (threads marked Done) as a shelf at the foot. ⌘1–⌘9 open the
-// first nine rows; holding ⌘ shows which is which.
+// Settled (threads marked Done) as a shelf at the foot.
 
 import {
   Check,
@@ -380,7 +379,6 @@ const ThreadRow = memo(function ThreadRow({
   scopeAll,
   now,
   snippet,
-  jump,
   compact,
   hasChildren,
 }: {
@@ -390,8 +388,6 @@ const ThreadRow = memo(function ThreadRow({
   now: number;
   /** While searching: the words around the match in what was said. */
   snippet?: string;
-  /** While ⌘ is held: the digit that opens this row. */
-  jump?: number;
   /** A child of the thread above it: one line, its harness and what it is doing, no meta line. */
   compact?: boolean;
   /** The sidebar lists this thread's children under it, which already say what the links are. */
@@ -558,9 +554,7 @@ const ThreadRow = memo(function ThreadRow({
               </span>
               <LinkBadge threadId={session.id} childrenListed={hasChildren} />
               <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
-                {jump !== undefined ? (
-                  <kbd className="rounded-sm bg-fill px-1 font-sans text-fg-muted">⌘{jump}</kbd>
-                ) : request ? (
+                {request ? (
                   <>
                     {request.question ? (
                       <MessageCircleQuestion size={12} className="text-accent" />
@@ -1255,59 +1249,6 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  // ⌘1–⌘9 open the first nine rows as they show; holding ⌘ labels them.
-  const searching = !!query.trim();
-  const jumpOrder = useMemo(() => {
-    const out: string[] = [];
-    for (const section of sections) {
-      if (section.id === "settled") continue;
-      if (section.projects) {
-        for (const p of section.projects)
-          if (searching || !folded.includes(`project:${p.key}`)) out.push(...p.items.map((x) => x.id));
-      } else out.push(...section.items.map((x) => x.id));
-    }
-    return out.slice(0, 9);
-  }, [sections, folded, searching]);
-  const [metaHeld, setMetaHeld] = useState(false);
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const down = (e: KeyboardEvent) => {
-      if (e.key === "Meta") {
-        timer = setTimeout(() => setMetaHeld(true), 200);
-        return;
-      }
-      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
-        const id = jumpOrder[Number(e.key) - 1];
-        if (!id) return;
-        e.preventDefault();
-        selectThread(id);
-      }
-    };
-    const up = (e: KeyboardEvent) => {
-      if (e.key !== "Meta") return;
-      clearTimeout(timer);
-      setMetaHeld(false);
-    };
-    const blur = () => {
-      clearTimeout(timer);
-      setMetaHeld(false);
-    };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    window.addEventListener("blur", blur);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", blur);
-    };
-  }, [jumpOrder]);
-  const jumpOf = (id: string) => {
-    if (!metaHeld) return undefined;
-    const i = jumpOrder.indexOf(id);
-    return i < 0 ? undefined : i + 1;
-  };
-
   const rows = (items: SessionSummary[], scopeAll: boolean) => (
     <div className="flex flex-col gap-px">
       {items.map((s) => (
@@ -1318,7 +1259,6 @@ export function Sidebar() {
             scopeAll={scopeAll}
             now={now}
             snippet={query.trim() ? contentHits[s.id] : undefined}
-            jump={jumpOf(s.id)}
             hasChildren={!!childrenOf[s.id]?.length}
           />
           {childrenOf[s.id] && (
