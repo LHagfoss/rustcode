@@ -35,6 +35,7 @@ import type { Json } from "../acp/jsonrpc";
 import { effortLabel, type FileDiff, modelName } from "../acp/types";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
+import { useHighlightedLines } from "../lib/useHighlightedLines";
 import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
@@ -388,8 +389,22 @@ function TextBox({ text, label }: { text: string; label: string }) {
   );
 }
 
+function DiffCode({ text, html }: { text: string; html: string | null | undefined }) {
+  return html ? (
+    // Shiki escapes the code; the HTML holds only spans with colour variables.
+    // biome-ignore lint/security/noDangerouslySetInnerHtml: highlighted, escaped output
+    <span className="shiki whitespace-pre" dangerouslySetInnerHTML={{ __html: html }} />
+  ) : (
+    <span className="whitespace-pre">{text || " "}</span>
+  );
+}
+
 export function DiffView({ diff, header = true }: { diff: FileDiff; header?: boolean }) {
   const lines = useMemo(() => diffLines(diff), [diff]);
+  const newSource = useMemo(() => (diff.newText ? diff.newText.split("\n") : []), [diff.newText]);
+  const oldSource = useMemo(() => (diff.oldText ? diff.oldText.split("\n") : []), [diff.oldText]);
+  const newHtml = useHighlightedLines(newSource, diff.path);
+  const oldHtml = useHighlightedLines(oldSource, diff.path);
   const [all, setAll] = useState(false);
   const counts = useMemo(() => diffCounts([diff]), [diff]);
   const shown = all || lines.length <= 15 ? lines : lines.slice(0, 12);
@@ -435,7 +450,14 @@ export function DiffView({ diff, header = true }: { diff: FileDiff; header?: boo
               >
                 {line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}
               </span>
-              <span className="whitespace-pre">{line.text || " "}</span>
+              <DiffCode
+                text={line.text}
+                html={
+                  line.kind === "removed"
+                    ? oldHtml[(line.oldNumber ?? 0) - diff.oldStart]
+                    : newHtml[(line.newNumber ?? 0) - diff.newStart]
+                }
+              />
             </div>
           ))}
         </div>
