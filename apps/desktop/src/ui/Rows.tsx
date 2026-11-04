@@ -73,11 +73,17 @@ export const UserRow = memo(function UserRow({
   item,
   threadId,
   rewind,
+  before,
+  after,
 }: {
   item: Item<"user">;
   threadId?: string;
   /** Edit and Retry take the thread back to this message (`_rustcode/rewind`). */
   rewind?: boolean;
+  /** The message after this one is the sender's too. */
+  before?: boolean;
+  /** The message before this one is the sender's too. */
+  after?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
@@ -145,7 +151,16 @@ export const UserRow = memo(function UserRow({
           ))}
         </div>
       )}
-      <div className={cx("relative max-w-[80%] rounded-2xl bg-fill px-3.5 py-2.5", !text && "hidden")}>
+      <div
+        className={cx(
+          // A card a step off the pane, not a fill that moves with the text colour. Messages sent
+          // one after another soften the corners they share, so they read as one run.
+          "relative max-w-[80%] rounded-2xl bg-message p-3",
+          after && "rounded-tr-md",
+          before && "rounded-br-md",
+          !text && "hidden",
+        )}
+      >
         <div
           ref={body}
           className={cx(
@@ -166,12 +181,12 @@ export const UserRow = memo(function UserRow({
           </Pill>
         )}
       </div>
-      {/* Time and actions show on hover. */}
-      <div className="mt-0.5 flex h-[22px] items-center gap-1 text-caption text-fg-faint opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
+      {/* Time and actions show on hover, clipped to the bubble's width. */}
+      <div className="mt-0.5 flex h-[22px] max-w-[80%] min-w-0 items-center gap-1 overflow-hidden text-sub text-fg-faint opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
-          <span className="tabular">{messageTime(item.at)}</span>
+          <span className="truncate tabular">{messageTime(item.at)}</span>
         </Tooltip>
         <CopyButton text={item.text} iconOnly label="Copy message" />
         {threadId && (
@@ -528,17 +543,17 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         >
           <span className="flex w-[18px] shrink-0 justify-center">
             {running ? (
-              <Spinner size={12} />
+              <Spinner size={14} />
             ) : failed ? (
-              <CircleX size={13} className="text-danger" />
+              <CircleX size={16} className="text-danger" />
             ) : (
-              <Icon size={13} className="text-fg-muted" />
+              <Icon size={16} className="text-fg-muted" />
             )}
           </span>
-          <span className="min-w-0 max-w-full shrink truncate text-callout text-fg-muted" title={item.title}>
+          <span className="min-w-0 max-w-full shrink truncate text-body text-fg-muted" title={item.title}>
             {title}
           </span>
-          {summary && <span className="min-w-0 shrink truncate text-callout text-fg-faint">{summary}</span>}
+          {summary && <span className="min-w-0 shrink truncate text-body text-fg-faint">{summary}</span>}
           {shownDetail && (
             <span
               className={cx(
@@ -816,7 +831,9 @@ export const ToolGroupRow = memo(function ToolGroupRow({
   onToggle: (key: string) => void;
 }) {
   return (
-    <div>
+    // Two or more finished calls read as one step of the turn, closed by a hairline so the run
+    // below it is told apart from the answer that follows.
+    <div className="border-border/60 border-b pb-2">
       <button
         type="button"
         aria-expanded={group.open}
@@ -828,10 +845,10 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         <span className="flex w-[18px] shrink-0 justify-center">
           {(() => {
             const Icon = (group.kind && KIND_ICON[group.kind]) || Layers;
-            return <Icon size={13} className="text-fg-muted" />;
+            return <Icon size={16} className="text-fg-muted" />;
           })()}
         </span>
-        <span className="min-w-0 truncate text-callout text-fg-muted">{group.label}</span>
+        <span className="min-w-0 truncate text-body text-fg-muted">{group.label}</span>
         {group.failed > 0 && (
           <span className="flex shrink-0 items-center gap-0.5 text-caption text-danger">
             <CircleX size={11} aria-hidden />
@@ -928,9 +945,9 @@ export function WorkingRow({ startedAt, now }: { startedAt?: number; now: number
 /** The running turn's foot while nothing else shows it working: what it does now, shimmering. */
 export function LiveActivityRow({ label }: { label: string }) {
   return (
-    <div className="flex min-h-6 items-center gap-2 text-callout" role="status" aria-live="polite">
+    <div className="flex min-h-6 items-center gap-2 text-body" role="status" aria-live="polite">
       <span className="flex w-[18px] shrink-0 justify-center">
-        <Spinner size={12} />
+        <Spinner size={14} />
       </span>
       <span className="rc-shimmer truncate">{label}</span>
     </div>

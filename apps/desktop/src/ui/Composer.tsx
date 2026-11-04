@@ -99,7 +99,11 @@ function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
   return [...prefixed, ...others].slice(0, 40);
 }
 
-const LINE = 19;
+// The field's line box: 14px at 1.625 (`leading-relaxed`), the same leading replies read at.
+const LINE = 22.75;
+/** It opens at two lines, and scrolls past the height of nine. */
+const MIN_LINES = 2;
+const MAX_HEIGHT = 208;
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -273,7 +277,7 @@ export const Composer = memo(function Composer({
     if (inChat) field.current?.focus();
   }, [key, inChat]);
 
-  // Grow from 1 to 10 lines, then scroll.
+  // Grow from two lines to the field's height, then scroll.
   // biome-ignore lint/correctness/useExhaustiveDependencies: measure on every draft change
   useLayoutEffect(() => {
     const el = field.current;
@@ -281,7 +285,7 @@ export const Composer = memo(function Composer({
     el.style.height = "0px";
     // scrollHeight includes the 2px padding above and below, which keeps the descenders of the
     // last line (g, j, p, y in the rounded font) inside the box instead of clipped at its edge.
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE + 4), LINE * 10 + 4)}px`;
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE * MIN_LINES + 4), MAX_HEIGHT)}px`;
   }, [draft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
@@ -568,8 +572,10 @@ export const Composer = memo(function Composer({
       )}
       <div
         className={cx(
-          // Frosted and floating over the transcript; focus steps the surface, no ring or colour.
-          "rc-composer relative z-10 flex flex-col gap-1.5 rounded-2xl p-2.5",
+          // One card, glass, floating over the transcript: the field on top, every control in the
+          // footer below it. Focus steps the glass; there is no ring or colour. `@container` sizes
+          // the footer's labels to the card, so a narrow window drops words, not controls.
+          "rc-composer @container/composer relative z-10 flex flex-col gap-1 rounded-2xl",
           dropping && "outline-2 outline-accent outline-dashed",
         )}
         onMouseDown={(e) => {
@@ -593,7 +599,7 @@ export const Composer = memo(function Composer({
         }}
       >
         {editing && (
-          <div className="flex items-center gap-1.5 px-2 pt-1 text-caption text-accent">
+          <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-accent">
             <Pencil size={11} />
             <b>Editing a sent message</b>
             <span className="text-fg-muted">· sending takes the thread back to it</span>
@@ -618,11 +624,11 @@ export const Composer = memo(function Composer({
             }
           />
         )}
-        <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-2 pt-1.5">
+        <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-3 pt-2 pb-0.5">
           {extras.command && (
             // One line of the field's own height, so the command and its argument read as one entry.
             <Tooltip label={extras.command.description}>
-              <span className="flex h-[19px] shrink-0 items-center rounded-xs bg-accent/12 px-1 font-semibold text-body text-accent leading-[19px]">
+              <span className="flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1 font-semibold text-body text-accent leading-[22.75px]">
                 {extras.command.name}
               </span>
             </Tooltip>
@@ -642,7 +648,7 @@ export const Composer = memo(function Composer({
               <div
                 ref={mirror}
                 aria-hidden
-                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-0.5 text-body text-fg leading-[19px]"
+                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-0.5 text-body text-fg leading-relaxed"
               >
                 {splitUrls(draft).map((part, i) =>
                   part.url ? (
@@ -677,13 +683,15 @@ export const Composer = memo(function Composer({
               aria-label="Message"
               spellCheck
               className={cx(
-                "relative block w-full resize-none bg-transparent py-0.5 text-body leading-[19px] outline-none placeholder:text-fg-faint",
+                "relative block w-full resize-none bg-transparent py-0.5 text-body leading-relaxed outline-none placeholder:text-fg-faint",
                 hasUrl && "text-transparent caret-fg selection:bg-accent/30",
               )}
             />
           </div>
         </div>
-        <div className="flex items-center gap-0.5">
+        {/* One footer row inside the card: what the turn may do on the left, how it runs and how it
+            is sent on the right. Labels drop out with the card's width; the controls do not. */}
+        <div className="flex min-w-0 items-center gap-0.5 px-2 pt-0.5 pb-2">
           <PlusMenu
             onAttach={chooseFiles}
             attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
@@ -700,10 +708,25 @@ export const Composer = memo(function Composer({
               void attachmentsFromFiles(files, images, harnessName).then(attach);
             }}
           />
+          <FolderMenu thread={thread} cwd={cwd} />
+          {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+          {thread?.worktree && (
+            <Tooltip side="bottom" label={thread.worktree.path}>
+              <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
+                <GitBranch size={12} className="shrink-0" />
+                <span className="truncate">{thread.worktree.branch}</span>
+              </span>
+            </Tooltip>
+          )}
+          <PermissionMenu threadId={thread?.id} compact={compact} />
           <span className="flex-1" />
           <PlanMeter threadId={thread?.id} />
           {thread && <ContextRing threadId={thread.id} />}
           <ModelPicker thread={thread} compact={compact} />
+          {/* The harness shows in the model picker; the agents are not repeated here either. */}
+          <span className="empty:hidden @max-lg/composer:hidden">
+            <AgentPill threadId={thread?.id} />
+          </span>
           {running && canSend && (
             <Tooltip label="Queue for when this turn ends (⏎)">
               <button
@@ -746,32 +769,6 @@ export const Composer = memo(function Composer({
             </Tooltip>
           )}
         </div>
-      </div>
-      {/* The tray under the box: where the thread works and what it brings, after the SwiftUI footer. */}
-      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[58px] items-end gap-0.5 rounded-b-2xl px-2 pt-[18px] pb-1.5">
-        <FolderMenu thread={thread} cwd={cwd} />
-        {!thread && <WorktreeToggle draft={draft} compact={compact} />}
-        {thread?.worktree && (
-          <Tooltip side="bottom" label={thread.worktree.path}>
-            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted">
-              <GitBranch size={12} className="shrink-0" />
-              <span className="truncate">{thread.worktree.branch}</span>
-            </span>
-          </Tooltip>
-        )}
-        <Tooltip
-          side="bottom"
-          label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}
-        >
-          <Pill quiet onClick={chooseFiles}>
-            <Paperclip size={12} />
-            {!compact && <span>Files</span>}
-          </Pill>
-        </Tooltip>
-        <PermissionMenu threadId={thread?.id} compact={compact} />
-        <span className="flex-1" />
-        {/* The harness shows in the model picker; it is not repeated here. */}
-        <AgentPill threadId={thread?.id} />
       </div>
     </div>
   );
@@ -895,7 +892,7 @@ function AttachmentStrip({
     a.kind === "image" ? [{ src: `data:${a.mimeType};base64,${a.data}`, alt: a.name }] : [],
   );
   return (
-    <div className="flex gap-1.5 overflow-x-auto px-1 pt-0.5 pb-0.5">
+    <div className="flex gap-1.5 overflow-x-auto px-3 pt-1 pb-0.5">
       {attachments.map((a) =>
         a.kind === "image" ? (
           <div key={a.id} className="group relative shrink-0">
@@ -1023,10 +1020,12 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
           <button
             type="button"
             disabled={!!thread && !cwd}
-            className={cx(trayButton, "data-[state=open]:bg-fill disabled:hover:bg-transparent")}
+            className={cx(footerButton, "data-[state=open]:bg-fill disabled:hover:bg-transparent")}
           >
             <Folder size={12} />
-            <span className="max-w-[220px] truncate">{cwd ? projectName(cwd) : "Choose a folder"}</span>
+            <span className="max-w-[220px] truncate @max-lg/composer:max-w-[96px]">
+              {cwd ? projectName(cwd) : "Choose a folder"}
+            </span>
             <ChevronDown size={11} className="text-fg-faint" />
           </button>
         </DropdownMenu.Trigger>
@@ -1107,7 +1106,8 @@ function FolderActions({ cwd }: { cwd: string }) {
   );
 }
 
-const trayButton =
+// A button in the composer's footer: quiet until hovered, and its fill is its open state.
+const footerButton =
   "flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
 const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
@@ -1129,13 +1129,13 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
             type="button"
             aria-label={`Permissions: ${current.label}`}
             className={cx(
-              trayButton,
+              footerButton,
               "data-[state=open]:bg-fill",
               mode === "full" && "text-warning hover:text-warning",
             )}
           >
             <Icon size={12} />
-            {!compact && <span>{current.label}</span>}
+            {!compact && <span className="@max-md/composer:hidden">{current.label}</span>}
             <ChevronDown size={11} className="text-fg-faint" />
           </button>
         </DropdownMenu.Trigger>

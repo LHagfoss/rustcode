@@ -343,7 +343,12 @@ export const Markdown = memo(function Markdown({
   return (
     <div
       ref={root}
-      className={cx("selectable flex flex-col gap-2.5 text-body text-fg/90 break-words", className)}
+      // Replies read at 14px on 1.625 (22.75px), the transcript's own leading; the app's rows keep
+      // the body's 19px (docs/design.md › Type).
+      className={cx(
+        "selectable flex flex-col gap-2.5 text-body leading-relaxed text-fg/90 break-words",
+        className,
+      )}
     >
       {blocks.map((block, i) => (
         <Block key={i} text={block} live={live && i === tail ? `${key}\u0000${i}` : undefined} />

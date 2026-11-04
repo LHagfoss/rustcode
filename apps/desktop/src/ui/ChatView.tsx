@@ -318,7 +318,7 @@ function TranscriptSkeleton() {
   return (
     <div className="min-h-0 flex-1 overflow-hidden" role="status" aria-label="Loading thread">
       <div
-        className="mx-auto flex w-full max-w-[824px] flex-col gap-[18px] px-7"
+        className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-[18px] px-3 sm:px-5"
         style={{ paddingTop: HEADER_HEIGHT + 20 }}
       >
         {[0, 1].map((turn) => (
@@ -406,7 +406,8 @@ export function ChatView() {
   const request = ownRequest ?? childRequest;
   const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
-  const side = width >= 600 ? 28 : width >= 360 ? 20 : 16;
+  // The lane's gutter is `px-3 sm:px-5` on the row itself, the same classes the transcript's rows use,
+  // so the field's edges and a message's edges line up at every width.
   const showsBanner = isNew && !!banner.name;
 
   return (
@@ -449,10 +450,9 @@ export function ChatView() {
       <div
         ref={stackRef}
         className={cx(
-          "absolute left-1/2 flex w-full max-w-[824px] -translate-x-1/2 flex-col gap-2.5 transition-[bottom,transform] duration-500 ease-snappy",
+          "absolute left-1/2 flex w-full max-w-[var(--rc-chat-content-max-width)] -translate-x-1/2 flex-col gap-2.5 px-3 transition-[bottom,transform] duration-500 ease-snappy sm:px-5",
           isNew ? "bottom-[max(16px,calc(50%-150px))]" : "bottom-4",
         )}
-        style={{ paddingLeft: side, paddingRight: side }}
       >
         {isNew && <EmptyState banner={showsBanner} />}
         {error && (

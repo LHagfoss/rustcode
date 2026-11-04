@@ -428,6 +428,13 @@ export function Transcript({
 
   const railCurrent = showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1;
 
+  // What waits at the end while the reader is scrolled up: the running turn's current step, when
+  // the thread is still working. Nothing new is asked of the store, only what the work already said.
+  const waits = useMemo(
+    () => (thread.running && showLatest ? workingLabel(visible) : undefined),
+    [thread.running, showLatest, visible],
+  );
+
   const onWheel = (e: React.WheelEvent) => {
     // Scrolling up during a stream unpins at once, before the next chunk pulls the view down.
     if (e.deltaY < 0) pinned.current = false;
@@ -572,7 +579,7 @@ export function Transcript({
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                     <div
-                      className="mx-auto w-full max-w-[824px] px-7"
+                      className="mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5"
                       style={{ paddingTop: v.index === 0 ? 0 : 16 }}
                     >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} />
@@ -600,7 +607,7 @@ export function Transcript({
                 <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                   <div
                     className={cx(
-                      "mx-auto w-full max-w-[824px] px-7",
+                      "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
                       row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
                     )}
                     style={{ paddingTop: gap }}
@@ -633,6 +640,9 @@ export function Transcript({
                         item={item}
                         threadId={thread.running || peek ? undefined : thread.id}
                         rewind={rewind}
+                        // Consecutive messages from the same side soften the corners they share.
+                        after={rows[v.index - 1]?.item?.kind === "user"}
+                        before={rows[v.index + 1]?.item?.kind === "user"}
                       />
                     ) : item?.kind === "assistant" ? (
                       <AssistantRow
@@ -698,13 +708,21 @@ export function Transcript({
         tabIndex={showLatest ? 0 : -1}
         className={cx(
           // Above the floating composer (its top is `bottomInset - 20` up) and over it in z.
-          "rc-glass rc-glass-strong absolute left-1/2 z-30 flex h-[30px] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,transform] duration-200 ease-snappy hover:bg-surface-3",
+          "rc-glass rc-glass-strong absolute left-1/2 z-30 flex h-[30px] max-w-[min(360px,calc(100%-32px))] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,transform] duration-200 ease-snappy hover:bg-surface-3",
           showLatest ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0",
         )}
         style={{ bottom: bottomInset - 8 }}
       >
         <ArrowDown size={13} />
         Latest
+        {waits && (
+          <>
+            <span aria-hidden className="text-fg-faint">
+              ·
+            </span>
+            <span className="min-w-0 truncate font-normal text-fg-muted">{waits}</span>
+          </>
+        )}
       </button>
     </div>
   );

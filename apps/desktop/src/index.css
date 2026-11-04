@@ -54,6 +54,7 @@
   --color-focus: var(--rc-focus);
   --color-selection: var(--rc-selection);
   --color-code-bg: var(--rc-code-bg);
+  --color-message: var(--rc-message);
   /* Derived from the text colour, so they stay neutral on any surface. */
   --color-fill-subtle: var(--rc-fill-subtle);
   --color-fill: var(--rc-fill);
@@ -67,6 +68,7 @@
   --radius-lg: var(--rc-radius-lg);
   --radius-xl: var(--rc-radius-xl);
   --radius-2xl: var(--rc-radius-2xl);
+  --radius-3xl: var(--rc-radius-3xl);
   --radius-full: 9999px;
 
   /* Two levels of elevation, each with the 1px edge ring. */
@@ -85,9 +87,12 @@
   --rc-surface: #f0f0f1;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e8e8ea;
-  /* The composer is the raised surface itself: solid, so neither its tray nor the transcript shows through. */
-  --rc-composer-bg: var(--rc-surface-2);
-  --rc-composer-bg-focus: var(--rc-surface-2);
+  /* The composer is glass on the raised surface (see `Glass` in index.css). */
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+  --rc-composer-filter: saturate(1.14) blur(12px);
+  --rc-composer-outline: #00000014;
+  --rc-composer-highlight: transparent;
   --rc-border: #0000000f;
   --rc-border-strong: #0000001f;
   --rc-text: #171717;
@@ -114,8 +119,11 @@
     --rc-surface: #18181a;
     --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
-    --rc-composer-bg: var(--rc-surface-2);
-    --rc-composer-bg-focus: var(--rc-surface-2);
+    --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
+    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+    --rc-composer-filter: saturate(1.08) blur(16px);
+    --rc-composer-outline: #ffffff0d;
+    --rc-composer-highlight: #ffffff08;
     --rc-border: #ffffff0f;
     --rc-border-strong: #ffffff1c;
     --rc-text: #ededed;
@@ -141,8 +149,11 @@
   --rc-surface: #18181a;
   --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
-  --rc-composer-bg: var(--rc-surface-2);
-  --rc-composer-bg-focus: var(--rc-surface-2);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+  --rc-composer-filter: saturate(1.08) blur(16px);
+  --rc-composer-outline: #ffffff0d;
+  --rc-composer-highlight: #ffffff08;
   --rc-border: #ffffff0f;
   --rc-border-strong: #ffffff1c;
   --rc-text: #ededed;
@@ -165,6 +176,9 @@
   --rc-fill-subtle: color-mix(in srgb, var(--rc-text) 4.5%, transparent);
   --rc-fill: color-mix(in srgb, var(--rc-text) 8%, transparent);
   --rc-fill-strong: color-mix(in srgb, var(--rc-text) 13%, transparent);
+  /* A sent message's surface: 8.5% of the text over the pane lands a step above the background in
+     either mode, and follows whatever neutrals a theme brings. */
+  --rc-message: color-mix(in srgb, var(--rc-text) 8.5%, var(--rc-bg));
   --rc-diff-add: color-mix(in srgb, var(--rc-success) 14%, transparent);
   --rc-diff-del: color-mix(in srgb, var(--rc-danger) 14%, transparent);
   /* Shadows lift, they do not loom: about half a theme's shadow colour, kept close to the edge. */
@@ -173,10 +187,16 @@
   --rc-shadow-2: 0 2px 8px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);
   --rc-radius-xs: 4px;
   --rc-radius-sm: 6px;
-  --rc-radius-md: 8px;
-  --rc-radius-lg: 12px;
-  --rc-radius-xl: 16px;
-  --rc-radius-2xl: 22px;
+  --rc-radius-md: 6px;
+  --rc-radius-lg: 8px;
+  --rc-radius-xl: 12px;
+  --rc-radius-2xl: 16px;
+  --rc-radius-3xl: 20px;
+}
+
+/* The chat lane: the transcript's rows and the composer share one measure (docs/design.md). */
+:root {
+  --rc-chat-content-max-width: 46rem;
 }
 
 :root[data-radius="sharp"] {
@@ -186,6 +206,7 @@
   --rc-radius-lg: 6px;
   --rc-radius-xl: 8px;
   --rc-radius-2xl: 10px;
+  --rc-radius-3xl: 12px;
 }
 
 :root[data-radius="round"] {
@@ -195,6 +216,7 @@
   --rc-radius-lg: 16px;
   --rc-radius-xl: 20px;
   --rc-radius-2xl: 26px;
+  --rc-radius-3xl: 30px;
 }
 
 @layer base {
@@ -686,9 +708,9 @@
 }
 
 /*
- * The composer floats over the transcript on the solid raised surface, with a
- * slight shadow under it. Focus strengthens its 1px edge; there is no coloured
- * ring. Its tray tucks under it, solid and borderless.
+ * The composer floats over the transcript in glass on the raised surface: 80% at rest,
+ * 88% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
+ * coloured ring.
  */
 .rc-composer,
 .rc-toast {
@@ -703,37 +725,31 @@
 .rc-toast {
   background: var(--rc-glass-bg-strong);
 }
-/* Solid, so it needs no blur: the shared glass filter is dropped. */
+/* The composer's own pair: lighter than the raised glass, with its own filter and edge. */
 .rc-composer {
   background: var(--rc-composer-bg);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  backdrop-filter: var(--rc-composer-filter);
+  -webkit-backdrop-filter: var(--rc-composer-filter);
   box-shadow:
-    0 1px 2px var(--rc-shadow-soft),
-    0 0 0 1px var(--rc-border);
+    0 2px 8px -4px var(--rc-shadow-soft),
+    inset 0 0 0 1px var(--rc-composer-highlight),
+    0 0 0 1px var(--rc-composer-outline);
 }
-/* In dark the lift is invisible; the 1px ring alone separates it from the transcript. */
+/* In dark the lift is invisible; the ring and the inner highlight alone separate it. */
 :root[data-theme="dark"] .rc-composer {
-  box-shadow: 0 0 0 1px var(--rc-border);
+  box-shadow:
+    inset 0 0 0 1px var(--rc-composer-highlight),
+    0 0 0 1px var(--rc-composer-outline);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .rc-composer {
-    box-shadow: 0 0 0 1px var(--rc-border);
+    box-shadow:
+      inset 0 0 0 1px var(--rc-composer-highlight),
+      0 0 0 1px var(--rc-composer-outline);
   }
 }
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
-  box-shadow:
-    0 1px 2px var(--rc-shadow-soft),
-    0 0 0 1px var(--rc-border-strong);
-}
-:root[data-theme="dark"] .rc-composer:focus-within {
-  box-shadow: 0 0 0 1px var(--rc-border-strong);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .rc-composer:focus-within {
-    box-shadow: 0 0 0 1px var(--rc-border-strong);
-  }
 }
 /* A toast drops in from under the header and lifts away. */
 @keyframes rc-toast-in {
@@ -814,11 +830,6 @@
 .rc-header-glass.rc-frost::before {
   --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 60%, transparent);
 }
-.rc-composer-tray {
-  /* Under the composer's edge, so it never reads as a second surface. */
-  background: var(--rc-glass-bg-strong);
-}
-
 .rc-fade-in {
   animation: rc-fade 400ms ease-out;
 }
@@ -855,6 +866,7 @@
     --rc-glass-filter: none;
     --rc-composer-bg: var(--rc-surface-2);
     --rc-composer-bg-focus: var(--rc-surface-2);
+    --rc-composer-filter: none;
   }
   :root,
   .rc-header-glass.rc-frost::before {
@@ -870,6 +882,7 @@
   --rc-glass-filter: none;
   --rc-composer-bg: var(--rc-surface-2);
   --rc-composer-bg-focus: var(--rc-surface-2);
+  --rc-composer-filter: none;
 }
 :root.reduce-transparency .rc-composer:focus-within {
   background: var(--rc-surface-2);
