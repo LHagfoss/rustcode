@@ -13,11 +13,21 @@ on:
         paths:
             - .github/workflows/desktop-ci.yml
             - apps/desktop/**
+    # Builds the caches pull requests restore (see ci.yml). Only what changes
+    # them: a UI merge leaves the dependencies and the shell crate as they were.
+    push:
+        branches: [main]
+        paths:
+            - .github/workflows/desktop-ci.yml
+            - apps/desktop/bun.lock
+            - apps/desktop/package.json
+            - apps/desktop/src-tauri/**
     workflow_dispatch:
 
 concurrency:
     group: desktop-ci-${{ github.event.pull_request.number || github.ref }}
-    cancel-in-progress: true
+    # A run on main has to finish to save its cache.
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
     contents: read
@@ -118,6 +128,7 @@ jobs:
               uses: Swatinem/rust-cache@v2
               with:
                   workspaces: apps/desktop/src-tauri
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Format
               working-directory: apps/desktop/src-tauri
