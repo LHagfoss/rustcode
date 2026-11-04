@@ -84,7 +84,7 @@ import { ContextRing, PlanMeter } from "./ComposerUsage";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
-import { cx, menuItem, menuSeparator, menuSurface, Tooltip } from "./primitives";
+import { cx, menuItem, menuSeparator, menuSurface, Pill, Tooltip } from "./primitives";
 
 function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
   if (!draft.startsWith("/") || /\s/.test(draft)) return [];
@@ -515,16 +515,17 @@ export const Composer = memo(function Composer({
             <Pencil size={11} />
             <b>Editing a sent message</b>
             <span className="text-fg-muted">· sending takes the thread back to it</span>
-            <button
-              type="button"
+            <Pill
+              quiet
+              size="sm"
+              className="ml-auto"
               onClick={() => {
                 cancelEdit(key);
                 update("");
               }}
-              className="ml-auto rounded-full px-2 text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
             >
               Cancel
-            </button>
+            </Pill>
           </div>
         )}
         {extras.attachments.length > 0 && (
@@ -676,10 +677,10 @@ export const Composer = memo(function Composer({
           side="bottom"
           label={images ? "Attach files or images" : `Attach files (${harnessName} takes no images)`}
         >
-          <button type="button" onClick={chooseFiles} className={trayButton}>
+          <Pill quiet onClick={chooseFiles}>
             <Paperclip size={12} />
             {!compact && <span>Files</span>}
-          </button>
+          </Pill>
         </Tooltip>
         <PermissionMenu threadId={thread?.id} compact={compact} />
         <span className="flex-1" />

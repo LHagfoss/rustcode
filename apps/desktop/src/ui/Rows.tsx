@@ -54,7 +54,7 @@ import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { LinkStateIcon } from "./Links";
 import { CopyButton, Markdown } from "./Markdown";
-import { Callout, cx, Spinner, Tooltip } from "./primitives";
+import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 
@@ -147,14 +147,10 @@ export const UserRow = memo(function UserRow({
           <TextWithLinks text={text} />
         </div>
         {long && (
-          <button
-            type="button"
-            onClick={() => setOpen(!open)}
-            className="mt-1.5 -mr-1 ml-auto flex h-[26px] items-center gap-1.5 rounded-md px-3 font-medium text-caption text-fg-muted hover:bg-fill hover:text-fg"
-          >
+          <Pill quiet className="mt-1.5 -mr-1 ml-auto" onClick={() => setOpen(!open)}>
             {open ? "Show less" : "Show more"}
             {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-          </button>
+          </Pill>
         )}
       </div>
       {/* Time and actions show on hover. */}
@@ -820,8 +816,8 @@ export function WaitingRow({ count }: { count: number }) {
 }
 
 /**
- * The running turn's header, right under the message that started it, as T3
- * Code draws it: `Working for 12s` over a hairline. What the turn does now
+ * The running turn's header, right under the message that started it:
+ * `Working for 12s` over a hairline. What the turn does now
  * shows at the foot ({@link LiveActivityRow}).
  */
 export function WorkingRow({ startedAt, now }: { startedAt?: number; now: number }) {

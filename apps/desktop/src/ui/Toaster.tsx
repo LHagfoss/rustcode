@@ -112,14 +112,15 @@ function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; 
         </Pill>
       )}
       {waiting > 0 && (
-        <button
-          type="button"
+        <Pill
+          quiet
+          size="sm"
           aria-label={`Clear all ${waiting + 1} notifications`}
+          className="tabular"
           onClick={clearToasts}
-          className="h-6 shrink-0 rounded-full px-2 font-medium text-caption text-fg-muted tabular hover:bg-fill hover:text-fg"
         >
           +{waiting}
-        </button>
+        </Pill>
       )}
       <button
         type="button"

@@ -197,7 +197,7 @@ export interface AppState {
   /** The workspace terminal under the chat (⌘J). */
   terminalOpen: boolean;
   /** The panel on the right of the chat. */
-  panel: "changes" | "pulls" | null;
+  panel: "details" | "changes" | "pulls" | null;
   /** Each thread's subagents, as `_rustcode/agents` last listed them. */
   agents: Record<string, SubagentInfo[]>;
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */

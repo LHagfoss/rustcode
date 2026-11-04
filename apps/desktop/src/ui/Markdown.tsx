@@ -25,7 +25,7 @@ import { hasShell } from "../lib/shell";
 import { toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
 import { MarkdownImage, MermaidBlock } from "./MarkdownMedia";
-import { copyText, cx } from "./primitives";
+import { copyText, cx, Pill } from "./primitives";
 
 export function CopyButton({
   text,
@@ -42,19 +42,27 @@ export function CopyButton({
     const t = setTimeout(() => setCopied(false), 1500);
     return () => clearTimeout(t);
   }, [copied]);
+  // The label it says, on the button and for a screen reader: "Copied" for a moment.
+  const said = copied ? "Copied" : label;
+  const copy = () => void copyText(text).then(() => setCopied(true));
+  const icon = copied ? <Check size={12} className="text-success" /> : <Copy size={12} />;
+  // The icon-only square in a row of 22px actions stays as it is; the labelled one is a pill.
+  if (iconOnly)
+    return (
+      <button
+        type="button"
+        aria-label={said}
+        onClick={copy}
+        className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+      >
+        {icon}
+      </button>
+    );
   return (
-    <button
-      type="button"
-      aria-label={copied ? "Copied" : label}
-      onClick={() => void copyText(text).then(() => setCopied(true))}
-      className={cx(
-        "inline-flex h-[22px] items-center gap-1 rounded-md text-caption text-fg-muted hover:bg-fill hover:text-fg",
-        iconOnly ? "w-[22px] justify-center" : "px-2",
-      )}
-    >
-      {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-      {!iconOnly && <span>{copied ? "Copied" : label}</span>}
-    </button>
+    <Pill quiet size="sm" aria-label={said} onClick={copy}>
+      {icon}
+      {said}
+    </Pill>
   );
 }
 
