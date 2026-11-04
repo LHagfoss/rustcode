@@ -328,6 +328,20 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   and Settled shelves. A snoozed row shows when it wakes where the age goes.
   Snooze (presets, or Custom…) is a submenu of the row's menu; a thread comes
   back on time, marked unread, or sooner when it needs you, works or is messaged.
+  A row's second line reads the worktree branch, then what the thread's calls
+  changed (`font-mono +N −N` in `success`/`danger`), for a thread the app has
+  already read; one it has not opened shows neither, rather than a made-up zero.
+- **Sidebar selection:** one tab stop for the whole list, on the row the
+  keyboard is on (the open thread, else the first): ↑ ↓ move it through the
+  rows on screen, skipping shut sections and project groups, ⏎ opens the
+  thread, Esc lets the selection go. Keys in a field inside the list (the
+  rename box) stay the field's, and ⌘/⌃/⌥ stay the app's. ⌘-click toggles a
+  row into the selection and ⇧-click takes the range from the last one clicked;
+  picked rows are `bg-accent/12` + `font-medium`, which is not the open row's
+  `bg-fill`, and a plain click opens the thread and lets the selection go. A
+  thread that leaves the list leaves the selection. With more than one picked,
+  the row's menu and a bar under the list (`3 selected`, Pin, Settle, Clear)
+  act on all of them, with one toast and one failure message for the lot.
 - **Skeleton:** `Skeleton` (`.rc-skeleton`): `fill-subtle` blocks the shape
   of what will appear (a text line `h-3`, a meta line `h-2`, a pill
   `rounded-full`), radius `sm` unless the real thing is rounder, varied
