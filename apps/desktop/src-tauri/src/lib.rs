@@ -60,6 +60,7 @@ pub fn run() {
             native::reveal_path,
             native::open_login_terminal,
             native::git_changes,
+            native::project_files,
             native::read_image,
             native::thread_image,
             native::open_terminal_at,

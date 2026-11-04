@@ -38,6 +38,7 @@ import {
   openTerminalAt,
   pickFiles,
   pickFolder,
+  projectFiles,
   readImage,
 } from "../lib/native";
 import {
@@ -51,6 +52,7 @@ import {
   MAX_INLINE_FILE_BYTES,
   splitUrls,
 } from "../state/compose";
+import { atToken, insertRef, rankFiles } from "../state/fileRefs";
 import { controlDisabledReason } from "../state/harness";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
@@ -196,6 +198,10 @@ function sameComposer(
   return Object.keys(a.thread).length === Object.keys(b.thread).length;
 }
 
+const NO_FILES: string[] = [];
+/** How long a project's file list is used before `@` lists it again. */
+const FILES_FRESH_MS = 30_000;
+
 export const Composer = memo(function Composer({
   thread,
   compact,
@@ -215,6 +221,8 @@ export const Composer = memo(function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [caret, setCaret] = useState(0);
+  const [files, setFiles] = useState<{ cwd: string; at: number; paths: string[] } | null>(null);
   const [dropping, setDropping] = useState(false);
 
   const running = thread?.running ?? false;
@@ -222,6 +230,25 @@ export const Composer = memo(function Composer({
   const list = useMemo(
     () => (dismissed === draft || extras.command ? [] : suggestions(draft, commands)),
     [draft, commands, dismissed, extras.command],
+  );
+  // `@`: the project's files, listed when the first reference opens, and again once it is stale.
+  const token = dismissed === draft || list.length ? null : atToken(draft, caret);
+  const cwdForFiles = thread?.cwd ?? projectCwd;
+  const wantsFiles = !!token && !!cwdForFiles;
+  useEffect(() => {
+    if (!wantsFiles || (files?.cwd === cwdForFiles && Date.now() - files.at < FILES_FRESH_MS)) return;
+    let live = true;
+    void projectFiles(cwdForFiles).then((paths) => {
+      if (live) setFiles({ cwd: cwdForFiles, at: Date.now(), paths });
+    });
+    return () => {
+      live = false;
+    };
+  }, [wantsFiles, cwdForFiles, files]);
+  const query = token?.query ?? null;
+  const fileList = useMemo(
+    () => (query !== null && files?.cwd === cwdForFiles ? rankFiles(files.paths, query) : NO_FILES),
+    [query, files, cwdForFiles],
   );
   const harness = threadHarness(thread);
   const harnessName = harness?.name ?? "This harness";
@@ -258,7 +285,7 @@ export const Composer = memo(function Composer({
   }, [draft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
-  useEffect(() => setSelected(0), [list.length]);
+  useEffect(() => setSelected(0), [list.length, fileList]);
 
   const update = (text: string) => setDraft(key, text);
   const change = (fn: (e: ComposeExtras) => ComposeExtras) => setExtras(key, fn);
@@ -329,6 +356,14 @@ export const Composer = memo(function Composer({
     });
   };
 
+  const reference = (path: string) => {
+    if (!token) return;
+    const next = insertRef(draft, token, path);
+    update(next.text);
+    setCaret(next.caret);
+    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
+  };
+
   const complete = (command: SlashCommand, run: boolean) => {
     // A command the app answers itself (a picker, a new thread) runs at once, arguments or not.
     if (run && (!command.takesArguments || command.action !== "execute")) {
@@ -366,6 +401,24 @@ export const Composer = memo(function Composer({
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
+    if (fileList.length) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : fileList.length - 1)) % fileList.length);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey)) {
+        e.preventDefault();
+        const path = fileList[selected];
+        if (path) reference(path);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDismissed(draft);
+        return;
+      }
+    }
     if (list.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -481,6 +534,35 @@ export const Composer = memo(function Composer({
           ))}
         </div>
       )}
+      {fileList.length > 0 && (
+        <div
+          className="elevated absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto p-1.5 rc-in"
+          role="listbox"
+          aria-label="Files"
+        >
+          {fileList.map((path, i) => {
+            const cut = path.lastIndexOf("/") + 1;
+            return (
+              <button
+                key={path}
+                type="button"
+                role="option"
+                aria-selected={i === selected}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => reference(path)}
+                onMouseEnter={() => setSelected(i)}
+                className={cx(
+                  "flex w-full items-baseline gap-2 rounded-lg px-3 py-[7px] text-left text-callout",
+                  i === selected && "bg-fill",
+                )}
+              >
+                <span className="shrink-0 font-medium">{path.slice(cut)}</span>
+                <span className="truncate text-fg-muted">{path.slice(0, cut)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       {thread && thread.queue.length > 0 && (
         <QueueStack thread={thread} steerable={steerable} onTakeBack={(q) => takeBack(q)} />
       )}
@@ -580,7 +662,11 @@ export const Composer = memo(function Composer({
             <textarea
               ref={field}
               value={draft}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={(e) => {
+                setCaret(e.target.selectionStart);
+                onChange(e.target.value);
+              }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
               onKeyDown={onKeyDown}
               onPaste={onPaste}
               onScroll={(e) => {

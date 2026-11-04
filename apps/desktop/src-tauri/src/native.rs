@@ -188,6 +188,22 @@ fn valid_base(base: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "._/@~^-".contains(c))
 }
 
+/// How many files `@` references choose from.
+const MAX_PROJECT_FILES: usize = 20_000;
+
+/// The project's files for `@` references, as git sees them: tracked and
+/// untracked, without what it ignores. Paths are relative to `cwd`.
+#[tauri::command(async)]
+pub fn project_files(cwd: String) -> Result<Vec<String>, String> {
+    let cwd = absolute_dir(&cwd)?;
+    let listed = git(&cwd, &["ls-files", "-co", "--exclude-standard"])?;
+    Ok(listed
+        .lines()
+        .take(MAX_PROJECT_FILES)
+        .map(str::to_owned)
+        .collect())
+}
+
 /// Uncommitted changes against HEAD, plus untracked files. With `base`
 /// (a worktree's base commit or branch), everything since the branch left
 /// it: its commits and the working tree, against their merge base.
@@ -607,6 +623,29 @@ pub fn open_in_editor(path: String, line: Option<u32>, column: Option<u32>) -> R
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn project_files_lists_what_git_sees() {
+        let dir = std::env::temp_dir().join(format!("rc-project-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        run(&["init", "-q"]);
+        std::fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
+        std::fs::write(dir.join("ignored.txt"), "").unwrap();
+        std::fs::write(dir.join("kept.txt"), "").unwrap();
+        let files = super::project_files(dir.to_string_lossy().into_owned()).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(files.contains(&"kept.txt".to_owned()));
+        assert!(!files.contains(&"ignored.txt".to_owned()));
+    }
+
     use super::*;
 
     #[test]

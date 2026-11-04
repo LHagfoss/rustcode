@@ -160,6 +160,21 @@ export const nativeCommands: Record<string, (args: Record<string, unknown>) => P
       throw new Error("Only web links.");
     return linkMeta(url);
   },
+  project_files: async ({ cwd }) => {
+    if (typeof cwd !== "string" || !isAbsolute(cwd)) throw new Error("Not a folder.");
+    const out = Bun.spawnSync([
+      "git",
+      "-C",
+      cwd,
+      "-c",
+      "core.quotepath=off",
+      "ls-files",
+      "-co",
+      "--exclude-standard",
+    ]);
+    if (!out.success) throw new Error("Not a git repository.");
+    return out.stdout.toString().split("\n").filter(Boolean).slice(0, 20_000);
+  },
   pty_open: async ({ cwd, cols, rows, __socket }) => {
     if (
       typeof cwd !== "string" ||
