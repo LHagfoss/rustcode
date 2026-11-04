@@ -213,12 +213,23 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 Some(Value::String(status)) if SESSION_STATUSES.contains(&status.as_str()) => {}
                 Some(_) => return Err(format!("status must be one of {SESSION_STATUSES:?}")),
             }
+            match args.get("snoozed_until") {
+                None | Some(Value::Null | Value::String(_)) => {}
+                Some(_) => return Err("snoozed_until must be an ISO 8601 time or null".to_owned()),
+            }
+            // `snoozed_until: null` is a change: it brings the thread back.
+            if args.get("snoozed_until").is_some() {
+                return Ok(());
+            }
             let changes = ["title", "pinned", "unread", "status"];
             if !changes
                 .iter()
                 .any(|key| !matches!(args.get(*key), None | Some(Value::Null)))
             {
-                return Err("give at least one of title, pinned, unread or status".to_owned());
+                return Err(
+                    "give at least one of title, pinned, unread, status or snoozed_until"
+                        .to_owned(),
+                );
             }
             Ok(())
         }
@@ -540,6 +551,12 @@ mod tests {
         assert!(!ok(UPDATE_SESSION, json!({"session_id": "b"})));
         assert!(!ok(UPDATE_SESSION, json!({"status": "gone"})));
         assert!(!ok(UPDATE_SESSION, json!({"pinned": "yes"})));
+        assert!(ok(
+            UPDATE_SESSION,
+            json!({"snoozed_until": "2026-11-05T09:00:00Z"})
+        ));
+        assert!(ok(UPDATE_SESSION, json!({"snoozed_until": null})));
+        assert!(!ok(UPDATE_SESSION, json!({"snoozed_until": 5})));
     }
 
     #[test]
