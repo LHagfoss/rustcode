@@ -52,6 +52,7 @@ import {
   thoughtHeadings,
 } from "../state/thread";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
+import { ThreadAgentRow } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
@@ -511,6 +512,11 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
   const input = inputWithoutSummary(item.input);
+  // A thread it started reads as a subagent: who runs it and how it goes.
+  if (opensThread && link && !failed) {
+    const asked = inputField(item.input, "model");
+    return <ThreadAgentRow link={link} model={asked} />;
+  }
   return (
     <div>
       <div className="group flex items-center gap-0.5">
