@@ -1,3 +1,17 @@
+## [v1.9.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.9.0) - 2026-11-05
+
+### Features
+- Settings has a cleaner layout, and the whole app has rounder corners. (#2995)
+- Sidebar rows are redrawn, and child threads list flat under their parent. (#2996)
+- The composer floats over the chat with a footer tray, and slash and @ menus attach to it. (#2997)
+- Subagents and delegated threads share a clearer two-line row. (#2998)
+- Approvals are answered from one bar instead of showing the same buttons twice. (#2999)
+- Settings is now a floating panel with Restore defaults and an About page. (#3007)
+- Sidebar rows show project and PR state above the title, and common actions move to the sidebar footer. (#3004)
+- Model search, editable queued messages, math in replies, and clearer tool rows. (#3005)
+- Diffs gain word highlights and split view, and thread details is a floating card. (#3006)
+- Thread links are kept in the data store, and a child thread can start its own children. (#3008)
+- Slash commands now appear in a new thread before it starts. (#3009)
 ## [v1.8.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.8.0) - 2026-11-04
 
 ### Features
