@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { projectName } from "../acp/types";
 import { canOpenPty, openPty, type PtyHandle } from "../lib/pty";
 import { cssVar, onAppThemeChange } from "../lib/theme";
-import { setTerminalOpen, useApp } from "../state/store";
+import { setTerminalOpen, useApp, useShortcutHint } from "../state/store";
 import { Cluster, ClusterButton } from "./primitives";
 
 /** A solid colour for xterm from a token that may be translucent, over the panel's background. */
@@ -140,6 +140,7 @@ function TerminalView({ cwd, visible }: { cwd: string; visible: boolean }) {
 
 export function TerminalPanel() {
   const open = useApp((s) => s.terminalOpen);
+  const terminalKey = useShortcutHint("toggle-terminal");
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const [opened, setOpened] = useState<string[]>([]);
   const [height, setHeight] = useState(260);
@@ -183,7 +184,7 @@ export function TerminalPanel() {
         <Cluster>
           <ClusterButton
             label="Hide terminal"
-            tooltip="Hide terminal (⌘J)"
+            tooltip={`Hide terminal (${terminalKey})`}
             onClick={() => setTerminalOpen(false)}
           >
             <X size={13} />

@@ -85,6 +85,7 @@ import {
   toggleSidebar,
   trashThread,
   useApp,
+  useShortcutHint,
   wakeSnoozed,
   worktreeOf,
 } from "../state/store";
@@ -1231,6 +1232,8 @@ export function Sidebar() {
   const finished = useApp((s) => s.finished);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
+  const toggleKey = useShortcutHint("toggle-sidebar");
+  const newKey = useShortcutHint("new-thread");
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
   // By state, with the project on each row; grouping by project is an option.
@@ -1607,10 +1610,18 @@ export function Sidebar() {
       >
         <TitlebarRow className="justify-end pr-2.5">
           <Cluster>
-            <ClusterButton label="Hide sidebar" tooltip="Hide sidebar (⌘B)" onClick={toggleSidebar}>
+            <ClusterButton
+              label="Hide sidebar"
+              tooltip={`Hide sidebar (${toggleKey})`}
+              onClick={toggleSidebar}
+            >
               <PanelLeft size={14} />
             </ClusterButton>
-            <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
+            <ClusterButton
+              label="New thread"
+              tooltip={`New thread (${newKey})`}
+              onClick={() => startNewThread()}
+            >
               <SquarePen size={14} />
             </ClusterButton>
             <SettingsButton />

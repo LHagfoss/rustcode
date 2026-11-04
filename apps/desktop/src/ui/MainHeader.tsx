@@ -6,17 +6,18 @@
 
 import { Settings as Gear, PanelLeft, SquarePen } from "lucide-react";
 import type { ReactNode } from "react";
-import { openSettings, startNewThread, toggleSidebar, useApp } from "../state/store";
+import { openSettings, startNewThread, toggleSidebar, useApp, useShortcutHint } from "../state/store";
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { useLightsInset } from "./Titlebar";
 
 /** Settings, in the sidebar's top row (and the header's when the sidebar is hidden). */
 export function SettingsButton() {
   const open = useApp((s) => s.settings !== null);
+  const key = useShortcutHint("settings");
   return (
     <ClusterButton
       label="Settings"
-      tooltip={open ? "Close Settings (Esc)" : "Settings (⌘,)"}
+      tooltip={open ? "Close Settings (Esc)" : `Settings (${key})`}
       on={open}
       onClick={() => openSettings(open ? null : "general")}
     >
@@ -41,6 +42,8 @@ export function MainHeader({
   lights?: boolean;
 }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const toggleKey = useShortcutHint("toggle-sidebar");
+  const newKey = useShortcutHint("new-thread");
   const lightsInset = useLightsInset();
   const underLights = lights || sidebarHidden;
   return (
@@ -56,10 +59,14 @@ export function MainHeader({
     >
       {sidebarHidden && !lights && (
         <Cluster>
-          <ClusterButton label="Show sidebar" tooltip="Show sidebar (⌘B)" onClick={toggleSidebar}>
+          <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
             <PanelLeft size={14} />
           </ClusterButton>
-          <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
+          <ClusterButton
+            label="New thread"
+            tooltip={`New thread (${newKey})`}
+            onClick={() => startNewThread()}
+          >
             <SquarePen size={14} />
           </ClusterButton>
           <SettingsButton />

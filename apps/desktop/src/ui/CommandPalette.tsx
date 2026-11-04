@@ -40,6 +40,7 @@ import {
   setTheme,
   setThreadStatus,
   setView,
+  shortcutHint,
   showPanel,
   startNewThread,
   toggleSidebar,
@@ -83,7 +84,13 @@ function baseActions(): PaletteAction[] {
   const s = useApp.getState();
   const harnesses = (s.harnesses?.harnesses ?? []).filter((h) => h.enabled);
   return [
-    { id: "new", label: "New thread", icon: SquarePen, keys: "⌘N", run: () => startNewThread() },
+    {
+      id: "new",
+      label: "New thread",
+      icon: SquarePen,
+      keys: shortcutHint("new-thread"),
+      run: () => startNewThread(),
+    },
     ...harnesses
       .filter((h) => h.id !== (s.harnesses?.default.harness ?? "rustcode"))
       .map(
@@ -160,12 +167,18 @@ function baseActions(): PaletteAction[] {
       words: "model worktree subagents usage",
       run: () => showPanel("details"),
     },
-    { id: "sidebar", label: "Toggle sidebar", icon: PanelLeft, keys: "⌘B", run: toggleSidebar },
+    {
+      id: "sidebar",
+      label: "Toggle sidebar",
+      icon: PanelLeft,
+      keys: shortcutHint("toggle-sidebar"),
+      run: toggleSidebar,
+    },
     {
       id: "terminal",
       label: "Toggle terminal",
       icon: SquareTerminal,
-      keys: "⌘J",
+      keys: shortcutHint("toggle-terminal"),
       run: () => setTerminalOpen(!useApp.getState().terminalOpen),
     },
     ...SETTINGS.map(
@@ -173,7 +186,7 @@ function baseActions(): PaletteAction[] {
         id: `settings-${id}`,
         label: `Settings: ${label}`,
         icon: Gear,
-        keys: id === "general" ? "⌘," : undefined,
+        keys: id === "general" ? shortcutHint("settings") : undefined,
         words: "preferences",
         run: () => openSettings(id),
       }),

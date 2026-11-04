@@ -80,7 +80,8 @@ import {
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { ChromeButton, cx, inputClass, Kbd, Pill, Segments, Spinner, Switch } from "./primitives";
+import { ChromeButton, cx, inputClass, Pill, Segments, Spinner, Switch } from "./primitives";
+import { ShortcutsPage } from "./ShortcutSettings";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import { Group, Loading, Row, useEngineData } from "./settingsKit";
 import { UsagePage } from "./UsagePage";
@@ -896,39 +897,6 @@ function AppVersion() {
   );
 }
 
-/** The shortcuts the app answers, for reference: they are not remappable yet. */
-const SHORTCUTS: [string, string][] = [
-  ["New thread", "⌘N"],
-  ["Folder of this thread (a new one, or move this one)", "⌘O"],
-  ["Default folder for new threads", "⌘⇧O"],
-  ["Command palette: threads, actions", "⌘K"],
-  ["Settings", "⌘,"],
-  ["Toggle sidebar", "⌘B"],
-  ["Find in thread", "⌘F"],
-  ["Terminal", "⌘J"],
-  ["Text larger, smaller, actual size", "⌘+  ⌘-  ⌘0"],
-  ["Stop the turn", "Esc / ⌘."],
-  ["Send · queue while running", "⏎"],
-  ["Steer the running turn", "⌘⏎"],
-  ["New line", "⇧⏎"],
-  ["Answer an approval", "1–9"],
-];
-
-function KeyboardPage() {
-  return (
-    <Group
-      title="Shortcuts"
-      footer="Fixed for now: nothing to remap here yet. ⌘K runs the same actions from the keyboard."
-    >
-      {SHORTCUTS.map(([label, keys]) => (
-        <Row key={label} title={label}>
-          <Kbd>{keys}</Kbd>
-        </Row>
-      ))}
-    </Group>
-  );
-}
-
 function AdvancedPage() {
   const status = useApp((s) => s.status);
   const detail = useApp((s) => s.statusDetail);
@@ -1165,7 +1133,7 @@ export function Settings() {
             {section === "connections" && <ConnectionsPage />}
             {section === "capabilities" && <CapabilitiesPage />}
             {section === "appearance" && <AppearancePage />}
-            {section === "keyboard" && <KeyboardPage />}
+            {section === "keyboard" && <ShortcutsPage />}
             {section === "usage" && <UsagePage />}
             {section === "advanced" && <AdvancedPage />}
           </div>

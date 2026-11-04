@@ -6,6 +6,7 @@
 // Advanced render the engine's answers — so their groups are listed here; a
 // group title is a landing target too (settingsKit.tsx).
 
+import { APP_COMMANDS, commandHint } from "../lib/keys";
 import type { SettingsSection } from "../state/store";
 
 export interface SettingEntry {
@@ -129,40 +130,13 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
 
   // ------------------------------------------------------------ Keyboard
-  { section: "keyboard", title: "New thread", keywords: "shortcut keyboard keys ⌘N" },
-  {
-    section: "keyboard",
-    title: "Folder of this thread (a new one, or move this one)",
-    keywords: "shortcut keyboard keys ⌘O",
-  },
-  {
-    section: "keyboard",
-    title: "Default folder for new threads",
-    keywords: "shortcut keyboard keys ⌘⇧O",
-  },
-  {
-    section: "keyboard",
-    title: "Command palette: threads, actions",
-    keywords: "shortcut keyboard keys ⌘K switcher",
-  },
-  { section: "keyboard", title: "Settings", keywords: "shortcut keyboard keys ⌘, preferences" },
-  { section: "keyboard", title: "Toggle sidebar", keywords: "shortcut keyboard keys ⌘B" },
-  { section: "keyboard", title: "Find in thread", keywords: "shortcut keyboard keys ⌘F search" },
-  { section: "keyboard", title: "Terminal", keywords: "shortcut keyboard keys ⌘J shell" },
-  {
-    section: "keyboard",
-    title: "Text larger, smaller, actual size",
-    keywords: "shortcut keyboard keys ⌘+ ⌘- ⌘0 zoom",
-  },
-  { section: "keyboard", title: "Stop the turn", keywords: "shortcut keyboard keys esc ⌘." },
-  {
-    section: "keyboard",
-    title: "Send · queue while running",
-    keywords: "shortcut keyboard keys ⏎ enter",
-  },
-  { section: "keyboard", title: "Steer the running turn", keywords: "shortcut keyboard keys ⌘⏎" },
-  { section: "keyboard", title: "New line", keywords: "shortcut keyboard keys ⇧⏎ shift" },
-  { section: "keyboard", title: "Answer an approval", keywords: "shortcut keyboard keys 1–9" },
+  // One line per command in the table (lib/keys.ts), so a renamed shortcut or a
+  // new one is searchable without editing this list.
+  ...APP_COMMANDS.map((command) => ({
+    section: "keyboard" as const,
+    title: command.label,
+    keywords: `shortcut keyboard keys ${commandHint(command.binding, command)}`.toLowerCase(),
+  })),
 
   // ------------------------------------------------------------ Usage
   {
