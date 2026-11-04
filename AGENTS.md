@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## What RustCode is
+
+RustCode is the orchestrator: the app and the CLI that own threads, projects,
+settings and usage data, and run each thread on a harness (Codex, Claude Code,
+Gemini CLI, OpenCode, Pi, or the built-in harness in
+`rustcode/engine/src/network/turn`). Query it from an agent with the
+`mcp__rustcode__*` tools, `rustcode threads list --all` and
+`rustcode threads path <id>`; on disk it is `~/.config/rustcode/threads`.
+
 ## Instruction priority
 
 These repository instructions are specific to RustCode and take precedence over

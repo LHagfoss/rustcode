@@ -5,6 +5,21 @@ in code (#2632). The short version: a conversation is a **thread**, in the
 apps, the CLI and on disk. Only the Agent Client Protocol keeps its own name,
 **session**, because other ACP clients depend on it.
 
+## The parts, by name
+
+| Name | Means |
+| --- | --- |
+| **RustCode** | The orchestrator: the app and the CLI that own your threads, projects, settings and usage data, and run every thread on a harness. |
+| **App** | The desktop app in `apps/desktop` (Tauri + React). The main way to use RustCode. |
+| **TUI** | The terminal front end in `rustcode/tui`, opened by `rustcode` in a terminal. Today it starts every thread on the built-in harness. |
+| **Harness** | What runs a thread's turns: an external coding agent (Codex, Claude Code, Gemini CLI, OpenCode, Pi, any ACP agent) or RustCode's built-in harness. Chosen per thread. |
+| **Built-in harness** | RustCode's own turn loop in `rustcode/engine/src/network/turn`, used by the TUI, local models and testing. It is what the harness id `rustcode` means. |
+| **Engine** | The host process and library in `rustcode/engine`, run as `rustcode --acp` behind the app: threads, tools, configuration, ACP, background jobs. It keeps the name for now, because no crate or binary is called engine and "server" is already taken by `rustcode serve` and the remote gateway; it becomes "server" when orchestration moves into it instead of the app. |
+
+RustCode is the only product here. The older separate repositories
+`rustcode-app` and `rustcode_app` are not this product, and nothing in this
+repository depends on them.
+
 ## Glossary
 
 | Term | Means | Where it shows |
@@ -16,7 +31,7 @@ apps, the CLI and on disk. Only the Agent Client Protocol keeps its own name,
 | **Tool call** | One action the agent takes in a round (read, edit, run a command). | The thread's steps. |
 | **Run** | A row of consecutive tool calls the thread folds into one line. | "Ran 3 commands", "Show steps". |
 | **Agent** (subagent) | A helper the thread's agent starts for a delegated task. It has its own conversation but is not a thread: it is not listed in the sidebar by itself and ends with its parent. | A row in the thread where it started, `spawn_agent`. |
-| **Harness** | What runs a thread's turns: RustCode's own turn loop (the built-in harness `rustcode`) or an external coding agent such as Codex or Claude Code. Chosen when the thread starts ([harnesses.md](harnesses.md)). | The new-thread picker, onboarding, Settings; `_meta.rustcode.harness` in ACP. |
+| **Harness** | What runs a thread's turns: RustCode's built-in harness or an external coding agent such as Codex or Claude Code. Chosen when the thread starts ([harnesses.md](harnesses.md)). | The new-thread picker, onboarding, Settings; `_meta.rustcode.harness` in ACP. |
 | **Provider** | A model API the built-in harness calls (OpenAI, Anthropic, Copilot, an OpenAI-compatible server). An external harness has its own models and sign-in, not RustCode's providers. | Settings → providers, `[[providers]]` in the config. |
 | **Plan** | The agent's task list (`todo_write`): what it proposes to do, step by step. | The task plan; never proof that a step ran. |
 

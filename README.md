@@ -13,10 +13,11 @@
   <img src="./images/readme-desktop.png" alt="The RustCode app with a thread open" width="100%"/>
 </p>
 
-RustCode runs Claude Code, Codex, Gemini CLI, OpenCode, or its own agent,
-side by side in one desktop app. Each thread picks its agent, model and
-effort; threads can run in their own git worktree, and an agent can start
-and message other threads.
+RustCode is the orchestrator for your coding agents: one app and one `rustcode`
+command that run Claude Code, Codex, Gemini CLI, OpenCode, Pi or RustCode's
+built-in harness, and keep every thread, project, setting and usage figure in
+one place. Each thread picks its agent, model and effort, can run in its own git
+worktree, and an agent can start and message other threads.
 
 ## Install
 
@@ -25,9 +26,9 @@ curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash   # macOS, Linux
 irm https://rustcode.lhagfoss.com/install.ps1 | iex          # Windows
 ```
 
-This installs two things: the **RustCode app** and the **`rustcode`
-command**, RustCode's own agent in the terminal. Details and other options
-are in the [install guide](docs/install.md).
+This installs two things: the **RustCode app**, the orchestrator, and the
+**`rustcode` command**: the terminal UI and the built-in harness it runs.
+Details and other options are in the [install guide](docs/install.md).
 
 ## What you get
 
@@ -44,7 +45,7 @@ are in the [install guide](docs/install.md).
 
 ```bash
 rustcode                 # the terminal UI in this project
-rustcode --prompt "…"    # one prompt, no UI
+rustcode --prompt "…"    # one prompt on the built-in harness, no UI
 rustcode --acp           # serve ACP over stdio (the app uses this)
 ```
 

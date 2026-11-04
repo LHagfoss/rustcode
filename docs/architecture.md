@@ -1,8 +1,10 @@
 # Runtime and workspace architecture
 
-RustCode is a Rust workspace with a root application crate and small domain
-crates. The extracted crates keep frequently edited functionality from forcing
-unrelated heavyweight dependencies to rebuild.
+This repository is a Rust workspace with a root application crate and small
+domain crates. The extracted crates keep frequently edited functionality from
+forcing unrelated heavyweight dependencies to rebuild. The product is the
+orchestrator app in `apps/desktop`; the TUI in `rustcode/tui` is a second front
+end over the same engine.
 
 ## Repository layout
 
@@ -18,7 +20,8 @@ rustcode/
 │   ├── rustcode-tasks/        background task state and event delivery
 │   └── rustcode-loop-detect/  semantic loop and progress guards
 ├── engine/     Sources of the root `rustcode` crate (library only): agent
-│               loop, tools, config, session state, ACP, daemon, controller.
+│               loop (the built-in harness), tools, config, session state, ACP,
+│               daemon, controller.
 └── tui/        `rustcode-tui`, the terminal frontend. Owns the `rustcode`
                 binary (TUI + headless/ACP/daemon CLI modes); depends on the
                 root library, never the reverse.
