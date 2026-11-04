@@ -92,17 +92,17 @@ the accent marks state (on, selected, linked), it does not shout.
 
 | Step | px | Tailwind | Used by |
 |---|---|---|---|
-| xs | 4 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
-| sm | 6 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
-| md | 6 | `rounded-md` | Icon buttons, sidebar rows, list rows, inputs |
-| lg | 8 | `rounded-lg` | Cards (tool output, error card, settings groups), menu items, tooltips, pictures in replies |
-| xl | 12 | `rounded-xl` | Menus, popovers, dialogs, the command palette, large panels, composer picture thumbnails |
-| 2xl | 16 | `rounded-2xl` | The composer, the settings panel, toasts |
-| 3xl | 20 | `rounded-3xl` | The largest floating surface, above the composer's step (nothing uses it yet) |
-| full | — | `rounded-full` | Pills, toolbar clusters, switches, segmented controls, avatars, dots |
+| xs | 6 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
+| sm | 8 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs, a segment inside its track |
+| md | 10 | `rounded-md` | Icon buttons, list rows, inputs |
+| lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, tooltips, pictures in replies |
+| xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels |
+| 2xl | 20 | `rounded-2xl` | The composer, the settings panel, toasts |
+| 3xl | 26 | `rounded-3xl` | The largest floating surface, above the composer's step (nothing uses it yet) |
+| full | — | `rounded-full` | Switches, avatars, dots, trackbars; never a labelled button |
 
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
-(`sharp`: 2/3/4/6/8/10/12, `round`: 6/8/10/16/20/26/30); components only ever
+(`sharp`: 2/3/4/6/8/10/12, `round`: 8/10/12/16/20/26/32); components only ever
 name a step. No arbitrary radii (`rounded-[14px]`), no `rounded-4xl`. A child
 inside a padded parent uses the step below the parent's.
 
@@ -279,7 +279,7 @@ model pill, chips, segmented items, header actions, Settings' "New…" and
 "Edit config".
 Circles only for icon-only round buttons (send, stop, close in a panel
 header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
-Rows are `rounded-md`, menu items and cards `rounded-lg`, menus, popovers and
+Rows are `rounded-md` (sidebar thread rows `rounded-lg`), menu items and cards `rounded-lg`, menus, popovers and
 panels `rounded-xl`.
 
 The shared controls are in `ui/primitives.tsx`; use them instead of restyling
@@ -298,7 +298,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   placeholder `text-fg-faint`, no ring until `:focus-visible`.
 - **Chip:** `h-6 rounded-full bg-fill px-2 text-callout text-fg-muted`;
   status chips tint with their colour at 12–14%.
-- **Row (sidebar, list):** `rounded-md px-2.5 py-1`, hover `bg-fill-subtle`,
+- **Row (list):** `rounded-md px-2.5 py-1`, hover `bg-fill-subtle`,
   selected `bg-fill` + `font-medium`; the hover action button appears with
   opacity only (no layout change).
 - **Card:** `rounded-lg bg-surface p-3.5`, no border; rows inside separated
@@ -358,16 +358,29 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   panel brings its own.
 - **Settings:** a page of the window, not a dialog: `fixed inset-0` in
   `bg-bg` with no scrim, radius or shadow, the shell mounted and inert
-  behind it. A 224px nav column in `bg-fill-subtle` with a hairline on its
-  right holds the search field, then the pages under short headings
-  (`Setup`, `App`, `System`), or the results while there is a query. One
-  page shows at a time beside it, scrolling on its own in a centred
-  `max-w-[760px]` column under its name and a `ChromeButton` close. Picking
-  a result opens its page and lights the row it found (`rc-setting-hit`, a
-  `fill` fading out over 1.2s). Rows show their description in full, take a
-  container query so the control stacks under the text when the window is
-  narrow, and keep the reset button of the bullet below where the value
-  differs from its default.
+  behind it. A 240px nav column in `bg-sidebar` with a hairline on its end
+  edge holds a 32px search field, then the pages under short headings
+  (`Setup`, `App`, `System`), or the results while there is a query, and a
+  Close row at its foot (Esc also closes). Nav rows are `h-8 rounded-md px-2`
+  with a `size-4` icon, `text-sm font-medium`; the open one is `bg-fill` in
+  `fg`, the others muted and filled on hover. One page shows at a time
+  beside it, scrolling on its own in a centred `max-w-[768px]` column with
+  generous top padding: the page's name (`text-title2`) scrolls with the
+  content, no sticky header and no hairline under it. Picking a result opens
+  its page and lights the row it found (`rc-setting-hit`, a `fill` fading
+  out over 1.2s).
+- **Settings section and row:** a section is its name in `text-base
+  font-semibold text-fg`, `px-3`/`px-4`, `space-y-2.5` above one group card,
+  and `32px` of gap before the next section. The card is `rounded-xl` with a
+  1px `border-strong` edge over a soft step of the page
+  (`bg-surface-2/40`), rows divided by a `border` hairline. A row is
+  `px-4 py-3`: its title `text-sm font-medium`, its description `text-xs
+  text-fg-muted`, its control at the right, and the control stacks under the
+  text when the row's own container is narrow. Controls in a row — buttons,
+  selects, the segmented control — are `h-8 rounded-lg` with a thin
+  `border-strong` edge; switches keep their own shape.
+- **Settings row, reset:** rows show their description in full and keep the
+  reset button of the bullet below where the value differs from its default.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer rounded-2xl`, with no padding of

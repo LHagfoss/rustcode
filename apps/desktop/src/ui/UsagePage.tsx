@@ -18,8 +18,8 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { PlanWindow } from "./ComposerUsage";
-import { Pill, Skeleton, Spinner, Switch } from "./primitives";
-import { Group, Row } from "./settingsKit";
+import { Skeleton, Spinner, Switch } from "./primitives";
+import { Action, Group, Row } from "./settingsKit";
 
 export function UsagePage() {
   const status = useApp((s) => s.status);
@@ -68,7 +68,7 @@ export function UsagePage() {
           action={p.via && <span className="text-caption text-fg-faint">from {p.via}</span>}
         >
           {p.status === "ok" && p.windows.length > 0 ? (
-            <div className="flex flex-col gap-4 px-3.5 py-3.5">
+            <div className="flex flex-col gap-4 px-4 py-4">
               {p.windows.map((w) => (
                 <PlanWindow key={w.label} window={w} title={w.label} />
               ))}
@@ -112,7 +112,7 @@ export function UsagePage() {
           )}
         </Group>
       ))}
-      <div className="flex items-center gap-2 px-1 text-caption text-fg-faint">
+      <div className="flex items-center gap-2 px-3 text-caption text-fg-faint sm:px-4">
         <span className="flex-1">
           {error ? (
             <span className="text-warning">Could not refresh: {error}</span>
@@ -120,9 +120,9 @@ export function UsagePage() {
             `Read ${Date.now() - readAt < 60_000 ? "just now" : relativeAge(readAt)}. ${soonestReset(plans) ?? ""}`
           ) : null}
         </span>
-        <Pill onClick={() => void load(claude)} disabled={loading}>
+        <Action onClick={() => void load(claude)} disabled={loading}>
           {loading ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
-        </Pill>
+        </Action>
       </div>
     </>
   );
@@ -144,11 +144,11 @@ function PlansSkeleton() {
   return (
     <div role="status" aria-label="Loading">
       {[0, 1].map((card) => (
-        <section key={card} className="mb-6">
-          <div className="mb-2 flex min-h-6 items-center px-1">
-            <Skeleton className="h-2.5 w-20" />
+        <section key={card} className="mb-8">
+          <div className="mb-2.5 flex min-h-7 items-center px-3 sm:px-4">
+            <Skeleton className="h-3 w-24" />
           </div>
-          <div className="flex flex-col gap-4 overflow-hidden rounded-lg bg-surface px-3.5 py-3.5">
+          <div className="flex flex-col gap-4 rounded-xl border border-border-strong bg-surface-2/40 px-4 py-4">
             {[0, 1].map((row) => (
               <div key={row} className="flex flex-col gap-1.5 px-0.5">
                 <div className="flex items-baseline justify-between gap-3">
