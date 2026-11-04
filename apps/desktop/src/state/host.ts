@@ -8,7 +8,7 @@
 // The store imports this module and this module imports the store; nothing
 // here touches the store at load time.
 
-import type { Json, JsonObject } from "../acp/jsonrpc";
+import { type Json, type JsonObject, RpcError } from "../acp/jsonrpc";
 import { parsePullError, parsePullList, pullErrorTitle } from "../acp/rustcode";
 import { Method, projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
@@ -44,10 +44,12 @@ import {
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
   markWoken,
+  mergeBooks,
   nextId,
   nextWakeAt,
   orphanedLinks,
   type PullStateChoice,
+  parseBook,
   parseCall,
   projectOf,
   prune,
@@ -89,7 +91,16 @@ import {
 import { appendNotice, attachAutoAllowed, localId, type TranscriptItem, turnCompletion } from "./thread";
 
 const BOOK_KEY = "rustcode.threadLinks";
+/** How long a change waits before it is written to the store: a run of tool calls is one save. */
+const SAVE_DEBOUNCE_MS = 250;
 
+/**
+ * The book for the first paint, read synchronously from local storage. The
+ * data store is the copy that survives a reinstall, a second window and a
+ * wiped webview; `syncLinkBook` takes its answer as soon as the engine is up.
+ * Links left active by a restart did not finish here and cannot resume by
+ * themselves, so they are interrupted once, on load.
+ */
 export function loadBook(): LinkBook {
   try {
     const raw = localStorage.getItem(BOOK_KEY);
@@ -101,17 +112,98 @@ export function loadBook(): LinkBook {
   }
 }
 
-function setBook(fn: (book: LinkBook) => LinkBook) {
-  const book = prune(fn(useApp.getState().links));
-  useApp.setState({ links: book });
+/** Whether the engine keeps the book: undefined until it answers, false on an older engine. */
+let engineLinks: boolean | undefined;
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+/** The book as the store last took it: a change that serialises the same is not sent. */
+let savedText: string | undefined;
+
+const text = (book: LinkBook) => JSON.stringify(book);
+
+/** Stores a book, without a save: the first paint and the fallback for an old engine. */
+function keepLocally(book: LinkBook) {
   try {
-    localStorage.setItem(BOOK_KEY, JSON.stringify(book));
+    localStorage.setItem(BOOK_KEY, text(book));
   } catch {
     // Not persisted in a private window.
   }
 }
 
+/** Writes the book to the store once the changes settle; only when it changed. */
+function scheduleSave() {
+  if (engineLinks !== true) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void flushSave(), SAVE_DEBOUNCE_MS);
+}
+
+/** Sends the book now, if it differs from what the store already has. */
+async function flushSave(): Promise<void> {
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  if (engineLinks !== true) return;
+  const current = book();
+  const body = text(current);
+  if (body === savedText) return;
+  savedText = body;
+  try {
+    await request(Method.dataLinksSave, { book: JSON.parse(body) as Json }, 15_000);
+  } catch (error) {
+    // A store that cannot answer must not stop delegation: the local copy is still there.
+    savedText = undefined;
+    console.error("the link book was not saved", error);
+  }
+}
+
+/**
+ * Takes the store's copy of the book once the engine is up. With nothing
+ * saved there, this window's local book is moved in once (the migration from
+ * the release that kept it only in the webview). An engine without the method
+ * answers `unknown method`: local storage stays the only copy, as before.
+ */
+export async function syncLinkBook(): Promise<void> {
+  let answer: JsonObject;
+  try {
+    answer = await request<JsonObject>(Method.dataLinksLoad, {}, 10_000);
+  } catch (error) {
+    if (error instanceof RpcError && error.isMethodNotFound) engineLinks = false;
+    console.error("the link book was not read from the data store", error);
+    return;
+  }
+  engineLinks = true;
+  const shared = parseBook(answer.book);
+  if (!shared) {
+    engineLinks = false;
+    return;
+  }
+  if (answer.stored !== true) {
+    // Nothing saved yet: this window's book is the one to keep.
+    const mine = book();
+    savedText = text(mine);
+    if (mine.links.length || Object.keys(mine.grants).length || mine.fanOuts.length) await flushSave();
+    return;
+  }
+  // Both copies are from before this connect: nothing left active resumes.
+  const merged = interruptActive(mergeBooks(interruptActive(shared), book()));
+  useApp.setState({ links: prune(merged) });
+  keepLocally(prune(merged));
+  savedText = text(interruptActive(shared));
+  // A link this window started while the store was answering is new to it.
+  if (text(prune(merged)) !== text(prune(interruptActive(shared)))) scheduleSave();
+}
+
+function setBook(fn: (book: LinkBook) => LinkBook) {
+  const next = prune(fn(useApp.getState().links));
+  useApp.setState({ links: next });
+  keepLocally(next);
+  scheduleSave();
+}
+
 const book = () => useApp.getState().links;
+
+// A tab or window closing mid-turn still leaves the store with what happened.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => void flushSave());
+}
 
 /**
  * The links each parent is blocked on in `wait_session` right now: a wake for

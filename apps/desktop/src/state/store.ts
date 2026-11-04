@@ -89,6 +89,7 @@ import {
   loadBook,
   queuedLinkDropped,
   stopLinksFrom,
+  syncLinkBook,
   wakeTick,
 } from "./host";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
@@ -748,6 +749,8 @@ async function handshake(): Promise<void> {
     // The composer's meter is ready before the first thread opens.
     void refreshPlanCache();
     if (connection === conn) await syncPinsAndSettled(conn);
+    // The link book now lives in the data store; local storage is the first paint only.
+    void syncLinkBook();
     const selected = get().selectedId;
     if (selected) void openThread(selected);
     if (connection === conn) void resumeInterrupted(interrupted);

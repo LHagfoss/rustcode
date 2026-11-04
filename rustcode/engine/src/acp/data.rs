@@ -2,8 +2,13 @@
 //! (`docs/data-store.md`) for the app, which asks on an agent's behalf for
 //! `thread_usage` and `query_data`. Both are read-only and need no session.
 //!
-//! The engine only reads. The *scope* is the app's decision: it passes the
-//! caller's project while "Let agents read threads in other projects" is off,
+//! `_rustcode/data/links/load` and `_rustcode/data/links/save` keep the app's
+//! link book (who started whom, and what may be done without asking again) in
+//! the same store, so a reinstall or a second window does not lose it. They
+//! need no session either.
+//!
+//! The engine only reads turns; the *scope* is the app's decision: it passes
+//! the caller's project while "Let agents read threads in other projects" is off,
 //! and it refuses `query_data` then, since SQL cannot be narrowed to a project
 //! safely.
 
@@ -42,6 +47,54 @@ pub(crate) struct DataQueryRequest {
     pub sql: String,
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+/// How large a link book may be: far more than the app's own bound (a few
+/// hundred links), so a body over this is a mistake, not a big book.
+pub(crate) const MAX_LINK_BOOK_BYTES: usize = 4 * 1024 * 1024;
+
+/// `_rustcode/data/links/load`: the link book, and whether one was saved.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/data/links/load", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataLinksLoadRequest {}
+
+/// `_rustcode/data/links/save`: replaces the link book with `book`.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/data/links/save", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataLinksSaveRequest {
+    /// The app's `LinkBook`: `links`, `grants`, `counters` and `fanOuts`.
+    pub book: Value,
+}
+
+pub(crate) fn links_load() -> Result<Value, String> {
+    crate::data_store::load_link_book()
+}
+
+pub(crate) fn links_save(request: DataLinksSaveRequest) -> Result<Value, String> {
+    if !request.book.is_object() {
+        return Err("book must be a JSON object".to_owned());
+    }
+    let size = serde_json::to_vec(&request.book)
+        .map_err(|error| error.to_string())?
+        .len();
+    if size > MAX_LINK_BOOK_BYTES {
+        return Err(format!(
+            "the link book is {size} bytes; at most {MAX_LINK_BOOK_BYTES} are kept"
+        ));
+    }
+    crate::data_store::save_link_book(&request.book)?;
+    Ok(serde_json::json!({ "saved": true, "bytes": size }))
 }
 
 pub(crate) fn usage(request: DataUsageRequest) -> Result<Value, String> {
@@ -105,5 +158,19 @@ mod tests {
                 .map(|_| ())
                 .ok_or_else(|| "bad group".to_owned()),
         }
+    }
+
+    #[test]
+    fn a_link_book_over_the_bound_is_refused_before_it_reaches_the_store() {
+        // A body over the bound is a mistake, not a big book: refused before
+        // the store is opened, so this needs no config directory.
+        let refused = super::links_save(super::DataLinksSaveRequest {
+            book: serde_json::json!({"links": [{"message": "x".repeat(super::MAX_LINK_BOOK_BYTES)}]}),
+        });
+        assert!(refused.unwrap_err().contains("at most"));
+        let not_an_object = super::links_save(super::DataLinksSaveRequest {
+            book: serde_json::json!([1, 2, 3]),
+        });
+        assert_eq!(not_an_object.unwrap_err(), "book must be a JSON object");
     }
 }

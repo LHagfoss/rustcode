@@ -26,8 +26,10 @@ import {
   listSessions,
   MAX_DATA_ROWS,
   markWoken,
+  mergeBooks,
   nextWakeAt,
   orphanedLinks,
+  parseBook,
   parseCall,
   type RuleThread,
   sameProject,
@@ -301,6 +303,68 @@ describe("the data store", () => {
     const refused = checkQueryData(false);
     expect(refused?.code).toBe("not_allowed");
     expect(refused?.message).toContain("Let agents read threads in other projects");
+  });
+});
+
+describe("the link book kept in the data store", () => {
+  test("parses what the store answers, and refuses what cannot be a book", () => {
+    expect(parseBook(undefined)).toBeNull();
+    expect(parseBook([] as never)).toBeNull();
+    expect(parseBook("nope" as never)).toBeNull();
+    const parsed = parseBook({
+      links: [
+        {
+          ...link("a", "b", "done"),
+          id: "a/b",
+          settledAt: 5_000,
+          notifiedAt: 6_000,
+          answer: "it is done",
+          laterField: { kept: true },
+        },
+        // A link without an id or with a state this build cannot read is dropped.
+        { orchestrator: "a", target: "c", state: "working", createdAt: 1 },
+        { ...link("a", "d", "working"), state: "somewhere-new" },
+      ],
+      grants: { a: ["start", 7] },
+      counters: { a: 3, b: "two" },
+      fanOuts: [{ id: "fan-1", orchestrator: "a", links: ["a/b"] }, { id: "lost" }],
+      // A field a later release added is dropped, not an error.
+      future: { kept: false },
+    })!;
+    expect(parsed.links.map((l) => l.id)).toEqual(["a/b"]);
+    expect(parsed.links[0]).toMatchObject({ state: "done", settledAt: 5_000, answer: "it is done" });
+    expect((parsed.links[0] as unknown as { laterField: unknown }).laterField).toEqual({ kept: true });
+    expect(parsed.grants).toEqual({ a: ["start"] });
+    expect(parsed.counters).toEqual({ a: 3 });
+    expect(parsed.fanOuts.map((f) => f.id)).toEqual(["fan-1"]);
+  });
+
+  test("merges the store's copy with this window's", () => {
+    const shared = { ...emptyBook(), links: [link("a", "b", "working")], grants: { a: ["start"] } };
+    const mine = {
+      ...emptyBook(),
+      links: [
+        // Settled here, still working in the store: the settled record wins.
+        { ...link("a", "b", "working"), state: "done" as const, settledAt: 9_000, answer: "done" },
+        // Started while the store was answering: nothing may lose it.
+        link("a", "c", "working"),
+      ],
+      grants: { a: ["a/c"], b: ["start"] },
+      counters: { a: 2 },
+      fanOuts: [{ id: "fan-1", orchestrator: "a", title: "T", prompt: "p", links: ["a/c"], createdAt: 1 }],
+    };
+    const merged = mergeBooks(shared, mine);
+    expect(merged.links.map((l) => [l.id, l.state])).toEqual([
+      ["a/b", "done"],
+      ["a/c", "working"],
+    ]);
+    // Nothing is opened twice: the counter is the highest anyone saw, and a grant is kept.
+    expect(merged.counters).toEqual({ a: 2 });
+    expect(merged.grants).toEqual({ a: ["start", "a/c"], b: ["start"] });
+    expect(merged.fanOuts.map((f) => f.id)).toEqual(["fan-1"]);
+    // The store's copy of a link it alone has is kept as it is.
+    const theirs = { ...emptyBook(), links: [link("z", "q", "done")] };
+    expect(mergeBooks(theirs, emptyBook()).links.map((l) => l.id)).toEqual(["z/q"]);
   });
 });
 

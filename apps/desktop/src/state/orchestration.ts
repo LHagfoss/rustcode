@@ -570,6 +570,77 @@ export function prune(book: LinkBook): LinkBook {
   };
 }
 
+const LINK_STATES = Object.keys(LINK_LABEL) as LinkState[];
+
+/** The book the data store answers with, or null when it is not a book at all. */
+export function parseBook(raw: Json | undefined): LinkBook | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const object = raw as Record<string, Json | undefined>;
+  const links: Link[] = [];
+  for (const entry of Array.isArray(object.links) ? object.links : []) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const link = entry as Record<string, Json | undefined>;
+    if (typeof link.id !== "string" || typeof link.orchestrator !== "string") continue;
+    if (typeof link.target !== "string" || typeof link.state !== "string") continue;
+    if (!LINK_STATES.includes(link.state as LinkState)) continue;
+    // The rest travels as it was written, so a field this build does not know survives.
+    links.push({
+      ...(link as unknown as Link),
+      createdAt: typeof link.createdAt === "number" ? link.createdAt : Date.now(),
+    });
+  }
+  const record = (value: Json | undefined) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, Json>) : {};
+  const grants: Record<string, string[]> = {};
+  for (const [who, keys] of Object.entries(record(object.grants))) {
+    if (Array.isArray(keys)) grants[who] = keys.filter((key): key is string => typeof key === "string");
+  }
+  const counters: Record<string, number> = {};
+  for (const [who, n] of Object.entries(record(object.counters))) {
+    if (typeof n === "number" && Number.isFinite(n)) counters[who] = n;
+  }
+  const fanOuts: FanOut[] = [];
+  for (const entry of Array.isArray(object.fanOuts) ? object.fanOuts : []) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const group = entry as Record<string, Json | undefined>;
+    if (typeof group.id !== "string" || !Array.isArray(group.links)) continue;
+    fanOuts.push(group as unknown as FanOut);
+  }
+  return { links, grants, counters, fanOuts };
+}
+
+/** When a link settled, or -1 while it has not: the later record of one link knows more. */
+const settledAtOf = (link: Link) => (typeof link.settledAt === "number" ? link.settledAt : -1);
+
+/**
+ * Two copies of the book: the one the data store holds (shared with every
+ * window) and this window's. A link is taken once: a record that settled beats
+ * one that did not, and otherwise the store's is kept, so a second window
+ * sees what another window already saved. A link only this window has —
+ * started while the store was answering — is kept, and a grant or counter is
+ * merged rather than lost, so nothing is opened twice under the same id.
+ */
+export function mergeBooks(shared: LinkBook, mine: LinkBook): LinkBook {
+  const links = new Map(shared.links.map((link) => [link.id, link] as const));
+  for (const link of mine.links) {
+    const seen = links.get(link.id);
+    if (!seen) links.set(link.id, link);
+    else if (settledAtOf(link) > settledAtOf(seen)) links.set(link.id, link);
+  }
+  const grants: Record<string, string[]> = { ...shared.grants };
+  for (const [who, keys] of Object.entries(mine.grants)) {
+    grants[who] = [...new Set([...(grants[who] ?? []), ...keys])];
+  }
+  const counters: Record<string, number> = { ...shared.counters };
+  for (const [who, n] of Object.entries(mine.counters)) {
+    counters[who] = Math.max(counters[who] ?? 0, n);
+  }
+  const fanOuts = [...shared.fanOuts];
+  const known = new Set(fanOuts.map((group) => group.id));
+  for (const group of mine.fanOuts) if (!known.has(group.id)) fanOuts.push(group);
+  return { links: [...links.values()], grants, counters, fanOuts };
+}
+
 /** A thread deleted: links from it are forgotten, links to it fail. */
 export function forget(book: LinkBook, thread: string): LinkBook {
   const grants = Object.fromEntries(

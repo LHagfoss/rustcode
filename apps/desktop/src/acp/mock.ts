@@ -553,6 +553,8 @@ export class MockEngine {
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
   private presence = true;
   private removedWorktrees = new Set<string>();
+  /** The link book the app keeps in the data store: none until it saves one. */
+  private linkBook: JsonObject | undefined;
   /** The engine's themes: the app's built-ins plus one user theme, as `_rustcode/themes` lists them. */
   private themes: JsonObject[] = [
     ...BUILTIN_THEMES.map((t) => ({ ...t, tokens: { ...t.tokens } }) as unknown as JsonObject),
@@ -986,6 +988,20 @@ export class MockEngine {
           ],
           truncated: false,
         };
+      case "_rustcode/data/links/load":
+        // The same shape `_rustcode/data/links/load` answers with (engine/src/acp/data.rs).
+        return {
+          stored: this.linkBook !== undefined,
+          book: this.linkBook ?? { links: [], grants: {}, counters: {}, fanOuts: [] },
+        };
+      case "_rustcode/data/links/save": {
+        const book = obj(params)?.book;
+        if (!book || typeof book !== "object" || Array.isArray(book)) {
+          throw Object.assign(new Error("book is required"), { code: -32602 });
+        }
+        this.linkBook = book as JsonObject;
+        return { saved: true };
+      }
       case "_rustcode/usage/plans": {
         const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
         const p = params as { claude?: boolean } | undefined;
