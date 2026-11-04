@@ -13,7 +13,6 @@ import {
   CircleX,
   CornerDownRight,
   ExternalLink,
-  FilePlus,
   FileText,
   Globe,
   Hourglass,
@@ -34,10 +33,9 @@ import {
 } from "lucide-react";
 import { memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
-import { effortLabel, type FileDiff, modelName } from "../acp/types";
+import { effortLabel, modelName } from "../acp/types";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
-import { useHighlightedLines } from "../lib/useHighlightedLines";
 import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
@@ -46,7 +44,6 @@ import { LINK_LABEL } from "../state/orchestration";
 import { editMessage, retryMessage, selectThread, useApp } from "../state/store";
 import {
   diffCounts,
-  diffLines,
   formatDuration,
   messageTime,
   type TranscriptItem,
@@ -55,6 +52,7 @@ import {
 } from "../state/thread";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
 import { ThreadAgentRow } from "./AgentViews";
+import { DiffView } from "./DiffView";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
@@ -430,92 +428,6 @@ function TextBox({ text, label }: { text: string; label: string }) {
         {shown.join("\n")}
       </pre>
       {folds && (
-        <button
-          type="button"
-          onClick={() => setAll(!all)}
-          className="mt-1 text-caption text-accent hover:underline"
-        >
-          {all ? "Show less" : `Show all ${lines.length} lines`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function DiffCode({ text, html }: { text: string; html: string | null | undefined }) {
-  return html ? (
-    // Shiki escapes the code; the HTML holds only spans with colour variables.
-    // biome-ignore lint/security/noDangerouslySetInnerHtml: highlighted, escaped output
-    <span className="shiki whitespace-pre" dangerouslySetInnerHTML={{ __html: html }} />
-  ) : (
-    <span className="whitespace-pre">{text || " "}</span>
-  );
-}
-
-export function DiffView({ diff, header = true }: { diff: FileDiff; header?: boolean }) {
-  const lines = useMemo(() => diffLines(diff), [diff]);
-  const newSource = useMemo(() => (diff.newText ? diff.newText.split("\n") : []), [diff.newText]);
-  const oldSource = useMemo(() => (diff.oldText ? diff.oldText.split("\n") : []), [diff.oldText]);
-  const newHtml = useHighlightedLines(newSource, diff.path);
-  const oldHtml = useHighlightedLines(oldSource, diff.path);
-  const [all, setAll] = useState(false);
-  const counts = useMemo(() => diffCounts([diff]), [diff]);
-  const shown = all || lines.length <= 15 ? lines : lines.slice(0, 12);
-  const width = String(
-    Math.max(...lines.map((l) => (l.kind === "removed" ? l.oldNumber : l.newNumber) ?? 0), 1),
-  ).length;
-  return (
-    <div>
-      {header && (
-        <div className="mb-1 flex items-center gap-1.5 text-caption">
-          {diff.oldText === undefined ? (
-            <FilePlus size={12} className="text-fg-muted" />
-          ) : (
-            <FileText size={12} className="text-fg-muted" />
-          )}
-          <span className="truncate font-mono">{diff.path}</span>
-          <DiffCount {...counts} />
-        </div>
-      )}
-      <div className="selectable overflow-x-auto rounded-md bg-fill-subtle py-1 font-mono text-caption leading-[16px]">
-        <div className="min-w-fit">
-          {shown.map((line, i) => (
-            <div
-              key={i}
-              className={cx(
-                "flex pr-3",
-                line.kind === "added" && "bg-[var(--rc-diff-add)]",
-                line.kind === "removed" && "bg-[var(--rc-diff-del)]",
-              )}
-            >
-              <span
-                className="shrink-0 pr-1.5 pl-2 text-right text-fg-muted/60 tabular"
-                style={{ width: `${width + 2}ch` }}
-              >
-                {(line.kind === "removed" ? line.oldNumber : line.newNumber) ?? ""}
-              </span>
-              <span
-                className={cx(
-                  "w-3 shrink-0",
-                  line.kind === "added" && "text-success",
-                  line.kind === "removed" && "text-danger",
-                )}
-              >
-                {line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}
-              </span>
-              <DiffCode
-                text={line.text}
-                html={
-                  line.kind === "removed"
-                    ? oldHtml[(line.oldNumber ?? 0) - diff.oldStart]
-                    : newHtml[(line.newNumber ?? 0) - diff.newStart]
-                }
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-      {lines.length > 15 && (
         <button
           type="button"
           onClick={() => setAll(!all)}
@@ -990,3 +902,6 @@ export function LiveActivityRow({ label }: { label: string }) {
     </div>
   );
 }
+
+// The diff row lives in its own file now (ui/DiffView.tsx); this keeps its importers.
+export { DiffView };

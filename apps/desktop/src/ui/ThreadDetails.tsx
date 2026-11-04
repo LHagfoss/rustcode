@@ -1,69 +1,98 @@
-// The Details view of the right panel: one place for what a thread is. Which
-// harness and model run it, where it works, what it changed, how it relates
-// to other threads, and how far along it is. A section with nothing to say
-// is left out.
+// The thread details card: what this thread is and where it works, as a
+// floating card at the top right of the chat (ui/RightPanel.tsx places it)
+// rather than a pane that narrows the transcript. The rows that do something
+// come first — the folder, a terminal on it, the branch, the changes — then
+// the rest as facts: the threads it runs for or started, its subagents, its
+// plan, the harness and the usage. A section with nothing to say is left out,
+// and so is a row with no action behind it.
 
-import { Copy, CornerDownRight, FolderOpen, GitBranch, ListChecks } from "lucide-react";
+import {
+  ChevronRight,
+  Copy,
+  CornerDownRight,
+  FileDiff,
+  Folder,
+  GitBranch,
+  GitPullRequest,
+  ListChecks,
+  SquareTerminal,
+} from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { SubagentInfo } from "../acp/rustcode";
-import { displayPath, effortLabel, modelName } from "../acp/types";
-import { type GitChanges, gitChanges, revealPath } from "../lib/native";
+import { displayPath, effortLabel, modelName, projectName } from "../acp/types";
+import { type GitChanges, gitChanges, openTerminalAt, revealPath } from "../lib/native";
 import { contextPercent, planProgress, type SubagentLine, subagentLines } from "../state/details";
 import { linksOf, stateOf } from "../state/host";
 import { LINK_LABEL, type Link } from "../state/orchestration";
-import { selectThread, showPanel, useApp, worktreeOf } from "../state/store";
+import { selectThread, showPanel, toast, useApp, worktreeOf } from "../state/store";
 import { formatDuration, formatTokens } from "../state/thread";
 import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
-import { copyText, cx, Tooltip } from "./primitives";
+import { copyText, cx } from "./primitives";
+import { DiffCount } from "./Rows";
 
 const NO_AGENTS: SubagentInfo[] = [];
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section aria-label={title} className="px-1.5 pt-2 pb-2.5 [&+&]:border-border [&+&]:border-t">
-      <h3 className="px-2 pb-1 font-medium text-fg-faint text-sub">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-/** One fact: its label, its value, and a click when there is somewhere to go. */
-function Line({
+/** One thing the card offers: an icon, what it is, and what is on its right. */
+function CardRow({
+  icon,
   label,
-  children,
+  right,
   onClick,
   title,
 }: {
+  icon?: ReactNode;
   label: ReactNode;
-  children?: ReactNode;
+  right?: ReactNode;
   onClick?: () => void;
   title?: string;
 }) {
   const body = (
     <>
-      <span className="flex min-w-0 shrink-0 items-center gap-1.5 text-fg-muted">{label}</span>
-      <span className="min-w-0 flex-1 truncate text-right">{children}</span>
+      {icon}
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      {right}
     </>
   );
-  const shape = "flex min-h-7 w-full items-center gap-3 rounded-lg px-2 text-callout";
+  const shape = "flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-body";
   return onClick ? (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className={cx(shape, "text-left hover:bg-fill-subtle")}
+      className={cx(shape, "font-medium text-fg enabled:hover:bg-fill-subtle")}
     >
       {body}
     </button>
   ) : (
-    <div title={title} className={shape}>
+    <div title={title} className={cx(shape, "text-fg-muted")}>
       {body}
     </div>
   );
 }
 
-function LinkLine({ link, id }: { link: Link; id: string }) {
+/** A fact the card only states: its name on the left, its value at the right. */
+function Fact({ label, value, title }: { label: ReactNode; value: ReactNode; title?: string }) {
+  return (
+    <div title={title} className="flex h-8 w-full items-center gap-2.5 px-2.5 text-body">
+      <span className="min-w-0 shrink-0 text-fg-muted">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-right text-fg tabular">{value}</span>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section aria-label={title} className="pt-1 pb-0.5">
+      <h3 className="px-2.5 pt-1.5 pb-1 font-medium text-caption text-fg-faint">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+const hairline = <div className="mx-2 my-1.5 border-border border-t" />;
+
+function LinkRow({ link, id }: { link: Link; id: string }) {
   const state = useApp((s) => stateOf(s, link));
   const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
   const started = id === link.target;
@@ -80,7 +109,7 @@ function LinkLine({ link, id }: { link: Link; id: string }) {
   );
 }
 
-function SubagentRowLine({ line, now, harness }: { line: SubagentLine; now: number; harness?: string }) {
+function SubagentRow({ line, now, harness }: { line: SubagentLine; now: number; harness?: string }) {
   const end = line.state === "working" ? now : line.endedAt;
   const elapsed = line.startedAt && end ? end - line.startedAt : undefined;
   return (
@@ -136,9 +165,7 @@ export function ThreadDetails() {
 
   if (!id || !thread) {
     return (
-      <div className="flex flex-1 items-center justify-center px-6 text-center text-callout text-fg-muted">
-        Open a thread to see its details.
-      </div>
+      <p className="px-3 py-4 text-center text-callout text-fg-muted">Open a thread to see its details.</p>
     );
   }
 
@@ -154,150 +181,154 @@ export function ThreadDetails() {
   const effort = pickedEffort.name ?? (pickedEffort.value ? effortLabel(pickedEffort.value) : undefined);
   const percent = contextPercent(thread.usage);
   const plan = planProgress(thread.plan);
+  const step = thread.plan.find((p) => p.status === "in_progress")?.content;
   const totals = changes?.files.reduce(
     (t, f) => ({ added: t.added + f.added, removed: t.removed + f.removed }),
     { added: 0, removed: 0 },
   );
+  const branch = worktree?.branch ?? changes?.branch;
+  // A worktree is the project's, checked out from the repository: the card names the project.
+  const project = worktree?.repo ?? thread.cwd;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-      {(harnessName || model) && (
-        <Section title="Harness">
-          {harnessName && (
-            <Line
-              label={
-                <>
-                  <HarnessIcon id={thread.harness!.id} size={13} /> Runs on
-                </>
-              }
-            >
-              {harnessName}
-            </Line>
-          )}
-          {model && <Line label="Model">{model}</Line>}
-          {effort && <Line label="Effort">{effort}</Line>}
-        </Section>
+    <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+      <CardRow
+        icon={<Folder size={16} className="shrink-0 text-fg-muted" />}
+        title={`Show ${thread.cwd} in the file manager`}
+        onClick={() => revealPath(thread.cwd)}
+        label={projectName(project)}
+        right={
+          <span className="max-w-[55%] shrink-0 truncate font-mono text-caption text-fg-faint" dir="rtl">
+            <bdi>{displayPath(thread.cwd)}</bdi>
+          </span>
+        }
+      />
+      <CardRow
+        icon={<SquareTerminal size={16} className="shrink-0 text-fg-muted" />}
+        label="Open in Terminal"
+        title={`A terminal in ${displayPath(thread.cwd)}`}
+        onClick={() => void openTerminalAt(thread.cwd).catch((e) => toast(String(e), "error"))}
+      />
+
+      {hairline}
+
+      {branch && (
+        <CardRow
+          icon={<GitBranch size={16} className="shrink-0 text-fg-muted" />}
+          label={<span className="font-mono">{branch}</span>}
+          title="Copy the branch name"
+          onClick={() => void copyText(branch)}
+          right={<Copy size={13} className="shrink-0 text-fg-faint" />}
+        />
+      )}
+      {worktree?.base && <Fact label="Based on" value={worktree.base} />}
+      {changes && (
+        <CardRow
+          icon={<FileDiff size={16} className="shrink-0 text-fg-muted" />}
+          label="Changes"
+          title="Open the changes"
+          onClick={() => showPanel("changes")}
+          right={
+            changes.files.length === 0 ? (
+              <span className="shrink-0 text-callout text-fg-muted">None</span>
+            ) : (
+              totals && (
+                <span className="shrink-0">
+                  <DiffCount added={totals.added} removed={totals.removed} />
+                </span>
+              )
+            )
+          }
+        />
+      )}
+      {pullsOn && (
+        <CardRow
+          icon={<GitPullRequest size={16} className="shrink-0 text-fg-muted" />}
+          label="Pull requests"
+          title="Open the pull requests"
+          onClick={() => showPanel("pulls")}
+          right={<ChevronRight size={13} className="shrink-0 text-fg-faint" />}
+        />
       )}
 
-      <Section title="Workspace">
-        <Line
-          label={
-            <>
-              <FolderOpen size={13} /> Folder
-            </>
-          }
-          title={`Show ${thread.cwd} in the file manager`}
-          onClick={() => revealPath(thread.cwd)}
-        >
-          {displayPath(thread.cwd)}
-        </Line>
-        {worktree && (
-          <Line
-            label={
-              <>
-                <GitBranch size={13} /> Worktree branch
-              </>
-            }
-            title="Copy the branch name"
-            onClick={() => void copyText(worktree.branch)}
-          >
-            <span className="inline-flex max-w-full items-center gap-1.5">
-              <span className="truncate">{worktree.branch}</span>
-              <Copy size={11} className="shrink-0 text-fg-faint" />
-            </span>
-          </Line>
-        )}
-        {worktree?.base && <Line label="Based on">{worktree.base}</Line>}
-        {totals && changes && (
-          <Line label="Uncommitted" onClick={() => showPanel("changes")} title="Open the changes">
-            {changes.files.length === 0 ? (
-              <span className="text-fg-muted">None</span>
-            ) : (
-              <span className="tabular-nums">
-                {changes.files.length} file{changes.files.length === 1 ? "" : "s"}{" "}
-                <span className="text-success">+{totals.added}</span>{" "}
-                <span className="text-danger">−{totals.removed}</span>
-              </span>
-            )}
-          </Line>
-        )}
-        {pullsOn && (
-          <Line label="Pull requests" onClick={() => showPanel("pulls")} title="Open the pull requests" />
-        )}
-      </Section>
-
       {(drivenBy || driving.length > 0) && (
-        <Section title="Threads">
-          {drivenBy && (
-            <>
-              <div className="flex items-center gap-1.5 px-2 pt-0.5 text-caption text-fg-faint">
-                <CornerDownRight size={11} /> Working for
-              </div>
-              <LinkLine link={drivenBy} id={drivenBy.orchestrator} />
-            </>
-          )}
-          {driving.length > 0 && (
-            <>
-              <div className="px-2 pt-0.5 text-caption text-fg-faint">Started or messaged</div>
-              {driving.map((l) => (
-                <LinkLine key={l.id} link={l} id={l.target} />
-              ))}
-            </>
-          )}
-        </Section>
+        <>
+          {hairline}
+          <Section title="Threads">
+            {drivenBy && (
+              <>
+                <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
+                  <CornerDownRight size={11} /> Working for
+                </div>
+                <LinkRow link={drivenBy} id={drivenBy.orchestrator} />
+              </>
+            )}
+            {driving.length > 0 && (
+              <>
+                <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">Started or messaged</div>
+                {driving.map((l) => (
+                  <LinkRow key={l.id} link={l} id={l.target} />
+                ))}
+              </>
+            )}
+          </Section>
+        </>
       )}
 
       {subagents.length > 0 && (
-        <Section title={`Subagents · ${subagents.length}`}>
-          {subagents.map((line) => (
-            <SubagentRowLine key={line.key} line={line} now={now} harness={thread.harness?.id} />
-          ))}
-        </Section>
+        <>
+          {hairline}
+          <Section title={`Subagents · ${subagents.length}`}>
+            {subagents.map((line) => (
+              <SubagentRow key={line.key} line={line} now={now} harness={thread.harness?.id} />
+            ))}
+          </Section>
+        </>
       )}
 
       {plan && (
-        <Section title="Plan">
-          <Tooltip label={thread.plan.find((p) => p.status === "in_progress")?.content ?? plan}>
-            <div>
-              <Line
-                label={
-                  <>
-                    <ListChecks size={13} /> Steps
-                  </>
-                }
-              >
-                {plan}
-              </Line>
-            </div>
-          </Tooltip>
-        </Section>
+        <>
+          {hairline}
+          <Fact
+            title={step ?? plan}
+            label={
+              <span className="flex items-center gap-1.5">
+                <ListChecks size={16} className="shrink-0" /> Plan
+              </span>
+            }
+            value={plan}
+          />
+        </>
       )}
 
-      {thread.usage && (
-        <Section title="Usage">
-          {percent !== undefined && (
-            <Line label="Context window">
-              <span className="tabular-nums">
-                {percent}% of {formatTokens(thread.usage.size)}
-              </span>
-            </Line>
-          )}
-          {thread.usage.inputTokens !== undefined && (
-            <Line label="Tokens in, out">
-              <span className="tabular-nums">
-                {formatTokens(thread.usage.inputTokens)}, {formatTokens(thread.usage.outputTokens ?? 0)}
-              </span>
-            </Line>
-          )}
-          {thread.usage.cost !== undefined && (
-            <Line label="Cost">
-              <span className="tabular-nums">
-                {thread.usage.cost.toFixed(2)} {thread.usage.currency ?? "USD"}
-              </span>
-            </Line>
-          )}
-        </Section>
+      {(harnessName || model || effort || percent !== undefined || thread.usage?.cost !== undefined) &&
+        hairline}
+
+      {harnessName && (
+        <Fact
+          label={
+            <span className="flex items-center gap-1.5">
+              <HarnessIcon id={thread.harness!.id} size={16} /> Runs on
+            </span>
+          }
+          value={harnessName}
+        />
       )}
+      {model && <Fact label="Model" value={model} />}
+      {effort && <Fact label="Effort" value={effort} />}
+      {percent !== undefined && thread.usage && (
+        <Fact label="Context" value={`${percent}% of ${formatTokens(thread.usage.size)}`} />
+      )}
+      {thread.usage?.inputTokens !== undefined && (
+        <Fact
+          label="Tokens in, out"
+          value={`${formatTokens(thread.usage.inputTokens)}, ${formatTokens(thread.usage.outputTokens ?? 0)}`}
+        />
+      )}
+      {thread.usage?.cost !== undefined && (
+        <Fact label="Cost" value={`${thread.usage.cost.toFixed(2)} ${thread.usage.currency ?? "USD"}`} />
+      )}
+      <div className="h-1" />
     </div>
   );
 }

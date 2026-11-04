@@ -1,11 +1,18 @@
 // The Changes panel, after ChangesPanel.swift: the thread's working tree
-// against HEAD, from git in the Tauri shell. Reloads when a turn ends.
+// against HEAD, from git in the Tauri shell. Each file keeps its header in
+// place while its diff scrolls under it, and can be folded away; the panel
+// draws the diff unified, or side by side when the window is wide enough.
+// Reloads when a turn ends.
 
 import { ChevronRight, CircleCheck, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { type GitChanges, gitChanges } from "../lib/native";
+import { parsePatch } from "../state/diff";
 import { useApp } from "../state/store";
-import { Cluster, ClusterButton, cx, Spinner } from "./primitives";
+import { Patch } from "./DiffView";
+import { Cluster, ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
+import { DiffCount } from "./Rows";
 
 const STATUS_TINT: Record<string, string> = {
   A: "text-success bg-success/15",
@@ -15,6 +22,22 @@ const STATUS_TINT: Record<string, string> = {
   C: "text-accent bg-accent/15",
   M: "text-warning bg-warning/15",
 };
+
+/** The letter a file's change is marked with, in the colour it means. */
+export function StatusMark({ status, size = 4 }: { status: string; size?: 4 | 5 }) {
+  return (
+    <span
+      aria-hidden
+      className={cx(
+        "flex shrink-0 items-center justify-center rounded-xs font-bold font-mono text-[9px]",
+        size === 5 ? "size-5" : "size-4",
+        STATUS_TINT[status] ?? "bg-fill text-fg-muted",
+      )}
+    >
+      {status.slice(0, 1)}
+    </span>
+  );
+}
 
 /** Splits `git diff` output into per-file chunks keyed by the new path. */
 export function splitUnifiedDiff(diff: string): Record<string, string[]> {
@@ -33,25 +56,56 @@ export function splitUnifiedDiff(diff: string): Record<string, string[]> {
   return out;
 }
 
-function UnifiedDiff({ lines }: { lines: string[] }) {
+/** One file's section: its header stays put, its diff folds away under it. */
+function FileSection({
+  file,
+  chunk,
+  mode,
+}: {
+  file: GitChanges["files"][number];
+  chunk: string[] | undefined;
+  mode: "unified" | "split";
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const lines = useMemo(() => parsePatch(chunk ?? []), [chunk]);
   return (
-    <div className="selectable overflow-x-auto rounded-md bg-fill-subtle py-1 font-mono text-caption leading-[16px]">
-      <div className="min-w-fit">
-        {lines.map((line, i) => (
-          <div
-            key={i}
-            className={cx(
-              "px-2.5 whitespace-pre",
-              line.startsWith("+") && "bg-[var(--rc-diff-add)]",
-              line.startsWith("-") && "bg-[var(--rc-diff-del)]",
-              line.startsWith("@@") && "text-fg-faint",
-            )}
-          >
-            {line || " "}
+    <section className="mb-3">
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed(!collapsed)}
+        // Full-bleed while it holds its place: nothing of the file above shows beside it.
+        className="sticky top-0 z-10 -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-2 bg-surface-2 px-4 py-1.5 text-left hover:bg-fill-subtle"
+      >
+        <ChevronRight
+          size={11}
+          strokeWidth={2.5}
+          className={cx(
+            "shrink-0 text-fg-faint transition-transform duration-150",
+            !collapsed && "rotate-90",
+          )}
+        />
+        <StatusMark status={file.status} />
+        <span className="min-w-0 flex-1 truncate font-mono text-callout" dir="rtl">
+          <bdi>{file.path}</bdi>
+        </span>
+        {file.binary ? (
+          <span className="text-caption text-fg-faint">binary</span>
+        ) : (
+          <DiffCount added={file.added} removed={file.removed} />
+        )}
+      </button>
+      {!collapsed &&
+        (lines.length ? (
+          <div className="mb-2 ml-2">
+            <Patch lines={lines} path={file.path} mode={mode} />
           </div>
+        ) : (
+          <p className="mb-2 ml-2 px-2 py-1 text-caption text-fg-faint">
+            {file.binary ? "A binary file: no lines to show." : "No text diff to show."}
+          </p>
         ))}
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -61,8 +115,11 @@ export function ChangesPanel() {
   const [data, setData] = useState<GitChanges | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState<Record<string, boolean>>({});
   const [loadedAt, setLoadedAt] = useState<number>();
+  // Split is measured on this pane's own column, not the window: a wide window
+  // with a narrow panel still has no room for two columns.
+  const [bodyRef, bodyWidth] = useDiffWidth<HTMLDivElement>();
+  const { mode, picked, wide } = useDiffLayout(bodyWidth);
 
   const load = useCallback(async () => {
     if (!cwd) return;
@@ -103,14 +160,32 @@ export function ChangesPanel() {
       <div className="flex h-9 shrink-0 items-center gap-2 px-3">
         <span className="font-semibold text-body">Uncommitted</span>
         <span className="flex-1" />
+        <Tooltip label={wide ? "Unified or side by side" : "Side by side needs a wider view"}>
+          <span>
+            <Segments
+              label="Layout"
+              value={mode}
+              onChange={(v) => setDiffMode(v)}
+              options={[
+                { value: "unified", label: "Unified" },
+                { value: "split", label: "Split", disabled: !wide },
+              ]}
+            />
+          </span>
+        </Tooltip>
         <Cluster>
           <ClusterButton label="Reload" onClick={() => void load()}>
             {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
           </ClusterButton>
         </Cluster>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {error && <p className="text-callout text-fg-muted">{error}</p>}
+        {!wide && picked === "split" && (
+          <p className="mb-3 text-caption text-fg-faint">
+            Side by side needs 900px of width here; these files read unified until then.
+          </p>
+        )}
         {!error && data && (
           <>
             <div className="mb-0.5 flex items-baseline gap-2 text-callout tabular">
@@ -135,50 +210,9 @@ export function ChangesPanel() {
                 No uncommitted changes
               </div>
             )}
-            <ul className="flex flex-col gap-0.5">
-              {data.files.map((f) => (
-                <li key={f.path}>
-                  <button
-                    type="button"
-                    aria-expanded={!!open[f.path]}
-                    onClick={() => setOpen({ ...open, [f.path]: !open[f.path] })}
-                    className="flex w-full items-center gap-2 rounded-sm p-[5px] text-left hover:bg-fill-subtle"
-                  >
-                    <ChevronRight
-                      size={11}
-                      className={cx(
-                        "shrink-0 text-fg-faint transition-transform",
-                        open[f.path] && "rotate-90",
-                      )}
-                    />
-                    <span
-                      className={cx(
-                        "flex size-4 shrink-0 items-center justify-center rounded-xs font-bold font-mono text-[9px]",
-                        STATUS_TINT[f.status] ?? "bg-fill text-fg-muted",
-                      )}
-                    >
-                      {f.status}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-callout" dir="rtl">
-                      <bdi>{f.path}</bdi>
-                    </span>
-                    {f.binary ? (
-                      <span className="text-caption text-fg-faint">binary</span>
-                    ) : (
-                      <span className="font-mono text-caption tabular">
-                        <span className="text-success">+{f.added}</span>{" "}
-                        <span className="text-danger">−{f.removed}</span>
-                      </span>
-                    )}
-                  </button>
-                  {open[f.path] && chunks[f.path] && (
-                    <div className="mt-1 mb-2 ml-6">
-                      <UnifiedDiff lines={chunks[f.path]!} />
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+            {data.files.map((file) => (
+              <FileSection key={file.path} file={file} chunk={chunks[file.path]} mode={mode} />
+            ))}
           </>
         )}
         {!error && !data && loading && (

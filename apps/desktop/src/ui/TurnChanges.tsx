@@ -9,43 +9,9 @@ import { useState } from "react";
 import type { Checkpoint, PatchFile } from "../acp/v2";
 import { parsePatch } from "../state/diff";
 import { askConfirm, canRewind, restoreCheckpoint, setView, turnDiff, useApp } from "../state/store";
-import { cx, Pill, Skeleton } from "./primitives";
+import { Patch } from "./DiffView";
+import { Pill, Skeleton } from "./primitives";
 import { DiffCount } from "./Rows";
-
-function Patch({ file }: { file: PatchFile }) {
-  const lines = parsePatch(file.patch);
-  return (
-    <div className="selectable overflow-x-auto rounded-md bg-fill-subtle py-1 font-mono text-caption leading-[16px]">
-      <div className="min-w-fit">
-        {lines.map((l, i) => (
-          <div
-            key={i}
-            className={cx(
-              "flex pr-3",
-              l.kind === "add" && "bg-[var(--rc-diff-add)]",
-              l.kind === "del" && "bg-[var(--rc-diff-del)]",
-              l.kind === "hunk" && "text-fg-faint",
-            )}
-          >
-            {l.kind === "hunk" ? (
-              <span className="px-2.5">{l.text}</span>
-            ) : (
-              <>
-                <span className="w-[5ch] shrink-0 pr-1.5 text-right text-fg-faint tabular">
-                  {(l.kind === "del" ? l.old : l.new) ?? ""}
-                </span>
-                <span className={cx("w-3 shrink-0", l.kind === "add" ? "text-success" : "text-danger")}>
-                  {l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}
-                </span>
-                <span className="whitespace-pre">{l.text || " "}</span>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkpoint: Checkpoint }) {
   const [files, setFiles] = useState<PatchFile[] | null>(null);
@@ -118,7 +84,7 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
                   <span className="truncate font-mono">{f.path}</span>
                   <DiffCount added={f.insertions} removed={f.deletions} />
                 </div>
-                <Patch file={f} />
+                <Patch lines={parsePatch(f.patch)} path={f.path} />
               </div>
             ))}
           </div>
