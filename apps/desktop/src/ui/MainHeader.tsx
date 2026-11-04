@@ -10,7 +10,7 @@ import { openSettings, startNewThread, toggleSidebar, useApp, useShortcutHint } 
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { useLightsInset } from "./Titlebar";
 
-/** Settings, in the sidebar's top row (and the header's when the sidebar is hidden). */
+/** Settings, in the header's row when the sidebar is hidden. */
 export function SettingsButton() {
   const open = useApp((s) => s.settings !== null);
   const key = useShortcutHint("settings");
@@ -75,7 +75,13 @@ export function MainHeader({
       <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
         {title}
       </div>
-      {right}
+      {right && (
+        // Each control stands on its own, without the track a Cluster draws: the header already
+        // has one shape in it (the title's project mark), and a pill beside it reads as a second.
+        <div className="flex shrink-0 items-center gap-0.5 [&>div]:h-7 [&>div]:gap-0 [&>div]:rounded-none [&>div]:bg-transparent [&>div]:px-0">
+          {right}
+        </div>
+      )}
     </header>
   );
 }

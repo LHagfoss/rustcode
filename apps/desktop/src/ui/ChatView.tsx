@@ -44,6 +44,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
+import { ProjectMark } from "./ProjectMark";
 import {
   Callout,
   Cluster,
@@ -174,18 +175,18 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
             <Tooltip
               label={
                 thread?.running
-                  ? `${cwd} · stop the turn to change folder`
-                  : `${cwd} · change folder (${folderKey})`
+                  ? `${displayPath(cwd)} · stop the turn to change folder`
+                  : `${displayPath(cwd)} · change folder (${folderKey})`
               }
             >
               <button
                 type="button"
                 disabled={thread?.running}
                 onClick={() => void chooseFolder(false)}
-                className="-mx-1 max-w-[260px] shrink-0 truncate rounded-sm px-1 text-body text-fg-muted enabled:hover:bg-fill-subtle enabled:hover:text-fg disabled:cursor-default"
-                dir="rtl"
+                className="-mx-1 flex max-w-[220px] shrink-0 items-center gap-1.5 rounded-sm px-1 text-body text-fg-muted enabled:hover:bg-fill-subtle enabled:hover:text-fg disabled:cursor-default"
               >
-                <bdi>{displayPath(cwd)}</bdi>
+                <ProjectMark name={projectName(cwd)} />
+                <span className="min-w-0 truncate">{projectName(cwd)}</span>
               </button>
             </Tooltip>
           )}
