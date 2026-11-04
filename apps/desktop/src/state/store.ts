@@ -1419,19 +1419,53 @@ export function cancelEdit(key: string) {
   });
 }
 
-export function togglePin(id: string) {
+/**
+ * Pin or unpin threads: the app's list first, so the sidebar answers at once, then the engine, one
+ * request each. A failure puts back only the threads the engine refused, and says so once for the
+ * whole selection rather than once per thread (ui/Sidebar.tsx acts on a multi-selection).
+ */
+export function setPinned(ids: string[], on: boolean) {
   const before = get().pinned;
-  const on = !before.includes(id);
-  const pinned = on ? [id, ...before] : before.filter((x) => x !== id);
-  set({ pinned });
-  store(STORAGE.pinned, JSON.stringify(pinned));
-  toast(on ? "Pinned" : "Unpinned", "success");
+  const wanted = new Set(ids);
+  const next = on
+    ? [...ids.filter((id) => !before.includes(id)), ...before]
+    : before.filter((id) => !wanted.has(id));
+  set({ pinned: next });
+  store(STORAGE.pinned, JSON.stringify(next));
+  const many = ids.length > 1;
+  toast(many ? `${on ? "Pinned" : "Unpinned"} ${ids.length} threads` : on ? "Pinned" : "Unpinned", "success");
   if (!get().features.pins || !connection) return;
-  connection.request(V2Method.sessionPin, { session_id: id, pinned: on }, 10_000).catch((error) => {
-    set({ pinned: before });
-    store(STORAGE.pinned, JSON.stringify(before));
-    toast(`Could not ${on ? "pin" : "unpin"} the thread: ${errorText(error)}`, "error");
+  const link = connection;
+  void Promise.all(
+    ids.map((id) =>
+      link.request(V2Method.sessionPin, { session_id: id, pinned: on }, 10_000).then(
+        () => undefined,
+        (error: unknown) => (error instanceof RpcError && error.isMethodNotFound ? undefined : { id, error }),
+      ),
+    ),
+  ).then((results) => {
+    const failed = results.filter((r): r is { id: string; error: unknown } => !!r);
+    if (!failed.length) return;
+    const refused = new Set(failed.map((f) => f.id));
+    // Unpinning: keep what was pinned before, less the ones the engine took. Pinning: drop the
+    // ones it refused and leave the rest.
+    const pinned = on
+      ? get().pinned.filter((id) => !refused.has(id))
+      : before.filter((id) => !wanted.has(id) || refused.has(id));
+    set({ pinned });
+    store(STORAGE.pinned, JSON.stringify(pinned));
+    const first = errorText(failed[0]!.error);
+    toast(
+      many
+        ? `Could not ${on ? "pin" : "unpin"} ${failed.length} of ${ids.length} threads: ${first}`
+        : `Could not ${on ? "pin" : "unpin"} the thread: ${first}`,
+      "error",
+    );
   });
+}
+
+export function togglePin(id: string) {
+  setPinned([id], !get().pinned.includes(id));
 }
 
 export function setArchived(id: string, on: boolean) {
@@ -2221,19 +2255,40 @@ export function clearStatusMark(id: string) {
 }
 
 /** Mark a thread for review, done, or back to idle; stored by the engine when it can, else by the app. */
-export async function setThreadStatus(id: string, status: "review" | "done" | "idle"): Promise<void> {
-  set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)) }));
-  if (status === "idle") clearStatusMark(id);
-  else saveMarks({ ...get().statusMarks, [id]: status });
-  if (!get().features.status || !connection) return;
-  try {
-    await connection.request(V2Method.sessionStatus, { session_id: id, status }, 10_000);
-    // The engine keeps it now; the app's mark only covers the gap until the list says so.
-  } catch (error) {
-    if (!(error instanceof RpcError && error.isMethodNotFound)) {
-      toast(`Could not save the status: ${errorText(error)}`, "error");
+export function setThreadStatus(id: string, status: "review" | "done" | "idle"): Promise<number> {
+  return setThreadsStatus([id], status);
+}
+
+/**
+ * The same for several threads at once: the app's list first, then the engine one request each.
+ * Whatever fails is reported in one toast for the selection, not one per thread.
+ */
+export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
+  const wanted = new Set(ids);
+  set((s) => ({ sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)) }));
+  if (status === "idle") for (const id of ids) clearStatusMark(id);
+  else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
+  if (!get().features.status || !connection) return 0;
+  const link = connection;
+  const errors: unknown[] = [];
+  for (const id of ids) {
+    try {
+      await link.request(V2Method.sessionStatus, { session_id: id, status }, 10_000);
+      // The engine keeps it now; the app's mark only covers the gap until the list says so.
+    } catch (error) {
+      if (!(error instanceof RpcError && error.isMethodNotFound)) errors.push(error);
     }
   }
+  if (errors.length) {
+    const first = errorText(errors[0]);
+    toast(
+      ids.length === 1
+        ? `Could not save the status: ${first}`
+        : `Could not save the status of ${errors.length} of ${ids.length} threads: ${first}`,
+      "error",
+    );
+  }
+  return errors.length;
 }
 
 export function setView(view: AppState["view"]) {

@@ -37,23 +37,31 @@ import {
   X,
 } from "lucide-react";
 import { ContextMenu, Dialog, DropdownMenu } from "radix-ui";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { openTerminalAt, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import {
   type ChildInfo,
-  type ChildState,
+  childInfo,
   childrenListed,
-  childState,
   childSummary,
   childVisible,
   orderChildren,
   pruneOpenGroups,
   unseenChild,
 } from "../state/children";
-import { isActive } from "../state/orchestration";
+import {
+  keepListed,
+  nextRow,
+  type OrderRow,
+  type OrderSection,
+  rangeRows,
+  rowKeyAction,
+  threadDiff,
+  visibleRows,
+} from "../state/sidebarRows";
 import { snoozePresets, wakeLabel } from "../state/snooze";
 import {
   askConfirm,
@@ -65,7 +73,9 @@ import {
   repairThread,
   searchThreads,
   selectThread,
+  setPinned,
   setThreadStatus,
+  setThreadsStatus,
   setView,
   snoozeThread,
   startNewThread,
@@ -89,6 +99,7 @@ import {
   inputClass,
   menuItem,
   menuItemDanger,
+  menuLabel,
   menuSeparator,
   menuSurface,
   Pill,
@@ -174,19 +185,63 @@ function ThreadMenuItems({
   Item,
   Separator,
   onRename,
+  bulk,
+  onClear,
 }: {
   session: SessionSummary;
   Menu: typeof DropdownMenu | typeof ContextMenu;
   Item: typeof DropdownMenu.Item | typeof ContextMenu.Item;
   Separator: typeof DropdownMenu.Separator | typeof ContextMenu.Separator;
   onRename: () => void;
+  /** The sidebar's multi-selection, when this row is in it: the menu acts on all of them. */
+  bulk?: SessionSummary[];
+  onClear?: () => void;
 }) {
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const statusMissing = useApp((s) => (s.features.status ? null : featureMissing("status")));
   const snoozed = useApp((s) => session.id in s.snoozed);
+  const allPinned = useApp((s) => (bulk ?? []).every((x) => s.pinned.includes(x.id)));
   const canFiles = hasShell();
+  // The selection's menu: every hook is read above, so the early return keeps the hooks in order.
+  if (bulk && bulk.length > 1) {
+    const n = bulk.length;
+    const ids = bulk.map((x) => x.id);
+    return (
+      <>
+        <div className={menuLabel}>{n} threads selected</div>
+        <Item
+          className={menuItem}
+          onSelect={() => {
+            settleThreads(bulk);
+            onClear?.();
+          }}
+        >
+          <CircleCheck size={13} /> Settle {n} Threads
+        </Item>
+        <Item
+          className={menuItem}
+          onSelect={() => {
+            setPinned(ids, !allPinned);
+            onClear?.();
+          }}
+        >
+          {allPinned ? <PinOff size={13} /> : <Pin size={13} />}
+          {allPinned ? "Unpin" : "Pin"} {n} Threads
+        </Item>
+        <Item
+          className={menuItem}
+          onSelect={() => {
+            for (const id of ids) markUnread(id);
+            onClear?.();
+          }}
+        >
+          <CircleCheck size={13} /> Mark {n} Unread
+        </Item>
+      </>
+    );
+  }
   return (
     <>
       {status !== "review" && (
@@ -358,6 +413,36 @@ function RowAction({
   );
 }
 
+/**
+ * Marks several threads Done at once: one toast, and an Undo that puts each one back the way it
+ * was (review stays review, the rest go back to idle).
+ */
+function settleThreads(sessions: SessionSummary[]) {
+  const state = useApp.getState();
+  const before = sessions
+    .map((s) => ({ id: s.id, status: statusOf(state, s.id) }))
+    .filter((x) => x.status !== "done");
+  if (!before.length) {
+    toast("Already settled", "info");
+    return;
+  }
+  void setThreadsStatus(
+    before.map((x) => x.id),
+    "done",
+  );
+  toast(`Settled ${before.length} threads`, "info", {
+    action: {
+      label: "Undo",
+      run: () => {
+        const review = before.filter((x) => x.status === "review").map((x) => x.id);
+        const rest = before.filter((x) => x.status !== "review").map((x) => x.id);
+        if (review.length) void setThreadsStatus(review, "review");
+        if (rest.length) void setThreadsStatus(rest, "idle");
+      },
+    },
+  });
+}
+
 /** Marks a thread Done, with an Undo that puts back the status it had. */
 function settleThread(session: SessionSummary, before: ThreadStatus | undefined) {
   void setThreadStatus(session.id, "done");
@@ -381,6 +466,10 @@ const ThreadRow = memo(function ThreadRow({
   snippet,
   compact,
   hasChildren,
+  navActive,
+  picked,
+  bulk,
+  onClearSelection,
 }: {
   session: SessionSummary;
   selected: boolean;
@@ -392,6 +481,13 @@ const ThreadRow = memo(function ThreadRow({
   compact?: boolean;
   /** The sidebar lists this thread's children under it, which already say what the links are. */
   hasChildren?: boolean;
+  /** The row the keyboard is on: it holds the list's one tab stop, ↑ ↓ move it. */
+  navActive?: boolean;
+  /** In the sidebar's multi-selection (⌘-click), which is not the same as the thread being open. */
+  picked?: boolean;
+  /** The picked threads, when there is more than one: this row's menu then acts on all of them. */
+  bulk?: SessionSummary[];
+  onClearSelection?: () => void;
 }) {
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
@@ -404,6 +500,10 @@ const ThreadRow = memo(function ThreadRow({
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const finishedAt = useApp((s) => s.finished[session.id]);
   const failedAt = useApp((s) => s.failed[session.id]);
+  // What the thread's calls changed, from the diffs the app already read: a thread never opened
+  // here has no items, and shows nothing rather than a made-up zero.
+  const items = useApp((s) => s.threads[session.id]?.items);
+  const diff = useMemo(() => threadDiff(items), [items]);
   // Done or Failed while you were elsewhere, until you open it.
   const fresh = !!finishedAt && !selected;
   const failed = !!failedAt && !selected;
@@ -452,6 +552,8 @@ const ThreadRow = memo(function ThreadRow({
           <div className="group relative">
             <button
               type="button"
+              data-row-id={session.id}
+              tabIndex={navActive ? 0 : -1}
               onClick={() => selectThread(session.id)}
               onDoubleClick={startRename}
               onKeyDown={(e) => {
@@ -461,9 +563,10 @@ const ThreadRow = memo(function ThreadRow({
                 }
               }}
               aria-current={selected ? "page" : undefined}
+              aria-pressed={picked || undefined}
               className={cx(
                 "flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left",
-                selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
+                picked ? "bg-accent/12" : selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
               )}
             >
               <Tooltip label={meta.length ? meta.join(" · ") : (session.title ?? "Thread")}>
@@ -479,7 +582,7 @@ const ThreadRow = memo(function ThreadRow({
               <span
                 className={cx(
                   "min-w-0 flex-1 truncate text-callout",
-                  selected || request || failed
+                  selected || picked || request || failed
                     ? "font-medium text-fg"
                     : running || status === "done"
                       ? "text-fg/75"
@@ -511,6 +614,8 @@ const ThreadRow = memo(function ThreadRow({
               Item={ContextMenu.Item}
               Separator={ContextMenu.Separator}
               onRename={startRename}
+              bulk={bulk}
+              onClear={onClearSelection}
             />
           </ContextMenu.Content>
         </ContextMenu.Portal>
@@ -523,6 +628,8 @@ const ThreadRow = memo(function ThreadRow({
         <div className="group relative">
           <button
             type="button"
+            data-row-id={session.id}
+            tabIndex={navActive ? 0 : -1}
             onClick={() => selectThread(session.id)}
             onDoubleClick={startRename}
             onKeyDown={(e) => {
@@ -532,9 +639,10 @@ const ThreadRow = memo(function ThreadRow({
               }
             }}
             aria-current={selected ? "page" : undefined}
+            aria-pressed={picked || undefined}
             className={cx(
               "flex w-full flex-col gap-px rounded-md px-2.5 py-[5px] text-left",
-              selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
+              picked ? "bg-accent/12" : selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
             )}
           >
             <span className="flex w-full items-center gap-1.5 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
@@ -543,7 +651,7 @@ const ThreadRow = memo(function ThreadRow({
                 className={cx(
                   "min-w-0 flex-1 truncate text-body",
                   // What wants you reads strong; what works, waits or is seen recedes.
-                  selected || request || fresh || failed
+                  selected || picked || request || fresh || failed
                     ? "font-medium text-fg"
                     : done || running || waiting
                       ? "text-fg/75"
@@ -610,12 +718,19 @@ const ThreadRow = memo(function ThreadRow({
                 {request.question ? request.question.text : request.title}
               </span>
             ) : (
-              (meta.length > 0 || worktree || external) && (
+              (meta.length > 0 || worktree || external || diff) && (
                 <span className="flex items-center gap-1 truncate text-fg-faint text-sub">
                   {worktree && (
                     <span className="flex min-w-0 shrink items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
                       <GitBranch size={9} className="shrink-0" />
                       <span className="truncate">{worktree.branch}</span>
+                    </span>
+                  )}
+                  {diff && (
+                    <span className="shrink-0 font-mono text-sub tabular">
+                      {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+                      {diff.added > 0 && diff.removed > 0 && " "}
+                      {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
                     </span>
                   )}
                   {external && (
@@ -658,6 +773,8 @@ const ThreadRow = memo(function ThreadRow({
                     Item={DropdownMenu.Item}
                     Separator={DropdownMenu.Separator}
                     onRename={startRename}
+                    bulk={bulk}
+                    onClear={onClearSelection}
                   />
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
@@ -673,6 +790,8 @@ const ThreadRow = memo(function ThreadRow({
             Item={ContextMenu.Item}
             Separator={ContextMenu.Separator}
             onRename={startRename}
+            bulk={bulk}
+            onClear={onClearSelection}
           />
         </ContextMenu.Content>
       </ContextMenu.Portal>
@@ -693,6 +812,12 @@ function ChildThreads({
   now,
   groupOpen,
   onGroupOpen,
+  finishedOpen,
+  onFinishedOpen,
+  activeId,
+  picked,
+  bulk,
+  onClearSelection,
 }: {
   items: SessionSummary[];
   parentId: string;
@@ -701,8 +826,15 @@ function ChildThreads({
   /** The group's state as the reader left it: true opened, false closed by hand, unset never touched. */
   groupOpen?: boolean;
   onGroupOpen: (open: boolean) => void;
+  /** The finished children are shown under the group's "N finished" toggle. */
+  finishedOpen?: boolean;
+  onFinishedOpen: (open: boolean) => void;
+  /** The row the keyboard is on, the picked threads and how to clear them (ui/Sidebar.tsx). */
+  activeId: string | null;
+  picked: ReadonlySet<string>;
+  bulk: SessionSummary[];
+  onClearSelection: () => void;
 }) {
-  const [openFinished, setOpenFinished] = useState(false);
   // One string, so the rows re-render only when a child's state changes. A child whose link is
   // still open is live even before its turn reports so (it was just started or messaged).
   const states = useApp((s) => {
@@ -711,11 +843,13 @@ function ChildThreads({
     );
     return items
       .map((c) => {
-        const status = statusOf(s, c.id);
-        const link = linked.get(c.id);
-        const live = link && isActive(link) ? (link === "needs_user" ? "needs_input" : "running") : status;
-        const state = childState(live, !!s.failed[c.id]);
-        return `${c.id}:${state}:${s.finished[c.id] ? 1 : 0}`;
+        const info = childInfo(c.id, {
+          status: statusOf(s, c.id),
+          link: linked.get(c.id),
+          failed: !!s.failed[c.id],
+          unseen: !!s.finished[c.id],
+        });
+        return `${info.id}:${info.state}:${info.unseen ? 1 : 0}`;
       })
       .join(" ");
   });
@@ -726,7 +860,7 @@ function ChildThreads({
         .filter(Boolean)
         .map((part) => {
           const [id, state, unseen] = part.split(":");
-          return [id!, { id: id!, state: state as ChildState, unseen: unseen === "1" }] as const;
+          return [id!, { id: id!, state: state as ChildInfo["state"], unseen: unseen === "1" }] as const;
         }),
     );
     return items.flatMap((c) => {
@@ -752,7 +886,17 @@ function ChildThreads({
     const session = items.find((c) => c.id === child.id);
     return session ? (
       <div key={child.id} className="ml-[14px] border-border border-l pl-1 rc-in">
-        <ThreadRow session={session} selected={child.id === selectedId} scopeAll={false} now={now} compact />
+        <ThreadRow
+          session={session}
+          selected={child.id === selectedId}
+          scopeAll={false}
+          now={now}
+          compact
+          navActive={child.id === activeId}
+          picked={picked.has(child.id)}
+          bulk={bulk.length > 1 && picked.has(child.id) ? bulk : undefined}
+          onClearSelection={onClearSelection}
+        />
       </div>
     ) : null;
   };
@@ -781,15 +925,15 @@ function ChildThreads({
       {listed && folded.length > 0 && (
         <button
           type="button"
-          onClick={() => setOpenFinished(!openFinished)}
-          aria-expanded={openFinished}
+          onClick={() => onFinishedOpen(!finishedOpen)}
+          aria-expanded={!!finishedOpen}
           className="ml-[14px] flex h-[20px] items-center gap-1 rounded-sm px-2 text-caption text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
         >
-          <ChevronRight size={10} className={cx("transition-transform", openFinished && "rotate-90")} />
-          {openFinished ? "Hide finished" : `${folded.length} finished`}
+          <ChevronRight size={10} className={cx("transition-transform", finishedOpen && "rotate-90")} />
+          {finishedOpen ? "Hide finished" : `${folded.length} finished`}
         </button>
       )}
-      {listed && openFinished && folded.map(row)}
+      {listed && finishedOpen && folded.map(row)}
     </>
   );
 }
@@ -1070,6 +1214,9 @@ function FilterMenu({
 
 const NO_MARKS: Record<string, ThreadStatus> = {};
 
+/** Nothing picked: one set, so clearing an empty selection never re-renders the list. */
+const NO_PICKS: ReadonlySet<string> = new Set();
+
 export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
@@ -1235,6 +1382,162 @@ export function Sidebar() {
   const isOpen = (id: string) => !!query.trim() || !folded.includes(id);
   const toggle = (id: string) => setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
 
+  // ---------------------------------------------------------------- the list's rows, selection and keys
+  // What is picked, and which row the keyboard is on, belong to the sidebar while it is drawn:
+  // nothing outside it reads them, and a thread that leaves the list leaves the selection.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(NO_PICKS);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  // The finished children a group shows, by parent: here, so the keyboard order can include them.
+  const [finishedOpen, setFinishedOpen] = useState<Record<string, boolean>>({});
+  const anchor = useRef<string | null>(null);
+  const list = useRef<HTMLElement>(null);
+  // Every child's state, as its group reads it: one string, so a streamed chunk that changes
+  // nothing about them does not redraw the list.
+  const childStates = useApp((s) => {
+    const linked = new Map(s.links.links.filter((l) => l.started).map((l) => [l.target, l.state] as const));
+    return filtered
+      .map((c) => {
+        if (!parentOf[c.id]) return "";
+        const info = childInfo(c.id, {
+          status: statusOf(s, c.id),
+          link: linked.get(c.id),
+          failed: !!s.failed[c.id],
+          unseen: !!s.finished[c.id],
+        });
+        return `${info.id}:${info.state}:${info.unseen ? 1 : 0}`;
+      })
+      .join(" ");
+  });
+  const infos = useMemo(() => {
+    const by = new Map<string, ChildInfo>();
+    for (const part of childStates.split(" ")) {
+      const [id, state, unseen] = part.split(":");
+      if (id) by.set(id, { id, state: state as ChildInfo["state"], unseen: unseen === "1" });
+    }
+    return by;
+  }, [childStates]);
+
+  // The order the list draws its rows in, so ↑ ↓ move through what is on screen: a shut section
+  // or group contributes nothing, and a parent's children follow it (state/sidebarRows.ts).
+  const order = useMemo<OrderSection[]>(() => {
+    const open = (id: string) => !!query.trim() || !folded.includes(id);
+    const kids = (parentId: string): string[] => {
+      const all = (childrenOf[parentId] ?? []).flatMap((c) => infos.get(c.id) ?? []);
+      const listed = childrenListed(all, {
+        expanded: openGroups[parentId] === true,
+        collapsed: openGroups[parentId] === false,
+        parentSelected: parentId === selectedId,
+        selectedId,
+      });
+      if (!listed) return [];
+      const ordered = orderChildren(all, selectedId);
+      const shown = ordered.filter((c) => childVisible(c, selectedId));
+      const rest = ordered.filter((c) => !childVisible(c, selectedId));
+      const under = finishedOpen[parentId] ? [...shown, ...rest] : shown;
+      return under.map((c) => c.id);
+    };
+    const toOrder = (items: SessionSummary[]): OrderRow[] =>
+      items.map((s) => ({ id: s.id, children: kids(s.id) }));
+    return sections.map((section) =>
+      section.projects
+        ? {
+            id: section.id,
+            groups: section.projects.map((p) => ({
+              key: p.key,
+              shut: !open(`project:${p.key}`),
+              rows: toOrder(p.items),
+            })),
+          }
+        : {
+            id: section.id,
+            shut: section.id === "settled" && !open(section.id),
+            rows: toOrder(section.items),
+            limit: section.id === "settled" && !query.trim() ? settledShown : undefined,
+          },
+    );
+  }, [childrenOf, finishedOpen, folded, infos, openGroups, query, sections, selectedId, settledShown]);
+  const orderIds = useMemo(() => visibleRows(order), [order]);
+
+  // The row the keyboard is on: where it was left, else the open thread, else the first row.
+  const currentId =
+    activeId && orderIds.includes(activeId)
+      ? activeId
+      : selectedId && orderIds.includes(selectedId)
+        ? selectedId
+        : (orderIds[0] ?? null);
+
+  useEffect(() => {
+    setPicked((prev) => (prev.size ? keepListed(prev, orderIds) : prev));
+  }, [orderIds]);
+
+  const pickedSessions = useMemo(() => sessions.filter((s) => picked.has(s.id)), [sessions, picked]);
+  const allPickedPinned = pickedSessions.length > 0 && pickedSessions.every((s) => pinned.includes(s.id));
+  const clearSelection = useCallback(() => setPicked(NO_PICKS), []);
+  const focusRow = (id: string) =>
+    list.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`)?.focus();
+
+  // ↑ ↓ ⏎ Esc over the rows; a section or group control keeps its own keys, and a field inside
+  // the list (the rename box) keeps every key it is given.
+  const onListKey = (e: React.KeyboardEvent) => {
+    const target = e.target as HTMLElement | null;
+    const action = rowKeyAction({
+      key: e.key,
+      metaKey: e.metaKey,
+      ctrlKey: e.ctrlKey,
+      altKey: e.altKey,
+      editable: !!target?.closest("input, textarea, [contenteditable]"),
+    });
+    if (!action) return;
+    if (action.kind === "clear") {
+      e.preventDefault();
+      clearSelection();
+      return;
+    }
+    if (!target?.closest("[data-row-id]")) return;
+    e.preventDefault();
+    if (action.kind === "open") {
+      if (currentId) selectThread(currentId);
+      clearSelection();
+      return;
+    }
+    const to = nextRow(orderIds, currentId, action.delta);
+    if (!to) return;
+    setActiveId(to);
+    focusRow(to);
+  };
+
+  const onListFocus = (e: React.FocusEvent) => {
+    const id = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-row-id]")?.dataset.rowId;
+    if (id) setActiveId(id);
+  };
+
+  // ⌘-click toggles a row, ⇧-click takes the range from the last row clicked, and a plain click
+  // opens the thread and lets the selection go (the row's own onClick does the opening).
+  const onListClick = (e: React.MouseEvent) => {
+    const id = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-row-id]")?.dataset.rowId;
+    if (!id) return;
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod && !e.shiftKey) {
+      setActiveId(id);
+      anchor.current = id;
+      clearSelection();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveId(id);
+    if (e.shiftKey) {
+      setPicked(new Set(rangeRows(orderIds, anchor.current ?? id, id)));
+      return;
+    }
+    anchor.current = id;
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  };
+
   const onResize = (e: React.PointerEvent) => {
     dragging.current = true;
     const startX = e.clientX;
@@ -1260,6 +1563,10 @@ export function Sidebar() {
             now={now}
             snippet={query.trim() ? contentHits[s.id] : undefined}
             hasChildren={!!childrenOf[s.id]?.length}
+            navActive={s.id === currentId}
+            picked={picked.has(s.id)}
+            bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
+            onClearSelection={clearSelection}
           />
           {childrenOf[s.id] && (
             <ChildThreads
@@ -1269,6 +1576,12 @@ export function Sidebar() {
               now={now}
               groupOpen={openGroups[s.id]}
               onGroupOpen={(open) => setGroupOpen(s.id, open)}
+              finishedOpen={!!finishedOpen[s.id]}
+              onFinishedOpen={(open) => setFinishedOpen((m) => ({ ...m, [s.id]: open }))}
+              activeId={currentId}
+              picked={picked}
+              bulk={pickedSessions}
+              onClearSelection={clearSelection}
             />
           )}
         </div>
@@ -1335,6 +1648,13 @@ export function Sidebar() {
           />
         </div>
         <nav
+          ref={list}
+          // One tab stop for the whole list (the row the keyboard is on), ↑ ↓ through its rows,
+          // ⏎ to open and Esc to let the selection go.
+          onKeyDown={onListKey}
+          onFocus={onListFocus}
+          onClickCapture={onListClick}
+          aria-label="Thread list"
           className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
@@ -1417,6 +1737,39 @@ export function Sidebar() {
             })}
           </div>
         </nav>
+        {picked.size > 1 && (
+          <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
+            <span
+              className="min-w-0 flex-1 truncate px-1 font-medium text-caption text-fg-muted tabular"
+              aria-live="polite"
+            >
+              {picked.size} selected
+            </span>
+            <Pill
+              size="sm"
+              quiet
+              onClick={() => {
+                setPinned([...picked], !allPickedPinned);
+                clearSelection();
+              }}
+            >
+              {allPickedPinned ? "Unpin" : "Pin"}
+            </Pill>
+            <Pill
+              size="sm"
+              quiet
+              onClick={() => {
+                settleThreads(pickedSessions);
+                clearSelection();
+              }}
+            >
+              Settle
+            </Pill>
+            <Pill size="sm" quiet onClick={clearSelection}>
+              Clear
+            </Pill>
+          </div>
+        )}
         <UpdateRow />
       </div>
       <CustomSnooze />

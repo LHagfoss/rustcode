@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type ChildInfo,
+  childInfo,
   childrenListed,
   childState,
   childSummary,
@@ -20,6 +21,25 @@ describe("a child's state", () => {
     expect(childState("review")).toBe("finished");
     expect(childState("done")).toBe("finished");
     expect(childState("idle", true)).toBe("failed");
+  });
+});
+
+describe("a child read as its group sees it", () => {
+  test("a live link beats a status that has not caught up", () => {
+    expect(childInfo("a", { status: "idle", link: "working" }).state).toBe("working");
+    expect(childInfo("a", { status: "idle", link: "needs_user" }).state).toBe("needs");
+    expect(childInfo("a", { status: "needs_input", link: "done" }).state).toBe("needs");
+  });
+
+  test("a finished link leaves the thread's own status, and a failure marks it", () => {
+    expect(childInfo("a", { status: "running", link: "done" }).state).toBe("working");
+    expect(childInfo("a", { status: "idle", link: "cancelled", failed: true }).state).toBe("failed");
+    expect(childInfo("a", {}).state).toBe("finished");
+  });
+
+  test("it carries whether the reader has seen the change", () => {
+    expect(childInfo("a", { status: "idle", unseen: true }).unseen).toBe(true);
+    expect(childInfo("a", { status: "idle" }).unseen).toBeUndefined();
   });
 });
 
