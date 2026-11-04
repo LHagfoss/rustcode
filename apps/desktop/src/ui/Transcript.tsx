@@ -5,6 +5,7 @@
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
@@ -19,12 +20,15 @@ import {
   workingLabel,
 } from "../state/thread";
 import { SubagentGroupRow, SubagentRow } from "./AgentViews";
+import { ApprovalRow } from "./AttentionCards";
+import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
 import {
   AssistantRow,
   HandoffRow,
   LiveActivityRow,
   NoticeRow,
+  QuestionRow,
   SwitchRow,
   ThoughtRow,
   ToolGroupRow,
@@ -51,6 +55,12 @@ type Row = {
   fold?: TurnFold;
   group?: ToolGroup;
   inFold?: string;
+  /** An approval the thread is waiting on, shown at the call it is about. */
+  approval?: PermissionRequest;
+  /** Which of the thread's waiting approvals it is, from 1: `2 of 3`. */
+  approvalNumber?: number;
+  /** The plan a paused thread keeps to, at the foot. */
+  plan?: { threadId: string; entries: PlanEntry[] };
 };
 
 /** The turns the reader opened, by thread: kept while the app runs, so going back keeps them. */
@@ -90,6 +100,8 @@ function searchable(item: TranscriptItem): string {
     case "thought":
     case "notice":
       return item.text;
+    case "question":
+      return `${item.header ?? ""} ${item.text} ${item.answer}`;
     case "tool":
       return `${item.title} ${item.summary ?? ""} ${item.detail ?? ""} ${item.output ?? ""}`;
     default:
@@ -191,6 +203,22 @@ export function Transcript({
         i++;
       }
     }
+    // A pending approval sits at the call it is about, so what it wants is read where the work
+    // stopped; one whose call is not on screen (yet, or folded away) goes to the foot, where it
+    // can still be answered.
+    const loose: Row[] = [];
+    let waiting = 0;
+    for (const request of thread.permissions) {
+      // A question keeps its form over the composer (its answer is a choice); it leaves a row
+      // only once it is answered.
+      if (request.question) continue;
+      waiting++;
+      const at = out.findIndex((r) => r.item?.kind === "tool" && r.item.id === request.toolCallId);
+      const row: Row = { key: `approval-${request.rpcId}`, approval: request, approvalNumber: waiting };
+      if (at >= 0) out.splice(at + 1, 0, row);
+      else loose.push(row);
+    }
+    out.push(...loose);
     if (thread.running) {
       // `Working for 12s` heads the turn, under the message that started it.
       let at = out.length;
@@ -208,10 +236,25 @@ export function Transcript({
         (last?.kind === "tool" && (last.status === "in_progress" || last.status === "pending")) ||
         (last?.kind === "thought" && !last.done) ||
         last?.kind === "assistant";
-      if (!shows) out.push({ key: "activity", activity: workingLabel(visible) });
+      // With an approval waiting, the turn is not working: the row that asks is the foot.
+      if (!shows && !waiting) out.push({ key: "activity", activity: workingLabel(visible) });
     } else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
+    // The plan a paused thread still has work on, at the foot: what is left, and Implement. A
+    // finished plan, or one a running turn is working through, is not repeated here.
+    if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
+      out.push({ key: "plan", plan: { threadId: thread.id, entries: thread.plan } });
     return out;
-  }, [visible, subagentSteps, thread.running, thread.waiting, open, searching]);
+  }, [
+    visible,
+    subagentSteps,
+    thread.running,
+    thread.waiting,
+    thread.permissions,
+    thread.plan,
+    thread.id,
+    open,
+    searching,
+  ]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -248,6 +291,8 @@ export function Transcript({
     });
     return map;
   }, [thread.items]);
+  // How many approvals wait: the rows and the bar both say "1 of N" from the same count.
+  const approvals = thread.permissions.filter((p) => !p.question).length;
   const rewind = useApp((s) => !!s.agent?.rewind) && (thread.harness?.capabilities.rewind ?? true);
   const checkpoints = useApp((s) => s.checkpoints[thread.id]);
   // Each finished turn's checkpoint, for its Changes chip.
@@ -269,6 +314,8 @@ export function Transcript({
       const known = rowSizes.get(rows[i]?.key ?? "");
       if (known !== undefined) return known;
       const item = rows[i]?.item;
+      if (rows[i]?.approval) return 96;
+      if (rows[i]?.plan) return 260;
       if (rows[i]?.fold || rows[i]?.group) return 26;
       if (!item) return 24;
       if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
@@ -316,6 +363,16 @@ export function Transcript({
 
   const [ready, setReady] = useState(false);
   useLayoutEffect(() => setReady(true), []);
+
+  // An approval (or the plan card) appearing or resolving changes how tall the rows around it
+  // are, and the virtualizer's cached measurements are stale until each mounted row reports
+  // again: ask it to measure the ones on screen.
+  const approvalSig = thread.permissions.map((p) => p.rpcId).join(" ");
+  const planSig = thread.plan.map((e) => e.status).join("");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the signature is what changed
+  useEffect(() => {
+    virtualizer.measure();
+  }, [approvalSig, planSig]);
 
   const toBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -480,8 +537,9 @@ export function Transcript({
       f && matches.length ? { ...f, index: (f.index + delta + matches.length) % matches.length } : f,
     );
 
-  // The last item's row: the running turn never folds, so it is the last row before the live foot.
-  const lastIndex = rows.length - (rows.at(-1)?.item ? 1 : 2);
+  // The last row that holds a transcript item: the streaming reply is that one, whatever follows
+  // it (the live foot, an approval, the plan).
+  const lastIndex = rows.findLastIndex((r) => !!r.item);
   // The first render draws no rows: the virtualizer has no scroll element yet and would pick the
   // thread's first rows. `attachScroll` then puts the view at the end, and the second render
   // (still before the first paint) draws the last rows straight away.
@@ -593,6 +651,7 @@ export function Transcript({
                 !!r?.group ||
                 !!r?.agents ||
                 !!r?.activity ||
+                !!r?.approval ||
                 r?.item?.kind === "tool" ||
                 r?.item?.kind === "thought";
               const gap =
@@ -612,7 +671,11 @@ export function Transcript({
                     )}
                     style={{ paddingTop: gap }}
                   >
-                    {row.agents ? (
+                    {row.approval ? (
+                      <ApprovalRow request={row.approval} pending={approvals} number={row.approvalNumber} />
+                    ) : row.plan ? (
+                      <PlanCard threadId={row.plan.threadId} entries={row.plan.entries} />
+                    ) : row.agents ? (
                       <SubagentGroupRow
                         items={row.agents.items}
                         stepsOf={(id) => subagentSteps.get(id) ?? NO_STEPS}
@@ -667,6 +730,8 @@ export function Transcript({
                       <HandoffRow item={item} />
                     ) : item?.kind === "switch" ? (
                       <SwitchRow item={item} />
+                    ) : item?.kind === "question" ? (
+                      <QuestionRow item={item} />
                     ) : item?.kind === "turnEnd" ? (
                       <TurnEndRow
                         item={item}

@@ -70,6 +70,21 @@ export type TranscriptItem =
       background?: "agent" | "task";
     }
   | { kind: "notice"; id: string; text: string; tone: "warning" | "error" | "info"; resumable?: boolean }
+  /**
+   * A question the harness asked and the answer given, kept as a row once it resolves. The
+   * engine's history has no permission events, so this is the app's own record: it stays while
+   * the thread is open and is not replayed when the thread is loaded again.
+   */
+  | {
+      kind: "question";
+      id: string;
+      /** The question's short header, when it had one. */
+      header?: string;
+      text: string;
+      /** What was answered: the options chosen, or the words written. */
+      answer: string;
+      at?: number;
+    }
   /** Where the thread moved to another harness, which got the conversation so far. */
   | { kind: "handoff"; id: string; from: string; to: string; model?: string }
   /** Where the thread's model or effort changed. */
@@ -81,6 +96,22 @@ export type TranscriptItem =
       at?: number;
       outcome: "completed" | "cancelled" | "failed";
     };
+
+/**
+ * The row a resolved question leaves behind: what was asked and what was answered. Built here,
+ * not in the reducer, because a permission request never reaches the transcript otherwise.
+ */
+export function questionItem(request: PermissionRequest, answer: string, at = Date.now()): TranscriptItem {
+  const question = request.question;
+  return {
+    kind: "question",
+    id: `question-${request.rpcId}`,
+    header: question?.header,
+    text: question?.text || request.title,
+    answer,
+    at,
+  };
+}
 
 export interface QueuedPrompt {
   id: string;

@@ -1639,6 +1639,28 @@ export class MockEngine {
           { content: "Run the checks", status: "pending", priority: "low" },
         ],
       });
+      // A prompt about a plan stops there, with the plan still open: the card at the foot of the
+      // transcript has something left to do and offers Implement.
+      if (/\bplan\b/i.test(prompt)) {
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text("Here's how I'd do it. Say the word and I'll start."),
+        });
+        push({
+          sessionUpdate: "plan",
+          entries: [
+            { content: "Read the composer and the transcript", status: "completed", priority: "medium" },
+            { content: "Move the approval to its tool row", status: "pending", priority: "high" },
+            { content: "Keep a resolved question in the transcript", status: "pending", priority: "medium" },
+            { content: "Draw the plan card with Expand and Copy", status: "pending", priority: "medium" },
+            { content: "Persist drafts across restarts", status: "pending", priority: "low" },
+            { content: "Write the design.md paragraphs", status: "pending", priority: "low" },
+            { content: "Add a mock state for each of the three", status: "pending", priority: "low" },
+            { content: "Run the checks", status: "pending", priority: "high" },
+          ],
+        });
+        return done("end_turn");
+      }
       if (/question/i.test(prompt)) {
         const answer = await this.ask("session/request_permission", {
           sessionId: sid,

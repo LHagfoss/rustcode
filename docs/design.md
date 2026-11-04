@@ -386,7 +386,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   folder name shortens, then the permission label, the branch chip and
   the agents pill go) rather than dropping controls or overflowing. The
   transcript scrolls under the card (its bottom padding is the stack's
-  height) and fades out from 56px above it.
+  height) and fades out from 56px above it. A draft is kept in app storage
+  under `rustcode.drafts` (400ms after typing stops, and at once when the
+  window closes), so an unsent message is still there after a restart:
+  sending clears the entry, a draft over 100 KB is not kept, and only the
+  200 newest survive (`state/drafts.ts`).
 - **Jump to latest:** the pill over the composer's foot (`shadow-1`,
   `.rc-glass-strong`, 30px) says `Latest` and, while a turn runs, what
   that turn is doing now after a `·` (`Reading files`, `Thinking · …`), so
@@ -455,11 +459,44 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   message, a quiet divider (`gpt-6-luna → gpt-6-astra · Medium → High`). Picks
   with no message between them are one row; the engine records it in the
   history on harness threads, so it survives a reload.
-- **Approval:** over the composer, `elevated rounded-2xl`: what it wants (`From
-  <thread>` when a thread this one started is asking), the command in a code
-  well, then Always allow, More, Decline `esc`, Approve `⏎` (the keys work when
-  no field, menu or dialog has the keyboard). A message sent from the composer
-  meanwhile declines it and tells the agent what to do instead.
+- **Approval row:** an approval waits as a row in the transcript, at the call
+  it is about (`ui/AttentionCards.tsx` `ApprovalRow`): the `Hand` in
+  `warning` in the 18px column, `Waiting for approval` in `font-medium`, then
+  the command or title in `font-mono`, with `1 of N` when the turn waits on
+  a batch. Under it, indented 26px, one body at most 160px tall that scrolls:
+  the command in a `bg-fill-subtle` code well (`$ ` in `text-fg-muted`), the
+  change it would make (`DiffView`), and its reason in `warning` when it has
+  one. Then its answers as 24px pills: Decline `esc`, Approve `⏎`,
+  Always allow, and More for the rest. It sits 2px from the call above it,
+  like the tool rows do. An approval whose call is not on screen yet (or is
+  folded away) goes to the foot of the transcript, where it can still be
+  answered.
+- **Approval bar:** the card over the composer keeps one slim line for the
+  same approval — `Waiting for approval · <title>` with the same answers
+  (`elevated rounded-2xl`, `min-h-[34px]`, `py-1`) — because it is the target
+  for the keys: 1–9 pick an answer in the engine's order (reject, always,
+  allow once), `⏎` approves and `esc` declines, whenever no field, menu or
+  dialog has the keyboard. The body is not repeated there; it is read in the
+  row. A message sent from the composer meanwhile declines it and tells the
+  agent what to do instead.
+- **Question row:** an answered question stays in the transcript
+  (`ui/Rows.tsx` `QuestionRow`, `bg-fill-subtle rounded-lg px-3 py-2`): the
+  header in `font-medium` after a `MessageCircleQuestion` in accent, the
+  question itself in `text-fg-muted` (three lines at most), and the answer
+  under a `CornerDownRight` in `success`. It is not folded away with its
+  turn. A question still waiting keeps its form over the composer, since its
+  answer is a choice; only the answer leaves a row.
+- **Plan card:** a paused thread's plan, at the foot of the transcript
+  (`ui/PlanCard.tsx`): `rounded-2xl bg-surface p-4`, a `ListChecks` and
+  `Plan` in `font-semibold` with `3 of 8 left` in `text-fg-muted tabular`, a
+  Copy button and Implement (a prominent 24px pill that sends `Implement the
+  plan.` as an ordinary message). Its steps are one line each, `text-body`
+  with a 6px status dot (`success` done, `accent` now, `fill-strong` next)
+  and done steps in `text-fg-muted`. Past 220px it clips and fades over its
+  last 24px, with `Expand · N steps` under it; expanded, it shows whole and
+  offers `Collapse`. It is drawn only while the thread is not running and
+  something is unfinished, so a finished plan leaves no card; the header's
+  popover and the composer's meter are unchanged.
 - **Jump to latest:** `.rc-glass rounded-full shadow-1`, centred 12px
   above the composer stack, above it in z.
 - **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`

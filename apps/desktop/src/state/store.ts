@@ -80,6 +80,7 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { restoreChoice, selectOption } from "./harness";
 import {
   answerOrchestration,
@@ -103,6 +104,7 @@ import {
   localId,
   messagesAfter,
   type QueuedPrompt,
+  questionItem,
   requeueSteers,
   type ThreadState,
   truncateBefore,
@@ -447,7 +449,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   newThread: null,
   harnesses: null,
   commands: [],
-  drafts: {},
+  drafts: parseDrafts(stored(DRAFTS_KEY)),
   extras: {},
   settings: null,
   switcherOpen: false,
@@ -1567,7 +1569,38 @@ export async function trashThread(id: string): Promise<boolean> {
 // ---------------------------------------------------------------- turns
 
 export function setDraft(key: string, text: string) {
-  set((s) => ({ drafts: { ...s.drafts, [key]: text } }));
+  const next = withDraft(get().drafts, key, text);
+  if (next !== get().drafts) set({ drafts: next });
+  saveDrafts();
+}
+
+/**
+ * Drafts are written to app storage a moment after typing stops, so a long paste or a fast
+ * typist does not write the whole book on every keystroke. Sending clears the draft (the
+ * composer sets it empty), which takes its entry out of the book. Storage gets `persistable`:
+ * nothing over 100 KB, and the 200 newest drafts.
+ */
+const DRAFTS_SAVE_MS = 400;
+let draftsSave: ReturnType<typeof setTimeout> | undefined;
+
+function writeDrafts() {
+  store(DRAFTS_KEY, JSON.stringify(persistable(get().drafts)));
+}
+
+function saveDrafts() {
+  if (draftsSave) clearTimeout(draftsSave);
+  draftsSave = setTimeout(() => {
+    draftsSave = undefined;
+    writeDrafts();
+  }, DRAFTS_SAVE_MS);
+}
+
+/** The book as it is now, written at once: for a page that is going away. */
+export function flushDrafts() {
+  if (!draftsSave) return;
+  clearTimeout(draftsSave);
+  draftsSave = undefined;
+  writeDrafts();
 }
 
 export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExtras) {
@@ -1957,17 +1990,26 @@ export async function setConfigOption(id: string, configId: string, value: strin
 
 // ---------------------------------------------------------------- approvals
 
-/** Answer exactly this request; it leaves the queue before the reply, so a double click cannot answer the next. */
-function reply(request: PermissionRequest, result: JsonObject) {
+/**
+ * Answer exactly this request; it leaves the queue before the reply, so a double click cannot
+ * answer the next. A question also leaves its answer in the transcript, where the reader can see
+ * what was asked and what they said (state/thread.ts `questionItem`).
+ */
+function reply(request: PermissionRequest, result: JsonObject, answer?: string) {
   updateThread(request.sessionId, (t) => ({
     ...t,
     permissions: t.permissions.filter((p) => p.rpcId !== request.rpcId),
+    items: answer ? [...t.items, questionItem(request, answer)] : t.items,
   }));
   connection?.respond(request.rpcId, result);
 }
 
 export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
-  reply(request, option ? permissionSelected(option.id) : permissionCancelled);
+  reply(
+    request,
+    option ? permissionSelected(option.id) : permissionCancelled,
+    request.question ? (option?.name ?? "Declined") : undefined,
+  );
 }
 
 /** Approve every approval the thread waits on (not questions), each with its "allow once" option. */
@@ -2022,7 +2064,11 @@ export function setPermissionMode(threadId: string | undefined, mode: Permission
 
 export function answerQuestionOptions(request: PermissionRequest, options: PermissionOption[]) {
   if (!options.length) return;
-  reply(request, options.length === 1 ? permissionSelected(options[0]!.id) : questionOptionsAnswer(options));
+  reply(
+    request,
+    options.length === 1 ? permissionSelected(options[0]!.id) : questionOptionsAnswer(options),
+    options.map((o) => o.name).join(", "),
+  );
 }
 
 export function answerQuestionText(request: PermissionRequest, text: string) {
@@ -2030,7 +2076,7 @@ export function answerQuestionText(request: PermissionRequest, text: string) {
     (o) => o.kind === "allow_once" || o.kind === "allow_always" || !o.kind,
   );
   if (!carrier || !text.trim()) return;
-  reply(request, questionTextAnswer(text.trim(), carrier));
+  reply(request, questionTextAnswer(text.trim(), carrier), text.trim());
 }
 
 // ---------------------------------------------------------------- harnesses

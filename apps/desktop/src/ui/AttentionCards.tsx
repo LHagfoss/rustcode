@@ -1,14 +1,12 @@
-// Approval and question cards over the composer, after AttentionCards.swift.
-// Only the selected thread's first pending request shows. An approval offers
-// Decline and Allow (prominent); the rarer answers (always allow, always
-// reject, approve all) sit in a More menu. Keys (when no
-// text field has focus): 1–9 pick an option in the engine's order
-// reject → always → allow once, shown on each button's tooltip.
+// What the thread is waiting on: an approval is a row in the transcript (ApprovalRow) named by
+// one slim bar over the composer (ApprovalNotice), which owns the keys (when no text field has
+// focus): 1–9 pick an option in the engine's order reject → always → allow once, and ⏎ approves
+// while esc declines. A question keeps its form in the bar, because the answer is a choice, and
+// leaves a row in the transcript once it is answered (Rows.tsx QuestionRow).
 
 import {
   CheckCheck,
   ChevronDown,
-  ChevronRight,
   CircleArrowUp,
   Hand,
   MessageCircleQuestion,
@@ -70,6 +68,97 @@ function useApprovalKeys(decline?: () => void, approve?: () => void) {
   }, [decline, approve]);
 }
 
+/**
+ * The answers to one approval, ordered for the digit keys, and the three that get a button of
+ * their own: reject, allow once, always allow. Shared by the timeline row and the bar over the
+ * composer, so both offer the same answers in the same order.
+ */
+function useApproval(request: PermissionRequest) {
+  const options = useMemo(() => orderedOptions(request.options), [request.options]);
+  const pick = (i: number) => {
+    const option = options[i];
+    if (option) answerPermission(request, option);
+  };
+  const decline =
+    options.find((o) => o.kind === "reject_once") ?? options.find((o) => o.kind === "reject_always");
+  const allow =
+    options.find((o) => o.kind === "allow_once") ?? options.find((o) => o.kind === "allow_always");
+  const alwaysAllow = options.find((o) => o.kind === "allow_always" && o !== allow);
+  const always = options.filter((o) => o !== decline && o !== allow && o !== alwaysAllow);
+  return { options, pick, decline, allow, alwaysAllow, always };
+}
+
+/**
+ * The buttons either of them offers, at the timeline's 24px pill: the rarer answers in More
+ * (always allow, and Allow all when the turn waits on a batch), then always allow, Decline and
+ * Approve.
+ */
+function ApprovalActions({
+  request,
+  pending = 1,
+  answers,
+}: {
+  request: PermissionRequest;
+  pending?: number;
+  answers: ReturnType<typeof useApproval>;
+}) {
+  const { options, pick, decline, allow, alwaysAllow, always } = answers;
+  return (
+    <>
+      {(always.length > 0 || pending > 1) && (
+        <DropdownMenu.Root modal={false}>
+          <DropdownMenu.Trigger asChild>
+            <Pill size="sm" aria-label="More answers">
+              More <ChevronDown size={11} />
+            </Pill>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="top"
+              align="end"
+              sideOffset={6}
+              className="elevated z-50 max-w-[360px] min-w-[220px] p-1.5 rc-in"
+            >
+              {always.map((o) => (
+                <DropdownMenu.Item key={o.id} onSelect={() => pick(options.indexOf(o))} className={menuItem}>
+                  <span className="min-w-0 flex-1 break-words">{o.name}</span>
+                  <Kbd>{options.indexOf(o) + 1}</Kbd>
+                </DropdownMenu.Item>
+              ))}
+              {pending > 1 && (
+                <DropdownMenu.Item onSelect={() => approveAll(request.sessionId)} className={menuItem}>
+                  <CheckCheck size={13} /> Allow all {pending} waiting
+                </DropdownMenu.Item>
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      )}
+      {alwaysAllow && (
+        <Tooltip label={`${alwaysAllow.name} (${options.indexOf(alwaysAllow) + 1})`}>
+          <Pill size="sm" quiet onClick={() => pick(options.indexOf(alwaysAllow))}>
+            Always allow
+          </Pill>
+        </Tooltip>
+      )}
+      {decline && (
+        <Tooltip label={`${decline.name} (${options.indexOf(decline) + 1})`}>
+          <Pill size="sm" onClick={() => pick(options.indexOf(decline))}>
+            Decline <Kbd>esc</Kbd>
+          </Pill>
+        </Tooltip>
+      )}
+      {allow && (
+        <Tooltip label={`${allow.name} (${options.indexOf(allow) + 1})`}>
+          <Pill size="sm" prominent onClick={() => pick(options.indexOf(allow))}>
+            Approve <Kbd>⏎</Kbd>
+          </Pill>
+        </Tooltip>
+      )}
+    </>
+  );
+}
+
 function Shell({ children, label }: { children: React.ReactNode; label: string }) {
   return (
     <section aria-label={label} className="elevated flex flex-col gap-3 p-4 rc-in">
@@ -79,11 +168,78 @@ function Shell({ children, label }: { children: React.ReactNode; label: string }
 }
 
 /**
- * An approval as one slim bar over the composer: what it wants, Details to
- * open the command, diff and raw input, and the engine's options. When the
- * turn waits on several at once (a batch), "1 of N" and Approve all.
+ * An approval as a row in the transcript, at the call it is about: the command it wants to run
+ * (at most 160px, then it scrolls), any change it wants to make, and the answers. The keys (1–9,
+ * ⏎, esc) belong to the bar over the composer, so answering twice is impossible; the row says
+ * which key picks which answer.
  */
-export function PermissionCard({
+export function ApprovalRow({
+  request,
+  pending = 1,
+  number = 1,
+}: {
+  request: PermissionRequest;
+  pending?: number;
+  /** Which of the waiting approvals this is, from 1. */
+  number?: number;
+}) {
+  const answers = useApproval(request);
+  const command = field(request.input, "command") ?? field(request.input, "cmd");
+  const note = field(request.input, "reason");
+  return (
+    <div className="flex flex-col gap-1.5" role="group" aria-label="Approval needed">
+      <div className="flex items-center gap-2">
+        <span className="flex w-[18px] shrink-0 justify-center">
+          <Hand size={16} className="text-warning" fill="currentColor" fillOpacity={0.2} />
+        </span>
+        <span className="shrink-0 font-medium text-body text-warning">Waiting for approval</span>
+        <span className="min-w-0 truncate font-mono text-callout text-fg-muted" title={request.title}>
+          {displayCommand(request.title)}
+        </span>
+        {pending > 1 && (
+          <span className="shrink-0 text-caption text-fg-muted tabular">
+            {number} of {pending}
+          </span>
+        )}
+      </div>
+      {(command || request.diffs.length > 0 || request.input !== undefined) && (
+        // One body, at most 160px: the command and the change it would make, then it scrolls.
+        <div className="ml-[26px] flex max-h-[160px] flex-col gap-2 overflow-y-auto">
+          {command && (
+            <pre className="selectable m-0 rounded-md bg-fill-subtle p-2.5 font-mono text-callout whitespace-pre-wrap">
+              <span className="text-fg-muted">$ </span>
+              {command}
+            </pre>
+          )}
+          {request.diffs.map((diff, i) => (
+            <DiffView key={i} diff={diff} />
+          ))}
+          {!command && !request.diffs.length && request.input !== undefined && (
+            <pre className="selectable m-0 rounded-md bg-fill-subtle p-2.5 font-mono text-caption">
+              {JSON.stringify(request.input, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+      {note && (
+        <div className="ml-[26px] flex items-center gap-1.5 text-warning text-callout">
+          <ShieldAlert size={13} />
+          {note}
+        </div>
+      )}
+      <div className="ml-[26px] flex items-center gap-1.5">
+        <ApprovalActions request={request} pending={pending} answers={answers} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The bar over the composer: one slim line naming the approval that waits, with the same answers
+ * as the row. It is the keyboard target (1–9, ⏎, esc), so the question is answered from one
+ * place while it is read in the other.
+ */
+export function ApprovalNotice({
   request,
   pending = 1,
   from,
@@ -93,169 +249,31 @@ export function PermissionCard({
   /** The thread asking, when it is a thread this one started and not this one. */
   from?: string;
 }) {
-  const command = field(request.input, "command");
-  const summary = field(request.input, "summary");
-  const [details, setDetails] = useState(Boolean(command) || request.diffs.length === 1);
-  const options = useMemo(() => orderedOptions(request.options), [request.options]);
-  const pick = (i: number) => {
-    const option = options[i];
-    if (option) answerPermission(request, option);
-  };
+  const answers = useApproval(request);
+  const { options, pick, decline, allow } = answers;
   useDigitKeys(options.length, pick);
-  // The two everyday answers get buttons; the rest go in More.
-  const decline =
-    options.find((o) => o.kind === "reject_once") ?? options.find((o) => o.kind === "reject_always");
-  const allow =
-    options.find((o) => o.kind === "allow_once") ?? options.find((o) => o.kind === "allow_always");
-  const alwaysAllow = options.find((o) => o.kind === "allow_always" && o !== allow);
-  const always = options.filter((o) => o !== decline && o !== allow && o !== alwaysAllow);
   useApprovalKeys(
     decline ? () => pick(options.indexOf(decline)) : undefined,
     allow ? () => pick(options.indexOf(allow)) : undefined,
   );
-  const cwd = field(request.input, "cwd") ?? field(request.input, "workdir");
-  const note = field(request.input, "reason");
-  const expandable = request.input !== undefined || request.diffs.length > 0;
-  const title = displayCommand(request.title);
-  const shownCommand = command && displayCommand(command);
-  // The command once: harnesses that title the request with it get no second copy beside it.
-  const aside = summary ?? (shownCommand && !title.includes(shownCommand) ? shownCommand : undefined);
   return (
     <section
       aria-label="Approval needed"
-      className="elevated flex flex-col gap-2 rounded-2xl px-2.5 py-2 rc-in"
+      className="elevated flex min-h-[34px] items-center gap-2 rounded-2xl px-2.5 py-1 rc-in"
     >
-      <div className="flex min-h-[30px] items-center gap-2">
-        <Hand size={14} className="ml-1 shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
-        {from && (
-          <span className="max-w-[35%] shrink-0 truncate text-callout text-fg-muted">From {from}</span>
-        )}
-        <button
-          type="button"
-          disabled={!expandable}
-          aria-expanded={details}
-          onClick={() => setDetails(!details)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left enabled:hover:bg-fill-subtle"
-        >
-          {/* A long command truncates inside the bar; Details shows it whole. */}
-          <span className="min-w-0 shrink truncate font-semibold text-body" title={request.title}>
-            {title}
-          </span>
-          {aside && (
-            <span
-              className={cx("min-w-0 flex-1 truncate text-callout text-fg-muted", !summary && "font-mono")}
-            >
-              {aside}
-            </span>
-          )}
-          {!aside && <span className="flex-1" />}
-          {expandable && (
-            <ChevronRight
-              size={11}
-              className={cx(
-                "shrink-0 text-fg-faint transition-transform duration-200",
-                details && "rotate-90",
-              )}
-            />
-          )}
-        </button>
-        {pending > 1 && <span className="shrink-0 text-caption text-fg-muted tabular">1 of {pending}</span>}
-      </div>
-      {details && (
-        <div className="flex flex-col gap-2 px-1 pb-1">
-          {command && (
-            <div>
-              <pre className="selectable m-0 max-h-[140px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-callout whitespace-pre-wrap">
-                <span className="text-fg-muted">$ </span>
-                {command}
-              </pre>
-              {cwd && (
-                <div className="mt-1 truncate text-caption text-fg-muted" dir="rtl">
-                  <bdi>{cwd}</bdi>
-                </div>
-              )}
-            </div>
-          )}
-          {request.diffs.length > 0 && (
-            <div className="flex max-h-[260px] flex-col gap-2 overflow-y-auto">
-              {request.diffs.map((d, i) => (
-                <DiffView key={i} diff={d} />
-              ))}
-            </div>
-          )}
-          {note && (
-            <div className="flex items-center gap-1.5 text-warning text-callout">
-              <ShieldAlert size={13} />
-              {note}
-            </div>
-          )}
-          {!command && !request.diffs.length && request.input !== undefined && (
-            <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption">
-              {JSON.stringify(request.input, null, 2)}
-            </pre>
-          )}
-        </div>
-      )}
-      <div className="flex items-center gap-1.5 pl-1">
-        <span className="flex min-w-0 flex-1 items-center gap-1 text-caption text-warning">
-          <ShieldAlert size={12} className="shrink-0" />
-          <span className="truncate">Waiting for your approval</span>
+      <Hand size={14} className="ml-1 shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
+      {from && <span className="max-w-[30%] shrink-0 truncate text-callout text-fg-muted">From {from}</span>}
+      <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">
+        Waiting for approval
+        <span className="text-fg-faint"> · </span>
+        <span className="font-medium text-body text-fg" title={request.title}>
+          {displayCommand(request.title)}
         </span>
-        {(always.length > 0 || pending > 1) && (
-          <DropdownMenu.Root modal={false}>
-            <DropdownMenu.Trigger asChild>
-              <Pill aria-label="More answers">
-                More <ChevronDown size={11} />
-              </Pill>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="top"
-                align="end"
-                sideOffset={6}
-                className="elevated z-50 max-w-[360px] min-w-[220px] p-1.5 rc-in"
-              >
-                {always.map((o) => (
-                  <DropdownMenu.Item
-                    key={o.id}
-                    onSelect={() => pick(options.indexOf(o))}
-                    className={menuItem}
-                  >
-                    <span className="min-w-0 flex-1 break-words">{o.name}</span>
-                    <Kbd>{options.indexOf(o) + 1}</Kbd>
-                  </DropdownMenu.Item>
-                ))}
-                {pending > 1 && (
-                  <DropdownMenu.Item onSelect={() => approveAll(request.sessionId)} className={menuItem}>
-                    <CheckCheck size={13} /> Allow all {pending} waiting
-                  </DropdownMenu.Item>
-                )}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        )}
-        {alwaysAllow && (
-          <Tooltip label={`${alwaysAllow.name} (${options.indexOf(alwaysAllow) + 1})`}>
-            <Pill quiet onClick={() => pick(options.indexOf(alwaysAllow))}>
-              Always allow
-            </Pill>
-          </Tooltip>
-        )}
-        {decline && (
-          <Tooltip label={`${decline.name} (${options.indexOf(decline) + 1})`}>
-            <Pill onClick={() => pick(options.indexOf(decline))}>
-              Decline <Kbd>esc</Kbd>
-            </Pill>
-          </Tooltip>
-        )}
-        {allow && (
-          <Tooltip label={`${allow.name} (${options.indexOf(allow) + 1})`}>
-            <Pill prominent onClick={() => pick(options.indexOf(allow))}>
-              Approve <Kbd>⏎</Kbd>
-            </Pill>
-          </Tooltip>
-        )}
-      </div>
+      </span>
+      {pending > 1 && <span className="shrink-0 text-caption text-fg-muted tabular">1 of {pending}</span>}
+      <span className="flex shrink-0 items-center gap-1">
+        <ApprovalActions request={request} pending={pending} answers={answers} />
+      </span>
     </section>
   );
 }
@@ -370,6 +388,6 @@ export function AttentionCard({
   return request.question ? (
     <QuestionCard key={`${request.rpcId}`} request={request} from={from} />
   ) : (
-    <PermissionCard key={`${request.rpcId}`} request={request} pending={pending} from={from} />
+    <ApprovalNotice key={`${request.rpcId}`} request={request} pending={pending} from={from} />
   );
 }
