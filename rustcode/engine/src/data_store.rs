@@ -14,6 +14,7 @@
 //!
 //! The reference point for the schema is `docs/data-store.md`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -31,10 +32,11 @@ pub const MAX_ROWS: usize = 1000;
 /// Wall-clock cap for one `data query`, enforced by the progress handler.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "threads_turns_and_tool_calls",
-    "CREATE TABLE threads (
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "threads_turns_and_tool_calls",
+        "CREATE TABLE threads (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT '',
         project TEXT,
@@ -84,7 +86,25 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[(
                COUNT(*) AS turns
         FROM turns
         GROUP BY day, harness, model;",
-)];
+    ),
+    (
+        2,
+        "thread_links_and_orchestration_state",
+        "CREATE TABLE thread_links (
+        id TEXT PRIMARY KEY,
+        orchestrator TEXT,
+        target TEXT,
+        state TEXT,
+        started_at INTEGER,
+        settled_at INTEGER,
+        harness TEXT,
+        files_changed INTEGER,
+        body TEXT NOT NULL
+    );
+    CREATE INDEX thread_links_target ON thread_links(target);
+    CREATE TABLE orchestration_state (key TEXT PRIMARY KEY, body TEXT NOT NULL);",
+    ),
+];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
 /// stores NULL and the number is never guessed. `cached` is the prompt cache
@@ -480,6 +500,234 @@ fn migrate(connection: &Connection) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------- thread links
+
+/// Finished links the book keeps, and fan-outs: the limits the app prunes to
+/// (`prune` in `state/orchestration.ts`), so a window that saves reads back
+/// what it wrote.
+const KEPT_FINISHED_LINKS: usize = 50;
+const KEPT_FAN_OUTS: usize = 20;
+
+/// What `orchestration_state` holds beside the links, under the names the book uses.
+const BOOK_STATE_KEYS: [&str; 3] = ["grants", "counters", "fanOuts"];
+
+fn is_active_link(state: Option<&str>) -> bool {
+    matches!(state, Some("queued" | "working" | "needs_user"))
+}
+
+fn empty_book() -> Value {
+    json!({ "links": [], "grants": {}, "counters": {}, "fanOuts": [] })
+}
+
+/// Keys that are an object in every book; the rest (`fanOuts`) is a list.
+fn empty_state(key: &str) -> Value {
+    if key == "fanOuts" {
+        json!([])
+    } else {
+        json!({})
+    }
+}
+
+/// The links the book keeps: every active one, and the newest
+/// [`KEPT_FINISHED_LINKS`] finished ones, in the order they came.
+fn kept_links(links: &[Value]) -> Vec<Value> {
+    let mut finished: Vec<&Value> = links
+        .iter()
+        .filter(|link| !is_active_link(link.get("state").and_then(Value::as_str)))
+        .collect();
+    finished.sort_by_key(|link| {
+        std::cmp::Reverse(link.get("createdAt").and_then(Value::as_i64).unwrap_or(0))
+    });
+    let keep: HashSet<&str> = finished
+        .iter()
+        .take(KEPT_FINISHED_LINKS)
+        .filter_map(|link| link.get("id").and_then(Value::as_str))
+        .collect();
+    links
+        .iter()
+        .filter(|link| {
+            is_active_link(link.get("state").and_then(Value::as_str))
+                || link
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| keep.contains(id))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The fan-outs that still have a link in the book, at most [`KEPT_FAN_OUTS`].
+fn kept_fan_outs(book: &serde_json::Map<String, Value>, links: &[Value]) -> Vec<Value> {
+    let kept: HashSet<&str> = links
+        .iter()
+        .filter_map(|link| link.get("id").and_then(Value::as_str))
+        .collect();
+    let live = |fan_out: &Value| match fan_out.get("links").and_then(Value::as_array) {
+        Some(ids) => ids
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|id| kept.contains(id)),
+        None => false,
+    };
+    let mut out: Vec<Value> = book
+        .get("fanOuts")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter(|fan_out| live(fan_out))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let extra = out.len().saturating_sub(KEPT_FAN_OUTS);
+    out.drain(..extra);
+    out
+}
+
+/// Saves the app's link book (`LinkBook` in `state/orchestration.ts`): the
+/// links in `thread_links`, grants, counters and fan-outs in
+/// `orchestration_state`. One transaction replaces the whole book, so a second
+/// window saving cannot leave half of each behind. Each link's `body` is the
+/// whole record, so a field this release does not know survives a round trip.
+///
+/// The book is bounded here, not trusted: the same kept links and fan-outs the
+/// app prunes to.
+pub fn save_link_book(book: &Value) -> Result<(), String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    save_link_book_at(&path, book)
+}
+
+/// [`save_link_book`] against one store file, so a test can use a temporary one.
+pub fn save_link_book_at(path: &Path, book: &Value) -> Result<(), String> {
+    let object = book
+        .as_object()
+        .ok_or_else(|| "the link book must be a JSON object".to_owned())?;
+    let links = kept_links(
+        object
+            .get("links")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+    );
+    let fan_outs = kept_fan_outs(object, &links);
+    let connection = open(path)?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM thread_links", [])
+        .map_err(|error| error.to_string())?;
+    {
+        let mut insert = transaction
+            .prepare_cached(
+                "INSERT OR REPLACE INTO thread_links
+                    (id, orchestrator, target, state, started_at, settled_at, harness, files_changed, body)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )
+            .map_err(|error| error.to_string())?;
+        for link in &links {
+            let Some(id) = link.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let body = link.to_string();
+            insert
+                .execute(params![
+                    id,
+                    link.get("orchestrator").and_then(Value::as_str),
+                    link.get("target").and_then(Value::as_str),
+                    link.get("state").and_then(Value::as_str),
+                    link.get("createdAt").and_then(Value::as_i64),
+                    link.get("settledAt").and_then(Value::as_i64),
+                    link.get("harness").and_then(Value::as_str),
+                    link.get("filesChanged").and_then(Value::as_i64),
+                    body,
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    for key in BOOK_STATE_KEYS {
+        let value = if key == "fanOuts" {
+            Value::Array(fan_outs.clone())
+        } else {
+            object.get(key).cloned().unwrap_or_else(|| empty_state(key))
+        };
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO orchestration_state (key, body) VALUES (?1, ?2)",
+                params![key, value.to_string()],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+/// Reads the link book back as `{ "stored": bool, "book": LinkBook }`.
+/// `stored` is false when nothing was ever saved, so the app migrates its own
+/// copy in once rather than replace a book it does not have with an empty one.
+pub fn load_link_book() -> Result<Value, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    load_link_book_at(&path)
+}
+
+/// [`load_link_book`] against one store file, so a test can use a temporary one.
+pub fn load_link_book_at(path: &Path) -> Result<Value, String> {
+    if !path.is_file() {
+        return Ok(json!({ "stored": false, "book": empty_book() }));
+    }
+    let connection = open(path)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, orchestrator, target, state, started_at, settled_at, harness, files_changed, body
+             FROM thread_links ORDER BY started_at, id",
+        )
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement.query([]).map_err(|error| error.to_string())?;
+    let mut links: Vec<Value> = Vec::new();
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        let body: String = row.get(8).map_err(|error| error.to_string())?;
+        // The body is the whole record; the columns only back it up.
+        let parsed = serde_json::from_str::<Value>(&body)
+            .ok()
+            .filter(Value::is_object);
+        links.push(parsed.unwrap_or_else(|| {
+            json!({
+                "id": row.get::<_, Option<String>>(0).ok().flatten(),
+                "orchestrator": row.get::<_, Option<String>>(1).ok().flatten(),
+                "target": row.get::<_, Option<String>>(2).ok().flatten(),
+                "state": row.get::<_, Option<String>>(3).ok().flatten(),
+                "createdAt": row.get::<_, Option<i64>>(4).ok().flatten(),
+                "settledAt": row.get::<_, Option<i64>>(5).ok().flatten(),
+                "harness": row.get::<_, Option<String>>(6).ok().flatten(),
+                "filesChanged": row.get::<_, Option<i64>>(7).ok().flatten(),
+            })
+        }));
+    }
+    drop(rows);
+    drop(statement);
+    let mut state = serde_json::Map::new();
+    let mut stored = !links.is_empty();
+    let mut statement = connection
+        .prepare("SELECT key, body FROM orchestration_state")
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement.query([]).map_err(|error| error.to_string())?;
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        let key: String = row.get(0).map_err(|error| error.to_string())?;
+        let body: String = row.get(1).map_err(|error| error.to_string())?;
+        let value = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+        state.insert(key, value);
+        stored = true;
+    }
+    let mut book = empty_book();
+    if let Some(object) = book.as_object_mut() {
+        object.insert("links".to_owned(), Value::Array(links));
+        for key in BOOK_STATE_KEYS {
+            let value = state.remove(key).unwrap_or_else(|| empty_state(key));
+            object.insert(key.to_owned(), value);
+        }
+    }
+    Ok(json!({ "stored": stored, "book": book }))
 }
 
 /// Records a turn (and its tool calls) in the store; a failure is logged and
@@ -1411,6 +1659,182 @@ mod tests {
         assert_eq!(GroupBy::parse("day"), Some(GroupBy::Day));
         assert_eq!(GroupBy::parse(""), Some(GroupBy::Harness));
         assert_eq!(GroupBy::parse("tool"), None);
+    }
+
+    /// A book with a settled link and then a working one (the order the app
+    /// appends them in), and the state beside them.
+    fn book_json() -> Value {
+        json!({
+            "links": [
+                {
+                    "id": "a/1",
+                    "orchestrator": "a",
+                    "target": "b",
+                    "orchestratorTitle": "A",
+                    "targetTitle": "B",
+                    "message": "count them",
+                    "state": "done",
+                    "answer": "twelve",
+                    "createdAt": 1_761_000_000_000i64,
+                    "settledAt": 1_761_000_100_000i64,
+                    "notifiedAt": 1_761_000_200_000i64,
+                },
+                {
+                    "id": "a/2",
+                    "orchestrator": "a",
+                    "target": "c",
+                    "orchestratorTitle": "A",
+                    "targetTitle": "C",
+                    "message": "review the diff",
+                    "state": "working",
+                    "started": true,
+                    "harness": "codex",
+                    "filesChanged": 2,
+                    "createdAt": 1_762_000_000_000i64,
+                },
+            ],
+            "grants": { "a": ["start", "b"] },
+            "counters": { "a": 2 },
+            "fanOuts": [{
+                "id": "fan-1",
+                "orchestrator": "a",
+                "title": "Both ways",
+                "prompt": "do it",
+                "links": ["a/2"],
+                "createdAt": 1_762_000_000_000i64,
+            }],
+        })
+    }
+
+    #[test]
+    fn the_link_book_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        // Nothing saved yet: the app must know to migrate its own copy in.
+        let none = load_link_book_at(&path).unwrap();
+        assert_eq!(none["stored"], false);
+        assert_eq!(none["book"]["links"], json!([]));
+
+        let book = book_json();
+        save_link_book_at(&path, &book).unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        assert_eq!(loaded["stored"], true);
+        assert_eq!(loaded["book"], book, "{loaded}");
+
+        // Denormalised columns answer a query without opening a body.
+        let connection = open(&path).unwrap();
+        let summary: (String, Option<String>, Option<i64>) = connection
+            .query_row(
+                "SELECT state, harness, files_changed FROM thread_links WHERE id = 'a/2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            summary,
+            ("working".to_owned(), Some("codex".to_owned()), Some(2))
+        );
+        // The book is replaced, not appended to.
+        save_link_book_at(
+            &path,
+            &json!({ "links": [], "grants": {}, "counters": {}, "fanOuts": [] }),
+        )
+        .unwrap();
+        let empty = load_link_book_at(&path).unwrap();
+        assert_eq!(empty["book"]["links"], json!([]));
+        assert_eq!(empty["stored"], true, "the state rows are still there");
+    }
+
+    #[test]
+    fn the_link_book_tolerates_fields_it_does_not_know() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let mut book = book_json();
+        book["future"] = json!({ "kept": false });
+        book["links"][1]["effort"] = json!("high");
+        book["links"][1]["laterField"] = json!([1, 2, 3]);
+        save_link_book_at(&path, &book).unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        // A link's own fields travel in `body`, which is the whole record.
+        assert_eq!(loaded["book"]["links"][1]["laterField"], json!([1, 2, 3]));
+        assert_eq!(loaded["book"]["links"][1]["effort"], json!("high"));
+        // A top-level key this release has no column for is dropped, never an error.
+        assert!(loaded["book"].get("future").is_none());
+        assert_eq!(loaded["book"]["grants"], json!({ "a": ["start", "b"] }));
+    }
+
+    #[test]
+    fn the_link_book_is_bounded_like_the_app_prunes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let mut links: Vec<Value> = (0..60)
+            .map(|n| {
+                json!({
+                    "id": format!("a/{n}"),
+                    "orchestrator": "a",
+                    "target": format!("t{n}"),
+                    "state": "done",
+                    "createdAt": 1_000 + n,
+                })
+            })
+            .collect();
+        // An active link is kept whatever its age.
+        links.push(json!({
+            "id": "a/old",
+            "orchestrator": "a",
+            "target": "old",
+            "state": "working",
+            "createdAt": 1,
+        }));
+        // Every fan-out names the active link, so all of them still have one.
+        let fan_outs: Vec<Value> = (0..25)
+            .map(|n| json!({ "id": format!("fan-{n}"), "orchestrator": "a", "links": ["a/old"] }))
+            .collect();
+        save_link_book_at(
+            &path,
+            &json!({ "links": links, "grants": {}, "counters": {}, "fanOuts": fan_outs }),
+        )
+        .unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        let kept = loaded["book"]["links"].as_array().unwrap();
+        assert_eq!(kept.len(), KEPT_FINISHED_LINKS + 1);
+        assert!(kept.iter().any(|link| link["id"] == "a/old"));
+        assert!(
+            !kept.iter().any(|link| link["id"] == "a/0"),
+            "the oldest finished link goes"
+        );
+        assert_eq!(
+            loaded["book"]["fanOuts"].as_array().unwrap().len(),
+            KEPT_FAN_OUTS
+        );
+    }
+
+    #[test]
+    fn a_store_from_the_previous_version_gets_the_link_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        // A store as release 1 left it: migration 1 recorded, nothing else.
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
+                )
+                .unwrap();
+            let (id, name, sql) = MIGRATIONS[0];
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (id, name) VALUES (?1, ?2)",
+                    params![id, name],
+                )
+                .unwrap();
+        }
+        let loaded = load_link_book_at(&path).unwrap();
+        assert_eq!(loaded["stored"], false);
+        save_link_book_at(&path, &book_json()).unwrap();
+        let again = load_link_book_at(&path).unwrap();
+        assert_eq!(again["book"]["links"].as_array().unwrap().len(), 2);
     }
 
     #[test]

@@ -67,7 +67,9 @@ import {
   childInfo,
   childrenListed,
   childSummary,
+  flatChildren,
   foldFinished,
+  GRANDCHILD_INSET,
   orderChildren,
   pruneOpenGroups,
   unseenChild,
@@ -556,6 +558,7 @@ const ThreadRow = memo(function ThreadRow({
   snippet,
   slim,
   state,
+  inset,
   pull,
   fold,
   navActive,
@@ -574,6 +577,8 @@ const ThreadRow = memo(function ThreadRow({
   slim?: boolean;
   /** A child's state as its parent's group reads it (state/children.ts), for its dot. */
   state?: ChildInfo["state"];
+  /** A grandchild's extra inset under its own group's rows (state/children.ts). */
+  inset?: string;
   /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
   pull?: PullRequest;
   /**
@@ -685,7 +690,11 @@ const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
-              className="relative flex h-8 w-full items-center gap-1.5 rounded-lg pr-2.5 pl-8 text-left"
+              className={cx(
+                "relative flex h-8 w-full items-center gap-1.5 rounded-lg pr-2.5 text-left",
+                // A grandchild sits one inset step further in, in the same group (state/children.ts).
+                inset ?? "pl-8",
+              )}
             >
               <RowFill selected={selected} picked={picked} radius="rounded-lg" />
               <span className="relative flex size-2 shrink-0 items-center justify-center">
@@ -963,7 +972,7 @@ const ThreadRow = memo(function ThreadRow({
 
 /** A parent's children as the list draws them: its rows, the fold and what it hides. */
 interface ChildGroup {
-  /** The children's threads, for their rows. */
+  /** The children's threads, and the grandchildren drawn flat under them, for their rows. */
   items: SessionSummary[];
   /** What the group lists, in draw order: what wants you, what works, what you opened. */
   rows: ChildInfo[];
@@ -1019,6 +1028,7 @@ function ChildThreads({
         now={now}
         slim
         state={child.state}
+        inset={child.level === 1 ? GRANDCHILD_INSET : undefined}
         navActive={child.id === activeId}
         picked={picked.has(child.id)}
         bulk={bulk.length > 1 && picked.has(child.id) ? bulk : undefined}
@@ -1655,7 +1665,27 @@ export function Sidebar() {
   const group = useCallback(
     (parentId: string): ChildGroup => {
       const items = childrenOf[parentId] ?? [];
-      const all = items.flatMap((c) => infos.get(c.id) ?? []);
+      // A grandchild's own group would be a second chevron under a row that is already small, so
+      // it is drawn flat in this group, one inset further in (state/children.ts).
+      const under = (id: string) =>
+        orderChildren(
+          (childrenOf[id] ?? []).flatMap((c) => infos.get(c.id) ?? []),
+          selectedId,
+        );
+      // A child whose own child still works stays a row, so that grandchild is not folded away.
+      const children: ChildInfo[] = [];
+      for (const c of items) {
+        const info = infos.get(c.id);
+        if (!info) continue;
+        const below = under(c.id);
+        const urgent = below.some((g) => g.state === "needs")
+          ? "needs"
+          : below.some((g) => g.state === "working")
+            ? "working"
+            : undefined;
+        children.push({ ...info, below: urgent });
+      }
+      const all = flatChildren(children, under);
       const listed = childrenListed(all, {
         expanded: openGroups[parentId] === true,
         collapsed: openGroups[parentId] === false,
@@ -1663,11 +1693,13 @@ export function Sidebar() {
         selectedId,
       });
       const closed = openGroups[parentId] === false;
-      const { rows, folded, fold } = foldFinished(orderChildren(all, selectedId), selectedId, closed);
+      const ordered = orderChildren(children, selectedId);
+      const { rows, folded, fold } = foldFinished(ordered, selectedId, closed);
       return {
-        items,
-        rows,
-        folded,
+        // A grandchild's thread, so its row can find what it draws.
+        items: [...items, ...items.flatMap((c) => childrenOf[c.id] ?? [])],
+        rows: flatChildren(rows, under),
+        folded: flatChildren(folded, under),
         fold,
         foldOpen: !!finishedOpen[parentId],
         listed,

@@ -89,6 +89,8 @@ import {
   loadBook,
   queuedLinkDropped,
   stopLinksFrom,
+  syncLinkBook,
+  threadTurnEnded,
   wakeTick,
 } from "./host";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
@@ -748,6 +750,8 @@ async function handshake(): Promise<void> {
     // The composer's meter is ready before the first thread opens.
     void refreshPlanCache();
     if (connection === conn) await syncPinsAndSettled(conn);
+    // The link book now lives in the data store; local storage is the first paint only.
+    void syncLinkBook();
     const selected = get().selectedId;
     if (selected) void openThread(selected);
     if (connection === conn) void resumeInterrupted(interrupted);
@@ -1935,6 +1939,9 @@ export async function runPrompt(
   }
   if (options.link)
     linkFinished(options.link, id, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
+  // Every finished turn of a thread matters to a parent waiting on it: a middle thread's real
+  // answer is the one after the work it started (state/host.ts threadTurnEnded).
+  threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
   void refreshSessions();
   void refreshPlanUsage(id);
   void refreshAgents(id);

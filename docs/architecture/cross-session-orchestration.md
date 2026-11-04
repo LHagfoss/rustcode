@@ -26,7 +26,8 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
   because nothing goes around them. The message arrives as a user message
   headed `From thread "<title>" (agent):`.
 - Enforced: same project only; a thread cannot message itself; no chains (a
-  thread working for another cannot message others); one orchestrator per
+  thread working for another cannot message others — v2 relaxes this to two
+  levels, [orchestrator.md](../orchestrator.md)); one orchestrator per
   target; 4 active links per thread; a 32-message mailbox; 8 KiB messages and
   answers; `wait_session` waits at most 1 h. It returns `needs_user` while the
   target waits on an approval or a question.

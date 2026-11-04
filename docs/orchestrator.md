@@ -161,6 +161,7 @@ mode and subagents never get any of them. Each call is forwarded as today:
 
 | `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the model and effort the thread actually runs, and the approval card shows harness · model · effort |
 | `message_session` | M1 | M1 |
+| `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come |
 | `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
@@ -178,7 +179,13 @@ The version 2 prompt hint replaces the M1 one (about 80 tokens, tested).
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
 at most 4 active links per thread (a `busy` refusal says `links_left` and that
-`wait_session` on one comes first); no chains; the user can stop any link;
+`wait_session` on one comes first); delegation goes two levels deep — a
+top-level thread may start children, and they may start grandchildren, while a
+thread at that depth is refused with the limit in the reason (`MAX_DEPTH` in
+`state/orchestration.ts`); a whole delegation tree holds at most 8 active
+links, whatever their depth (a `busy` refusal says how many slots the tree has
+left); a message that would close a loop — to a thread that already works for
+the caller, directly or further up — is refused; the user can stop any link;
 nothing starts without the user's approval (*Allow for This Thread* / *Allow
 Once* / *Don't Allow*).
 
@@ -192,22 +199,47 @@ they finish or ask, instead of having to poll with sleeps.
   gets one message in a turn of its own. While any of its links is still
   running, a settled child waits in a coalescing window of 3 s
   (`WAKE_COALESCE_MS`) for its siblings, so a fan-out that finishes together is
-  one message. The message names each child: `link_id`, status, title, child
-  `session`, files changed, how long ago, and its answer cut to 1 KiB each
-  (`WAKE_ANSWER_CHARS`); it says the rest is in `read_session` on the child's
-  session or `wait_session` on a `link_id`, and that the message is the
-  notification.
+  one message. A settled child is reported only when its own subtree is quiet:
+  no link of its is active, none of its own children waits to be reported to
+  it, and no turn of it runs (`quietTree` in `state/orchestration.ts`). A
+  middle thread that ended its turn after starting a leaf has *not* finished
+  for its parent then — its answer was "I started it" — so the parent waits
+  through the leaf's result and the wake turn that follows, and is told the
+  middle's **latest** answer: a settled, not-yet-reported link takes the answer
+  and `settledAt` of each later turn of its target (`restateLinks`). The message
+  names each child: `link_id`, status, title, child `session`, files changed,
+  how long ago, and its answer cut to 1 KiB each (`WAKE_ANSWER_CHARS`); a link
+  that settled without one (its reply's rows reached the app a moment later) is
+  completed from the child's last reply before anyone reads it, and a later turn
+  that answers nothing never erases an answer; it says
+  the rest is in `read_session` on the child's session or `wait_session` on a
+  `link_id`, and that the message is the notification. A child that was
+  stopped or interrupted is no result to wait for: nothing ever reports it, so
+  it does not hold its parent back.
 - **Waiting on the user.** A child that goes `needs_user` (an approval or a
   question) is reported the same way, once per pending request (its rpc id):
   the parent is told to use `list_pending_requests` and that the user answers,
   because an agent cannot answer an approval.
 - **Not twice.** Each link is marked in the link book (`notifiedAt`,
-  `askedRequest`), which is kept in app storage, so a restart does not deliver
-  it again. A parent blocked in `wait_session` on that link already has the
-  answer — the wait marks it heard — and is not sent a second copy. A thread that
-  is itself a child is not woken (it cannot delegate; its own parent is told). A
-  parent whose thread is gone is dropped, and the link is marked so a thread
-  reopened under the same id cannot be woken for old work.
+  `askedRequest`), which now lives in the data store (`docs/data-store.md`),
+  so a restart does not deliver it again. A parent blocked in `wait_session`
+  on that link already has the answer — the wait marks it heard — and is not
+  sent a second copy. A thread that is itself a child is woken the same way a
+  top-level parent is: its children's results are its to read, and its own
+  parent hears about it when its own subtree is quiet, not before. A wake turn
+  carries no link, so being woken never settles the woken thread in its
+  parent's book while that turn runs. A link that was already reported and whose
+  target then answers again is reported a second time only when that turn was
+  started by the wake from the target's own child — once, marked by
+  `answerChangedAt`, so nothing loops and a user's own turn in the child does
+  not wake the parent again. A parent whose thread is gone is dropped, and the
+  link is marked so a thread reopened under the same id cannot be woken for old
+  work.
+- **Stopping takes the tree.** Stopping a thread — `interrupt_session`, or the
+  user's own stop — also stops the links it is working through, and theirs, once
+  each; the tool's answer says how many (`stopped`). A normal finish does not
+  cascade: the children keep running and are woken into the thread that started
+  them.
 - **No loops.** A wake is a message from the app, not a delegation: it creates
   no link and grants nothing, and waking a parent does not in turn wake anyone.
   A wake turn that starts new children is ordinary work and its own completion
@@ -231,7 +263,7 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
-| `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, status? }`; a thread cannot stop itself | Asked, allowed by Full access |
+| `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, stopped, status? }`, with `stopped` the links under it that stopped too; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
 | `transfer_session` | `{ session_id, harness }` | `{ session_id, harness, moved, model?, effort? }`; the thread must be idle, and a thread cannot move itself | Asked, allowed by Full access |
 | `list_pending_requests` | none | `{ requests: [{ session_id, title, kind, asks }] }`: approvals and questions this project's open threads wait on. Agents cannot answer them | None |
