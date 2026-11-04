@@ -1535,6 +1535,8 @@ pub const TOOLS: &[Tool] = &[
     misc::LIST_PULL_REQUESTS,
     misc::TRANSFER_SESSION,
     misc::LIST_PENDING_REQUESTS,
+    misc::THREAD_USAGE,
+    misc::QUERY_DATA,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {

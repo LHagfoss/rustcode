@@ -42,6 +42,8 @@ pub const LIST_PROJECTS: &str = "list_projects";
 pub const LIST_PULL_REQUESTS: &str = "list_pull_requests";
 pub const TRANSFER_SESSION: &str = "transfer_session";
 pub const LIST_PENDING_REQUESTS: &str = "list_pending_requests";
+pub const THREAD_USAGE: &str = "thread_usage";
+pub const QUERY_DATA: &str = "query_data";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
@@ -59,8 +61,10 @@ pub const V3_TOOL_NAMES: [&str; 10] = [
     TRANSFER_SESSION,
     LIST_PENDING_REQUESTS,
 ];
+/// Added by version 4: the data store — tokens and reported cost, and SQL.
+pub const V4_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 3;
+pub const VERSION: u8 = 4;
 /// What `update_session` may set a thread's status to.
 pub const SESSION_STATUSES: [&str; 3] = ["active", "review", "settled"];
 /// What `list_pull_requests` may ask for.
@@ -72,6 +76,8 @@ pub const MAX_LAST_TURNS: u64 = 10;
 /// How many harnesses one `fan_out` starts.
 pub const MIN_FAN_OUT: usize = 2;
 pub const MAX_FAN_OUT: usize = 4;
+/// The longest SQL `query_data` takes: a question, not a dump.
+pub const MAX_SQL_BYTES: usize = 8 * 1024;
 /// The longest title a new thread takes.
 pub const MAX_TITLE_CHARS: usize = 200;
 
@@ -97,9 +103,26 @@ pub const PROMPT_HINT_V2: &str = "\n\nOther threads: `list_sessions` and `read_s
 /// [`PROMPT_HINT_V2`] for version 3 clients.
 pub const PROMPT_HINT_V3: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `list_harnesses` shows what can run, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves. The app wakes this thread by itself when a thread it started finishes or asks a question, so never poll for one with sleeps: wait on it only when you need the answer in this turn.";
 
+/// [`PROMPT_HINT_V3`] for version 4 clients, which can read the data store.
+pub const PROMPT_HINT_V4: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+
+/// The prompt hint a client of `version` gets.
+pub fn prompt_hint(version: u8) -> &'static str {
+    match version {
+        0 => "",
+        1 => PROMPT_HINT,
+        2 => PROMPT_HINT_V2,
+        3 => PROMPT_HINT_V3,
+        _ => PROMPT_HINT_V4,
+    }
+}
+
 /// Every orchestration tool of any version.
 pub fn is_tool(name: &str) -> bool {
-    TOOL_NAMES.contains(&name) || V2_TOOL_NAMES.contains(&name) || V3_TOOL_NAMES.contains(&name)
+    TOOL_NAMES.contains(&name)
+        || V2_TOOL_NAMES.contains(&name)
+        || V3_TOOL_NAMES.contains(&name)
+        || V4_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -110,6 +133,11 @@ pub fn is_v2_tool(name: &str) -> bool {
 /// Whether `name` needs a version 3 client.
 pub fn is_v3_tool(name: &str) -> bool {
     V3_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 4 client (the local data store).
+pub fn is_v4_tool(name: &str) -> bool {
+    V4_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -126,9 +154,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             FAN_OUT,
         ]
         .to_vec(),
-        _ => {
+        3 => {
             let mut names = tool_names(2);
             names.extend(V3_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(3);
+            names.extend(V4_TOOL_NAMES);
             names
         }
     }
@@ -197,6 +230,37 @@ fn optional_title(args: &Value) -> Result<(), String> {
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     match name {
         LIST_SESSIONS | LIST_WORKTREES => optional_flag(args, "all_projects"),
+        THREAD_USAGE => {
+            if let Some(since) = args.get("since").and_then(Value::as_str) {
+                crate::data_store::parse_since(since)?;
+            }
+            match args.get("group_by") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(group))
+                    if crate::data_store::GroupBy::parse(group).is_some() => {}
+                Some(_) => {
+                    return Err(format!(
+                        "group_by must be one of {:?}",
+                        crate::data_store::GroupBy::ALL
+                    ));
+                }
+            }
+            optional_name(args, "project")
+        }
+        QUERY_DATA => {
+            let sql = text(args, "sql").unwrap_or("");
+            if sql.trim().is_empty() {
+                return Err("sql is required".to_owned());
+            }
+            if sql.len() > MAX_SQL_BYTES {
+                return Err(format!("sql is over {MAX_SQL_BYTES} bytes"));
+            }
+            match args.get("limit") {
+                None | Some(Value::Null) => Ok(()),
+                Some(Value::Number(limit)) if limit.as_u64().is_some() => Ok(()),
+                Some(_) => Err("limit must be a whole number of rows".to_owned()),
+            }
+        }
         LIST_HARNESSES | LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
         TRANSFER_SESSION => {
             required_name(args, "session_id")?;
@@ -555,6 +619,99 @@ mod tests {
             assert!(is_tool(name) && is_v3_tool(name));
             assert!(PROMPT_HINT_V3.contains(name), "{name}");
         }
+    }
+
+    #[test]
+    fn version_four_adds_the_data_store_tools_only_for_its_clients() {
+        assert_eq!(VERSION, 4);
+        let v3 = tool_names(3);
+        assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
+        let v4 = tool_names(4);
+        assert_eq!(v4.len(), v3.len() + 2, "{v4:?}");
+        assert!(v4.contains(&THREAD_USAGE) && v4.contains(&QUERY_DATA));
+        assert_eq!(
+            tool_names(9),
+            v4,
+            "a newer client gets what this engine speaks"
+        );
+        for name in [THREAD_USAGE, QUERY_DATA] {
+            assert!(is_tool(name) && is_v4_tool(name));
+            assert!(PROMPT_HINT_V4.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V3.contains(name), "{name} is v4 only");
+        }
+        // The hint a client is told follows the version it advertised.
+        assert_eq!(prompt_hint(1), PROMPT_HINT);
+        assert_eq!(prompt_hint(2), PROMPT_HINT_V2);
+        assert_eq!(prompt_hint(3), PROMPT_HINT_V3);
+        assert_eq!(prompt_hint(4), PROMPT_HINT_V4);
+        assert_eq!(prompt_hint(0), "");
+        assert_eq!(
+            client_meta_version(Some(
+                &json!({"rustcode": {"orchestration": 9}})
+                    .as_object()
+                    .cloned()
+                    .unwrap()
+            )),
+            4
+        );
+        assert_eq!(
+            client_meta_version(Some(
+                &json!({"rustcode": {"orchestration": 3}})
+                    .as_object()
+                    .cloned()
+                    .unwrap()
+            )),
+            3
+        );
+        // It rides in the root prompt and in the MCP server's instructions, so
+        // it is bounded: v3 was 149 tokens, v4 adds the two data tools.
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V4);
+        println!(
+            "prompt hints: v3 {} tokens, v4 {tokens} tokens",
+            crate::network::compaction::estimate_tokens(PROMPT_HINT_V3)
+        );
+        assert!(tokens < 260, "{tokens}");
+    }
+
+    #[test]
+    fn version_four_arguments_are_checked() {
+        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        assert!(ok(THREAD_USAGE, json!({})));
+        assert!(ok(
+            THREAD_USAGE,
+            json!({"since": "2026-11-01", "group_by": "day"})
+        ));
+        assert!(ok(
+            THREAD_USAGE,
+            json!({"since": "2026-11", "group_by": "model"})
+        ));
+        assert!(ok(THREAD_USAGE, json!({"project": "/repo/a"})));
+        assert!(!ok(THREAD_USAGE, json!({"since": "yesterday"})));
+        assert!(!ok(THREAD_USAGE, json!({"group_by": "tool"})));
+        assert!(!ok(THREAD_USAGE, json!({"project": ""})));
+        assert!(ok(QUERY_DATA, json!({"sql": "SELECT 1"})));
+        assert!(ok(QUERY_DATA, json!({"sql": "SELECT 1", "limit": 5})));
+        assert!(!ok(QUERY_DATA, json!({})));
+        assert!(!ok(QUERY_DATA, json!({"sql": "  "})));
+        assert!(!ok(QUERY_DATA, json!({"sql": "SELECT 1", "limit": "5"})));
+        assert!(!ok(
+            QUERY_DATA,
+            json!({"sql": "x".repeat(MAX_SQL_BYTES + 1)})
+        ));
+        // The descriptions are how an agent learns the store without another call.
+        let tool = |name: &str| {
+            crate::tools::TOOLS
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap()
+        };
+        assert!(tool(THREAD_USAGE).description.contains("group_by"));
+        assert!(tool(THREAD_USAGE).description.contains("never a price"));
+        for table in ["threads(", "turns(", "tool_calls(", "daily_usage("] {
+            assert!(tool(QUERY_DATA).description.contains(table), "{table}");
+        }
+        assert!(tool(QUERY_DATA).description.contains("read-only"));
+        assert!((tool(QUERY_DATA).schema)()["properties"]["limit"]["maximum"] == 1000);
     }
 
     #[test]

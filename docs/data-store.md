@@ -110,10 +110,35 @@ requests itself. A row with no token counts prints `—`, not `0`, and the last
 row totals the table. `rustcode storage usage` is a different command: it
 reports disk space, and lists `data.sqlite` among the stores.
 
+## For agents
+
+Two orchestration tools (v4, `docs/orchestrator.md`) read the store for an
+agent in a thread, forwarded through the app like `list_sessions`:
+
+| Tool | Args | Answer |
+| --- | --- | --- |
+| `thread_usage` | `{ since?, group_by?, project? }` — `group_by` is `harness` (default), `model`, `day`, `project` or `thread`; `since` is `YYYY-MM-DD` or `YYYY-MM`; `project` is an absolute path | `{ group_by, since, project, scope, rows, totals, truncated, note }`, each row with input, output, cached and cache-write tokens, `cost_usd`, `turns` and `turns_without_tokens`; a group that reported nothing keeps `NULL`, never a `0` |
+| `query_data` | `{ sql, limit? }`, one read-only statement, at most 1000 rows | `{ columns, rows, truncated }` through the guards above; its description lists every table and column, so an agent needs no extra call |
+
+Both are reads, so neither asks the user. They follow **Let agents read
+threads in other projects** (Settings › Agents, on by default), because the
+store crosses projects and holds thread titles and paths:
+
+- With it on, `thread_usage` covers every project, or the one `project` names.
+- With it off, `thread_usage` is scoped to the calling thread's project even
+  when another project is asked for, and a request naming another project is
+  refused.
+- `query_data` needs it on: SQL cannot be narrowed to one project safely (a
+  join, a subquery, a view), so with the setting off it answers `not_allowed`
+  and names the setting.
+
+A shell has the same data without an app: `rustcode usage` and
+`rustcode data query`. The engine answers the app through
+`_rustcode/data/usage` and `_rustcode/data/query` (`engine/src/acp/data.rs`).
+
 ## Not in this store
 
 Prices (only a cost a harness reports is kept), message text, tool arguments
 and output, and per-turn history for turns recorded before this file existed.
 Opencode reports no token counts RustCode can read, so its turns keep `NULL`
-tokens and only its reported cost. MCP tools that expose the store to agents
-are a later change; today the CLI and the SQL database are the interface.
+tokens and only its reported cost.

@@ -64,6 +64,8 @@ pub struct Launch {
     pub token: String,
     /// The user has Smart UI on, so the server also offers `smart_ui_check`.
     pub smart_ui: bool,
+    /// The orchestration version the client advertises: which tools it can answer.
+    pub version: u8,
 }
 
 /// The environment variable `rustcode mcp-orchestrator` reads its token from.
@@ -72,6 +74,11 @@ pub const ORCHESTRATOR_TOKEN_ENV: &str = "RUSTCODE_ORCHESTRATOR_TOKEN";
 /// Set to `1` when the thread's client runs Smart UI blocks: the server then
 /// also lists `smart_ui_check` (`smart_ui::CHECK_TOOL_NAME`).
 pub const SMART_UI_ENV: &str = "RUSTCODE_SMART_UI";
+
+/// The orchestration version the thread's client advertises. The server lists
+/// that version's tools and instructions, so a client never sees a tool it
+/// would answer with "unknown tool".
+pub const ORCHESTRATION_VERSION_ENV: &str = "RUSTCODE_ORCHESTRATION_VERSION";
 
 /// How long a harness should let one call run: the longest
 /// `wait_session` plus room for the app to answer.
@@ -93,6 +100,7 @@ impl Launch {
             ],
             token: token.to_owned(),
             smart_ui: false,
+            version: super::VERSION,
         }
     }
 
@@ -102,13 +110,31 @@ impl Launch {
         self
     }
 
+    /// The orchestration version the client advertises.
+    pub fn with_version(mut self, version: u8) -> Self {
+        self.version = version;
+        self
+    }
+
+    /// The settings the server reads, as environment pairs.
+    fn env(&self) -> Vec<(&'static str, String)> {
+        let mut env = vec![
+            (ORCHESTRATOR_TOKEN_ENV, self.token.clone()),
+            (ORCHESTRATION_VERSION_ENV, self.version.to_string()),
+        ];
+        if self.smart_ui {
+            env.push((SMART_UI_ENV, "1".to_owned()));
+        }
+        env
+    }
+
     /// One ACP `McpServer` (stdio) entry for `session/new`'s `mcpServers`.
     pub fn acp_server(&self) -> Value {
-        let mut env =
-            vec![serde_json::json!({ "name": ORCHESTRATOR_TOKEN_ENV, "value": self.token })];
-        if self.smart_ui {
-            env.push(serde_json::json!({ "name": SMART_UI_ENV, "value": "1" }));
-        }
+        let env = self
+            .env()
+            .into_iter()
+            .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
+            .collect::<Vec<_>>();
         serde_json::json!({
             "name": SERVER_NAME,
             "command": self.command.to_string_lossy(),
@@ -124,11 +150,11 @@ impl Launch {
             format!("mcp_servers.{SERVER_NAME}"): {
                 "command": self.command.to_string_lossy(),
                 "args": self.args,
-                "env": if self.smart_ui {
-                    serde_json::json!({ ORCHESTRATOR_TOKEN_ENV: self.token, SMART_UI_ENV: "1" })
-                } else {
-                    serde_json::json!({ ORCHESTRATOR_TOKEN_ENV: self.token })
-                },
+                "env": self
+                    .env()
+                    .into_iter()
+                    .map(|(name, value)| (name.to_owned(), serde_json::json!(value)))
+                    .collect::<serde_json::Map<_, _>>(),
                 // Codex stops an MCP call after 60 s by default; a call
                 // can wait for the user, and `wait_session` up to an hour.
                 "tool_timeout_sec": TOOL_TIMEOUT_SECS,
@@ -391,7 +417,11 @@ pub async fn shared() -> Result<Arc<Hub>, String> {
 /// Register an external harness thread with the process's hub, binding it
 /// on first use, and say how to start its MCP server. `None` when the
 /// platform or the socket cannot carry it.
-pub async fn launch_for(session_id: &str, client: Arc<dyn PreviewClient>) -> Option<Launch> {
+pub async fn launch_for(
+    session_id: &str,
+    client: Arc<dyn PreviewClient>,
+    version: u8,
+) -> Option<Launch> {
     #[cfg(unix)]
     {
         let hub = match shared().await {
@@ -405,11 +435,15 @@ pub async fn launch_for(session_id: &str, client: Arc<dyn PreviewClient>) -> Opt
         let token = hub.register(session_id, client);
         // Smart UI is the client's setting, not the thread's: an engine serves one client.
         let smart_ui = crate::harness::client_smart_ui() == crate::app::SmartUi::On;
-        Some(Launch::new(command, session_id, hub.path(), &token).with_smart_ui(smart_ui))
+        Some(
+            Launch::new(command, session_id, hub.path(), &token)
+                .with_smart_ui(smart_ui)
+                .with_version(version),
+        )
     }
     #[cfg(not(unix))]
     {
-        let _ = (session_id, client);
+        let _ = (session_id, client, version);
         None
     }
 }

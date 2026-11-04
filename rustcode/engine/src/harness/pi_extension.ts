@@ -17,6 +17,8 @@ export default async function (pi: any) {
   const token = take("RUSTCODE_ORCHESTRATOR_TOKEN");
   // The user has Smart UI on: the server also offers the block check.
   const smartUi = take("RUSTCODE_SMART_UI");
+  // Which orchestration tools this thread's client can answer.
+  const orchestration = take("RUSTCODE_ORCHESTRATION_VERSION");
   if (!command || !token) return;
 
   const server = spawn(command, args, {
@@ -25,6 +27,7 @@ export default async function (pi: any) {
       ...process.env,
       RUSTCODE_ORCHESTRATOR_TOKEN: token,
       ...(smartUi ? { RUSTCODE_SMART_UI: smartUi } : {}),
+      ...(orchestration ? { RUSTCODE_ORCHESTRATION_VERSION: orchestration } : {}),
     },
   });
   const waiting = new Map<number, (message: any) => void>();

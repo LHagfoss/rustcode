@@ -252,6 +252,28 @@ names and counts. `list_pull_requests` uses the same
 `not_connected`, `not_a_repository`, `timed_out`) as an error with that
 reason, so the agent can say what to fix.
 
+## Orchestration tools v4
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 4` also get the
+local data store (`docs/data-store.md`) as two read tools. The version is
+bumped rather than the tools added to v3 because the *client* carries them out:
+a v3 app has no `_rustcode/data/*` to ask and would answer "unknown tool", so
+an old app keeps exactly the v3 set (and the v3 prompt hint).
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `thread_usage` | `{ since?, group_by?, project? }` — `harness` (default), `model`, `day`, `project`, `thread`; `since` is `YYYY-MM-DD` or `YYYY-MM` | `{ group_by, since, project, scope, rows, totals, truncated, note }`: tokens and the USD a harness reported, per group, with `turns_without_tokens` so a silent harness is visible | None |
+| `query_data` | `{ sql, limit? }`, one read-only statement, at most 1000 rows | `{ columns, rows, truncated }` | None |
+
+The app answers them (`state/host.ts`): it passes the caller's project while
+**Let agents read threads in other projects** is off — `thread_usage` then
+reports `scope: "this project"` — and refuses `query_data`, which cannot be
+scoped to a project safely, with a `not_allowed` that names the setting. It
+asks the engine `_rustcode/data/usage` / `_rustcode/data/query`
+(`engine/src/acp/data.rs`), which only ever reads: the one-time backfill runs
+on first use, and `query` keeps the read-only connection, the single-statement
+rule, no `ATTACH` and the two-second stop.
+
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
@@ -265,6 +287,11 @@ RUSTCODE_ORCHESTRATOR_TOKEN=<t> rustcode mcp-orchestrator --session <thread id> 
 The per-thread token travels in the server's environment (ACP `env`, Codex
 `env`), never in its arguments, so other local users cannot read it from the
 process list. `--token` still works for manual testing.
+
+The same environment carries `RUSTCODE_ORCHESTRATION_VERSION` (the client's
+version), so the server lists exactly that version's tools and prompt hint — a
+v3 app is never offered `thread_usage` or `query_data`, which it could not
+answer.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -319,4 +346,7 @@ can inject the server (unix), and in a thread's answer whether it did.
 `checkpoints` and `worktree` are `true` for every harness in the snapshot (the
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
-`checkpoints` and `threadStatus` (each `1`).
+`checkpoints` and `threadStatus` (each `1`). The app advertises
+`_meta.rustcode.orchestration = 4` while threads may orchestrate
+(`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
+v4 data-store tools.

@@ -77,6 +77,25 @@ const MOCKS: Record<string, unknown> = {
     ],
   },
   read_session: { title: "Add the login form", status: "idle", turns: [] },
+  thread_usage: {
+    group_by: "harness",
+    scope: "every project",
+    rows: [
+      { harness: "codex", input_tokens: 812400, output_tokens: 9140, cached_tokens: 601200, cost_usd: 3.42, turns: 27, turns_without_tokens: 0 },
+      { harness: "claude-code", input_tokens: 204800, output_tokens: 3310, cached_tokens: 150000, cost_usd: null, turns: 9, turns_without_tokens: 9 },
+    ],
+    totals: { input_tokens: 1017200, output_tokens: 12450, cached_tokens: 751200, cost_usd: 3.42, turns: 36 },
+    truncated: false,
+    note: "tokens are what each harness reported; cost is the USD a harness reported, never a price RustCode computed",
+  },
+  query_data: {
+    columns: ["tool_name", "failures"],
+    rows: [
+      { tool_name: "run_command", failures: 19 },
+      { tool_name: "replace_file_content", failures: 6 },
+    ],
+    truncated: false,
+  },
   smart_ui_check:
     "No problems found in a 180-byte block titled \u201cCosts\u201d, about 4 elements.\nThis is a static check: it does not run the page.",
 

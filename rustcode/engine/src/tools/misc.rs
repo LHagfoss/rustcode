@@ -634,6 +634,57 @@ pub const LIST_PULL_REQUESTS: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Tokens and the cost a harness reported, from the local data store
+/// (`docs/data-store.md`). The app answers it, so the project scope follows
+/// "Let agents read threads in other projects".
+pub const THREAD_USAGE: Tool = Tool {
+    name: crate::orchestration::THREAD_USAGE,
+    description: "Tokens and cost from what RustCode recorded of every turn, as rows with totals: input, output, cached and cache-write tokens, cost_usd (only the USD a harness reported, never a price RustCode computed), turns, and how many turns reported no tokens. Ask it when the user asks what they have spent or used. group_by: harness (default), model, day, project or thread; since is a day or month, YYYY-MM-DD or YYYY-MM; project limits it to one project's threads.",
+    arguments: r#"{"since": "2026-11-01", "group_by": "harness", "project": "/abs/project"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "YYYY-MM-DD or YYYY-MM; every turn from that day or month on"},
+                "group_by": {"type": "string", "enum": crate::data_store::GroupBy::ALL},
+                "project": {"type": "string", "description": "absolute path of one project, as list_projects prints it"}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+/// One read-only SQL statement over the local data store, answered by the app.
+pub const QUERY_DATA: Tool = Tool {
+    name: crate::orchestration::QUERY_DATA,
+    description: concat!(
+        "Run one read-only SQL statement (SQLite) over what RustCode recorded, for questions thread_usage cannot answer: which tools fail, an exit code, a day's turns. Returns columns and rows, at most ",
+        "1000 rows. Ask it when the user asks something about their own history. ",
+        "Tables: threads(id, title, project, cwd, harness, model, effort, created_at, updated_at); turns(thread_id, started_at, finished_at, harness, model, input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd, tool_calls, status), one row per turn; tool_calls(thread_id, turn_id, tool_name, success, exit_code, at), one row per finished call; daily_usage(day, harness, model, input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd, turns), a view over turns; store_meta internal. Tokens and cost_usd are NULL when the harness reported none, never guessed; cost_usd is USD only."
+    ),
+    arguments: r#"{"sql": "SELECT tool_name, COUNT(*) FROM tool_calls WHERE success = 0 GROUP BY 1 ORDER BY 2 DESC", "limit": 50}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "sql": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_SQL_BYTES},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1000}
+            },
+            "required": ["sql"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn smart_ui_preview_schema() -> Value {
     crate::smart_ui::schema()
 }

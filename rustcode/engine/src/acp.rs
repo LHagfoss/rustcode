@@ -3,6 +3,7 @@ mod capabilities;
 mod commands;
 mod config;
 mod connections;
+mod data;
 mod edit_diff;
 mod harnesses;
 mod permissions;
@@ -1572,6 +1573,32 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         Ok(())
                     })
                 }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: data::DataUsageRequest, responder, connection| {
+                connection.spawn(async move {
+                    match data::usage(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: data::DataQueryRequest, responder, connection| {
+                connection.spawn(async move {
+                    match data::query(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )

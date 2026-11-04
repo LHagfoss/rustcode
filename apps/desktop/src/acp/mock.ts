@@ -914,6 +914,71 @@ export class MockEngine {
         if (action === "send") return { queued: false };
         throw Object.assign(new Error("bad action"), { code: -32602 });
       }
+      case "_rustcode/data/usage": {
+        // The same shape engine/src/acp/data.rs answers with.
+        const by = (params as { groupBy?: string } | undefined)?.groupBy ?? "harness";
+        return {
+          group_by: by,
+          since: null,
+          project: null,
+          scope: "every project",
+          rows: [
+            {
+              harness: "codex",
+              model: "gpt-6-luna",
+              input_tokens: 80871339,
+              output_tokens: 710621,
+              cached_tokens: 77779584,
+              cache_write_tokens: null,
+              cost_usd: null,
+              turns: 25,
+              turns_without_tokens: 2,
+            },
+            {
+              harness: "pi",
+              model: "deepseek/deepseek-flash",
+              input_tokens: 1552534,
+              output_tokens: 1113040,
+              cached_tokens: 464657024,
+              cache_write_tokens: 0,
+              cost_usd: 4.59,
+              turns: 12,
+              turns_without_tokens: 0,
+            },
+            {
+              harness: "claude-code",
+              model: "opus",
+              input_tokens: 112,
+              output_tokens: 72297,
+              cached_tokens: 14757930,
+              cache_write_tokens: 633078,
+              cost_usd: 77.22,
+              turns: 9,
+              turns_without_tokens: 7,
+            },
+          ],
+          totals: {
+            input_tokens: 82423985,
+            output_tokens: 1255958,
+            cached_tokens: 557194538,
+            cache_write_tokens: 633078,
+            cost_usd: 81.81,
+            turns: 46,
+          },
+          truncated: false,
+          note: "tokens are what each harness reported; cost is the USD a harness reported, never a price RustCode computed",
+          version: 1,
+        };
+      }
+      case "_rustcode/data/query":
+        return {
+          columns: ["tool_name", "failures", "calls"],
+          rows: [
+            { tool_name: "run_command", failures: 19, calls: 240 },
+            { tool_name: "replace_file_content", failures: 6, calls: 310 },
+          ],
+          truncated: false,
+        };
       case "_rustcode/usage/plans": {
         const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
         const p = params as { claude?: boolean } | undefined;

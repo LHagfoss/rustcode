@@ -283,7 +283,7 @@ async fn attach_orchestrator(
     else {
         return false;
     };
-    let launch = crate::orchestration::hub::launch_for(&session.id, client).await;
+    let launch = crate::orchestration::hub::launch_for(&session.id, client, orchestration).await;
     let attached = launch.is_some();
     session.set_orchestrator(launch);
     attached
