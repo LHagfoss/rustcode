@@ -1530,6 +1530,8 @@ pub const TOOLS: &[Tool] = &[
     misc::UPDATE_SESSION,
     misc::INTERRUPT_SESSION,
     misc::CONFIGURE_SESSION,
+    misc::LIST_PROJECTS,
+    misc::LIST_PULL_REQUESTS,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {

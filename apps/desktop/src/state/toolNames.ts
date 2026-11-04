@@ -21,6 +21,8 @@ export const ORCHESTRATION_TOOLS = [
   "update_session",
   "interrupt_session",
   "configure_session",
+  "list_projects",
+  "list_pull_requests",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -167,6 +169,12 @@ function orchestrationLabel(
       return { title: "Searched threads", summary: text(args.query) || undefined };
     case "list_worktrees":
       return { title: "Listed worktrees" };
+    case "list_projects":
+      return { title: "Listed projects" };
+    case "list_pull_requests": {
+      const state = text(args.state) || "open";
+      return { title: "Listed pull requests", summary: state };
+    }
     case "update_session":
       return { title: "Updated thread", summary: text(args.title) || text(args.status) || undefined };
     case "interrupt_session":

@@ -193,9 +193,15 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status? }` (`active`, `review`, `settled`) | `{ session_id, title, pinned, status }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, status? }`; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
+| `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |
+| `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
 
 Every tool stays within the caller's project. A grant is per thread and per
-kind of change (*Allow for This Thread*).
+kind of change (*Allow for This Thread*). `list_projects` spans projects since
+it only reads names and counts. `list_pull_requests` uses the same
+`_rustcode/pulls` request as the panel and answers its failures (`gh_missing`,
+`not_connected`, `not_a_repository`, `timed_out`) as an error with that
+reason, so the agent can say what to fix.
 
 ## External harnesses as orchestrators
 

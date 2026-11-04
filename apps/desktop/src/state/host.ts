@@ -8,8 +8,9 @@
 // The store imports this module and this module imports the store; nothing
 // here touches the store at load time.
 
-import type { JsonObject } from "../acp/jsonrpc";
-import { projectName } from "../acp/types";
+import type { Json, JsonObject } from "../acp/jsonrpc";
+import { parsePullError, parsePullList, pullErrorTitle } from "../acp/rustcode";
+import { Method, projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
 import { titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
@@ -36,7 +37,10 @@ import {
   linkResult,
   listSessions,
   MAX_ACTIVE_LINKS,
+  MAX_PROJECTS,
+  MAX_PULL_REQUESTS,
   nextId,
+  type PullStateChoice,
   parseCall,
   projectOf,
   prune,
@@ -57,6 +61,7 @@ import {
   openThread,
   permissionModeOf,
   renameThread,
+  request,
   runPrompt,
   searchThreads,
   setConfigOption,
@@ -253,6 +258,10 @@ async function answer(params: JsonObject): Promise<JsonObject> {
       return searchSessions(threads(), caller, call.query);
     case "list_worktrees":
       return listWorktrees(threads(), caller);
+    case "list_projects":
+      return listProjects(s);
+    case "list_pull_requests":
+      return listPullRequests(caller, call.state);
     case "update_session":
       return updateSession(caller, call);
     case "interrupt_session":
@@ -319,6 +328,56 @@ function listWorktrees(all: RuleThread[], caller: RuleThread): JsonObject {
         ? [{ session_id: t.id, title: t.title, branch: t.worktree.branch, path: t.worktree.path }]
         : [],
     ),
+  };
+}
+
+/** `list_projects`: every project the user has a thread in, most recently updated first. */
+function listProjects(s: AppState): JsonObject {
+  const byPath = new Map<string, { path: string; threads: number; working: boolean; updatedAt: number }>();
+  for (const x of s.sessions) {
+    const path = projectOf({ folder: x.cwd, worktree: x.worktree });
+    if (!path) continue;
+    const entry = byPath.get(path) ?? { path, threads: 0, working: false, updatedAt: 0 };
+    entry.threads += 1;
+    entry.working ||= !!s.threads[x.id]?.running || x.status === "running";
+    entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
+    byPath.set(path, entry);
+  }
+  const projects = [...byPath.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_PROJECTS)
+    .map((p) => ({ path: p.path, name: projectName(p.path), threads: p.threads, working: p.working }));
+  return { projects };
+}
+
+/** Why a pull request read failed, in the shape the agent reads: `{ error: { code, message } }`. */
+function pullFailure(error: { code: string; message: string }): Failure {
+  return failure(
+    error.code === "failed" ? "failed" : "target_unavailable",
+    `${pullErrorTitle(error.code)}: ${error.message}`,
+  );
+}
+
+/** `list_pull_requests`: the caller's project's pull requests, through the panel's own call. */
+async function listPullRequests(caller: RuleThread, state: PullStateChoice): Promise<JsonObject> {
+  const cwd = projectOf(caller);
+  if (!cwd) return failureJson(failure("failed", "this thread has no project folder"));
+  let result: Json;
+  try {
+    result = await request(Method.pulls, { cwd, state, limit: MAX_PULL_REQUESTS }, 60_000);
+  } catch (error) {
+    return failureJson(failure("target_unavailable", `pull requests could not be read: ${errorText(error)}`));
+  }
+  const error = parsePullError(result);
+  if (error) return failureJson(pullFailure(error));
+  return {
+    pull_requests: parsePullList(result).pulls.map((p) => ({
+      number: p.number,
+      title: p.title,
+      state: p.state,
+      branch: p.headRef,
+      ...(p.url ? { url: p.url } : {}),
+    })),
   };
 }
 

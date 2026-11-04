@@ -117,11 +117,20 @@ export type Call =
       status?: SessionStatusChoice;
     }
   | { tool: "interrupt_session"; target: string }
-  | { tool: "configure_session"; target?: string; model?: string; effort?: string };
+  | { tool: "configure_session"; target?: string; model?: string; effort?: string }
+  | { tool: "list_projects" }
+  | { tool: "list_pull_requests"; state: PullStateChoice };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
 const SESSION_STATUSES: readonly string[] = ["active", "review", "settled"];
+
+/** What `list_pull_requests` may ask for. */
+export type PullStateChoice = "open" | "closed" | "merged" | "all";
+const PULL_STATES: readonly string[] = ["open", "closed", "merged", "all"];
+/** Pull requests listed, and projects: an agent's context pays for each. */
+export const MAX_PULL_REQUESTS = 30;
+export const MAX_PROJECTS = 50;
 
 const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
 const bytes = (text: string) => new TextEncoder().encode(text).length;
@@ -137,6 +146,15 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "list_harnesses" };
     case "list_worktrees":
       return { tool: "list_worktrees" };
+    case "list_projects":
+      return { tool: "list_projects" };
+    case "list_pull_requests": {
+      const state = s(args.state) ?? "open";
+      if (!PULL_STATES.includes(state)) {
+        return failure("invalid", `state must be one of ${PULL_STATES.join(", ")}`);
+      }
+      return { tool: "list_pull_requests", state: state as PullStateChoice };
+    }
     case "search_sessions": {
       const query = (s(args.query) ?? "").trim();
       if (!query) return failure("invalid", "query is required");

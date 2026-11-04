@@ -1333,6 +1333,8 @@ export class MockEngine {
       await call("list_harnesses", {});
       await call("search_sessions", { query: "login" });
       await call("list_worktrees", {});
+      await call("list_projects", {});
+      await call("list_pull_requests", { state: "open" });
       await call("update_session", { title: "Managed by its agent", pinned: true });
       await call("configure_session", { effort: "high" });
       return "Renamed and pinned this thread, and raised its effort.";

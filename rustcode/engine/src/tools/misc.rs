@@ -366,7 +366,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a new thread with prompt as its first message, on another harness or model if given, in its own worktree by default. The user is asked first. Returns session_id and a link_id for wait_session. It does not see this conversation.",
+    description: "Start a new thread with prompt as its first message, on another harness or model if given, in its own worktree by default. Pass the task itself as prompt: when the user says to start this or the current task in another thread, write that task out; the new thread does not see this conversation. The user approves in the app, where the harness, model and effort are shown, so choose sensible ones and call it rather than asking first. Returns session_id and a link_id for wait_session.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -486,7 +486,7 @@ pub const LIST_WORKTREES: Tool = Tool {
 
 pub const UPDATE_SESSION: Tool = Tool {
     name: crate::orchestration::UPDATE_SESSION,
-    description: "Rename, pin, mark unread or change the status of a thread. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done).",
+    description: "Rename, pin, mark unread or change the status of a thread. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done, snoozed). Use it for a rename, a snooze or a status change the user asks for instead of asking them back.",
     arguments: r#"{"title": "Fix login", "pinned": true, "status": "settled"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -541,6 +541,44 @@ pub const CONFIGURE_SESSION: Tool = Tool {
                 "session_id": {"type": "string", "minLength": 1},
                 "model": {"type": "string", "minLength": 1},
                 "effort": {"type": "string", "minLength": 1}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const LIST_PROJECTS: Tool = Tool {
+    name: crate::orchestration::LIST_PROJECTS,
+    description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Use a path as start_session's project.",
+    arguments: r#"{}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const LIST_PULL_REQUESTS: Tool = Tool {
+    name: crate::orchestration::LIST_PULL_REQUESTS,
+    description: "List this project's pull requests on its git host, at most 30: number, title, state, branch and url. Open ones by default; pass state closed, merged or all to see others. Fails when the folder is not a GitHub repository or its CLI is missing.",
+    arguments: r#"{"state": "open"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "state": {"type": "string", "enum": crate::orchestration::PR_STATES}
             },
             "required": [],
             "additionalProperties": false
