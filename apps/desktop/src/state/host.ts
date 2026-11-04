@@ -61,6 +61,7 @@ import {
   searchThreads,
   setConfigOption,
   setThreadStatus,
+  snoozeThread,
   statusOf,
   toast,
   togglePin,
@@ -344,6 +345,7 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
       call.pinned !== undefined && (call.pinned ? "pin it" : "unpin it"),
       call.unread && "mark it unread",
       call.status && `set its status to ${call.status}`,
+      call.snoozedUntil ? "snooze it" : call.snoozedUntil === null && "bring it back from snooze",
     ].filter(Boolean);
     const no = await permitted(caller, `organize:${target.id}`, {
       kind: "organize",
@@ -362,6 +364,7 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
   }
   if (call.unread) markUnread(target.id);
   if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
+  if (call.snoozedUntil !== undefined) snoozeThread(target.id, call.snoozedUntil);
   const after = ruleThread(useApp.getState(), target.id);
   return {
     session_id: target.id,

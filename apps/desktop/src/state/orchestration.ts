@@ -115,6 +115,8 @@ export type Call =
       pinned?: boolean;
       unread?: boolean;
       status?: SessionStatusChoice;
+      /** When it comes back, in ms; `null` brings it back now. */
+      snoozedUntil?: number | null;
     }
   | { tool: "interrupt_session"; target: string }
   | { tool: "configure_session"; target?: string; model?: string; effort?: string };
@@ -162,8 +164,14 @@ export function parseCall(params: JsonObject): Call | Failure {
       const title = s(args.title)?.trim();
       const pinned = typeof args.pinned === "boolean" ? args.pinned : undefined;
       const unread = typeof args.unread === "boolean" ? args.unread : undefined;
-      if (!title && pinned === undefined && unread === undefined && !status) {
-        return failure("invalid", "give at least one of title, pinned, unread or status");
+      let snoozedUntil: number | null | undefined;
+      if (args.snoozed_until === null) snoozedUntil = null;
+      else if (args.snoozed_until !== undefined) {
+        snoozedUntil = Date.parse(s(args.snoozed_until) ?? "");
+        if (Number.isNaN(snoozedUntil)) return failure("invalid", "snoozed_until must be an ISO 8601 time");
+      }
+      if (!title && pinned === undefined && unread === undefined && !status && snoozedUntil === undefined) {
+        return failure("invalid", "give at least one of title, pinned, unread, status or snoozed_until");
       }
       return {
         tool: "update_session",
@@ -172,6 +180,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         pinned,
         unread,
         status: status as SessionStatusChoice | undefined,
+        snoozedUntil,
       };
     }
     case "read_session": {
