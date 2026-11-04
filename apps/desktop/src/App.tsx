@@ -22,7 +22,7 @@ import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
-import { cx, Pill } from "./ui/primitives";
+import { Pill } from "./ui/primitives";
 import { RightPanel } from "./ui/RightPanel";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
 import { Settings } from "./ui/Settings";
@@ -185,16 +185,13 @@ export function App() {
   return (
     <Tooltip.Provider delayDuration={400} skipDelayDuration={300} disableHoverableContent>
       {/*
-        One shell, never unmounted. Settings takes the whole window (sidebar and
-        chat): the shell stays mounted and laid out underneath, only hidden and
+        One shell, never unmounted. Settings floats over it (docs/design.md ›
+        Settings): the shell stays mounted and laid out underneath the scrim,
         inert, so closing Settings shows the thread exactly where it was
         (scroll, drafts, open rows) in one frame.
       */}
       <div className="relative h-full w-full overflow-hidden">
-        <div
-          className={cx("flex h-full w-full overflow-hidden bg-sidebar", settings && "invisible")}
-          inert={settings}
-        >
+        <div className="flex h-full w-full overflow-hidden bg-sidebar" inert={settings}>
           <Sidebar />
           <div className="relative flex min-w-0 flex-1 bg-bg">
             <div className="flex min-w-0 flex-1 flex-col">
@@ -216,11 +213,7 @@ export function App() {
             </div>
           </div>
         </div>
-        {settings && (
-          <div className="absolute inset-0 z-20 flex bg-bg">
-            <Settings />
-          </div>
-        )}
+        {settings && <Settings />}
       </div>
       <CommandPalette />
       <Suspense fallback={null}>{onboarding && <Onboarding onClose={() => setOnboarding(false)} />}</Suspense>
