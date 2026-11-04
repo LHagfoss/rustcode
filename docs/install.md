@@ -98,7 +98,7 @@ RUSTCODE_INSTALL_ARTIFACTS=/tmp/rc/art bash ../../scripts/install.sh --bin-dir /
 
 ### Updating the app
 
-- macOS: Settings › Engine › **Check for Updates**, then **Update to X**. The
+- macOS: Settings › Advanced › **Check for Updates**, then **Update to X**. The
   app downloads the release's app zip, checks it against `SHA256SUMS`, its
   code signature and bundle id, then quits, swaps `RustCode.app` and reopens.
   It needs write access to the folder the app is in; otherwise the button

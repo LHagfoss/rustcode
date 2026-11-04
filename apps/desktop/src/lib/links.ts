@@ -20,11 +20,15 @@ const waiting: (() => void)[] = [];
 let active = 0;
 const MAX_ACTIVE = 4;
 
+/** Chips on, until the user turns them off (Settings › Chat). */
+export const LINK_PREVIEWS_DEFAULT = true;
+
 export function linkPreviewsEnabled(): boolean {
   try {
-    return localStorage.getItem(KEY) !== "0";
+    const raw = localStorage.getItem(KEY);
+    return raw === null ? LINK_PREVIEWS_DEFAULT : raw === "1";
   } catch {
-    return true;
+    return LINK_PREVIEWS_DEFAULT;
   }
 }
 

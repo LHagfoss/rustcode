@@ -9,7 +9,7 @@ the agent answer with a small interactive component, such as a filterable
 table or a view driven by a few controls, that the client runs in the
 transcript of the desktop app (`apps/desktop`). A view reads
 like the rest of the reply: no card chrome, border or background of its own. It is **on by default** (it shipped opt-in, and agents almost
-never reached it): Settings › General › Chat › Smart UI turns it off. The engine learns the setting when it starts, so after
+never reached it): Settings › Chat › Smart UI turns it off. The engine learns the setting when it starts, so after
 switching it Settings offers **Restart Engine** (shown once no chat is
 running).
 
@@ -105,7 +105,7 @@ off.
 
 While the setting is off the app sends `smartUi = 0`. The root prompt then
 carries a one-line note instead (under 80 tokens): Smart UI exists but is off,
-so when the user asks for it the agent names Settings › General › Chat › Smart
+so when the user asks for it the agent names Settings › Chat › Smart
 UI rather than inventing a fence the app shows as source. A client that sends
 no `smartUi` gets neither. It tells the agent to use Smart UI only when the user asks
 for an interactive view or controls clearly help, and to use Markdown or

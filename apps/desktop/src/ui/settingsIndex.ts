@@ -2,8 +2,8 @@
 // words people look for but that the row does not say. Pure (no React, no
 // store at runtime), so the nav's search is testable on its own.
 //
-// A few pages have no rows of their own — Harnesses lists cards, Connections
-// and Engine render the engine's answers — so their groups are listed here; a
+// A few pages have no rows of their own — Agents lists cards, Connections and
+// Advanced render the engine's answers — so their groups are listed here; a
 // group title is a landing target too (settingsKit.tsx).
 
 import type { SettingsSection } from "../state/store";
@@ -34,71 +34,39 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
-    title: "Smart UI",
-    keywords: "interactive view chart table sandbox html agent answer",
-  },
-  {
-    section: "general",
     title: "Continue threads after a restart",
     keywords: "resume quit update engine cut short",
   },
   {
     section: "general",
-    title: "Threads can start and message other threads",
-    keywords: "orchestration subagents spawn compare message agents",
-  },
-  { section: "general", title: "Link previews", keywords: "links chips title icon page" },
-  { section: "general", title: "Trackpad haptics", keywords: "haptic tap feedback force touch" },
-  {
-    section: "general",
     title: "Discord Rich Presence",
     keywords: "rich presence status shared project",
   },
-  { section: "general", title: "New thread", keywords: "shortcut keyboard keys ⌘N" },
-  {
-    section: "general",
-    title: "Folder of this thread (a new one, or move this one)",
-    keywords: "shortcut keyboard keys ⌘O",
-  },
-  {
-    section: "general",
-    title: "Default folder for new threads",
-    keywords: "shortcut keyboard keys ⌘⇧O",
-  },
-  {
-    section: "general",
-    title: "Command palette: threads, actions",
-    keywords: "shortcut keyboard keys ⌘K switcher",
-  },
-  { section: "general", title: "Settings", keywords: "shortcut keyboard keys ⌘, preferences" },
-  { section: "general", title: "Toggle sidebar", keywords: "shortcut keyboard keys ⌘B" },
-  { section: "general", title: "Find in thread", keywords: "shortcut keyboard keys ⌘F search" },
-  { section: "general", title: "Terminal", keywords: "shortcut keyboard keys ⌘J shell" },
-  {
-    section: "general",
-    title: "Text larger, smaller, actual size",
-    keywords: "shortcut keyboard keys ⌘+ ⌘- ⌘0 zoom",
-  },
-  { section: "general", title: "Stop the turn", keywords: "shortcut keyboard keys esc ⌘." },
-  {
-    section: "general",
-    title: "Send · queue while running",
-    keywords: "shortcut keyboard keys ⏎ enter",
-  },
-  { section: "general", title: "Steer the running turn", keywords: "shortcut keyboard keys ⌘⏎" },
-  { section: "general", title: "New line", keywords: "shortcut keyboard keys ⇧⏎ shift" },
-  { section: "general", title: "Answer an approval", keywords: "shortcut keyboard keys 1–9" },
+  { section: "general", title: "Trackpad haptics", keywords: "haptic tap feedback force touch" },
 
-  // ------------------------------------------------------------ Harnesses
+  // ------------------------------------------------------------ Chat
   {
-    section: "harnesses",
+    section: "chat",
+    title: "Smart UI",
+    keywords: "interactive view chart table sandbox html agent answer",
+  },
+  { section: "chat", title: "Link previews", keywords: "links chips title icon page" },
+
+  // ------------------------------------------------------------ Agents
+  {
+    section: "agents",
     title: "New threads start on",
     keywords: "default harness model effort agent",
   },
   {
-    section: "harnesses",
+    section: "agents",
     title: "Coding agents",
     keywords: "agent harness install sign in check enable disable local remove",
+  },
+  {
+    section: "agents",
+    title: "Threads can start and message other threads",
+    keywords: "orchestration subagents spawn compare message agents",
   },
 
   // ------------------------------------------------------------ Connections
@@ -146,9 +114,50 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "appearance",
+    title: "Theme",
+    keywords: "colors colours palette theme files editor tokens create",
+  },
+  {
+    section: "appearance",
     title: "New thread banner",
     keywords: "banner picture image header new thread",
   },
+
+  // ------------------------------------------------------------ Keyboard
+  { section: "keyboard", title: "New thread", keywords: "shortcut keyboard keys ⌘N" },
+  {
+    section: "keyboard",
+    title: "Folder of this thread (a new one, or move this one)",
+    keywords: "shortcut keyboard keys ⌘O",
+  },
+  {
+    section: "keyboard",
+    title: "Default folder for new threads",
+    keywords: "shortcut keyboard keys ⌘⇧O",
+  },
+  {
+    section: "keyboard",
+    title: "Command palette: threads, actions",
+    keywords: "shortcut keyboard keys ⌘K switcher",
+  },
+  { section: "keyboard", title: "Settings", keywords: "shortcut keyboard keys ⌘, preferences" },
+  { section: "keyboard", title: "Toggle sidebar", keywords: "shortcut keyboard keys ⌘B" },
+  { section: "keyboard", title: "Find in thread", keywords: "shortcut keyboard keys ⌘F search" },
+  { section: "keyboard", title: "Terminal", keywords: "shortcut keyboard keys ⌘J shell" },
+  {
+    section: "keyboard",
+    title: "Text larger, smaller, actual size",
+    keywords: "shortcut keyboard keys ⌘+ ⌘- ⌘0 zoom",
+  },
+  { section: "keyboard", title: "Stop the turn", keywords: "shortcut keyboard keys esc ⌘." },
+  {
+    section: "keyboard",
+    title: "Send · queue while running",
+    keywords: "shortcut keyboard keys ⏎ enter",
+  },
+  { section: "keyboard", title: "Steer the running turn", keywords: "shortcut keyboard keys ⌘⏎" },
+  { section: "keyboard", title: "New line", keywords: "shortcut keyboard keys ⇧⏎ shift" },
+  { section: "keyboard", title: "Answer an approval", keywords: "shortcut keyboard keys 1–9" },
 
   // ------------------------------------------------------------ Usage
   {
@@ -157,18 +166,23 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "plan keychain limits windows read composer usage",
   },
 
-  // ------------------------------------------------------------ Engine
+  // ------------------------------------------------------------ Advanced
   {
-    section: "engine",
+    section: "advanced",
     title: "Engine",
     keywords: "status restart running stopped starting acp transport",
   },
+  { section: "advanced", title: "Engine log", keywords: "log stderr debug errors" },
   {
-    section: "engine",
+    section: "advanced",
     title: "RustCode",
-    keywords: "version update check upgrade download what's new",
+    keywords: "version update check upgrade download what's new about",
   },
-  { section: "engine", title: "Engine log", keywords: "log stderr debug errors" },
+  {
+    section: "advanced",
+    title: "Set up your agents again",
+    keywords: "setup onboarding install sign in harness start over",
+  },
 ];
 
 /** How many results the nav shows at once. */
@@ -176,7 +190,7 @@ export const SETTINGS_RESULTS = 12;
 
 /**
  * Every word of the query appears in the row's title or its keywords, in any
- * order and case. No query, nothing: the nav shows the sections then.
+ * order and case. No query, nothing: the nav shows the pages then.
  */
 export function searchSettings(query: string): SettingEntry[] {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);

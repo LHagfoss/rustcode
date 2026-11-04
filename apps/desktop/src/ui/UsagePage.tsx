@@ -8,23 +8,22 @@ import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { parsePlans, planHarness, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
-import { CLAUDE_USAGE_KEY, commitPlansAnswer, request, setClaudeUsageAllowed, useApp } from "../state/store";
+import {
+  CLAUDE_USAGE_DEFAULT,
+  claudeUsageAllowed,
+  commitPlansAnswer,
+  request,
+  setClaudeUsageAllowed,
+  useApp,
+} from "../state/store";
 import { relativeAge } from "../state/thread";
 import { PlanWindow } from "./ComposerUsage";
 import { Pill, Skeleton, Spinner, Switch } from "./primitives";
 import { Group, Row } from "./settingsKit";
 
-function claudeAllowed(): boolean {
-  try {
-    return localStorage.getItem(CLAUDE_USAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 export function UsagePage() {
   const status = useApp((s) => s.status);
-  const [claude, setClaude] = useState(claudeAllowed);
+  const [claude, setClaude] = useState(claudeUsageAllowed);
   const [plans, setPlans] = useState<UsagePlan[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,6 +97,14 @@ export function UsagePage() {
           {planHarness(p.id) === "claude-code" && (
             <Row
               title="Show Claude usage in the composer"
+              reset={
+                claude
+                  ? () => {
+                      setClaudeUsageAllowed(CLAUDE_USAGE_DEFAULT);
+                      setClaude(CLAUDE_USAGE_DEFAULT);
+                    }
+                  : undefined
+              }
               subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer shows your plan. macOS may ask once to allow it in the Keychain. Only reads; never signs in or out."
             >
               <Switch label="Show Claude usage in the composer" checked={claude} onChange={allowClaude} />

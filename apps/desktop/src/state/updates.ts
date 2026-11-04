@@ -26,7 +26,7 @@ interface UpdatesState {
   /** This app's version from the shell, known before any check answers. */
   version: string | null;
   info: UpdateInfo | null;
-  /** Why the last check failed, for Settings › Engine; null after a good check. */
+  /** Why the last check failed, for Settings › Advanced; null after a good check. */
   error: string | null;
   checkedAt: number | null;
   installing: boolean;
@@ -121,7 +121,7 @@ let retryDelay = RETRY_FIRST_MS;
 
 let checking: Promise<void> | null = null;
 
-/** Check now: on launch, on the interval, when the app comes back, and from Settings › Engine. */
+/** Check now: on launch, on the interval, when the app comes back, and from Settings › Advanced. */
 export function checkNow(): Promise<void> {
   // One check at a time: a second caller waits for the one already running.
   checking ??= runCheck().finally(() => {
@@ -234,7 +234,7 @@ export function closeWhatsNew() {
   useUpdates.setState({ whatsNew: null });
 }
 
-/** What's New for the running version on demand (Settings › Engine). */
+/** What's New for the running version on demand (Settings › Advanced). */
 export async function showWhatsNew(version: string) {
   const notes = await shellCall<string | null>("release_notes", { version }).catch(() => null);
   useUpdates.setState({ whatsNew: { version, notes } });

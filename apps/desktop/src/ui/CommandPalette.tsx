@@ -62,11 +62,14 @@ export interface PaletteAction {
 
 const SETTINGS: [SettingsSection, string][] = [
   ["general", "General"],
-  ["harnesses", "Harnesses"],
+  ["chat", "Chat"],
+  ["agents", "Agents: harnesses, models and orchestration"],
   ["connections", "Connections"],
   ["capabilities", "Capabilities: skills and MCP servers"],
   ["appearance", "Appearance"],
-  ["engine", "Engine"],
+  ["keyboard", "Keyboard"],
+  ["usage", "Usage"],
+  ["advanced", "Advanced: engine, updates and setup"],
 ];
 
 /** Actions other views add (board, review, …), so the palette lists them without knowing them. */

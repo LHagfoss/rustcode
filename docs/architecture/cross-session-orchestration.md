@@ -35,7 +35,7 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
   queued or running links are `interrupted` and nothing restarts.
 - Stopping the orchestrator's turn stops the link turns it started and drops
   its queued messages. Turns the user started in the target keep running.
-- Off by default: Settings ▸ General ▸ *Threads can message each other*. The
+- Settings ▸ Agents ▸ *Threads can start and message other threads*. The
   engine learns it at `initialize`, so a change applies after the engine
   restarts.
 - UI: chips above the composer for the threads this one messaged (state,
