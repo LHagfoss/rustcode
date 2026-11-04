@@ -65,6 +65,16 @@ export async function gitChanges(cwd: string, base?: string): Promise<GitChanges
   }
 }
 
+/** The project's files for `@` references; empty outside a git repository or the app. */
+export async function projectFiles(cwd: string): Promise<string[]> {
+  if (!isTauri() && !hasShell()) return [];
+  try {
+    return await invoke<string[]>("project_files", { cwd });
+  } catch {
+    return [];
+  }
+}
+
 /** A Terminal window in a folder (macOS). */
 export function openTerminalAt(path: string): Promise<void> {
   return invoke("open_terminal_at", { path });

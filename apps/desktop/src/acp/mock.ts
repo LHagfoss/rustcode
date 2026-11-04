@@ -1911,6 +1911,7 @@ export class MockTransport implements Transport {
     if (command === "link_meta") return mockLinkMeta(String(args.url));
     if (command === "thread_rename") return this.engine?.renameThread(String(args.id), String(args.title));
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
+    if (command === "project_files") return MOCK_PROJECT_FILES;
     if (command === "git_changes")
       return mockGitChanges(String(args.cwd), args.base ? String(args.base) : undefined);
     if (
@@ -1936,6 +1937,17 @@ export class MockTransport implements Transport {
     this.engine = null;
   }
 }
+
+const MOCK_PROJECT_FILES = [
+  "README.md",
+  "apps/desktop/src/main.tsx",
+  "apps/desktop/src/ui/Composer.tsx",
+  "apps/desktop/src/ui/Sidebar.tsx",
+  "apps/desktop/src/state/store.ts",
+  "docs/design.md",
+  "docs/my notes.md",
+  "rustcode/engine/src/acp.rs",
+];
 
 /** Canned `git_changes`, as the shell answers it: the branch since its base adds the login form. */
 export function mockGitChanges(cwd: string, base?: string): JsonObject {

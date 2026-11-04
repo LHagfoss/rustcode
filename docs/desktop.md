@@ -887,7 +887,7 @@ SwiftUI updater already trust; Developer ID signing adds to it once set up.
 
 From the SwiftUI app, still missing or partial:
 
-- `@` file references; picking diff lines for a message. Files dropped in
+- Picking diff lines for a message. Files dropped in
   the browser are inlined as text rather than linked.
 - Slash commands the app answers itself (`/terminal`, `/remote`,
   `/visualize`).
