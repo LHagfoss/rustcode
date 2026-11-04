@@ -16,7 +16,7 @@ import { cx, Orb, Skeleton, Spinner } from "./primitives";
 const EMPTY: SubagentInfo[] = [];
 const NO_STEPS: ToolItem[] = [];
 
-function useNow(active: boolean) {
+export function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!active) return;
@@ -248,6 +248,7 @@ interface Working {
   name: string;
   task: string;
   step?: string;
+  startedAt?: number;
 }
 
 /**
@@ -259,9 +260,12 @@ export function AgentPill({ threadId }: { threadId?: string }) {
   // Read here, not from the composer's prop: the composer skips item changes.
   const thread = useApp((s) => (threadId ? s.threads[threadId] : undefined));
   const working = useMemo<Working[]>(() => {
-    const out: Working[] = agents
-      .filter(agentActive)
-      .map((a) => ({ key: `rc-${a.id}`, name: a.name, task: a.task.split("\n")[0] ?? "" }));
+    const out: Working[] = agents.filter(agentActive).map((a) => ({
+      key: `rc-${a.id}`,
+      name: a.name,
+      task: a.task.split("\n")[0] ?? "",
+      startedAt: a.startedAt,
+    }));
     if (!thread?.running) return out;
     const items = thread.items;
     for (const item of items) {
@@ -276,10 +280,17 @@ export function AgentPill({ threadId }: { threadId?: string }) {
           break;
         }
       }
-      out.push({ key: item.id, name: agent.name, task: agent.task, step: step && stepLabel(step) });
+      out.push({
+        key: item.id,
+        name: agent.name,
+        task: agent.task,
+        step: step && stepLabel(step),
+        startedAt: item.startedAt,
+      });
     }
     return out;
   }, [agents, thread?.items, thread?.running]);
+  const now = useNow(working.length > 0);
   if (!working.length) return null;
   return (
     <HoverCard.Root openDelay={80} closeDelay={120}>
@@ -308,7 +319,12 @@ export function AgentPill({ threadId }: { threadId?: string }) {
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-1.5">
                   <span className="shrink-0 font-medium text-callout">{w.name}</span>
-                  <span className="min-w-0 truncate text-callout text-fg-muted">{w.task}</span>
+                  <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">{w.task}</span>
+                  {w.startedAt !== undefined && now - w.startedAt >= 1000 && (
+                    <span className="shrink-0 text-caption text-fg-faint tabular-nums">
+                      {formatDuration(Math.floor((now - w.startedAt) / 1000) * 1000)}
+                    </span>
+                  )}
                 </span>
                 {w.step && <span className="block truncate text-caption text-fg-faint">{w.step}</span>}
               </span>

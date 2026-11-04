@@ -394,13 +394,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   folded; find in thread opens them all while it searches. Folded steps are
   not rows at all, so the virtualizer and the timeline rail have fewer.
   Logic: `state/fold.ts` (`foldTurns`).
-- **Right panel:** one `RightPanel` for every side view (Changes, Agents,
+- **Right panel:** one `RightPanel` for every side view (Details, Changes,
   Pull requests): floating, inset 8px from the window's top, right and
   bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has
   a segmented switch between the views and a close button; views add a
   slim toolbar (`h-9`) under it. The left edge drags (320–760px, kept);
   its slot takes its width at once and the panel slides and fades in 200ms
   (see Motion). ⌘⌥B toggles it with the last view.
+  Details lists what a thread is, in titled sections that drop out when
+  they have nothing to say: harness, workspace, linked threads, subagents with
+  status and elapsed time, plan and usage.
 - **Approval:** over the composer, `elevated rounded-2xl`: what it wants (`From
   <thread>` when a thread this one started is asking), the command in a code
   well, then Always allow, More, Decline `esc`, Approve `⏎` (the keys work when
