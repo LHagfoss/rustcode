@@ -16,8 +16,8 @@ import {
   repositoryOf,
 } from "../acp/rustcode";
 import { Method } from "../acp/types";
-import { highlight, langForPath } from "../lib/highlight";
 import { gitChanges } from "../lib/native";
+import { useHighlightedLines } from "../lib/useHighlightedLines";
 import {
   fileTree,
   type PatchLine,
@@ -73,29 +73,6 @@ function sourceLabel(s: Source, branch?: string): string {
 }
 
 const STATUS_LETTER: Record<string, string> = { added: "A", deleted: "D", renamed: "R", modified: "M" };
-
-/** Shiki HTML for each line of `lines`, in order (null while it loads or for an unknown language). */
-function useHighlightedLines(lines: string[], path: string): (string | null)[] {
-  const [html, setHtml] = useState<(string | null)[]>([]);
-  const code = lines.join("\n");
-  useEffect(() => {
-    let live = true;
-    const lang = langForPath(path);
-    if (!lang || code.length > 200_000) {
-      setHtml([]);
-      return;
-    }
-    void highlight(code, lang).then((out) => {
-      if (!live || !out) return;
-      const doc = new DOMParser().parseFromString(out, "text/html");
-      setHtml([...doc.querySelectorAll(".line")].map((el) => el.innerHTML));
-    });
-    return () => {
-      live = false;
-    };
-  }, [code, path]);
-  return html;
-}
 
 function CommentBox({
   onSave,

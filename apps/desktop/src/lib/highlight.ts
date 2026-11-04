@@ -104,26 +104,69 @@ export async function highlight(code: string, lang: string | undefined): Promise
 }
 
 /** The language a path's extension implies, for diffs. */
+const LANG_BY_EXTENSION: Record<string, string> = {
+  ts: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  tsx: "tsx",
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "jsx",
+  rs: "rust",
+  py: "python",
+  swift: "swift",
+  go: "go",
+  md: "markdown",
+  mdx: "mdx",
+  json: "json",
+  jsonc: "jsonc",
+  toml: "toml",
+  yml: "yaml",
+  yaml: "yaml",
+  css: "css",
+  scss: "scss",
+  less: "less",
+  html: "html",
+  xml: "xml",
+  svg: "xml",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  fish: "fish",
+  sql: "sql",
+  c: "c",
+  h: "c",
+  cc: "cpp",
+  cpp: "cpp",
+  hpp: "cpp",
+  cs: "csharp",
+  java: "java",
+  kt: "kotlin",
+  rb: "ruby",
+  php: "php",
+  lua: "lua",
+  vue: "vue",
+  svelte: "svelte",
+  graphql: "graphql",
+  proto: "proto",
+  nix: "nix",
+  zig: "zig",
+  tf: "terraform",
+  diff: "diff",
+  patch: "diff",
+};
+
+const LANG_BY_NAME: Record<string, string> = {
+  dockerfile: "dockerfile",
+  makefile: "makefile",
+  gemfile: "ruby",
+  rakefile: "ruby",
+};
+
 export function langForPath(path: string): string | undefined {
-  const ext = path.split(".").pop()?.toLowerCase();
-  if (!ext || ext === path.toLowerCase()) return undefined;
-  const map: Record<string, string> = {
-    ts: "typescript",
-    tsx: "tsx",
-    js: "javascript",
-    jsx: "jsx",
-    rs: "rust",
-    py: "python",
-    swift: "swift",
-    go: "go",
-    md: "markdown",
-    json: "json",
-    toml: "toml",
-    yml: "yaml",
-    yaml: "yaml",
-    css: "css",
-    html: "html",
-    sh: "bash",
-  };
-  return map[ext];
+  const name = path.split("/").pop()?.toLowerCase() ?? "";
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return LANG_BY_NAME[name];
+  return LANG_BY_EXTENSION[name.slice(dot + 1)] ?? LANG_BY_NAME[name.slice(0, dot)];
 }
