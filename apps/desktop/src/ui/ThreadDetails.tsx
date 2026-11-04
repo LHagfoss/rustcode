@@ -3,7 +3,7 @@
 // to other threads, and how far along it is. A section with nothing to say
 // is left out.
 
-import { CircleCheck, CircleX, Copy, CornerDownRight, FolderOpen, GitBranch, ListChecks } from "lucide-react";
+import { Copy, CornerDownRight, FolderOpen, GitBranch, ListChecks } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { SubagentInfo } from "../acp/rustcode";
 import { displayPath, effortLabel, modelName } from "../acp/types";
@@ -13,10 +13,9 @@ import { linksOf, stateOf } from "../state/host";
 import { LINK_LABEL, type Link } from "../state/orchestration";
 import { selectThread, showPanel, useApp, worktreeOf } from "../state/store";
 import { formatDuration, formatTokens } from "../state/thread";
-import { useNow } from "./AgentViews";
+import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
-import { LinkStateIcon } from "./Links";
-import { copyText, cx, Orb, Tooltip } from "./primitives";
+import { copyText, cx, Tooltip } from "./primitives";
 
 const NO_AGENTS: SubagentInfo[] = [];
 
@@ -66,45 +65,37 @@ function Line({
 
 function LinkLine({ link, id }: { link: Link; id: string }) {
   const state = useApp((s) => stateOf(s, link));
+  const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
+  const started = id === link.target;
+  const title = (started && session?.title) || (started ? link.targetTitle : link.orchestratorTitle);
   return (
-    <Line
+    <AgentRow
+      harness={link.harness ?? session?.harness}
+      state={LINK_AGENT_STATE[state]}
+      title={title}
+      label={`Open ${title}`}
+      tooltip={<AgentTip title={title} meta={LINK_LABEL[state]} task={link.message} />}
       onClick={() => selectThread(id)}
-      label={
-        <span className="flex min-w-0 items-center gap-1.5">
-          <LinkStateIcon state={state} />
-          <span className="max-w-[220px] truncate text-fg">
-            {id === link.target ? link.targetTitle : link.orchestratorTitle}
-          </span>
-        </span>
-      }
-    >
-      <span className="text-fg-muted">{LINK_LABEL[state]}</span>
-    </Line>
+    />
   );
 }
 
-function SubagentRowLine({ line, now }: { line: SubagentLine; now: number }) {
+function SubagentRowLine({ line, now, harness }: { line: SubagentLine; now: number; harness?: string }) {
   const end = line.state === "working" ? now : line.endedAt;
   const elapsed = line.startedAt && end ? end - line.startedAt : undefined;
   return (
-    <div className="flex min-h-7 items-center gap-2 rounded-lg px-2 text-callout">
-      <span className="flex w-3.5 shrink-0 justify-center">
-        {line.state === "working" ? (
-          <Orb />
-        ) : line.state === "failed" ? (
-          <CircleX size={12} className="text-danger" />
-        ) : (
-          <CircleCheck size={12} className="text-success" />
-        )}
-      </span>
-      <span className="shrink-0 font-medium">{line.name}</span>
-      <span className="min-w-0 flex-1 truncate text-fg-muted">{line.task}</span>
-      {elapsed !== undefined && elapsed >= 1000 && (
-        <span className="shrink-0 text-caption text-fg-faint tabular-nums">
-          {formatDuration(Math.floor(elapsed / 1000) * 1000)}
-        </span>
-      )}
-    </div>
+    <AgentRow
+      harness={harness}
+      state={line.state}
+      title={line.name}
+      detail={line.task}
+      elapsed={
+        elapsed !== undefined && elapsed >= 1000
+          ? formatDuration(Math.floor(elapsed / 1000) * 1000)
+          : undefined
+      }
+      tooltip={<AgentTip title={line.name} task={line.task} />}
+    />
   );
 }
 
@@ -259,7 +250,7 @@ export function ThreadDetails() {
       {subagents.length > 0 && (
         <Section title={`Subagents · ${subagents.length}`}>
           {subagents.map((line) => (
-            <SubagentRowLine key={line.key} line={line} now={now} />
+            <SubagentRowLine key={line.key} line={line} now={now} harness={thread.harness?.id} />
           ))}
         </Section>
       )}

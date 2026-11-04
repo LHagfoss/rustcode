@@ -1,7 +1,7 @@
-// Threads working for threads, in the chat: chips above the composer for
-// the threads this one started or messaged (state, open, stop), a "Working
-// for" banner in a thread doing work for another, and the prompt that asks
-// the user before a thread reaches another one.
+// Threads working for threads, in the chat: agent rows above the composer for
+// the threads this one started or messaged (what it is doing, open, stop), a
+// "Working for" banner in a thread doing work for another, and the prompt that
+// asks the user before a thread reaches another one.
 
 import {
   ChevronDown,
@@ -22,7 +22,7 @@ import { useEffect } from "react";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import { isActive, LINK_LABEL, type Link, type LinkState } from "../state/orchestration";
 import { selectThread, setView, useApp } from "../state/store";
-import { HarnessIcon } from "./HarnessIcon";
+import { ThreadAgentRow } from "./AgentViews";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const ICON: Record<LinkState, typeof Clock> = {
@@ -50,64 +50,29 @@ export function LinkStateIcon({ state, size = 12 }: { state: LinkState; size?: n
   );
 }
 
-function LinkChipRow({ link }: { link: Link }) {
+/**
+ * One thread this one delegated to, in the strip above the composer and in its
+ * popover: the same row as a subagent, plus stop (or remove once settled).
+ */
+function LinkRow({ link }: { link: Link }) {
   const state = useApp((s) => stateOf(s, link));
   const active = isActive(state);
   return (
-    <span className="elevated flex h-[28px] min-w-0 shrink items-center gap-1.5 rounded-full pr-1.5 pl-2.5 text-callout rc-in">
-      <LinkStateIcon state={state} />
-      {link.harness && <HarnessIcon id={link.harness} size={12} />}
-      <Tooltip label={link.message.length > 300 ? `${link.message.slice(0, 300)}…` : link.message}>
-        <button
-          type="button"
-          onClick={() => selectThread(link.target)}
-          className="flex min-w-0 items-center gap-1 rounded-full hover:text-accent"
-        >
-          <span className="max-w-[180px] min-w-0 truncate">{link.targetTitle}</span>
-          <span className="shrink-0 text-fg-muted">· {LINK_LABEL[state]}</span>
-        </button>
-      </Tooltip>
-      <Tooltip label={active ? "Stop this work in that thread" : "Remove"}>
-        <button
-          type="button"
-          aria-label={active ? `Stop ${link.targetTitle}` : `Remove ${link.targetTitle}`}
-          onClick={() => (active ? void stopLink(link.id) : dismissLink(link.id))}
-          className="flex size-5 shrink-0 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg"
-        >
-          <X size={11} strokeWidth={2.5} />
-        </button>
-      </Tooltip>
-    </span>
-  );
-}
-
-/** One linked thread in the popover: its state, its title, and stop or dismiss as on a chip. */
-function LinkMenuRow({ link }: { link: Link }) {
-  const state = useApp((s) => stateOf(s, link));
-  const active = isActive(state);
-  return (
-    <div className="flex w-full items-center gap-2 rounded-lg px-3 py-[7px] hover:bg-fill">
-      <LinkStateIcon state={state} />
-      {link.harness && <HarnessIcon id={link.harness} size={12} />}
-      <button
-        type="button"
-        onClick={() => selectThread(link.target)}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-callout"
-      >
-        <span className="min-w-0 flex-1 truncate">{link.targetTitle}</span>
-        <span className="shrink-0 text-fg-muted">{LINK_LABEL[state]}</span>
-      </button>
-      <Tooltip label={active ? "Stop this work in that thread" : "Remove"}>
-        <button
-          type="button"
-          aria-label={active ? `Stop ${link.targetTitle}` : `Remove ${link.targetTitle}`}
-          onClick={() => (active ? void stopLink(link.id) : dismissLink(link.id))}
-          className="flex size-5 shrink-0 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg"
-        >
-          <X size={11} strokeWidth={2.5} />
-        </button>
-      </Tooltip>
-    </div>
+    <ThreadAgentRow
+      link={link}
+      action={
+        <Tooltip label={active ? "Stop this work in that thread" : "Remove"}>
+          <button
+            type="button"
+            aria-label={active ? `Stop ${link.targetTitle}` : `Remove ${link.targetTitle}`}
+            onClick={() => (active ? void stopLink(link.id) : dismissLink(link.id))}
+            className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
+          >
+            <X size={12} strokeWidth={2.5} />
+          </button>
+        </Tooltip>
+      }
+    />
   );
 }
 
@@ -118,9 +83,9 @@ const stateSummary = (states: LinkState[]) => ({
 });
 
 /**
- * Three or more threads working for this one read as a single chip: the row
- * above the composer has about 800px, and cut-off titles tell the reader
- * nothing. Two stay as they are; they fit.
+ * Three or more threads working for this one fold into one row: the strip above
+ * the composer has about 800px, and a third of it spent on a made-up title tells
+ * the reader nothing. Two stay as rows of their own; they fit.
  */
 function ManyLinks({ links }: { links: Link[] }) {
   // Joined into one string so the selector's result is stable between renders.
@@ -131,18 +96,20 @@ function ManyLinks({ links }: { links: Link[] }) {
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="elevated flex h-[28px] shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout data-[state=open]:bg-fill-strong"
+          className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
-          <Link2 size={12} className="text-fg-muted" />
-          <span>{links.length} threads</span>
-          {working > 0 && <span className="text-fg-muted">· {working} working</span>}
-          {needs > 0 && (
-            <span className="flex items-center gap-1 text-warning">
-              <Hand size={12} />
-              {needs}
+          <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full bg-fill">
+            <Link2 size={13} className="text-fg-muted" />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="min-w-0 truncate font-medium text-fg text-sub">{links.length} threads</span>
+            <span className="block truncate text-caption text-fg-muted">
+              {[working > 0 ? `${working} working` : undefined, needs > 0 ? `${needs} need you` : undefined]
+                .filter(Boolean)
+                .join(" · ") || "done"}
             </span>
-          )}
-          <ChevronDown size={11} className="text-fg-faint" />
+          </span>
+          <ChevronDown size={14} aria-hidden className="shrink-0 text-fg-faint group-hover:text-fg" />
         </button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -151,10 +118,10 @@ function ManyLinks({ links }: { links: Link[] }) {
           align="start"
           sideOffset={8}
           aria-label="Linked threads"
-          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[320px] flex-col overflow-y-auto p-1.5 rc-in"
+          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-y-auto p-1.5 rc-in"
         >
           {links.map((l) => (
-            <LinkMenuRow key={l.id} link={l} />
+            <LinkRow key={l.id} link={l} />
           ))}
         </Popover.Content>
       </Popover.Portal>
@@ -169,21 +136,28 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
   if (!driving.length && !drivenBy) return null;
   return (
-    <div className="flex flex-col gap-1.5 rounded-xl bg-bg">
+    <div className="flex flex-col gap-1 rounded-xl bg-bg py-0.5">
       {drivenBy && <WorkingFor link={drivenBy} />}
       {driving.length > 0 && (
-        <div className="flex flex-nowrap items-center gap-1.5 overflow-hidden bg-bg">
-          <Link2 size={12} className="ml-1 shrink-0 text-fg-faint" />
+        <div className="flex flex-col gap-0.5">
           {driving.length > 2 ? (
             <ManyLinks links={driving} />
           ) : (
-            driving.map((l) => <LinkChipRow key={l.id} link={l} />)
+            driving.map((l) => <LinkRow key={l.id} link={l} />)
           )}
-          {fanOuts.map((f) => (
-            <Pill key={f.id} onClick={() => setView({ kind: "compare", fanOut: f.id })} className="shrink-0">
-              <Rows3 size={12} /> Compare
-            </Pill>
-          ))}
+          {fanOuts.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-2 pt-0.5">
+              {fanOuts.map((f) => (
+                <Pill
+                  key={f.id}
+                  onClick={() => setView({ kind: "compare", fanOut: f.id })}
+                  className="shrink-0"
+                >
+                  <Rows3 size={12} /> Compare
+                </Pill>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
