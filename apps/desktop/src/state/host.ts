@@ -15,6 +15,7 @@ import { hasShell, shellCall } from "../lib/shell";
 import { titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
 import {
+  activityOf,
   capped,
   checkManage,
   checkMessage,
@@ -34,12 +35,17 @@ import {
   isFailure,
   type Link,
   type LinkBook,
+  type LinkState,
   linkResult,
+  linksLeft,
   listSessions,
   MAX_ACTIVE_LINKS,
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
+  markWoken,
   nextId,
+  nextWakeAt,
+  orphanedLinks,
   type PullStateChoice,
   parseCall,
   projectOf,
@@ -49,6 +55,10 @@ import {
   sameProject,
   shownState,
   updateLink,
+  type Wake,
+  type WakeContext,
+  wakeMessage,
+  wakesDue,
 } from "./orchestration";
 import { delegationAllowed, modeLabel } from "./permissions";
 import {
@@ -100,6 +110,15 @@ function setBook(fn: (book: LinkBook) => LinkBook) {
 }
 
 const book = () => useApp.getState().links;
+
+/**
+ * The links each parent is blocked on in `wait_session` right now: a wake for
+ * one of them would be a duplicate, so it is held back while the wait runs.
+ */
+const waiting = new Map<string, Set<string>>();
+
+/** The timer that re-checks a coalescing window; one at a time. */
+let wakeTimer: ReturnType<typeof setTimeout> | undefined;
 
 function ruleThread(s: AppState, id: string): RuleThread | undefined {
   const summary = s.sessions.find((x) => x.id === id);
@@ -862,6 +881,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     title,
     harness: harness.id,
     ...ranWith(id),
+    links_left: linksLeft(book(), caller.id),
   };
 }
 
@@ -912,7 +932,8 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
       out.push({ session_id: id, link_id: link, harness: h.id, ...ranWith(id) });
       deliver(id, delivered(call.prompt, caller.title), link);
     } catch (error) {
-      out.push({ harness: h.id, error: { code: "failed", message: errorText(error) } });
+      // The reason, not the name of the error class: the harness says why it could not start.
+      out.push({ harness: h.id, ...failureJson(failure("failed", errorText(error))) });
     }
   }
   if (linkIds.length) {
@@ -926,7 +947,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     };
     setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
   }
-  return { links: out, fan_out_id: fanId };
+  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id) };
 }
 
 /** A link's state now: a running turn that waits on an approval or a question needs the user. */
@@ -934,37 +955,155 @@ export function stateOf(s: AppState, link: Link) {
   return shownState(link, !!s.threads[link.target]?.permissions.length);
 }
 
+/**
+ * `wait_session`: blocks until one of the links settles or asks the user, or
+ * the timeout passes. Each answer carries what the app already knows about the
+ * child (idle time, last tool, turns), so a timeout says whether it is
+ * thinking or stuck. While it runs, this parent is registered as waiting, so
+ * no wake repeats what the wait itself returns.
+ */
 async function wait(callerId: string, ids: string[], timeoutMs: number): Promise<JsonObject> {
   const mine = ids.filter((id) => book().links.find((l) => l.id === id)?.orchestrator === callerId);
   if (!mine.length) return failureJson(failure("not_found", "no such link from this thread"));
   const deadline = Date.now() + timeoutMs;
+  const set = waiting.get(callerId) ?? new Set<string>();
+  for (const id of mine) set.add(id);
+  waiting.set(callerId, set);
+  const until = new Date(deadline).toISOString();
   const result = (link: Link) => {
     const s = useApp.getState();
-    return linkResult(link, stateOf(s, link), statusOf(s, link.target));
+    const now = Date.now();
+    const activity = activityOf(s.threads[link.target]?.items ?? []);
+    return linkResult(link, stateOf(s, link), statusOf(s, link.target), { now, activity });
   };
-  for (;;) {
-    const s = useApp.getState();
-    for (const id of mine) {
-      const link = book().links.find((l) => l.id === id);
-      if (!link) continue;
-      if (isActive(link.state) && !s.sessions.some((x) => x.id === link.target)) {
-        setBook((b) => updateLink(b, id, { state: "failed", answer: "That thread is gone." }));
-        continue;
+  // The parent has this answer now: no wake may repeat it.
+  const hand = (link: Link) => {
+    markHeard(link, stateOf(useApp.getState(), link), Date.now());
+    return { links: [result(link)] };
+  };
+  try {
+    for (;;) {
+      const s = useApp.getState();
+      for (const id of mine) {
+        const link = book().links.find((l) => l.id === id);
+        if (!link) continue;
+        if (isActive(link.state) && !s.sessions.some((x) => x.id === link.target)) {
+          setBook((b) => updateLink(b, id, { state: "failed", answer: "That thread is gone." }));
+          continue;
+        }
+        const now = stateOf(s, link);
+        if (!isActive(now) || now === "needs_user") return hand(link);
       }
-      const now = stateOf(s, link);
-      if (!isActive(now) || now === "needs_user") return { links: [result(link)] };
+      if (Date.now() >= deadline) {
+        return {
+          status: "timeout",
+          waited_until: until,
+          links: mine.flatMap((id) => {
+            const link = book().links.find((l) => l.id === id);
+            return link ? [result(link)] : [];
+          }),
+          note: "Still running. You are woken when it finishes or asks; do not poll with sleeps.",
+        };
+      }
+      await new Promise((r) => setTimeout(r, 300));
     }
-    if (Date.now() >= deadline) {
-      return {
-        status: "timeout",
-        links: mine.flatMap((id) => {
-          const link = book().links.find((l) => l.id === id);
-          return link ? [result(link)] : [];
-        }),
-      };
-    }
-    await new Promise((r) => setTimeout(r, 300));
+  } finally {
+    for (const id of mine) set.delete(id);
+    if (!set.size) waiting.delete(callerId);
+    wakeTick();
   }
+}
+
+// ---------------------------------------------------------------- waking a parent
+
+/** What the wake rules need of the app, read once: no polling, no engine calls. */
+function wakeContext(now: number): WakeContext {
+  const s = useApp.getState();
+  const states: Record<string, LinkState> = {};
+  const pending: Record<string, string> = {};
+  const parents: Record<string, { title: string; running: boolean }> = {};
+  const said: Record<string, readonly string[]> = {};
+  for (const link of s.links.links) {
+    const thread = s.threads[link.target];
+    states[link.id] = shownState(link, !!thread?.permissions.length);
+    const request = thread?.permissions[0];
+    if (request) pending[link.id] = String(request.rpcId);
+    const parent = ruleThread(s, link.orchestrator);
+    if (parent)
+      parents[link.orchestrator] = { title: parent.title, running: !!s.threads[link.orchestrator]?.running };
+  }
+  for (const [id, ids] of waiting) said[id] = [...ids];
+  return { states, pending, waiting: said, parents, now };
+}
+
+/**
+ * Delivers what each parent should hear — children settling, children waiting
+ * on the user — once per child, and schedules the re-check a coalescing window
+ * needs. Called when a link settles, when a child asks the user, and when a
+ * wait returns; nothing here polls.
+ */
+export function wakeTick(): void {
+  clearTimeout(wakeTimer);
+  wakeTimer = undefined;
+  const now = Date.now();
+  if (!useApp.getState().orchestration) return;
+  const ctx = wakeContext(now);
+  // A parent that is gone for good: its children's results are never delivered.
+  const orphaned = orphanedLinks(book(), ctx);
+  if (orphaned.length) {
+    setBook((b) => orphaned.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), b));
+  }
+  for (const wake of wakesDue(book(), ctx)) sendWake(wake, ctx, now);
+  const at = nextWakeAt(book(), ctx);
+  if (at !== null) scheduleWake(Math.max(250, at - now + 50));
+}
+
+/** Re-checks once, later: a coalescing window ending, or a parent still loading. */
+function scheduleWake(ms: number): void {
+  clearTimeout(wakeTimer);
+  wakeTimer = setTimeout(() => wakeTick(), ms);
+}
+
+/**
+ * One message per parent, in a turn of its own: queued behind a running turn
+ * (never interrupting its tools), started at once when the thread is idle.
+ * Links are marked before it is sent, so a wake turn's own activity cannot
+ * deliver the same result twice.
+ */
+function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
+  const parent = useApp.getState().threads[wake.parent];
+  if (parent?.loading) {
+    // Its own history is still replaying: try again once it is there, unmarked.
+    scheduleWake(1_000);
+    return;
+  }
+  const text = wakeMessage(wake, now);
+  setBook((b) => markWoken(b, wake, ctx, now));
+  if (!parent) return;
+  if (parent.running) {
+    updateThread(wake.parent, (t) => ({
+      ...t,
+      queue: [...t.queue, { id: localId("queued"), text, wake: true }],
+    }));
+    return;
+  }
+  void runPrompt(wake.parent, text, undefined, { wake: true });
+}
+
+/**
+ * A link the parent was just handed (a `wait_session` answer, or a pending
+ * question it was told about): mark it heard, so no wake repeats it.
+ */
+function markHeard(link: Link, state: LinkState, now: number): void {
+  const request = useApp.getState().threads[link.target]?.permissions[0]?.rpcId;
+  const asked = request === undefined ? undefined : String(request);
+  setBook((b) =>
+    updateLink(
+      b,
+      link.id,
+      state === "needs_user" && asked !== undefined ? { askedRequest: asked } : { notifiedAt: now },
+    ),
+  );
 }
 
 // ---------------------------------------------------------------- link turns
@@ -984,20 +1123,26 @@ export function linkFinished(
   const reply = [...items].reverse().find((i) => i.kind === "assistant");
   const { text, truncated } = capped(reply?.kind === "assistant" ? reply.text : "");
   const files = turnCompletion(items, items.length)?.files.length ?? 0;
+  const now = Date.now();
   setBook((b) =>
     updateLink(b, id, {
       state: outcome === "cancelled" ? "cancelled" : outcome === "failed" ? "failed" : "done",
       answer: failed ? (text ? `${text}\n\n${failed}` : failed) : text,
       truncated,
       filesChanged: files,
+      settledAt: now,
     }),
   );
+  wakeTick();
 }
 
 /** A queued link message was removed from the target's queue. */
 export function queuedLinkDropped(id: string) {
   const link = book().links.find((l) => l.id === id);
-  if (link?.state === "queued") setBook((b) => updateLink(b, id, { state: "cancelled" }));
+  if (link?.state !== "queued") return;
+  setBook((b) => updateLink(b, id, { state: "cancelled", settledAt: Date.now() }));
+  // Its siblings can now be the last ones working: look again at once.
+  wakeTick();
 }
 
 /** Stop a link: its queued message goes, or its running turn is cancelled. The user's own turns there go on. */

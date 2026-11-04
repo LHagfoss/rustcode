@@ -89,6 +89,7 @@ import {
   loadBook,
   queuedLinkDropped,
   stopLinksFrom,
+  wakeTick,
 } from "./host";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
@@ -966,6 +967,8 @@ async function handleInbound(message: Inbound) {
         if (request.sessionId !== get().selectedId) {
           toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
+        // A child that now waits on the user: its parent hears about it once.
+        wakeTick();
         return;
       }
       if (message.method === V2Method.orchestration) {
@@ -1559,6 +1562,8 @@ export async function trashThread(id: string): Promise<boolean> {
     sessions: s.sessions.filter((x) => x.id !== id),
     links: forget(s.links, id),
   }));
+  // Links into the trashed thread failed: their parents may now have something to hear.
+  wakeTick();
   store(STORAGE.archived, JSON.stringify(archived));
   store(STORAGE.pinned, JSON.stringify(pinned));
   toast("Moved to the Trash", "success");
@@ -1873,7 +1878,7 @@ export async function runPrompt(
   id: string,
   text: string,
   extras: ComposeExtras = emptyExtras,
-  options: { fromView?: boolean; link?: string } = {},
+  options: { fromView?: boolean; link?: string; wake?: boolean } = {},
 ): Promise<void> {
   const conn = engine();
   const thread = get().threads[id];
@@ -1887,7 +1892,9 @@ export async function runPrompt(
     cwd: thread?.cwd ?? "",
   });
   const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
-  updateThread(id, (t) => beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView));
+  updateThread(id, (t) =>
+    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake),
+  );
   // A new prompt starts a new report, if it is one.
   if (get().report?.threadId === id) set({ report: null });
   set((s) => ({
@@ -1942,7 +1949,11 @@ export async function runPrompt(
   const next = get().threads[id]?.queue[0];
   if (outcome === "completed" && next) {
     removeQueued(id, next.id);
-    await runPrompt(id, next.text, next.extras, { fromView: next.fromView, link: next.link });
+    await runPrompt(id, next.text, next.extras, {
+      fromView: next.fromView,
+      link: next.link,
+      wake: next.wake,
+    });
   }
 }
 

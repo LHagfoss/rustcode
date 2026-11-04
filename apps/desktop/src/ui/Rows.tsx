@@ -90,6 +90,9 @@ export const UserRow = memo(function UserRow({
   const [open, setOpen] = useState(false);
   const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
   const markdown = useMemo(() => messageMarkdown(text), [text]);
+  // A turn the app woke the thread for (children finished, a child asks): a
+  // divider row like a compaction, never a message that reads as the user's.
+  const wakeLine = item.wake ? (item.text.split("\n")[0] ?? item.text) : null;
   const body = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
   useLayoutEffect(() => {
@@ -101,6 +104,13 @@ export const UserRow = memo(function UserRow({
   }, []);
   const attachments = item.attachments ?? [];
   const placeholders = attachments.some((a) => a.kind === "image") ? 0 : markers;
+  if (wakeLine) {
+    return (
+      <div title={item.text}>
+        <NoticeRow item={{ kind: "notice", id: item.id, text: wakeLine, tone: "info" }} />
+      </div>
+    );
+  }
   return (
     <div className="group flex flex-col items-end">
       {(attachments.length > 0 || placeholders > 0) && (
