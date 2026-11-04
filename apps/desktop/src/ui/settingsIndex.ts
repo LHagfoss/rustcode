@@ -154,13 +154,15 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { section: "advanced", title: "Engine log", keywords: "log stderr debug errors" },
   {
     section: "advanced",
-    title: "RustCode",
-    keywords: "version update check upgrade download what's new about",
-  },
-  {
-    section: "advanced",
     title: "Set up your agents again",
     keywords: "setup onboarding install sign in harness start over",
+  },
+
+  // ------------------------------------------------------------ About
+  {
+    section: "about",
+    title: "RustCode",
+    keywords: "version update check upgrade download what's new about licences licenses open source",
   },
 ];
 

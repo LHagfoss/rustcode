@@ -15,15 +15,23 @@
 //
 // Groups and rows carry `data-setting` with their title, so the panel's search
 // can scroll to the row it found (Settings.tsx) and light it once.
+//
+// A row whose value differs from its default registers that reset with the
+// page's `RowResets` provider, so the panel's header can offer one "Restore
+// defaults" for everything on the page that changed (it disappears again as
+// the rows go back to their defaults).
 
 import { Check, ChevronDown, RotateCcw } from "lucide-react";
 import { Select as RadixSelect } from "radix-ui";
 import {
   type ButtonHTMLAttributes,
+  createContext,
   type ReactNode,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -102,6 +110,50 @@ function ResetButton({
   );
 }
 
+/** The provider's registry: stable for the life of the page, so a row registers once. */
+type RegisterReset = (run: () => void) => () => void;
+interface RowResetsState {
+  /** Rows on the page that can go back to their default, right now. */
+  count: number;
+  restore: () => void;
+}
+
+const RegisterResetContext = createContext<RegisterReset | null>(null);
+const RowResetsContext = createContext<RowResetsState>({ count: 0, restore: () => undefined });
+
+let nextResetId = 0;
+
+/** Collector for the resets of the rows on the page it wraps (Settings.tsx). */
+export function RowResets({ children }: { children: ReactNode }) {
+  const runs = useRef(new Map<number, () => void>());
+  const [version, bump] = useState(0);
+  const register = useCallback<RegisterReset>((run) => {
+    nextResetId += 1;
+    const id = nextResetId;
+    runs.current.set(id, run);
+    bump((n) => n + 1);
+    return () => {
+      runs.current.delete(id);
+      bump((n) => n + 1);
+    };
+  }, []);
+  const restore = useCallback(() => {
+    for (const run of [...runs.current.values()]) run();
+  }, []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is what makes the count fresh
+  const state = useMemo<RowResetsState>(() => ({ count: runs.current.size, restore }), [version, restore]);
+  return (
+    <RegisterResetContext value={register}>
+      <RowResetsContext value={state}>{children}</RowResetsContext>
+    </RegisterResetContext>
+  );
+}
+
+/** The page's resettable rows, for the panel header's "Restore defaults". */
+export function useRowResets(): RowResetsState {
+  return useContext(RowResetsContext);
+}
+
 export function Row({
   title,
   subtitle,
@@ -119,15 +171,29 @@ export function Row({
   /** Puts the row back to its default; pass it only while the value differs. */
   reset?: () => void;
 }) {
+  // Register with the page so its header can restore every changed row at once. The
+  // run goes through a ref: the registry is keyed on presence, not on the closure.
+  const register = useContext(RegisterResetContext);
+  const latest = useRef(reset);
+  latest.current = reset;
+  const resettable = reset !== undefined;
+  useEffect(() => {
+    if (!register || !resettable) return;
+    return register(() => latest.current?.());
+  }, [register, resettable]);
   return (
     <div
       className={cx("@container group/row relative", className)}
       data-setting={typeof title === "string" ? title : undefined}
     >
-      <div className="flex min-h-12 flex-col gap-3 px-4 py-3 @min-[34rem]:flex-row @min-[34rem]:items-center @min-[34rem]:gap-8">
+      <div className="flex min-h-12 flex-col gap-3 px-4 py-3.5 @min-[34rem]:flex-row @min-[34rem]:items-center @min-[34rem]:gap-8">
         <div className={cx("min-w-0 flex-1", reset && "@max-[34rem]:pr-7")}>
           <div className="flex min-h-5 items-center gap-1.5 font-medium text-body text-fg">{title}</div>
-          {subtitle && <div className="max-w-[70ch] text-balance text-caption text-fg-muted">{subtitle}</div>}
+          {subtitle && (
+            <div className="max-w-[70ch] pt-1 text-balance text-callout text-fg-muted leading-normal">
+              {subtitle}
+            </div>
+          )}
           {status && <div className="pt-0.5 text-caption text-fg-faint">{status}</div>}
         </div>
         {(children || reset) && (

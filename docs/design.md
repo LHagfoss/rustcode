@@ -198,7 +198,7 @@ with headings at 20/18/16/14 in semibold:
 | `text-callout` | 13/17 | Controls, chips, secondary copy |
 | `text-body` | 14/19 | Body, rows, tool rows |
 | `text-title3` | 16/21 | Card titles |
-| `text-title2` | 18/23 | Page titles (Settings) |
+| `text-title2` | 18/23 | Onboarding, a document's headings |
 | `text-title` | 23/29 | Empty-state heading |
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
@@ -360,29 +360,37 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   header's edge, as the transcript fades above the composer. Every view
   that has a header uses this one (the chat, new or open); the Settings
   panel brings its own.
-- **Settings:** a page of the window, not a dialog: `fixed inset-0` in
-  `bg-bg` with no scrim, radius or shadow, the shell mounted and inert
-  behind it. A 240px nav column in `bg-sidebar` with a hairline on its end
-  edge holds a 32px search field, then the pages under short headings
-  (`Setup`, `App`, `System`), or the results while there is a query, and a
-  Close row at its foot (Esc also closes). Nav rows are `h-8 rounded-md px-2`
-  with a `size-4` icon, `text-sm font-medium`; the open one is `bg-fill` in
-  `fg`, the others muted and filled on hover. One page shows at a time
-  beside it, scrolling on its own in a centred `max-w-[768px]` column with
-  generous top padding: the page's name (`text-title2`) scrolls with the
-  content, no sticky header and no hairline under it. Picking a result opens
-  its page and lights the row it found (`rc-setting-hit`, a `fill` fading
-  out over 1.2s).
+- **Settings:** a floating panel over the app, not a page of it: a centred
+  `max-w-[80rem] max-h-[60rem]` panel inside `p-1 sm:p-6 lg:p-10` (about a
+  hundred px in from the sides at 1512×945, a small inset in a narrow
+  window), `rounded-3xl` over our raised shadow and a hairline edge, on a
+  `bg-bg/60` scrim; the shell stays mounted and inert behind it. A press on
+  the scrim, Esc, ⌘, or the header's close button puts you back where you
+  were. The panel takes focus when it opens, never its first control. A
+  240px nav column in `bg-sidebar` with a hairline on its end edge holds a
+  32px search field, then the pages under short `text-callout` headings
+  (`Setup`, `App`, `System`), or the results while there is a query. Nav rows
+  are `h-8 rounded-md px-2` with a `size-4` icon, `text-body`; the open one is
+  `bg-fill` in `fg`, the others muted and filled on hover. The content has its
+  own 48px header — the breadcrumb `Settings / General` (the first part
+  muted) at its start, "Restore defaults" and the close button at its end —
+  with a hairline under it, and the page scrolls beneath. One page shows at a
+  time in a centred `max-w-[760px]` column, `pt-5`, its rows keeping the
+  `px-4` inset the section titles share. "Restore defaults" shows only while
+  a row on that page differs from its default, and puts back every changed
+  row at once with one toast. Picking a result opens its page and lights the
+  row it found (`rc-setting-hit`, a `fill` fading out over 1.2s).
 - **Settings section and row:** a section is its name in `text-base
   font-semibold text-fg`, `px-3`/`px-4`, `space-y-2.5` above one group card,
   and `32px` of gap before the next section. The card is `rounded-xl` with a
   1px `border-strong` edge over a soft step of the page
   (`bg-surface-2/40`), rows divided by a `border` hairline. A row is
-  `px-4 py-3`: its title `text-sm font-medium`, its description `text-xs
-  text-fg-muted`, its control at the right, and the control stacks under the
-  text when the row's own container is narrow. Controls in a row — buttons,
-  selects, the segmented control — are `h-8 rounded-lg` with a thin
-  `border-strong` edge; switches keep their own shape.
+  `px-4 py-3.5`: its title `text-sm font-medium`, its description
+  `text-callout leading-normal text-fg-muted`, its control at the right, and
+  the control stacks under the text when the row's own container is narrow.
+  Controls in a row — buttons, selects, the segmented control — are
+  `h-8 rounded-lg` with a thin `border-strong` edge; switches keep their own
+  shape.
 - **Settings row, reset:** rows show their description in full and keep the
   reset button of the bullet below where the value differs from its default.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`

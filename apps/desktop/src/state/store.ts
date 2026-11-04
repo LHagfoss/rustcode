@@ -124,7 +124,8 @@ export type SettingsSection =
   | "appearance"
   | "keyboard"
   | "usage"
-  | "advanced";
+  | "advanced"
+  | "about";
 
 /** Every Settings page, in the order the panel's nav lists them. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -137,6 +138,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "keyboard",
   "usage",
   "advanced",
+  "about",
 ];
 
 /**
