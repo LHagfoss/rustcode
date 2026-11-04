@@ -226,3 +226,29 @@ describe("the running turn", () => {
     expect("group" in first && first.group).toMatchObject({ count: 4, failed: 1 });
   });
 });
+
+describe("what a finished turn keeps in view", () => {
+  test("subagents and started threads stay out of the fold", () => {
+    const tool = (id: string, title: string, toolName?: string): TranscriptItem => ({
+      kind: "tool",
+      id,
+      title,
+      toolName,
+      status: "completed",
+      diffs: [],
+    });
+    const rows = foldTurns(
+      [
+        { kind: "user", id: "u", text: "go" },
+        tool("r", "Read a.ts"),
+        tool("a", "Agent", "Agent"),
+        tool("s", "start_session"),
+        { kind: "turnEnd", id: "e", outcome: "completed" },
+      ],
+      false,
+      new Set(),
+    );
+    const keys = rows.flatMap((r) => ("item" in r ? [r.item.id] : []));
+    expect(keys).toEqual(["u", "a", "s", "e"]);
+  });
+});

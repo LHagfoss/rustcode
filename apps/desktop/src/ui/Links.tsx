@@ -22,6 +22,7 @@ import { useEffect } from "react";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import { isActive, LINK_LABEL, type Link, type LinkState } from "../state/orchestration";
 import { selectThread, setView, useApp } from "../state/store";
+import { HarnessIcon } from "./HarnessIcon";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const ICON: Record<LinkState, typeof Clock> = {
@@ -55,6 +56,7 @@ function LinkChipRow({ link }: { link: Link }) {
   return (
     <span className="elevated flex h-[28px] min-w-0 shrink items-center gap-1.5 rounded-full pr-1.5 pl-2.5 text-callout rc-in">
       <LinkStateIcon state={state} />
+      {link.harness && <HarnessIcon id={link.harness} size={12} />}
       <Tooltip label={link.message.length > 300 ? `${link.message.slice(0, 300)}…` : link.message}>
         <button
           type="button"
@@ -86,6 +88,7 @@ function LinkMenuRow({ link }: { link: Link }) {
   return (
     <div className="flex w-full items-center gap-2 rounded-lg px-3 py-[7px] hover:bg-fill">
       <LinkStateIcon state={state} />
+      {link.harness && <HarnessIcon id={link.harness} size={12} />}
       <button
         type="button"
         onClick={() => selectThread(link.target)}

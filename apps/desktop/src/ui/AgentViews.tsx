@@ -4,12 +4,16 @@
 // agents work. RustCode's own agents (`spawn_agent`) take the same row, fed
 // by `_rustcode/agents`.
 
-import { ChevronRight, CircleCheck, CircleX } from "lucide-react";
+import { Bot, ChevronRight, CircleCheck, CircleX } from "lucide-react";
 import { HoverCard } from "radix-ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
-import { agentHistory, useApp } from "../state/store";
+import { modelName } from "../acp/types";
+import { stateOf } from "../state/host";
+import { isActive, LINK_LABEL, type Link, type LinkState } from "../state/orchestration";
+import { agentHistory, selectThread, useApp } from "../state/store";
 import { formatDuration, stepLabel, subagentOf, type TranscriptItem } from "../state/thread";
+import { HarnessIcon } from "./HarnessIcon";
 import { Markdown } from "./Markdown";
 import { cx, Orb, Skeleton, Spinner } from "./primitives";
 
@@ -58,6 +62,101 @@ function useAgentSteps(threadId: string, agentId: number | undefined, active: bo
   return { steps, loading };
 }
 
+type AgentState = "working" | "needs" | "done" | "failed" | "stopped";
+
+const AGENT_DOT: Record<AgentState, string> = {
+  working: "bg-accent rc-breathe",
+  needs: "bg-warning",
+  done: "bg-success",
+  failed: "bg-danger",
+  stopped: "bg-fg-faint",
+};
+
+const LINK_AGENT_STATE: Record<LinkState, AgentState> = {
+  queued: "working",
+  working: "working",
+  needs_user: "needs",
+  done: "done",
+  failed: "failed",
+  cancelled: "stopped",
+  interrupted: "stopped",
+};
+
+/** Who is doing the work, and a dot for how it goes. The dot pops in when the state changes. */
+function AgentAvatar({ harness, state }: { harness?: string; state: AgentState }) {
+  return (
+    <span className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full bg-fill">
+      {harness ? <HarnessIcon id={harness} size={11} /> : <Bot size={11} className="text-fg-muted" />}
+      <span
+        key={state}
+        aria-hidden
+        className={cx(
+          "-right-0.5 -bottom-0.5 absolute size-2 rounded-full ring-2 ring-bg",
+          AGENT_DOT[state],
+          state !== "working" && "rc-dot-in",
+        )}
+      />
+    </span>
+  );
+}
+
+/** `Claude Code · haiku`: what runs the agent, on the row itself. */
+function useAgentMeta(harness: string | undefined, model: string | undefined): string {
+  const name = useApp((s) =>
+    harness ? (s.harnesses?.harnesses.find((h) => h.id === harness)?.name ?? harness) : undefined,
+  );
+  return [name, modelName(model)].filter(Boolean).join(" · ");
+}
+
+/**
+ * A thread this one started (`start_session`), as a subagent: which harness and model it runs on,
+ * how it goes, and for how long. Clicking opens it.
+ */
+export function ThreadAgentRow({ link, model }: { link: Link; model?: string }) {
+  const state = useApp((s) => stateOf(s, link));
+  const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
+  const active = isActive(state);
+  const now = useNow(active);
+  const meta = useAgentMeta(link.harness ?? session?.harness, session?.model ?? model);
+  const end = active ? now : session?.updatedAt;
+  const elapsed = end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
+  const agent = LINK_AGENT_STATE[state];
+  return (
+    <button
+      type="button"
+      aria-label={`Open ${link.targetTitle}`}
+      onClick={() => selectThread(link.target)}
+      className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+    >
+      <AgentAvatar harness={link.harness ?? session?.harness} state={agent} />
+      <span className="min-w-0 shrink truncate font-medium text-callout text-fg">
+        {session?.title || link.targetTitle}
+      </span>
+      {meta && <span className="min-w-0 max-w-[40%] shrink truncate text-caption text-fg-faint">{meta}</span>}
+      <span
+        className={cx(
+          "shrink-0 text-caption tabular",
+          agent === "working"
+            ? "text-accent"
+            : agent === "failed"
+              ? "text-danger"
+              : agent === "needs"
+                ? "text-warning"
+                : agent === "done"
+                  ? "text-success"
+                  : "text-fg-faint",
+        )}
+      >
+        {LINK_LABEL[state]}
+        {elapsed !== undefined && (
+          <span className="text-fg-faint"> · {formatDuration(Math.floor(elapsed / 1000) * 1000)}</span>
+        )}
+      </span>
+      <ChevronRight size={11} className="shrink-0 text-fg-faint opacity-0 group-hover:opacity-100" />
+    </button>
+  );
+}
+
 /**
  * A subagent, drawn as one line: what it was asked, and while it works the
  * step it is on; once done, how many steps it took and how long. Its steps
@@ -100,6 +199,15 @@ export function SubagentRow({
   const count = steps.length ? `${steps.length} step${steps.length === 1 ? "" : "s"}` : undefined;
   const done = [count, elapsed].filter(Boolean).join(" · ");
   const name = info?.agentType && info.agentType !== "default" ? info.agentType : agent.name;
+  // A subagent runs on its parent's harness, and on its model unless the call chose another.
+  const parentHarness = useApp((s) => s.threads[threadId]?.harness?.id);
+  const parentModel = useApp((s) => s.sessions.find((x) => x.id === threadId)?.model);
+  const asked =
+    item.input && typeof item.input === "object" && !Array.isArray(item.input) ? item.input.model : undefined;
+  const meta = useAgentMeta(
+    parentHarness,
+    info?.model ?? (typeof asked === "string" && asked ? asked : parentModel),
+  );
   return (
     <div>
       <button
@@ -109,22 +217,22 @@ export function SubagentRow({
         className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
-          {running ? (
-            <Orb />
-          ) : failed ? (
-            <CircleX size={13} className="text-danger" />
-          ) : (
-            <CircleCheck size={13} className="text-success rc-dot-in" />
-          )}
+          <AgentAvatar harness={parentHarness} state={running ? "working" : failed ? "failed" : "done"} />
         </span>
         <span className="shrink-0 font-medium text-callout text-fg">{name}</span>
         <span className="min-w-0 shrink truncate text-callout text-fg-muted">{agent.task}</span>
+        {meta && (
+          <span className="min-w-0 max-w-[30%] shrink truncate text-caption text-fg-faint">{meta}</span>
+        )}
         {running ? (
           <span className="min-w-0 max-w-[40%] shrink truncate text-caption text-accent">
             {current ? stepLabel(current) : "Starting"}
           </span>
         ) : (
-          done && <span className="shrink-0 text-caption text-fg-faint tabular">{done}</span>
+          <span className={cx("shrink-0 text-caption tabular", failed ? "text-danger" : "text-success")}>
+            {failed ? "Failed" : "Done"}
+            {done && <span className="text-fg-faint"> · {done}</span>}
+          </span>
         )}
         {(steps.length > 0 || output || agentId !== undefined) && (
           <ChevronRight
@@ -242,6 +350,8 @@ export function SubagentGroupRow({
   );
 }
 
+const FINISHED_PILL_MS = 5000;
+
 /** What one working agent is doing, for the pill's card. */
 interface Working {
   key: string;
@@ -291,7 +401,33 @@ export function AgentPill({ threadId }: { threadId?: string }) {
     return out;
   }, [agents, thread?.items, thread?.running]);
   const now = useNow(working.length > 0);
-  if (!working.length) return null;
+  // Agents leaving the list finished: say so for a moment instead of the pill just going away.
+  const [finished, setFinished] = useState(0);
+  const before = useRef({ threadId, count: working.length });
+  const stopped = thread?.items.findLast((i) => i.kind === "turnEnd");
+  const cancelled = stopped?.kind === "turnEnd" && stopped.outcome === "cancelled";
+  useEffect(() => {
+    const was = before.current;
+    before.current = { threadId, count: working.length };
+    if (was.threadId !== threadId) return setFinished(0);
+    if (working.length > 0) return setFinished(0);
+    if (was.count === 0 || cancelled) return;
+    setFinished(was.count);
+    const t = setTimeout(() => setFinished(0), FINISHED_PILL_MS);
+    return () => clearTimeout(t);
+  }, [threadId, working.length, cancelled]);
+  if (!working.length) {
+    if (!finished) return null;
+    return (
+      <span
+        role="status"
+        className="flex h-[26px] items-center gap-1.5 rounded-full bg-success/10 px-2.5 text-callout text-success rc-in"
+      >
+        <CircleCheck size={13} className="rc-dot-in" />
+        {finished === 1 ? "Agent finished" : `${finished} agents finished`}
+      </span>
+    );
+  }
   return (
     <HoverCard.Root openDelay={80} closeDelay={120}>
       <HoverCard.Trigger asChild>

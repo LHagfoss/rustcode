@@ -4,7 +4,8 @@
 // once it ends, its work (thoughts, tool calls, subagents, the replies written
 // between steps) folds under one "Worked for 1m 3s" divider above the final
 // answer. What stays visible: the message you sent, the final answer,
-// warnings and errors, and the turn's footer (time, Changes). Pure, so the
+// subagents and threads it started, notices, and the turn's footer (time,
+// Changes). Pure, so the
 // transcript and the tests share it; one pass over the items.
 
 import { subagentOf, type TranscriptItem } from "./thread";
@@ -48,7 +49,9 @@ function staysVisible(item: TranscriptItem): boolean {
     item.kind === "turnEnd" ||
     item.kind === "handoff" ||
     item.kind === "switch" ||
-    item.kind === "notice"
+    item.kind === "notice" ||
+    // Who was sent off, and how it went: the row keeps saying after the turn ends.
+    (item.kind === "tool" && (!!subagentOf(item) || orchestrationTool(item.title) === "start_session"))
   );
 }
 
@@ -193,6 +196,7 @@ function groupable(row: FoldRow): row is GroupRow {
     item.kind === "tool" &&
     item.title !== "spawn_agent" &&
     !subagentOf(item) &&
+    orchestrationTool(item.title) !== "start_session" &&
     (item.status === "completed" || item.status === "failed")
   );
 }
