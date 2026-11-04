@@ -19,8 +19,8 @@ import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { askConfirm, request, toast, useApp } from "../state/store";
-import { cx, inputClass, Pill, Switch, Tooltip } from "./primitives";
-import { Group, Loading, Row, useEngineData } from "./settingsKit";
+import { cx, Switch, Tooltip } from "./primitives";
+import { Action, fieldClass, Group, Loading, Row, SectionTitle, useEngineData } from "./settingsKit";
 
 interface Skill {
   name: string;
@@ -117,9 +117,9 @@ export function CapabilitiesPage() {
   const q = filter.trim().toLowerCase();
   return (
     <>
-      <div className="mb-4 flex items-center gap-2">
-        <label className={cx(inputClass, "flex flex-1 items-center gap-2")}>
-          <Search size={13} className="shrink-0 text-fg-faint" />
+      <div className="mb-6 flex items-center gap-2">
+        <label className={cx(fieldClass, "flex flex-1 items-center gap-2")}>
+          <Search size={14} className="shrink-0 text-fg-faint" />
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -128,9 +128,9 @@ export function CapabilitiesPage() {
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-fg-faint"
           />
         </label>
-        <Pill onClick={() => void reload()} aria-label="Refresh">
+        <Action onClick={() => void reload()} aria-label="Refresh">
           <RefreshCw size={12} /> Refresh
-        </Pill>
+        </Action>
       </div>
       <McpSection data={data} filter={q} run={run} />
       <SkillsSection data={data} filter={q} run={run} />
@@ -184,19 +184,19 @@ function McpSection({
         <div className="flex items-center gap-1">
           {data.configPath && hasShell() && (
             <Tooltip label={`Edit ${data.configPath}`}>
-              <Pill
+              <Action
                 quiet
                 size="sm"
                 aria-label="Edit the config file"
                 onClick={() => openPath(data.configPath!)}
               >
                 <SquarePen size={12} /> Edit config
-              </Pill>
+              </Action>
             </Tooltip>
           )}
-          <Pill quiet size="sm" onClick={() => setAdding(!adding)} aria-expanded={adding}>
+          <Action quiet size="sm" onClick={() => setAdding(!adding)} aria-expanded={adding}>
             <Plus size={12} /> Add server
-          </Pill>
+          </Action>
         </div>
       }
       footer={data.configPath ? `Saved in ${data.configPath}` : undefined}
@@ -257,7 +257,7 @@ function McpRow({
           />
           <StatusDot connection={s.connection} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-body">{s.name}</span>
+            <span className="block truncate font-medium text-body">{s.name}</span>
             <span className={cx("block truncate text-caption", s.error ? "text-danger" : "text-fg-muted")}>
               {s.error ??
                 `${CONNECTION[s.connection] ?? s.connection} · ${s.transport}${
@@ -305,7 +305,7 @@ function McpRow({
             </pre>
           </div>
           {s.scope === "user" && (
-            <Pill
+            <Action
               danger
               className="self-start"
               onClick={() =>
@@ -319,7 +319,7 @@ function McpRow({
               }
             >
               <Trash2 size={12} /> Remove
-            </Pill>
+            </Action>
           )}
         </div>
       )}
@@ -355,21 +355,21 @@ function AddServer({
     if (ok) onDone();
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 p-3.5">
+    <div className="rc-expand flex flex-col gap-2 px-4 py-3.5">
       <input
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="Name"
         aria-label="Server name"
-        className={inputClass}
+        className={fieldClass}
       />
       <input
         value={target}
         onChange={(e) => setTarget(e.target.value)}
         placeholder="Command (npx some-server) or https:// URL"
         aria-label="Server command or URL"
-        className={cx(inputClass, "font-mono")}
+        className={cx(fieldClass, "font-mono")}
       />
       <textarea
         value={env}
@@ -377,13 +377,13 @@ function AddServer({
         rows={2}
         placeholder={isHttp ? "Headers, one per line (Name: value)" : "Environment, one per line (KEY=value)"}
         aria-label={isHttp ? "Headers" : "Environment"}
-        className={cx(inputClass, "h-auto resize-none py-1.5 font-mono")}
+        className={cx(fieldClass, "h-auto resize-none py-1.5 font-mono")}
       />
       <div className="flex justify-end gap-2">
-        <Pill onClick={onDone}>Cancel</Pill>
-        <Pill prominent disabled={!name.trim() || !target.trim() || busy} onClick={() => void add()}>
+        <Action onClick={onDone}>Cancel</Action>
+        <Action prominent disabled={!name.trim() || !target.trim() || busy} onClick={() => void add()}>
           Add Server
-        </Pill>
+        </Action>
       </div>
     </div>
   );
@@ -410,16 +410,16 @@ function SkillsSection({
   }, [data.skills, filter]);
   return (
     <>
-      <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
-        <h3 className="flex-1 font-semibold text-callout text-fg-muted">
-          Skills · {on} of {data.skills.length} on
-        </h3>
-        {hasShell() && (
-          <Pill quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
-            <FilePlus2 size={12} /> New skill
-          </Pill>
-        )}
-      </div>
+      <SectionTitle
+        title={`Skills · ${on} of ${data.skills.length} on`}
+        action={
+          hasShell() && (
+            <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
+              <FilePlus2 size={12} /> New skill
+            </Action>
+          )
+        }
+      />
       {creating && <NewSkill onDone={() => setCreating(false)} />}
       {groups.length === 0 && (
         <Group>
@@ -429,7 +429,7 @@ function SkillsSection({
       {groups.map(([source, skills]) => (
         <Group
           key={source}
-          title={<span className="font-medium text-fg-faint">{sourceOf(source).label}</span>}
+          title={<span className="font-medium text-body text-fg-muted">{sourceOf(source).label}</span>}
         >
           {skills.map((s) => (
             <Row
@@ -506,7 +506,7 @@ function NewSkill({ onDone }: { onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand mb-6 flex flex-col gap-2 rounded-lg bg-surface p-3.5">
+    <div className="rc-expand mb-8 flex flex-col gap-2.5 rounded-xl border border-border-strong bg-surface-2/40 p-4">
       <input
         autoFocus
         value={name}
@@ -514,30 +514,30 @@ function NewSkill({ onDone }: { onDone: () => void }) {
         onKeyDown={(e) => e.key === "Enter" && valid && void create()}
         placeholder="skill-name"
         aria-label="Skill name"
-        className={cx(inputClass, "font-mono")}
+        className={cx(fieldClass, "font-mono")}
       />
       <div className="flex items-center gap-2 text-callout text-fg-muted">
         <span>In</span>
         {(["user", "project"] as const).map((v) => (
-          <Pill
+          <Action
             key={v}
             quiet={scope !== v}
             size="sm"
             aria-pressed={scope === v}
             disabled={v === "project" && !cwd}
             onClick={() => setScope(v)}
-            className={scope === v ? "bg-fill-strong text-fg" : undefined}
+            className={scope === v ? "bg-surface-3 text-fg" : undefined}
           >
             {v === "user"
               ? "~/.config/rustcode/skills"
               : `${cwd ? cwd.split("/").pop() : "project"}/.rustcode/skills`}
-          </Pill>
+          </Action>
         ))}
         <span className="flex-1" />
-        <Pill onClick={onDone}>Cancel</Pill>
-        <Pill prominent disabled={!valid || busy} onClick={() => void create()}>
+        <Action onClick={onDone}>Cancel</Action>
+        <Action prominent disabled={!valid || busy} onClick={() => void create()}>
           Create
-        </Pill>
+        </Action>
       </div>
       <p className="m-0 text-caption text-fg-faint">
         Lowercase letters, digits and dashes. Creates SKILL.md from a template and opens it.

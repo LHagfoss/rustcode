@@ -134,10 +134,10 @@ function ShortcutRow({
         }
         onClick={onToggle}
         className={cx(
-          "flex h-6 min-w-16 items-center justify-center rounded-md border px-1.5",
+          "flex h-8 min-w-16 items-center justify-center gap-1.5 rounded-lg border px-2.5",
           recording
             ? "border-accent bg-surface-3 text-fg"
-            : "border-border text-fg-muted hover:bg-fill-subtle hover:text-fg",
+            : "border-border-strong bg-surface-2/60 text-fg-muted hover:bg-surface-2 hover:text-fg",
         )}
       >
         {recording ? (

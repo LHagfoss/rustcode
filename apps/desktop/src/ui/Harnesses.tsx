@@ -28,7 +28,8 @@ import {
 } from "../state/store";
 import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
-import { cx, Pill, Select, type SelectOption, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
+import { cx, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
+import { Action, Select, type SelectOption } from "./settingsKit";
 
 function StatusDot({ tone }: { tone: "ok" | "warn" | "off" }) {
   return (
@@ -48,9 +49,9 @@ function SignIn({ harness }: { harness: Harness }) {
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Pill prominent={harness.auth === "needs_login"} disabled={!harness.installed}>
+        <Action prominent={harness.auth === "needs_login"} disabled={!harness.installed}>
           Sign in
-        </Pill>
+        </Action>
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
@@ -67,10 +68,10 @@ function SignIn({ harness }: { harness: Harness }) {
             <CopyButton text={line} />
           </div>
           {canOpenTerminal() && (
-            <Pill onClick={() => void openInTerminal(command)} className="self-start">
+            <Action onClick={() => void openInTerminal(command)} className="self-start">
               <SquareTerminal size={13} />
               Open in Terminal
-            </Pill>
+            </Action>
           )}
         </Popover.Content>
       </Popover.Portal>
@@ -123,7 +124,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   // Sign in stays out of the way once the harness is known to be signed in.
   const signIn = !local && harness.installed && harness.auth !== "ok" && !result?.ok;
   return (
-    <div className="flex flex-col gap-2 px-3.5 py-3">
+    <div className="flex flex-col gap-2 px-4 py-3">
       <div className="flex items-center gap-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-fill">
           <HarnessIcon id={harness.id} name={harness.name} size={17} />
@@ -146,10 +147,10 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         </div>
         {signIn && <SignIn harness={harness} />}
         {harness.installed && harness.enabled && (
-          <Pill onClick={() => void check()} disabled={checking || harness.auth === "needs_login"}>
+          <Action onClick={() => void check()} disabled={checking || harness.auth === "needs_login"}>
             {checking && <Spinner size={10} />}
             Check
-          </Pill>
+          </Action>
         )}
         <Tooltip
           label={
@@ -192,9 +193,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           {result?.ok && <Check size={13} className="mt-[3px] shrink-0" />}
           <span className="min-w-0 flex-1">{result ? result.text : harness.error}</span>
           {!result?.ok && (
-            <Pill size="sm" quiet disabled={checking} onClick={() => void recheck()}>
+            <Action size="sm" quiet disabled={checking} onClick={() => void recheck()}>
               {checking ? <Spinner size={11} /> : <RefreshCw size={12} />} Check again
-            </Pill>
+            </Action>
           )}
         </div>
       )}
@@ -260,13 +261,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
 /** Where the cards will be: each one's icon, name and status line, and its switch. */
 export function HarnessListSkeleton({ rows = 3 }: { rows?: number }) {
   return (
-    <div
-      role="status"
-      aria-label="Loading"
-      className="divide-y divide-border overflow-hidden rounded-lg bg-fill-subtle"
-    >
+    <div role="status" aria-label="Loading" className="divide-y divide-border">
       {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="flex items-center gap-3 px-3.5 py-3">
+        <div key={i} className="flex items-center gap-3 px-4 py-3">
           <Skeleton className="size-8 shrink-0 rounded-lg" />
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
             <Skeleton className="h-3" style={{ width: `${[34, 46, 30][i % 3]}%` }} />
@@ -281,7 +278,7 @@ export function HarnessListSkeleton({ rows = 3 }: { rows?: number }) {
 
 export function HarnessList({ snapshot }: { snapshot: HarnessSnapshot }) {
   return (
-    <div className="divide-y divide-border overflow-hidden rounded-lg bg-fill-subtle">
+    <div className="divide-y divide-border">
       {orderHarnesses(snapshot.harnesses).map((h) => (
         <HarnessCard key={h.id} harness={h} />
       ))}
@@ -300,7 +297,7 @@ function SelectRow({
   disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-3.5 py-[11px]">
+    <div className="flex items-center justify-between gap-4 px-4 py-3">
       <span className="text-body">{label}</span>
       <Select label={label} {...select} />
     </div>
@@ -352,7 +349,7 @@ export function DefaultsForm({
   };
   return (
     <div className="flex flex-col">
-      <div className="divide-y divide-border overflow-hidden rounded-lg bg-fill-subtle">
+      <div className="divide-y divide-border">
         <SelectRow
           label="Harness"
           value={value.harness}
@@ -382,7 +379,7 @@ export function DefaultsForm({
             ...models.map((m) => ({ value: m.value, label: m.label })),
           ]}
         />
-        <div className="flex items-center justify-between gap-4 px-3.5 py-[11px]">
+        <div className="flex items-center justify-between gap-4 px-4 py-3">
           <span className="text-body">Effort</span>
           {harness && !harness.capabilities.effort ? (
             <span className="text-callout text-fg-faint">{harness.name} has no effort setting</span>
@@ -401,7 +398,7 @@ export function DefaultsForm({
           )}
         </div>
       </div>
-      {problem && <p className="mt-2 px-1 text-warning text-callout">{problem}</p>}
+      {problem && <p className="mt-2 px-3 text-caption text-warning sm:px-4">{problem}</p>}
     </div>
   );
 }

@@ -185,13 +185,13 @@
   --rc-shadow-soft: color-mix(in srgb, var(--rc-shadow-color) 50%, transparent);
   --rc-shadow-1: 0 1px 1px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);
   --rc-shadow-2: 0 2px 8px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);
-  --rc-radius-xs: 4px;
-  --rc-radius-sm: 6px;
-  --rc-radius-md: 6px;
-  --rc-radius-lg: 8px;
-  --rc-radius-xl: 12px;
-  --rc-radius-2xl: 16px;
-  --rc-radius-3xl: 20px;
+  --rc-radius-xs: 6px;
+  --rc-radius-sm: 8px;
+  --rc-radius-md: 10px;
+  --rc-radius-lg: 12px;
+  --rc-radius-xl: 16px;
+  --rc-radius-2xl: 20px;
+  --rc-radius-3xl: 26px;
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md). */
@@ -210,13 +210,13 @@
 }
 
 :root[data-radius="round"] {
-  --rc-radius-xs: 6px;
-  --rc-radius-sm: 8px;
-  --rc-radius-md: 10px;
+  --rc-radius-xs: 8px;
+  --rc-radius-sm: 10px;
+  --rc-radius-md: 12px;
   --rc-radius-lg: 16px;
   --rc-radius-xl: 20px;
   --rc-radius-2xl: 26px;
-  --rc-radius-3xl: 30px;
+  --rc-radius-3xl: 32px;
 }
 
 @layer base {
