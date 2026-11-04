@@ -34,6 +34,7 @@ import {
   setView,
   statusOf,
   useApp,
+  useShortcutHint,
   worktreeOf,
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
@@ -157,6 +158,9 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
   const terminalOpen = useApp((s) => s.terminalOpen);
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const projectCwd = useApp((s) => s.projectCwd);
+  const folderKey = useShortcutHint("thread-folder");
+  const terminalKey = useShortcutHint("toggle-terminal");
+  const panelKey = useShortcutHint("toggle-panel");
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
   const title = thread ? (thread.title ?? listed ?? "New thread") : "New thread";
   const cwd = thread?.cwd ?? projectCwd;
@@ -169,7 +173,9 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
           {cwd && (
             <Tooltip
               label={
-                thread?.running ? `${cwd} · stop the turn to change folder` : `${cwd} · change folder (⌘O)`
+                thread?.running
+                  ? `${cwd} · stop the turn to change folder`
+                  : `${cwd} · change folder (${folderKey})`
               }
             >
               <button
@@ -211,7 +217,7 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
             )}
             <ClusterButton
               label="Terminal"
-              tooltip="Terminal (⌘J)"
+              tooltip={`Terminal (${terminalKey})`}
               on={terminalOpen}
               onClick={() => setTerminalOpen(!terminalOpen)}
             >
@@ -227,7 +233,7 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
             </ClusterButton>
             <ClusterButton
               label="Changes"
-              tooltip="Changes in the working tree (⌘⌥B toggles the panel)"
+              tooltip={`Changes in the working tree (${panelKey} toggles the panel)`}
               on={panel === "changes"}
               onClick={() => setPanel("changes")}
             >

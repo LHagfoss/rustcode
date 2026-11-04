@@ -58,6 +58,15 @@ import {
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import {
+  APP_COMMANDS,
+  bindingOf,
+  commandFor,
+  commandHint,
+  type KeyEventLike,
+  parseOverrides,
+  SHORTCUTS_KEY,
+} from "../lib/keys";
 import { dismissOverlays } from "../lib/overlays";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
@@ -261,6 +270,8 @@ export interface AppState {
   roundedFont: boolean;
   /** A streaming reply's new words fade in as the model writes them. */
   animateStreaming: boolean;
+  /** Shortcuts the user changed, by command id (lib/keys.ts holds the defaults). */
+  shortcuts: Record<string, string>;
   orchestrationPending: boolean;
   /** Links between threads, fan-outs and grants, kept in app storage. */
   links: LinkBook;
@@ -330,6 +341,8 @@ const STORAGE = {
   harnessChoices: "rustcode.harnessChoices",
   /** Each harness's plan windows, so the composer's meter is there on launch. */
   planCache: "rustcode.planCache",
+  /** Bindings the user changed, by command id; the table in lib/keys.ts holds the rest. */
+  shortcuts: SHORTCUTS_KEY,
 };
 
 /**
@@ -399,6 +412,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
+  shortcuts: parseOverrides(stored(STORAGE.shortcuts)),
   orchestrationPending: false,
   links: loadBook(),
   grant: null,
@@ -2206,6 +2220,45 @@ export function setResumeAfterRestart(on: boolean) {
 export function setRoundedFont(on: boolean) {
   set({ roundedFont: on });
   store(STORAGE.roundedFont, on ? "1" : "0");
+}
+
+/** A command's shortcut as the app shows it ("⌘B"), or "" when it has none. */
+export function shortcutHint(id: string): string {
+  const s = get();
+  return commandHint(
+    bindingOf(s.shortcuts, id),
+    APP_COMMANDS.find((c) => c.id === id),
+  );
+}
+
+/** The command a keydown runs, if any (state/shortcuts.ts runs it). */
+export function shortcutFor(event: KeyEventLike): string | null {
+  return commandFor(get().shortcuts, event);
+}
+
+/** What a command is bound to now, for a component that must follow a remap. */
+export function useShortcutHint(id: string): string {
+  return useApp((s) =>
+    commandHint(
+      bindingOf(s.shortcuts, id),
+      APP_COMMANDS.find((c) => c.id === id),
+    ),
+  );
+}
+
+/** Rebinds a command; the caller has already checked the binding (lib/keys.ts). */
+export function setShortcut(id: string, binding: string) {
+  const next = { ...get().shortcuts, [id]: binding };
+  set({ shortcuts: next });
+  store(STORAGE.shortcuts, JSON.stringify(next));
+}
+
+/** Drops a command's override: its default binding is back. */
+export function resetShortcut(id: string) {
+  const next = { ...get().shortcuts };
+  delete next[id];
+  set({ shortcuts: next });
+  store(STORAGE.shortcuts, JSON.stringify(next));
 }
 
 export function setAnimateStreaming(on: boolean) {

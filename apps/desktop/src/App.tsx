@@ -1,22 +1,9 @@
 import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect } from "react";
 import { applyTheme, resolveTheme } from "./lib/themes";
-import { restoreZoom, stepZoom } from "./lib/zoom";
-import { chooseFolder } from "./state/folders";
-import {
-  cancel,
-  closeConfirm,
-  openSettings,
-  setOnboarding,
-  setSwitcher,
-  setTerminalOpen,
-  setView,
-  startNewThread,
-  toast,
-  toggleRightPanel,
-  toggleSidebar,
-  useApp,
-} from "./state/store";
+import { restoreZoom } from "./lib/zoom";
+import { runShortcut } from "./state/shortcuts";
+import { closeConfirm, openSettings, setOnboarding, setView, shortcutFor, useApp } from "./state/store";
 import { startUpdateChecks } from "./state/updates";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
@@ -73,39 +60,16 @@ function useTheme() {
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
+      // One table, one matcher (lib/keys.ts): Settings › Keyboard rebinds it and
+      // this handler needs no change. A command the panel can change runs here;
+      // the transcript matches "find in thread" itself.
+      const command = shortcutFor(e);
+      if (command && runShortcut(command)) {
+        e.preventDefault();
+        return;
+      }
       const s = useApp.getState();
-      if (mod && !e.altKey && (e.key === "=" || e.key === "+" || e.key === "-" || e.key === "0")) {
-        // Text zoom: ⌘+ / ⌘= larger, ⌘- smaller, ⌘0 actual size (also with focus in the composer).
-        e.preventDefault();
-        const direction = e.key === "0" ? 0 : e.key === "-" ? -1 : 1;
-        void stepZoom(direction).then((level) => toast(`Zoom ${Math.round(level * 100)}%`, "info"));
-      } else if (mod && !e.shiftKey && e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        startNewThread();
-      } else if (mod && e.key.toLowerCase() === "o") {
-        // ⌘O: the folder of this thread (a new one starts there, an open one moves); ⌘⇧O: the default.
-        e.preventDefault();
-        void chooseFolder(e.shiftKey);
-      } else if (mod && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setSwitcher(!s.switcherOpen);
-      } else if (mod && e.key === ",") {
-        e.preventDefault();
-        openSettings(s.settings ? null : "general");
-      } else if (mod && e.altKey && e.code === "KeyB") {
-        e.preventDefault();
-        toggleRightPanel();
-      } else if (mod && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        toggleSidebar();
-      } else if (mod && e.key.toLowerCase() === "j") {
-        e.preventDefault();
-        setTerminalOpen(!s.terminalOpen);
-      } else if (mod && e.key === ".") {
-        e.preventDefault();
-        void cancel();
-      } else if (
+      if (
         e.key === "Escape" &&
         !s.settings &&
         s.view.kind !== "chat" &&

@@ -15,6 +15,7 @@ import {
   statusOf,
   toggleSidebar,
   useApp,
+  useShortcutHint,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { Cluster, ClusterButton, cx, Pill, Tooltip } from "./primitives";
@@ -31,6 +32,8 @@ const COLUMNS: { status: ThreadStatus; hint: string }[] = [
 /** A header for views that replace the chat: clear of the traffic lights when the sidebar hides. */
 export function ViewHeader({ title, children }: { title: React.ReactNode; children?: React.ReactNode }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const toggleKey = useShortcutHint("toggle-sidebar");
+  const newKey = useShortcutHint("new-thread");
   const lightsInset = useLightsInset();
   return (
     <header
@@ -43,10 +46,14 @@ export function ViewHeader({ title, children }: { title: React.ReactNode; childr
     >
       {sidebarHidden && (
         <Cluster>
-          <ClusterButton label="Show sidebar" tooltip="Show sidebar (⌘B)" onClick={toggleSidebar}>
+          <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
             <PanelLeft size={14} />
           </ClusterButton>
-          <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
+          <ClusterButton
+            label="New thread"
+            tooltip={`New thread (${newKey})`}
+            onClick={() => startNewThread()}
+          >
             <SquarePen size={14} />
           </ClusterButton>
         </Cluster>

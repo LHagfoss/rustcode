@@ -200,10 +200,27 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   by Shiki with Xcode's colours.
 
 Keys: ⌘N new thread, ⌘O the folder of the thread in front (a new thread starts there; an open one moves there through `_rustcode/session/move`, closed and reopened; also a click on the header's path), ⌘⇧O the default folder for new threads (also Settings › General; picking a folder for one new thread no longer changes it), ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⌥B right panel, ⌘F find
-in thread, ⌘J terminal, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
+in thread, ⌘J terminal, ⌘+ / ⌘- / ⌘0 text zoom, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the
 command token, Esc clears the draft and then stops the
 turn (⌘. stops it too), 1–9 answer the visible approval or question.
+
+Every key above except the composer's is a command in one table
+(`src/lib/keys.ts`) with an id, a label and a default binding, and Settings ›
+Keyboard rebinds it: click the key, press the new combination, Esc cancels;
+a row whose binding differs from its default offers a reset. A binding needs
+⌘ (or ⌥) unless it is a function key; ⌘Q, ⌘W, ⌘H, ⌘M and ⌘Tab are refused
+because macOS keeps them, and so are the editing keys (⌘C, ⌘V, ⌘X, ⌘A, ⌘Z,
+⌘⇧Z) that the window's menu answers before the page sees the keydown. A key
+another command already answers is refused with its name, so two commands
+never share one. Only the overrides are kept, as `rustcode.shortcuts`
+(`{ "command-id": "mod+alt+s" }`) in localStorage: an unknown id, a corrupt
+value or a binding equal to the default is dropped, and the rest of the table
+stays the default it ships with. `state/shortcuts.ts` runs a matched command;
+the transcript matches "find in thread" against the same table. The app sets
+no menu of its own (`src-tauri/src/lib.rs`), so a remap has no native
+accelerator to fight; ⌘R (reload the view, `ui/Recover.tsx`) and the
+composer's keys stay outside the table.
 
 ## Features
 

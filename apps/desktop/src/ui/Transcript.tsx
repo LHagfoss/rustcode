@@ -8,7 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
-import { RESUME_TEXT, useApp } from "../state/store";
+import { RESUME_TEXT, shortcutFor, useApp } from "../state/store";
 import {
   splitSubagentSteps,
   subagentOf,
@@ -447,11 +447,11 @@ export function Transcript({
   }, [rows, find?.query]);
   const currentRow = find && matches.length ? matches[Math.min(find.index, matches.length - 1)] : undefined;
 
-  // ⌘F opens find in this thread; Esc closes it.
+  // Find in this thread, on the key Settings › Keyboard binds to it; Esc closes it.
   useEffect(() => {
     if (peek) return;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+      if (shortcutFor(e) === "find-in-thread") {
         e.preventDefault();
         setFind((f) => f ?? { query: "", index: 0 });
         requestAnimationFrame(() => findField.current?.select());

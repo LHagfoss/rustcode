@@ -7,7 +7,7 @@
 
 import { X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { type AppState, setPanel, showPanel, useApp } from "../state/store";
+import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
 import { cx, Segments, Tooltip } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
@@ -34,6 +34,7 @@ function storedWidth(): number {
 
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
+  const panelKey = useShortcutHint("toggle-panel");
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const peekOn = useApp((s) => !!s.peekId);
   // What the frame shows: the open panel, or while closing the one that was.
@@ -99,7 +100,7 @@ export function RightPanel() {
               <span className="px-1 font-semibold text-body">{tabs[0]?.label}</span>
             )}
             <span className="flex-1" data-tauri-drag-region />
-            <Tooltip label="Close (⌘⌥B)">
+            <Tooltip label={`Close (${panelKey})`}>
               <button
                 type="button"
                 aria-label="Close panel"
