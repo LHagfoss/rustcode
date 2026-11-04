@@ -1035,7 +1035,7 @@ export function startNewThread(cwd?: string) {
   });
 }
 
-/** The folder of the new thread being written (⌘O there, the tray's folder menu). */
+/** The folder of the new thread being written (⌘O there, the composer footer's folder menu). */
 export function setProjectCwd(cwd: string) {
   set({ projectCwd: cwd });
 }

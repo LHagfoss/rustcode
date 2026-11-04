@@ -207,11 +207,13 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 
 ## Features
 
-- **Composer.** A compact rounded box (the field, then a row: **+** for
-  attaching and new threads, the plan meter, the context ring, the model
-  pill and send/queue/stop) with a lighter tray tucked under it: the
-  project folder, *Worktree* (new threads), *Files*, agents working, and the
-  harness only when it is not the default one. A slash command from `available_commands_update` that
+- **Composer.** One glass card: the field, then a single footer row inside
+  it, **+** (attaching and new threads), the project folder, *Worktree*
+  (new threads) and the branch, the permissions mode, the plan meter, the
+  context ring, the model pill, agents working, and send/queue/stop. A
+  narrow window shortens the labels and then drops them (the permission
+  label, the branch chip, the agents pill); controls stay. A slash command
+  from `available_commands_update` that
   takes arguments becomes a token in front of the field (picked from the
   popup or typed as `/name `). Commands the engine marks for the client
   (`_meta.rustcode.action`) never go out as a prompt: `new_session`
@@ -326,9 +328,9 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   two buttons, *Decline* and *Allow* (prominent). The rarer answers, the
   engine's always-allow and always-reject options and, when a turn waits
   on several, *Allow all N waiting*, sit in *More*. Keys
-  1–9 still pick in the engine's order. The composer is a light frost
-  (`--rc-composer-bg`: white glass in light mode, a pale tint of the text
-  in dark), solid under Reduce transparency. Queued messages are rows above the composer that can be
+  1–9 still pick in the engine's order. The composer is glass
+  (`--rc-composer-bg`: 80% of the raised surface, 88% on focus; blur 12px,
+  16px in dark), solid under Reduce transparency. Queued messages are rows above the composer that can be
   edited in place, moved up, sent now as a steer, or removed. A steer
   carries text only, so a message with images (or links, or a command
   token) queues whole for the next turn, with a toast saying so; its row
@@ -362,7 +364,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   Threads another thread started nest under it.
   Settings is the gear in the top row, after Hide sidebar and New thread
   (in the header's cluster while the sidebar is hidden); the project is
-  chosen per thread in the composer's tray.
+  chosen per thread in the composer's footer.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
   lights' line, 14 px past the zoom button (x 92; the button ends at x 78),
   the gap the SwiftUI app leaves (`src/ui/Titlebar.tsx`); in full screen,
@@ -429,7 +431,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   re-renders only when the turns on screen change (`src/ui/TimelineRail.tsx`).
 - **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
   (no fetch, no dependency), in the model pill, the harness picker and list
-  (onboarding, Settings), the tray, the sidebar's rows and the thread's
+  (onboarding, Settings), the composer's footer, the sidebar's rows and the thread's
   header: the OpenAI blossom for Codex (currentColor), the Claude mark in
   its orange, the Gemini spark with its gradient (all three from
   `@lobehub/icons-static-svg` 1.102.0, MIT), OpenCode's own mark from

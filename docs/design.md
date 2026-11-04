@@ -73,6 +73,7 @@ set by a theme:
 | `fill-subtle` | `text` at 4.5% | Resting fill of quiet controls (search field, cluster), hover on rows |
 | `fill` | `text` at 8% | Hover on controls, the selected row, chips |
 | `fill-strong` | `text` at 13% | Pressed, an "on" icon button, switch track off |
+| `message` | `text` at 8.5% over `bg` | A sent message's bubble: a step off the pane, so it is told apart from hover fills |
 | `--rc-diff-add` / `--rc-diff-del` | `success` / `danger` at 14% | Diff line backgrounds |
 | `--rc-shadow-1` / `--rc-shadow-2` | see Elevation | |
 
@@ -81,7 +82,8 @@ Tailwind classes use the token names, except the text family, which is
 `border-border`, `border-border-strong`, `text-fg`, `text-fg-muted`,
 `text-fg-faint`, `bg-accent`, `text-accent`, `text-accent-fg`,
 `text-danger`, `bg-code-bg`, `bg-fill`, `bg-fill-subtle`,
-`bg-fill-strong`. Opacity modifiers work on any of them (`bg-danger/10`).
+`bg-fill-strong`, `bg-message`. Opacity modifiers work on any of them
+(`bg-danger/10`).
 
 Primary actions are **inverted neutral** (`bg-fg text-bg`), not accent:
 the accent marks state (on, selected, linked), it does not shout.
@@ -92,15 +94,16 @@ the accent marks state (on, selected, linked), it does not shout.
 |---|---|---|---|
 | xs | 4 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
 | sm | 6 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
-| md | 8 | `rounded-md` | Icon buttons, sidebar rows, list rows, inputs |
-| lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), menu items, tooltips, pictures in replies |
-| xl | 16 | `rounded-xl` | Menus, popovers, dialogs, the command palette, large panels, composer picture thumbnails |
-| 2xl | 22 | `rounded-2xl` | The composer and its tray, toasts |
+| md | 6 | `rounded-md` | Icon buttons, sidebar rows, list rows, inputs |
+| lg | 8 | `rounded-lg` | Cards (tool output, error card, settings groups), menu items, tooltips, pictures in replies |
+| xl | 12 | `rounded-xl` | Menus, popovers, dialogs, the command palette, large panels, composer picture thumbnails |
+| 2xl | 16 | `rounded-2xl` | The composer, the settings panel, toasts |
+| 3xl | 20 | `rounded-3xl` | The largest floating surface, above the composer's step (nothing uses it yet) |
 | full | — | `rounded-full` | Pills, toolbar clusters, switches, segmented controls, avatars, dots |
 
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
-(`sharp`: 2/3/4/6/8/10, `round`: 6/8/10/16/20/26); components only ever name a
-step. No arbitrary radii (`rounded-[14px]`), no `rounded-3xl`+. A child
+(`sharp`: 2/3/4/6/8/10/12, `round`: 6/8/10/16/20/26/30); components only ever
+name a step. No arbitrary radii (`rounded-[14px]`), no `rounded-4xl`. A child
 inside a padded parent uses the step below the parent's.
 
 ## Borders
@@ -119,7 +122,7 @@ inside a padded parent uses the step below the parent's.
 - Only `:focus-visible` shows a ring: 2px `focus` at 40%, offset 2px. It is
   global in `index.css`; components do not add their own focus colours.
 - Never on mouse click, never on the composer's text field. The composer
-  shows focus by its surface stepping from `surface` to `surface-2`.
+  shows focus by its glass stepping from 80% to 88% (see Component recipes).
 - `outline-none` is allowed only on a text field whose container already
   shows focus (the composer, a search capsule).
 
@@ -145,43 +148,51 @@ own `rounded-lg` recipe below.
 
 ## Glass
 
-One translucency, one token pair, for every floating surface: the
-composer, popovers, menus, tooltips, dialogs, toasts, the right panel and
-the lightbox. `--rc-glass-bg` (`surface-2` at 84%; `--rc-glass-bg-strong`
-at 93% for popovers, menus and the focused composer) with
-`--rc-glass-filter` (`saturate(1.2) blur(13px)`). Use `.rc-glass` or the
-`elevated` utility, never a hand-made `backdrop-filter`. Reduce
-transparency (the media query, or the system setting the shell reads)
-turns the pair solid. Headers use the same filter tinted with the pane
-instead of a surface (`--rc-glass-pane`, `bg` at 86%; 60% with `.rc-frost`
-over a new thread's banner), through `.rc-header-glass`. Panes, cards,
-rows and the sidebar stay opaque.
+One translucency, one recipe, for every floating surface: popovers, menus,
+tooltips, dialogs, toasts, the right panel and the lightbox.
+`--rc-glass-bg` (`surface-2` at 84%; `--rc-glass-bg-strong` at 93% for
+popovers, menus and floating pills) with `--rc-glass-filter`
+(`saturate(1.2) blur(13px)`). Use `.rc-glass` or the `elevated` utility,
+never a hand-made `backdrop-filter`. Reduce transparency (the media query,
+or the system setting the shell reads) turns the pair solid. Headers use
+the same filter tinted with the pane instead of a surface
+(`--rc-glass-pane`, `bg` at 86%; 60% with `.rc-frost` over a new thread's
+banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar
+stay opaque.
+
+The composer is its own, lighter pair, because it is the one surface text
+scrolls under all day: `surface-2` at **80%** (88% focused), its own
+`--rc-composer-filter` (`saturate(1.14) blur(12px)`; `saturate(1.08)
+blur(16px)` in dark), and a 1px `--rc-composer-outline` (`black` at 8% in
+light, `white` at 5% in dark) with a 3% `white` inner highlight in dark.
 
 Near-solid and lightly blurred on purpose: text scrolling under a panel
-should be a hint, not a smear. Keep it to the one filter on floating
-surfaces and headers: no larger radius, no second blur stacked on the
-first, no blur on a pane or a scrolling row.
+should be a hint, not a smear. One filter per surface, two recipes in all
+(the shared glass and the composer's): no larger radius, no second blur
+stacked on the first, no blur on a pane or a scrolling row.
 
 ## Spacing
 
 Tailwind's 4px grid. Common steps: 4 (icon to label), 8 (between controls
-in a row), 12 (card padding block), 14 (card padding inline), 16 (side
-gutter, between groups), 24 (between sections). The chat column is at most
-980px wide with 28/20/16px gutters by width.
+in a row), 12 (card padding block), 14 (card padding inline), 16 (between
+groups), 24 (between sections). The chat lane is **736px**
+(`--rc-chat-content-max-width`, 46rem) for the transcript's rows and the
+composer alike, inset by a 12px gutter, 20px from the `sm` breakpoint.
 
 ## Type
 
 macOS text styles one point up (read at a laptop's distance), SF Pro
 (Settings › Appearance › Rounded font switches to SF Pro Rounded) / SF Mono.
-Replies read at 14px on a 1.625 line height, in `fg` at 90%, with headings at
-20/18/16/14 in semibold:
+Replies read at 14px on a 1.625 line height (22.75px, `leading-relaxed`,
+set on the reply's own scope so the app's rows keep 19px), in `fg` at 90%,
+with headings at 20/18/16/14 in semibold:
 
 | Class | Size / line | Use |
 |---|---|---|
 | `text-caption` | 11/14 | Metadata, badges |
 | `text-sub` | 12/15 | Sidebar secondary lines, section headers |
 | `text-callout` | 13/17 | Controls, chips, secondary copy |
-| `text-body` | 14/19 | Body, rows, transcript |
+| `text-body` | 14/19 | Body, rows, tool rows |
 | `text-title3` | 16/21 | Card titles |
 | `text-title2` | 18/23 | Page titles (Settings) |
 | `text-title` | 23/29 | Empty-state heading |
@@ -236,7 +247,7 @@ for the first, then instant while the pointer moves between triggers
 (`skipDelayDuration` 300ms), closing at once. The tip takes no pointer
 events, opens on top by default, 8px from its trigger and 10px from the
 window's edges, and flips when there is no room. Controls in the composer
-tray open theirs below, clear of the box. Inside a popover, hints are
+open theirs below, clear of the box. Inside a popover, hints are
 secondary text, not tooltips.
 
 ## Cursor
@@ -248,9 +259,9 @@ the default arrow on static text; the text cursor only in fields and
 
 ## Icons
 
-Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes: 12 inside chips and
-dense rows, 13 in menus, 14 in toolbar and composer buttons, 16 in page
-headers, 18 in empty states. Icon colour follows text (`text-fg-muted` idle,
+Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes: 12 inside chips,
+13 in menus, 14 in toolbar and composer buttons, 16 in page headers and tool
+rows, 18 in empty states. Icon colour follows text (`text-fg-muted` idle,
 `text-fg` on hover).
 
 ## Scrollbars
@@ -263,8 +274,9 @@ content never shifts when a classic scrollbar appears.
 ## Component recipes
 
 Shape rule: **labelled buttons are pills** (`rounded-full` with
-horizontal padding, never a circle): tray buttons, the model pill, chips,
-segmented items, header actions, Settings' "New…" and "Edit config".
+horizontal padding, never a circle): the composer's footer buttons, the
+model pill, chips, segmented items, header actions, Settings' "New…" and
+"Edit config".
 Circles only for icon-only round buttons (send, stop, close in a panel
 header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
 Rows are `rounded-md`, menu items and cards `rounded-lg`, menus, popovers and
@@ -341,27 +353,38 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   show their description in full.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
-- **Composer:** `.rc-composer rounded-2xl p-2.5` in the denser glass
-  (`--rc-composer-bg`, the text colour at 7%; 10% on focus), a soft shadow
-  above and below plus the edge ring; no ring or colour on focus. Its
-  controls rest one step above it: the **+** and the model pill are
-  `bg-fill-subtle`, `bg-fill` on hover, `bg-fill-strong` when open. Its
-  tray (`.rc-composer-tray`) is tucked under the box as in the SwiftUI app:
-  12px narrower each side, its top 18px hidden behind the box (which sits
-  above it in z), only its rounded bottom showing; solid `surface-2`, no
-  border. The tray is `min-h-[58px]` with `px-2 pb-1.5`, so its 28px
-  buttons have the same 6px above them (to the box's edge) as at its
-  sides and foot. The transcript scrolls under both (its bottom padding is the
-  stack's height) and fades out from 56px above the box.
+- **Composer:** one card, `.rc-composer rounded-2xl`, with no padding of
+  its own: the field is padded `px-3 pt-2` and the footer `px-2 pb-2`.
+  Glass at `--rc-composer-bg` (80%, 88% focused) with
+  `--rc-composer-filter` and a 1px `--rc-composer-outline`; no ring or
+  colour on focus, the glass step is the focus. The editor reads at
+  `text-body leading-relaxed` (22.75px), two lines at rest and 208px at
+  most, then it scrolls. The footer is one row **inside** the card: attach
+  (**+**), the folder, the worktree or branch and the permissions mode on
+  the left; the plan meter, the context ring, the model pill, the working
+  agents and send/stop on the right. No tucked tray, no second surface.
+  What rests on the card's own surface (the **+**, the model pill) is
+  `bg-fill-subtle`, `bg-fill` on hover, `bg-fill-strong` when open. The
+  card is a container (`@container`), so a narrow window drops labels (the
+  folder name shortens, then the permission label, the branch chip and
+  the agents pill go) rather than dropping controls or overflowing. The
+  transcript scrolls under the card (its bottom padding is the stack's
+  height) and fades out from 56px above it.
+- **Jump to latest:** the pill over the composer's foot (`shadow-1`,
+  `.rc-glass-strong`, 30px) says `Latest` and, while a turn runs, what
+  that turn is doing now after a `·` (`Reading files`, `Thinking · …`), so
+  a reader scrolled up knows what waits. One line, truncated.
 - **Tool group:** two or more finished tool calls in a row (with the
-  thoughts between them) are one row: the icon of
-  the kind most of them are in the 18px column, then a sentence of the two
-  most frequent actions, `Read 4 files and ran 2 commands`, the rest as
-  `performed N other actions`, in `text-callout text-fg-muted`, the failed
-  count in `danger`, and the fold chevron. It sits 2px from neighbouring
-  tool rows, like they do. A tool row itself is quiet: its title in
-  `text-fg-muted`, the summary in `text-fg-faint`, the chevron only on
-  hover.
+  thoughts between them) are one row, closed by a hairline
+  (`border-b border-border/60`, `pb-2`) so the answer below it is told
+  apart from the work: the icon of the kind most of them are in the 18px
+  column, then a sentence of the two most frequent actions,
+  `Read 4 files and ran 2 commands`, the rest as `performed N other
+  actions`, in `text-body text-fg-muted`, the failed count in `danger`,
+  and the fold chevron. It sits 2px from neighbouring tool rows, like they
+  do. A tool row itself is quiet: 24px high (`min-h-6`), a 16px icon in
+  the 18px column, its title in `text-body text-fg-muted`, the summary in
+  `text-body text-fg-faint`, the chevron only on hover.
 - **Subagent row:** a subagent (Claude Code's `Agent`/`Task` call,
   RustCode's `spawn_agent`) is one row in the tool rows' grammar: the `Orb`
   (a 3×3 dot ring whose light travels clockwise) while it works, else a
@@ -383,11 +406,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   its work folds under one divider where the work began, above the final
   answer: `Worked for 1m 3s ›` or `You stopped after 12s`, in the same
   type over the same hairline, a `CircleX` in `danger` when a step failed.
-  What stays visible: the message sent (a `rounded-2xl` bubble at most 80%
-  wide; its time and actions on hover), the final answer (the replies after
-  the last step), warnings and errors, and the footer (time, copy,
-  Changes), which then leaves out the duration. The chat lane is 768px
-  wide. Opening it shows the steps in order,
+  What stays visible: the message sent (a `rounded-2xl bg-message` bubble at
+  most 80% wide, `p-3`; consecutive messages soften the corners they share,
+  `rounded-tr-md` / `rounded-br-md`; its time and actions on hover, 12px,
+  clipped to the bubble), the final answer (the replies after the last
+  step), warnings and errors, and the footer (time, copy, Changes), which
+  then leaves out the duration. Opening it shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
   under a transition; Reduce motion makes it instant). A `<button
   aria-expanded>`, so ⏎ and Space toggle it. Opened turns are kept per
