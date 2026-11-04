@@ -88,8 +88,8 @@
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e8e8ea;
   /* The composer is glass on the raised surface (see `Glass` in index.css). */
-  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 92%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 96%, transparent);
   --rc-composer-filter: saturate(1.14) blur(12px);
   --rc-composer-outline: #00000014;
   --rc-composer-highlight: transparent;
@@ -119,8 +119,8 @@
     --rc-surface: #18181a;
     --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
-    --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
-    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+    --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 92%, transparent);
+    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 96%, transparent);
     --rc-composer-filter: saturate(1.08) blur(16px);
     --rc-composer-outline: #ffffff0d;
     --rc-composer-highlight: #ffffff08;
@@ -149,8 +149,8 @@
   --rc-surface: #18181a;
   --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
-  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 88%, transparent);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 92%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 96%, transparent);
   --rc-composer-filter: saturate(1.08) blur(16px);
   --rc-composer-outline: #ffffff0d;
   --rc-composer-highlight: #ffffff08;
@@ -710,7 +710,8 @@
 /*
  * The composer floats over the transcript in glass on the raised surface: 80% at rest,
  * 88% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
- * coloured ring.
+ * coloured ring. Its drawer and its tray are the same glass, tucked behind its edge,
+ * so the three read as one surface.
  */
 .rc-composer,
 .rc-toast {
@@ -726,7 +727,8 @@
   background: var(--rc-glass-bg-strong);
 }
 /* The composer's own pair: lighter than the raised glass, with its own filter and edge. */
-.rc-composer {
+.rc-composer,
+.rc-composer-tray::before {
   background: var(--rc-composer-bg);
   backdrop-filter: var(--rc-composer-filter);
   -webkit-backdrop-filter: var(--rc-composer-filter);
@@ -734,6 +736,27 @@
     0 2px 8px -4px var(--rc-shadow-soft),
     inset 0 0 0 1px var(--rc-composer-highlight),
     0 0 0 1px var(--rc-composer-outline);
+}
+/* The tray's glass starts where the box ends: the box is translucent, so glass under it would
+   show as a darker band. It sits on a pseudo-element so the tray's menus are not clipped. */
+.rc-composer-tray {
+  position: relative;
+  isolation: isolate;
+}
+.rc-composer-tray::before {
+  content: "";
+  position: absolute;
+  inset: 17px 0 0;
+  z-index: -1;
+  border-radius: 0 0 var(--rc-radius-2xl) var(--rc-radius-2xl);
+}
+/* A drawer is read, not looked through: opaque, its foot cut where the box begins. */
+.rc-composer-drawer {
+  background: var(--rc-surface-2);
+  box-shadow:
+    inset 0 1px 0 0 var(--rc-composer-highlight),
+    0 0 0 1px var(--rc-composer-outline);
+  clip-path: inset(-1px -1px calc(1rem - 1px) -1px);
 }
 /* In dark the lift is invisible; the ring and the inner highlight alone separate it. */
 :root[data-theme="dark"] .rc-composer {
@@ -748,7 +771,8 @@
       0 0 0 1px var(--rc-composer-outline);
   }
 }
-.rc-composer:focus-within {
+.rc-composer:focus-within,
+.rc-composer-shell:focus-within > .rc-composer-tray::before {
   background: var(--rc-composer-bg-focus);
 }
 /* A toast drops in from under the header and lifts away. */

@@ -9,6 +9,7 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronUp,
+  Command,
   Copy,
   FileText,
   Folder,
@@ -509,266 +510,296 @@ export const Composer = memo(function Composer({
           : "Queue a message…"
         : `Message ${speakingTo}…`;
 
+  // The drawer over the box: the commands `/` is looking for, or the files `@` is. A slash that
+  // matches nothing still opens it and says so, where the field is about to be typed in.
+  const slashTyped = !extras.command && dismissed !== draft && /^\/\S*$/.test(draft);
+  const drawer = slashTyped ? "commands" : token && files?.cwd === cwdForFiles ? "files" : null;
+
   return (
-    <div className="relative">
-      {list.length > 0 && (
-        <div
-          className="elevated absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto p-1.5 rc-in"
-          role="listbox"
-          aria-label="Commands"
-        >
-          {list.map((c, i) => (
-            <button
-              key={c.name}
-              type="button"
-              role="option"
-              aria-selected={i === selected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => complete(c, true)}
-              onMouseEnter={() => setSelected(i)}
-              className={cx(
-                "flex w-full items-baseline gap-3 rounded-lg px-3 py-[7px] text-left",
-                i === selected && "bg-fill",
-              )}
-            >
-              <span className="min-w-[110px] font-semibold text-accent text-callout">{c.name}</span>
-              <span className="truncate text-callout text-fg-muted">{c.description}</span>
-              {c.takesArguments && <span className="ml-auto shrink-0 text-caption text-fg-faint">…</span>}
-            </button>
-          ))}
-        </div>
-      )}
-      {fileList.length > 0 && (
-        <div
-          className="elevated absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[280px] overflow-y-auto p-1.5 rc-in"
-          role="listbox"
-          aria-label="Files"
-        >
-          {fileList.map((path, i) => {
-            const cut = path.lastIndexOf("/") + 1;
-            return (
-              <button
-                key={path}
-                type="button"
-                role="option"
-                aria-selected={i === selected}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => reference(path)}
-                onMouseEnter={() => setSelected(i)}
-                className={cx(
-                  "flex w-full items-baseline gap-2 rounded-lg px-3 py-[7px] text-left text-callout",
-                  i === selected && "bg-fill",
-                )}
-              >
-                <span className="shrink-0 font-medium">{path.slice(cut)}</span>
-                <span className="truncate text-fg-muted">{path.slice(0, cut)}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+    <div className="rc-composer-shell relative @container/composer">
       {thread && thread.queue.length > 0 && (
         <QueueStack thread={thread} steerable={steerable} onTakeBack={(q) => takeBack(q)} />
       )}
-      <div
-        className={cx(
-          // One card, glass, floating over the transcript: the field on top, every control in the
-          // footer below it. Focus steps the glass; there is no ring or colour. `@container` sizes
-          // the footer's labels to the card, so a narrow window drops words, not controls.
-          "rc-composer @container/composer relative z-10 flex flex-col gap-1 rounded-2xl",
-          dropping && "outline-2 outline-accent outline-dashed",
-        )}
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) {
-            e.preventDefault();
-            field.current?.focus();
-          }
-        }}
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("Files")) {
-            e.preventDefault();
-            setDropping(true);
-          }
-        }}
-        onDragLeave={() => setDropping(false)}
-        onDrop={(e) => {
-          if (!e.dataTransfer.files.length) return;
-          e.preventDefault();
-          setDropping(false);
-          void attachmentsFromFiles([...e.dataTransfer.files], images, harnessName).then(attach);
-        }}
-      >
-        {editing && (
-          <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-accent">
-            <Pencil size={11} />
-            <b>Editing a sent message</b>
-            <span className="text-fg-muted">· sending takes the thread back to it</span>
-            <Pill
-              quiet
-              size="sm"
-              className="ml-auto"
-              onClick={() => {
-                cancelEdit(key);
-                update("");
-              }}
-            >
-              Cancel
-            </Pill>
-          </div>
-        )}
-        {extras.attachments.length > 0 && (
-          <AttachmentStrip
-            attachments={extras.attachments}
-            onRemove={(id) =>
-              change((e) => ({ ...e, attachments: e.attachments.filter((a) => a.id !== id) }))
-            }
-          />
-        )}
-        <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-3 pt-2 pb-0.5">
-          {extras.command && (
-            // One line of the field's own height, so the command and its argument read as one entry.
-            <Tooltip label={extras.command.description}>
-              <span className="flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1 font-semibold text-body text-accent leading-[22.75px]">
-                {extras.command.name}
-              </span>
-            </Tooltip>
-          )}
-          {extras.links.map((url) => (
-            <LinkChip
-              key={url}
-              url={url}
-              onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
-            />
-          ))}
-          {/* Links in the draft read as links: a mirror under the field draws the same text with
-              each URL on an accent pill, and the field's own text is transparent so the mirror shows
-              through while the caret, selection and editing stay the field's. */}
-          <div className="relative min-w-[160px] flex-1 basis-[160px]">
-            {hasUrl && (
-              <div
-                ref={mirror}
-                aria-hidden
-                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-0.5 text-body text-fg leading-relaxed"
-              >
-                {splitUrls(draft).map((part, i) =>
-                  part.url ? (
-                    <span
-                      key={i}
-                      className="rounded-xs bg-accent/15 text-accent [box-decoration-break:clone]"
-                    >
-                      {part.url}
+      {/* The box: the field and how it is sent. The drawer tucks under its top, the tray under its
+          foot, so the three read as one floating surface over the transcript. */}
+      <div className="relative">
+        {drawer && (
+          <div
+            className="rc-composer-drawer rc-in absolute inset-x-[22px] bottom-[calc(100%-1rem)] z-0 max-h-72 overflow-y-auto rounded-t-2xl px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
+            role="listbox"
+            aria-label={drawer === "commands" ? "Commands" : "Files"}
+          >
+            {drawer === "commands" &&
+              list.map((c, i) => (
+                <button
+                  key={c.name}
+                  type="button"
+                  role="option"
+                  aria-selected={i === selected}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => complete(c, true)}
+                  onMouseEnter={() => setSelected(i)}
+                  className={cx(
+                    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
+                    i === selected && "bg-fill",
+                  )}
+                >
+                  <Command size={16} className="shrink-0 text-fg-muted" />
+                  {/* A command that wants arguments says so before it is picked. */}
+                  <span className="min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub">
+                    {c.name}
+                    {c.takesArguments && <span className="text-fg-faint"> …</span>}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{c.description}</span>
+                  {/* What answers it: the app itself, not the harness. */}
+                  {(c.action !== "execute" || c.report) && (
+                    <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
+                      App
                     </span>
-                  ) : (
-                    part.text
-                  ),
-                )}
-                {"\u200b"}
-              </div>
+                  )}
+                </button>
+              ))}
+            {drawer === "files" &&
+              fileList.map((path, i) => {
+                const cut = path.lastIndexOf("/") + 1;
+                return (
+                  <button
+                    key={path}
+                    type="button"
+                    role="option"
+                    aria-selected={i === selected}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => reference(path)}
+                    onMouseEnter={() => setSelected(i)}
+                    className={cx(
+                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
+                      i === selected && "bg-fill",
+                    )}
+                  >
+                    <FileText size={16} className="shrink-0 text-fg-muted" />
+                    <span className="min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub">
+                      {path.slice(cut)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
+                      {path.slice(0, cut)}
+                    </span>
+                    <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
+                      Project
+                    </span>
+                  </button>
+                );
+              })}
+            {(drawer === "commands" ? !list.length : !fileList.length) && (
+              <p className="px-5 pt-3.5 pb-7 text-fg-muted text-sub">
+                {drawer === "commands" ? "No matching command." : "No matching files or folders."}
+              </p>
             )}
-            <textarea
-              ref={field}
-              value={draft}
-              onChange={(e) => {
-                setCaret(e.target.selectionStart);
-                onChange(e.target.value);
-              }}
-              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-              onKeyDown={onKeyDown}
-              onPaste={onPaste}
-              onScroll={(e) => {
-                if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
-              }}
-              rows={1}
-              placeholder={placeholder}
-              aria-label="Message"
-              spellCheck
-              className={cx(
-                "relative block w-full resize-none bg-transparent py-0.5 text-body leading-relaxed outline-none placeholder:text-fg-faint",
-                hasUrl && "text-transparent caret-fg selection:bg-accent/30",
-              )}
+          </div>
+        )}
+        <div
+          className={cx(
+            // The field's own card: glass, floating over the transcript. Focus steps the glass;
+            // there is no ring or colour.
+            "rc-composer relative z-10 flex flex-col gap-1 rounded-2xl",
+            dropping && "outline-2 outline-accent outline-dashed",
+          )}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              e.preventDefault();
+              field.current?.focus();
+            }
+          }}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes("Files")) {
+              e.preventDefault();
+              setDropping(true);
+            }
+          }}
+          onDragLeave={() => setDropping(false)}
+          onDrop={(e) => {
+            if (!e.dataTransfer.files.length) return;
+            e.preventDefault();
+            setDropping(false);
+            void attachmentsFromFiles([...e.dataTransfer.files], images, harnessName).then(attach);
+          }}
+        >
+          {editing && (
+            <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-accent">
+              <Pencil size={11} />
+              <b>Editing a sent message</b>
+              <span className="text-fg-muted">· sending takes the thread back to it</span>
+              <Pill
+                quiet
+                size="sm"
+                className="ml-auto"
+                onClick={() => {
+                  cancelEdit(key);
+                  update("");
+                }}
+              >
+                Cancel
+              </Pill>
+            </div>
+          )}
+          {extras.attachments.length > 0 && (
+            <AttachmentStrip
+              attachments={extras.attachments}
+              onRemove={(id) =>
+                change((e) => ({ ...e, attachments: e.attachments.filter((a) => a.id !== id) }))
+              }
             />
+          )}
+          <div className="flex min-w-0 items-end gap-1.5 px-3 pt-2 pb-1.5">
+            <div className="flex min-w-0 flex-1 flex-wrap items-start gap-x-1.5 gap-y-1">
+              {extras.command && (
+                // One line of the field's own height, so the command and its argument read as one entry.
+                <Tooltip label={extras.command.description}>
+                  <span className="flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1 font-semibold text-accent text-body leading-[22.75px]">
+                    {extras.command.name}
+                  </span>
+                </Tooltip>
+              )}
+              {extras.links.map((url) => (
+                <LinkChip
+                  key={url}
+                  url={url}
+                  onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
+                />
+              ))}
+              {/* Links in the draft read as links: a mirror under the field draws the same text with
+                  each URL on an accent pill, and the field's own text is transparent so the mirror shows
+                  through while the caret, selection and editing stay the field's. */}
+              <div className="relative min-w-[160px] flex-1 basis-[160px]">
+                {hasUrl && (
+                  <div
+                    ref={mirror}
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-0.5 text-body text-fg leading-relaxed"
+                  >
+                    {splitUrls(draft).map((part, i) =>
+                      part.url ? (
+                        <span
+                          key={i}
+                          className="rounded-xs bg-accent/15 text-accent [box-decoration-break:clone]"
+                        >
+                          {part.url}
+                        </span>
+                      ) : (
+                        part.text
+                      ),
+                    )}
+                    {"\u200b"}
+                  </div>
+                )}
+                <textarea
+                  ref={field}
+                  value={draft}
+                  onChange={(e) => {
+                    setCaret(e.target.selectionStart);
+                    onChange(e.target.value);
+                  }}
+                  onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+                  onKeyDown={onKeyDown}
+                  onPaste={onPaste}
+                  onScroll={(e) => {
+                    if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
+                  }}
+                  rows={1}
+                  placeholder={placeholder}
+                  aria-label="Message"
+                  spellCheck
+                  className={cx(
+                    "relative block w-full resize-none bg-transparent py-0.5 text-body leading-relaxed outline-none placeholder:text-fg-faint",
+                    hasUrl && "text-transparent caret-fg selection:bg-accent/30",
+                  )}
+                />
+              </div>
+            </div>
+            {/* What sends it, at the field's own foot: the one control the box keeps. */}
+            <div className="flex shrink-0 items-center gap-1">
+              {running && canSend && (
+                <Tooltip label="Queue for when this turn ends (⏎)">
+                  <button
+                    type="button"
+                    aria-label="Queue message"
+                    onClick={() => send(false)}
+                    className="flex size-[30px] items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85"
+                  >
+                    <ListEnd size={13} strokeWidth={2.5} />
+                  </button>
+                </Tooltip>
+              )}
+              {running ? (
+                <Tooltip label={cancelReason ?? "Stop turn (Esc)"}>
+                  <button
+                    type="button"
+                    aria-label="Stop turn"
+                    disabled={!!cancelReason}
+                    onClick={() => {
+                      haptic("level");
+                      void cancel(thread?.id);
+                    }}
+                    className="flex size-[30px] items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85 disabled:opacity-40"
+                  >
+                    <Square size={10} fill="currentColor" strokeWidth={0} />
+                  </button>
+                </Tooltip>
+              ) : (
+                <Tooltip label="Send (⏎)">
+                  <button
+                    type="button"
+                    aria-label="Send"
+                    disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
+                    onPointerEnter={(e) => !e.currentTarget.disabled && haptic("alignment")}
+                    onClick={() => send(false)}
+                    className="flex size-[30px] items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fill-strong disabled:text-fg-muted"
+                  >
+                    <ArrowUp size={14} strokeWidth={2.75} />
+                  </button>
+                </Tooltip>
+              )}
+            </div>
           </div>
         </div>
-        {/* One footer row inside the card: what the turn may do on the left, how it runs and how it
-            is sent on the right. Labels drop out with the card's width; the controls do not. */}
-        <div className="flex min-w-0 items-center gap-0.5 px-2 pt-0.5 pb-2">
-          <PlusMenu
-            onAttach={chooseFiles}
-            attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
-            cwd={cwd}
-          />
-          <input
-            ref={fileInput}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              const files = [...(e.target.files ?? [])];
-              e.target.value = "";
-              void attachmentsFromFiles(files, images, harnessName).then(attach);
-            }}
-          />
-          <FolderMenu thread={thread} cwd={cwd} />
-          {!thread && <WorktreeToggle draft={draft} compact={compact} />}
-          {thread?.worktree && (
-            <Tooltip side="bottom" label={thread.worktree.path}>
-              <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
-                <GitBranch size={12} className="shrink-0" />
-                <span className="truncate">{thread.worktree.branch}</span>
-              </span>
-            </Tooltip>
-          )}
-          <PermissionMenu threadId={thread?.id} compact={compact} />
-          <span className="flex-1" />
-          <PlanMeter threadId={thread?.id} />
-          {thread && <ContextRing threadId={thread.id} />}
-          <ModelPicker thread={thread} compact={compact} />
-          {/* The harness shows in the model picker; the agents are not repeated here either. */}
-          <span className="empty:hidden @max-lg/composer:hidden">
-            <AgentPill threadId={thread?.id} />
-          </span>
-          {running && canSend && (
-            <Tooltip label="Queue for when this turn ends (⏎)">
-              <button
-                type="button"
-                aria-label="Queue message"
-                onClick={() => send(false)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85"
-              >
-                <ListEnd size={13} strokeWidth={2.5} />
-              </button>
-            </Tooltip>
-          )}
-          {running ? (
-            <Tooltip label={cancelReason ?? "Stop turn (Esc)"}>
-              <button
-                type="button"
-                aria-label="Stop turn"
-                disabled={!!cancelReason}
-                onClick={() => {
-                  haptic("level");
-                  void cancel(thread?.id);
-                }}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85 disabled:opacity-40"
-              >
-                <Square size={10} fill="currentColor" strokeWidth={0} />
-              </button>
-            </Tooltip>
-          ) : (
-            <Tooltip label="Send (⏎)">
-              <button
-                type="button"
-                aria-label="Send"
-                disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
-                onPointerEnter={(e) => !e.currentTarget.disabled && haptic("alignment")}
-                onClick={() => send(false)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fill-strong disabled:text-fg-muted"
-              >
-                <ArrowUp size={14} strokeWidth={2.75} />
-              </button>
-            </Tooltip>
-          )}
-        </div>
+      </div>
+      {/* The tray under the box: where the thread works and what it runs on. Labels drop out with
+          the card's width; the controls do not. */}
+      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[58px] items-end gap-0.5 rounded-b-2xl px-2 pt-[18px] pb-1.5">
+        <PlusMenu
+          onAttach={chooseFiles}
+          attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
+          cwd={cwd}
+        />
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            void attachmentsFromFiles(files, images, harnessName).then(attach);
+          }}
+        />
+        <FolderMenu thread={thread} cwd={cwd} />
+        {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+        {thread?.worktree && (
+          <Tooltip side="bottom" label={thread.worktree.path}>
+            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
+              <GitBranch size={12} className="shrink-0" />
+              <span className="truncate">{thread.worktree.branch}</span>
+            </span>
+          </Tooltip>
+        )}
+        <PermissionMenu threadId={thread?.id} compact={compact} />
+        <span className="flex-1" />
+        <PlanMeter threadId={thread?.id} />
+        {thread && <ContextRing threadId={thread.id} />}
+        <ModelPicker thread={thread} compact={compact} />
+        {/* The harness shows in the model picker; the agents are not repeated here either. */}
+        <span className="empty:hidden @max-lg/composer:hidden">
+          <AgentPill threadId={thread?.id} />
+        </span>
       </div>
     </div>
   );
