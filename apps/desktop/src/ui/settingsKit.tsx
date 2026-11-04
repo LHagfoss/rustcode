@@ -5,10 +5,11 @@
 // Groups and rows carry `data-setting` with their title, so the panel's search
 // can scroll to the row it found (Settings.tsx) and light it once.
 
+import { RotateCcw } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { request, useApp } from "../state/store";
-import { cx, Skeleton } from "./primitives";
+import { cx, Skeleton, Tooltip } from "./primitives";
 
 export function Group({
   title,
@@ -41,21 +42,36 @@ export function Row({
   subtitle,
   children,
   className,
+  reset,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
   children?: ReactNode;
   className?: string;
+  /** Puts the row back to its default; pass it only while the value differs. */
+  reset?: () => void;
 }) {
   return (
     <div
-      className={cx("flex min-h-11 items-center gap-4 px-3.5 py-2.5", className)}
+      className={cx("group/row flex min-h-11 items-center gap-4 px-3.5 py-2.5", className)}
       data-setting={typeof title === "string" ? title : undefined}
     >
       <div className="min-w-0 flex-1">
         <div className="text-body">{title}</div>
         {subtitle && <div className="text-caption text-fg-muted">{subtitle}</div>}
       </div>
+      {reset && (
+        <Tooltip label="Reset to default">
+          <button
+            type="button"
+            aria-label={typeof title === "string" ? `Reset ${title} to default` : "Reset to default"}
+            onClick={reset}
+            className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-faint opacity-0 hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover/row:opacity-100"
+          >
+            <RotateCcw size={12} />
+          </button>
+        </Tooltip>
+      )}
       {children}
     </div>
   );

@@ -32,7 +32,7 @@ import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { validateDefault } from "../state/harness";
-import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
+import { PERMISSION_MODES, type PermissionMode, parsePermissionMode } from "../state/permissions";
 import {
   APP_VERSION,
   createTheme,
@@ -72,6 +72,9 @@ import { ChromeButton, cx, inputClass, Kbd, Pill, Segments, Spinner, Switch } fr
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import { Group, Loading, Row, useEngineData } from "./settingsKit";
 import { UsagePage } from "./UsagePage";
+
+/** Where a new thread's access starts when nothing was picked. */
+const DEFAULT_ACCESS = parsePermissionMode(null);
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
   { id: "general", label: "General", icon: Gear },
@@ -185,6 +188,9 @@ function General() {
       <Group title="Chat">
         <Row
           title="Default access"
+          reset={
+            defaultAccess !== DEFAULT_ACCESS ? () => setDefaultPermissionMode(DEFAULT_ACCESS) : undefined
+          }
           subtitle="New threads start here. The shield under the message box changes one thread only."
         >
           <Segments
@@ -196,6 +202,7 @@ function General() {
         </Row>
         <Row
           title="Smart UI"
+          reset={smartUi ? undefined : () => setSmartUi(true)}
           subtitle="The agent can answer with a small interactive view (a filterable table, a chart with controls) that runs in the chat, sandboxed, with no network. Its buttons can send a message for you, only when you click them."
         >
           <Switch label="Smart UI" checked={smartUi} onChange={setSmartUi} />
@@ -212,6 +219,7 @@ function General() {
         )}
         <Row
           title="Continue threads after a restart"
+          reset={resume ? undefined : () => setResumeAfterRestart(true)}
           subtitle="A thread whose turn was cut short by quitting, an update or an engine restart is sent “Continue where you left off” when the app is back."
         >
           <Switch
@@ -222,6 +230,7 @@ function General() {
         </Row>
         <Row
           title="Threads can start and message other threads"
+          reset={orchestration ? undefined : () => setOrchestration(true)}
           subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
         >
           <Switch
@@ -239,6 +248,14 @@ function General() {
         )}
         <Row
           title="Link previews"
+          reset={
+            linkPreviews
+              ? undefined
+              : () => {
+                  setLinkPreviews(true);
+                  setLinkPreviewsState(true);
+                }
+          }
           subtitle="Links show as chips with the page's title, icon and colour. The app fetches them itself, with no cookies, from public hosts only."
         >
           <Switch
@@ -252,6 +269,14 @@ function General() {
         </Row>
         <Row
           title="Trackpad haptics"
+          reset={
+            haptics
+              ? undefined
+              : () => {
+                  setHaptics(true);
+                  setHapticsState(true);
+                }
+          }
           subtitle="A light tap on the Force Touch trackpad when you send, stop a turn, or rest on Send."
         >
           <Switch
@@ -565,7 +590,11 @@ function Appearance() {
   return (
     <>
       <Group title="Mode">
-        <Row title="Light or dark" subtitle="System follows macOS. Picking a theme sets its mode.">
+        <Row
+          title="Light or dark"
+          reset={mode !== "system" ? () => setTheme("system") : undefined}
+          subtitle="System follows macOS. Picking a theme sets its mode."
+        >
           <Segments
             label="Appearance"
             value={mode}
@@ -579,12 +608,14 @@ function Appearance() {
         </Row>
         <Row
           title="Rounded font"
+          reset={roundedFont ? undefined : () => setRoundedFont(true)}
           subtitle="SF Pro Rounded for the interface and chat. Code stays monospaced."
         >
           <Switch label="Rounded font" checked={roundedFont} onChange={setRoundedFont} />
         </Row>
         <Row
           title="Animate streaming text"
+          reset={animateStreaming ? undefined : () => setAnimateStreaming(true)}
           subtitle="A reply's new words fade in as the model writes them. Finished replies never animate."
         >
           <Switch label="Animate streaming text" checked={animateStreaming} onChange={setAnimateStreaming} />
