@@ -51,6 +51,25 @@ function useDigitKeys(count: number, pick: (index: number) => void) {
   }, [count, pick]);
 }
 
+/** ⏎ approves and Esc declines, unless something else has the keyboard: a field, a menu or a dialog. */
+function useApprovalKeys(decline?: () => void, approve?: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" && e.key !== "Enter") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, button, a, [contenteditable]")) return;
+      if (document.querySelector('[role="menu"], [role="dialog"], [role="listbox"]')) return;
+      const run = e.key === "Enter" ? approve : decline;
+      if (!run) return;
+      e.preventDefault();
+      run();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [decline, approve]);
+}
+
 function Shell({ children, label }: { children: React.ReactNode; label: string }) {
   return (
     <section aria-label={label} className="elevated flex flex-col gap-3 p-4 rc-in">
@@ -64,10 +83,19 @@ function Shell({ children, label }: { children: React.ReactNode; label: string }
  * open the command, diff and raw input, and the engine's options. When the
  * turn waits on several at once (a batch), "1 of N" and Approve all.
  */
-export function PermissionCard({ request, pending = 1 }: { request: PermissionRequest; pending?: number }) {
+export function PermissionCard({
+  request,
+  pending = 1,
+  from,
+}: {
+  request: PermissionRequest;
+  pending?: number;
+  /** The thread asking, when it is a thread this one started and not this one. */
+  from?: string;
+}) {
   const command = field(request.input, "command");
   const summary = field(request.input, "summary");
-  const [details, setDetails] = useState(request.diffs.length > 0 && request.diffs.length <= 1);
+  const [details, setDetails] = useState(Boolean(command) || request.diffs.length === 1);
   const options = useMemo(() => orderedOptions(request.options), [request.options]);
   const pick = (i: number) => {
     const option = options[i];
@@ -79,7 +107,12 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
     options.find((o) => o.kind === "reject_once") ?? options.find((o) => o.kind === "reject_always");
   const allow =
     options.find((o) => o.kind === "allow_once") ?? options.find((o) => o.kind === "allow_always");
-  const always = options.filter((o) => o !== decline && o !== allow);
+  const alwaysAllow = options.find((o) => o.kind === "allow_always" && o !== allow);
+  const always = options.filter((o) => o !== decline && o !== allow && o !== alwaysAllow);
+  useApprovalKeys(
+    decline ? () => pick(options.indexOf(decline)) : undefined,
+    allow ? () => pick(options.indexOf(allow)) : undefined,
+  );
   const cwd = field(request.input, "cwd") ?? field(request.input, "workdir");
   const note = field(request.input, "reason");
   const expandable = request.input !== undefined || request.diffs.length > 0;
@@ -88,9 +121,15 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
   // The command once: harnesses that title the request with it get no second copy beside it.
   const aside = summary ?? (shownCommand && !title.includes(shownCommand) ? shownCommand : undefined);
   return (
-    <section aria-label="Approval needed" className="elevated flex flex-col gap-2 px-2.5 py-2 rc-in">
+    <section
+      aria-label="Approval needed"
+      className="elevated flex flex-col gap-2 rounded-2xl px-2.5 py-2 rc-in"
+    >
       <div className="flex min-h-[30px] items-center gap-2">
         <Hand size={14} className="ml-1 shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
+        {from && (
+          <span className="max-w-[35%] shrink-0 truncate text-callout text-fg-muted">From {from}</span>
+        )}
         <button
           type="button"
           disabled={!expandable}
@@ -195,15 +234,24 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
         )}
+        {alwaysAllow && (
+          <Tooltip label={`${alwaysAllow.name} (${options.indexOf(alwaysAllow) + 1})`}>
+            <Pill quiet onClick={() => pick(options.indexOf(alwaysAllow))}>
+              Always allow
+            </Pill>
+          </Tooltip>
+        )}
         {decline && (
           <Tooltip label={`${decline.name} (${options.indexOf(decline) + 1})`}>
-            <Pill onClick={() => pick(options.indexOf(decline))}>Decline</Pill>
+            <Pill onClick={() => pick(options.indexOf(decline))}>
+              Decline <Kbd>esc</Kbd>
+            </Pill>
           </Tooltip>
         )}
         {allow && (
           <Tooltip label={`${allow.name} (${options.indexOf(allow) + 1})`}>
             <Pill prominent onClick={() => pick(options.indexOf(allow))}>
-              Allow
+              Approve <Kbd>⏎</Kbd>
             </Pill>
           </Tooltip>
         )}
@@ -212,7 +260,7 @@ export function PermissionCard({ request, pending = 1 }: { request: PermissionRe
   );
 }
 
-export function QuestionCard({ request }: { request: PermissionRequest }) {
+export function QuestionCard({ request, from }: { request: PermissionRequest; from?: string }) {
   const q = request.question!;
   const answers = request.options.filter((o) => isAllow(o.kind) || !o.kind);
   const reject = request.options.find((o) => o.kind === "reject_once" || o.kind === "reject_always");
@@ -226,6 +274,7 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
     <Shell label="Question">
       <div className="flex items-center gap-2 font-semibold text-body text-accent">
         <MessageCircleQuestion size={15} />
+        {from ? `From ${from}: ` : ""}
         {q.header || "RustCode has a question"}
       </div>
       <div className="selectable text-body">{q.text}</div>
@@ -309,10 +358,18 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
   );
 }
 
-export function AttentionCard({ request, pending = 1 }: { request: PermissionRequest; pending?: number }) {
+export function AttentionCard({
+  request,
+  pending = 1,
+  from,
+}: {
+  request: PermissionRequest;
+  pending?: number;
+  from?: string;
+}) {
   return request.question ? (
-    <QuestionCard key={`${request.rpcId}`} request={request} />
+    <QuestionCard key={`${request.rpcId}`} request={request} from={from} />
   ) : (
-    <PermissionCard key={`${request.rpcId}`} request={request} pending={pending} />
+    <PermissionCard key={`${request.rpcId}`} request={request} pending={pending} from={from} />
   );
 }
