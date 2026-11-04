@@ -84,3 +84,14 @@ describe("delegation policy", () => {
     }
   });
 });
+
+describe("delegationAllowed for managing threads", () => {
+  test("Auto-edit may organize, only Full access may stop or reconfigure", () => {
+    expect(delegationAllowed("ask", "organize")).toBe(false);
+    expect(delegationAllowed("edits", "organize")).toBe(true);
+    expect(delegationAllowed("edits", "interrupt")).toBe(false);
+    expect(delegationAllowed("edits", "configure")).toBe(false);
+    expect(delegationAllowed("full", "interrupt")).toBe(true);
+    expect(delegationAllowed("full", "configure")).toBe(true);
+  });
+});

@@ -426,6 +426,130 @@ pub const FAN_OUT: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Orchestration version 3 (`docs/orchestrator.md`): offered only to
+/// clients that advertise `_meta.rustcode.orchestration >= 3`.
+pub const LIST_HARNESSES: Tool = Tool {
+    name: crate::orchestration::LIST_HARNESSES,
+    description: "List the harnesses that can run a thread, each with its models and efforts or why it cannot run, and what this thread runs on. Use the ids in start_session, fan_out and configure_session.",
+    arguments: r#"{}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const SEARCH_SESSIONS: Tool = Tool {
+    name: crate::orchestration::SEARCH_SESSIONS,
+    description: "Search this project's threads by title and by what was said in them. Returns each match's session_id, title, status and the words around the match.",
+    arguments: r#"{"query": "login form"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1}
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const LIST_WORKTREES: Tool = Tool {
+    name: crate::orchestration::LIST_WORKTREES,
+    description: "List this project's threads that work in their own git worktree: session_id, title, branch and path.",
+    arguments: r#"{}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const UPDATE_SESSION: Tool = Tool {
+    name: crate::orchestration::UPDATE_SESSION,
+    description: "Rename, pin, mark unread or change the status of a thread. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done).",
+    arguments: r#"{"title": "Fix login", "pinned": true, "status": "settled"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "title": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_TITLE_CHARS},
+                "pinned": {"type": "boolean"},
+                "unread": {"type": "boolean"},
+                "status": {"type": "string", "enum": crate::orchestration::SESSION_STATUSES}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const INTERRUPT_SESSION: Tool = Tool {
+    name: crate::orchestration::INTERRUPT_SESSION,
+    description: "Stop the running turn of another thread of this project. The user is asked first. The thread stays and can be messaged again.",
+    arguments: r#"{"session_id": "id from list_sessions"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1}
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const CONFIGURE_SESSION: Tool = Tool {
+    name: crate::orchestration::CONFIGURE_SESSION,
+    description: "Read a thread's harness, model, effort and access, or set its model and effort. Omit session_id for this thread. With neither model nor effort it only reads; changing another thread asks the user first. Models come from list_harnesses.",
+    arguments: r#"{"session_id": "id from list_sessions", "effort": "high"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "model": {"type": "string", "minLength": 1},
+                "effort": {"type": "string", "minLength": 1}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn smart_ui_preview_schema() -> Value {
     crate::smart_ui::schema()
 }

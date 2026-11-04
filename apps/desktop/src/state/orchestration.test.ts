@@ -9,6 +9,7 @@ import {
 } from "../acp/v2";
 import {
   capped,
+  checkManage,
   checkMessage,
   checkStart,
   emptyBook,
@@ -43,6 +44,34 @@ const link = (orchestrator: string, target: string, state: Link["state"] = "work
 });
 
 const book = (links: Link[]): LinkBook => ({ ...emptyBook(), links });
+
+describe("management tools", () => {
+  test("parseCall reads them and refuses what cannot run", () => {
+    expect(parseCall({ tool: "list_harnesses", args: {} })).toEqual({ tool: "list_harnesses" });
+    expect(parseCall({ tool: "search_sessions", args: { query: " login " } })).toEqual({
+      tool: "search_sessions",
+      query: "login",
+    });
+    expect(isFailure(parseCall({ tool: "search_sessions", args: {} }))).toBe(true);
+    expect(isFailure(parseCall({ tool: "interrupt_session", args: {} }))).toBe(true);
+    expect(isFailure(parseCall({ tool: "update_session", args: { session_id: "a" } }))).toBe(true);
+    expect(isFailure(parseCall({ tool: "update_session", args: { status: "gone" } }))).toBe(true);
+    expect(parseCall({ tool: "update_session", args: { pinned: false, status: "settled" } })).toMatchObject({
+      pinned: false,
+      status: "settled",
+    });
+    expect(parseCall({ tool: "configure_session", args: { effort: "high" } })).toMatchObject({
+      effort: "high",
+    });
+  });
+
+  test("checkManage keeps a thread to its own project", () => {
+    const a = { id: "a", title: "A", folder: "/repo", running: false };
+    expect(checkManage(a, undefined)?.code).toBe("not_found");
+    expect(checkManage(a, { ...a, id: "b", folder: "/other" })?.code).toBe("not_allowed");
+    expect(checkManage(a, { ...a, id: "b" })).toBeNull();
+  });
+});
 
 describe("orchestration rules", () => {
   test("parses the v2 calls and refuses bad arguments", () => {
