@@ -28,7 +28,6 @@ import {
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { haptic } from "../lib/haptics";
@@ -919,130 +918,100 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
     () => [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 30),
     [sessions],
   );
-  const [open, setOpen] = useState(false);
-  const trigger = useRef<HTMLButtonElement>(null);
-  // At most 360px or half the window, and never over the header: the room above the trigger less the 42px header and gaps.
-  const [maxHeight, setMaxHeight] = useState(360);
-  // The tray's backdrop blur makes it a stacking context under the message box, so the menu
-  // renders in the body, fixed 8px above the trigger, or the box would cover it.
-  const [anchor, setAnchor] = useState({ left: 0, bottom: 0 });
-  const toggle = () => {
-    const rect = trigger.current?.getBoundingClientRect();
-    const top = rect?.top ?? 600;
-    setMaxHeight(Math.max(140, Math.min(360, window.innerHeight * 0.5, top - 42 - 16)));
-    setAnchor({ left: rect?.left ?? 0, bottom: window.innerHeight - top + 8 });
-    setOpen(!open);
-  };
   return (
-    <div className="relative">
+    <DropdownMenu.Root>
       <Tooltip side="bottom" label={cwd || "Choose a folder"}>
-        <button
-          ref={trigger}
-          type="button"
-          disabled={!!thread && !cwd}
-          onClick={toggle}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          className={cx(trayButton, "disabled:hover:bg-transparent")}
-        >
-          <Folder size={12} />
-          <span className="max-w-[220px] truncate">{cwd ? projectName(cwd) : "Choose a folder"}</span>
-          <ChevronDown size={11} className="text-fg-faint" />
-        </button>
-      </Tooltip>
-      {open &&
-        createPortal(
-          <div
-            role="menu"
-            className="elevated fixed z-50 flex w-[300px] flex-col p-1.5 rc-in"
-            style={{ maxHeight, left: anchor.left, bottom: anchor.bottom }}
-            onMouseLeave={() => setOpen(false)}
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            disabled={!!thread && !cwd}
+            className={cx(trayButton, "data-[state=open]:bg-fill disabled:hover:bg-transparent")}
           >
-            {thread ? (
-              <FolderActions cwd={cwd} close={() => setOpen(false)} />
-            ) : (
-              <>
-                {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
-                <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
-                  {projects.map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setProjectCwd(p);
-                        setOpen(false);
-                      }}
-                      className={cx(
-                        "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left hover:bg-fill",
-                        p === cwd && "bg-fill",
-                      )}
-                    >
-                      <span className="text-body text-fg">{projectName(p)}</span>
-                      <span className="truncate text-caption text-fg-muted" dir="rtl">
-                        <bdi>{p}</bdi>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setOpen(false);
-                    void pickFolder(cwd).then((p) => p && setProjectCwd(p));
-                  }}
-                  className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body hover:bg-fill"
-                >
-                  Choose Folder…
-                </button>
-              </>
-            )}
-          </div>,
-          document.body,
-        )}
-    </div>
+            <Folder size={12} />
+            <span className="max-w-[220px] truncate">{cwd ? projectName(cwd) : "Choose a folder"}</span>
+            <ChevronDown size={11} className="text-fg-faint" />
+          </button>
+        </DropdownMenu.Trigger>
+      </Tooltip>
+      <DropdownMenu.Portal>
+        {/* At most 360px and never over the header: Radix measures the room left above the trigger. */}
+        <DropdownMenu.Content
+          side="top"
+          align="start"
+          sideOffset={8}
+          collisionPadding={{ top: 58, left: 8, right: 8, bottom: 8 }}
+          className="elevated z-50 flex w-[300px] flex-col p-1.5"
+          style={{ maxHeight: "min(360px, var(--radix-dropdown-menu-content-available-height))" }}
+        >
+          {thread ? (
+            <FolderActions cwd={cwd} />
+          ) : (
+            <>
+              {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
+              <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
+                {projects.map((p) => (
+                  <DropdownMenu.Item
+                    key={p}
+                    onSelect={() => setProjectCwd(p)}
+                    className={cx(
+                      "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left outline-none data-[highlighted]:bg-fill",
+                      p === cwd && "bg-fill",
+                    )}
+                  >
+                    <span className="text-body text-fg">{projectName(p)}</span>
+                    <span className="truncate text-caption text-fg-muted" dir="rtl">
+                      <bdi>{p}</bdi>
+                    </span>
+                  </DropdownMenu.Item>
+                ))}
+              </div>
+              {projects.length > 0 && (
+                <DropdownMenu.Separator className="mx-1.5 my-1 h-px shrink-0 bg-border" />
+              )}
+              <DropdownMenu.Item
+                onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}
+                className="flex w-full shrink-0 rounded-md px-2.5 py-2 text-left text-body outline-none data-[highlighted]:bg-fill"
+              >
+                Choose Folder…
+              </DropdownMenu.Item>
+            </>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
 /** What the folder of an existing thread offers. */
-function FolderActions({ cwd, close }: { cwd: string; close: () => void }) {
-  const item = "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-left text-body hover:bg-fill";
-  const run = (action: () => void) => () => {
-    close();
-    action();
-  };
+function FolderActions({ cwd }: { cwd: string }) {
+  const item =
+    "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-left text-body outline-none data-[highlighted]:bg-fill";
   return (
     <>
       <div className="truncate px-2.5 pt-1 pb-1.5 text-caption text-fg-muted" dir="rtl">
         <bdi>{cwd}</bdi>
       </div>
-      <button type="button" role="menuitem" className={item} onClick={run(() => openPath(cwd))}>
+      <DropdownMenu.Item className={item} onSelect={() => openPath(cwd)}>
         <FolderOpen size={13} className="text-fg-muted" /> Open in Finder
-      </button>
+      </DropdownMenu.Item>
       {canOpenTerminal() && (
-        <button
-          type="button"
-          role="menuitem"
+        <DropdownMenu.Item
           className={item}
-          onClick={run(() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error")))}
+          onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}
         >
           <SquareTerminal size={13} className="text-fg-muted" /> Open in Terminal
-        </button>
+        </DropdownMenu.Item>
       )}
-      <button
-        type="button"
-        role="menuitem"
+      <DropdownMenu.Item
         className={item}
-        onClick={run(() => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info")))}
+        onSelect={() => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info"))}
       >
         <Copy size={13} className="text-fg-muted" /> Copy Path
-      </button>
-      <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-      <button type="button" role="menuitem" className={item} onClick={run(() => startNewThread(cwd))}>
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator className="mx-1.5 my-1 h-px shrink-0 bg-border" />
+      <DropdownMenu.Item className={item} onSelect={() => startNewThread(cwd)}>
         <SquarePen size={13} className="text-fg-muted" /> New Thread Here
-      </button>
+      </DropdownMenu.Item>
     </>
   );
 }
