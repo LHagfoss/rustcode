@@ -25,6 +25,7 @@ import {
   HandoffRow,
   LiveActivityRow,
   NoticeRow,
+  SwitchRow,
   ThoughtRow,
   ToolGroupRow,
   ToolRow,
@@ -630,6 +631,8 @@ export function Transcript({
                       <NoticeRow item={item} />
                     ) : item?.kind === "handoff" ? (
                       <HandoffRow item={item} />
+                    ) : item?.kind === "switch" ? (
+                      <SwitchRow item={item} />
                     ) : item?.kind === "turnEnd" ? (
                       <TurnEndRow
                         item={item}

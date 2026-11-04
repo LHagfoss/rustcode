@@ -2,7 +2,7 @@
 // onboarding and Settings › Harnesses (docs/harnesses.md). RustCode never
 // signs in for a harness: "Sign in" shows the harness's own login command.
 
-import { Check, ChevronRight, Minus, SquareTerminal } from "lucide-react";
+import { Check, ChevronRight, Minus, RefreshCw, SquareTerminal } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { effortLabel, type Harness, type HarnessSnapshot } from "../acp/types";
@@ -21,6 +21,7 @@ import {
   ensureHarnessModels,
   fetchHarnessModels,
   type NewThreadChoice,
+  refreshHarnesses,
   removeHarness,
   setHarnessEnabled,
   useApp,
@@ -97,11 +98,21 @@ function useCheck(harness: Harness) {
       setChecking(false);
     }
   };
-  return { checking, result, check };
+  /** Detects the harness again: its install or sign-in may have changed outside the app. */
+  const recheck = async () => {
+    setChecking(true);
+    setResult(null);
+    try {
+      await refreshHarnesses();
+    } finally {
+      setChecking(false);
+    }
+  };
+  return { checking, result, check, recheck };
 }
 
 export function HarnessCard({ harness }: { harness: Harness }) {
-  const { checking, result, check } = useCheck(harness);
+  const { checking, result, check, recheck } = useCheck(harness);
   const [open, setOpen] = useState(false);
   const status = harnessStatus(harness);
   const local = harness.builtin;
@@ -179,7 +190,12 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           )}
         >
           {result?.ok && <Check size={13} className="mt-[3px] shrink-0" />}
-          <span>{result ? result.text : harness.error}</span>
+          <span className="min-w-0 flex-1">{result ? result.text : harness.error}</span>
+          {!result?.ok && (
+            <Pill size="sm" quiet disabled={checking} onClick={() => void recheck()}>
+              {checking ? <Spinner size={11} /> : <RefreshCw size={12} />} Check again
+            </Pill>
+          )}
         </div>
       )}
       <div className="ml-11">

@@ -27,6 +27,8 @@ pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// What an adapter hands the client side.
 pub(crate) enum Output {
+    /// Shown to the client but not part of the reply; the history already has it.
+    Marker(SessionUpdate),
     Update(SessionUpdate),
     Permission {
         request: RequestPermissionRequest,
@@ -228,7 +230,7 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
                 Output::Flush(reply) => {
                     let _ = reply.send(());
                 }
-                Output::Update(_) | Output::Activity(_) => {}
+                Output::Update(_) | Output::Marker(_) | Output::Activity(_) => {}
             }
         }
     });
@@ -351,6 +353,7 @@ impl ExternalSession {
                                 .observe(&update);
                             sink.update(update);
                         }
+                        Output::Marker(update) => sink.update(update),
                         Output::Permission { request, reply } => {
                             let asked = sink.request_permission(request);
                             tokio::spawn(async move {
@@ -543,10 +546,27 @@ impl ExternalSession {
         let adapter = self.ensure_started().await?;
         let options = adapter.set_config(id, value).await?;
         let (model, effort) = adapter.model_and_effort();
+        let before = {
+            let record = self.record();
+            (record.model, record.effort)
+        };
+        let divider = super::switch::note(
+            &mut self
+                .transcript
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .history,
+            &before,
+            &(model.clone(), effort.clone()),
+        );
         self.save_record(|record| {
             record.model = model;
             record.effort = effort;
         });
+        if let Some(divider) = divider {
+            self.save_history();
+            let _ = self.out.send(Output::Marker(divider));
+        }
         Ok(options)
     }
 

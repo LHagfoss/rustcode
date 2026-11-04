@@ -72,6 +72,8 @@ export type TranscriptItem =
   | { kind: "notice"; id: string; text: string; tone: "warning" | "error" | "info"; resumable?: boolean }
   /** Where the thread moved to another harness, which got the conversation so far. */
   | { kind: "handoff"; id: string; from: string; to: string; model?: string }
+  /** Where the thread's model or effort changed. */
+  | { kind: "switch"; id: string; change: import("../acp/types").ChoiceChange }
   | {
       kind: "turnEnd";
       id: string;
@@ -383,6 +385,19 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           { kind: "handoff", id: localId("handoff"), from: update.from, to: update.to, model: update.model },
         ],
       };
+    case "switch": {
+      // Picks with no message between them are one change, and undoing it leaves none.
+      const items = state.items.at(-1)?.kind === "switch" ? state.items.slice(0, -1) : state.items;
+      const { modelFrom, modelTo, effortFrom, effortTo } = update.change;
+      if (modelFrom === modelTo && effortFrom === effortTo) return { ...state, items };
+      return {
+        ...state,
+        items: [
+          ...finishThoughts(items, now),
+          { kind: "switch", id: localId("switch"), change: update.change },
+        ],
+      };
+    }
     case "notice":
       return {
         ...state,

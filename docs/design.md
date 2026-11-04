@@ -407,6 +407,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   Details lists what a thread is, in titled sections that drop out when
   they have nothing to say: harness, workspace, linked threads, subagents with
   status and elapsed time, plan and usage.
+- **Switch row:** where a thread's model or effort changed after its first
+  message, a quiet divider (`gpt-6-luna → gpt-6-astra · Medium → High`). Picks
+  with no message between them are one row; the engine records it in the
+  history on harness threads, so it survives a reload.
 - **Approval:** over the composer, `elevated rounded-2xl`: what it wants (`From
   <thread>` when a thread this one started is asking), the command in a code
   well, then Always allow, More, Decline `esc`, Approve `⏎` (the keys work when
