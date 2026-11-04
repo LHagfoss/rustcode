@@ -61,10 +61,21 @@ async fn fake_agent(
                 id,
                 Ok(json!({"outcome": if cancelled.is_empty() { "promptRequired" } else { "injected" }})),
             ),
-            "session/new" => peer.respond(
-                id,
-                Ok(json!({"sessionId": "child-1", "configOptions": options("medium")})),
-            ),
+            "session/new" => {
+                peer.respond(
+                    id,
+                    Ok(json!({"sessionId": "child-1", "configOptions": options("medium")})),
+                );
+                // Like Pi, a startup banner outside any turn. It must not reach the thread.
+                peer.notify(
+                    "session/update",
+                    update(
+                        "child-1",
+                        json!({"sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "banner"}}),
+                    ),
+                );
+            }
             "session/load" => {
                 // A real agent replays the history before answering.
                 peer.notify(

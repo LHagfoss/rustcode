@@ -29,6 +29,8 @@ const STEER_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Default)]
 struct State {
+    /// A prompt has gone out in this process.
+    prompted: bool,
     /// The child's own config options, ids as the child spells them.
     options: Vec<SessionConfigOption>,
     /// `models` from an agent that predates config options.
@@ -410,6 +412,7 @@ impl AcpAdapter {
     }
 
     pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
+        lock(&self.state).prompted = true;
         let answer = self
             .peer
             .request(
@@ -578,6 +581,14 @@ async fn relay(
                     if let Some(activity) = effects.activity {
                         let _ = out.send(Output::Activity(activity));
                     }
+                    continue;
+                }
+                // Text before any prompt is the agent's startup banner, not a reply: Pi lists its
+                // context files and every skill here. It would open the thread and fill handoffs.
+                if !lock(&state).prompted
+                    && update.get("sessionUpdate").and_then(Value::as_str)
+                        == Some("agent_message_chunk")
+                {
                     continue;
                 }
                 let update = match serde_json::from_value::<SessionUpdate>(update) {

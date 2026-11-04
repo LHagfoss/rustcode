@@ -1220,6 +1220,8 @@ export async function createSession(options: NewSession): Promise<string> {
       ...st.sessions,
     ],
   }));
+  // Saved, not only shown: otherwise the thread's first message replaces it at the next list.
+  if (options.title) await renameThread(id, options.title);
   // A model or effort picked before the thread existed applies now, when the thread did not take it
   // from `session/new` (an older engine, or a harness that ignores it there).
   const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
