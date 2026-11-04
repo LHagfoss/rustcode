@@ -9,6 +9,7 @@ import { X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { type AppState, setPanel, showPanel, useApp } from "../state/store";
 import { cx, Segments, Tooltip } from "./primitives";
+import { ThreadPeek } from "./ThreadPeek";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
 const ThreadDetails = lazy(() => import("./ThreadDetails").then((m) => ({ default: m.ThreadDetails })));
@@ -34,6 +35,7 @@ function storedWidth(): number {
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
+  const peekOn = useApp((s) => !!s.peekId);
   // What the frame shows: the open panel, or while closing the one that was.
   const [shown, setShown] = useState<Kind | null>(panel);
   const [width, setWidth] = useState(storedWidth);
@@ -69,6 +71,7 @@ export function RightPanel() {
     { value: "details", label: "Details" },
     { value: "changes", label: "Changes" },
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
+    ...(peekOn ? [{ value: "peek" as const, label: "Thread" }] : []),
   ];
 
   return (
@@ -111,6 +114,7 @@ export function RightPanel() {
             {kind === "details" && <ThreadDetails />}
             {kind === "changes" && <ChangesPanel />}
             {kind === "pulls" && <PullsPanel />}
+            {kind === "peek" && <ThreadPeek />}
           </Suspense>
           {open && (
             <div
