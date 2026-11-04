@@ -1,11 +1,15 @@
-// The sidebar: a toolbar clear of the traffic lights, a
-// search field with a filter menu, then one list: pinned threads first, then
-// every active thread (by project when asked), each saying in its right slot
-// what it does (Working, Approval, Input, Failed, Done until you open it), the
-// threads it started folded under it as slim rows, and Settled (threads marked
-// Done) as a shelf at the foot.
+// The sidebar: a toolbar clear of the traffic lights, a search row with the
+// filter and the buttons that make a thread or a project, then one list:
+// pinned threads first, then every active thread (by project when asked). A row
+// runs two lines: where it runs, its branch and what the branch's pull request
+// became, above its title and the mark of the harness that runs it. What it is
+// doing (Working, Approval, Input, Failed, Done until you open it) takes the
+// time's slot on the top line, the threads it started fold under it as slim
+// rows, and Settled (threads marked Done) opens from the foot, above the app's
+// own pages: settings, pull requests, usage.
 
 import {
+  ChartNoAxesColumn,
   Check,
   ChevronDown,
   ChevronRight,
@@ -19,8 +23,14 @@ import {
   FileDiff,
   Folder,
   FolderOpen,
+  FolderPlus,
   FolderX,
   GitBranch,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestArrow,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
   KanbanSquare,
   ListFilter,
   MessageCircleQuestion,
@@ -37,10 +47,20 @@ import {
   X,
 } from "lucide-react";
 import { ContextMenu, Dialog, DropdownMenu } from "radix-ui";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { modelName, projectName, type SessionSummary } from "../acp/types";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { PullRequest } from "../acp/rustcode";
+import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
-import { openTerminalAt, revealPath } from "../lib/native";
+import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import {
   type ChildInfo,
@@ -52,6 +72,15 @@ import {
   pruneOpenGroups,
   unseenChild,
 } from "../state/children";
+import {
+  cachedPulls,
+  loadPulls,
+  projectFolders,
+  pullForBranch,
+  pullState,
+  pullsVersion,
+  subscribePulls,
+} from "../state/pulls";
 import {
   keepListed,
   nextRow,
@@ -68,11 +97,13 @@ import {
   askCustomSnooze,
   featureMissing,
   markUnread,
+  openSettings,
   removeWorktree,
   renameThread,
   repairThread,
   searchThreads,
   selectThread,
+  setPanel,
   setPinned,
   setThreadStatus,
   setThreadsStatus,
@@ -93,6 +124,7 @@ import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
+import { ProjectMark } from "./ProjectMark";
 import {
   Cluster,
   ClusterButton,
@@ -415,6 +447,63 @@ function RowAction({
 }
 
 /**
+ * A row's fill, drawn as its own child under the row's content.
+ *
+ * The row is a `<button>`, and a fill set on one (a `bg-fill` from a `color-mix` token, under the
+ * base layer's background transition) never lands: WebKit holds the value the button had before
+ * the state changed. A child element mounts with the fill it is given, so the selected, picked
+ * and hover states show.
+ */
+function RowFill({ selected, picked, radius }: { selected: boolean; picked?: boolean; radius: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cx(
+        "pointer-events-none absolute inset-0",
+        radius,
+        picked
+          ? "bg-accent/12"
+          : selected
+            ? "bg-fill"
+            : "bg-transparent group-hover:bg-fill-subtle group-active:bg-fill",
+      )}
+    />
+  );
+}
+
+/** The mark of what a pull request is: open, merged, closed, or still a draft. */
+function PullMark({ pull }: { pull: PullRequest }) {
+  const state = pullState(pull);
+  const Icon =
+    state === "merged"
+      ? GitMerge
+      : state === "closed"
+        ? GitPullRequestClosed
+        : state === "draft"
+          ? GitPullRequestDraft
+          : GitPullRequestArrow;
+  return (
+    <span
+      role="img"
+      aria-label={`Pull request #${pull.number}: ${state}`}
+      title={`#${pull.number} ${state} · ${pull.title}`}
+      className={cx(
+        "flex shrink-0 items-center",
+        state === "merged"
+          ? "text-accent"
+          : state === "closed"
+            ? "text-danger"
+            : state === "draft"
+              ? "text-fg-muted"
+              : "text-success",
+      )}
+    >
+      <Icon size={12} />
+    </span>
+  );
+}
+
+/**
  * Marks several threads Done at once: one toast, and an Undo that puts each one back the way it
  * was (review stays review, the rest go back to idle).
  */
@@ -456,17 +545,18 @@ function settleThread(session: SessionSummary, before: ThreadStatus | undefined)
 }
 
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
-// the title and one meta line, and a single slot on the right that shows the
-// age, a live clock while the turn runs, or what the thread waits for; hovering swaps it for the
-// row's actions, so nothing shifts.
+// Two lines: where it runs, its branch, what the branch's pull request became and what the thread
+// is doing above; the title and the harness mark below. Hovering swaps the top line's right slot
+// for the row's actions, so nothing shifts.
 const ThreadRow = memo(function ThreadRow({
   session,
   selected,
-  scopeAll,
+  grouped,
   now,
   snippet,
   slim,
   state,
+  pull,
   fold,
   navActive,
   picked,
@@ -475,7 +565,8 @@ const ThreadRow = memo(function ThreadRow({
 }: {
   session: SessionSummary;
   selected: boolean;
-  scopeAll: boolean;
+  /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
+  grouped: boolean;
   now: number;
   /** While searching: the words around the match in what was said. */
   snippet?: string;
@@ -483,6 +574,8 @@ const ThreadRow = memo(function ThreadRow({
   slim?: boolean;
   /** A child's state as its parent's group reads it (state/children.ts), for its dot. */
   state?: ChildInfo["state"];
+  /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
+  pull?: PullRequest;
   /**
    * Threads this one started, which the sidebar lists under it: the chevron that
    * folds them into the row, and the dot for what the fold hides.
@@ -525,8 +618,11 @@ const ThreadRow = memo(function ThreadRow({
   const [title, setTitle] = useState("");
   const external = !!session.harness && session.harness !== "rustcode";
   const harness = external ? harnesses?.harnesses.find((h) => h.id === session.harness) : undefined;
-  const meta = [
-    worktree ? undefined : scopeAll && session.cwd ? projectName(session.cwd) : undefined,
+  // Where the row runs: the worktree's repository, else the thread's own folder.
+  const project = projectName(worktree?.repo || session.cwd || "");
+  // The path, the harness and the model the row no longer spells out, on its tooltip.
+  const details = [
+    session.cwd ? displayPath(session.cwd) : undefined,
     harness?.name ?? (external ? session.harness : undefined),
     modelName(session.model),
   ].filter(Boolean);
@@ -589,12 +685,10 @@ const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
-              className={cx(
-                "flex h-8 w-full items-center gap-1.5 rounded-lg px-2.5 text-left",
-                picked ? "bg-accent/12" : selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
-              )}
+              className="relative flex h-8 w-full items-center gap-1.5 rounded-lg pr-2.5 pl-8 text-left"
             >
-              <span className="flex size-2 shrink-0 items-center justify-center">
+              <RowFill selected={selected} picked={picked} radius="rounded-lg" />
+              <span className="relative flex size-2 shrink-0 items-center justify-center">
                 {mark === "working" ? (
                   <Spinner size={10} className="text-accent" />
                 ) : (
@@ -611,7 +705,7 @@ const ThreadRow = memo(function ThreadRow({
               </span>
               <span
                 className={cx(
-                  "min-w-0 flex-1 truncate text-body",
+                  "relative min-w-0 flex-1 truncate text-body",
                   selected || picked || mark === "needs" || mark === "working"
                     ? "font-medium text-fg"
                     : "text-fg-muted",
@@ -619,7 +713,7 @@ const ThreadRow = memo(function ThreadRow({
               >
                 {session.title || "New thread"}
               </span>
-              <span className="shrink-0 text-fg-faint text-sub tabular">
+              <span className="relative shrink-0 text-fg-faint text-sub tabular">
                 {running && startedAt ? <Elapsed since={startedAt} /> : shortAge(session.updatedAt, now)}
               </span>
             </button>
@@ -658,16 +752,14 @@ const ThreadRow = memo(function ThreadRow({
               }
               title={fold.summary}
               tabIndex={-1}
-              className="absolute top-2.5 left-1.5 z-10 flex size-4 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+              className="absolute top-[7px] left-1.5 z-10 flex size-4 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
             >
-              <ChevronRight
-                size={12}
-                strokeWidth={2.5}
-                className={cx(
-                  "shrink-0 transition-transform duration-200 ease-snappy",
-                  fold.open && "rotate-90",
-                )}
-              />
+              {/* The mark says which way the group goes; a turned one keeps the transform it had. */}
+              {fold.open ? (
+                <ChevronDown size={12} strokeWidth={2.5} className="shrink-0" />
+              ) : (
+                <ChevronRight size={12} strokeWidth={2.5} className="shrink-0" />
+              )}
             </button>
           )}
           <button
@@ -691,39 +783,39 @@ const ThreadRow = memo(function ThreadRow({
             }}
             aria-current={selected ? "page" : undefined}
             aria-pressed={picked || undefined}
+            title={details.join(" · ")}
             className={cx(
-              "flex w-full flex-col rounded-lg py-1.5 pr-2.5 text-left",
+              "relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2.5 text-left",
               fold ? "pl-6" : "pl-2.5",
-              picked ? "bg-accent/12" : selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
             )}
           >
-            <span className="flex h-6 w-full items-center gap-2 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
-              {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-muted" />}
-              <span
-                className={cx(
-                  "min-w-0 flex-1 truncate text-body",
-                  // What wants you reads strong; what works, waits or has been read recedes.
-                  selected || picked || request || fresh || failed
-                    ? "font-medium text-fg"
-                    : done || running || waiting
-                      ? "font-normal text-fg/75 group-hover:text-fg"
-                      : "font-medium text-fg",
-                )}
-              >
-                {session.title || "New thread"}
-              </span>
-              {fold?.dot && (
-                <span
-                  role="img"
-                  aria-label={fold.dot === "failed" ? "A child thread failed" : "A child thread finished"}
-                  className={cx(
-                    "size-1.5 shrink-0 rounded-full",
-                    fold.dot === "failed" ? "bg-danger" : "bg-success",
-                  )}
-                />
+            <RowFill selected={selected} picked={picked} radius="rounded-xl" />
+            {/* Where it runs, what its branch carries, and what it is doing. */}
+            <span className="relative flex h-[17px] w-full min-w-0 items-center gap-1 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
+              {!grouped && (
+                <>
+                  <ProjectMark name={project} />
+                  {/* The name keeps its room; the branch, the counts and the pull request give way. */}
+                  <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">
+                    {project}
+                  </span>
+                </>
               )}
-              <LinkBadge threadId={session.id} childrenListed={!!fold} />
-              <span className="flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
+              {worktree && (
+                <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
+                  <GitBranch size={9} className="shrink-0" />
+                  <span className="truncate">{worktree.branch}</span>
+                </span>
+              )}
+              {diff && (
+                <span className="shrink-0 font-mono text-[10px] tabular">
+                  {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+                  {diff.added > 0 && diff.removed > 0 && " "}
+                  {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                </span>
+              )}
+              {pull && <PullMark pull={pull} />}
+              <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
                 {request ? (
                   <>
                     {request.question ? (
@@ -773,46 +865,50 @@ const ThreadRow = memo(function ThreadRow({
                 )}
               </span>
             </span>
-            {snippet ? (
-              <span className="mt-0.5 truncate text-fg-muted text-sub">“{snippet}”</span>
-            ) : request ? (
-              <span className="mt-0.5 truncate text-fg-muted text-sub">
-                {request.question ? request.question.text : request.title}
+            {/* Its title, and the harness that runs it. */}
+            <span className="relative flex w-full min-w-0 items-center gap-1.5">
+              {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+              <span
+                className={cx(
+                  "min-w-0 flex-1 truncate text-body",
+                  // What wants you reads strong; what works, waits or has been read recedes.
+                  selected || picked || request || fresh || failed
+                    ? "font-medium text-fg"
+                    : done || running || waiting
+                      ? "font-normal text-fg/75 group-hover:text-fg"
+                      : "font-medium text-fg",
+                )}
+              >
+                {session.title || "New thread"}
               </span>
-            ) : (
-              (meta.length > 0 || worktree || external || diff) && (
-                <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-fg-muted text-sub">
-                  {worktree && (
-                    <span className="flex min-w-0 shrink items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
-                      <GitBranch size={9} className="shrink-0" />
-                      <span className="truncate">{worktree.branch}</span>
-                    </span>
+              {fold?.dot && (
+                <span
+                  role="img"
+                  aria-label={fold.dot === "failed" ? "A child thread failed" : "A child thread finished"}
+                  className={cx(
+                    "size-1.5 shrink-0 rounded-full",
+                    fold.dot === "failed" ? "bg-danger" : "bg-success",
                   )}
-                  <span className="min-w-0 flex-1 truncate">{meta.join(" · ")}</span>
-                  {(diff || external) && (
-                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                      {diff && (
-                        <span className="font-mono tabular">
-                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                          {diff.added > 0 && diff.removed > 0 && " "}
-                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
-                        </span>
-                      )}
-                      {external && (
-                        <HarnessIcon
-                          id={session.harness!}
-                          name={harness?.name}
-                          size={12}
-                          className="shrink-0 text-fg-muted"
-                        />
-                      )}
-                    </span>
-                  )}
-                </span>
-              )
+                />
+              )}
+              <LinkBadge threadId={session.id} childrenListed={!!fold} />
+              {external && (
+                <HarnessIcon
+                  id={session.harness!}
+                  name={harness?.name}
+                  size={13}
+                  className="shrink-0 text-fg-muted"
+                />
+              )}
+            </span>
+            {/* What it asks of you, or while searching, the words around the match. */}
+            {(snippet || request) && (
+              <span className="relative truncate text-fg-muted text-sub">
+                {snippet ? `“${snippet}”` : request!.question ? request!.question.text : request!.title}
+              </span>
             )}
           </button>
-          <div className="absolute top-2 right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
+          <div className="absolute top-1 right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
             <RowAction label={pinned ? "Unpin" : "Pin"} onClick={() => togglePin(session.id)}>
               {pinned ? <PinOff size={12} /> : <Pin size={12} />}
             </RowAction>
@@ -919,7 +1015,7 @@ function ChildThreads({
         key={child.id}
         session={session}
         selected={child.id === selectedId}
-        scopeAll={false}
+        grouped={false}
         now={now}
         slim
         state={child.state}
@@ -931,14 +1027,14 @@ function ChildThreads({
     ) : null;
   };
   return (
-    <div className="flex flex-col gap-px pb-1">
+    <div className="flex flex-col gap-0.5 pb-1">
       {group.rows.map(row)}
       {group.fold && (
         <button
           type="button"
           onClick={() => group.onFold(!group.foldOpen)}
           aria-expanded={group.foldOpen}
-          className="flex h-7 w-full items-center rounded-lg pr-2.5 pl-6 text-left text-fg-faint text-sub hover:bg-fill-subtle hover:text-fg-muted"
+          className="flex h-7 w-full items-center rounded-lg pr-2.5 pl-8 text-left text-fg-faint text-sub hover:bg-fill-subtle hover:text-fg-muted"
         >
           {group.foldOpen ? "Hide finished" : `Show ${group.folded.length} finished`}
         </button>
@@ -980,7 +1076,7 @@ function useStored<T>(key: string, initial: T) {
 type SectionId = "working" | "pinned" | "threads" | "snoozed" | "settled";
 
 /** Sections with a header; the rest are simply part of the list. */
-const HEADED: SectionId[] = ["working", "snoozed", "settled"];
+const HEADED: SectionId[] = ["working", "snoozed"];
 
 interface Section {
   id: SectionId;
@@ -991,9 +1087,6 @@ interface Section {
   /** Threads, split by project when there are several. */
   projects?: { key: string; label: string; items: SessionSummary[] }[];
 }
-
-/** Sections that start folded: Settled, so done threads stay out of the way. */
-const FOLDED_BY_DEFAULT: SectionId[] = ["settled"];
 
 /**
  * A section's rows, unfolding with a height transition. Folded rows are not
@@ -1174,20 +1267,11 @@ function FilterMenu({
   );
   return (
     <DropdownMenu.Root>
-      <Tooltip label="Filter and view">
-        <DropdownMenu.Trigger asChild>
-          <button
-            type="button"
-            aria-label="Filter and view"
-            className={cx(
-              "flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-fill data-[state=open]:bg-fill",
-              on ? "text-accent" : "text-fg-muted",
-            )}
-          >
-            <ListFilter size={14} />
-          </button>
-        </DropdownMenu.Trigger>
-      </Tooltip>
+      <DropdownMenu.Trigger asChild>
+        <ClusterButton label="Filter and view" tooltip="Filter and view" on={on}>
+          <ListFilter size={14} />
+        </ClusterButton>
+      </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content align="end" sideOffset={6} className={menuSurface}>
           <DropdownMenu.Item className={menuItem} onSelect={() => setByProject(!byProject)}>
@@ -1226,6 +1310,106 @@ const NO_MARKS: Record<string, ThreadStatus> = {};
 /** Nothing picked: one set, so clearing an empty selection never re-renders the list. */
 const NO_PICKS: ReadonlySet<string> = new Set();
 
+/**
+ * The sidebar's search: a row that reads "Search" until it is clicked (or ⌘F
+ * while the sidebar has the keyboard), then the field itself. Never a pill: it
+ * is a row among the icon buttons beside it, the same height and radius.
+ */
+function SidebarSearch({
+  query,
+  setQuery,
+  open,
+  setOpen,
+}: {
+  query: string;
+  setQuery: (query: string) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (open) input.current?.focus();
+  }, [open]);
+  if (!open && !query) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Search threads"
+        className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-callout text-fg-muted hover:bg-fill hover:text-fg"
+      >
+        <Search size={14} className="shrink-0" />
+        <span className="truncate">Search</span>
+      </button>
+    );
+  }
+  const clear = () => (query ? setQuery("") : setOpen(false));
+  return (
+    <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-fill px-2">
+      <Search size={14} className="shrink-0 text-fg-muted" />
+      <input
+        ref={input}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") clear();
+        }}
+        // An empty search closes with the keyboard: a field with nothing in it is a label.
+        onBlur={() => {
+          if (!query) setOpen(false);
+        }}
+        placeholder="Search"
+        aria-label="Search threads"
+        className="min-w-0 flex-1 bg-transparent text-callout outline-none placeholder:text-fg-faint"
+      />
+      <button
+        type="button"
+        aria-label={query ? "Clear search" : "Close search"}
+        onClick={clear}
+        className="shrink-0 text-fg-faint hover:text-fg-muted"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The shelf at the foot of the sidebar: Settled says how many threads it holds
+ * and opens them where they lie, at the end of the list above it.
+ */
+function SettledRow({
+  count,
+  open,
+  hidden,
+  onToggle,
+}: {
+  count: number;
+  open: boolean;
+  hidden?: HiddenKind;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      disabled={!count}
+      className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+    >
+      <span className="min-w-0 flex-1 truncate">Settled</span>
+      {!open && <HiddenDot kind={hidden} />}
+      <span className="shrink-0 text-fg-faint text-sub tabular">{count}</span>
+      {/* Two marks rather than one turned by a class: a rotated icon keeps the transform it had. */}
+      {open ? (
+        <ChevronDown size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
+      ) : (
+        <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
+      )}
+    </button>
+  );
+}
+
 export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
@@ -1244,6 +1428,15 @@ export function Sidebar() {
   const newKey = useShortcutHint("new-thread");
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
+  // The search row is a label until it is used: ⌘F while the sidebar has the keyboard opens it.
+  const [searchOpen, setSearchOpen] = useState(false);
+  // Each thread's branch's pull request, from the projects' one read (state/pulls.ts).
+  const pullsOn = useApp((s) => !!s.agent?.pullRequests);
+  // The foot's icon buttons open the same places the header does.
+  const settings = useApp((s) => s.settings);
+  const panel = useApp((s) => s.panel);
+  // The cache's version: a landed read re-renders the rows that read it.
+  useSyncExternalStore(subscribePulls, pullsVersion);
   // By state, with the project on each row; grouping by project is an option.
   const [byProject, setByProject] = useStored("rustcode.sidebar.groupByProject", false);
   const [showWorking, setShowWorking] = useStored("rustcode.sidebar.workingSection", true);
@@ -1254,7 +1447,9 @@ export function Sidebar() {
     return () => clearInterval(t);
   }, []);
   const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
-  const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", FOLDED_BY_DEFAULT);
+  const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", []);
+  // The shelf at the foot has its own switch: it is a row of the sidebar's, not of the list.
+  const [settledOpen, setSettledOpen] = useStored("rustcode.sidebar.settledOpen", false);
   // Which child groups are open, by parent: one record for the whole sidebar, written in one
   // place. A copy per group wrote the whole record back, so opening one group erased another.
   const [openGroups, setOpenGroups] = useStored<Record<string, boolean>>("rustcode.sidebar.childrenOpen", {});
@@ -1330,6 +1525,23 @@ export function Sidebar() {
     return map;
   }, [filtered, parentOf]);
 
+  // The projects whose branches a pull request could name: a thread in a worktree has one to look
+  // up, and its pulls live in the repository the worktree came from.
+  const branchProjects = useMemo(
+    () => projectFolders(sessions.filter((s) => s.worktree?.branch).map((s) => s.worktree?.repo || s.cwd)),
+    [sessions],
+  );
+  // One read per project, a moment after the list settles: `gh` is slow, and a row is not worth it.
+  useEffect(() => {
+    if (!pullsOn || !branchProjects.length) return;
+    const t = setTimeout(() => branchProjects.forEach(loadPulls), 400);
+    return () => clearTimeout(t);
+  }, [pullsOn, branchProjects]);
+  // Each listed thread's own pull request. The cache keeps the objects, so a row whose branch has
+  // no pull request gets nothing new to render, and one that has keeps the same object.
+  const pullOf = (session: SessionSummary) =>
+    pullForBranch(cachedPulls(session.worktree?.repo || session.cwd), session.worktree?.branch);
+
   const sections = useMemo(() => {
     const flagged = new Set(flags.split(" "));
     const pins: SessionSummary[] = [];
@@ -1393,8 +1605,15 @@ export function Sidebar() {
 
   const footShelf = sections.some((g) => g.id === "snoozed") ? "snoozed" : "settled";
   // A search shows every match, folded sections too.
-  const isOpen = (id: string) => !!query.trim() || !folded.includes(id);
-  const toggle = (id: string) => setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
+  const isOpen = (id: string) =>
+    id === "settled" ? !!query.trim() || settledOpen : !!query.trim() || !folded.includes(id);
+  const toggle = (id: string) =>
+    id === "settled"
+      ? setSettledOpen(!settledOpen)
+      : setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
+  // Settled is the shelf at the foot (ui/Sidebar.tsx SettledRow): its header sits in the footer,
+  // and its rows stay at the end of the list above it.
+  const settledSection = sections.find((g) => g.id === "settled");
 
   // ---------------------------------------------------------------- the list's rows, selection and keys
   // What is picked, and which row the keyboard is on, belong to the sidebar while it is drawn:
@@ -1587,16 +1806,17 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  const rows = (items: SessionSummary[], scopeAll: boolean) => (
-    <div className="flex flex-col gap-px">
+  const rows = (items: SessionSummary[], grouped: boolean) => (
+    <div className="flex flex-col gap-0.5">
       {items.map((s) => {
         const kids = childrenOf[s.id]?.length ? group(s.id) : undefined;
         return (
-          <div key={s.id} className="flex flex-col gap-px">
+          <div key={s.id} className="flex flex-col gap-0.5">
             <ThreadRow
               session={s}
               selected={s.id === selectedId}
-              scopeAll={scopeAll}
+              grouped={grouped}
+              pull={pullOf(s)}
               now={now}
               snippet={query.trim() ? contentHits[s.id] : undefined}
               fold={
@@ -1637,6 +1857,14 @@ export function Sidebar() {
       className="relative flex shrink-0 flex-col"
       style={{ width: hidden ? 0 : width }}
       aria-hidden={hidden}
+      // ⌘F searches threads while the sidebar has the keyboard, and the transcript's find bar
+      // everywhere else: the event is stopped here, before it reaches the window.
+      onKeyDownCapture={(e) => {
+        if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "f") return;
+        e.preventDefault();
+        e.stopPropagation();
+        setSearchOpen(true);
+      }}
     >
       <div
         className={cx(
@@ -1661,31 +1889,10 @@ export function Sidebar() {
             >
               <SquarePen size={14} />
             </ClusterButton>
-            <SettingsButton />
           </Cluster>
         </TitlebarRow>
-        <div className="mx-2 mt-2 mb-1.5 flex shrink-0 items-center gap-1">
-          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full bg-fill-subtle px-2.5 focus-within:bg-fill hover:bg-fill">
-            <Search size={14} className="shrink-0 text-fg-muted" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-              placeholder="Search threads"
-              aria-label="Search threads"
-              className="min-w-0 flex-1 bg-transparent text-callout outline-none placeholder:text-fg-faint"
-            />
-            {query && (
-              <button
-                type="button"
-                aria-label="Clear search"
-                onClick={() => setQuery("")}
-                className="text-fg-faint hover:text-fg-muted"
-              >
-                <X size={12} />
-              </button>
-            )}
-          </label>
+        <div className="mx-2 mt-2 mb-1.5 flex shrink-0 items-center gap-0.5">
+          <SidebarSearch query={query} setQuery={setQuery} open={searchOpen} setOpen={setSearchOpen} />
           <FilterMenu
             byProject={byProject}
             setByProject={setByProject}
@@ -1694,6 +1901,20 @@ export function Sidebar() {
             onlyProject={onlyProject}
             setOnlyProject={setOnlyProject}
           />
+          <ClusterButton
+            label="Add project"
+            tooltip="Add a project folder"
+            onClick={() => void pickFolder(projectCwd || undefined).then((p) => p && startNewThread(p))}
+          >
+            <FolderPlus size={14} />
+          </ClusterButton>
+          <ClusterButton
+            label="New thread"
+            tooltip={`New thread (${newKey})`}
+            onClick={() => startNewThread()}
+          >
+            <SquarePen size={14} />
+          </ClusterButton>
         </div>
         <nav
           ref={list}
@@ -1753,7 +1974,7 @@ export function Sidebar() {
                                 onNew={p.key ? () => startNewThread(p.key) : undefined}
                               />
                               <Fold open={projectOpen}>
-                                <div className="pl-3">{rows(p.items, false)}</div>
+                                <div className="pl-3">{rows(p.items, true)}</div>
                               </Fold>
                             </div>
                           );
@@ -1762,7 +1983,8 @@ export function Sidebar() {
                           section.id === "settled" && !query.trim()
                             ? section.items.slice(0, settledShown)
                             : section.items,
-                          !byProject || section.id !== "threads",
+                          // Under its project's heading the row drops the mark and the name.
+                          !!section.projects,
                         )}
                     {section.id === "settled" && !query.trim() && section.items.length > settledShown && (
                       <button
@@ -1818,6 +2040,36 @@ export function Sidebar() {
             </Pill>
           </div>
         )}
+        <div className="shrink-0 px-2 pb-1">
+          <SettledRow
+            count={settledSection?.items.length ?? 0}
+            open={!!settledSection && isOpen("settled")}
+            hidden={settledSection?.hidden}
+            onToggle={() => toggle("settled")}
+          />
+          {/* The app's own pages, quiet until hovered. */}
+          <div className="flex items-center gap-0.5">
+            <SettingsButton />
+            {pullsOn && (
+              <ClusterButton
+                label="Pull requests"
+                tooltip="Pull requests of this project"
+                on={panel === "pulls"}
+                onClick={() => setPanel("pulls")}
+              >
+                <GitPullRequest size={14} />
+              </ClusterButton>
+            )}
+            <ClusterButton
+              label="Usage"
+              tooltip={`Usage${settings === "usage" ? " (open)" : ""}`}
+              on={settings === "usage"}
+              onClick={() => openSettings(settings === "usage" ? null : "usage")}
+            >
+              <ChartNoAxesColumn size={14} />
+            </ClusterButton>
+          </div>
+        </div>
         <UpdateRow />
       </div>
       <CustomSnooze />

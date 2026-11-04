@@ -56,7 +56,6 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/ModelPicker.tsx", "Model and effort", "the model pill is a trigger, and not in this pass"],
   ["ui/Settings.tsx", 'role="option"', "a settings result row"],
   ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
-  ["ui/Sidebar.tsx", "onDoubleClick={startRename}", "the thread rows, both layouts"],
 ];
 
 /** Every `<button` opening tag in a file: tags span lines and hold `>` in expressions. */
