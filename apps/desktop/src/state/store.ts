@@ -1767,7 +1767,14 @@ export async function runPrompt(
   void refreshPlanUsage(id);
   void refreshAgents(id);
   void refreshCheckpoints(id);
-  if (outcome === "completed" && id !== get().selectedId) toast("A thread finished", "success");
+  if ((outcome === "completed" || outcome === "failed") && id !== get().selectedId) {
+    const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
+    toast(
+      outcome === "failed" ? `“${name}” failed` : `“${name}” finished`,
+      outcome === "failed" ? "error" : "success",
+      { action: { label: "Open", run: () => selectThread(id) } },
+    );
+  }
   // A queued message starts at once, so "working" stays up across the hand-off.
   const next = get().threads[id]?.queue[0];
   if (outcome === "completed" && next) {

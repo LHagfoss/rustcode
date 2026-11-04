@@ -891,8 +891,7 @@ From the SwiftUI app, still missing or partial:
   the browser are inlined as text rather than linked.
 - Slash commands the app answers itself (`/terminal`, `/remote`,
   `/visualize`).
-- Snoozed and done threads, moving a thread to another folder
-  (`_rustcode/session/move`), the retention sweep, swipe actions; loading
+- The retention sweep, swipe actions; loading
   the thread list page by page. Trash moves the folder into `~/.Trash`
   (macOS); Finder's Put Back does not know it.
 - A file reference that is changed in the turn does not open the Changes
@@ -907,10 +906,8 @@ From the SwiftUI app, still missing or partial:
 - Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
   `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as
   Text or VoiceOver summaries.
-- Orchestrator v2 was checked against the mock and the engine's own tests;
-  orchestration through a real external harness has not run end to end
-  (#2799). A link's `cancel_session_turn` and the target's *Pause messages*
-  / *Detach* are not offered.
+- A link's `cancel_session_turn` and the target's *Pause messages* / *Detach*
+  are not offered.
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
