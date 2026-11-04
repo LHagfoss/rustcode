@@ -1,0 +1,16 @@
+{"id":"models-on-codex","kind":"bad","prompt":"which model can I use on codex","must":["list_harnesses"],"mustNot":[]}
+{"id":"find-login-thread","kind":"bad","prompt":"find the thread about the login form","must":["search_sessions"],"mustNot":[]}
+{"id":"start-in-thread","kind":"bad","prompt":"start this in a separate thread on codex: add validation to the login form","must":["start_session"],"mustNot":[]}
+{"id":"rename-thread","kind":"bad","prompt":"rename this thread to \"Login form cleanup\"","must":["update_session"],"mustNot":[]}
+{"id":"stop-other-thread","kind":"bad","prompt":"stop the other thread","must":["interrupt_session","list_sessions"],"mustNot":[]}
+{"id":"high-effort-here","kind":"bad","prompt":"use high effort here","must":["configure_session"],"mustNot":[]}
+{"id":"snooze-until-tomorrow","kind":"bad","prompt":"snooze this until tomorrow","must":["update_session"],"mustNot":[]}
+{"id":"open-pull-requests","kind":"bad","prompt":"which pull requests are open","must":["list_pull_requests"],"mustNot":[]}
+{"id":"my-projects","kind":"bad","prompt":"what projects do I have","must":["list_projects"],"mustNot":[]}
+{"id":"merge-state-pulls","kind":"bad","prompt":"show me the pull requests that were merged","must":["list_pull_requests"],"mustNot":[]}
+{"id":"worktrees","kind":"bad","prompt":"what worktrees are there right now","must":["list_worktrees"],"mustNot":[]}
+{"id":"explain-function","kind":"guard","prompt":"explain this function","must":[],"mustNot":["list_sessions","message_session","wait_session","read_session","start_session","fan_out","list_harnesses","search_sessions","list_worktrees","update_session","interrupt_session","configure_session","list_projects","list_pull_requests"]}
+{"id":"translate","kind":"guard","prompt":"translate \"good morning\" into French","must":[],"mustNot":["list_sessions","message_session","wait_session","read_session","start_session","fan_out","list_harnesses","search_sessions","list_worktrees","update_session","interrupt_session","configure_session","list_projects","list_pull_requests"]}
+{"id":"haiku","kind":"guard","prompt":"write a haiku about the ocean","must":[],"mustNot":["list_sessions","message_session","wait_session","read_session","start_session","fan_out","list_harnesses","search_sessions","list_worktrees","update_session","interrupt_session","configure_session","list_projects","list_pull_requests"]}
+{"id":"arithmetic","kind":"control","prompt":"what is 2+2","must":[],"mustNot":["list_sessions","message_session","wait_session","read_session","start_session","fan_out","list_harnesses","search_sessions","list_worktrees","update_session","interrupt_session","configure_session","list_projects","list_pull_requests"]}
+{"id":"greeting","kind":"control","prompt":"say hello in one sentence","must":[],"mustNot":["list_sessions","message_session","wait_session","read_session","start_session","fan_out","list_harnesses","search_sessions","list_worktrees","update_session","interrupt_session","configure_session","list_projects","list_pull_requests"]}

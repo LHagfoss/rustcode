@@ -38,23 +38,29 @@ pub const LIST_WORKTREES: &str = "list_worktrees";
 pub const UPDATE_SESSION: &str = "update_session";
 pub const INTERRUPT_SESSION: &str = "interrupt_session";
 pub const CONFIGURE_SESSION: &str = "configure_session";
+pub const LIST_PROJECTS: &str = "list_projects";
+pub const LIST_PULL_REQUESTS: &str = "list_pull_requests";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
 pub const V2_TOOL_NAMES: [&str; 3] = [READ_SESSION, START_SESSION, FAN_OUT];
 /// Added by version 3: discover what can run, find threads, and manage them.
-pub const V3_TOOL_NAMES: [&str; 6] = [
+pub const V3_TOOL_NAMES: [&str; 8] = [
     LIST_HARNESSES,
     SEARCH_SESSIONS,
     LIST_WORKTREES,
     UPDATE_SESSION,
     INTERRUPT_SESSION,
     CONFIGURE_SESSION,
+    LIST_PROJECTS,
+    LIST_PULL_REQUESTS,
 ];
 /// The newest version this engine speaks.
 pub const VERSION: u8 = 3;
 /// What `update_session` may set a thread's status to.
 pub const SESSION_STATUSES: [&str; 3] = ["active", "review", "settled"];
+/// What `list_pull_requests` may ask for.
+pub const PR_STATES: [&str; 4] = ["open", "closed", "merged", "all"];
 
 /// Turns `read_session` returns by default, and at most.
 pub const DEFAULT_LAST_TURNS: u64 = 3;
@@ -85,7 +91,7 @@ pub const PROMPT_HINT: &str = "\n\nOther threads: `list_sessions` lists this pro
 pub const PROMPT_HINT_V2: &str = "\n\nOther threads: `list_sessions` and `read_session` show this project's threads; `message_session` messages one, `start_session` starts one, `fan_out` runs one task on 2-4 harnesses; `wait_session` returns their answers. The user approves first. Use them only when the user asks to involve other threads.";
 
 /// [`PROMPT_HINT_V2`] for version 3 clients.
-pub const PROMPT_HINT_V3: &str = "\n\nOther threads: `list_sessions`, `search_sessions`, `read_session` and `list_worktrees` show threads; `list_harnesses` shows what can run. `start_session`, `fan_out` and `message_session` give threads work, `wait_session` returns their answers; `update_session`, `configure_session` and `interrupt_session` manage them. The user approves work on other threads. Use them only when the user asks.";
+pub const PROMPT_HINT_V3: &str = "\n\nOther threads: `list_sessions`, `search_sessions`, `read_session` and `list_worktrees` show threads; `list_harnesses` shows what can run, `list_projects` the user's projects and `list_pull_requests` this project's pull requests. `start_session`, `fan_out` and `message_session` give threads work, `wait_session` returns their answers; `update_session`, `configure_session` and `interrupt_session` manage them. The user approves work on other threads. Use them only when the user asks.";
 
 /// Every orchestration tool of any version.
 pub fn is_tool(name: &str) -> bool {
@@ -171,7 +177,12 @@ fn optional_title(args: &Value) -> Result<(), String> {
 /// Check the arguments before they leave the engine.
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     match name {
-        LIST_SESSIONS | LIST_HARNESSES | LIST_WORKTREES => Ok(()),
+        LIST_SESSIONS | LIST_HARNESSES | LIST_WORKTREES | LIST_PROJECTS => Ok(()),
+        LIST_PULL_REQUESTS => match args.get("state") {
+            None | Some(Value::Null) => Ok(()),
+            Some(Value::String(state)) if PR_STATES.contains(&state.as_str()) => Ok(()),
+            Some(_) => Err(format!("state must be one of {PR_STATES:?}")),
+        },
         SEARCH_SESSIONS => {
             if text(args, "query").unwrap_or("").trim().is_empty() {
                 return Err("query is required".to_owned());
@@ -506,7 +517,7 @@ mod tests {
                 .all(|name| !tool_names(2).contains(name))
         );
         let v3 = tool_names(3);
-        assert_eq!(v3.len(), 12);
+        assert_eq!(v3.len(), 14);
         for name in V3_TOOL_NAMES {
             assert!(v3.contains(&name), "{name}");
             assert!(is_tool(name) && is_v3_tool(name));
@@ -527,6 +538,11 @@ mod tests {
             CONFIGURE_SESSION,
             json!({"model": "m", "effort": "high"})
         ));
+        assert!(ok(LIST_PROJECTS, json!({})));
+        assert!(ok(LIST_PULL_REQUESTS, json!({})));
+        assert!(ok(LIST_PULL_REQUESTS, json!({"state": "merged"})));
+        assert!(!ok(LIST_PULL_REQUESTS, json!({"state": "draft"})));
+        assert!(!ok(LIST_PULL_REQUESTS, json!({"state": 1})));
         assert!(ok(UPDATE_SESSION, json!({"pinned": true})));
         assert!(ok(
             UPDATE_SESSION,

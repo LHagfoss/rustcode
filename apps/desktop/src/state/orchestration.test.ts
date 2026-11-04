@@ -56,6 +56,16 @@ describe("management tools", () => {
     expect(isFailure(parseCall({ tool: "interrupt_session", args: {} }))).toBe(true);
     expect(isFailure(parseCall({ tool: "update_session", args: { session_id: "a" } }))).toBe(true);
     expect(isFailure(parseCall({ tool: "update_session", args: { status: "gone" } }))).toBe(true);
+    expect(parseCall({ tool: "list_projects", args: {} })).toEqual({ tool: "list_projects" });
+    expect(parseCall({ tool: "list_pull_requests", args: {} })).toEqual({
+      tool: "list_pull_requests",
+      state: "open",
+    });
+    expect(parseCall({ tool: "list_pull_requests", args: { state: "merged" } })).toEqual({
+      tool: "list_pull_requests",
+      state: "merged",
+    });
+    expect(isFailure(parseCall({ tool: "list_pull_requests", args: { state: "draft" } }))).toBe(true);
     expect(parseCall({ tool: "update_session", args: { pinned: false, status: "settled" } })).toMatchObject({
       pinned: false,
       status: "settled",
