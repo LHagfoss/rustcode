@@ -147,7 +147,7 @@ where
                             "title": "RustCode threads",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": super::PROMPT_HINT_V2.trim(),
+                        "instructions": super::PROMPT_HINT_V3.trim(),
                     }),
                 ));
             }
@@ -320,7 +320,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             listed,
-            super::super::tool_names(2)
+            super::super::tool_names(super::super::VERSION)
                 .into_iter()
                 .map(str::to_owned)
                 .collect::<Vec<_>>()

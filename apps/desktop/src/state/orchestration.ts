@@ -9,7 +9,7 @@ import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 2;
+export const CAPABILITY_VERSION = 3;
 export const MAX_BYTES = 8 * 1024;
 export const READ_BYTES = 16 * 1024;
 export const MAILBOX = 32;
@@ -104,7 +104,24 @@ export type Call =
       worktree?: boolean;
       project?: string;
     }
-  | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[] };
+  | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[] }
+  | { tool: "list_harnesses" }
+  | { tool: "search_sessions"; query: string }
+  | { tool: "list_worktrees" }
+  | {
+      tool: "update_session";
+      target?: string;
+      title?: string;
+      pinned?: boolean;
+      unread?: boolean;
+      status?: SessionStatusChoice;
+    }
+  | { tool: "interrupt_session"; target: string }
+  | { tool: "configure_session"; target?: string; model?: string; effort?: string };
+
+/** What `update_session` may set a thread's status to. */
+export type SessionStatusChoice = "active" | "review" | "settled";
+const SESSION_STATUSES: readonly string[] = ["active", "review", "settled"];
 
 const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
 const bytes = (text: string) => new TextEncoder().encode(text).length;
@@ -116,6 +133,47 @@ export function parseCall(params: JsonObject): Call | Failure {
   switch (s(params.tool)) {
     case "list_sessions":
       return { tool: "list_sessions", query: s(args.query) ?? "" };
+    case "list_harnesses":
+      return { tool: "list_harnesses" };
+    case "list_worktrees":
+      return { tool: "list_worktrees" };
+    case "search_sessions": {
+      const query = (s(args.query) ?? "").trim();
+      if (!query) return failure("invalid", "query is required");
+      return { tool: "search_sessions", query };
+    }
+    case "interrupt_session": {
+      const target = s(args.session_id) ?? "";
+      if (!target) return failure("invalid", "session_id is required");
+      return { tool: "interrupt_session", target };
+    }
+    case "configure_session":
+      return {
+        tool: "configure_session",
+        target: s(args.session_id),
+        model: s(args.model),
+        effort: s(args.effort),
+      };
+    case "update_session": {
+      const status = s(args.status);
+      if (status && !SESSION_STATUSES.includes(status)) {
+        return failure("invalid", `status must be one of ${SESSION_STATUSES.join(", ")}`);
+      }
+      const title = s(args.title)?.trim();
+      const pinned = typeof args.pinned === "boolean" ? args.pinned : undefined;
+      const unread = typeof args.unread === "boolean" ? args.unread : undefined;
+      if (!title && pinned === undefined && unread === undefined && !status) {
+        return failure("invalid", "give at least one of title, pinned, unread or status");
+      }
+      return {
+        tool: "update_session",
+        target: s(args.session_id),
+        title,
+        pinned,
+        unread,
+        status: status as SessionStatusChoice | undefined,
+      };
+    }
     case "read_session": {
       const target = s(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
@@ -206,6 +264,18 @@ export const projectOf = (t: Pick<RuleThread, "folder" | "worktree">) => clean(t
 export const sameProject = (a: string, b: string) => !!a && clean(a) === clean(b);
 
 /** `list_sessions`: the other threads of the caller's project, newest first, metadata only. */
+/** Why a thread may not manage `target`, the project rule every management tool shares. */
+export function checkManage(caller: RuleThread, target: RuleThread | undefined): Failure | null {
+  if (!target) return failure("not_found", "no thread has that id; use list_sessions");
+  if (!sameProject(projectOf(target), projectOf(caller))) {
+    return failure(
+      "not_allowed",
+      "that thread is in another project; only this project's threads can be reached",
+    );
+  }
+  return null;
+}
+
 export function listSessions(threads: RuleThread[], caller: RuleThread, query: string): JsonObject {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = threads
@@ -385,7 +455,7 @@ export function linkResult(link: Link, state: LinkState, status?: ThreadStatus):
 
 /** What the user is asked, in words. */
 export interface GrantAsk {
-  kind: "message" | "read" | "start" | "fan_out";
+  kind: "message" | "read" | "start" | "fan_out" | "organize" | "interrupt" | "configure";
   caller: string;
   callerTitle: string;
   /** The thread messaged or read, or the new thread's title. */
