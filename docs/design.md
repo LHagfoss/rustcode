@@ -9,7 +9,9 @@ in [themes.md](themes.md).
 
 `src/design.test.ts` fails the build on a raw colour (`#hex`, `rgb()`,
 `hsl()`) or a Tailwind palette class (`zinc-*`, `white`, `black`, …)
-outside the tokens files, and on the retired class names listed at the end.
+outside the tokens files, on the retired class names listed at the end, and
+on a native `<select>`, `transition-colors`, `backdrop-blur` or a hand-made
+menu item.
 
 ## Principles
 
@@ -90,9 +92,9 @@ the accent marks state (on, selected, linked), it does not shout.
 |---|---|---|---|
 | xs | 4 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
 | sm | 6 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
-| md | 8 | `rounded-md` | Buttons that are not pills, sidebar rows, menu items, list rows, inputs, tooltips |
-| lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), popovers, menu items, pictures in replies |
-| xl | 16 | `rounded-xl` | Menus and dropdowns (`p-1.5`, items `rounded-lg px-3 py-[7px]`), dialogs, the command palette, large panels, composer picture thumbnails |
+| md | 8 | `rounded-md` | Icon buttons, sidebar rows, list rows, inputs |
+| lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), menu items, tooltips, pictures in replies |
+| xl | 16 | `rounded-xl` | Menus, popovers, dialogs, the command palette, large panels, composer picture thumbnails |
 | 2xl | 22 | `rounded-2xl` | The composer and its tray, toasts |
 | full | — | `rounded-full` | Pills, toolbar clusters, switches, segmented controls, avatars, dots |
 
@@ -138,7 +140,8 @@ A raised surface is told apart by its edge and glass, not by a dark halo.
 Do not hand-tune a shadow on one component: the tokens are the whole scale.
 
 The `elevated` utility is glass (`--rc-glass-bg-strong`) + `shadow-2` +
-`rounded-lg`: use it for every popover, menu and tooltip.
+`rounded-xl`: use it for every popover, menu and dialog. Tooltips have their
+own `rounded-lg` recipe below.
 
 ## Glass
 
@@ -170,7 +173,7 @@ gutter, between groups), 24 (between sections). The chat column is at most
 
 macOS text styles one point up (read at a laptop's distance), SF Pro Rounded
 (`ui-rounded`; Settings › Appearance › Rounded font switches to SF Pro) /
-SF Mono. Lucide icons draw at stroke 1.75, not 2:
+SF Mono:
 
 | Class | Size / line | Use |
 |---|---|---|
@@ -244,7 +247,7 @@ the default arrow on static text; the text cursor only in fields and
 
 ## Icons
 
-Lucide, stroke 2 (2.5 for chevrons at 10–12px). Sizes: 12 inside chips and
+Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes: 12 inside chips and
 dense rows, 13 in menus, 14 in toolbar and composer buttons, 16 in page
 headers, 18 in empty states. Icon colour follows text (`text-fg-muted` idle,
 `text-fg` on hover).
@@ -263,14 +266,21 @@ horizontal padding, never a circle): tray buttons, the model pill, chips,
 segmented items, header actions, Settings' "New…" and "Edit config".
 Circles only for icon-only round buttons (send, stop, close in a panel
 header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
-Rows and menu items are `rounded-md`, cards `rounded-lg`, popovers and
+Rows are `rounded-md`, menu items and cards `rounded-lg`, menus, popovers and
 panels `rounded-xl`.
 
-- **Button, primary:** `rounded-full h-[26px] px-3 bg-fg text-bg font-medium`;
-  hover 90%. **Secondary:** `bg-fill text-fg`, hover `bg-fill-strong`.
-  **Danger:** `bg-danger/12 text-danger`. **Ghost / icon:** transparent,
-  `text-fg-muted`, hover `bg-fill text-fg`; 28px square, `rounded-md` (or
-  `rounded-full` inside a cluster). Disabled: 40% opacity, no hover.
+The shared controls are in `ui/primitives.tsx`; use them instead of restyling
+a raw element. `?catalog` in a dev build shows them all on one page.
+
+- **Button:** `Pill`, 24, 26 (default) or 30px high. Secondary by default
+  (`bg-fill text-fg`, hover `bg-fill-strong`); `prominent` (`bg-fg text-bg`,
+  hover 90%) for the one primary action; `danger` (`bg-danger/12 text-danger`);
+  `quiet` (transparent, `text-fg-muted`, hover `bg-fill text-fg`). **Icon:**
+  `ChromeButton`, or `ClusterButton` inside a `Cluster`. Disabled: 40% opacity,
+  no hover.
+- **Select:** `Select` for one choice from a list, native `<select>` never: a
+  pill trigger with a chevron, opening a menu with a check on the current
+  option. `Segments` when two to four short options should all show.
 - **Input:** `h-8 rounded-md bg-fill-subtle px-3 text-callout`,
   placeholder `text-fg-faint`, no ring until `:focus-visible`.
 - **Chip:** `h-6 rounded-full bg-fill px-2 text-callout text-fg-muted`;
@@ -280,9 +290,10 @@ panels `rounded-xl`.
   opacity only (no layout change).
 - **Card:** `rounded-lg bg-surface p-3.5`, no border; rows inside separated
   by `divide-border`.
-- **Popover / menu:** `elevated p-1`; items `rounded-md px-2.5 py-[5px]`,
-  highlighted `bg-fill` (not accent); destructive items `text-danger`,
-  highlighted `bg-danger/12`.
+- **Menu:** `menuSurface` (`elevated p-1.5`) with `menuItem` rows
+  (`rounded-lg px-3 py-[7px]`), highlighted `bg-fill` (not accent);
+  destructive rows add `menuItemDanger`; `menuSeparator` and `menuLabel`
+  between them. **Popover:** `popoverSurface` (`elevated p-3`).
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
 - **Toast:** `.rc-toast rounded-2xl` (the composer's glass, denser, and its
   slight shadow), 380px wide, `py-1.5 pl-3.5 pr-1.5 text-callout`: an icon
@@ -377,8 +388,8 @@ panels `rounded-xl`.
   bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has
   a segmented switch between the views and a close button; views add a
   slim toolbar (`h-9`) under it. The left edge drags (320–760px, kept);
-  it slides and fades in 200ms while its slot's width animates, so the
-  chat reflows with it. ⌘⌥B toggles it with the last view.
+  its slot takes its width at once and the panel slides and fades in 200ms
+  (see Motion). ⌘⌥B toggles it with the last view.
 - **Jump to latest:** `.rc-glass rounded-full shadow-1`, centred 12px
   above the composer stack, above it in z.
 - **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`

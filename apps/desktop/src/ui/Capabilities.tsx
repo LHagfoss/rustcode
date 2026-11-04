@@ -19,8 +19,8 @@ import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { askConfirm, request, toast, useApp } from "../state/store";
-import { cx, Pill, Switch, Tooltip } from "./primitives";
-import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
+import { cx, inputClass, Pill, Switch, Tooltip } from "./primitives";
+import { Group, Loading, Row, useEngineData } from "./settingsKit";
 
 interface Skill {
   name: string;
@@ -184,24 +184,19 @@ function McpSection({
         <div className="flex items-center gap-1">
           {data.configPath && hasShell() && (
             <Tooltip label={`Edit ${data.configPath}`}>
-              <button
-                type="button"
+              <Pill
+                quiet
+                size="sm"
                 aria-label="Edit the config file"
                 onClick={() => openPath(data.configPath!)}
-                className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
               >
                 <SquarePen size={12} /> Edit config
-              </button>
+              </Pill>
             </Tooltip>
           )}
-          <button
-            type="button"
-            onClick={() => setAdding(!adding)}
-            aria-expanded={adding}
-            className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-          >
+          <Pill quiet size="sm" onClick={() => setAdding(!adding)} aria-expanded={adding}>
             <Plus size={12} /> Add server
-          </button>
+          </Pill>
         </div>
       }
       footer={data.configPath ? `Saved in ${data.configPath}` : undefined}
@@ -420,14 +415,9 @@ function SkillsSection({
           Skills · {on} of {data.skills.length} on
         </h3>
         {hasShell() && (
-          <button
-            type="button"
-            onClick={() => setCreating(!creating)}
-            aria-expanded={creating}
-            className="flex h-6 items-center gap-1 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-          >
+          <Pill quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
             <FilePlus2 size={12} /> New skill
-          </button>
+          </Pill>
         )}
       </div>
       {creating && <NewSkill onDone={() => setCreating(false)} />}
@@ -529,21 +519,19 @@ function NewSkill({ onDone }: { onDone: () => void }) {
       <div className="flex items-center gap-2 text-callout text-fg-muted">
         <span>In</span>
         {(["user", "project"] as const).map((v) => (
-          <button
+          <Pill
             key={v}
-            type="button"
+            quiet={scope !== v}
+            size="sm"
             aria-pressed={scope === v}
             disabled={v === "project" && !cwd}
             onClick={() => setScope(v)}
-            className={cx(
-              "h-6 rounded-full px-2.5 disabled:opacity-40",
-              scope === v ? "bg-fill-strong text-fg" : "hover:bg-fill",
-            )}
+            className={scope === v ? "bg-fill-strong text-fg" : undefined}
           >
             {v === "user"
               ? "~/.config/rustcode/skills"
               : `${cwd ? cwd.split("/").pop() : "project"}/.rustcode/skills`}
-          </button>
+          </Pill>
         ))}
         <span className="flex-1" />
         <Pill onClick={onDone}>Cancel</Pill>

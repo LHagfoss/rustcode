@@ -17,7 +17,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
-import { Cluster, ClusterButton, cx, Tooltip } from "./primitives";
+import { Cluster, ClusterButton, cx, Pill, Tooltip } from "./primitives";
 import { StatusIcon } from "./Status";
 import { useLightsInset } from "./Titlebar";
 
@@ -100,25 +100,19 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
         <div className="mt-2 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
           {status === "review" ? (
             <Tooltip label="Mark done">
-              <button
-                type="button"
-                aria-label="Mark done"
-                onClick={() => void setThreadStatus(session.id, "done")}
-                className="flex h-6 items-center gap-1 rounded-full bg-fill px-2 text-caption hover:bg-fill-strong"
-              >
+              <Pill size="sm" aria-label="Mark done" onClick={() => void setThreadStatus(session.id, "done")}>
                 <CircleCheck size={11} /> Done
-              </button>
+              </Pill>
             </Tooltip>
           ) : (
             <Tooltip label="Back to review">
-              <button
-                type="button"
+              <Pill
+                size="sm"
                 aria-label="Back to review"
                 onClick={() => void setThreadStatus(session.id, "review")}
-                className="flex h-6 items-center gap-1 rounded-full bg-fill px-2 text-caption hover:bg-fill-strong"
               >
                 <Eye size={11} /> Review
-              </button>
+              </Pill>
             </Tooltip>
           )}
           <Tooltip label="Clear the status">

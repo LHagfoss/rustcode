@@ -14,7 +14,7 @@ import { buildPage, pageTheme, usesChart, varsCss } from "../smartui/page";
 import { blockProblem, blockTitle, clampHeight, MAX_ELEMENTS, viewMessage } from "../smartui/parse";
 import { sendFromView, setSmartUi, toast, useApp } from "../state/store";
 import { CodeBlock } from "./Markdown";
-import { copyText, cx, Tooltip } from "./primitives";
+import { copyText, cx, Pill, Tooltip } from "./primitives";
 
 const LOAD_TIMEOUT = 5000;
 const BUSY_TIMEOUT = 3000;
@@ -47,7 +47,7 @@ function IconButton({
         type="button"
         aria-label={label}
         onClick={onClick}
-        className="flex size-[22px] items-center justify-center rounded-md bg-bg/80 text-fg-muted backdrop-blur hover:bg-fill hover:text-fg"
+        className="flex size-[22px] items-center justify-center rounded-md bg-bg/80 text-fg-muted hover:bg-fill hover:text-fg"
       >
         {children}
       </button>
@@ -244,14 +244,9 @@ export function SmartUIView({
         />
       ) : (
         <div className="flex min-h-[44px] items-center gap-2 text-callout">
-          <button
-            type="button"
-            disabled={!threadId}
-            onClick={() => void run()}
-            className="flex h-[28px] items-center gap-1.5 rounded-full bg-fill px-3 font-medium hover:bg-fill-strong"
-          >
+          <Pill disabled={!threadId} onClick={() => void run()}>
             <Play size={11} fill="currentColor" /> Run interactive view
-          </button>
+          </Pill>
           <span className="truncate text-fg-muted">{title}</span>
         </div>
       )}

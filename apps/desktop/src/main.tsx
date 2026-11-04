@@ -25,13 +25,20 @@ quietNativeChrome();
 const root = document.getElementById("root");
 if (!root) throw new Error("No #root element");
 
-createRoot(root).render(
-  <StrictMode>
-    <Recoverable>
-      <App />
-    </Recoverable>
-  </StrictMode>,
-);
+// `?catalog` in a dev build: the shared controls on one page, without an engine (ui/Catalog.tsx).
+const catalog = import.meta.env.DEV && new URLSearchParams(window.location.search).has("catalog");
+
+if (catalog) {
+  void import("./ui/Catalog").then(({ Catalog }) => createRoot(root).render(<Catalog />));
+} else {
+  createRoot(root).render(
+    <StrictMode>
+      <Recoverable>
+        <App />
+      </Recoverable>
+    </StrictMode>,
+  );
+}
 
 // Dev builds expose the store and its actions, so an agent can drive and inspect the UI
 // (`window.__rustcode.useApp.getState()`), as DebugDriver does for the SwiftUI app.
@@ -39,7 +46,7 @@ createRoot(root).render(
 if (import.meta.env.DEV || new URLSearchParams(window.location.search).get("transport") === "perf")
   Object.assign(window, { __rustcode: store });
 
-void defaultTransport().then(store.connect);
+if (!catalog) void defaultTransport().then(store.connect);
 
 // ⌘⌥F: the frame-rate overlay (docs/desktop.md › Native frame rate). Dev builds only.
 if (import.meta.env.DEV) void import("./lib/perfOverlay").then((m) => m.installPerfOverlay());

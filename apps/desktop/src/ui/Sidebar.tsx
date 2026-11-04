@@ -78,7 +78,18 @@ import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
-import { Cluster, ClusterButton, cx, Skeleton, Spinner, Tooltip } from "./primitives";
+import {
+  Cluster,
+  ClusterButton,
+  cx,
+  menuItem,
+  menuItemDanger,
+  menuSeparator,
+  menuSurface,
+  Skeleton,
+  Spinner,
+  Tooltip,
+} from "./primitives";
 import { StatusChip } from "./Status";
 import { TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
@@ -103,10 +114,6 @@ function useSidebarWidth() {
   }, [width]);
   return [width, setWidth] as const;
 }
-
-const menuItem =
-  "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
-const menuSurface = "elevated z-50 min-w-[200px] p-1.5 rc-in";
 
 function ThreadMenuItems({
   session,
@@ -150,7 +157,7 @@ function ThreadMenuItems({
       <Item className={menuItem} onSelect={() => markUnread(session.id)}>
         <CircleCheck size={13} /> Mark Unread
       </Item>
-      <Separator className="mx-1.5 my-1 h-px bg-border" />
+      <Separator className={menuSeparator} />
       <Item className={menuItem} onSelect={() => togglePin(session.id)}>
         {pinned ? <PinOff size={13} /> : <Pin size={13} />}
         {pinned ? "Unpin" : "Pin"}
@@ -171,7 +178,7 @@ function ThreadMenuItems({
       </Item>
       {worktree && (
         <>
-          <Separator className="mx-1.5 my-1 h-px bg-border" />
+          <Separator className={menuSeparator} />
           <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-muted">
             <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
@@ -185,17 +192,14 @@ function ThreadMenuItems({
           >
             <SquareTerminal size={13} /> Open in Terminal
           </Item>
-          <Item
-            className={cx(menuItem, "text-danger data-[highlighted]:bg-danger/12")}
-            onSelect={() => void removeWorktree(session.id)}
-          >
+          <Item className={cx(menuItem, menuItemDanger)} onSelect={() => void removeWorktree(session.id)}>
             <FolderX size={13} /> Remove Worktree…
           </Item>
         </>
       )}
-      <Separator className="mx-1.5 my-1 h-px bg-border" />
+      <Separator className={menuSeparator} />
       <Item
-        className={cx(menuItem, "text-danger data-[highlighted]:bg-danger/12")}
+        className={cx(menuItem, menuItemDanger)}
         disabled={!canFiles}
         onSelect={() =>
           askConfirm({
@@ -939,7 +943,7 @@ function FilterMenu({
             {check(onlyProject)}
             <span className="truncate">Only {projectCwd ? projectName(projectCwd) : "this project"}</span>
           </DropdownMenu.Item>
-          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-border" />
+          <DropdownMenu.Separator className={menuSeparator} />
           <DropdownMenu.Item
             className={menuItem}
             onSelect={() => setView(view === "board" ? { kind: "chat" } : { kind: "board" })}

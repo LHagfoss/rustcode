@@ -41,7 +41,17 @@ import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { Callout, Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
+import {
+  Callout,
+  Cluster,
+  ClusterButton,
+  cx,
+  menuItem,
+  menuSeparator,
+  Pill,
+  Skeleton,
+  Tooltip,
+} from "./primitives";
 import { ReportPanel } from "./ReportPanel";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
@@ -97,8 +107,6 @@ function PlanButton({ thread }: { thread: ThreadState }) {
 function ThreadStatusMenu({ threadId }: { threadId: string }) {
   const status = useApp((s) => statusOf(s, threadId));
   const wt = useApp((s) => worktreeOf(s, threadId));
-  const item =
-    "flex w-full items-center gap-2 rounded-lg px-3 py-[7px] text-body outline-none data-[highlighted]:bg-fill";
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -123,17 +131,17 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content align="end" sideOffset={6} className="elevated z-50 min-w-[200px] p-1.5">
-          <DropdownMenu.Item className={item} onSelect={() => setView({ kind: "review", threadId })}>
+          <DropdownMenu.Item className={menuItem} onSelect={() => setView({ kind: "review", threadId })}>
             <FileDiff size={13} /> Review Changes
           </DropdownMenu.Item>
-          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-border" />
-          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "review")}>
+          <DropdownMenu.Separator className={menuSeparator} />
+          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
             <Eye size={13} /> Mark for Review
           </DropdownMenu.Item>
-          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "done")}>
+          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "done")}>
             <CircleCheck size={13} /> Mark Done
           </DropdownMenu.Item>
-          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "idle")}>
+          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
             <CircleDashed size={13} /> Clear Status
           </DropdownMenu.Item>
         </DropdownMenu.Content>

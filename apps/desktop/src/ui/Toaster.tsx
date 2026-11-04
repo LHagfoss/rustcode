@@ -9,7 +9,7 @@
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { clearToasts, dismissToast, type Toast, useApp } from "../state/store";
-import { cx, Spinner } from "./primitives";
+import { cx, Pill, Spinner } from "./primitives";
 
 const DURATION_MS = 3000;
 const ERROR_MS = 7000;
@@ -101,16 +101,15 @@ function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; 
       </span>
       <p className="line-clamp-3 min-w-0 flex-1 py-1 text-fg">{toast.text}</p>
       {toast.action && (
-        <button
-          type="button"
+        <Pill
+          size="sm"
           onClick={() => {
             toast.action?.run();
             dismissToast(toast.id);
           }}
-          className="h-6 shrink-0 rounded-full bg-fill px-2.5 font-medium text-fg hover:bg-fill-strong active:bg-fill-strong"
         >
           {toast.action.label}
-        </button>
+        </Pill>
       )}
       {waiting > 0 && (
         <button
