@@ -1577,6 +1577,19 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |_request: commands::CommandsRequest, responder, connection| {
+                connection.spawn(async move {
+                    match commands::catalog_update() {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: data::DataUsageRequest, responder, connection| {
                 connection.spawn(async move {
                     match data::usage(request) {

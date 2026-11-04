@@ -672,13 +672,6 @@ export class MockEngine {
       case "initialize": {
         const rc = obj(obj(obj(params.clientCapabilities)?._meta)?.rustcode);
         this.orchestration = typeof rc?.orchestration === "number" ? rc.orchestration : 0;
-        // A new thread has no session yet, and the slash commands arrive with one (on `session/new`),
-        // so they are offered here too, on the id a thread that has not started yet would get.
-        queueMicrotask(() =>
-          this.notify(
-            update("new-thread", { sessionUpdate: "available_commands_update", availableCommands: COMMANDS }),
-          ),
-        );
         return {
           protocolVersion: 1,
           agentCapabilities: {
@@ -692,6 +685,9 @@ export class MockEngine {
           authMethods: [],
         };
       }
+      // The catalog, for a thread that has no session yet to send it on.
+      case "_rustcode/commands":
+        return { sessionUpdate: "available_commands_update", availableCommands: COMMANDS };
       case "session/list":
         return {
           sessions: this.threads

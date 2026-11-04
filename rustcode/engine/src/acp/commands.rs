@@ -84,6 +84,23 @@ fn catalog() -> Vec<RemoteCommandInfo> {
         .collect()
 }
 
+/// `_rustcode/commands`: the catalog below, asked for by a client that has no
+/// session yet. A new thread in the app shows its command drawer before it
+/// starts, and commands only ride on `available_commands_update`, on
+/// `session/new` and `session/load`.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/commands", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommandsRequest {}
+
+/// The same update `available_commands_update` sends, as the value a client's
+/// session-update parser already reads (`sessionUpdate`, `availableCommands`).
+pub(crate) fn catalog_update() -> Result<serde_json::Value, String> {
+    serde_json::to_value(available_commands_update()).map_err(|error| error.to_string())
+}
+
 /// Commands a client can offer: host commands (`execute`) and those it handles
 /// natively (`new_session`, `model_picker`, `session_picker`, `copy_response`).
 /// Terminal-only commands are left out. ACP names carry no leading slash; the
@@ -408,6 +425,33 @@ mod tests {
             "model_picker"
         );
         assert!(model.input.is_some());
+    }
+
+    #[test]
+    fn advertises_the_same_catalog_without_a_session() {
+        let value = catalog_update().expect("the catalog serializes");
+        assert_eq!(value["sessionUpdate"], "available_commands_update");
+        let listed = value["availableCommands"]
+            .as_array()
+            .expect("the update carries availableCommands");
+        let SessionUpdate::AvailableCommandsUpdate(update) = available_commands_update() else {
+            panic!("expected an available_commands_update");
+        };
+        assert_eq!(listed.len(), update.available_commands.len());
+        let names: Vec<_> = listed
+            .iter()
+            .filter_map(|command| command["name"].as_str())
+            .collect();
+        assert!(names.contains(&"status"));
+        assert!(names.contains(&"model"));
+        assert!(!names.iter().any(|name| name.starts_with('/')));
+        // The app reads the action and the report flag off `_meta.rustcode`, as it does on the notification.
+        let model = listed
+            .iter()
+            .find(|command| command["name"] == "model")
+            .unwrap();
+        assert_eq!(model["_meta"]["rustcode"]["action"], "model_picker");
+        assert!(model["input"].is_object());
     }
 
     #[test]

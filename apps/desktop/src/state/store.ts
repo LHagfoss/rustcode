@@ -73,6 +73,13 @@ import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from ".
 import { titleFrom } from "../lib/title";
 import { createBatcher, frameQueue } from "./batch";
 import {
+  type HarnessCommands,
+  menuCommands,
+  parseHarnessCommands,
+  rememberCommands,
+  serializeHarnessCommands,
+} from "./commands";
+import {
   type ComposeExtras,
   emptyExtras,
   hasExtras,
@@ -210,7 +217,12 @@ export interface AppState {
   defaultCwd: string;
   newThread: NewThreadChoice | null;
   harnesses: HarnessSnapshot | null;
-  commands: SlashCommand[];
+  /** The engine's own catalog (`_rustcode/commands`), so a new thread's drawer works before it starts. */
+  baseCommands: SlashCommand[];
+  /** Each harness's last advertised commands, by harness id (kept in app storage). */
+  harnessCommands: HarnessCommands;
+  /** The commands an open thread's session advertised, by thread id; absent falls back to the menu above. */
+  sessionCommands: Record<string, SlashCommand[]>;
   drafts: Record<string, string>;
   /** Command token, link chips and attachments of each composer, by thread id (or "new"). */
   extras: Record<string, ComposeExtras>;
@@ -344,6 +356,8 @@ const STORAGE = {
   permissionModes: "rustcode.permissionModes",
   /** Each harness's last new-thread choice, for an engine that does not remember it. */
   harnessChoices: "rustcode.harnessChoices",
+  /** Each harness's last advertised slash commands, so a new thread's drawer is filled in. */
+  harnessCommands: "rustcode.harnessCommands",
   /** Each harness's plan windows, so the composer's meter is there on launch. */
   planCache: "rustcode.planCache",
   /** Bindings the user changed, by command id; the table in lib/keys.ts holds the rest. */
@@ -451,7 +465,9 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   defaultCwd: stored(STORAGE.project) ?? "",
   newThread: null,
   harnesses: null,
-  commands: [],
+  baseCommands: [],
+  harnessCommands: parseHarnessCommands(stored(STORAGE.harnessCommands)),
+  sessionCommands: {},
   drafts: parseDrafts(stored(DRAFTS_KEY)),
   extras: {},
   settings: null,
@@ -744,7 +760,13 @@ async function handshake(): Promise<void> {
         ]),
       ),
     }));
-    await Promise.all([refreshSessions(), refreshHarnesses(), probeFeatures(conn), refreshThemes(conn)]);
+    await Promise.all([
+      refreshSessions(),
+      refreshHarnesses(),
+      probeFeatures(conn),
+      refreshThemes(conn),
+      refreshCommands(conn),
+    ]);
     // The composer's meter is ready before the first thread opens.
     void refreshPlanCache();
     if (connection === conn) await syncPinsAndSettled(conn);
@@ -774,6 +796,24 @@ async function probeFeatures(conn: AcpConnection): Promise<void> {
   ]);
   if (connection === conn)
     set((s) => ({ features: { ...s.features, worktrees, checkpoints, status, pins } }));
+}
+
+// ---------------------------------------------------------------- commands
+
+/**
+ * The engine's command catalog (`_rustcode/commands`): commands otherwise only arrive with a
+ * session, so a new thread's drawer would be empty until one had been opened. An engine without
+ * the method is an older one; the per-harness lists still fill the drawer once they are known.
+ */
+async function refreshCommands(conn: AcpConnection): Promise<void> {
+  try {
+    const answer = obj(await conn.request(Method.commands, {}, 10_000));
+    const update = parseSessionUpdate({ update: answer ?? {} });
+    if (connection !== conn || update.kind !== "commands") return;
+    set({ baseCommands: update.commands });
+  } catch {
+    // No catalog: a new thread shows what its harness last advertised, if anything.
+  }
 }
 
 // ---------------------------------------------------------------- themes
@@ -990,7 +1030,14 @@ function onSessionUpdate(params: JsonObject) {
   if (!sessionId) return;
   const update = parseSessionUpdate(params);
   if (update.kind === "commands") {
-    set({ commands: update.commands });
+    // The thread's own list, and the harness's last one for the next new thread on it.
+    const harness = harnessOf(get(), sessionId);
+    const next = harness ? rememberCommands(get().harnessCommands, harness, update.commands) : undefined;
+    set((s) => ({
+      sessionCommands: { ...s.sessionCommands, [sessionId]: update.commands },
+      ...(harness && next ? { harnessCommands: next } : {}),
+    }));
+    if (next) store(STORAGE.harnessCommands, serializeHarnessCommands(next));
     return;
   }
   if (isReportUpdate(params) && update.kind === "agent") {
@@ -1637,16 +1684,20 @@ export function acceptsImages(thread?: ThreadState): boolean {
  * Returns whether the command was one of them.
  */
 export function runCommandAction(text: string, from: string | null): boolean {
-  const command = get().commands.find((c) => c.name === text);
+  const s = get();
+  const command = commandsFor(s, from).find((c) => c.name === text);
   if (!command || command.action === "execute") return false;
-  const thread = from ? get().threads[from] : undefined;
+  const thread = from ? s.threads[from] : undefined;
   switch (command.action) {
     case "new_session": {
-      // A fresh thread on the same project, harness, model and effort, selected and empty.
-      const model = thread ? selectOption(thread.configOptions, "model")?.current : undefined;
-      const effort = thread ? selectOption(thread.configOptions, "effort")?.current : undefined;
-      const harness = thread?.harness?.id ?? get().sessions.find((x) => x.id === from)?.harness;
-      startNewThread(thread?.cwd);
+      // A fresh thread on the same project, harness, model and effort, selected and empty; in a
+      // new thread it keeps the folder and the choice already made there.
+      const choice = newThreadChoice(s);
+      const model = thread ? selectOption(thread.configOptions, "model")?.current : choice?.model;
+      const effort = thread ? selectOption(thread.configOptions, "effort")?.current : choice?.effort;
+      const harness =
+        thread?.harness?.id ?? (from ? s.sessions.find((x) => x.id === from)?.harness : choice?.harness);
+      startNewThread(thread?.cwd ?? s.projectCwd);
       if (harness) setNewThreadChoice({ harness, model: model ?? null, effort: effort ?? null });
       return true;
     }
@@ -1930,7 +1981,7 @@ export async function runPrompt(
   else if (outcome === "failed") markFinished(id, Date.now(), true);
   // A report command that answered in the panel leaves no turn behind: its message and footer go.
   const reported = get().report?.threadId === id;
-  if (reported && outcome === "completed" && isReportCommand(text, extras)) {
+  if (reported && outcome === "completed" && isReportCommand(id, text, extras)) {
     updateThread(id, (t) => ({ ...t, items: t.items.slice(0, startIndex) }));
   }
   if (options.link)
@@ -2674,6 +2725,31 @@ export function harnessOf(
   return s.threads[threadId]?.harness?.id ?? s.sessions.find((x) => x.id === threadId)?.harness;
 }
 
+/** The state `commandsFor` reads. */
+type CommandsSource = Pick<
+  AppState,
+  "threads" | "sessions" | "newThread" | "harnesses" | "baseCommands" | "harnessCommands" | "sessionCommands"
+>;
+
+/**
+ * The slash commands a composer offers: an open thread reads its session's own list, a new one the
+ * menu of the harness picked there. Until a thread's session has advertised (or for a new thread),
+ * the menu is the engine's catalog with that harness's last list over it, so switching between
+ * them never leaves another harness's commands behind.
+ */
+export function commandsFor(s: CommandsSource, threadId?: string | null): SlashCommand[] {
+  const own = threadId ? s.sessionCommands[threadId] : undefined;
+  if (own) return own;
+  const harness = harnessOf(s, threadId ?? undefined);
+  const known = s.harnesses?.harnesses.find((h) => h.id === harness);
+  return menuCommands({
+    base: s.baseCommands,
+    seen: harness ? s.harnessCommands[harness] : undefined,
+    // Before the harnesses are listed the engine answers the thread, so its catalog applies.
+    builtin: known?.builtin ?? (!s.harnesses || harness === undefined || harness === "rustcode"),
+  });
+}
+
 /** How often the app asks for every plan while its window is visible. */
 export const PLAN_CACHE_POLL_MS = 180_000;
 
@@ -3025,7 +3101,9 @@ export function resetForTests() {
     projectCwd: "",
     newThread: null,
     harnesses: null,
-    commands: [],
+    baseCommands: [],
+    harnessCommands: {},
+    sessionCommands: {},
     drafts: {},
     extras: {},
     settings: null,
@@ -3062,12 +3140,12 @@ export function resetForTests() {
 }
 
 /** A command the engine marks as a report (`/status`, `/context`…), sent alone. */
-function isReportCommand(text: string, extras: ComposeExtras): boolean {
+function isReportCommand(id: string, text: string, extras: ComposeExtras): boolean {
   const name = extras.command?.name ?? text.trim().split(/\s/)[0];
   return (
     !extras.links.length &&
     !extras.attachments.length &&
-    get().commands.some((c) => c.name === name && c.report)
+    commandsFor(get(), id).some((c) => c.name === name && c.report)
   );
 }
 
