@@ -40,30 +40,62 @@ pub fn session_usage(
 ) -> Option<SessionUsage> {
     let id = native_session_id.filter(|id| !id.trim().is_empty())?;
     match harness {
-        "claude-code" => claude_log(id, cwd).map(|path| read_claude(&path)),
+        "claude-code" => {
+            let logs = claude_logs(id, cwd);
+            (!logs.is_empty()).then(|| read_claude_logs(&logs))
+        }
         "pi" => pi_log(id).map(|path| read_pi(&path)),
         _ => None,
     }
 }
 
-/// Claude Code's transcript: the project folder named after the working
-/// directory, else any project folder that holds this session.
-fn claude_log(id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
+/// Claude Code's transcripts of a session: in each config folder, the project
+/// folder named after the working directory, else any project folder that
+/// holds it. A session resumed under another profile has a log in both.
+fn claude_logs(id: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
     if !safe_id(id) {
-        return None;
+        return Vec::new();
     }
-    let base = std::env::var_os("CLAUDE_CONFIG_DIR")
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let configured = std::env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))?;
-    let projects = base.join("projects");
+        .map(PathBuf::from);
+    claude_config_dirs(configured, home.as_deref())
+        .iter()
+        .filter_map(|base| claude_log_in(&base.join("projects"), id, cwd))
+        .collect()
+}
+
+/// Where Claude Code's logs may be: `CLAUDE_CONFIG_DIR`, `~/.claude`, then
+/// other profiles such as `~/.claude-work`. A thread keeps its log in the
+/// profile it ran under, whichever one this process was started with. Session
+/// ids are UUIDs, so looking in another profile cannot find the wrong log.
+fn claude_config_dirs(configured: Option<PathBuf>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = configured.into_iter().collect();
+    if let Some(home) = home {
+        dirs.push(home.join(".claude"));
+        let mut profiles: Vec<PathBuf> = std::fs::read_dir(home)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".claude-"))
+            .map(|entry| entry.path())
+            .filter(|path| path.join("projects").is_dir())
+            .collect();
+        profiles.sort();
+        dirs.append(&mut profiles);
+    }
+    dirs
+}
+
+fn claude_log_in(projects: &Path, id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     if let Some(cwd) = cwd {
         let candidate = projects.join(project_slug(cwd)).join(format!("{id}.jsonl"));
         if candidate.is_file() {
             return Some(candidate);
         }
     }
-    for entry in std::fs::read_dir(&projects).ok()?.flatten() {
+    for entry in std::fs::read_dir(projects).ok()?.flatten() {
         let candidate = entry.path().join(format!("{id}.jsonl"));
         if candidate.is_file() {
             return Some(candidate);
@@ -181,9 +213,23 @@ fn timestamp(value: Option<&Value>) -> Option<String> {
 }
 
 /// Sums Claude Code's assistant usage, one entry per `message.id`.
+#[cfg(test)]
 fn read_claude(path: &Path) -> SessionUsage {
+    read_claude_logs(&[path.to_path_buf()])
+}
+
+/// [`read_claude`] over every log of a session. A log copied to another
+/// profile repeats its messages, and the shared `message.id` set counts them once.
+fn read_claude_logs(paths: &[PathBuf]) -> SessionUsage {
     let mut seen: HashSet<String> = HashSet::new();
     let mut usage = SessionUsage::default();
+    for path in paths {
+        read_claude_log(path, &mut seen, &mut usage);
+    }
+    usage
+}
+
+fn read_claude_log(path: &Path, seen: &mut HashSet<String>, usage: &mut SessionUsage) {
     scan(path, |line| {
         // A cheap filter before parsing: most lines are not assistant usage.
         if !line.contains("\"usage\"") {
@@ -223,7 +269,6 @@ fn read_claude(path: &Path) -> SessionUsage {
             usage.cost_usd = Some(usage.cost_usd.unwrap_or(0.0) + cost);
         }
     });
-    usage
 }
 
 /// Sums Pi's per-response usage; Pi prices its own requests in USD.
@@ -289,6 +334,54 @@ mod tests {
             cache_read = cache_read,
             cache_write = cache_write,
         )
+    }
+
+    #[test]
+    fn logs_of_one_session_in_two_profiles_count_each_message_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = |id: &str, output: i64| {
+            format!(
+                "{{\"type\":\"assistant\",\"message\":{{\"id\":\"{id}\",\"usage\":{{\"output_tokens\":{output}}}}}}}\n"
+            )
+        };
+        let first = dir.path().join("first.jsonl");
+        let second = dir.path().join("second.jsonl");
+        std::fs::write(&first, line("a", 10) + &line("b", 20)).unwrap();
+        std::fs::write(&second, line("b", 20) + &line("c", 40)).unwrap();
+        let usage = read_claude_logs(&[first, second]);
+        assert_eq!(
+            usage.tokens.output,
+            Some(70),
+            "a + b + c, with b counted once"
+        );
+    }
+
+    #[test]
+    fn a_log_in_another_claude_profile_is_found() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "01c534e5-afc8-4477-a154-cdafb3c7754a";
+        let folder = home.path().join(".claude-personal/projects/-Users-me-code");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{id}.jsonl")), "").unwrap();
+        // A file named like a profile, and a profile with no logs, are skipped.
+        std::fs::write(home.path().join(".claude-notes"), "").unwrap();
+        std::fs::create_dir_all(home.path().join(".claude-empty")).unwrap();
+        std::fs::create_dir_all(home.path().join(".claude/projects")).unwrap();
+
+        let dirs = claude_config_dirs(Some(PathBuf::from("/set")), Some(home.path()));
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/set"),
+                home.path().join(".claude"),
+                home.path().join(".claude-personal"),
+            ],
+            "the configured folder first, then the default, then other profiles"
+        );
+        let found = dirs
+            .iter()
+            .find_map(|base| claude_log_in(&base.join("projects"), id, None));
+        assert_eq!(found, Some(folder.join(format!("{id}.jsonl"))));
     }
 
     #[test]

@@ -57,7 +57,7 @@ Two hooks, both chosen so no new code sits in a turn's critical path:
 
   | harness | log | taken |
   | --- | --- | --- |
-  | Claude Code | `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<slug>/<native id>.jsonl` | `message.usage` of `type: assistant` lines, deduplicated by `message.id` because one message spans several lines |
+  | Claude Code | `<CLAUDE_CONFIG_DIR, ~/.claude and ~/.claude-*>/projects/<slug>/<native id>.jsonl`, every one that holds the session | `message.usage` of `type: assistant` lines, deduplicated by `message.id` because one message spans several lines |
   | Pi | `~/.pi/agent/sessions/<dir>/<started>_<native id>.jsonl` | `message.usage` of `type: message` lines, including its own USD cost |
 
   Only numbers are read: token counts, cost, timestamps, message and model
