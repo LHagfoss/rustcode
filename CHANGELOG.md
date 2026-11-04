@@ -1,3 +1,18 @@
+## [v1.8.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.8.0) - 2026-11-04
+
+### Features
+- Rework the chat lane, reply type and composer into one card (#2978)
+- Split Settings into pages with a grouped nav and add resets to rows (#2979)
+- Select several threads in the sidebar, navigate it with the keyboard, and see diff counts on rows (#2981)
+- Agents can answer questions about your threads and read threads in other projects, with a setting to turn it off (#2980)
+- Show the real reason when a thread fails to start (#2983)
+- Remap app shortcuts in Settings > Keyboard (#2982)
+- Show approvals, answered questions and plans in the timeline, and keep drafts across restarts (#2984)
+- Add a local data store with `rustcode usage` and `rustcode data query` covering tokens and reported cost per harness and model (#2986)
+- Wake a parent thread when its children finish or need you, and report why delegation was refused (#2987)
+- Codex, Claude Code, Pi and OpenCode can draw rich Smart UI views when asked for a visualization, and Pi and OpenCode now receive RustCode's instructions (#2989)
+- Keep tool output and exit codes in Pi, Codex and Claude Code threads (#2990)
+- Agents can answer usage questions and query the data store with `thread_usage` and `query_data` (#2992)
 ## [v1.7.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.7.1) - 2026-11-04
 
 ### Features
