@@ -1,4 +1,4 @@
-// Subagents, one way for every harness, as T3 Code draws them: a row per
+// Subagents, one way for every harness: a row per
 // agent a turn started, where it started it, that says what it does while it
 // works and how long it took once done; and a pill over the composer while
 // agents work. RustCode's own agents (`spawn_agent`) take the same row, fed
@@ -163,7 +163,7 @@ export function SubagentRow({
 }
 
 /**
- * Two or more subagents a turn started together, as T3 Code collapses them:
+ * Two or more subagents a turn started together:
  * one line, `3 subagents`, with how many still work (or how long they took)
  * and a chevron; open, a card with each agent's own row.
  */

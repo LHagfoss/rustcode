@@ -73,7 +73,7 @@ left out on purpose.
 
 ## Where the idea came from
 
-T3 Code (see `research/orchestrator/t3code.md`) injects its client contract
+Another orchestrator injects its client contract
 per provider: Codex `additionalContext` entries kept under Codex's per-entry
 size limit, a system-prompt append for harnesses that have one, and a
 wrapped first prompt for ACP agents. It tells the agent what the client can
@@ -81,7 +81,7 @@ show (charts through its HTML preview, files linked by absolute path so they
 open in its viewer) rather than a long style guide. Two lessons carried over:
 gate each instruction on what the client can render, and keep it short and
 specific, since a hedge such as "render a visual only when asked" switched
-the behaviour off entirely (pingdotgg/t3code#25766).
+the behaviour off entirely.
 
 ## Changing the rules
 

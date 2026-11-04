@@ -353,7 +353,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   sides and foot. The transcript scrolls under both (its bottom padding is the
   stack's height) and fades out from 56px above the box.
 - **Tool group:** two or more finished tool calls in a row (with the
-  thoughts between them) are one row, as T3 Code's work log: the icon of
+  thoughts between them) are one row: the icon of
   the kind most of them are in the 18px column, then a sentence of the two
   most frequent actions, `Read 4 files and ran 2 commands`, the rest as
   `performed N other actions`, in `text-callout text-fg-muted`, the failed
@@ -369,8 +369,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `text-accent`, done `3 steps · 42s`. Its own steps never become
   transcript rows; the chevron opens a bordered card
   (`rounded-lg border bg-fill-subtle/30`) of one-line steps and its
-  answer. Two or more subagents in a row are one row, as T3 Code collapses
-  them: `3 subagents`, then `2 working · 42s` in accent (or `1 failed`,
+  answer. Two or more subagents in a row are one row:
+  `3 subagents`, then `2 working · 42s` in accent (or `1 failed`,
   `done`), opening to a card with each agent's row. Over the composer,
   `● 2 agents working` (accent pill with the `Orb`) opens on hover a card
   of each working agent and its step.
@@ -386,7 +386,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   wide; its time and actions on hover), the final answer (the replies after
   the last step), warnings and errors, and the footer (time, copy,
   Changes), which then leaves out the duration. The chat lane is 768px
-  wide, as T3 Code's. Opening it shows the steps in order,
+  wide. Opening it shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
   under a transition; Reduce motion makes it instant). A `<button
   aria-expanded>`, so ⏎ and Space toggle it. Opened turns are kept per

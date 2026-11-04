@@ -236,7 +236,7 @@ What each part does for an external thread:
   fails `session/prompt` with the harness's message. A harness that exited is
   started again by the next prompt.
 - **Reply style and runtime info.** An external harness never sees
-  RustCode's system prompt. Like T3 Code's runtime instructions, it gets a
+  RustCode's system prompt. It gets a
   `<runtime_info>` line (it runs in RustCode through that harness; embed
   images and link files by absolute path so the app opens them) and the
   output-style rules ([output-style.md](output-style.md)). Codex gets them as
@@ -294,8 +294,8 @@ What each part does for an external thread:
 ## Switching a thread's harness
 
 `_rustcode/session/harness` `{ "sessionId", "harness", "model"?, "effort"? }`
-→ `{ "configOptions", "_meta" }` moves a thread to another external harness,
-as T3 Code's context handoff does (`harness/handoff.rs`). The old harness
+→ `{ "configOptions", "_meta" }` moves a thread to another external harness
+(`harness/handoff.rs`). The old harness
 stops; `harness.json` names the new one, without a native session, with
 `handoff_from` set. Its first prompt carries the conversation so far, newest
 back to about 16k tokens (tool results cut short), as
@@ -310,7 +310,7 @@ the composer's model picker › Harness switches an open thread.
 ## Compaction
 
 Each harness compacts its own context; RustCode does not compact on a
-threshold of its own (as T3 Code does). `/compact` on its own asks for a
+threshold of its own. `/compact` on its own asks for a
 compaction now: the Codex adapter calls Codex's `thread/compact/start`
 instead of sending the text to the model, and an ACP harness (Claude Code,
 OpenCode) gets `/compact` as its prompt and runs its own command. Codex's

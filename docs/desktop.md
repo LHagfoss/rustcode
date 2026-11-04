@@ -40,7 +40,7 @@ Next, in rough order:
 2. #2799, cross-harness delegation: the live test plan with Claude Code
    and Codex parents, a harness/model discovery tool, one approval per
    delegation, waking a parent when its child ends.
-3. Compaction follow-ups from T3 Code: the auto-compact tick on the context
+3. Compaction follow-ups: the auto-compact tick on the context
    bar (`autoCompactThreshold`), Claude's idle compaction before the prompt
    cache expires.
 4. SQLite as the store, not only an index: pins and status first, then an
@@ -249,8 +249,8 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   messages go too. A finished turn shows a summary card: files changed with
   +/−, and whether the checks it ran (test, lint, build, …) passed on their
   last run, from its tool calls only.
-- **Subagents.** Every harness's subagents take one row, as T3 Code draws
-  them: Claude Code's `Agent`/`Task` calls (their steps fold under them by
+- **Subagents.** Every harness's subagents take one row:
+  Claude Code's `Agent`/`Task` calls (their steps fold under them by
   `_meta.claudeCode.parentToolUseId`) and RustCode's `spawn_agent` (status
   from `_rustcode/agents`, polled every 2 s while a turn runs or a child
   works; steps from the child's conversation). While one works the row says
@@ -325,7 +325,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   title opens the command and diff), then "Waiting for your approval" and
   two buttons, *Decline* and *Allow* (prominent). The rarer answers, the
   engine's always-allow and always-reject options and, when a turn waits
-  on several, *Allow all N waiting*, sit in *More* (after T3 Code). Keys
+  on several, *Allow all N waiting*, sit in *More*. Keys
   1–9 still pick in the engine's order. The composer is a light frost
   (`--rc-composer-bg`: white glass in light mode, a pale tint of the text
   in dark), solid under Reduce transparency. Queued messages are rows above the composer that can be
@@ -337,9 +337,9 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Sidebar.** One list, as T3 Code's: pinned threads first, then every
+- **Sidebar.** One list: pinned threads first, then every
   active thread, and Settled as a shelf at the foot: threads marked Done
-  and, as in T3 Code, threads untouched for three days unless they wait
+  and threads untouched for three days unless they wait
   for review (`idleSettled`), folded by default, 10 at a time then *Show
   25 more*. A thread that works, waits or needs you stays in the list and
   says so in its row. A row is the title and one meta line (project when
@@ -353,7 +353,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   nine rows, and holding ⌘ shows each row's digit in the slot. Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
   Double-click or F2 renames. Settling is marking a thread Done, with an
   Undo toast; a new message brings it back. The filter button by the
-  search groups Threads by project (off by default, as in T3 Code; each
+  search groups Threads by project (off by default; each
   project folds and has New thread on hover; a worktree thread sits under
   its repository), keeps to the current project, and opens the Board.
   Search matches titles and folders at once, and from three characters
@@ -453,7 +453,7 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   rows' grammar: "Read 4 files and ran 2 commands", the two most frequent
   actions by tool kind and "performed N other actions" for the rest, with
   "N failed" in danger. A call still running and a subagent keep their own rows; a
-  search opens every group (`groupTools`, after T3 Code's timeline).
+  search opens every group (`groupTools`).
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
   pictures, a click zooms, Esc or a click outside closes). A reply's

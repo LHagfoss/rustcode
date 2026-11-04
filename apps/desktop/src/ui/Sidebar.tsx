@@ -1,4 +1,4 @@
-// The sidebar, after T3 Code's: a toolbar clear of the traffic lights, a
+// The sidebar: a toolbar clear of the traffic lights, a
 // search field with a filter menu, then one list: pinned threads first, then
 // every active thread (by project when asked), each saying in its right slot
 // what it does (Working, Approval, Input, Failed, Done until you open it), and
@@ -371,7 +371,7 @@ function settleThread(session: SessionSummary, before: ThreadStatus | undefined)
 }
 
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
-// After T3 Code's rows: the title and one meta line, and a single slot on the right that shows the
+// the title and one meta line, and a single slot on the right that shows the
 // age, a live clock while the turn runs, or what the thread waits for; hovering swaps it for the
 // row's actions, so nothing shifts.
 const ThreadRow = memo(function ThreadRow({
@@ -408,7 +408,7 @@ const ThreadRow = memo(function ThreadRow({
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const finishedAt = useApp((s) => s.finished[session.id]);
   const failedAt = useApp((s) => s.failed[session.id]);
-  // Done or Failed while you were elsewhere, until you open it (T3 Code's unseen completion).
+  // Done or Failed while you were elsewhere, until you open it.
   const fresh = !!finishedAt && !selected;
   const failed = !!failedAt && !selected;
   const [renaming, setRenaming] = useState(false);
@@ -949,7 +949,7 @@ function SectionHeader({
 }
 
 /**
- * A project's folder, as T3 Code draws it: the folder and its name, a dot for
+ * A project's folder: the folder and its name, a dot for
  * what it hides and its count only while folded, the chevron at the end, and
  * a new-thread button on hover.
  */
@@ -1092,7 +1092,7 @@ export function Sidebar() {
   const hidden = useApp((s) => s.sidebarHidden);
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
-  // By state, as T3 Code's sidebar, with the project on each row; grouping by project is an option.
+  // By state, with the project on each row; grouping by project is an option.
   const [byProject, setByProject] = useStored("rustcode.sidebar.groupByProject", false);
   const [showWorking, setShowWorking] = useStored("rustcode.sidebar.workingSection", true);
   const snoozed = useApp((s) => s.snoozed);
@@ -1128,7 +1128,7 @@ export function Sidebar() {
   }, [hidden, width]);
   const dragging = useRef(false);
   const now = useNow();
-  // Settled lists 10 threads, then 25 more at a time, as T3 Code does.
+  // Settled lists 10 threads, then 25 more at a time.
   const [settledShown, setSettledShown] = useState(10);
   // design-lint: allow (mask alpha, not a colour)
   const fade = "linear-gradient(to bottom, #000 calc(100% - 12px), transparent)";
@@ -1186,12 +1186,12 @@ export function Sidebar() {
     for (const s of filtered) {
       if (parentOf[s.id]) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
-      // Settled: threads marked Done (by the user, or the engine for a merged branch), and, as in
-      // T3 Code, threads untouched for three days unless they wait for review.
+      // Settled: threads marked Done (by the user, or the engine for a merged branch), and
+      // threads untouched for three days unless they wait for review.
       const status = marks[s.id] ?? listed;
       const done = status === "done" || (status !== "review" && idleSettled(s.updatedAt, now));
       // A pinned thread always shows, whatever it is doing.
-      // As T3 Code's: one list, each row saying what it does; only settled threads leave it.
+      // One list, each row saying what it does; only settled threads leave it.
       if (pinned.includes(s.id)) pins.push(s);
       // Snoozed until its time, unless it needs you or works in the meantime.
       else if (snoozed[s.id] && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`)) sleeping.push(s);
@@ -1255,7 +1255,7 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  // ⌘1–⌘9 open the first nine rows as they show; holding ⌘ labels them (T3 Code).
+  // ⌘1–⌘9 open the first nine rows as they show; holding ⌘ labels them.
   const searching = !!query.trim();
   const jumpOrder = useMemo(() => {
     const out: string[] = [];

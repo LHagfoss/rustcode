@@ -9,9 +9,9 @@
 ## [v1.6.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.6.0) - 2026-11-03
 
 ### Features
-- The chat looks like T3 Code's: "Working for 12s" at the top of a running turn, finished calls grouped as one sentence, "Worked for 1m 3s" dividers and a narrower lane. (#2943)
-- The sidebar is one list like T3 Code's, with Done/Failed/Approval/Input in each row until you open it, ⌘1–⌘9 to jump, and Mark Unread. (#2944)
-- Subagents started together collapse into one "N subagents" row with how many still work, like T3 Code. (#2945)
+- The chat has a new layout: "Working for 12s" at the top of a running turn, finished calls grouped as one sentence, "Worked for 1m 3s" dividers and a narrower lane. (#2943)
+- The sidebar is one list, with Done/Failed/Approval/Input in each row until you open it, ⌘1–⌘9 to jump, and Mark Unread. (#2944)
+- Subagents started together collapse into one "N subagents" row with how many still work. (#2945)
 - The context ring fills as context is used, the folder under the composer opens a menu (Finder, Terminal, copy path, new thread), and Claude Code now gets RustCode's reply style and runtime info. (#2942)
 ## [v1.5.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.5.1) - 2026-11-03
 
@@ -130,7 +130,7 @@ RustCode 1.0 is one app for your coding agents: run Claude Code, Codex, Gemini C
 - Settings › Harnesses lists each agent's models as soon as you pick it, saves the default as you change it, re-checks each agent when opened, and puts Claude Code first. (#2810, #2829)
 - ⌘O changes the folder of the current or new thread; ⌘⇧O sets where new threads start. (#2829)
 - RustCode tells you in the sidebar when an update is out, installs it in one click, and shows what changed after each update. (#2830)
-- Threads untouched for three days settle on their own, as in T3 Code, so the sidebar keeps only current work; Settled loads 10 at a time. (#2832)
+- Threads untouched for three days settle on their own, so the sidebar keeps only current work; Settled loads 10 at a time. (#2832)
 - Sidebar search finds threads by what was said in them, from a fast SQLite index kept beside your threads. (#2835)
 
 ### Chat

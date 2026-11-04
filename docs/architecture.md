@@ -138,7 +138,7 @@ shared target directory.
 ## Thread index
 
 `~/.config/rustcode/index.sqlite` (`engine/src/thread_index.rs`) indexes the
-thread folders, after T3 Code's SQLite store: a `threads` table (title,
+thread folders: a `threads` table (title,
 folder, message count, folder mtime) and an FTS5 trigram index over user and
 assistant messages (each capped at 6,000 characters). The folders stay the
 source of truth: the engine refreshes the index from them at start, in the
