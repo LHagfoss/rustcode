@@ -401,9 +401,9 @@ pub fn recorded(
 ) -> Result<SessionUsage, String> {
     connection
         .query_row(
-            "SELECT SUM(COALESCE(input_tokens, 0)), SUM(COALESCE(output_tokens, 0)),
-                    SUM(COALESCE(cached_tokens, 0)), SUM(COALESCE(cache_write_tokens, 0)),
-                    SUM(COALESCE(cost_usd, 0)), COUNT(*)
+            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
+                    COALESCE(SUM(cost_usd), 0.0), COUNT(*)
              FROM turns WHERE thread_id = ?1 AND harness = ?2",
             params![thread_id, harness],
             |row| {
@@ -1326,6 +1326,44 @@ mod tests {
             usage(0.2).growth(SessionUsage::default()).cost_usd,
             Some(0.2)
         );
+    }
+
+    #[test]
+    fn the_first_turn_of_a_new_thread_is_recorded() {
+        let config = tempfile::tempdir().unwrap();
+        let connection = open(&config.path().join(DATA_FILE)).unwrap();
+        let thread = "01a10000-0000-0000-0000-00000000000f";
+        let turn = TurnRow {
+            thread_id: thread.to_owned(),
+            started_at: "2026-11-04T11:00:00.000Z".to_owned(),
+            finished_at: Some("2026-11-04T11:00:05.000Z".to_owned()),
+            harness: Some("pi".to_owned()),
+            status: "completed".to_owned(),
+            ..TurnRow::default()
+        };
+        // No row yet, so the baseline has nothing to sum.
+        write_cumulative_turn(
+            &connection,
+            &turn,
+            SessionUsage {
+                tokens: TokenTotals {
+                    input: Some(50),
+                    ..TokenTotals::default()
+                },
+                ..SessionUsage::default()
+            },
+        )
+        .unwrap();
+        let (turns, input, threads): (i64, i64, i64) = connection
+            .query_row(
+                "SELECT COUNT(*), SUM(input_tokens),
+                        (SELECT COUNT(*) FROM threads WHERE id = ?1)
+                 FROM turns WHERE thread_id = ?1",
+                [thread],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((turns, input, threads), (1, 50, 1));
     }
 
     #[test]
