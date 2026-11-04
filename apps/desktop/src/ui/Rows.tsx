@@ -15,6 +15,7 @@ import {
   ExternalLink,
   FilePlus,
   FileText,
+  GitFork,
   Globe,
   Hourglass,
   Image as ImageIcon,
@@ -43,7 +44,7 @@ import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
 import { LINK_LABEL } from "../state/orchestration";
-import { editMessage, retryMessage, selectThread, useApp } from "../state/store";
+import { editMessage, forkThread, retryMessage, selectThread, useApp } from "../state/store";
 import {
   diffCounts,
   diffLines,
@@ -168,8 +169,9 @@ export const UserRow = memo(function UserRow({
           // A card a step off the pane, not a fill that moves with the text colour. Messages sent
           // one after another soften the corners they share, so they read as one run.
           "relative max-w-[80%] rounded-2xl bg-message p-3",
-          after && "rounded-tr-md",
-          before && "rounded-br-md",
+          // A message after this one continues the run: the bottom-right corner joins it.
+          after && "rounded-br-md",
+          before && "rounded-tr-md",
           !text && "hidden",
         )}
       >
@@ -194,7 +196,7 @@ export const UserRow = memo(function UserRow({
         )}
       </div>
       {/* Time and actions show on hover, clipped to the bubble's width. */}
-      <div className="mt-0.5 flex h-[22px] max-w-[80%] min-w-0 items-center gap-1 overflow-hidden text-sub text-fg-faint opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
+      <div className="mt-0.5 flex h-[22px] max-w-[80%] min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
@@ -263,26 +265,41 @@ export const AssistantRow = memo(function AssistantRow({
   item,
   streaming = false,
   threadId,
-  copyable = true,
 }: {
   item: Item<"assistant">;
   streaming?: boolean;
   threadId?: string;
-  /** False for the reply the turn's footer already copies: one copy button per reply. */
-  copyable?: boolean;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
   const reveal = useApp((s) => s.animateStreaming);
-  // Each reply block copies on its own, from the margin: faint until the row is hovered, and out of
-  // the text's flow so a streaming block never moves.
-  const copy = copyable && item.text.trim() && (
-    <span className="absolute top-0 right-0 opacity-0 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100">
-      <CopyButton text={item.text} iconOnly label="Copy this reply" />
-    </span>
-  );
+  // Under the reply, on hover: copy, fork and the time, 12px, in that order.
+  const canCopy = !!item.text.trim();
+  const actions =
+    canCopy || (threadId && item.at) ? (
+      <div className="mt-0.5 flex h-[22px] items-center gap-1 text-sub text-fg-faint tabular opacity-0 transition-opacity focus-within:opacity-100 group-hover/reply:opacity-100">
+        {canCopy && <CopyButton text={item.text} iconOnly label="Copy this reply" />}
+        {threadId && !streaming && (
+          <Tooltip label="Fork the chat: a new thread gets this conversation">
+            <button
+              type="button"
+              aria-label="Fork chat"
+              onClick={() => void forkThread(threadId)}
+              className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+            >
+              <GitFork size={12} />
+            </button>
+          </Tooltip>
+        )}
+        {item.at && (
+          <Tooltip label={new Date(item.at).toLocaleString()}>
+            <span className="truncate">{messageTime(item.at)}</span>
+          </Tooltip>
+        )}
+      </div>
+    ) : null;
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <div className={cx("group/reply relative", copy && "pr-7")}>
+      <div className="group/reply">
         <Markdown
           text={item.text}
           streaming={streaming}
@@ -292,12 +309,11 @@ export const AssistantRow = memo(function AssistantRow({
           // again as it stops being the last one, so the reveal covers it instead.
           className={streaming && !reveal ? "rc-stream" : undefined}
         />
-        {copy}
+        {actions}
       </div>
     );
   return (
-    <div className={cx("group/reply relative flex flex-col gap-2.5", copy && "pr-7")}>
-      {copy}
+    <div className="group/reply flex flex-col gap-2.5">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown
@@ -319,6 +335,7 @@ export const AssistantRow = memo(function AssistantRow({
           <VizView key={`viz${segment.index}`} source={segment.source} complete={segment.complete} />
         ),
       )}
+      {actions}
     </div>
   );
 });
@@ -576,7 +593,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           type="button"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="-mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+          className="-mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left leading-relaxed hover:bg-fill-subtle"
         >
           <span className="flex w-[18px] shrink-0 justify-center">
             {running ? (
@@ -870,14 +887,14 @@ export const ToolGroupRow = memo(function ToolGroupRow({
   return (
     // Two or more finished calls read as one step of the turn, closed by a hairline so the run
     // below it is told apart from the answer that follows.
-    <div className="border-border/60 border-b pb-2">
+    <div className="border-border/60 border-b pt-1 pb-2">
       <button
         type="button"
         aria-expanded={group.open}
         onClick={() => onToggle(group.key)}
         title={group.open ? "Hide these steps" : `Show ${group.count} steps`}
         data-kind={group.kind}
-        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left hover:bg-fill-subtle"
+        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left leading-relaxed hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
           {(() => {

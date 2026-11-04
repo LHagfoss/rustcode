@@ -262,20 +262,16 @@ export function Transcript({
     return set;
   }, [rows]);
 
-  // The reply each turn footer copies: the last reply before it. That reply keeps no margin copy.
-  const { replyBefore, footerCopied } = useMemo(() => {
+  // The reply each turn footer copies: the last reply before it.
+  const replyBefore = useMemo(() => {
     const map: Record<string, string> = {};
-    const copied = new Set<string>();
     let last: { id: string; text: string } | undefined;
     for (const item of thread.items) {
       if (item.kind === "assistant") last = { id: item.id, text: item.text };
       else if (item.kind === "user") last = undefined;
-      else if (item.kind === "turnEnd" && last) {
-        map[item.id] = last.text;
-        copied.add(last.id);
-      }
+      else if (item.kind === "turnEnd" && last) map[item.id] = last.text;
     }
-    return { replyBefore: map, footerCopied: copied };
+    return map;
   }, [thread.items]);
 
   const completions = useMemo(() => {
@@ -485,12 +481,33 @@ export function Transcript({
 
   const railCurrent = showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1;
 
-  // What waits at the end while the reader is scrolled up: the running turn's current step, when
-  // the thread is still working. Nothing new is asked of the store, only what the work already said.
-  const waits = useMemo(
-    () => (thread.running && showLatest ? workingLabel(visible) : undefined),
-    [thread.running, showLatest, visible],
-  );
+  // What waits at the end while the reader is scrolled up, after the pill's `·`: an approval it
+  // needs, what the turn does now, or the agents that finished since. Nothing new is asked of the
+  // store, only what the work already said.
+  const waits = useMemo(() => {
+    if (!showLatest) return undefined;
+    const approvals = thread.permissions.filter((p) => !p.question).length;
+    if (approvals) return approvals === 1 ? "Approval" : `${approvals} approvals`;
+    if (thread.running) return workingLabel(visible);
+    // The last turn's subagents, once they have all stopped: what the reader scrolled away from.
+    let agents = 0;
+    let finished = 0;
+    let ended = false;
+    for (let i = visible.length - 1; i >= 0; i--) {
+      const item = visible[i]!;
+      if (item.kind === "user") break;
+      if (item.kind === "turnEnd") {
+        ended = true;
+        continue;
+      }
+      const agent = item.kind === "tool" && !item.parent ? subagentOf(item) : undefined;
+      if (!agent) continue;
+      agents++;
+      if (item.kind === "tool" && item.status !== "pending" && item.status !== "in_progress") finished++;
+    }
+    if (!ended || !agents || finished !== agents) return undefined;
+    return `${agents} ${agents === 1 ? "agent" : "agents"} finished`;
+  }, [thread.permissions, thread.running, showLatest, visible]);
 
   const onWheel = (e: React.WheelEvent) => {
     // Scrolling up during a stream unpins at once, before the next chunk pulls the view down.
@@ -712,7 +729,6 @@ export function Transcript({
                         item={item}
                         threadId={thread.id}
                         streaming={thread.running && v.index === lastIndex}
-                        copyable={!footerCopied.has(item.id)}
                       />
                     ) : item?.kind === "thought" ? (
                       <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
@@ -736,7 +752,7 @@ export function Transcript({
                       <TurnEndRow
                         item={item}
                         folded={foldedEnds.has(item.id)}
-                        reply={replyBefore[item.id]}
+                        reply={foldedEnds.has(item.id) ? replyBefore[item.id] : undefined}
                         completion={completions[item.id]}
                         changes={
                           turnCheckpoints[item.id] && (

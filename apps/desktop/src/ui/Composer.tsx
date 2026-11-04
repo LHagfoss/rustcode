@@ -7,6 +7,7 @@
 
 import {
   ArrowUp,
+  Check,
   ChevronDown,
   ChevronUp,
   Command,
@@ -79,6 +80,7 @@ import {
   takeQueued,
   threadHarness,
   toast,
+  updateQueued,
   useApp,
 } from "../state/store";
 import { localId, type QueuedPrompt, type ThreadState } from "../state/thread";
@@ -819,6 +821,21 @@ function QueueStack({
   steerable: boolean;
   onTakeBack: (q: QueuedPrompt) => void;
 }) {
+  // A queued message can be rewritten where it waits: ⏎ saves it, Esc leaves it as it was.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const startEdit = (q: QueuedPrompt) => {
+    setEditing(q.id);
+    setDraft(q.text);
+  };
+  const stopEdit = () => {
+    setEditing(null);
+    setDraft("");
+  };
+  const save = (q: QueuedPrompt) => {
+    updateQueued(thread.id, q.id, draft);
+    stopEdit();
+  };
   return (
     <section className="mb-2 flex flex-col gap-1 px-2" aria-label="Queued messages">
       <div className="flex items-center gap-1.5 px-1 text-caption text-accent">
@@ -826,88 +843,141 @@ function QueueStack({
         <b>Queued</b>
         <span className="text-fg-muted">· sent when this turn ends{steerable ? ", or now with ⌘⏎" : ""}</span>
       </div>
-      {thread.queue.map((q, i) => (
-        <div
-          key={q.id}
-          className="elevated group flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 rc-in"
-        >
-          <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-faint">{i + 1}</span>
-          <button
-            type="button"
-            onClick={() => onTakeBack(q)}
-            className="flex min-w-0 flex-1 cursor-text items-center gap-1.5 text-left"
-            aria-label="Edit in the composer"
-            title="Edit in the composer (↑)"
-          >
-            {!!q.extras?.attachments.length && (
-              <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-fill px-1 text-caption text-fg-muted">
-                <Paperclip size={10} />
-                {q.extras.attachments.length}
-              </span>
-            )}
-            <span className={cx("line-clamp-2 text-callout", !q.text && "text-fg-faint")}>
-              {q.text || "Attachments only"}
-            </span>
-          </button>
-          <span className="flex shrink-0 items-center gap-1.5 opacity-60 group-hover:opacity-100">
-            {i > 0 && (
-              <Tooltip label="Move up">
-                <button
-                  type="button"
-                  aria-label="Move up"
-                  onClick={() => moveQueued(thread.id, q.id, -1)}
-                  className="text-fg-muted hover:text-fg"
-                >
-                  <ChevronUp size={13} />
-                </button>
-              </Tooltip>
-            )}
-            <Tooltip label="Edit in the composer (↑)">
-              <button
-                type="button"
-                aria-label="Edit in the composer"
-                onClick={() => onTakeBack(q)}
-                className="text-fg-muted hover:text-fg"
-              >
-                <Pencil size={12} />
-              </button>
-            </Tooltip>
-            {steerable &&
-              (q.extras?.attachments.length ? (
-                <Tooltip label="Attachments go with the next turn: a running turn takes text only">
-                  <span
-                    role="img"
-                    aria-label="Send now is not available with attachments"
-                    className="text-fg-faint"
-                  >
-                    <ArrowUp size={13} />
-                  </span>
-                </Tooltip>
-              ) : (
-                <Tooltip label="Send now: the turn reads it after its current step">
+      {thread.queue.map((q, i) => {
+        if (editing === q.id)
+          return (
+            <div
+              key={q.id}
+              className="elevated flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5"
+            >
+              <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-faint">{i + 1}</span>
+              <input
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    save(q);
+                  } else if (e.key === "Escape") {
+                    // The composer's Esc must not also fire under this field.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    stopEdit();
+                  }
+                }}
+                aria-label="Edit the queued message"
+                placeholder="What to send"
+                className="h-7 min-w-0 flex-1 rounded-sm bg-fill-subtle px-2 text-callout text-fg outline-none placeholder:text-fg-faint"
+              />
+              <span className="flex shrink-0 items-center gap-1.5">
+                <Tooltip label="Save (⏎)">
                   <button
                     type="button"
-                    aria-label="Send now"
-                    onClick={() => void sendQueuedNow(thread.id, q.id)}
-                    className="text-fg-muted hover:text-fg"
+                    aria-label="Save the queued message"
+                    onClick={() => save(q)}
+                    disabled={!draft.trim() && !q.extras?.attachments.length}
+                    className="text-fg-muted hover:text-fg disabled:opacity-40"
                   >
-                    <ArrowUp size={13} />
+                    <Check size={13} />
                   </button>
                 </Tooltip>
-              ))}
-            <Tooltip label="Remove">
-              <button
-                type="button"
-                aria-label="Remove queued message"
-                onClick={() => removeQueued(thread.id, q.id)}
-                className="text-fg-faint hover:text-fg"
-              >
-                <X size={13} />
-              </button>
-            </Tooltip>
-          </span>
-        </div>
-      ))}
+                <Tooltip label="Cancel (esc)">
+                  <button
+                    type="button"
+                    aria-label="Cancel editing"
+                    onClick={stopEdit}
+                    className="text-fg-faint hover:text-fg"
+                  >
+                    <X size={13} />
+                  </button>
+                </Tooltip>
+              </span>
+            </div>
+          );
+        return (
+          <div
+            key={q.id}
+            className="elevated group flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 rc-in"
+          >
+            <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-faint">{i + 1}</span>
+            <button
+              type="button"
+              onClick={() => onTakeBack(q)}
+              className="flex min-w-0 flex-1 cursor-text items-center gap-1.5 text-left"
+              aria-label="Edit in the composer"
+              title="Edit in the composer (↑)"
+            >
+              {!!q.extras?.attachments.length && (
+                <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-fill px-1 text-caption text-fg-muted">
+                  <Paperclip size={10} />
+                  {q.extras.attachments.length}
+                </span>
+              )}
+              <span className={cx("line-clamp-2 text-callout", !q.text && "text-fg-faint")}>
+                {q.text || "Attachments only"}
+              </span>
+            </button>
+            <span className="flex shrink-0 items-center gap-1.5 opacity-60 group-hover:opacity-100">
+              {i > 0 && (
+                <Tooltip label="Move up">
+                  <button
+                    type="button"
+                    aria-label="Move up"
+                    onClick={() => moveQueued(thread.id, q.id, -1)}
+                    className="text-fg-muted hover:text-fg"
+                  >
+                    <ChevronUp size={13} />
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip label="Edit here (⏎ saves, esc cancels)">
+                <button
+                  type="button"
+                  aria-label="Edit the queued message"
+                  onClick={() => startEdit(q)}
+                  className="text-fg-muted hover:text-fg"
+                >
+                  <Pencil size={12} />
+                </button>
+              </Tooltip>
+              {steerable &&
+                (q.extras?.attachments.length ? (
+                  <Tooltip label="Attachments go with the next turn: a running turn takes text only">
+                    <span
+                      role="img"
+                      aria-label="Send now is not available with attachments"
+                      className="text-fg-faint"
+                    >
+                      <ArrowUp size={13} />
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <Tooltip label="Send now: the turn reads it after its current step">
+                    <button
+                      type="button"
+                      aria-label="Send now"
+                      onClick={() => void sendQueuedNow(thread.id, q.id)}
+                      className="text-fg-muted hover:text-fg"
+                    >
+                      <ArrowUp size={13} />
+                    </button>
+                  </Tooltip>
+                ))}
+              <Tooltip label="Remove">
+                <button
+                  type="button"
+                  aria-label="Remove queued message"
+                  onClick={() => removeQueued(thread.id, q.id)}
+                  className="text-fg-faint hover:text-fg"
+                >
+                  <X size={13} />
+                </button>
+              </Tooltip>
+            </span>
+          </div>
+        );
+      })}
     </section>
   );
 }

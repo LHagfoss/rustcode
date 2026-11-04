@@ -1735,7 +1735,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
  * engine's rule). The reply does not name the new thread, so the list is
  * compared before and after, and a toast offers to open it.
  */
-async function forkThread(id: string): Promise<void> {
+export async function forkThread(id: string): Promise<void> {
   const before = new Set(get().sessions.map((x) => x.id));
   await runPrompt(id, "/fork");
   await refreshSessions();
