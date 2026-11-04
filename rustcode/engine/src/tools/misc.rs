@@ -284,14 +284,17 @@ fn orchestration_unavailable(_args: &Value) -> Result<String, String> {
 /// message goes, and runs it as an attributed turn of the target thread.
 pub const LIST_SESSIONS: Tool = Tool {
     name: crate::orchestration::LIST_SESSIONS,
-    description: "List the other threads in this project: id, title, last update and whether one is working. Reads no transcripts. Use only when the user asks to involve another thread.",
-    arguments: r#"{"query": "optional words in the title"}"#,
+    description: "List the user's threads, newest first: id, title, project, last update and whether one is working. Reads no transcripts. This project's threads by default, every project's with all_projects. It answers what the user has been working on and which threads exist, so ask it instead of looking for RustCode's data elsewhere.",
+    arguments: r#"{"query": "optional words in the title", "all_projects": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
         serde_json::json!({
             "type": "object",
-            "properties": {"query": {"type": "string"}},
+            "properties": {
+                "query": {"type": "string"},
+                "all_projects": {"type": "boolean", "description": "Every project's threads, with each thread's project path"}
+            },
             "additionalProperties": false
         })
     },
@@ -345,7 +348,7 @@ pub const WAIT_SESSION: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 2`.
 pub const READ_SESSION: Tool = Tool {
     name: crate::orchestration::READ_SESSION,
-    description: "Read the last turns of another thread of this project: its title, status, and each turn's request, answer and changed files (at most 16 KiB).",
+    description: "Read the last turns of one thread by id: title, status, project, and each turn's request, answer and changed files (at most 16 KiB). Any thread of any project. Given a thread id, read it before answering about it.",
     arguments: r#"{"session_id": "id from list_sessions", "last_turns": 3}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -430,7 +433,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models and efforts or why it cannot run, and what this thread runs on. Use the ids in start_session, fan_out and configure_session.",
+    description: "List the harnesses that can run a thread, each with its models and efforts or why it cannot run, and what this thread runs on. Ask it when the user asks which harnesses, models or efforts are available. Use the ids in start_session, fan_out and configure_session.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -448,15 +451,16 @@ pub const LIST_HARNESSES: Tool = Tool {
 
 pub const SEARCH_SESSIONS: Tool = Tool {
     name: crate::orchestration::SEARCH_SESSIONS,
-    description: "Search this project's threads by title and by what was said in them. Returns each match's session_id, title, status and the words around the match.",
-    arguments: r#"{"query": "login form"}"#,
+    description: "Search the user's threads by title and by what was said in them: each match's session_id, title, project, status and the words around it. This project's threads by default, every project's with all_projects. Ask it when the user asks about past work rather than a named thread.",
+    arguments: r#"{"query": "login form", "all_projects": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "query": {"type": "string", "minLength": 1}
+                "query": {"type": "string", "minLength": 1},
+                "all_projects": {"type": "boolean", "description": "Search every project's threads, with each match's project path"}
             },
             "required": ["query"],
             "additionalProperties": false
@@ -468,14 +472,16 @@ pub const SEARCH_SESSIONS: Tool = Tool {
 
 pub const LIST_WORKTREES: Tool = Tool {
     name: crate::orchestration::LIST_WORKTREES,
-    description: "List this project's threads that work in their own git worktree: session_id, title, branch and path.",
-    arguments: r#"{}"#,
+    description: "List the threads that work in their own git worktree: session_id, title, project, branch and path. This project's by default, every project's with all_projects.",
+    arguments: r#"{"all_projects": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
         serde_json::json!({
             "type": "object",
-            "properties": {},
+            "properties": {
+                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"}
+            },
             "required": [],
             "additionalProperties": false
         })
@@ -574,7 +580,7 @@ pub const TRANSFER_SESSION: Tool = Tool {
 
 pub const LIST_PENDING_REQUESTS: Tool = Tool {
     name: crate::orchestration::LIST_PENDING_REQUESTS,
-    description: "List the approvals and questions this project's open threads are waiting on from the user: session_id, thread title, whether it is an approval or a question, and what it asks. Only the user can answer them.",
+    description: "List the approvals and questions this project's open threads are waiting on from the user: session_id, thread title, whether it is an approval or a question, and what it asks. Ask it when the user asks what is waiting on them. Only the user can answer them.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -592,7 +598,7 @@ pub const LIST_PENDING_REQUESTS: Tool = Tool {
 
 pub const LIST_PROJECTS: Tool = Tool {
     name: crate::orchestration::LIST_PROJECTS,
-    description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Use a path as start_session's project.",
+    description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Ask it when the user asks what they have been working on or where a thread lives. Use a path as start_session's project and all_projects on list_sessions and search_sessions.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

@@ -91,7 +91,7 @@ export interface HarnessChoice {
 }
 
 export type Call =
-  | { tool: "list_sessions"; query: string }
+  | { tool: "list_sessions"; query: string; allProjects: boolean }
   | { tool: "read_session"; target: string; lastTurns: number }
   | { tool: "message_session"; target: string; text: string }
   | { tool: "wait_session"; links: string[]; timeoutMs: number }
@@ -107,8 +107,8 @@ export type Call =
     }
   | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[] }
   | { tool: "list_harnesses" }
-  | { tool: "search_sessions"; query: string }
-  | { tool: "list_worktrees" }
+  | { tool: "search_sessions"; query: string; allProjects: boolean }
+  | { tool: "list_worktrees"; allProjects: boolean }
   | {
       tool: "update_session";
       target?: string;
@@ -138,6 +138,8 @@ export const MAX_PULL_REQUESTS = 30;
 export const MAX_PROJECTS = 50;
 
 const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
+/** `all_projects`: the user's threads in every project, when the setting allows it. */
+const allProjects = (args: JsonObject) => args.all_projects === true;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
 /** The call in a request's params, or the failure to answer with. */
@@ -146,11 +148,11 @@ export function parseCall(params: JsonObject): Call | Failure {
   const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   switch (s(params.tool)) {
     case "list_sessions":
-      return { tool: "list_sessions", query: s(args.query) ?? "" };
+      return { tool: "list_sessions", query: s(args.query) ?? "", allProjects: allProjects(args) };
     case "list_harnesses":
       return { tool: "list_harnesses" };
     case "list_worktrees":
-      return { tool: "list_worktrees" };
+      return { tool: "list_worktrees", allProjects: allProjects(args) };
     case "list_projects":
       return { tool: "list_projects" };
     case "list_pull_requests": {
@@ -163,7 +165,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "search_sessions": {
       const query = (s(args.query) ?? "").trim();
       if (!query) return failure("invalid", "query is required");
-      return { tool: "search_sessions", query };
+      return { tool: "search_sessions", query, allProjects: allProjects(args) };
     }
     case "interrupt_session": {
       const target = s(args.session_id) ?? "";
@@ -318,10 +320,20 @@ export function checkManage(caller: RuleThread, target: RuleThread | undefined):
   return null;
 }
 
-export function listSessions(threads: RuleThread[], caller: RuleThread, query: string): JsonObject {
+/**
+ * `list_sessions`: the other threads, newest first, metadata only. The caller's
+ * project unless `allProjects`, where every entry names its project.
+ */
+export function listSessions(
+  threads: RuleThread[],
+  caller: RuleThread,
+  query: string,
+  allProjects = false,
+): JsonObject {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = threads
-    .filter((t) => t.id !== caller.id && sameProject(projectOf(t), projectOf(caller)))
+    .filter((t) => t.id !== caller.id)
+    .filter((t) => allProjects || sameProject(projectOf(t), projectOf(caller)))
     .filter((t) => words.every((w) => t.title.toLowerCase().includes(w)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 50);
@@ -334,6 +346,8 @@ export function listSessions(threads: RuleThread[], caller: RuleThread, query: s
         status: t.status ?? (t.running ? "running" : "idle"),
         harness: t.harness ?? "rustcode",
       };
+      // Across projects, which project a thread is in is what tells them apart.
+      if (allProjects) entry.project = projectOf(t);
       if (t.updatedAt) entry.updated_at = new Date(t.updatedAt).toISOString();
       if (t.worktree)
         entry.worktree = { path: t.worktree.path, branch: t.worktree.branch, repo: t.worktree.repo };
@@ -352,17 +366,22 @@ function chained(book: LinkBook, caller: RuleThread): Failure | null {
     : null;
 }
 
-/** Whether `caller` may message (or read) `target`, before the user is asked. */
+/**
+ * Whether `caller` may message (or read) `target`, before the user is asked.
+ * Reading reaches any project while the app allows it; everything that writes,
+ * or that opens a thread to another, stays in the caller's own project.
+ */
 export function checkMessage(
   caller: RuleThread,
   target: RuleThread | undefined,
   book: LinkBook,
   read = false,
+  acrossProjects = false,
 ): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!sameProject(projectOf(target), projectOf(caller))) {
+  if (!(read && acrossProjects) && !sameProject(projectOf(target), projectOf(caller))) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",

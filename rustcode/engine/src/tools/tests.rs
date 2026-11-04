@@ -5020,6 +5020,10 @@ fn harness_instructions_teach_the_viz_types_the_client_draws() {
     use super::schema::{harness_instructions, harness_output_style};
     let none = harness_instructions("Claude Code", 0);
     assert!(none.contains("through the Claude Code harness"));
+    // It knows the app is what owns its threads, and where to ask or look.
+    assert!(none.contains("owns this machine's threads"));
+    assert!(none.contains("rustcode threads list --all"));
+    assert!(none.contains("~/.config/rustcode/threads"));
     assert!(!none.contains("rustcode-viz"));
     assert!(none.ends_with(&harness_output_style()));
 

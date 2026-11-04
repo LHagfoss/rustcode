@@ -241,13 +241,23 @@ async function answer(params: JsonObject): Promise<JsonObject> {
   if (!caller) return failureJson(failure("not_found", "the calling thread is not listed"));
   const call = parseCall(params);
   if (isFailure(call)) return failureJson(call);
+  const acrossProjects = () => useApp.getState().readAcrossProjects;
+  /** A read that asked for every project and may not have it: say so, rather than answer half. */
+  const reachRefused = () =>
+    failureJson(
+      failure(
+        "not_allowed",
+        "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Agents",
+      ),
+    );
   const threads = () => {
     const st = useApp.getState();
     return st.sessions.flatMap((x) => ruleThread(st, x.id) ?? []);
   };
   switch (call.tool) {
     case "list_sessions":
-      return listSessions(threads(), caller, call.query);
+      if (call.allProjects && !acrossProjects()) return reachRefused();
+      return listSessions(threads(), caller, call.query, call.allProjects);
     case "read_session":
       return read(caller, call.target, call.lastTurns);
     case "message_session":
@@ -261,9 +271,11 @@ async function answer(params: JsonObject): Promise<JsonObject> {
     case "list_harnesses":
       return listHarnesses(caller);
     case "search_sessions":
-      return searchSessions(threads(), caller, call.query);
+      if (call.allProjects && !acrossProjects()) return reachRefused();
+      return searchSessions(threads(), caller, call.query, call.allProjects);
     case "list_worktrees":
-      return listWorktrees(threads(), caller);
+      if (call.allProjects && !acrossProjects()) return reachRefused();
+      return listWorktrees(threads(), caller, call.allProjects);
     case "list_projects":
       return listProjects(s);
     case "list_pull_requests":
@@ -313,11 +325,16 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
   };
 }
 
-async function searchSessions(all: RuleThread[], caller: RuleThread, query: string): Promise<JsonObject> {
+async function searchSessions(
+  all: RuleThread[],
+  caller: RuleThread,
+  query: string,
+  allProjects = false,
+): Promise<JsonObject> {
   const said = await searchThreads(query);
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const matches = all
-    .filter((t) => sameProject(projectOf(t), projectOf(caller)))
+    .filter((t) => allProjects || sameProject(projectOf(t), projectOf(caller)))
     .filter((t) => t.id in said || words.every((w) => t.title.toLowerCase().includes(w)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 30);
@@ -326,16 +343,25 @@ async function searchSessions(all: RuleThread[], caller: RuleThread, query: stri
       session_id: t.id,
       title: t.title,
       status: t.status ?? (t.running ? "running" : "idle"),
+      ...(allProjects ? { project: projectOf(t) } : {}),
       ...(said[t.id] ? { snippet: said[t.id] } : {}),
     })),
   };
 }
 
-function listWorktrees(all: RuleThread[], caller: RuleThread): JsonObject {
+function listWorktrees(all: RuleThread[], caller: RuleThread, allProjects = false): JsonObject {
   return {
     worktrees: all.flatMap((t) =>
-      t.worktree && sameProject(projectOf(t), projectOf(caller))
-        ? [{ session_id: t.id, title: t.title, branch: t.worktree.branch, path: t.worktree.path }]
+      t.worktree && (allProjects || sameProject(projectOf(t), projectOf(caller)))
+        ? [
+            {
+              session_id: t.id,
+              title: t.title,
+              ...(allProjects ? { project: projectOf(t) } : {}),
+              branch: t.worktree.branch,
+              path: t.worktree.path,
+            },
+          ]
         : [],
     ),
   };
@@ -549,14 +575,18 @@ function listPendingRequests(caller: RuleThread): JsonObject {
 
 async function read(caller: RuleThread, targetId: string, lastTurns: number): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), targetId);
-  const refused = checkMessage(caller, target, book(), true);
+  const refused = checkMessage(caller, target, book(), true, useApp.getState().readAcrossProjects);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
+  // Its project only matters to the user when it is not the caller's.
+  const elsewhere = sameProject(projectOf(target), projectOf(caller))
+    ? ""
+    : ` It is in ${projectOf(target)}, another project.`;
   const no = await permitted(caller, target.id, {
     kind: "read",
     caller: caller.id,
     callerTitle: caller.title,
     target: target.title,
-    detail: `Its last ${lastTurns} turn${lastTurns === 1 ? "" : "s"}: your messages and its replies, no tool output.`,
+    detail: `Its last ${lastTurns} turn${lastTurns === 1 ? "" : "s"}: your messages and its replies, no tool output.${elsewhere}`,
   });
   if (no) return failureJson(no);
   await openThread(target.id);
@@ -572,6 +602,7 @@ async function read(caller: RuleThread, targetId: string, lastTurns: number): Pr
   return {
     title: target.title,
     status: target.status ?? "idle",
+    project: projectOf(target),
     turns: fits
       ? shown
       : shown.map((t) => ({

@@ -95,7 +95,7 @@ pub const PROMPT_HINT: &str = "\n\nOther threads: `list_sessions` lists this pro
 pub const PROMPT_HINT_V2: &str = "\n\nOther threads: `list_sessions` and `read_session` show this project's threads; `message_session` messages one, `start_session` starts one, `fan_out` runs one task on 2-4 harnesses; `wait_session` returns their answers. The user approves first. Use them only when the user asks to involve other threads.";
 
 /// [`PROMPT_HINT_V2`] for version 3 clients.
-pub const PROMPT_HINT_V3: &str = "\n\nOther threads: `list_sessions`, `search_sessions`, `read_session` and `list_worktrees` show threads; `list_harnesses` shows what can run, `list_projects` the user's projects and `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. The user approves work on other threads. Use them only when the user asks.";
+pub const PROMPT_HINT_V3: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `list_harnesses` shows what can run, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
 /// Every orchestration tool of any version.
 pub fn is_tool(name: &str) -> bool {
@@ -175,6 +175,14 @@ fn optional_name(args: &Value, key: &str) -> Result<(), String> {
     }
 }
 
+/// An optional flag: when present it must be a boolean, never a string.
+fn optional_flag(args: &Value, key: &str) -> Result<(), String> {
+    match args.get(key) {
+        None | Some(Value::Null | Value::Bool(_)) => Ok(()),
+        Some(_) => Err(format!("{key} must be true or false")),
+    }
+}
+
 fn optional_title(args: &Value) -> Result<(), String> {
     match args.get("title") {
         None | Some(Value::Null) => Ok(()),
@@ -188,9 +196,8 @@ fn optional_title(args: &Value) -> Result<(), String> {
 /// Check the arguments before they leave the engine.
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     match name {
-        LIST_SESSIONS | LIST_HARNESSES | LIST_WORKTREES | LIST_PROJECTS | LIST_PENDING_REQUESTS => {
-            Ok(())
-        }
+        LIST_SESSIONS | LIST_WORKTREES => optional_flag(args, "all_projects"),
+        LIST_HARNESSES | LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
         TRANSFER_SESSION => {
             required_name(args, "session_id")?;
             required_name(args, "harness")
@@ -201,6 +208,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             Some(_) => Err(format!("state must be one of {PR_STATES:?}")),
         },
         SEARCH_SESSIONS => {
+            optional_flag(args, "all_projects")?;
             if text(args, "query").unwrap_or("").trim().is_empty() {
                 return Err("query is required".to_owned());
             }
@@ -543,11 +551,75 @@ mod tests {
     }
 
     #[test]
+    fn the_version_three_hint_and_read_tools_say_what_they_answer() {
+        // Reads answer questions about the user's work, across projects when asked.
+        assert!(PROMPT_HINT_V3.contains("all_projects"));
+        assert!(PROMPT_HINT_V3.contains("before answering about it"));
+        assert!(PROMPT_HINT_V3.contains("do them only when the user asks"));
+        let tool = |name: &str| {
+            crate::tools::TOOLS
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        for name in [
+            LIST_SESSIONS,
+            SEARCH_SESSIONS,
+            READ_SESSION,
+            LIST_WORKTREES,
+            LIST_PROJECTS,
+            LIST_PENDING_REQUESTS,
+            LIST_HARNESSES,
+            LIST_PULL_REQUESTS,
+        ] {
+            assert!(
+                !tool(name).description.contains("involve another thread"),
+                "{name} reads: no delegation-only rule"
+            );
+        }
+        assert!(
+            tool(LIST_SESSIONS)
+                .description
+                .contains("what the user has been working on")
+        );
+        assert!(
+            (tool(LIST_SESSIONS).schema)()["properties"]["all_projects"].is_object(),
+            "list_sessions takes all_projects"
+        );
+        assert!((tool(SEARCH_SESSIONS).schema)()["properties"]["all_projects"].is_object());
+        assert!((tool(LIST_WORKTREES).schema)()["properties"]["all_projects"].is_object());
+        // Tools that give another thread work keep the approval rule.
+        assert!(
+            tool(MESSAGE_SESSION)
+                .description
+                .contains("The user is asked once")
+        );
+        assert!(
+            tool(START_SESSION)
+                .description
+                .contains("The user approves")
+        );
+    }
+
+    #[test]
     fn version_three_arguments_are_checked() {
         let ok = |name: &str, args: Value| validate(name, &args).is_ok();
         assert!(ok(LIST_HARNESSES, json!({})));
         assert!(ok(SEARCH_SESSIONS, json!({"query": "login"})));
         assert!(!ok(SEARCH_SESSIONS, json!({"query": " "})));
+        // Reaching every project is a flag, never a string, on the reads.
+        assert!(ok(
+            SEARCH_SESSIONS,
+            json!({"query": "login", "all_projects": true})
+        ));
+        assert!(!ok(
+            SEARCH_SESSIONS,
+            json!({"query": "login", "all_projects": "yes"})
+        ));
+        assert!(ok(LIST_SESSIONS, json!({"all_projects": true})));
+        assert!(!ok(LIST_SESSIONS, json!({"all_projects": 1})));
+        assert!(ok(LIST_WORKTREES, json!({"all_projects": false})));
+        assert!(!ok(LIST_WORKTREES, json!({"all_projects": "false"})));
         assert!(ok(INTERRUPT_SESSION, json!({"session_id": "b"})));
         assert!(!ok(INTERRUPT_SESSION, json!({})));
         assert!(ok(CONFIGURE_SESSION, json!({})));

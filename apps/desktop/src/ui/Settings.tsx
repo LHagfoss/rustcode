@@ -61,6 +61,7 @@ import {
   setDefaultPermissionMode,
   setOnboarding,
   setOrchestration,
+  setReadAcrossProjects,
   setResumeAfterRestart,
   setRoundedFont,
   setSmartUi,
@@ -393,6 +394,7 @@ function AgentsPage() {
 /** Threads that start and message other threads (`state/host.ts`, docs/orchestrator.md). */
 function OrchestrationGroup() {
   const orchestration = useApp((s) => s.orchestration);
+  const readAcrossProjects = useApp((s) => s.readAcrossProjects);
   const pending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   return (
@@ -400,12 +402,25 @@ function OrchestrationGroup() {
       <Row
         title="Threads can start and message other threads"
         reset={orchestration ? undefined : () => setOrchestration(SETTINGS_DEFAULTS.orchestration)}
-        subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
+        subtitle="An agent can list and read threads, message one in this project, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
       >
         <Switch
           label="Threads can start and message other threads"
           checked={orchestration}
           onChange={setOrchestration}
+        />
+      </Row>
+      <Row
+        title="Let agents read threads in other projects"
+        reset={
+          readAcrossProjects ? undefined : () => setReadAcrossProjects(SETTINGS_DEFAULTS.readAcrossProjects)
+        }
+        subtitle="When on, an agent can list, search and read any thread, including in other projects. Reading a thread still follows the approval rules above. Messaging and starting threads stay in the project."
+      >
+        <Switch
+          label="Let agents read threads in other projects"
+          checked={readAcrossProjects}
+          onChange={setReadAcrossProjects}
         />
       </Row>
       {pending && (

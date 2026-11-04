@@ -51,6 +51,7 @@ describe("management tools", () => {
     expect(parseCall({ tool: "search_sessions", args: { query: " login " } })).toEqual({
       tool: "search_sessions",
       query: "login",
+      allProjects: false,
     });
     expect(isFailure(parseCall({ tool: "search_sessions", args: {} }))).toBe(true);
     expect(isFailure(parseCall({ tool: "interrupt_session", args: {} }))).toBe(true);
@@ -144,6 +145,48 @@ describe("orchestration rules", () => {
     expect(sessions.map((x) => x.session_id)).toEqual(["b"]);
     expect(sessions[0]?.harness).toBe("codex");
     expect(sessions[0]?.worktree).toEqual(wt);
+  });
+
+  test("all_projects lists every project, each entry naming its own", () => {
+    const all = [thread("a"), thread("b", "/repo"), thread("c", "/elsewhere")];
+    const out = listSessions(all, thread("a"), "", true);
+    const sessions = out.sessions as { session_id: string; project?: string }[];
+    expect(sessions.map((x) => x.session_id)).toEqual(["b", "c"]);
+    expect(sessions.map((x) => x.project)).toEqual(["/repo", "/elsewhere"]);
+    // Without it, this project's threads only, and no project on the entries.
+    const scoped = listSessions(all, thread("a"), "", false);
+    expect((scoped.sessions as { session_id: string }[]).map((x) => x.session_id)).toEqual(["b"]);
+    expect((scoped.sessions as { project?: string }[])[0]?.project).toBeUndefined();
+  });
+
+  test("reading reaches another project only when allowed; writing never does", () => {
+    const a = thread("a");
+    const other = thread("b", "/other");
+    expect(checkMessage(a, other, emptyBook(), true)?.code).toBe("not_allowed");
+    expect(checkMessage(a, other, emptyBook(), true, true)).toBeNull();
+    expect(checkMessage(a, other, emptyBook(), false, true)?.code).toBe("not_allowed");
+    expect(checkMessage(a, a, emptyBook(), true, true)?.code).toBe("not_allowed");
+    expect(checkMessage(a, undefined, emptyBook(), true, true)?.code).toBe("not_found");
+  });
+
+  test("parseCall reads all_projects as a flag, never a string", () => {
+    expect(parseCall({ tool: "list_sessions", args: { all_projects: true } })).toEqual({
+      tool: "list_sessions",
+      query: "",
+      allProjects: true,
+    });
+    expect(parseCall({ tool: "list_sessions", args: { all_projects: "yes" } })).toEqual({
+      tool: "list_sessions",
+      query: "",
+      allProjects: false,
+    });
+    expect(parseCall({ tool: "search_sessions", args: { query: "x", all_projects: true } })).toMatchObject({
+      allProjects: true,
+    });
+    expect(parseCall({ tool: "list_worktrees", args: {} })).toEqual({
+      tool: "list_worktrees",
+      allProjects: false,
+    });
   });
 
   test("caps on a character boundary, interrupts after restart, forgets deleted threads", () => {

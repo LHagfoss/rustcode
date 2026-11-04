@@ -253,6 +253,8 @@ export interface AppState {
   } | null;
   /** Threads can start and message other threads (Settings › Agents); the engine learns it at initialize. */
   orchestration: boolean;
+  /** Agents may read threads of every project, not only the calling thread's (Settings › Agents). */
+  readAcrossProjects: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
   /** The interface in SF Pro Rounded (the default) or the standard system font. */
@@ -314,6 +316,7 @@ const STORAGE = {
   archiveMigrated: "rustcode.archiveMigrated",
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
+  readAcrossProjects: "rustcode.readAcrossProjects",
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   /** The ids of the threads running a turn, kept while the engine is up. */
   runningThreads: "rustcode.runningThreads",
@@ -341,6 +344,7 @@ export const SETTINGS_DEFAULTS = {
   animateStreaming: true,
   resumeAfterRestart: true,
   orchestration: true,
+  readAcrossProjects: true,
   smartUi: true,
   defaultPermissionMode: parsePermissionMode(null),
 };
@@ -389,6 +393,9 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // On unless turned off: an agent asks before it starts or messages a thread (Ask), so
   // delegating is there to use without first finding the setting.
   orchestration: storedFlag(STORAGE.orchestration, SETTINGS_DEFAULTS.orchestration),
+  // On unless turned off: reading knows no project boundary, so an agent asked
+  // about the user's work is not answered with a fragment of it.
+  readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
@@ -2172,6 +2179,11 @@ export function setAnimateStreaming(on: boolean) {
   store(STORAGE.animateStreaming, on ? "1" : "0");
 }
 
+export function setReadAcrossProjects(on: boolean) {
+  set({ readAcrossProjects: on });
+  store(STORAGE.readAcrossProjects, on ? "1" : "0");
+}
+
 export function setOrchestration(on: boolean) {
   set((s) => ({
     orchestration: on,
@@ -2847,6 +2859,7 @@ export function resetForTests() {
     planCache: {},
     orchestration: false,
     orchestrationPending: false,
+    readAcrossProjects: false,
     links: { links: [], grants: {}, counters: {}, fanOuts: [] },
     grant: null,
     features: {},
