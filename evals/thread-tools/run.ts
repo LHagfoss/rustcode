@@ -76,7 +76,7 @@ const MOCKS: Record<string, unknown> = {
   update_session: { session_id: "self", title: "Renamed thread", pinned: false, status: "settled" },
   interrupt_session: { session_id: "t1", interrupted: true },
   configure_session: { session_id: "self", harness: "rustcode", access: "auto", effort: "high" },
-  start_session: { session_id: "t3", link_id: "self/1", harness: "codex" },
+  start_session: { session_id: "thread-3", link_id: "self/1", harness: "codex" },
   message_session: { link_id: "self/1", receipt: "started", session_id: "t1" },
   wait_session: { links: [{ link_id: "self/1", status: "done" }] },
   fan_out: { links: [] },
