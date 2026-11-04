@@ -3,11 +3,26 @@ name: CI
 on:
     pull_request:
         branches: [main]
+    # Merges build the caches every pull request restores: GitHub lets a PR read
+    # its own ref and its base branch, never another PR. Without this each PR's
+    # first run compiled every dependency from scratch.
+    push:
+        branches: [main]
+        paths:
+            - .cargo/**
+            - .github/workflows/ci.yml
+            - Cargo.lock
+            - Cargo.toml
+            - rust-toolchain*
+            - rustcode/**
+            - "!rustcode/**/*.md"
     workflow_dispatch:
 
 concurrency:
     group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-    cancel-in-progress: true
+    # A run on main has to finish to save its cache, so merges queue instead of
+    # cancelling each other. GitHub keeps only the newest one waiting.
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
     CARGO_TERM_COLOR: always
@@ -43,7 +58,7 @@ jobs:
               run: |
                   if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
                       echo "code=true" >> "$GITHUB_OUTPUT"
-                      echo "packages=--workspace --exclude rustcode-app" >> "$GITHUB_OUTPUT"
+                      echo "packages=--workspace" >> "$GITHUB_OUTPUT"
                       echo "seatbelt=true" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi
@@ -91,10 +106,12 @@ jobs:
               if: env.AFFECTED_PACKAGES != ''
               uses: Swatinem/rust-cache@v2
               with:
-                  # Share dependency and native build-script artifacts between
-                  # the Linux test and lint jobs.
+                  # Its own key: clippy's check-only artifacts are no use to
+                  # `cargo test`, and with one shared key lint finished first
+                  # and test could not save. sccache still shares between them.
                   shared-key: linux
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Configure shared compiler cache
               if: env.AFFECTED_PACKAGES != ''
@@ -145,8 +162,9 @@ jobs:
               if: env.AFFECTED_PACKAGES != ''
               uses: Swatinem/rust-cache@v2
               with:
-                  shared-key: linux
+                  shared-key: linux-lint
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Configure shared compiler cache
               if: env.AFFECTED_PACKAGES != ''
@@ -205,6 +223,7 @@ jobs:
               with:
                   shared-key: macos-seatbelt
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
@@ -262,6 +281,7 @@ jobs:
               uses: Swatinem/rust-cache@v2
               with:
                   shared-key: ${{ matrix.cache_key }}
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
