@@ -6,7 +6,7 @@
 
 import { ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { cx } from "./primitives";
+import { cx, Pill } from "./primitives";
 
 export interface LightboxImage {
   src: string;
@@ -179,14 +179,14 @@ export function Lightbox() {
         >
           <Minus size={14} />
         </button>
-        <button
-          type="button"
+        <Pill
+          quiet
           aria-label="Fit to window"
+          className="min-w-[52px] tabular"
           onClick={() => setView(FITTED)}
-          className="h-7 min-w-[52px] rounded-full px-2 tabular hover:bg-fill"
         >
           {Math.round(view.zoom * 100)}%
-        </button>
+        </Pill>
         <button
           type="button"
           aria-label="Zoom in"
