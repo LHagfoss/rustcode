@@ -88,6 +88,7 @@ pub(crate) fn spawn(
     command: &[String],
     cwd: &Path,
     log_session: Option<String>,
+    env: &[(String, String)],
 ) -> Result<(HarnessProcess, ChildStdout, ChildStdin), String> {
     let program = command
         .first()
@@ -109,6 +110,7 @@ pub(crate) fn spawn(
             builder.env_remove(name);
         }
     }
+    builder.envs(env.iter().map(|(name, value)| (name, value)));
     #[cfg(unix)]
     builder.process_group(0);
     let mut child = builder
@@ -160,6 +162,7 @@ mod tests {
             &["rustcode-no-such-harness-binary".into()],
             dir.path(),
             None,
+            &[],
         )
         .err()
         .unwrap();
@@ -170,6 +173,7 @@ mod tests {
             &["sh".into(), "-c".into(), "sleep 30 & sleep 30".into()],
             dir.path(),
             None,
+            &[],
         )
         .unwrap();
         let group = process.group.unwrap();
