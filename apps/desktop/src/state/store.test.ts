@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { parsePlans } from "../acp/rustcode";
 import { emptyExtras } from "./compose";
@@ -15,6 +16,7 @@ import {
   connect,
   editMessage,
   ensureHarnessModels,
+  errorText,
   fetchHarnessModels,
   forgetPlans,
   mergePlans,
@@ -811,5 +813,33 @@ describe("plan usage cache", () => {
     expect(cache.codex).toBeUndefined();
     expect(cache["claude-code"]?.windows[0]?.usedPercent).toBe(30);
     resetForTests();
+  });
+});
+
+describe("an error's words", () => {
+  test("the engine's reason in data wins over its generic name", () => {
+    // Worktree creation: `Error::invalid_params().data({ reason, message })`.
+    const error = new RpcError(-32602, "Invalid params", {
+      reason: "not_git",
+      message: "/Users/me/code is not in a git repository",
+    });
+    expect(errorText(error)).toBe("/Users/me/code is not in a git repository");
+  });
+
+  test("a data string is the reason too", () => {
+    expect(errorText(new RpcError(-32602, "Invalid params", "invalid session id"))).toBe(
+      "invalid session id",
+    );
+    expect(errorText(new RpcError(-32602, "Invalid params", { error: { message: "no such thread" } }))).toBe(
+      "no such thread",
+    );
+  });
+
+  test("without a reason it is the message it always was", () => {
+    expect(errorText(new RpcError(-32603, "The engine stopped"))).toBe("The engine stopped");
+    expect(errorText(new RpcError(-32602, "Invalid params", { reason: "not_git" }))).toBe("Invalid params");
+    expect(errorText(new RpcError(-32602, "Invalid params", "   "))).toBe("Invalid params");
+    expect(errorText(new Error("plain"))).toBe("plain");
+    expect(errorText("text")).toBe("text");
   });
 });
