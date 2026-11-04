@@ -390,6 +390,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   slim toolbar (`h-9`) under it. The left edge drags (320–760px, kept);
   its slot takes its width at once and the panel slides and fades in 200ms
   (see Motion). ⌘⌥B toggles it with the last view.
+- **Approval:** over the composer, `elevated rounded-2xl`: what it wants (`From
+  <thread>` when a thread this one started is asking), the command in a code
+  well, then Always allow, More, Decline `esc`, Approve `⏎` (the keys work when
+  no field, menu or dialog has the keyboard). A message sent from the composer
+  meanwhile declines it and tells the agent what to do instead.
 - **Jump to latest:** `.rc-glass rounded-full shadow-1`, centred 12px
   above the composer stack, above it in z.
 - **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`
