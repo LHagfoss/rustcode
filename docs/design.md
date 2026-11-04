@@ -309,6 +309,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   toast for what is not tied to a message (copied, engine, worktree,
   harness and theme events, errors of an action); an error about a
   thread's turn stays an error card over the composer. No banners.
+- **Sidebar sections:** one list, with a header only where a group needs one:
+  Working (threads running now, on top; off with the filter menu or when
+  grouping by project), then pinned and the rest, and at the foot the Snoozed
+  and Settled shelves. A snoozed row shows when it wakes where the age goes.
+  Snooze (presets, or Custom…) is a submenu of the row's menu; a thread comes
+  back on time, marked unread, or sooner when it needs you, works or is messaged.
 - **Skeleton:** `Skeleton` (`.rc-skeleton`): `fill-subtle` blocks the shape
   of what will appear (a text line `h-3`, a meta line `h-2`, a pill
   `rounded-full`), radius `sm` unless the real thing is rounder, varied

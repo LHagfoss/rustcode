@@ -12,6 +12,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  Clock,
   Copy,
   Ellipsis,
   Eye,
@@ -36,7 +37,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { ContextMenu, DropdownMenu } from "radix-ui";
+import { ContextMenu, Dialog, DropdownMenu } from "radix-ui";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
@@ -54,8 +55,10 @@ import {
   unseenChild,
 } from "../state/children";
 import { isActive } from "../state/orchestration";
+import { snoozePresets, wakeLabel } from "../state/snooze";
 import {
   askConfirm,
+  askCustomSnooze,
   featureMissing,
   markUnread,
   removeWorktree,
@@ -65,6 +68,7 @@ import {
   selectThread,
   setThreadStatus,
   setView,
+  snoozeThread,
   startNewThread,
   statusOf,
   toast,
@@ -72,6 +76,7 @@ import {
   toggleSidebar,
   trashThread,
   useApp,
+  wakeSnoozed,
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
@@ -82,10 +87,12 @@ import {
   Cluster,
   ClusterButton,
   cx,
+  inputClass,
   menuItem,
   menuItemDanger,
   menuSeparator,
   menuSurface,
+  Pill,
   Skeleton,
   Spinner,
   Tooltip,
@@ -115,13 +122,62 @@ function useSidebarWidth() {
   return [width, setWidth] as const;
 }
 
+/** Choose a wake time when no preset fits. */
+function CustomSnooze() {
+  const id = useApp((s) => s.snoozeAsk);
+  const [value, setValue] = useState("");
+  const at = value ? new Date(value).getTime() : Number.NaN;
+  const valid = at > Date.now();
+  return (
+    <Dialog.Root
+      open={!!id}
+      onOpenChange={(open) => {
+        if (!open) askCustomSnooze(null);
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="elevated fixed top-1/2 left-1/2 z-50 flex w-[min(360px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 p-5 rc-in"
+        >
+          <Dialog.Title className="font-semibold text-body">Snooze until</Dialog.Title>
+          <input
+            type="datetime-local"
+            aria-label="Wake time"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className={inputClass}
+          />
+          <div className="flex justify-end gap-2">
+            <Pill onClick={() => askCustomSnooze(null)}>Cancel</Pill>
+            <Pill
+              prominent
+              disabled={!valid}
+              onClick={() => {
+                if (id && valid) snoozeThread(id, at);
+                setValue("");
+                askCustomSnooze(null);
+              }}
+            >
+              Snooze
+            </Pill>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function ThreadMenuItems({
   session,
+  Menu,
   Item,
   Separator,
   onRename,
 }: {
   session: SessionSummary;
+  Menu: typeof DropdownMenu | typeof ContextMenu;
   Item: typeof DropdownMenu.Item | typeof ContextMenu.Item;
   Separator: typeof DropdownMenu.Separator | typeof ContextMenu.Separator;
   onRename: () => void;
@@ -130,6 +186,7 @@ function ThreadMenuItems({
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const statusMissing = useApp((s) => (s.features.status ? null : featureMissing("status")));
+  const snoozed = useApp((s) => session.id in s.snoozed);
   const canFiles = hasShell();
   return (
     <>
@@ -151,6 +208,32 @@ function ThreadMenuItems({
       {statusMissing && (
         <div className="px-2.5 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
       )}
+      {snoozed ? (
+        <Item className={menuItem} onSelect={() => snoozeThread(session.id, null)}>
+          <Clock size={13} /> Unsnooze
+        </Item>
+      ) : (
+        <Menu.Sub>
+          <Menu.SubTrigger className={menuItem}>
+            <Clock size={13} /> Snooze
+            <ChevronRight size={11} strokeWidth={2.5} className="ml-auto text-fg-faint" />
+          </Menu.SubTrigger>
+          <Menu.Portal>
+            <Menu.SubContent sideOffset={4} className={menuSurface}>
+              {snoozePresets(Date.now()).map((p) => (
+                <Item key={p.label} className={menuItem} onSelect={() => snoozeThread(session.id, p.at)}>
+                  <span className="flex-1">{p.label}</span>
+                  <span className="text-caption text-fg-faint">{wakeLabel(p.at, Date.now()).replace("Tomorrow ", "")}</span>
+                </Item>
+              ))}
+              <Separator className={menuSeparator} />
+              <Item className={menuItem} onSelect={() => askCustomSnooze(session.id)}>
+                Custom…
+              </Item>
+            </Menu.SubContent>
+          </Menu.Portal>
+        </Menu.Sub>
+      )}
       <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
         <FileDiff size={13} /> Review Changes
       </Item>
@@ -168,14 +251,27 @@ function ThreadMenuItems({
       <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
         <Wrench size={13} /> Repair Thread
       </Item>
-      {session.cwd && (
-        <Item className={menuItem} onSelect={() => copyText(worktree?.path ?? session.cwd!, "Path copied")}>
-          <Copy size={13} /> Copy Path
-        </Item>
-      )}
-      <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
-        <Copy size={13} /> Copy Thread ID
-      </Item>
+      <Menu.Sub>
+        <Menu.SubTrigger className={menuItem}>
+          <Copy size={13} /> Copy
+          <ChevronRight size={11} strokeWidth={2.5} className="ml-auto text-fg-faint" />
+        </Menu.SubTrigger>
+        <Menu.Portal>
+          <Menu.SubContent sideOffset={4} className={menuSurface}>
+            {session.cwd && (
+              <Item
+                className={menuItem}
+                onSelect={() => copyText(worktree?.path ?? session.cwd!, "Path copied")}
+              >
+                Path
+              </Item>
+            )}
+            <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
+              Thread ID
+            </Item>
+          </Menu.SubContent>
+        </Menu.Portal>
+      </Menu.Sub>
       {worktree && (
         <>
           <Separator className={menuSeparator} />
@@ -303,6 +399,7 @@ const ThreadRow = memo(function ThreadRow({
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
   const waiting = useApp((s) => s.threads[session.id]?.waiting ?? 0);
+  const wake = useApp((s) => s.snoozed[session.id]);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const harnesses = useApp((s) => s.harnesses);
@@ -412,6 +509,7 @@ const ThreadRow = memo(function ThreadRow({
           <ContextMenu.Content className={menuSurface}>
             <ThreadMenuItems
               session={session}
+              Menu={ContextMenu}
               Item={ContextMenu.Item}
               Separator={ContextMenu.Separator}
               onRename={startRename}
@@ -502,7 +600,9 @@ const ThreadRow = memo(function ThreadRow({
                 ) : (
                   <>
                     {status === "review" && <StatusChip status={status} compact />}
-                    <span className="text-fg-faint">{shortAge(session.updatedAt, now)}</span>
+                    <span className="text-fg-faint">
+                      {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
+                    </span>
                   </>
                 )}
               </span>
@@ -558,6 +658,7 @@ const ThreadRow = memo(function ThreadRow({
                 <DropdownMenu.Content align="start" sideOffset={4} className={menuSurface}>
                   <ThreadMenuItems
                     session={session}
+                    Menu={DropdownMenu}
                     Item={DropdownMenu.Item}
                     Separator={DropdownMenu.Separator}
                     onRename={startRename}
@@ -572,6 +673,7 @@ const ThreadRow = memo(function ThreadRow({
         <ContextMenu.Content className={menuSurface}>
           <ThreadMenuItems
             session={session}
+            Menu={ContextMenu}
             Item={ContextMenu.Item}
             Separator={ContextMenu.Separator}
             onRename={startRename}
@@ -725,7 +827,10 @@ function useStored<T>(key: string, initial: T) {
   return [value, setValue] as const;
 }
 
-type SectionId = "pinned" | "threads" | "settled";
+type SectionId = "working" | "pinned" | "threads" | "snoozed" | "settled";
+
+/** Sections with a header; the rest are simply part of the list. */
+const HEADED: SectionId[] = ["working", "snoozed", "settled"];
 
 interface Section {
   id: SectionId;
@@ -900,11 +1005,15 @@ function ProjectHeader({
 function FilterMenu({
   byProject,
   setByProject,
+  showWorking,
+  setShowWorking,
   onlyProject,
   setOnlyProject,
 }: {
   byProject: boolean;
   setByProject: (v: boolean) => void;
+  showWorking: boolean;
+  setShowWorking: (v: boolean) => void;
   onlyProject: boolean;
   setOnlyProject: (v: boolean) => void;
 }) {
@@ -934,6 +1043,13 @@ function FilterMenu({
         <DropdownMenu.Content align="end" sideOffset={6} className={menuSurface}>
           <DropdownMenu.Item className={menuItem} onSelect={() => setByProject(!byProject)}>
             {check(byProject)} Group by project
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            className={menuItem}
+            disabled={byProject}
+            onSelect={() => setShowWorking(!showWorking)}
+          >
+            {check(showWorking)} Working section
           </DropdownMenu.Item>
           <DropdownMenu.Item
             className={menuItem}
@@ -976,6 +1092,13 @@ export function Sidebar() {
   const [query, setQuery] = useState("");
   // By state, as T3 Code's sidebar, with the project on each row; grouping by project is an option.
   const [byProject, setByProject] = useStored("rustcode.sidebar.groupByProject", false);
+  const [showWorking, setShowWorking] = useStored("rustcode.sidebar.workingSection", true);
+  const snoozed = useApp((s) => s.snoozed);
+  useEffect(() => {
+    wakeSnoozed();
+    const t = setInterval(() => wakeSnoozed(), 15_000);
+    return () => clearInterval(t);
+  }, []);
   const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
   const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", FOLDED_BY_DEFAULT);
   // Which child groups are open, by parent: one record for the whole sidebar, written in one
@@ -1056,6 +1179,8 @@ export function Sidebar() {
     const isFresh = (id: string) => !!finished[id];
     const active: SessionSummary[] = [];
     const settled: SessionSummary[] = [];
+    const working: SessionSummary[] = [];
+    const sleeping: SessionSummary[] = [];
     for (const s of filtered) {
       if (parentOf[s.id]) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
@@ -1066,6 +1191,10 @@ export function Sidebar() {
       // A pinned thread always shows, whatever it is doing.
       // As T3 Code's: one list, each row saying what it does; only settled threads leave it.
       if (pinned.includes(s.id)) pins.push(s);
+      // Snoozed until its time, unless it needs you or works in the meantime.
+      else if (snoozed[s.id] && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`)) sleeping.push(s);
+      // Folders already separate the work, so grouping by project has no Working section.
+      else if (showWorking && !byProject && flagged.has(`${s.id}:w`)) working.push(s);
       else if (done && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`) && !isFresh(s.id))
         settled.push(s);
       else active.push(s);
@@ -1085,9 +1214,12 @@ export function Sidebar() {
             items,
           }))
         : undefined;
+    sleeping.sort((a, b) => (snoozed[a.id] ?? 0) - (snoozed[b.id] ?? 0));
     const all: Section[] = [
+      { id: "working", label: "Working", items: working },
       { id: "pinned", label: "Pinned", items: pins },
       { id: "threads", label: "Threads", items: active, projects },
+      { id: "snoozed", label: "Snoozed", items: sleeping },
       { id: "settled", label: "Settled", items: settled },
     ];
     for (const g of all) {
@@ -1100,8 +1232,9 @@ export function Sidebar() {
             : undefined;
     }
     return all.filter((g) => g.items.length);
-  }, [filtered, flags, marks, finished, pinned, parentOf, byProject, now]);
+  }, [filtered, flags, marks, finished, pinned, parentOf, byProject, now, snoozed, showWorking]);
 
+  const footShelf = sections.some((g) => g.id === "snoozed") ? "snoozed" : "settled";
   // A search shows every match, folded sections too.
   const isOpen = (id: string) => !!query.trim() || !folded.includes(id);
   const toggle = (id: string) => setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
@@ -1253,6 +1386,8 @@ export function Sidebar() {
           <FilterMenu
             byProject={byProject}
             setByProject={setByProject}
+            showWorking={showWorking}
+            setShowWorking={setShowWorking}
             onlyProject={onlyProject}
             setOnlyProject={setOnlyProject}
           />
@@ -1277,12 +1412,12 @@ export function Sidebar() {
               return (
                 <section
                   key={section.id}
-                  // Settled is a shelf at the foot of the list, as in T3 Code.
-                  className={cx("mt-2 first:mt-0", section.id === "settled" && "mt-auto pt-2")}
+                  // Snoozed and Settled are shelves at the foot of the list.
+                  className={cx("mt-2 first:mt-0", section.id === footShelf && "mt-auto pt-2")}
                   aria-label={section.label}
                 >
-                  {/* One list, as T3 Code's: only the Settled shelf has a header. */}
-                  {section.id === "settled" && (
+                  {/* One list: only the working group and the shelves have a header. */}
+                  {HEADED.includes(section.id) && (
                     <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
                   )}
                   <Fold open={open}>
@@ -1342,6 +1477,7 @@ export function Sidebar() {
         </nav>
         <UpdateRow />
       </div>
+      <CustomSnooze />
       {!hidden && (
         <div
           role="separator"

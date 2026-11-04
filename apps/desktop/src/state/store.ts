@@ -82,6 +82,7 @@ import {
 } from "./host";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
+import { dueSnoozes } from "./snooze";
 import {
   appendSteer,
   applyUpdate,
@@ -240,6 +241,10 @@ export interface AppState {
   };
   /** Review / done marks kept by the app when the engine does not store them. */
   statusMarks: Record<string, ThreadStatus>;
+  /** Threads out of the list until a time (state/snooze.ts). */
+  snoozed: Record<string, number>;
+  /** The thread the custom snooze dialog is open for. */
+  snoozeAsk: string | null;
   /** What threads may do without asking (Settings › General › Default access)... */
   defaultPermissionMode: PermissionMode;
   /** ...each thread's own, once it was set from the composer's pill... */
@@ -282,6 +287,7 @@ const STORAGE = {
   roundedFont: "rustcode.roundedFont",
   animateStreaming: "rustcode.animateStreaming",
   statusMarks: "rustcode.statusMarks",
+  snoozed: "rustcode.snoozed",
   permissionMode: "rustcode.permissionMode",
   permissionModes: "rustcode.permissionModes",
   /** Each harness's last new-thread choice, for an engine that does not remember it. */
@@ -336,6 +342,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grant: null,
   features: {},
   statusMarks: storedJson<Record<string, ThreadStatus>>(STORAGE.statusMarks, {}),
+  snoozed: storedJson<Record<string, number>>(STORAGE.snoozed, {}),
+  snoozeAsk: null,
   defaultPermissionMode: parsePermissionMode(stored(STORAGE.permissionMode)),
   permissionModes: storedJson<Record<string, PermissionMode>>(STORAGE.permissionModes, {}),
   newThreadPermissionMode: null,
@@ -958,6 +966,28 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
 }
 
 /** Mark a thread unread again: its row says Done until you open it. */
+/** Take a thread out of the list until `at`, or bring it back now with `null`. */
+export function snoozeThread(id: string, at: number | null) {
+  const { [id]: _, ...rest } = get().snoozed;
+  const snoozed = at === null ? rest : { ...rest, [id]: at };
+  set({ snoozed });
+  store(STORAGE.snoozed, JSON.stringify(snoozed));
+}
+
+export function askCustomSnooze(id: string | null) {
+  set({ snoozeAsk: id });
+}
+
+/** Bring back the threads whose time has come, each marked unread so it is noticed. */
+export function wakeSnoozed(now = Date.now()) {
+  for (const id of dueSnoozes(get().snoozed, now)) {
+    snoozeThread(id, null);
+    markUnread(id);
+    const title = get().sessions.find((s) => s.id === id)?.title || "A thread";
+    toast(`“${title}” is back`, "info");
+  }
+}
+
 export function markUnread(id: string) {
   set((s) => ({ finished: { ...s.finished, [id]: Date.now() } }));
 }
@@ -1687,6 +1717,7 @@ export async function runPrompt(
   const thread = get().threads[id];
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
+  if (id in get().snoozed) snoozeThread(id, null);
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
     images: acceptsImages(thread),
@@ -2743,6 +2774,8 @@ export function resetForTests() {
     themes: null,
     themeActive: "rustcode",
     statusMarks: {},
+    snoozed: {},
+    snoozeAsk: null,
     defaultPermissionMode: "ask",
     permissionModes: {},
     newThreadPermissionMode: null,
