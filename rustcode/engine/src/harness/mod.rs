@@ -15,6 +15,7 @@ pub(crate) mod codex;
 pub mod config;
 pub(crate) mod detect;
 pub(crate) mod handoff;
+pub(crate) mod pi_mcp;
 pub(crate) mod process;
 pub(crate) mod rpc;
 pub(crate) mod session;
