@@ -18,6 +18,10 @@ export const MAX_ACTIVE_LINKS = 4;
 export const DEFAULT_WAIT_MS = 60_000;
 export const MAX_WAIT_MS = 3_600_000;
 export const MAX_LAST_TURNS = 10;
+/** How long a settled child waits for its siblings before the parent hears about them. */
+export const WAKE_COALESCE_MS = 3_000;
+/** The most of one child's answer a wake message carries, per child. */
+export const WAKE_ANSWER_CHARS = 1024;
 
 export type LinkState = "queued" | "working" | "needs_user" | "done" | "failed" | "cancelled" | "interrupted";
 
@@ -52,6 +56,12 @@ export interface Link {
   truncated?: boolean;
   filesChanged?: number;
   createdAt: number;
+  /** When it settled (done or failed), for the coalescing window. */
+  settledAt?: number;
+  /** When the parent was told it settled: one delivery per link, kept in the book across restarts. */
+  notifiedAt?: number;
+  /** The child's pending request (its rpc id, as text) the parent was told about. */
+  askedRequest?: string;
 }
 
 /** One prompt run on several harnesses at once, compared side by side. */
@@ -79,10 +89,22 @@ export const emptyBook = (): LinkBook => ({ links: [], grants: {}, counters: {},
 export interface Failure {
   code: string;
   message: string;
+  /** How many more links the thread can open: sent with a `busy` refusal. */
+  linksLeft?: number;
 }
 
-export const failure = (code: string, message: string): Failure => ({ code, message });
-export const failureJson = (f: Failure): JsonObject => ({ error: { code: f.code, message: f.message } });
+export const failure = (code: string, message: string, linksLeft?: number): Failure => ({
+  code,
+  message,
+  ...(linksLeft === undefined ? {} : { linksLeft }),
+});
+export const failureJson = (f: Failure): JsonObject => ({
+  error: {
+    code: f.code,
+    message: f.message,
+    ...(f.linksLeft === undefined ? {} : { links_left: f.linksLeft }),
+  },
+});
 
 export interface HarnessChoice {
   harness: string;
@@ -359,6 +381,10 @@ export function listSessions(
 const activeFrom = (book: LinkBook, id: string) =>
   book.links.filter((l) => l.orchestrator === id && isActive(l.state));
 
+/** How many more links a thread may open at once, for an answer to say. */
+export const linksLeft = (book: LinkBook, id: string): number =>
+  Math.max(0, MAX_ACTIVE_LINKS - activeFrom(book, id).length);
+
 /** No chains: a thread working for another one cannot pass work on. */
 function chained(book: LinkBook, caller: RuleThread): Failure | null {
   return book.links.some((l) => l.target === caller.id && isActive(l.state))
@@ -394,7 +420,11 @@ export function checkMessage(
     return failure("target_linked", "another thread is already working with that one");
   }
   if (activeFrom(book, caller.id).length >= MAX_ACTIVE_LINKS) {
-    return failure("busy", `this thread already has ${MAX_ACTIVE_LINKS} links under way; wait for one first`);
+    return failure(
+      "busy",
+      `at most ${MAX_ACTIVE_LINKS} at once; wait_session on one first (this thread has ${MAX_ACTIVE_LINKS})`,
+      0,
+    );
   }
   if (book.links.filter((l) => l.target === target.id && l.state === "queued").length >= MAILBOX) {
     return failure("mailbox_full", `that thread has ${MAILBOX} messages waiting`);
@@ -408,9 +438,11 @@ export function checkStart(caller: RuleThread, book: LinkBook, count: number): F
   if (chain) return chain;
   const active = activeFrom(book, caller.id).length;
   if (active + count > MAX_ACTIVE_LINKS) {
+    const left = Math.max(0, MAX_ACTIVE_LINKS - active);
     return failure(
       "busy",
-      `this thread may have ${MAX_ACTIVE_LINKS} links under way and has ${active}; wait for one first`,
+      `at most ${MAX_ACTIVE_LINKS} at once; wait_session on one first (this thread has ${active}, so ${count} would not fit, and ${left} ${left === 1 ? "slot is" : "slots are"} left)`,
+      left,
     );
   }
   return null;
@@ -498,8 +530,18 @@ export function forget(book: LinkBook, thread: string): LinkBook {
 export const shownState = (link: Link, targetWaits: boolean): LinkState =>
   link.state === "working" && targetWaits ? "needs_user" : link.state;
 
-/** `wait_session`'s answer for one link. */
-export function linkResult(link: Link, state: LinkState, status?: ThreadStatus): JsonObject {
+/**
+ * `wait_session`'s answer for one link. With `activity` (what the app already
+ * holds of the child's thread) it also says how long the child has been idle,
+ * the last tool it ran and how many turns it finished, so a caller that gets a
+ * timeout knows whether it is thinking, stuck or over.
+ */
+export function linkResult(
+  link: Link,
+  state: LinkState,
+  status?: ThreadStatus,
+  extra?: { now?: number; activity?: LinkActivity },
+): JsonObject {
   const entry: JsonObject = {
     link_id: link.id,
     status: state,
@@ -510,8 +552,206 @@ export function linkResult(link: Link, state: LinkState, status?: ThreadStatus):
   if (link.answer !== undefined) entry.answer = link.answer;
   if (link.truncated) entry.truncated = true;
   if (link.filesChanged !== undefined) entry.files_changed = link.filesChanged;
+  const activity = extra?.activity;
+  if (activity) {
+    entry.turns = activity.turns;
+    if (activity.lastTool) entry.last_tool = activity.lastTool;
+    if (activity.lastAt !== undefined && extra?.now !== undefined) {
+      entry.idle_ms = Math.max(0, extra.now - activity.lastAt);
+    }
+  }
   if (state === "needs_user") entry.note = "That thread is waiting for the user to answer it there.";
   return entry;
+}
+
+// ---------------------------------------------------------------- waking a parent
+
+/** One item of a child's transcript, as the idle summary reads it. */
+export interface ActivityItem {
+  kind: string;
+  at?: number;
+  startedAt?: number;
+  endedAt?: number;
+  title?: string;
+  toolName?: string;
+}
+
+/** What a child was last doing, and how many turns it finished (`wait_session` timeout). */
+export interface LinkActivity {
+  lastAt?: number;
+  lastTool?: string;
+  turns: number;
+}
+
+/** The last activity in a thread, from the items the app already holds: no polling. */
+export function activityOf(items: readonly ActivityItem[]): LinkActivity {
+  let lastAt: number | undefined;
+  let lastTool: string | undefined;
+  let turns = 0;
+  for (const item of items) {
+    const at = item.endedAt ?? item.startedAt ?? item.at;
+    if (at !== undefined && (lastAt === undefined || at > lastAt)) lastAt = at;
+    if (item.kind === "tool") lastTool = item.toolName ?? item.title ?? lastTool;
+    if (item.kind === "turnEnd") turns += 1;
+  }
+  return { lastAt, lastTool, turns };
+}
+
+/** A parent that should hear about its children, and what about them. */
+export interface Wake {
+  parent: string;
+  parentTitle: string;
+  /** Children that settled and were not reported yet. */
+  settled: Link[];
+  /** Children waiting on the user, whose request was not reported yet. */
+  asking: Link[];
+}
+
+/** What the decision needs of the app: states, pending requests, waits, parents. */
+export interface WakeContext {
+  /** Each link's state as shown (`needs_user` while its child waits on the user). */
+  states: Readonly<Record<string, LinkState>>;
+  /** Each child's pending request id, when it waits on one. */
+  pending: Readonly<Record<string, string>>;
+  /** The links each parent is blocked on in `wait_session` right now. */
+  waiting: Readonly<Record<string, readonly string[]>>;
+  /** The parents that still exist, with their title and whether their turn runs. */
+  parents: Readonly<Record<string, { title: string; running: boolean }>>;
+  now: number;
+}
+
+const stateOfLink = (link: Link, ctx: WakeContext) => ctx.states[link.id] ?? link.state;
+
+/**
+ * What to tell each parent, one message per parent: children that settled and
+ * children waiting on the user. A link is reported once — the mark lives in the
+ * book (`notifiedAt`, `askedRequest`), so a restart does not tell it again — and
+ * a parent blocked on it in `wait_session` already has the answer. A thread
+ * working for another is not woken (it cannot delegate, and its own parent is
+ * the one to tell). Parallel children are coalesced: while any of a parent's
+ * links still runs, a settled one waits up to `WAKE_COALESCE_MS` for its
+ * siblings; with none active the message goes at once.
+ */
+export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
+  const byParent = new Map<string, Link[]>();
+  for (const link of book.links) {
+    const list = byParent.get(link.orchestrator);
+    if (list) list.push(link);
+    else byParent.set(link.orchestrator, [link]);
+  }
+  const out: Wake[] = [];
+  for (const [parent, links] of byParent) {
+    const here = ctx.parents[parent];
+    if (!here) continue;
+    // A child works for another thread: its parent hears about it, not it.
+    if (book.links.some((l) => l.target === parent && isActive(stateOfLink(l, ctx)))) continue;
+    const waiting = new Set(ctx.waiting[parent] ?? []);
+    const active = links.some((l) => isActive(stateOfLink(l, ctx)));
+    const settled = links.filter((link) => {
+      const state = stateOfLink(link, ctx);
+      if (state !== "done" && state !== "failed") return false;
+      if (link.notifiedAt !== undefined || waiting.has(link.id)) return false;
+      return !active || ctx.now - (link.settledAt ?? 0) >= WAKE_COALESCE_MS;
+    });
+    const asking = links.filter((link) => {
+      if (stateOfLink(link, ctx) !== "needs_user" || waiting.has(link.id)) return false;
+      const request = ctx.pending[link.id];
+      return request !== undefined && link.askedRequest !== request;
+    });
+    if (settled.length || asking.length) {
+      out.push({ parent, parentTitle: here.title, settled, asking });
+    }
+  }
+  return out;
+}
+
+/**
+ * The book after a wake has been delivered: each reported link is marked heard
+ * (and, for a question, with the request it was about) so no restart or tick
+ * reports it twice.
+ */
+export function markWoken(book: LinkBook, wake: Wake, ctx: WakeContext, now: number): LinkBook {
+  const settled = wake.settled.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), book);
+  return wake.asking.reduce(
+    (acc, l) => updateLink(acc, l.id, { askedRequest: ctx.pending[l.id] ?? l.askedRequest }),
+    settled,
+  );
+}
+
+/** Settled links whose parent thread is gone: nothing will ever deliver them. */
+export function orphanedLinks(book: LinkBook, ctx: WakeContext): Link[] {
+  return book.links.filter(
+    (link) =>
+      !ctx.parents[link.orchestrator] &&
+      link.notifiedAt === undefined &&
+      (stateOfLink(link, ctx) === "done" || stateOfLink(link, ctx) === "failed"),
+  );
+}
+
+/**
+ * When a wake could next be due, for a timer to look again: the oldest settled
+ * child still inside its coalescing window. Null when nothing waits.
+ */
+export function nextWakeAt(book: LinkBook, ctx: WakeContext): number | null {
+  let next: number | null = null;
+  for (const link of book.links) {
+    const state = stateOfLink(link, ctx);
+    if (state !== "done" && state !== "failed") continue;
+    if (link.notifiedAt !== undefined) continue;
+    const at = (link.settledAt ?? 0) + WAKE_COALESCE_MS;
+    if (at <= ctx.now) continue;
+    if (next === null || at < next) next = at;
+  }
+  return next;
+}
+
+/** A wake's compact first line, and the transcript's: "2 children finished · 1 needs you". */
+export function wakeSummary(wake: Wake): string {
+  const parts: string[] = [];
+  if (wake.settled.length) {
+    parts.push(`${wake.settled.length} ${wake.settled.length === 1 ? "child" : "children"} finished`);
+  }
+  if (wake.asking.length) {
+    parts.push(`${wake.asking.length} ${wake.asking.length === 1 ? "needs" : "need"} you`);
+  }
+  return parts.join(" · ");
+}
+
+/** One child, as the wake message names it: link id, status, title, thread, what it changed. */
+const linkLine = (link: Link, state: LinkState, now: number) => {
+  const bits = [`link_id ${link.id}`, state, `“${link.targetTitle}”`, `session ${link.target}`];
+  if (link.filesChanged) bits.push(`${link.filesChanged} file${link.filesChanged === 1 ? "" : "s"} changed`);
+  if (link.settledAt) bits.push(`${Math.max(1, Math.round((now - link.settledAt) / 1000))}s ago`);
+  return `- ${bits.join(" · ")}`;
+};
+
+/**
+ * The message a woken parent gets: what finished, with each child's status,
+ * title, link id, files and a bounded answer, and which children wait on the
+ * user. The first line is the compact summary the transcript shows. It ends by
+ * naming `read_session` / `wait_session` for the rest and says not to poll.
+ */
+export function wakeMessage(wake: Wake, now: number): string {
+  const lines: string[] = [wakeSummary(wake), ""];
+  if (wake.settled.length) {
+    lines.push("Finished:", "");
+    for (const link of wake.settled) {
+      lines.push(linkLine(link, link.state, now));
+      const { text, truncated } = capped((link.answer ?? "").trim(), WAKE_ANSWER_CHARS);
+      if (!text) lines.push("  answer: (nothing it said came back)");
+      else lines.push(`  answer: ${text.split("\n").join("\n  ")}${truncated ? " …" : ""}`);
+    }
+    lines.push("");
+  }
+  if (wake.asking.length) {
+    lines.push("Waiting on you (the user answers these; you cannot):", "");
+    for (const link of wake.asking) lines.push(linkLine(link, "needs_user", now));
+    lines.push("", "list_pending_requests shows what it asks; ask the user if it is unclear.", "");
+  }
+  lines.push(
+    "The rest is in read_session on a child's session id, or wait_session on a link_id (a settled link answers at once). This message is the notification: do not poll with sleeps.",
+  );
+  return lines.join("\n");
 }
 
 /** What the user is asked, in words. */

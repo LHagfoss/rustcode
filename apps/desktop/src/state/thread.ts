@@ -26,6 +26,8 @@ export type TranscriptItem =
       attachments?: SentAttachment[];
       /** Sent by a Smart UI view's button (`rustcode.send`). */
       fromView?: boolean;
+      /** The app woke the thread for its children: a divider row, not a message the user typed. */
+      wake?: boolean;
     }
   | { kind: "assistant"; id: string; text: string; at?: number; turnId?: string }
   | {
@@ -118,6 +120,8 @@ export interface QueuedPrompt {
   text: string;
   extras?: ComposeExtras;
   fromView?: boolean;
+  /** The app woke the thread for its children: it runs as a wake turn when its turn comes. */
+  wake?: boolean;
   /** Delivered for another thread (orchestration link id): its answer goes back there. */
   link?: string;
 }
@@ -455,6 +459,7 @@ export function beginTurn(
   now = Date.now(),
   attachments?: SentAttachment[],
   fromView?: boolean,
+  wake?: boolean,
 ): ThreadState {
   const closed = closePendingTurn(state);
   return {
@@ -473,6 +478,7 @@ export function beginTurn(
         at: now,
         attachments: attachments?.length ? attachments : undefined,
         fromView: fromView || undefined,
+        wake: wake || undefined,
       },
     ],
   };

@@ -95,7 +95,7 @@ pub const PROMPT_HINT: &str = "\n\nOther threads: `list_sessions` lists this pro
 pub const PROMPT_HINT_V2: &str = "\n\nOther threads: `list_sessions` and `read_session` show this project's threads; `message_session` messages one, `start_session` starts one, `fan_out` runs one task on 2-4 harnesses; `wait_session` returns their answers. The user approves first. Use them only when the user asks to involve other threads.";
 
 /// [`PROMPT_HINT_V2`] for version 3 clients.
-pub const PROMPT_HINT_V3: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `list_harnesses` shows what can run, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+pub const PROMPT_HINT_V3: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `list_harnesses` shows what can run, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves. The app wakes this thread by itself when a thread it started finishes or asks a question, so never poll for one with sleeps: wait on it only when you need the answer in this turn.";
 
 /// Every orchestration tool of any version.
 pub fn is_tool(name: &str) -> bool {
@@ -469,8 +469,15 @@ fn output(name: &str, value: Value) -> ToolExecutionOutput {
             "not_found" | "target_unavailable" | "not_allowed" => ToolErrorKind::Validation,
             _ => ToolErrorKind::Unknown,
         };
+        // The slots a busy refusal leaves are part of its answer, not only of
+        // its wording: the model reads them to decide what to do next.
+        let left = error
+            .get("links_left")
+            .and_then(Value::as_u64)
+            .map(|left| format!(" (links_left: {left})"))
+            .unwrap_or_default();
         return ToolExecutionOutput::failure_with_kind(
-            format!("error: {name} {code}: {message}"),
+            format!("error: {name} {code}: {message}{left}"),
             kind,
             false,
         );
@@ -809,6 +816,18 @@ mod tests {
 
         let invalid = execute_with(client(json!({})), &cancel, MESSAGE_SESSION, &json!({})).await;
         assert_eq!(invalid.error_kind, Some(ToolErrorKind::InvalidArguments));
+
+        // A busy refusal keeps the wording and the slots it leaves.
+        let busy = execute_with(
+            client(json!({"error": {"code": "busy", "message": "at most 4 at once; wait_session on one first", "links_left": 0}})),
+            &cancel,
+            START_SESSION,
+            &json!({"prompt": "go"}),
+        )
+        .await;
+        assert!(!busy.success);
+        assert!(busy.content.contains("wait_session on one first"));
+        assert!(busy.content.contains("links_left: 0"));
     }
 
     #[tokio::test]

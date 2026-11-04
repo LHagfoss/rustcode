@@ -325,7 +325,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
 
 pub const WAIT_SESSION: Tool = Tool {
     name: crate::orchestration::WAIT_SESSION,
-    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. needs_user means that thread waits for the user.",
+    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. needs_user means that thread waits for the user. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
     arguments: r#"{"link_id": "from message_session", "timeout_ms": 60000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

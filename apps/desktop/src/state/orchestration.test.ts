@@ -8,20 +8,33 @@ import {
   validBranch,
 } from "../acp/v2";
 import {
+  activityOf,
   capped,
   checkManage,
   checkMessage,
   checkStart,
   emptyBook,
+  failureJson,
   forget,
   interruptActive,
+  isActive,
   isFailure,
   type Link,
   type LinkBook,
+  linkResult,
   listSessions,
+  markWoken,
+  nextWakeAt,
+  orphanedLinks,
   parseCall,
   type RuleThread,
   sameProject,
+  updateLink,
+  WAKE_ANSWER_CHARS,
+  WAKE_COALESCE_MS,
+  type WakeContext,
+  wakeMessage,
+  wakesDue,
 } from "./orchestration";
 
 const thread = (id: string, folder = "/repo", extra: Partial<RuleThread> = {}): RuleThread => ({
@@ -244,5 +257,144 @@ describe("projects", () => {
     expect(sameProject("/private/var/folders/x/", "/var/folders/x")).toBe(true);
     expect(sameProject("/private/tmpx/app", "/tmpx/app")).toBe(false);
     expect(sameProject("/Users/me/a", "/Users/me/b")).toBe(false);
+  });
+});
+
+describe("waking a parent", () => {
+  const done = (orchestrator: string, target: string, at = 1_000, state: Link["state"] = "done"): Link => ({
+    ...link(orchestrator, target, state),
+    settledAt: at,
+    answer: `${target} says done`,
+    filesChanged: 2,
+  });
+
+  const ctx = (over: Partial<WakeContext> = {}): WakeContext => ({
+    states: {},
+    pending: {},
+    waiting: {},
+    parents: { a: { title: "Parent a", running: false } },
+    now: 10_000,
+    ...over,
+  });
+
+  test("coalesces parallel children into one message, once", () => {
+    const two = book([done("a", "b"), done("a", "c")]);
+    const wakes = wakesDue(two, ctx());
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]!.settled.map((l) => l.target)).toEqual(["b", "c"]);
+    // Delivered: the same links are not reported again, in this run or after a reload.
+    const after = markWoken(two, wakes[0]!, ctx(), 10_000);
+    expect(wakesDue(after, ctx({ now: 20_000 }))).toEqual([]);
+    expect(after.links.every((l) => l.notifiedAt === 10_000)).toBe(true);
+  });
+
+  test("a settled child waits for a sibling that is still running", () => {
+    const mixed = book([done("a", "b", 9_500), link("a", "c", "working")]);
+    // Just settled: inside the coalescing window, nothing is sent yet.
+    expect(wakesDue(mixed, ctx())).toEqual([]);
+    expect(nextWakeAt(mixed, ctx())).toBe(9_500 + WAKE_COALESCE_MS);
+    // The window passed and the sibling still runs: report what is done.
+    const later = ctx({ now: 9_500 + WAKE_COALESCE_MS });
+    expect(wakesDue(mixed, later)[0]!.settled.map((l) => l.target)).toEqual(["b"]);
+  });
+
+  test("a parent already blocked in wait_session gets no duplicate", () => {
+    const b = book([done("a", "b"), done("a", "c")]);
+    const both = ctx({ waiting: { a: ["a/b", "a/c"] } });
+    expect(wakesDue(b, both)).toEqual([]);
+    // One of the two is taken out of the wait: only the other is new to it.
+    const one = ctx({ waiting: { a: ["a/b"] } });
+    expect(wakesDue(b, one)[0]!.settled.map((l) => l.target)).toEqual(["c"]);
+  });
+
+  test("a child works for another thread, so it is not woken", () => {
+    const chain = book([link("c", "a", "working"), done("a", "b")]);
+    expect(wakesDue(chain, ctx({ parents: { a: { title: "A", running: false } } }))).toEqual([]);
+  });
+
+  test("a parent that is gone is dropped, and its links are marked", () => {
+    const b = book([done("a", "b")]);
+    const gone = ctx({ parents: {} });
+    expect(wakesDue(b, gone)).toEqual([]);
+    expect(orphanedLinks(b, gone).map((l) => l.id)).toEqual(["a/b"]);
+    // Nothing is orphaned while the parent exists.
+    expect(orphanedLinks(b, ctx())).toEqual([]);
+  });
+
+  test("one notice per pending request", () => {
+    const asking = updateLink(book([link("a", "b", "working")]), "a/b", { askedRequest: "7" });
+    const waiting = (request: string) =>
+      ctx({ states: { "a/b": "needs_user" }, pending: { "a/b": request } });
+    // The request reported before is not reported again.
+    expect(wakesDue(asking, waiting("7"))).toEqual([]);
+    // A new request on the same child is.
+    const next = wakesDue(asking, waiting("8"));
+    expect(next[0]!.asking.map((l) => l.id)).toEqual(["a/b"]);
+    const after = markWoken(asking, next[0]!, waiting("8"), 10_000);
+    expect(after.links[0]!.askedRequest).toBe("8");
+    expect(wakesDue(after, waiting("8"))).toEqual([]);
+    // A question the parent is waiting on is not reported either.
+    expect(wakesDue(asking, { ...waiting("8"), waiting: { a: ["a/b"] } })).toEqual([]);
+  });
+
+  test("the message says what finished, what waits, and not to poll", () => {
+    const b = book([done("a", "b"), link("a", "c", "working")]);
+    const wake = wakesDue(b, ctx({ states: { "a/c": "needs_user" }, pending: { "a/c": "3" } }))[0]!;
+    const text = wakeMessage(wake, 10_000);
+    expect(text.split("\n")[0]).toBe("1 child finished · 1 needs you");
+    expect(text).toContain("link_id a/b");
+    expect(text).toContain("done");
+    expect(text).toContain("session b");
+    expect(text).toContain("2 files changed");
+    expect(text).toContain("b says done");
+    expect(text).toContain("list_pending_requests");
+    expect(text).toContain("read_session");
+    expect(text).toContain("do not poll with sleeps");
+    // Each answer is bounded, whatever the child said.
+    const long = { ...done("a", "b"), answer: "x".repeat(5_000) };
+    const cappedText = wakeMessage({ ...wake, settled: [long], asking: [] }, 10_000);
+    expect(cappedText).toContain("…");
+    expect(cappedText.length).toBeLessThan(WAKE_ANSWER_CHARS + 1_000);
+  });
+
+  test("a wake is a message, not a new link", () => {
+    const b = book([done("a", "b")]);
+    const wake = wakesDue(b, ctx())[0]!;
+    const after = markWoken(b, wake, ctx(), 10_000);
+    // No link appears, and no other parent suddenly has something to hear.
+    expect(after.links).toHaveLength(1);
+    expect(wakesDue(after, ctx({ now: 11_000 }))).toEqual([]);
+    expect(isActive(after.links[0]!.state)).toBe(false);
+  });
+});
+
+describe("answering with the slots and the child's activity", () => {
+  test("a busy refusal says how many links are left", () => {
+    const full = book([link("a", "b"), link("a", "c"), link("a", "d"), link("a", "e")]);
+    const refused = checkStart(thread("a"), full, 2)!;
+    expect(refused.code).toBe("busy");
+    expect(refused.linksLeft).toBe(0);
+    expect(refused.message).toContain("at most 4 at once; wait_session on one first");
+    const json = failureJson(refused);
+    expect(json.error).toMatchObject({ code: "busy", links_left: 0 });
+    // One slot open: a single start fits, two do not.
+    const three = book([link("a", "b"), link("a", "c"), link("a", "d")]);
+    expect(checkStart(thread("a"), three, 1)).toBeNull();
+    expect(checkStart(thread("a"), three, 2)?.linksLeft).toBe(1);
+  });
+
+  test("a timeout's link says how long it has been idle and what it did last", () => {
+    const items = [
+      { kind: "user", at: 4_000 },
+      { kind: "tool", title: "bash", startedAt: 5_000, endedAt: 6_000 },
+      { kind: "tool", title: "read", toolName: "read_session", startedAt: 7_000, endedAt: 8_000 },
+      { kind: "turnEnd", at: 8_500 },
+    ];
+    expect(activityOf(items)).toEqual({ lastAt: 8_500, lastTool: "read_session", turns: 1 });
+    const entry = linkResult(link("a", "b", "working"), "working", undefined, {
+      now: 12_000,
+      activity: activityOf(items),
+    });
+    expect(entry).toMatchObject({ idle_ms: 3_500, last_tool: "read_session", turns: 1 });
   });
 });

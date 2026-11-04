@@ -159,10 +159,10 @@ mode and subagents never get any of them. Each call is forwarded as today:
 | `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
 | `read_session` | `{ session_id, last_turns?: 1..10 }` (default 3) | `{ title, status, project, turns: [{ user, assistant, files_changed }] }` (bounded, 16 KiB); any project's thread |
 
-| `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, model?, effort? }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the model and effort the thread actually runs, and the approval card shows harness · model · effort |
+| `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the model and effort the thread actually runs, and the approval card shows harness · model · effort |
 | `message_session` | M1 | M1 |
-| `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed` |
-| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, model?, effort? }] }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
+| `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come |
+| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
 Checked in the engine before anything is sent (`validate`): `prompt` is
 required and at most 8 KiB; `title` at most 200 characters; `harness`,
@@ -177,9 +177,47 @@ The version 2 prompt hint replaces the M1 one (about 80 tokens, tested).
 
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
-at most 4 active links per thread; no chains; the user can stop any link;
+at most 4 active links per thread (a `busy` refusal says `links_left` and that
+`wait_session` on one comes first); no chains; the user can stop any link;
 nothing starts without the user's approval (*Allow for This Thread* / *Allow
 Once* / *Don't Allow*).
+
+## Waking a parent thread
+
+Built in the app (`apps/desktop/src/state/host.ts`, rules in
+`state/orchestration.ts`). A thread that starts or messages others is told when
+they finish or ask, instead of having to poll with sleeps.
+
+- **Done or failed.** When every link under a parent has settled, the parent
+  gets one message in a turn of its own. While any of its links is still
+  running, a settled child waits in a coalescing window of 3 s
+  (`WAKE_COALESCE_MS`) for its siblings, so a fan-out that finishes together is
+  one message. The message names each child: `link_id`, status, title, child
+  `session`, files changed, how long ago, and its answer cut to 1 KiB each
+  (`WAKE_ANSWER_CHARS`); it says the rest is in `read_session` on the child's
+  session or `wait_session` on a `link_id`, and that the message is the
+  notification.
+- **Waiting on the user.** A child that goes `needs_user` (an approval or a
+  question) is reported the same way, once per pending request (its rpc id):
+  the parent is told to use `list_pending_requests` and that the user answers,
+  because an agent cannot answer an approval.
+- **Not twice.** Each link is marked in the link book (`notifiedAt`,
+  `askedRequest`), which is kept in app storage, so a restart does not deliver
+  it again. A parent blocked in `wait_session` on that link already has the
+  answer — the wait marks it heard — and is not sent a second copy. A thread that
+  is itself a child is not woken (it cannot delegate; its own parent is told). A
+  parent whose thread is gone is dropped, and the link is marked so a thread
+  reopened under the same id cannot be woken for old work.
+- **No loops.** A wake is a message from the app, not a delegation: it creates
+  no link and grants nothing, and waking a parent does not in turn wake anyone.
+  A wake turn that starts new children is ordinary work and its own completion
+  is reported when it settles.
+- **Delivery.** If the parent is idle the wake starts a turn at once; if it is
+  running, it is queued behind that turn (the same queue a typed message uses),
+  so no tool call is interrupted. Settings' *Threads can start and message other
+  threads* turns the whole thing off with the rest of orchestration.
+- **In the transcript** the wake is a quiet divider row ("2 children finished ·
+  1 needs you"), not a message that reads as the user's own.
 
 ## Orchestration tools v3
 
