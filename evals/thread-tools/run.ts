@@ -91,6 +91,8 @@ interface Case {
   kind: "bad" | "guard" | "control";
   prompt: string;
   must: string[];
+  /** One of these is enough: several tools answer the same question. */
+  oneOf: string[];
   mustNot: string[];
 }
 
@@ -243,6 +245,7 @@ function readCases(): Case[] {
         kind: parsed.kind,
         prompt: parsed.prompt,
         must: parsed.must ?? [],
+        oneOf: parsed.oneOf ?? [],
         mustNot: parsed.mustNot ?? [],
       };
     });
@@ -263,7 +266,9 @@ function readCalls(log: string): Call[] {
 }
 
 const passing = (c: Case, called: string[]) =>
-  c.must.every((tool) => called.includes(tool)) && !c.mustNot.some((tool) => called.includes(tool));
+  c.must.every((tool) => called.includes(tool)) &&
+  (!c.oneOf.length || c.oneOf.some((tool) => called.includes(tool))) &&
+  !c.mustNot.some((tool) => called.includes(tool));
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
@@ -339,6 +344,7 @@ async function main() {
       );
       if (!ok) {
         if (c.must.length) console.log(`      must: ${c.must.join(", ")}`);
+        if (c.oneOf.length) console.log(`      one of: ${c.oneOf.join(", ")}`);
         if (c.mustNot.length) console.log(`      must not: ${c.mustNot.join(", ")}`);
         const tail = (outcome.stderr || outcome.stdout).trim().split("\n").slice(-4).join("\n");
         if (tail) console.log(`      ${tail.replace(/\n/g, "\n      ")}`);
@@ -352,6 +358,7 @@ async function main() {
           model: options.model,
           prompt: c.prompt,
           must: c.must,
+          oneOf: c.oneOf,
           mustNot: c.mustNot,
           pass: ok,
           called,

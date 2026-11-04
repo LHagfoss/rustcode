@@ -40,6 +40,7 @@ Append one line to `cases.jsonl`:
 - `kind`: `bad` (the prompt should pick a tool), `guard` (ordinary work, no
   thread tool) or `control` (nothing to do, no tool at all).
 - `must`: tools that must be called, in any order.
+- `oneOf`: when several tools answer the same question, at least one of these.
 - `mustNot`: tools that must not be called; controls name all of them.
 
 Canned results live in `MOCKS` in `run.ts`; add one when a follow-up call

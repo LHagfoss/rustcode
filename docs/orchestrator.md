@@ -156,8 +156,9 @@ mode and subagents never get any of them. Each call is forwarded as today:
 
 | Tool | Args | Answer |
 | --- | --- | --- |
-| `list_sessions` | M1 | M1 + `harness`, `status`, `worktree` |
-| `read_session` | `{ session_id, last_turns?: 1..10 }` (default 3) | `{ title, status, turns: [{ user, assistant, files_changed }] }` (bounded, 16 KiB) |
+| `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
+| `read_session` | `{ session_id, last_turns?: 1..10 }` (default 3) | `{ title, status, project, turns: [{ user, assistant, files_changed }] }` (bounded, 16 KiB); any project's thread |
+
 | `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, model?, effort? }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the model and effort the thread actually runs, and the approval card shows harness · model · effort |
 | `message_session` | M1 | M1 |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed` |
@@ -175,9 +176,10 @@ The engine waits for the client's answer 15 min for `start_session` and
 The version 2 prompt hint replaces the M1 one (about 80 tokens, tested).
 
 Rules (enforced by the client, as M1): same project unless `project` is given
-and the user approves it; at most 4 active links per thread; no chains; the
-user can stop any link; nothing starts without the user's approval (*Allow for
-This Thread* / *Allow Once* / *Don't Allow*).
+and the user approves it, or `all_projects` reads it (see the v3 note below);
+at most 4 active links per thread; no chains; the user can stop any link;
+nothing starts without the user's approval (*Allow for This Thread* / *Allow
+Once* / *Don't Allow*).
 
 ## Orchestration tools v3
 
@@ -188,8 +190,8 @@ validated like the others; the client carries them out (`state/host.ts`).
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
 | `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, models?, omitted_models? }] }`, at most 25 models each | None |
-| `search_sessions` | `{ query }` | `{ sessions: [{ session_id, title, status, snippet? }] }`: this project, title and full text, at most 30 | None |
-| `list_worktrees` | none | `{ worktrees: [{ session_id, title, branch, path }] }`: this project | None |
+| `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
+| `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, status? }`; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
@@ -198,9 +200,16 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
 
-Every tool stays within the caller's project. A grant is per thread and per
-kind of change (*Allow for This Thread*). `list_projects` spans projects since
-it only reads names and counts. `list_pull_requests` uses the same
+Every tool that writes, or that hands work to another thread, stays within the
+caller's project. Reads — `list_sessions`, `search_sessions`, `read_session`,
+`list_worktrees`, `list_projects` — reach any project while **Let agents read
+threads in other projects** is on (Settings › Agents, on by default;
+`rustcode.readAcrossProjects`). With it off, an `all_projects: true` call and a
+`read_session` of another project's thread answer `not_allowed`. An
+`all_projects` answer names each thread's `project` path, so two threads with
+the same title are told apart. A grant is per thread and per kind of change
+(*Allow for This Thread*). `list_projects` spans projects since it only reads
+names and counts. `list_pull_requests` uses the same
 `_rustcode/pulls` request as the panel and answers its failures (`gh_missing`,
 `not_connected`, `not_a_repository`, `timed_out`) as an error with that
 reason, so the agent can say what to fix.

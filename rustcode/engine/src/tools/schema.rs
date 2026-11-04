@@ -2549,15 +2549,19 @@ pub(crate) fn harness_output_style() -> String {
 }
 
 /// What an external harness adds to its own system prompt: where it runs, so it can say so when asked and
-/// link what it makes so the app opens it, the `rustcode-viz` types the
-/// connected client draws (none at level 0), then [`harness_output_style`].
+/// link what it makes so the app opens it, that RustCode is what owns its threads and projects, the
+/// `rustcode-viz` types the connected client draws (none at level 0), then [`harness_output_style`].
 pub(crate) fn harness_instructions(harness: &str, visualization_level: u8) -> String {
     let harness = harness.split_whitespace().collect::<Vec<_>>().join(" ");
     format!(
         "<runtime_info>In case you're asked: you are running in RustCode through the {harness} harness. \
          No need to mention this otherwise. You can embed images in your reply with Markdown image syntax \
          and an absolute file path. Link any other file you produce by its absolute path so the user can \
-         open it from RustCode.</runtime_info>\n\n{}{}",
+         open it from RustCode. RustCode is the app that owns this machine's threads, its projects and its \
+         settings: when the `rustcode` tools (or `mcp__rustcode__*`) are listed, they answer what the user \
+         asks about them; without them, `rustcode threads list --all` and `rustcode threads path <id>` do \
+         the same from a shell. Thread data lives in `~/.config/rustcode/threads`, not in another tool's \
+         database.</runtime_info>\n\n{}{}",
         visualization_prompt_hint(visualization_level),
         harness_output_style()
     )

@@ -68,6 +68,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Threads can start and message other threads",
     keywords: "orchestration subagents spawn compare message agents",
   },
+  {
+    section: "agents",
+    title: "Let agents read threads in other projects",
+    keywords: "orchestration read search across all projects privacy agents",
+  },
 
   // ------------------------------------------------------------ Connections
   {
