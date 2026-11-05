@@ -28,9 +28,10 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
 - Enforced: same project only; a thread cannot message itself; no chains (a
   thread working for another cannot message others — v2 relaxes this to two
   levels, [orchestrator.md](../orchestrator.md)); one orchestrator per
-  target; 4 active links per thread; a 32-message mailbox; 8 KiB messages and
-  answers; `wait_session` waits at most 1 h. It returns `needs_user` while the
-  target waits on an approval or a question.
+  target; 8 active threads per thread by default (2–16 in Settings › Agents,
+  and twice that per tree); a 32-message mailbox; 32 KiB messages and prompts;
+  8 KiB answers, paged by `read_session`; `wait_session` waits at most 1 h. It
+  returns `needs_user` while the target waits on an approval or a question.
 - Links and *Allow for This Thread* grants are kept in Application Support
   (`RustCode/thread-links.json`). *Allow Once* is not kept. After a restart,
   queued or running links are `interrupted` and nothing restarts.
@@ -206,9 +207,10 @@ Decisions:
   started.
 - `interrupt: true` is allowed only for a turn the same link started, as with
   `followup_task`.
-- The orchestrator may have at most 4 active links and the engine at most
-  8 orchestrated turns running at once; further turns queue, and waiting
-  yields the orchestrator's slot as `wait_agent` does.
+- The orchestrator may have at most 8 distinct target threads active by
+  default (2–16 in Settings › Agents; a follow-up takes no slot) and the
+  engine at most 8 orchestrated turns running at once; further turns queue, and
+  waiting yields the orchestrator's slot as `wait_agent` does.
 - `wait_session` accepts one `link_id` or several (first to finish wins),
   default timeout 60 s, maximum 1 h, and wakes on completion, a question or an
   approval waiting in the target.
@@ -329,8 +331,9 @@ ones in `rustcode/engine/src/acp.rs`, with a scripted model):
   to a busy target is queued and runs after the user's turn without steering
   it; the 33rd queued message fails with `mailbox_full`.
 - **Result delivery**: `wait_session` returns the target's completion capped
-  at 8 KiB with the truncation flag; timeouts leave the link usable; a target
-  question returns `needs_user`.
+  at 8 KiB, with `answer_truncated: true` and the target's `session_id` when
+  it was cut; `read_session` pages the rest. Timeouts leave the link usable; a
+  target question returns `needs_user`.
 - **Permission boundaries**: no tools without the client capability or with
   `delegation_enabled = false`; deny blocks sending; *Allow once* is not
   persisted; a driven target does not get orchestration tools; target tool

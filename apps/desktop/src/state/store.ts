@@ -111,7 +111,15 @@ import {
   threadTurnEnded,
   wakeTick,
 } from "./host";
-import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
+import {
+  CAPABILITY_VERSION,
+  forget,
+  type GrantAsk,
+  type LinkBook,
+  MAX_ACTIVE_LIMIT,
+  MAX_ACTIVE_LINKS,
+  MIN_ACTIVE_LINKS,
+} from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { nextQueued } from "./queue";
 import { dueSnoozes } from "./snooze";
@@ -307,6 +315,8 @@ export interface AppState {
   } | null;
   /** Threads can start and message other threads (Settings › Agents); the engine learns it at initialize. */
   orchestration: boolean;
+  /** How many distinct threads one thread may run at once (Settings › Agents); a tree holds twice as many. */
+  threadLimit: number;
   /** Agents may read threads of every project, not only the calling thread's (Settings › Agents). */
   readAcrossProjects: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
@@ -376,6 +386,7 @@ const STORAGE = {
   archiveMigrated: "rustcode.archiveMigrated",
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
+  threadLimit: "rustcode.threadLimit",
   readAcrossProjects: "rustcode.readAcrossProjects",
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   /** The ids of the threads running a turn, kept while the engine is up. */
@@ -414,6 +425,7 @@ export const SETTINGS_DEFAULTS = {
   headerButtons: DEFAULT_HEADER_BUTTONS,
   resumeAfterRestart: true,
   orchestration: true,
+  threadLimit: MAX_ACTIVE_LINKS,
   readAcrossProjects: true,
   smartUi: true,
   defaultPermissionMode: parsePermissionMode(null),
@@ -431,6 +443,14 @@ function stored(key: string): string | null {
 function storedFlag(key: string, fallback: boolean): boolean {
   const raw = stored(key);
   return raw === null ? fallback : raw === "1";
+}
+
+/** A whole number kept as text, kept to the setting's own range. */
+function storedThreadLimit(key: string, fallback: number): number {
+  const raw = stored(key);
+  const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_ACTIVE_LIMIT, Math.max(MIN_ACTIVE_LINKS, n));
 }
 
 export function store(key: string, value: string) {
@@ -464,6 +484,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // On unless turned off: an agent asks before it starts or messages a thread (Ask), so
   // delegating is there to use without first finding the setting.
   orchestration: storedFlag(STORAGE.orchestration, SETTINGS_DEFAULTS.orchestration),
+  threadLimit: storedThreadLimit(STORAGE.threadLimit, SETTINGS_DEFAULTS.threadLimit),
   // On unless turned off: reading knows no project boundary, so an agent asked
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
@@ -2669,6 +2690,13 @@ export function setOrchestration(on: boolean) {
     orchestrationPending: s.status === "ready" ? !s.orchestrationPending : s.orchestrationPending,
   }));
   store(STORAGE.orchestration, on ? "1" : "0");
+}
+
+/** The number of distinct threads one thread may run at once, kept to 2..16. */
+export function setThreadLimit(limit: number) {
+  const n = Math.min(MAX_ACTIVE_LIMIT, Math.max(MIN_ACTIVE_LINKS, Math.round(limit)));
+  set({ threadLimit: n });
+  store(STORAGE.threadLimit, String(n));
 }
 
 // ---------------------------------------------------------------- status and views

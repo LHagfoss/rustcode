@@ -52,13 +52,14 @@ import {
   nextWakeAt,
   orphanedLinks,
   type PullStateChoice,
+  pageOf,
   parseBook,
   parseCall,
   projectOf,
   prune,
   quietTree,
-  READ_BYTES,
   type RuleThread,
+  renderRead,
   restateLinks,
   sameProject,
   shownState,
@@ -207,6 +208,8 @@ function setBook(fn: (book: LinkBook) => LinkBook) {
 }
 
 const book = () => useApp.getState().links;
+/** How many distinct threads one thread may run at once (Settings › Agents). */
+const threadLimit = () => useApp.getState().threadLimit;
 
 // A tab or window closing mid-turn still leaves the store with what happened.
 if (typeof window !== "undefined") {
@@ -397,7 +400,7 @@ async function answer(params: JsonObject): Promise<JsonObject> {
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return listSessions(threads(), caller, call.query, call.allProjects);
     case "read_session":
-      return read(caller, call.target, call.lastTurns);
+      return read(caller, call.target, call.lastTurns, call.offset);
     case "message_session":
       return message(caller, call.target, call.text);
     case "wait_session":
@@ -741,7 +744,12 @@ function listPendingRequests(caller: RuleThread): JsonObject {
   return { requests };
 }
 
-async function read(caller: RuleThread, targetId: string, lastTurns: number): Promise<JsonObject> {
+async function read(
+  caller: RuleThread,
+  targetId: string,
+  lastTurns: number,
+  offset: number,
+): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), targetId);
   const refused = checkMessage(caller, target, book(), true, useApp.getState().readAcrossProjects);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
@@ -760,25 +768,28 @@ async function read(caller: RuleThread, targetId: string, lastTurns: number): Pr
   await openThread(target.id);
   const items = useApp.getState().threads[target.id]?.items ?? [];
   const turns = turnsOf(items).slice(-lastTurns);
-  // Bounded: drop the oldest turns until the answer fits.
-  let shown = turns;
-  while (shown.length > 1 && new TextEncoder().encode(JSON.stringify(shown)).length > READ_BYTES) {
-    shown = shown.slice(1);
-  }
-  const body = JSON.stringify(shown);
-  const fits = new TextEncoder().encode(body).length <= READ_BYTES;
-  return {
+  // One rendered answer, then a page of it: pages join with nothing lost or repeated.
+  const rendered = renderRead({
+    session_id: target.id,
     title: target.title,
     status: target.status ?? "idle",
     project: projectOf(target),
-    turns: fits
-      ? shown
-      : shown.map((t) => ({
-          ...t,
-          user: capped(String(t.user), READ_BYTES / 4).text,
-          assistant: capped(String(t.assistant), READ_BYTES / 2).text,
-        })),
-    ...(shown.length < turns.length || !fits ? { truncated: true } : {}),
+    turns: turns.map((t) => ({
+      user: String(t.user ?? ""),
+      assistant: String(t.assistant ?? ""),
+      files_changed: Number(t.files_changed ?? 0),
+    })),
+  });
+  const page = pageOf(rendered, offset);
+  if (isFailure(page)) return failureJson(page);
+  return {
+    session_id: target.id,
+    title: target.title,
+    status: target.status ?? "idle",
+    project: projectOf(target),
+    offset: page.offset,
+    text: page.text,
+    ...(page.nextOffset === null ? { complete: true } : { next_offset: page.nextOffset }),
   };
 }
 
@@ -805,7 +816,7 @@ export function turnsOf(items: TranscriptItem[]): JsonObject[] {
 
 async function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), targetId);
-  const refused = checkMessage(caller, target, book());
+  const refused = checkMessage(caller, target, book(), false, false, threadLimit());
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const no = await permitted(caller, target.id, {
     kind: "message",
@@ -816,7 +827,14 @@ async function message(caller: RuleThread, targetId: string, text: string): Prom
   });
   if (no) return failureJson(no);
   // The user took their time: look again.
-  const again = checkMessage(caller, ruleThread(useApp.getState(), targetId), book());
+  const again = checkMessage(
+    caller,
+    ruleThread(useApp.getState(), targetId),
+    book(),
+    false,
+    false,
+    threadLimit(),
+  );
   if (again) return failureJson(again);
   await openThread(target.id);
   const thread = useApp.getState().threads[target.id];
@@ -987,7 +1005,7 @@ async function createThreadFor(
 }
 
 async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), 1);
+  const refused = checkStart(caller, book(), 1, threadLimit());
   if (refused) return failureJson(refused);
   const project = projectFor(caller, call.project);
   if (isFailure(project)) return failureJson(project);
@@ -1008,7 +1026,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     worktree: call.worktree ?? true,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), 1);
+  const again = checkStart(caller, book(), 1, threadLimit());
   if (again) return failureJson(again);
   let id: string;
   try {
@@ -1036,12 +1054,12 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     title,
     harness: harness.id,
     ...ranWith(id),
-    links_left: linksLeft(book(), caller.id),
+    links_left: linksLeft(book(), caller.id, threadLimit()),
   };
 }
 
 async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), call.harnesses.length);
+  const refused = checkStart(caller, book(), call.harnesses.length, threadLimit());
   if (refused) return failureJson(refused);
   const chosen: { id: string; name: string; model?: string; effort?: string }[] = [];
   for (const entry of call.harnesses) {
@@ -1063,7 +1081,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     worktree: true,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), chosen.length);
+  const again = checkStart(caller, book(), chosen.length, threadLimit());
   if (again) return failureJson(again);
   const fanId = localId("fan");
   const out: JsonObject[] = [];
@@ -1107,7 +1125,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     };
     setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
   }
-  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id) };
+  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, threadLimit()) };
 }
 
 /** A link's state now: a running turn that waits on an approval or a question needs the user. */
@@ -1123,7 +1141,9 @@ export function stateOf(s: AppState, link: Link) {
  * no wake repeats what the wait itself returns.
  */
 async function wait(callerId: string, ids: string[], timeoutMs: number): Promise<JsonObject> {
-  const mine = ids.filter((id) => book().links.find((l) => l.id === id)?.orchestrator === callerId);
+  const mine = [...new Set(ids)].filter(
+    (id) => book().links.find((l) => l.id === id)?.orchestrator === callerId,
+  );
   if (!mine.length) return failureJson(failure("not_found", "no such link from this thread"));
   const deadline = Date.now() + timeoutMs;
   const set = waiting.get(callerId) ?? new Set<string>();

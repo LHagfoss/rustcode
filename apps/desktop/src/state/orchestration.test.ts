@@ -30,7 +30,9 @@ import {
   linkCounts,
   linkGroupStatus,
   linkResult,
+  linksLeft,
   listSessions,
+  MAX_ACTIVE_LINKS,
   MAX_DATA_ROWS,
   MAX_DEPTH,
   MAX_TREE_LINKS,
@@ -38,11 +40,13 @@ import {
   mergeBooks,
   nextWakeAt,
   orphanedLinks,
+  pageOf,
   parseBook,
   parseCall,
   pendingWakeUnder,
   quietTree,
   type RuleThread,
+  renderRead,
   restateLinks,
   sameProject,
   stripLinks,
@@ -130,7 +134,12 @@ describe("orchestration rules", () => {
       tool: "read_session",
       target: "b",
       lastTurns: 2,
+      offset: 0,
     });
+    expect(parseCall({ tool: "read_session", args: { session_id: "b", offset: 16384 } })).toMatchObject({
+      offset: 16384,
+    });
+    expect(isFailure(parseCall({ tool: "read_session", args: { session_id: "b", offset: -1 } }))).toBe(true);
     expect(isFailure(parseCall({ tool: "read_session", args: { session_id: "b", last_turns: 11 } }))).toBe(
       true,
     );
@@ -144,13 +153,19 @@ describe("orchestration rules", () => {
     ).toBe(true);
     expect(isFailure(parseCall({ tool: "start_session", args: { prompt: "  " } }))).toBe(true);
     expect(
-      isFailure(parseCall({ tool: "message_session", args: { session_id: "b", message: "x".repeat(9000) } })),
+      isFailure(
+        parseCall({ tool: "message_session", args: { session_id: "b", message: "x".repeat(33_000) } }),
+      ),
     ).toBe(true);
     const wait = parseCall({ tool: "wait_session", args: { link_id: "a/1", timeout_ms: 9e9 } });
     expect(!isFailure(wait) && wait.tool === "wait_session" && wait.timeoutMs).toBe(3_600_000);
+    // Each answer once: a repeated link id is asked about once.
+    expect(parseCall({ tool: "wait_session", args: { link_ids: ["a/1", "a/1", "a/2"] } })).toMatchObject({
+      links: ["a/1", "a/2"],
+    });
   });
 
-  test("same project, four links, one orchestrator per target", () => {
+  test("same project, the thread limit, one orchestrator per target", () => {
     const a = thread("a");
     expect(checkMessage(a, thread("b", "/other"), emptyBook())?.code).toBe("not_allowed");
     expect(checkMessage(a, a, emptyBook())?.code).toBe("not_allowed");
@@ -159,10 +174,43 @@ describe("orchestration rules", () => {
     const wt = thread("w", "/wt/x", { worktree: { path: "/wt/x", branch: "b", repo: "/repo" } });
     expect(checkMessage(a, wt, emptyBook())).toBeNull();
     expect(checkMessage(a, thread("b"), book([link("z", "b")]))?.code).toBe("target_linked");
-    const four = ["c", "d", "e", "f"].map((t) => link("a", t));
-    expect(checkMessage(a, thread("b"), book(four))?.code).toBe("busy");
-    expect(checkStart(a, book(four.slice(0, 2)), 3)?.code).toBe("busy");
-    expect(checkStart(a, book(four.slice(0, 2)), 2)).toBeNull();
+    const full = ["c", "d", "e", "f"].map((t) => link("a", t));
+    expect(checkMessage(a, thread("b"), book(full), false, false, 4)?.code).toBe("busy");
+    expect(checkStart(a, book(full.slice(0, 2)), 3, 4)?.code).toBe("busy");
+    expect(checkStart(a, book(full.slice(0, 2)), 2, 4)).toBeNull();
+    // The default is eight now, and the setting's own ends are two and sixteen.
+    expect(checkStart(a, book(full.slice(0, 2)), 2)).toBeNull();
+    const eight = ["c", "d", "e", "f", "g", "h", "i", "j"].map((t) => link("a", t));
+    expect(checkStart(a, book(eight.slice(0, 7)), 1)).toBeNull();
+    expect(checkStart(a, book(eight), 1)?.code).toBe("busy");
+    expect(checkStart(a, book(eight.slice(0, 2)), 7, 2)?.code).toBe("busy");
+    expect(checkStart(a, book(eight.slice(0, 1)), 1, 2)).toBeNull();
+    expect(checkStart(a, book(eight), 1, 16)).toBeNull();
+  });
+
+  test("a follow-up to a thread the caller already runs takes no slot", () => {
+    // The live shape: a thread at the limit messaging a thread it is already running.
+    const targets = Array.from({ length: MAX_ACTIVE_LINKS }, (_, i) => `t${i}`);
+    const full = book(targets.map((t) => link("a", t)));
+    expect(checkStart(thread("a"), full, 1)?.code).toBe("busy");
+    expect(checkMessage(thread("a"), thread(targets[0]!), full)).toBeNull();
+    // A second link to the same thread is still tracked, and a wait answers each once.
+    const again = book([...full.links, link("a", targets[0]!)]);
+    expect(checkMessage(thread("a"), thread(targets[0]!), again)).toBeNull();
+    expect(again.links.filter((l) => l.target === targets[0])).toHaveLength(2);
+    // Slots count distinct threads, not links: two links to one thread take one.
+    const pair = book([link("a", "b"), link("a", "b"), link("a", "c")]);
+    expect(linksLeft(pair, "a", 4)).toBe(2);
+    expect(linksLeft(full, "a")).toBe(0);
+    // A full tree does not refuse a follow-up either.
+    const tree = book([
+      ...targets.map((t) => link("a", t)),
+      ...Array.from({ length: MAX_ACTIVE_LINKS }, (_, i) => link(targets[0]!, `k${i}`)),
+    ]);
+    expect(activeInTree(tree, "a")).toBe(MAX_TREE_LINKS);
+    expect(checkMessage(thread("a"), thread(targets[0]!), tree, false, false, 2)).toBeNull();
+    // A thread it does not already run is still one more.
+    expect(checkMessage(thread("a"), thread("new"), full)?.code).toBe("busy");
   });
 
   test("a child may delegate one level further, and a grandchild is told the limit", () => {
@@ -199,28 +247,26 @@ describe("orchestration rules", () => {
     expect(checkMessage(thread("b"), thread("c"), sibling)?.code).toBe("target_linked");
   });
 
-  test("a whole tree holds at most eight active links", () => {
-    // Two levels of four: four under a, four under b (b is a's child).
-    const tree = book([
-      link("a", "b"),
-      ...["c", "d", "e"].map((t) => link("a", t)),
-      ...["f", "g", "h", "i"].map((t) => link("b", t)),
-    ]);
+  test("a whole tree holds twice the thread limit in active threads", () => {
+    // Two levels: eight threads under a, eight under b (b is a's child).
+    const under = (parent: string, n: number) =>
+      Array.from({ length: n }, (_, i) => link(parent, `${parent}-${i}`));
+    const tree = book([link("a", "b"), ...under("a", MAX_ACTIVE_LINKS - 1), ...under("b", MAX_ACTIVE_LINKS)]);
     expect(activeInTree(tree, "b")).toBe(MAX_TREE_LINKS);
-    const refused = checkStart(thread("c"), tree, 1)!;
+    const refused = checkStart(thread("a-0"), tree, 1)!;
     expect(refused.code).toBe("busy");
     expect(refused.message).toContain(`tree holds at most ${MAX_TREE_LINKS}`);
     expect(refused.linksLeft).toBe(0);
     // A message to another thread opens a link too, so the tree cap holds for it as well.
-    expect(checkMessage(thread("c"), thread("j"), tree)?.code).toBe("busy");
+    expect(checkMessage(thread("a-0"), thread("j"), tree)?.code).toBe("busy");
     // One less in the tree: the last slot is there, and a fan-out of two is not.
     const room = book([
       link("a", "b"),
-      ...["c", "d", "e"].map((t) => link("a", t)),
-      ...["f", "g", "h"].map((t) => link("b", t)),
+      ...under("a", MAX_ACTIVE_LINKS - 1),
+      ...under("b", MAX_ACTIVE_LINKS - 1),
     ]);
-    expect(checkStart(thread("c"), room, 1)).toBeNull();
-    expect(checkStart(thread("c"), room, 2)?.code).toBe("busy");
+    expect(checkStart(thread("a-0"), room, 1)).toBeNull();
+    expect(checkStart(thread("a-0"), room, 2)?.code).toBe("busy");
   });
 
   test("stopping a thread takes its active descendants, and nothing on a finish", () => {
@@ -829,18 +875,26 @@ describe("a group of threads", () => {
 });
 
 describe("answering with the slots and the child's activity", () => {
-  test("a busy refusal says how many links are left", () => {
-    const full = book([link("a", "b"), link("a", "c"), link("a", "d"), link("a", "e")]);
+  test("a busy refusal says how many threads are left", () => {
+    const full = book(Array.from({ length: MAX_ACTIVE_LINKS }, (_, i) => link("a", `t${i}`)));
     const refused = checkStart(thread("a"), full, 2)!;
     expect(refused.code).toBe("busy");
     expect(refused.linksLeft).toBe(0);
-    expect(refused.message).toContain("at most 4 at once; wait_session on one first");
+    expect(refused.message).toContain(
+      `at most ${MAX_ACTIVE_LINKS} threads at once; wait_session on one first`,
+    );
     const json = failureJson(refused);
     expect(json.error).toMatchObject({ code: "busy", links_left: 0 });
     // One slot open: a single start fits, two do not.
-    const three = book([link("a", "b"), link("a", "c"), link("a", "d")]);
-    expect(checkStart(thread("a"), three, 1)).toBeNull();
-    expect(checkStart(thread("a"), three, 2)?.linksLeft).toBe(1);
+    const room = book(Array.from({ length: MAX_ACTIVE_LINKS - 1 }, (_, i) => link("a", `t${i}`)));
+    expect(checkStart(thread("a"), room, 1)).toBeNull();
+    expect(checkStart(thread("a"), room, 2)?.linksLeft).toBe(1);
+    // A thread limit of two says two, and its tree says four.
+    const two = book([link("a", "b"), link("a", "c")]);
+    const small = checkStart(thread("a"), two, 1, 2)!;
+    expect(small.message).toContain("at most 2 threads at once");
+    const tiny = book([link("a", "b"), link("b", "c"), link("b", "d"), link("b", "e")]);
+    expect(checkStart(thread("a"), tiny, 1, 2)?.message).toContain("tree holds at most 4");
   });
 
   test("a timeout's link says how long it has been idle and what it did last", () => {
@@ -856,5 +910,70 @@ describe("answering with the slots and the child's activity", () => {
       activity: activityOf(items),
     });
     expect(entry).toMatchObject({ idle_ms: 3_500, last_tool: "read_session", turns: 1 });
+  });
+
+  test("a cut answer says so and names the thread whose read_session has the rest", () => {
+    const cut = { ...link("a", "b", "done"), answer: "x", truncated: true };
+    const entry = linkResult(cut, "done");
+    expect(entry).toMatchObject({ answer_truncated: true, session_id: "b", link_id: "a/b" });
+    // An answer that fits says nothing about truncation.
+    expect(linkResult({ ...cut, truncated: false }, "done")).not.toHaveProperty("answer_truncated");
+  });
+});
+
+describe("paging a rendered answer", () => {
+  test("a page walk over multibyte text loses and repeats nothing", () => {
+    const text = `${'å🦀\n\t\u0001"\\'.repeat(4_000)}\nend`;
+    let offset = 0;
+    let recovered = "";
+    for (let pages = 0; ; pages += 1) {
+      const page = pageOf(text, offset);
+      expect(isFailure(page)).toBe(false);
+      if (isFailure(page)) return;
+      expect(new TextEncoder().encode(page.text).length).toBeLessThanOrEqual(16 * 1024);
+      recovered += page.text;
+      if (page.nextOffset === null) break;
+      expect(page.nextOffset).toBeGreaterThan(offset);
+      offset = page.nextOffset;
+      expect(pages).toBeLessThan(100);
+    }
+    expect(recovered).toBe(text);
+  });
+
+  test("a rendered read pages whole characters, and a bad offset is refused", () => {
+    const answer = {
+      session_id: "b",
+      title: "Thread 🦀",
+      status: "idle",
+      project: "/repo",
+      turns: Array.from({ length: 6 }, (_, i) => ({
+        user: `ask ${i} å`.repeat(400),
+        assistant: "🦀 done\n".repeat(900),
+        files_changed: i,
+      })),
+    };
+    const rendered = renderRead(answer);
+    expect(rendered).toContain("Thread: Thread 🦀");
+    expect(rendered).toContain("files changed: 5");
+    let offset = 0;
+    let recovered = "";
+    for (;;) {
+      const page = pageOf(rendered, offset);
+      if (isFailure(page)) throw new Error(page.message);
+      recovered += page.text;
+      if (page.nextOffset === null) break;
+      offset = page.nextOffset;
+    }
+    expect(recovered).toBe(rendered);
+    // An offset inside a character is refused rather than moved, as zoom_context does.
+    const second = new TextEncoder().encode("🦀")[1]!;
+    const inside = pageOf("🦀x", 1);
+    expect(inside).toMatchObject({ code: "invalid" });
+    expect(second & 0xc0).toBe(0x80);
+    expect(isFailure(pageOf(rendered, rendered.length * 4))).toBe(true);
+    expect(pageOf(rendered, new TextEncoder().encode(rendered).length)).toMatchObject({
+      text: "",
+      nextOffset: null,
+    });
   });
 });
