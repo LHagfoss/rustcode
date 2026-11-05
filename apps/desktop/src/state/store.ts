@@ -122,6 +122,7 @@ import {
   MAX_ACTIVE_LINKS,
   MIN_ACTIVE_LINKS,
 } from "./orchestration";
+import { clearPageCache } from "./pageCache";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
 import { nextQueued } from "./queue";
@@ -742,6 +743,9 @@ function bootStep(progress: number) {
 }
 
 function onEngineStatus(s: AppState, prev?: AppState) {
+  // Settings' answers name this engine's accounts and plans: none of them may
+  // show for the next one (a restart can reach a different config).
+  if (s.status !== "ready") clearPageCache();
   clearTimeout(slowTimer);
   if (s.status === "ready") {
     // Batched updates can go from closed straight to ready: this keys on `crashed` alone.
@@ -3616,6 +3620,7 @@ export async function request<T = Json>(
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
   clearTimeout(slowTimer);
+  clearPageCache();
   stopPlanPolling();
   resetWaits();
   engineWatch?.();

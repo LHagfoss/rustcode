@@ -35,7 +35,17 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Json } from "../acp/jsonrpc";
+import type { Json, JsonObject } from "../acp/jsonrpc";
+import {
+  beginPageRead,
+  cachedPage,
+  commitPage,
+  forgetPage,
+  isLatestPageRead,
+  pageKey,
+  rememberPage,
+  sameValue,
+} from "../state/pageCache";
 import { request, useApp } from "../state/store";
 import { cx, menuItem, Skeleton, Tooltip } from "./primitives";
 
@@ -421,28 +431,49 @@ export function Loading({ error }: { error: string | null }) {
   );
 }
 
-/** The last answer per method: a page opens with it at once and refreshes behind it. */
-const cache = new Map<string, unknown>();
-
-export function useEngineData<T>(method: string, parse: (v: Json) => T) {
+/**
+ * A page's engine data: the last answer for this ask (`state/pageCache.ts`)
+ * draws at once, and the page reads again on open, behind it. A read that
+ * started before a newer one, or before an action wrote its own answer, is
+ * dropped, so a slow response never puts back what the page just changed.
+ * The cache is in memory only and is cleared when the engine goes away.
+ */
+export function useEngineData<T>(method: string, parse: (v: Json) => T, params: JsonObject = {}) {
   const status = useApp((s) => s.status);
-  const [data, setDataState] = useState<T | null>(() => (cache.get(method) as T | undefined) ?? null);
+  const key = pageKey(method, params);
+  const [data, setDataState] = useState<T | null>(() => cachedPage<T>(key)?.data ?? null);
   const [error, setError] = useState<string | null>(null);
-  const setData = useCallback(
-    (value: T | null) => {
-      if (value !== null) cache.set(method, value);
-      setDataState(value);
-    },
-    [method],
-  );
+  // The latest render's ask: a stable `load` reads it, so an inline params
+  // object or parser does not restart the effect on every render.
+  const ask = useRef({ method, params, parse, key });
+  ask.current = { method, params, parse, key };
+  const setData = useCallback((value: T | null) => {
+    const { key } = ask.current;
+    if (value === null) forgetPage(key);
+    else rememberPage(key, value);
+    setDataState((shown) => (sameValue(shown, value) ? shown : value));
+  }, []);
   const load = useCallback(async () => {
+    const { method, params, parse } = ask.current;
+    const token = beginPageRead(key);
     try {
-      setData(parse(await request(method)));
+      const answer = parse(await request(method, params));
+      const stored = commitPage(key, token, answer);
+      if (!stored) return;
+      setDataState((shown) => (sameValue(shown, stored.data) ? shown : stored.data));
       setError(null);
     } catch (e) {
+      if (!isLatestPageRead(key, token)) return;
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [method, parse, setData]);
+  }, [key]);
+  // A key change (or an engine going away) shows that ask's last answer, never
+  // the one the page had for another engine.
+  useEffect(() => {
+    const shown = status === "ready" ? (cachedPage<T>(key)?.data ?? null) : null;
+    setDataState((current) => (sameValue(current, shown) ? current : shown));
+    setError(null);
+  }, [status, key]);
   useEffect(() => {
     if (status === "ready") void load();
   }, [status, load]);
