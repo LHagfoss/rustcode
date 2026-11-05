@@ -7,79 +7,64 @@ keywords: interactive, widget, component, html, chart, slider, filter, sort, tog
 
 # Smart UI
 
-One small HTML component inside a chat reply, reading like the rest of the
-reply: no card, border or background of its own.
-
 ## When
 
-- Read once: Markdown. A quick plain chart, table or tree: `rustcode-viz`.
-- Smart UI when the user asks for a visualization, a graph, a dashboard or
-  anything you would design: give it a real design, a short title, the finding
-  in a sentence and big numbers where the point is a number.
-- Also when a control changes what the reader sees (filter, sort, slider,
-  toggle, step) or a button asks a follow-up.
-- One component per question. Put the key finding in a sentence before it.
+Default to a view for anything structured: a table, comparison, breakdown,
+status overview, plan, numbers, a chart or a dashboard, asked or not. Prose, a
+single fact, a few bullets, code and diffs stay Markdown. Put the finding in a
+sentence before the view. A report to another thread stays plain Markdown.
 
 ## Format
 
 ````markdown
 ```rustcode-ui v1
-<title>Kristiansand, next 3 days</title>
-<label>Show <select id="m"><option value="0">Temperature</option><option value="1">Wind</option></select></label>
-<div style="height:200px"><canvas id="c" role="img" aria-label="Forecast"></canvas></div>
-<button id="d">Tuesday by hour</button>
-<script src="rustcode-lib:chart.js"></script>
-<script>
-const series = [["°C", [8, 10, 7]], ["m/s", [5, 9, 4]]];
-const chart = new Chart(document.getElementById("c"), {type: "line",
-  data: {labels: ["Mon", "Tue", "Wed"], datasets: [{label: series[0][0], data: series[0][1]}]},
-  options: {maintainAspectRatio: false}});
-document.getElementById("m").onchange = (e) => {
-  const [label, data] = series[e.target.value];
-  Object.assign(chart.data.datasets[0], {label, data}); chart.update();
-};
-document.getElementById("d").onclick = () => window.rustcode?.send("Show Tuesday by hour");
-</script>
+<title>Test runs</title>
+<div class="rc-stats"><div class="rc-stat"><span class="rc-stat-value">128</span><span class="rc-stat-label">Runs</span></div></div>
 ```
 ````
 
-- `<title>` labels the view; do not repeat it as a heading.
-- Inline `<style>` and `<script>` only, data embedded. Network, imports,
-  storage and navigation are blocked. Limits: 64 KB source, 5,000 elements.
+`<title>` labels the view; do not repeat it. Inline `<style>` and `<script>`
+only, data embedded; no network, imports, storage or navigation.
+Limits: 64 KB source, 5,000 elements.
 
-## Runtime (already on the page)
+## Kit (already on the page)
 
-- Headings, tables, inputs, buttons and code are already styled with the
-  app's typography, so write little CSS.
-- CSS variables: `--rc-text --rc-muted --rc-faint --rc-accent --rc-surface
-  --rc-separator --rc-danger --rc-success --rc-warning --rc-font --rc-mono
-  --rc-radius --rc-series-1` … `--rc-series-8`.
-- Classes: `.rc-row` `.rc-col` (flex), `.rc-grid`, `.rc-gap-1` … `.rc-gap-4`,
-  `.rc-muted`, `.rc-mono`, `.rc-num` (tabular figures), `.rc-card` (an inner
-  group), `.rc-scroll`.
-- Chart.js 4 (global `Chart`) via `<script src="rustcode-lib:chart.js">`.
-  `Chart.defaults` already use the variables, so set no colours. If you must,
-  read one: `getComputedStyle(document.documentElement).getPropertyValue('--rc-accent')`.
-  Never give a canvas a system colour (`CanvasText`, `AccentColor`): it draws
-  nothing.
-- `window.rustcode`: `send(text)` sends `text` as the user's next message,
-  only from a click or key press (follow-ups such as "Show details for X");
-  `copy(text)`; `theme` (`"light"` or `"dark"`); `onThemeChange(callback)`.
-- Older apps have no `rustcode` object and no runtime: call
-  `window.rustcode?.send(...)`, give variables a fallback
-  (`var(--rc-muted, GrayText)`), and keep the view readable without classes.
+Set no colours and write as little CSS as you can.
+
+- Text: `.rc-title .rc-lead .rc-label .rc-muted .rc-mono .rc-num`.
+- Numbers: `.rc-stats` > `.rc-stat` > `.rc-stat-value .rc-stat-label .rc-stat-note`.
+- Status: tints `.rc-ok .rc-warn .rc-bad .rc-info` on `.rc-badge .rc-callout`,
+  a stat, a bar or a line in `.rc-term`. `<div class="rc-progress"><span style="width:72%"></span></div>`
+- Bars: `<div class="rc-bars"><div class="rc-bar"><span>Name</span><i style="width:40%"></i><b>40</b></div></div>`
+- Rows: `<table class="rc-table">` (in `.rc-scroll` its header sticks);
+  `<ul class="rc-list"><li class="rc-item"><span>Name</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
+- Plans: `<ol class="rc-steps"><li class="rc-step rc-done">Built</li></ol>`, also `rc-active rc-failed rc-todo`.
+- Folding: `<details class="rc-details"><summary>Files</summary>…</details>`;
+  `.rc-tree` around nested ones, `.rc-file` rows of name and value.
+- Output: `<div class="rc-term"><div>$ cargo test</div><div class="rc-ok">ok</div></div>`
+- Citation: `<span class="rc-tip" tabindex="0">1<span>Source text</span></span>`
+- Tabs: `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`
+- Actions, no script: `<button class="rc-chip" data-rc-send="Show X">Show X</button>`
+  sends a follow-up; `data-rc-copy="text"` copies and says Copied.
+- Layout: `.rc-row .rc-col .rc-grid .rc-gap-1` … `.rc-gap-4 .rc-card .rc-scroll`.
+- Variables: `--rc-text --rc-muted --rc-faint --rc-accent
+  --rc-surface --rc-bg --rc-separator --rc-danger --rc-success --rc-warning
+  --rc-font --rc-mono --rc-radius --rc-series-1` … `--rc-series-8`.
+- Charts: Chart.js 4 via `<script src="rustcode-lib:chart.js"></script>`, in
+  `<div style="height:200px"><canvas role="img" aria-label="…"></canvas></div>`.
+  Themed already; a canvas draws nothing with `CanvasText`.
+- `window.rustcode`: `send(text)` only from a click or key press, `copy(text)`,
+  `theme`, `onThemeChange(callback)`.
+- Older apps have no runtime: call `window.rustcode?.send(...)`, use
+  `var(--rc-muted, GrayText)`.
 
 ## Design
 
-- No outer card, border, background, shadow or title banner.
-- Compact (aim under 300 px tall) and fits a 320 px column: relative widths,
-  wrapping rows.
-- The first state is useful without interaction; a control's effect shows
-  next to it.
-- Accessible: real `<button>`, `<select>`, `<input>` and `<label>`,
-  `aria-label` where a control has no visible label, keyboard operable.
-  Respect `prefers-reduced-motion`.
-- Pre-aggregate; never embed thousands of rows.
+- No outer card, border, background or title banner. One view per question.
+- Fits a 320 px column, aim under 300 px tall: relative widths, no `vh`.
+- Useful before any interaction; a control's effect shows next to it.
+- Real `<button>`, `<select>`, `<input>`, `<label>`; `aria-label` where a
+  control has no visible label. Pre-aggregate; no thousands of rows.
 
 ## Before you send
 

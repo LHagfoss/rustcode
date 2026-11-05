@@ -4,14 +4,32 @@
 // docs/smart-ui.md for the format, limits and security model.
 
 import { Check, Code, Copy, Play, Square } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
 import { shellCall } from "../lib/shell";
 import { cssVar, isDark, onAppThemeChange } from "../lib/theme";
 import { chartSource } from "../smartui/chart";
-import { claimLive, frameToken, releaseLive, SendGate } from "../smartui/host";
+import {
+  AutoRun,
+  claimLive,
+  clearHalt,
+  frameToken,
+  haltOf,
+  haltView,
+  releaseLive,
+  rememberedHeight,
+  rememberHeight,
+  SendGate,
+} from "../smartui/host";
 import { buildPage, pageTheme, usesChart, varsCss } from "../smartui/page";
-import { blockProblem, blockTitle, clampHeight, MAX_ELEMENTS, viewMessage } from "../smartui/parse";
+import {
+  blockProblem,
+  blockTitle,
+  clampHeight,
+  MAX_ELEMENTS,
+  MIN_HEIGHT,
+  viewMessage,
+} from "../smartui/parse";
 import { sendFromView, setSmartUi, toast, useApp } from "../state/store";
 import { CodeBlock } from "./Markdown";
 import { copyText, cx, Pill, Tooltip } from "./primitives";
@@ -19,6 +37,8 @@ import { copyText, cx, Pill, Tooltip } from "./primitives";
 const LOAD_TIMEOUT = 5000;
 const BUSY_TIMEOUT = 3000;
 const HIDDEN_TIMEOUT = 30_000;
+/** A view starts this far before it scrolls into sight, so it is drawn when it arrives. */
+const SEEN_MARGIN = "200px";
 
 function currentTheme() {
   return pageTheme(isDark() ? "dark" : "light", cssVar);
@@ -30,7 +50,14 @@ function frameUrl(id: string): string {
   return windows ? `http://rcui.localhost/${id}` : `rcui://localhost/${id}`;
 }
 
-type State = { kind: "idle" } | { kind: "running" } | { kind: "failed"; reason: string };
+/** The scroller around a view: an observer's margin only applies to its own root. */
+function scrollParent(el: Element): Element | null {
+  for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+    const overflow = getComputedStyle(parent).overflowY;
+    if (overflow === "auto" || overflow === "scroll") return parent;
+  }
+  return null;
+}
 
 function IconButton({
   label,
@@ -63,60 +90,125 @@ export function SmartUIView({
 }: {
   source: string;
   complete: boolean;
-  /** The reply is streaming in front of the reader now: a block that finishes runs on its own. */
+  /** The reply is streaming in front of the reader now. */
   streaming: boolean;
   threadId?: string;
 }) {
   const enabled = useApp((s) => s.smartUi);
-  const [state, setState] = useState<State>({ kind: "idle" });
-  const [height, setHeight] = useState(48);
+  const [height, setHeight] = useState(() => rememberedHeight(source) ?? MIN_HEIGHT);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
   const [page, setPage] = useState<{ token: string; src?: string; srcdoc?: string } | null>(null);
+  const [inView, setInView] = useState(false);
+  const [, haltChanged] = useReducer((n: number) => n + 1, 0);
   const frame = useRef<HTMLIFrameElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  const sawStreaming = useRef(streaming && !complete);
+  const autoRun = useRef(new AutoRun());
+  // Each start or stop outdates a start still waiting on Chart.js or the shell.
+  const attempt = useRef(0);
+  const starting = useRef(false);
   const instance = useRef(frameToken());
   const problem = complete ? blockProblem(source) : null;
   const title = blockTitle(source);
+  const haltKey = `${threadId ?? ""}\n${source}`;
+  const halt = complete ? haltOf(haltKey) : undefined;
+  const runnable = enabled && complete && !problem;
 
-  if (streaming && !complete) sawStreaming.current = true;
-
-  const stop = useCallback((reason?: string) => {
+  const tearDown = useCallback(() => {
+    attempt.current++;
+    starting.current = false;
     releaseLive(instance.current);
     setPage(null);
-    setState(reason ? { kind: "failed", reason } : { kind: "idle" });
   }, []);
+
+  /** Stop and failure stay after the row unmounts: only pressing Run brings the view back. */
+  const haltWith = useCallback(
+    (reason?: string) => {
+      haltView(haltKey, reason ? { kind: "failed", reason } : { kind: "stopped" });
+      haltChanged();
+      tearDown();
+    },
+    [haltKey, tearDown],
+  );
 
   const run = useCallback(async () => {
     if (!threadId) return;
+    const mine = ++attempt.current;
+    starting.current = true;
+    const show = (next: NonNullable<typeof page>) => {
+      starting.current = false;
+      setPage(next);
+    };
     const token = frameToken();
     const chart = usesChart(source) ? await chartSource() : undefined;
+    if (mine !== attempt.current) return;
     const html = buildPage(source, token, currentTheme(), chart);
-    claimLive(instance.current, () => stop());
-    setHeight(48);
-    setState({ kind: "running" });
+    claimLive(
+      instance.current,
+      () => {
+        autoRun.current.evicted();
+        tearDown();
+      },
+      () => autoRun.current.inView,
+    );
+    setHeight((now) => rememberedHeight(source) ?? now);
     if (isTauri()) {
       try {
         const id = await shellCall<string>("smartui_page", { html });
-        setPage({ token, src: frameUrl(id) });
+        if (mine === attempt.current) show({ token, src: frameUrl(id) });
       } catch (error) {
-        stop(`The view could not start: ${error instanceof Error ? error.message : String(error)}`);
+        if (mine === attempt.current)
+          haltWith(`The view could not start: ${error instanceof Error ? error.message : String(error)}`);
       }
     } else {
-      setPage({ token, srcdoc: html });
+      show({ token, srcdoc: html });
     }
-  }, [source, threadId, stop]);
+  }, [source, threadId, tearDown, haltWith]);
 
-  // A block that finished streaming in front of the reader runs on its own; others wait for Run.
+  const pressRun = () => {
+    clearHalt(haltKey);
+    haltChanged();
+    void run();
+  };
+
+  // What is in sight, for the whole life of a finished block, running or not.
   useEffect(() => {
-    if (enabled && complete && !problem && sawStreaming.current && state.kind === "idle" && !page) {
-      sawStreaming.current = false;
-      void run();
-    }
-  }, [enabled, complete, problem, state.kind, page, run]);
+    const el = box.current;
+    if (!runnable || !el) return;
+    const gate = autoRun.current;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const seen = entries.at(-1)?.isIntersecting ?? false;
+        gate.see(seen);
+        setInView(seen);
+      },
+      { root: scrollParent(el), rootMargin: SEEN_MARGIN },
+    );
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      gate.see(false);
+      setInView(false);
+    };
+  }, [runnable]);
 
-  useEffect(() => () => releaseLive(instance.current), []);
+  // In sight it runs by itself, unless stopped, failed or just evicted (`AutoRun`).
+  useEffect(() => {
+    if (runnable && inView && !halt && !page && !starting.current && autoRun.current.ready) void run();
+  }, [runnable, inView, halt, page, run]);
+
+  // Smart UI turned off: nothing draws the frame, so its watchdog must not call it a failure.
+  useEffect(() => {
+    if (!enabled && page) tearDown();
+  }, [enabled, page, tearDown]);
+
+  useEffect(
+    () => () => {
+      attempt.current++;
+      releaseLive(instance.current);
+    },
+    [],
+  );
 
   // Messages from the page: only from this frame, with this frame's token.
   useEffect(() => {
@@ -133,8 +225,12 @@ export function SmartUIView({
         case "size": {
           const elements = Number(data.elements);
           if (elements > MAX_ELEMENTS)
-            stop(`The view built more than ${MAX_ELEMENTS.toLocaleString()} elements.`);
-          else setHeight(clampHeight(Number(data.height) || 48));
+            haltWith(`The view built more than ${MAX_ELEMENTS.toLocaleString()} elements.`);
+          else {
+            const measured = clampHeight(Number(data.height) || MIN_HEIGHT);
+            rememberHeight(source, measured);
+            setHeight(measured);
+          }
           break;
         }
         case "send": {
@@ -163,10 +259,12 @@ export function SmartUIView({
     window.addEventListener("message", onMessage);
     // Watchdogs: a page that never starts, or stops answering (a busy loop), is stopped.
     const watch = setInterval(() => {
+      // A hidden window throttles the page's heartbeat; that is not a failure, and a failure sticks.
+      if (document.hidden) lastSign = Date.now();
       const quiet = Date.now() - lastSign;
-      if (!loaded && quiet > LOAD_TIMEOUT) stop("The view did not load in 5 seconds.");
+      if (!loaded && quiet > LOAD_TIMEOUT) haltWith("The view did not load in 5 seconds.");
       else if (loaded && quiet > BUSY_TIMEOUT)
-        stop("The view stopped answering for 3 seconds (a busy loop?).");
+        haltWith("The view stopped answering for 3 seconds (a busy loop?).");
     }, 500);
     // The app's appearance changed: the page's variables follow.
     const unTheme = onAppThemeChange(() => {
@@ -181,23 +279,14 @@ export function SmartUIView({
       clearInterval(watch);
       unTheme();
     };
-  }, [page, threadId, stop]);
+  }, [page, threadId, source, haltWith]);
 
-  // Out of sight for 30 s: torn down; its Run button brings it back.
+  // Out of sight for 30 s: torn down; it runs again when it comes back.
   useEffect(() => {
-    const el = box.current;
-    if (!el || !page) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry?.isIntersecting) clearTimeout(timer);
-      else timer = setTimeout(() => stop(), HIDDEN_TIMEOUT);
-    });
-    observer.observe(el);
-    return () => {
-      observer.disconnect();
-      clearTimeout(timer);
-    };
-  }, [page, stop]);
+    if (!page || inView) return;
+    const timer = setTimeout(tearDown, HIDDEN_TIMEOUT);
+    return () => clearTimeout(timer);
+  }, [page, inView, tearDown]);
 
   useEffect(() => {
     if (!copied) return;
@@ -228,10 +317,9 @@ export function SmartUIView({
     );
   }
 
-  const running = state.kind === "running" && page;
   return (
     <div ref={box} className="group/ui relative" aria-label={title} role="group">
-      {running ? (
+      {page ? (
         <iframe
           ref={frame}
           title={title}
@@ -242,15 +330,19 @@ export function SmartUIView({
           className="block w-full border-0 bg-transparent"
           style={{ height, colorScheme: "normal" }}
         />
-      ) : (
+      ) : halt ? (
         <div className="flex min-h-[44px] items-center gap-2 text-callout">
-          <Pill disabled={!threadId} onClick={() => void run()}>
+          <Pill disabled={!threadId} onClick={pressRun}>
             <Play size={11} fill="currentColor" /> Run interactive view
           </Pill>
           <span className="truncate text-fg-muted">{title}</span>
         </div>
+      ) : (
+        <div className="truncate text-callout text-fg-muted" style={{ height }}>
+          {title}
+        </div>
       )}
-      {state.kind === "failed" && <p className="mt-1 text-caption text-danger">{state.reason}</p>}
+      {halt?.kind === "failed" && <p className="mt-1 text-caption text-danger">{halt.reason}</p>}
       <div
         className={cx(
           "absolute top-0 right-0 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within/ui:opacity-100 group-hover/ui:opacity-100",
@@ -268,17 +360,17 @@ export function SmartUIView({
         >
           <Code size={12} />
         </IconButton>
-        {running ? (
-          <IconButton label="Stop" onClick={() => stop()}>
+        {page ? (
+          <IconButton label="Stop" onClick={() => haltWith()}>
             <Square size={10} />
           </IconButton>
         ) : (
-          <IconButton label="Run" onClick={() => void run()}>
+          <IconButton label="Run" onClick={pressRun}>
             <Play size={11} />
           </IconButton>
         )}
       </div>
-      {(showSource || state.kind === "failed") && (
+      {(showSource || halt?.kind === "failed") && (
         <div className="mt-2">
           <CodeBlock code={source} lang="html" />
         </div>

@@ -267,8 +267,12 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
     if input.selected_subagent_model.is_none() {
         tools_prompt.push_str(&crate::tools::schema::output_style_hint(
             input.visualization_level,
+            input.smart_ui,
         ));
-        tools_prompt.push_str(&super::visualization_prompt_hint(input.visualization_level));
+        tools_prompt.push_str(&crate::tools::schema::taught_visualization_hint(
+            input.visualization_level,
+            input.smart_ui,
+        ));
         tools_prompt.push_str(crate::tools::schema::smart_ui_hint(input.smart_ui));
     }
     let full_system_prompt_tokens = super::estimate_tokens(&tools_prompt);

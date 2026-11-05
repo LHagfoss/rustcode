@@ -25,6 +25,7 @@ export interface PageTheme {
 export function pageTheme(mode: ThemeMode, token: (name: string) => string): PageTheme {
   const vars: Record<string, string> = {
     "--rc-text": token("--rc-text"),
+    "--rc-bg": token("--rc-bg"),
     "--rc-muted": token("--rc-text-muted"),
     "--rc-faint": token("--rc-text-faint"),
     "--rc-accent": token("--rc-accent"),
@@ -57,7 +58,7 @@ export function varsCss(theme: PageTheme): string {
 
 export const BASE_CSS = `
 html, body { margin: 0; background: transparent; }
-body { color: var(--rc-text); font: 13px/20px var(--rc-font); padding: 1px 0 2px; overflow-wrap: anywhere;
+body { position: relative; color: var(--rc-text); font: 13px/20px var(--rc-font); padding: 1px 0 2px; overflow-wrap: anywhere;
   -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
 h1, h2, h3, h4 { margin: 0 0 6px; font-weight: 600; line-height: 1.3; }
@@ -95,6 +96,111 @@ canvas { max-width: 100%; }
 td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-card { background: var(--rc-surface); border-radius: var(--rc-radius); padding: 10px 12px; }
 .rc-scroll { max-height: 320px; overflow: auto; }
+
+.rc-title { font-size: 15px; font-weight: 600; line-height: 20px; margin: 0 0 2px; }
+.rc-lead { color: var(--rc-muted); margin: 0 0 12px; }
+.rc-label { font-size: 11px; line-height: 16px; color: var(--rc-muted); }
+.rc-ok { --rc-tint: var(--rc-success); } .rc-warn { --rc-tint: var(--rc-warning); }
+.rc-bad { --rc-tint: var(--rc-danger); } .rc-info { --rc-tint: var(--rc-accent); }
+
+.rc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.rc-stats:last-child { margin-bottom: 0; }
+.rc-stat { display: flex; flex-direction: column; min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--rc-separator); border-radius: var(--rc-radius); }
+.rc-stat-label { order: -1; font-size: 12px; line-height: 16px; color: var(--rc-muted); }
+.rc-stat-value { font-size: 24px; line-height: 30px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.rc-stat-note { font-size: 11px; line-height: 16px; color: var(--rc-tint, var(--rc-muted)); }
+
+.rc-badge { display: inline-block; padding: 0 7px; font-size: 11px; line-height: 18px; font-weight: 500; white-space: nowrap;
+  border-radius: 999px; color: var(--rc-tint, var(--rc-muted));
+  background: color-mix(in srgb, var(--rc-tint, var(--rc-text)) 13%, transparent); }
+.rc-callout { padding: 8px 12px; margin-bottom: 12px; border-radius: var(--rc-radius);
+  background: color-mix(in srgb, var(--rc-tint, var(--rc-text)) 10%, transparent); }
+.rc-callout:last-child { margin-bottom: 0; }
+.rc-chip { padding: 2px 10px; font-size: 12px; line-height: 18px; font-weight: 400; color: var(--rc-muted); cursor: pointer;
+  background: transparent; border: 1px solid var(--rc-separator); border-radius: 999px; }
+.rc-chip:hover { color: var(--rc-text); }
+[data-rc-send], [data-rc-copy] { cursor: pointer; }
+
+.rc-progress { height: 6px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+.rc-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--rc-tint, var(--rc-accent)); }
+
+.rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 6px 10px; align-items: center; }
+.rc-bar { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; font-size: 12px; line-height: 16px; }
+.rc-bar::before { content: ""; grid-area: 1 / 2; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+.rc-bar > span { grid-area: 1 / 1; color: var(--rc-muted); }
+.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 2px; height: 6px; border-radius: 999px; background: var(--rc-tint, var(--rc-accent)); }
+.rc-bar > b { grid-area: 1 / 3; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+
+.rc-table { overflow-wrap: normal; font-variant-numeric: tabular-nums; }
+.rc-bars, .rc-list, .rc-steps, .rc-tabs, .rc-table-box { margin-bottom: 12px; }
+.rc-bars:last-child, .rc-list:last-child, .rc-steps:last-child, .rc-tabs:last-child, .rc-table-box:last-child { margin-bottom: 0; }
+.rc-table .rc-num { white-space: nowrap; }
+.rc-table-box { overflow-x: auto; }
+.rc-table th { position: sticky; top: 0; z-index: 1; font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--rc-bg);
+  border-bottom: 0; box-shadow: inset 0 -1px var(--rc-separator); }
+.rc-table tbody tr:hover > td { background: color-mix(in srgb, var(--rc-text) 4.5%, transparent); }
+
+.rc-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.rc-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0;
+  border-bottom: 1px solid var(--rc-separator); }
+.rc-item:last-child { border-bottom: 0; }
+.rc-item > :first-child { min-width: 0; }
+.rc-item > :last-child:not(:first-child) { flex: none; font-variant-numeric: tabular-nums; }
+
+.rc-steps { margin: 0; padding: 0; list-style: none; }
+.rc-step { position: relative; padding: 0 0 12px 20px; }
+.rc-step:last-child { padding-bottom: 0; }
+.rc-step::before { content: ""; position: absolute; left: 1px; top: 6px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--rc-faint); }
+.rc-step::after { content: ""; position: absolute; left: 4.5px; top: 18px; bottom: -2px; width: 1px; background: var(--rc-separator); }
+.rc-step:last-child::after { display: none; }
+.rc-done::before { background: var(--rc-success); }
+.rc-active::before { background: var(--rc-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc-accent) 22%, transparent); }
+.rc-failed::before { background: var(--rc-danger); }
+.rc-todo { color: var(--rc-muted); }
+.rc-todo::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--rc-faint); }
+
+.rc-details { border-bottom: 1px solid var(--rc-separator); }
+.rc-details:last-child { border-bottom: 0; }
+.rc-details > summary { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-weight: 500; cursor: pointer; list-style: none; }
+.rc-details > summary::-webkit-details-marker { display: none; }
+.rc-details > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px;
+  border-right: 1.5px solid var(--rc-muted); border-bottom: 1.5px solid var(--rc-muted);
+  transform: rotate(-45deg); transition: transform 120ms ease-out; }
+.rc-details[open] > summary::before { transform: rotate(45deg); }
+.rc-details > summary > :last-child:not(:first-child) { margin-left: auto; font-weight: 400; }
+.rc-details > :not(summary) { margin-bottom: 8px; }
+.rc-tree .rc-details { border-bottom: 0; }
+.rc-tree .rc-details > :not(summary) { margin: 0 0 0 5px; padding-left: 12px; border-left: 1px solid var(--rc-separator); }
+.rc-file { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font: 12px/18px var(--rc-mono); }
+.rc-file > :last-child:not(:first-child) { flex: none; color: var(--rc-muted); }
+
+.rc-term { padding: 10px 12px; margin-bottom: 12px; overflow-x: auto; font: 12px/18px var(--rc-mono); background: var(--rc-surface);
+  border-radius: var(--rc-radius); }
+.rc-term:last-child { margin-bottom: 0; }
+.rc-term > * { display: block; white-space: pre-wrap; }
+pre.rc-term { white-space: pre-wrap; }
+.rc-term .rc-ok, .rc-term .rc-warn, .rc-term .rc-bad, .rc-term .rc-info { color: var(--rc-tint); }
+
+.rc-tabs [role=tablist] { display: inline-flex; max-width: 100%; gap: 2px; padding: 2px; overflow-x: auto;
+  background: var(--rc-surface); border-radius: 8px; }
+.rc-tabs [role=tab] { flex: none; padding: 1px 10px; font-size: 12px; line-height: 20px; color: var(--rc-muted);
+  background: transparent; border: 0; border-radius: 6px; }
+.rc-tabs [role=tab]:hover { color: var(--rc-text); background: transparent; }
+.rc-tabs [role=tab][aria-selected=true] { color: var(--rc-text); background: var(--rc-bg); }
+.rc-tabs [data-rc-panel] { margin-top: 10px; }
+.rc-tabs [data-rc-panel][hidden] { display: none; }
+
+.rc-tip { padding: 0 5px; font-size: 10px; line-height: 14px; font-weight: 500; color: var(--rc-muted); cursor: help; vertical-align: 1px;
+  border-radius: 999px; background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
+.rc-tip > span { display: none; position: absolute; left: 0; right: 0; z-index: 2; width: fit-content; max-width: min(320px, 100%);
+  margin: 18px auto 0; padding: 6px 10px; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--rc-text);
+  background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: 8px; }
+.rc-tip:hover > span, .rc-tip:focus > span { display: inline-block; }
+.rc-tip:focus-visible, .rc-details > summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) { .rc-details > summary::before { transition: none; } }
 `;
 
 /**
@@ -134,17 +240,94 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     if (window.__rcThemeCharts) window.__rcThemeCharts();
     for (const callback of listeners) { try { callback(theme); } catch (e) { console.error(e); } }
   });
+  // The content, not the document: the root's scrollHeight is never below the frame's own height,
+  // so a frame could only grow. The body is positioned (BASE_CSS), so its scrollHeight also counts
+  // what is absolutely placed in it.
+  const contentHeight = () => {
+    const body = document.body;
+    const style = getComputedStyle(body);
+    return Math.max(body.getBoundingClientRect().height, body.scrollHeight) +
+      (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+  };
+  let parsed = false;
   let last = "";
   const report = () => {
-    const root = document.documentElement;
-    const height = Math.max(root.scrollHeight, document.body ? document.body.scrollHeight : 0);
+    // Not while parsing: a half-built body would shrink the height the app reserved.
+    if (!parsed) return;
+    const height = contentHeight();
     const elements = document.getElementsByTagName("*").length;
     const next = height + ":" + elements;
     if (next !== last) { last = next; post({ type: "size", height, elements }); }
   };
   // A heartbeat, so the app can tell a busy loop from a quiet page.
   setInterval(() => { post({ type: "alive" }); report(); }, 500);
-  window.addEventListener("load", () => { report(); new ResizeObserver(report).observe(document.documentElement); });
+
+  // The kit's behaviour, so a view needs no script for it (docs/smart-ui.md).
+  const own = (group, selector) => Array.from(group.querySelectorAll(selector)).filter((el) => el.closest(".rc-tabs") === group);
+  const selectTab = (group, name, focus) => {
+    for (const tab of own(group, "[data-rc-tab]")) {
+      const on = tab.getAttribute("data-rc-tab") === name;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+      if (on && focus) tab.focus();
+    }
+    for (const panel of own(group, "[data-rc-panel]")) {
+      panel.setAttribute("role", "tabpanel");
+      panel.hidden = panel.getAttribute("data-rc-panel") !== name;
+    }
+    report();
+  };
+  const flashes = new WeakMap();
+  const flashCopied = (el) => {
+    const flash = flashes.get(el);
+    if (flash) clearTimeout(flash.timer);
+    const nodes = flash ? flash.nodes : Array.from(el.childNodes);
+    el.replaceChildren("Copied");
+    const timer = setTimeout(() => { flashes.delete(el); el.replaceChildren(...nodes); }, 1500);
+    flashes.set(el, { nodes, timer });
+  };
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const send = target.closest("[data-rc-send]");
+    if (send) rustcode.send(send.getAttribute("data-rc-send"));
+    const copy = target.closest("[data-rc-copy]");
+    if (copy) { rustcode.copy(copy.getAttribute("data-rc-copy")); flashCopied(copy); }
+    const tab = target.closest("[data-rc-tab]");
+    const group = tab && tab.closest(".rc-tabs");
+    if (group) selectTab(group, tab.getAttribute("data-rc-tab"), false);
+  });
+  document.addEventListener("keydown", (event) => {
+    const tab = event.target instanceof Element ? event.target.closest("[data-rc-tab]") : null;
+    const group = tab && tab.closest(".rc-tabs");
+    if (!group) return;
+    const tabs = own(group, "[data-rc-tab]");
+    const at = tabs.indexOf(tab);
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[event.key];
+    if (to === undefined) return;
+    event.preventDefault();
+    selectTab(group, tabs[(to + tabs.length) % tabs.length].getAttribute("data-rc-tab"), true);
+  });
+  document.addEventListener("DOMContentLoaded", () => {
+    for (const group of document.querySelectorAll(".rc-tabs")) {
+      const first = own(group, "[data-rc-tab]")[0];
+      if (first) selectTab(group, first.getAttribute("data-rc-tab"), false);
+    }
+    // A wide table scrolls by itself on a narrow window; one in .rc-scroll already does.
+    for (const table of document.querySelectorAll("table.rc-table")) {
+      if (table.closest(".rc-scroll")) continue;
+      const box = document.createElement("div");
+      box.className = "rc-table-box";
+      table.replaceWith(box);
+      box.append(table);
+    }
+    parsed = true;
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(document.documentElement);
+    observer.observe(document.body);
+  });
+  window.addEventListener("load", report);
   window.addEventListener("error", (e) => post({ type: "error", message: String(e.message || "Script error") }));
   window.addEventListener("unhandledrejection", (e) => post({ type: "error", message: String(e.reason) }));
 })();`;

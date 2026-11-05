@@ -2099,20 +2099,22 @@ export class MockEngine {
       } else {
         push({ sessionUpdate: "tool_call_update", toolCallId: editId, status: "completed", content: [diff] });
       }
-      const reply = /\bview\b/i.test(prompt)
-        ? MOCK_VIEW
-        : /\bcharts?\b/i.test(prompt)
-          ? MOCK_VIZ
-          : [
-              "Done. ",
-              "I updated the greeting in `src/app.ts` ",
-              "and the tests pass.\n\n",
-              "```ts\n",
-              'const greeting = "hello, world";\n',
-              "export default greeting;\n",
-              "```\n\n",
-              "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-            ];
+      const reply = /\bkit\b/i.test(prompt)
+        ? MOCK_KIT
+        : /\bview\b/i.test(prompt)
+          ? MOCK_VIEW
+          : /\bcharts?\b/i.test(prompt)
+            ? MOCK_VIZ
+            : [
+                "Done. ",
+                "I updated the greeting in `src/app.ts` ",
+                "and the tests pass.\n\n",
+                "```ts\n",
+                'const greeting = "hello, world";\n',
+                "export default greeting;\n",
+                "```\n\n",
+                "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+              ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -2178,6 +2180,70 @@ export const MOCK_VIEW = [
   "document.getElementById('ask').onclick = () => window.rustcode?.send(\"Why did 4 tests fail on Thursday?\");\n",
   "document.getElementById('copy').onclick = () => window.rustcode?.copy('Mon 24/1, Tue 27/0, Wed 22/2, Thu 19/4, Fri 29/0');\n",
   "</script>\n",
+  "```\n",
+];
+
+/** A Smart UI reply built from the page's component kit: no script and next to no CSS of its own. */
+export const MOCK_KIT = [
+  "The release is blocked by one failing suite; everything else is green.\n\n",
+  "```rustcode-ui v1\n",
+  "<title>Release 1.11 readiness</title>\n",
+  '<div class="rc-stats">\n',
+  '  <div class="rc-stat"><span class="rc-stat-value">128</span><span class="rc-stat-label">Tests run</span><span class="rc-stat-note">+12 this week</span></div>\n',
+  '  <div class="rc-stat rc-bad"><span class="rc-stat-value">7</span><span class="rc-stat-label">Failed</span><span class="rc-stat-note">4 on Thursday</span></div>\n',
+  '  <div class="rc-stat rc-ok"><span class="rc-stat-value">41 s</span><span class="rc-stat-label">Median run</span><span class="rc-stat-note">6 s faster</span></div>\n',
+  "</div>\n",
+  '<div class="rc-callout rc-warn">The auth suite fails on a stale fixture <span class="rc-tip" tabindex="0">1<span>tests/auth/fixtures/token.json expired on 2026-11-01, so every refresh test fails at setup.</span></span>, not on a code change.</div>\n',
+  '<div class="rc-tabs">\n',
+  '  <div role="tablist" aria-label="Sections"><button role="tab" data-rc-tab="suites">Suites</button><button role="tab" data-rc-tab="plan">Plan</button><button role="tab" data-rc-tab="log">Log</button></div>\n',
+  '  <section data-rc-panel="suites">\n',
+  '    <div class="rc-bars">\n',
+  '      <div class="rc-bar"><span>engine</span><i style="width:100%"></i><b>42 s</b></div>\n',
+  '      <div class="rc-bar"><span>desktop</span><i style="width:44%"></i><b>18.5 s</b></div>\n',
+  '      <div class="rc-bar rc-bad"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div>\n',
+  '      <div class="rc-bar"><span>core</span><i style="width:7%"></i><b>3 s</b></div>\n',
+  "    </div>\n",
+  '    <table class="rc-table"><thead><tr><th>Suite</th><th>Status</th><th class="rc-num">Passed</th><th class="rc-num">Failed</th><th class="rc-num">Time</th></tr></thead><tbody>\n',
+  '      <tr><td>engine</td><td><span class="rc-badge rc-ok">Passing</span></td><td class="rc-num">64</td><td class="rc-num">0</td><td class="rc-num">42 s</td></tr>\n',
+  '      <tr><td>desktop</td><td><span class="rc-badge rc-ok">Passing</span></td><td class="rc-num">38</td><td class="rc-num">0</td><td class="rc-num">18.5 s</td></tr>\n',
+  '      <tr><td>auth</td><td><span class="rc-badge rc-bad">Failing</span></td><td class="rc-num">12</td><td class="rc-num">7</td><td class="rc-num">10.5 s</td></tr>\n',
+  '      <tr><td>core</td><td><span class="rc-badge rc-info">Skipped 1</span></td><td class="rc-num">7</td><td class="rc-num">0</td><td class="rc-num">3 s</td></tr>\n',
+  "    </tbody></table>\n",
+  "  </section>\n",
+  '  <section data-rc-panel="plan">\n',
+  '    <div class="rc-row rc-gap-2" style="margin-bottom:12px"><span class="rc-label">2 of 4 steps</span><div class="rc-progress" style="flex:1"><span style="width:50%"></span></div></div>\n',
+  '    <ol class="rc-steps">\n',
+  '      <li class="rc-step rc-done">Bump the version <div class="rc-label">Done by the release script</div></li>\n',
+  '      <li class="rc-step rc-done">Build the macOS app</li>\n',
+  '      <li class="rc-step rc-failed">Run the auth suite <div class="rc-label">7 failures, one cause</div></li>\n',
+  '      <li class="rc-step rc-active">Refresh the fixture</li>\n',
+  '      <li class="rc-step rc-todo">Publish the beta</li>\n',
+  "    </ol>\n",
+  "  </section>\n",
+  '  <section data-rc-panel="log">\n',
+  '    <div class="rc-term"><div>$ cargo test -p auth</div><div class="rc-ok">test refresh::keeps_session ... ok</div><div class="rc-bad">test refresh::rotates_token ... FAILED</div><div>test result: 12 passed; 7 failed</div></div>\n',
+  "  </section>\n",
+  "</div>\n",
+  "<div>\n",
+  '  <details class="rc-details"><summary>Owners <span class="rc-label">3</span></summary><ul class="rc-list">\n',
+  '    <li class="rc-item"><span>Engine</span><span class="rc-badge rc-ok">Ready</span></li>\n',
+  '    <li class="rc-item"><span>Desktop</span><span class="rc-badge rc-ok">Ready</span></li>\n',
+  '    <li class="rc-item"><span>Auth</span><span class="rc-badge rc-warn">Waiting</span></li>\n',
+  "  </ul></details>\n",
+  '  <details class="rc-details rc-tree"><summary>Changed files <span class="rc-label">4</span></summary><div>\n',
+  '    <details class="rc-details" open><summary>tests/auth</summary><div>\n',
+  '      <div class="rc-file"><span>fixtures/token.json</span><span>+2 −2</span></div>\n',
+  '      <div class="rc-file"><span>refresh.rs</span><span>+14 −3</span></div>\n',
+  "    </div></details>\n",
+  '    <div class="rc-file"><span>Cargo.lock</span><span>+1 −1</span></div>\n',
+  '    <div class="rc-file"><span>CHANGELOG.md</span><span>+6</span></div>\n',
+  "  </div></details>\n",
+  "</div>\n",
+  '<div class="rc-row rc-gap-2" style="margin-top:12px">\n',
+  '  <button class="rc-chip" data-rc-send="Refresh the auth fixture">Refresh the fixture</button>\n',
+  '  <button class="rc-chip" data-rc-send="Show the failing tests">Show the failures</button>\n',
+  '  <button class="rc-chip" data-rc-copy="128 run, 7 failed, 41 s median">Copy numbers</button>\n',
+  "</div>\n",
   "```\n",
 ];
 
