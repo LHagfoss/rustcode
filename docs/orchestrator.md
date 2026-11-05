@@ -152,7 +152,17 @@ delegation is on, as in M1). M1 clients send `1` and get exactly the M1
 tools, descriptions and prompt hint; a version 2 call from a version 1
 session (a made-up one) is refused in the engine and nothing is sent. Plan
 mode and subagents never get any of them. Each call is forwarded as today:
-`_rustcode/orchestration` `{ "tool": <name>, "args": {...}, "sessionId": <calling session> }`.
+`_rustcode/orchestration` `{ "tool": <name>, "args": {...}, "sessionId": <calling session>, "callId": <the engine's name for this call> }`.
+
+The engine drops a call when the harness stops waiting for it (its own tool
+timeout, a cancel, the MCP server closing). It then sends the client
+`_rustcode/orchestration/cancelled` `{ sessionId, callId }`, and the client ends
+that call where it is: a `wait_session` releases its links without marking
+anything heard — an answer the wait had already sent is handed back to the
+ordinary wake, since the engine threw it away unread — so nothing is lost and
+nothing arrives twice. A harness whose drop the engine never sees has a second
+signal: the caller's own `wait_session` row ends in the app's transcript, and
+the wait is released the same way.
 
 | Tool | Args | Answer |
 | --- | --- | --- |
@@ -386,7 +396,8 @@ Each tool call goes to the parent engine over a local unix socket,
 of engines no longer running are removed). The engine binds it lazily, when
 the first external thread with orchestration starts or loads. Wire format: one
 connection per call, one JSON line `{ session_id, token, tool, args }` in, one
-`{ success, content }` out; closing early cancels the call. The engine checks
+`{ success, content }` out; closing early cancels the call, and so does MCP's
+own `notifications/cancelled` for a call in flight. The engine checks
 that the session is registered and the token (256 random bits, one per thread,
 dropped when the thread closes) matches, then forwards through the same
 `_rustcode/orchestration` request a built-in call uses, with the external

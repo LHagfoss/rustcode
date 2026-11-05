@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans } from "../acp/rustcode";
+import { V2Method } from "../acp/v2";
 import { emptyExtras } from "./compose";
-import { answerOrchestration, resolveGrant } from "./host";
+import { answerOrchestration, linkFinished, orchestrationCallDropped, resolveGrant } from "./host";
+import { emptyBook, type Link } from "./orchestration";
 import {
   agentHistory,
   answerPermission,
@@ -609,6 +611,203 @@ describe("engine controller with the mock engine", () => {
     await until(woken, 3000);
     expect(linkOf()?.notifiedAt).toBeDefined();
     await waited;
+  });
+
+  /**
+   * A thread with one live link to another, staged in the book: these tests drive
+   * the link's turn and the engine's word on the call by hand, so no mock turn
+   * race decides what they check.
+   */
+  const stagedWait = async () => {
+    setOrchestration(true);
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
+    selectThread(parent);
+    await until(() => selected()?.loaded === true);
+    // The turn that asks: it runs, so the wait belongs to one.
+    updateThread(parent, (t) => ({ ...t, running: true }));
+    const link: Link = {
+      id: `${parent}/1`,
+      orchestrator: parent,
+      target,
+      orchestratorTitle: "Parent",
+      targetTitle: "Child",
+      message: "do it",
+      state: "working",
+      createdAt: Date.now(),
+    };
+    useApp.setState({
+      links: { ...emptyBook(), links: [link], counters: { [parent]: 1 } },
+    });
+    const linkOf = () => useApp.getState().links.links.find((l) => l.id === link.id);
+    return { parent, target, link, linkOf };
+  };
+
+  /** The wakes the app queued or wrote for a thread: one message per batch of children. */
+  const wakes = (thread: string) =>
+    useApp.getState().threads[thread]?.queue.filter((q) => q.wake).length ?? 0;
+
+  const wakeText = (thread: string) =>
+    (useApp.getState().threads[thread]?.queue ?? [])
+      .filter((q) => q.wake)
+      .map((q) => q.text)
+      .join("\n");
+
+  test("a wait whose call is dropped frees its links, and the child's answer wakes the parent", async () => {
+    // The method the engine names in `orchestration::CANCELLED_METHOD`.
+    expect(V2Method.orchestrationCancelled).toBe("_rustcode/orchestration/cancelled");
+    const { parent, link, target, linkOf } = await stagedWait();
+    const waited = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      callId: "call-1",
+      args: { link_ids: [link.id], timeout_ms: 3_600_000 },
+    });
+    // The harness stopped waiting for the call: the wait ends there and then, not in an hour.
+    orchestrationCallDropped({ sessionId: parent, callId: "call-1" });
+    const answer = (await waited) as { status?: string; links?: unknown[] };
+    expect(answer.status).toBe("dropped");
+    expect(answer.links).toEqual([]);
+    // Nothing was marked heard: nobody read that answer.
+    expect(linkOf()?.notifiedAt).toBeUndefined();
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    await until(() => wakes(parent) === 1, 3000);
+    expect(wakes(parent)).toBe(1);
+    expect(wakeText(parent)).toContain("the child's answer");
+    expect(linkOf()?.notifiedAt).toBeDefined();
+  });
+
+  test("a child that finishes as the call drops is delivered exactly once", async () => {
+    const { parent, link, target, linkOf } = await stagedWait();
+    const waited = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      callId: "call-2",
+      args: { link_ids: [link.id], timeout_ms: 3_600_000 },
+    });
+    // The child settles: the wait hands its answer over, and marks it heard.
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    const answer = (await waited) as { links?: { status?: string }[] };
+    expect(answer.links?.[0]?.status).toBe("done");
+    expect(linkOf()?.notifiedAt).toBeDefined();
+    // At that very moment the call is dropped too: the engine threw that answer away.
+    orchestrationCallDropped({ sessionId: parent, callId: "call-2" });
+    await until(() => wakes(parent) === 1, 3000);
+    // One delivery, not two, and not none.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(wakes(parent)).toBe(1);
+    expect(wakeText(parent)).toContain("the child's answer");
+    expect(linkOf()?.notifiedAt).toBeDefined();
+  });
+
+  test("an ordinary wait still answers with the child's result, and no wake repeats it", async () => {
+    const { parent, link, target, linkOf } = await stagedWait();
+    const waited = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      callId: "call-3",
+      args: { link_ids: [link.id], timeout_ms: 3_600_000 },
+    });
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    const answer = (await waited) as { status?: string; links?: { status?: string; answer?: string }[] };
+    expect(answer.status).toBeUndefined();
+    expect(answer.links?.[0]?.status).toBe("done");
+    expect(answer.links?.[0]?.answer).toContain("the child's answer");
+    expect(linkOf()?.notifiedAt).toBeDefined();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(wakes(parent)).toBe(0);
+  });
+
+  test("a timeout is unchanged: it says the child still runs and keeps the link free", async () => {
+    const { parent, link, linkOf } = await stagedWait();
+    const waited = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      callId: "call-4",
+      args: { link_ids: [link.id], timeout_ms: 60 },
+    });
+    const answer = (await waited) as { status?: string; note?: string; waited_until?: string };
+    expect(answer.status).toBe("timeout");
+    expect(answer.note).toContain("Still running");
+    expect(answer.waited_until).toBeDefined();
+    expect(linkOf()?.notifiedAt).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(wakes(parent)).toBe(0);
+  });
+
+  test("a wait whose own transcript row ends is released too, for a drop the engine never saw", async () => {
+    const { parent, link, target, linkOf } = await stagedWait();
+    // The harness's own row for the call, in flight: the app can watch it when the engine cannot tell.
+    const row = "row-1";
+    updateThread(parent, (t) => ({
+      ...t,
+      items: [
+        ...t.items,
+        {
+          kind: "tool",
+          id: row,
+          title: "mcp__rustcode__wait_session",
+          status: "in_progress",
+          diffs: [],
+        },
+      ],
+    }));
+    const waited = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      args: { link_ids: [link.id], timeout_ms: 3_600_000 },
+    });
+    // The harness timed the call out on its own side: the row fails, and nobody reads the wait.
+    updateThread(parent, (t) => ({
+      ...t,
+      items: t.items.map((i) => (i.kind === "tool" && i.id === row ? { ...i, status: "failed" } : i)),
+    }));
+    const answer = (await waited) as { status?: string; links?: unknown[] };
+    expect(answer.status).toBe("dropped");
+    expect(answer.links).toEqual([]);
+    expect(linkOf()?.notifiedAt).toBeUndefined();
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    await until(() => wakes(parent) === 1, 3000);
+    expect(wakeText(parent)).toContain("the child's answer");
+  });
+
+  test("a second wait on the same link takes over the first, with one delivery", async () => {
+    const { parent, link, target, linkOf } = await stagedWait();
+    const first = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      callId: "call-5",
+      args: { link_ids: [link.id], timeout_ms: 3_600_000 },
+    });
+    const second = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      callId: "call-6",
+      args: { link_ids: [link.id], timeout_ms: 3_600_000 },
+    });
+    // The older wait stops at once, without an answer: the newer one is the one being read.
+    const taken = (await first) as { status?: string; links?: unknown[] };
+    expect(taken.status).toBe("taken_over");
+    expect(taken.links).toEqual([]);
+    expect(linkOf()?.notifiedAt).toBeUndefined();
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    const answer = (await second) as { links?: { status?: string; answer?: string }[] };
+    expect(answer.links?.[0]?.status).toBe("done");
+    expect(answer.links?.[0]?.answer).toContain("the child's answer");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(wakes(parent)).toBe(0);
+    expect(linkOf()?.notifiedAt).toBeDefined();
   });
 
   test("review and done marks, and the engine's auto-done", async () => {

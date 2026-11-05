@@ -180,7 +180,8 @@ export type Call =
   | { tool: "list_sessions"; query: string; allProjects: boolean }
   | { tool: "read_session"; target: string; lastTurns: number; offset: number }
   | { tool: "message_session"; target: string; text: string }
-  | { tool: "wait_session"; links: string[]; timeoutMs: number }
+  /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
+  | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string }
   | {
       tool: "start_session";
       prompt: string;
@@ -361,7 +362,12 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (one && !links.includes(one)) links.unshift(one);
       if (!links.length) return failure("invalid", "link_id is required");
       const asked = typeof args.timeout_ms === "number" ? args.timeout_ms : DEFAULT_WAIT_MS;
-      return { tool: "wait_session", links, timeoutMs: Math.min(Math.max(asked, 1), MAX_WAIT_MS) };
+      return {
+        tool: "wait_session",
+        links,
+        timeoutMs: Math.min(Math.max(asked, 1), MAX_WAIT_MS),
+        callId: s(params.callId),
+      };
     }
     case "start_session": {
       const prompt = s(args.prompt) ?? "";
@@ -1170,6 +1176,43 @@ export function restateLinks(
       return { ...replaced, settledAt: now, notifiedAt: undefined, answerChangedAt: now };
     }),
   };
+}
+
+/**
+ * A mark a wait set when it handed a link over: the field it wrote, so the one
+ * mark can be taken back when the call that handed it over turns out to be gone.
+ */
+export interface HeardMark {
+  id: string;
+  notifiedAt?: number;
+  askedRequest?: string;
+}
+
+/**
+ * The book without the marks those waits set: the call that handed their links
+ * over was dropped, so nobody read the answer it carried, and the ordinary wake
+ * has to deliver it instead. Only the mark the wait itself wrote is cleared — a
+ * newer one (another wait, or a wake) stands, so nothing is delivered twice.
+ */
+export function unheard(book: LinkBook, marks: readonly HeardMark[]): LinkBook {
+  if (!marks.length) return book;
+  const byId = new Map(marks.map((mark) => [mark.id, mark]));
+  let changed = false;
+  const links = book.links.map((link) => {
+    const mark = byId.get(link.id);
+    if (!mark) return link;
+    if (mark.notifiedAt !== undefined) {
+      if (link.notifiedAt !== mark.notifiedAt) return link;
+      changed = true;
+      const { notifiedAt: _cleared, ...rest } = link;
+      return rest;
+    }
+    if (mark.askedRequest === undefined || link.askedRequest !== mark.askedRequest) return link;
+    changed = true;
+    const { askedRequest: _cleared, ...rest } = link;
+    return rest;
+  });
+  return changed ? { ...book, links } : book;
 }
 
 /**
