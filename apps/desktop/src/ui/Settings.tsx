@@ -43,6 +43,7 @@ import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { validateDefault } from "../state/harness";
+import { MAX_ACTIVE_LIMIT, MIN_ACTIVE_LINKS } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   APP_VERSION,
@@ -67,6 +68,7 @@ import {
   setRoundedFont,
   setSmartUi,
   setTheme,
+  setThreadLimit,
   toast,
   useApp,
 } from "../state/store";
@@ -94,6 +96,7 @@ import {
   Row,
   RowResets,
   SectionTitle,
+  Select,
   useEngineData,
   useRowResets,
 } from "./settingsKit";
@@ -414,9 +417,14 @@ function AgentsPage() {
 /** Threads that start and message other threads (`state/host.ts`, docs/orchestrator.md). */
 function OrchestrationGroup() {
   const orchestration = useApp((s) => s.orchestration);
+  const threadLimit = useApp((s) => s.threadLimit);
   const readAcrossProjects = useApp((s) => s.readAcrossProjects);
   const pending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const limits = Array.from({ length: MAX_ACTIVE_LIMIT - MIN_ACTIVE_LINKS + 1 }, (_, i) => ({
+    value: String(MIN_ACTIVE_LINKS + i),
+    label: `${MIN_ACTIVE_LINKS + i} thread${MIN_ACTIVE_LINKS + i === 1 ? "" : "s"}`,
+  }));
   return (
     <Group title="Orchestration">
       <Row
@@ -428,6 +436,22 @@ function OrchestrationGroup() {
           label="Threads can start and message other threads"
           checked={orchestration}
           onChange={setOrchestration}
+        />
+      </Row>
+      <Row
+        title="Threads one thread can run at once"
+        reset={
+          threadLimit === SETTINGS_DEFAULTS.threadLimit
+            ? undefined
+            : () => setThreadLimit(SETTINGS_DEFAULTS.threadLimit)
+        }
+        subtitle={`How many distinct threads one thread may have working at the same time. A message to a thread it is already running is a follow-up and takes no slot. The whole delegation tree holds twice as many: ${threadLimit * 2} now.`}
+      >
+        <Select
+          label="Threads one thread can run at once"
+          value={String(threadLimit)}
+          options={limits}
+          onChange={(value) => setThreadLimit(Number(value))}
         />
       </Row>
       <Row

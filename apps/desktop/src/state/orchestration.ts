@@ -12,18 +12,31 @@ import { withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
 export const CAPABILITY_VERSION = 4;
+/** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
+/** The longest prompt or message a thread may hand another one (32 KiB). */
+export const MAX_MESSAGE_BYTES = 32 * 1024;
+/** One `read_session` page. */
 export const READ_BYTES = 16 * 1024;
 export const MAILBOX = 32;
-export const MAX_ACTIVE_LINKS = 4;
+/**
+ * The default number of distinct threads one thread may have working for it at
+ * once (Settings › Agents); the tree below it holds twice as many. A message
+ * to a thread it already has a link to is a follow-up, not another slot.
+ */
+export const MAX_ACTIVE_LINKS = 8;
+export const MIN_ACTIVE_LINKS = 2;
+export const MAX_ACTIVE_LIMIT = 16;
 /**
  * How deep delegation goes: a top-level thread (0) may start children (1), and
  * they may start grandchildren (2). A thread at the limit is told so, with the
  * limit in the reason, instead of being told it cannot delegate at all.
  */
 export const MAX_DEPTH = 2;
-/** Active links one delegation tree may hold, whatever their depth. */
-export const MAX_TREE_LINKS = 8;
+/** Active threads one delegation tree may hold, whatever their depth: twice a thread's limit. */
+export const MAX_TREE_LINKS = MAX_ACTIVE_LINKS * 2;
+/** How many distinct target threads a whole tree may hold, from one thread's limit. */
+export const treeLimit = (limit: number) => limit * 2;
 export const DEFAULT_WAIT_MS = 60_000;
 export const MAX_WAIT_MS = 3_600_000;
 export const MAX_LAST_TURNS = 10;
@@ -164,7 +177,7 @@ export interface HarnessChoice {
 
 export type Call =
   | { tool: "list_sessions"; query: string; allProjects: boolean }
-  | { tool: "read_session"; target: string; lastTurns: number }
+  | { tool: "read_session"; target: string; lastTurns: number; offset: number }
   | { tool: "message_session"; target: string; text: string }
   | { tool: "wait_session"; links: string[]; timeoutMs: number }
   | {
@@ -325,13 +338,17 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (!target) return failure("invalid", "session_id is required");
       const n = typeof args.last_turns === "number" ? Math.floor(args.last_turns) : 3;
       if (n < 1 || n > MAX_LAST_TURNS) return failure("invalid", `last_turns must be 1 to ${MAX_LAST_TURNS}`);
-      return { tool: "read_session", target, lastTurns: n };
+      const offset = typeof args.offset === "number" ? Math.floor(args.offset) : 0;
+      // Bytes into the rendered output: a page is a UTF-8 slice of it, never a character split.
+      if (!Number.isFinite(offset) || offset < 0)
+        return failure("invalid", "offset must be a whole number of bytes");
+      return { tool: "read_session", target, lastTurns: n, offset };
     }
     case "message_session": {
       const target = s(args.session_id) ?? "";
       const text = s(args.message) ?? "";
       if (!target || !text.trim()) return failure("invalid", "session_id and message are required");
-      if (bytes(text) > MAX_BYTES) return failure("invalid", "the message is over 8 KiB");
+      if (bytes(text) > MAX_MESSAGE_BYTES) return failure("invalid", "the message is over 32 KiB");
       return { tool: "message_session", target, text };
     }
     case "wait_session": {
@@ -347,7 +364,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "start_session": {
       const prompt = s(args.prompt) ?? "";
       if (!prompt.trim()) return failure("invalid", "prompt is required");
-      if (bytes(prompt) > MAX_BYTES) return failure("invalid", "the prompt is over 8 KiB");
+      if (bytes(prompt) > MAX_MESSAGE_BYTES) return failure("invalid", "the prompt is over 32 KiB");
       return {
         tool: "start_session",
         prompt,
@@ -362,7 +379,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "fan_out": {
       const prompt = s(args.prompt) ?? "";
       if (!prompt.trim()) return failure("invalid", "prompt is required");
-      if (bytes(prompt) > MAX_BYTES) return failure("invalid", "the prompt is over 8 KiB");
+      if (bytes(prompt) > MAX_MESSAGE_BYTES) return failure("invalid", "the prompt is over 32 KiB");
       const list = Array.isArray(args.harnesses) ? args.harnesses : [];
       const harnesses: HarnessChoice[] = [];
       for (const entry of list) {
@@ -469,6 +486,7 @@ export function checkMessage(
   book: LinkBook,
   read = false,
   acrossProjects = false,
+  limit = MAX_ACTIVE_LINKS,
 ): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
@@ -485,8 +503,13 @@ export function checkMessage(
   if (book.links.some((l) => l.target === target.id && l.orchestrator !== caller.id && isActive(l.state))) {
     return failure("target_linked", "another thread is already working with that one");
   }
-  const slots = slotRefusal(book, caller, 1);
-  if (slots) return slots;
+  // A message to a thread this caller already has a live link to is a follow-up:
+  // it queues on that thread, so it never counts against a slot, this thread's
+  // limit or its tree's.
+  if (!hasActiveTo(book, caller.id, target.id)) {
+    const slots = slotRefusal(book, caller, 1, limit);
+    if (slots) return slots;
+  }
   if (book.links.filter((l) => l.target === target.id && l.state === "queued").length >= MAILBOX) {
     return failure("mailbox_full", `that thread has ${MAILBOX} messages waiting`);
   }
@@ -529,14 +552,87 @@ export function checkQueryData(acrossProjects: boolean): Failure | null {
 }
 
 /** Whether `caller` may start `count` threads, before the user is asked. */
-export function checkStart(caller: RuleThread, book: LinkBook, count: number): Failure | null {
+export function checkStart(
+  caller: RuleThread,
+  book: LinkBook,
+  count: number,
+  limit = MAX_ACTIVE_LINKS,
+): Failure | null {
   const chain = chainRefusal(book, caller);
   if (chain) return chain;
-  return slotRefusal(book, caller, count);
+  return slotRefusal(book, caller, count, limit);
 }
 
 /** The message as the other thread receives it: who it is from, then the text. */
 export const delivered = (text: string, from: string) => `From thread “${from}” (agent):\n\n${text}`;
+
+/** One turn of a thread as `read_session` renders it. */
+export interface ReadTurn {
+  user: string;
+  assistant: string;
+  files_changed: number;
+}
+
+/** What `read_session` renders, before it is cut into pages. */
+export interface ReadAnswer {
+  session_id: string;
+  title: string;
+  status: string;
+  project: string;
+  turns: ReadTurn[];
+}
+
+/**
+ * The whole `read_session` answer as text, which `offset` then pages. Nothing
+ * here is cut: a page is a byte range of this string, so pages join exactly.
+ */
+export function renderRead(answer: ReadAnswer): string {
+  const lines = [
+    `Thread: ${answer.title}`,
+    `Session: ${answer.session_id}`,
+    `Status: ${answer.status}`,
+    `Project: ${answer.project}`,
+    `Turns: ${answer.turns.length}`,
+    "",
+  ];
+  answer.turns.forEach((turn, i) => {
+    lines.push(`Turn ${i + 1}`);
+    lines.push("  user:");
+    for (const line of String(turn.user).split("\n")) lines.push(`    ${line}`);
+    lines.push("  assistant:");
+    for (const line of String(turn.assistant).split("\n")) lines.push(`    ${line}`);
+    lines.push(`  files changed: ${turn.files_changed}`);
+    lines.push("");
+  });
+  return lines.join("\n");
+}
+
+/**
+ * `text` from byte `offset`, at most `max` bytes, cut on a UTF-8 character
+ * boundary. `nextOffset` is where the next page starts, or null at the end.
+ * Concatenating the pages rebuilds `text` exactly. An offset inside a
+ * character is refused rather than silently moved, as `zoom_context` does.
+ */
+export function pageOf(
+  text: string,
+  offset: number,
+  max = READ_BYTES,
+): { text: string; offset: number; nextOffset: number | null } | Failure {
+  const raw = new TextEncoder().encode(text);
+  if (!Number.isInteger(offset) || offset < 0 || offset > raw.length) {
+    return failure("invalid", `offset ${offset} is out of range; this answer is ${raw.length} bytes`);
+  }
+  if (offset < raw.length && (raw[offset]! & 0xc0) === 0x80) {
+    return failure("invalid", "offset must be on a UTF-8 character boundary; use the returned next_offset");
+  }
+  let end = Math.min(raw.length, offset + max);
+  while (end > offset && end < raw.length && (raw[end]! & 0xc0) === 0x80) end -= 1;
+  return {
+    text: new TextDecoder().decode(raw.subarray(offset, end)),
+    offset,
+    nextOffset: end < raw.length ? end : null,
+  };
+}
 
 /** `text` cut to `max` bytes on a character boundary, and whether it was. */
 export function capped(text: string, max = MAX_BYTES): { text: string; truncated: boolean } {
@@ -687,9 +783,17 @@ export function mergeBooks(shared: LinkBook, mine: LinkBook): LinkBook {
 const activeFrom = (book: LinkBook, id: string) =>
   book.links.filter((l) => l.orchestrator === id && isActive(l.state));
 
-/** How many more links a thread may open at once, for an answer to say. */
-export const linksLeft = (book: LinkBook, id: string): number =>
-  Math.max(0, MAX_ACTIVE_LINKS - activeFrom(book, id).length);
+/** The distinct threads a thread has working for it: follow-ups do not take another slot. */
+export const activeTargets = (book: LinkBook, id: string): Set<string> =>
+  new Set(activeFrom(book, id).map((l) => l.target));
+
+/** Whether `orchestrator` already has a live link to `target`. */
+const hasActiveTo = (book: LinkBook, orchestrator: string, target: string) =>
+  book.links.some((l) => l.orchestrator === orchestrator && l.target === target && isActive(l.state));
+
+/** How many more threads a thread may open at once, for an answer to say. */
+export const linksLeft = (book: LinkBook, id: string, limit = MAX_ACTIVE_LINKS): number =>
+  Math.max(0, limit - activeTargets(book, id).size);
 
 /** The thread working for `id` right now, if any (a target has at most one). */
 const parentLink = (book: LinkBook, id: string) =>
@@ -751,10 +855,11 @@ export function treeOf(book: LinkBook, id: string): Set<string> {
   return ids;
 }
 
-/** Active links in `id`'s tree, which the tree cap counts. */
+/** Active threads in `id`'s tree, which the tree cap counts: one per target, not one per link. */
 export function activeInTree(book: LinkBook, id: string): number {
   const ids = treeOf(book, id);
-  return book.links.filter((l) => isActive(l.state) && ids.has(l.orchestrator)).length;
+  return new Set(book.links.filter((l) => isActive(l.state) && ids.has(l.orchestrator)).map((l) => l.target))
+    .size;
 }
 
 /**
@@ -780,26 +885,33 @@ export function activeDescendants(book: LinkBook, id: string): Link[] {
 }
 
 /**
- * The `busy` refusal when `count` more links would not fit: this thread's four
- * at once, or its tree's eight. `links_left` says what does fit, so the agent
- * can retry with fewer instead of guessing.
+ * The `busy` refusal when `count` more threads would not fit: this thread's
+ * limit at once, or its tree's twice that. A follow-up to a thread it already
+ * works with passes `count: 0`, so it never takes a slot. `links_left` says
+ * what does fit, so the agent can retry with fewer instead of guessing.
  */
-function slotRefusal(book: LinkBook, caller: RuleThread, count: number): Failure | null {
-  const active = activeFrom(book, caller.id).length;
-  if (active + count > MAX_ACTIVE_LINKS) {
-    const left = Math.max(0, MAX_ACTIVE_LINKS - active);
+function slotRefusal(
+  book: LinkBook,
+  caller: RuleThread,
+  count: number,
+  limit = MAX_ACTIVE_LINKS,
+): Failure | null {
+  const active = activeTargets(book, caller.id).size;
+  if (active + count > limit) {
+    const left = Math.max(0, limit - active);
     return failure(
       "busy",
-      `at most ${MAX_ACTIVE_LINKS} at once; wait_session on one first (this thread has ${active}, so ${count} would not fit, and ${left} ${left === 1 ? "slot is" : "slots are"} left)`,
+      `at most ${limit} threads at once; wait_session on one first (this thread has ${active}, so ${count} would not fit, and ${left} ${left === 1 ? "slot is" : "slots are"} left)`,
       left,
     );
   }
   const tree = activeInTree(book, caller.id);
-  if (tree + count > MAX_TREE_LINKS) {
-    const left = Math.max(0, MAX_TREE_LINKS - tree);
+  const most = treeLimit(limit);
+  if (tree + count > most) {
+    const left = Math.max(0, most - tree);
     return failure(
       "busy",
-      `this thread's tree holds at most ${MAX_TREE_LINKS} active links and has ${tree}: ${left} ${left === 1 ? "slot is" : "slots are"} left, so ${count} would not fit`,
+      `this thread's tree holds at most ${most} active threads and has ${tree}: ${left} ${left === 1 ? "slot is" : "slots are"} left, so ${count} would not fit`,
       left,
     );
   }
@@ -874,7 +986,10 @@ export function linkResult(
   };
   if (status) entry.thread_status = status;
   if (link.answer !== undefined) entry.answer = link.answer;
-  if (link.truncated) entry.truncated = true;
+  if (link.truncated) {
+    // The answer was cut at the 8 KiB budget: the rest is in read_session on this thread.
+    entry.answer_truncated = true;
+  }
   if (link.filesChanged !== undefined) entry.files_changed = link.filesChanged;
   const activity = extra?.activity;
   if (activity) {

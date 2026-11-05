@@ -88,6 +88,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
+    title: "Threads one thread can run at once",
+    keywords: "orchestration delegation parallel slots limit concurrent children tree",
+  },
+  {
+    section: "agents",
     title: "Let agents read threads in other projects",
     keywords: "orchestration read search across all projects privacy agents",
   },

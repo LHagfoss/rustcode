@@ -81,8 +81,11 @@ pub const MAX_SQL_BYTES: usize = 8 * 1024;
 /// The longest title a new thread takes.
 pub const MAX_TITLE_CHARS: usize = 200;
 
-/// The most text a message or an answer carries.
-pub const MAX_MESSAGE_BYTES: usize = 8 * 1024;
+/// The most text a message or a prompt carries: 32 KiB.
+pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
+/// The most an engine-rendered answer carries before it is a safety cut: one
+/// `read_session` page with worst-case JSON escaping stays under it.
+pub const MAX_OUTPUT_BYTES: usize = 128 * 1024;
 /// How long `wait_session` waits by default, and at most.
 pub const DEFAULT_WAIT_MS: u64 = 60_000;
 pub const MAX_WAIT_MS: u64 = 3_600_000;
@@ -341,15 +344,17 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 return Err("session_id is required".to_owned());
             }
             match args.get("last_turns") {
-                None | Some(Value::Null) => Ok(()),
+                None | Some(Value::Null) => {}
                 Some(turns)
                     if turns
                         .as_u64()
-                        .is_some_and(|turns| (1..=MAX_LAST_TURNS).contains(&turns)) =>
-                {
-                    Ok(())
-                }
-                Some(_) => Err(format!("last_turns must be 1 to {MAX_LAST_TURNS}")),
+                        .is_some_and(|turns| (1..=MAX_LAST_TURNS).contains(&turns)) => {}
+                Some(_) => return Err(format!("last_turns must be 1 to {MAX_LAST_TURNS}")),
+            }
+            match args.get("offset") {
+                None | Some(Value::Null) => Ok(()),
+                Some(offset) if offset.as_u64().is_some() => Ok(()),
+                Some(_) => Err("offset must be a whole number of bytes".to_owned()),
             }
         }
         START_SESSION => {
@@ -548,8 +553,8 @@ fn output(name: &str, value: Value) -> ToolExecutionOutput {
     }
     let mut content = serde_json::to_string_pretty(&value).unwrap_or_default();
     // The client caps answers; this holds if one does not.
-    if content.len() > MAX_MESSAGE_BYTES * 2 {
-        let mut end = MAX_MESSAGE_BYTES * 2;
+    if content.len() > MAX_OUTPUT_BYTES {
+        let mut end = MAX_OUTPUT_BYTES;
         while !content.is_char_boundary(end) {
             end -= 1;
         }
@@ -752,6 +757,18 @@ mod tests {
         );
         assert!((tool(SEARCH_SESSIONS).schema)()["properties"]["all_projects"].is_object());
         assert!((tool(LIST_WORKTREES).schema)()["properties"]["all_projects"].is_object());
+        assert!(tool(READ_SESSION).description.contains("next_offset"));
+        assert!((tool(READ_SESSION).schema)()["properties"]["offset"].is_object());
+        assert!(tool(WAIT_SESSION).description.contains("answer_truncated"));
+        // The longest prompt and message are 32 KiB in the schema and in the check.
+        assert_eq!(
+            (tool(MESSAGE_SESSION).schema)()["properties"]["message"]["maxLength"],
+            32768
+        );
+        assert_eq!(
+            (tool(START_SESSION).schema)()["properties"]["prompt"]["maxLength"],
+            32768
+        );
         // Tools that give another thread work keep the approval rule.
         assert!(
             tool(MESSAGE_SESSION)
@@ -823,6 +840,13 @@ mod tests {
     fn version_two_arguments_are_checked() {
         let ok = |name: &str, args: Value| validate(name, &args).is_ok();
         assert!(ok(READ_SESSION, json!({"session_id": "b"})));
+        assert!(ok(READ_SESSION, json!({"session_id": "b", "offset": 0})));
+        assert!(ok(
+            READ_SESSION,
+            json!({"session_id": "b", "last_turns": 10, "offset": 16384})
+        ));
+        assert!(!ok(READ_SESSION, json!({"session_id": "b", "offset": -1})));
+        assert!(!ok(READ_SESSION, json!({"session_id": "b", "offset": "0"})));
         assert!(ok(
             READ_SESSION,
             json!({"session_id": "b", "last_turns": 10})
@@ -936,6 +960,14 @@ mod tests {
             )
             .is_err()
         );
+        // 32 KiB fits; one byte more does not.
+        assert!(
+            validate(
+                MESSAGE_SESSION,
+                &json!({"session_id": "b", "message": "x".repeat(MAX_MESSAGE_BYTES)})
+            )
+            .is_ok()
+        );
         assert!(validate(WAIT_SESSION, &json!({})).is_err());
         assert!(validate(WAIT_SESSION, &json!({"link_ids": ["a/1"]})).is_ok());
         assert_eq!(
@@ -976,7 +1008,7 @@ mod tests {
 
         // A busy refusal keeps the wording and the slots it leaves.
         let busy = execute_with(
-            client(json!({"error": {"code": "busy", "message": "at most 4 at once; wait_session on one first", "links_left": 0}})),
+            client(json!({"error": {"code": "busy", "message": "at most 8 threads at once; wait_session on one first", "links_left": 0}})),
             &cancel,
             START_SESSION,
             &json!({"prompt": "go"}),
