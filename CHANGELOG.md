@@ -1,3 +1,14 @@
+## [v1.10.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.10.0) - 2026-11-05
+
+### Features
+- Opening, zooming and panning a picture is now smooth: the image follows a trackpad pinch, a wheel or a drag without trailing behind, and a cancelled drag no longer leaves the picture stuck to the pointer. (#3011)
+- The composer's attach button now sits inside the input, in a rounder, more glassy box, and slash commands read better in the field and in sent messages. (#3013)
+- Settings, Pull requests and Usage move from the sidebar's foot to its top row; clicking the composer's plan meter opens Usage. (#3012)
+- Choose which buttons the thread header shows, and drag them into the order you want (Settings › Chat › Thread header buttons). (#3015)
+- Threads started by an agent now read as the same rows as its subagents — grouped into one card, titled by the thread, and shown in one place at a time instead of twice above and inside the chat. (#3014)
+- Queued messages now show at the end of the thread, with editing in the composer; a stopped or failed turn holds them in order with Resume, wake-ups read as one quiet line instead of the user's message, and a wake no longer repeats an answer a wait_session already returned. (#3017)
+- A thread whose turn ended while the threads it started still run now says so — `Waiting on 2 threads` at the foot of the transcript and `Waiting` in its sidebar row — and a finished child no longer puts a green dot on its parent. (#3018)
+- Use several Claude Code logins on one machine: add named accounts in Settings › Agents and choose one per thread from the model picker. Each account keeps its own limits; RustCode never switches or pools them on its own. (#3016)
 ## [v1.9.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.9.0) - 2026-11-05
 
 ### Features
