@@ -52,7 +52,6 @@ import {
   thoughtHeadings,
 } from "../state/thread";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
-import { ThreadAgentRow } from "./AgentViews";
 import { DiffView } from "./DiffView";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
@@ -476,7 +475,6 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const title = displayCommand(label.title);
   // The line that tells two calls apart; a lone fence marker is not one.
   const summary = usefulSummary(item.summary) ?? label.summary;
-  // A `start_session` that answered with a thread: the row opens it, and shows how it is doing.
   const startedId = orchestrationTool(item.title) === "start_session" ? sessionIdOf(item.output) : undefined;
   const link = useApp((s) => (startedId ? s.links.links.find((l) => l.target === startedId) : undefined));
   const linkState = useApp((s) => (link ? stateOf(s, link) : undefined));
@@ -493,11 +491,6 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
   const input = inputWithoutSummary(item.input);
-  // A thread it started reads as a subagent: who runs it and how it goes.
-  if (opensThread && link && !failed) {
-    const asked = inputField(item.input, "model");
-    return <ThreadAgentRow link={link} model={asked} />;
-  }
   return (
     <div>
       <div className="group flex items-center gap-0.5">

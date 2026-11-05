@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { parseSessionUpdate, type SessionUpdate } from "../acp/types";
+import type { Link } from "./orchestration";
 import {
+  agentStepLabel,
   appendSteer,
   applyUpdate,
   attachAutoAllowed,
@@ -19,9 +21,15 @@ import {
   requeueSteers,
   shortAge,
   splitSubagentSteps,
+  startedLinks,
+  stripHarnessMarkup,
   subagentOf,
+  subagentTitle,
+  type TranscriptItem,
   thoughtHeadings,
+  wakeLine,
   wakeTurn,
+  withWakeMark,
   workingLabel,
 } from "./thread";
 
@@ -538,6 +546,168 @@ describe("checkCommands", () => {
   });
 });
 
+describe("the threads a run of start_session calls started", () => {
+  const started = (target: string, message: string): Link => ({
+    id: `o/${target}`,
+    orchestrator: "o",
+    target,
+    orchestratorTitle: "Orchestrator",
+    targetTitle: target,
+    message,
+    state: "working",
+    started: true,
+    createdAt: 1,
+  });
+  const call = (id: string, input: Record<string, string>, output?: string): TranscriptItem => ({
+    kind: "tool",
+    id,
+    title: "start_session",
+    status: output ? "completed" : "in_progress",
+    input,
+    output,
+    diffs: [],
+  });
+  const targets = (items: TranscriptItem[], links: Link[]) =>
+    [...startedLinks(items, links)].map(([id, link]) => [id, link.target]);
+
+  test("a call that answered names its thread; one still starting matches its prompt", () => {
+    const links = [started("t1", "Map the code"), started("t2", "Write tests")];
+    const items = [
+      call("c1", { prompt: "Map the code" }, '{"session_id":"t1","link_id":"o/t1"}'),
+      call("c2", { prompt: "Write tests" }),
+    ];
+    expect(targets(items, links)).toEqual([
+      ["c1", "t1"],
+      ["c2", "t2"],
+    ]);
+  });
+
+  test("two calls that asked the same thing take one link each, newest first", () => {
+    const links = [started("t1", "Map the code"), started("t2", "Map the code")];
+    const items = [call("c1", { prompt: "Map the code" }), call("c2", { prompt: "Map the code" })];
+    expect(targets(items, links)).toEqual([
+      ["c1", "t2"],
+      ["c2", "t1"],
+    ]);
+  });
+
+  test("a call whose link is gone is left out, and another tool never matches one", () => {
+    const links = [started("t1", "Map the code")];
+    expect(targets([call("c1", { prompt: "Something else" })], links)).toEqual([]);
+    const messaged: TranscriptItem = {
+      kind: "tool",
+      id: "c2",
+      title: "message_session",
+      status: "completed",
+      input: { prompt: "Map the code" },
+      diffs: [],
+    };
+    expect(targets([messaged], links)).toEqual([]);
+  });
+});
+
+describe("a subagent row's text", () => {
+  const tool = (body: Record<string, unknown>) => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: { sessionUpdate: "tool_call", ...body },
+    } as never);
+    const item = applyUpdate(emptyThread("s", "/p"), update).items.at(-1);
+    if (item?.kind !== "tool") throw new Error("not a tool call");
+    return item;
+  };
+
+  test("the tags a harness puts at the head of an answer are dropped", () => {
+    const tagged = "<tools-used-before-summary>WebFetch</tools-used-before-summary>\n\nFound the file.";
+    expect(stripHarnessMarkup(tagged)).toBe("Found the file.");
+    expect(stripHarnessMarkup("<system-reminder>be careful</system-reminder>\nDone.")).toBe("Done.");
+    expect(
+      stripHarnessMarkup(
+        "<tools-used-before-summary>Read</tools-used-before-summary>\n<system-reminder>note</system-reminder>\nDone.",
+      ),
+    ).toBe("Done.");
+  });
+
+  test("an answer that is only the tag leaves nothing to show", () => {
+    expect(stripHarnessMarkup("<tools-used-before-summary>WebFetch</tools-used-before-summary>\n")).toBe("");
+  });
+
+  test("a tag named mid-text, or any other markup, stays", () => {
+    const answer = "The `<tools-used-before-summary>` tag wraps the tools a subagent used.";
+    expect(stripHarnessMarkup(answer)).toBe(answer);
+    const xml = "<answer>\nA real reply about <system-reminder> tags.\n</answer>";
+    expect(stripHarnessMarkup(xml)).toBe(xml);
+  });
+
+  test("a generic agent name gives way to the task; a specific one stays", () => {
+    expect(subagentTitle("Agent", "Locate desktop UI code\nand more")).toBe("Locate desktop UI code");
+    expect(subagentTitle("Task", "Map the code")).toBe("Map the code");
+    expect(subagentTitle("Explore", "Map the code")).toBe("Explore");
+    expect(subagentTitle("Agent", "  ")).toBe("Agent");
+  });
+
+  test("a read step names the file", () => {
+    const item = tool({
+      toolCallId: "r1",
+      title: "Read",
+      kind: "read",
+      status: "in_progress",
+      rawInput: { file_path: "/repo/apps/desktop/src/ui/Lightbox.tsx" },
+    });
+    expect(agentStepLabel(item)).toBe("Reading Lightbox.tsx");
+    const titled = tool({
+      toolCallId: "r2",
+      title: "Read Composer.tsx",
+      kind: "read",
+      status: "in_progress",
+      rawInput: {},
+    });
+    expect(agentStepLabel(titled)).toBe("Reading Composer.tsx");
+    const bare = tool({ toolCallId: "r3", title: "Read", kind: "read", status: "in_progress" });
+    expect(agentStepLabel(bare)).toBe("Reading a file");
+  });
+
+  test("a search step names what it looks for", () => {
+    const item = tool({
+      toolCallId: "g1",
+      title: "Grep",
+      kind: "search",
+      status: "in_progress",
+      rawInput: { pattern: "focusComposer" },
+    });
+    expect(agentStepLabel(item)).toBe("Searching for focusComposer");
+  });
+
+  test("a shell step drops the cd prefix and keeps the command and its first argument", () => {
+    const item = tool({
+      toolCallId: "b1",
+      title: "Bash",
+      kind: "execute",
+      status: "in_progress",
+      rawInput: { command: "cd /Users/lagos/code/rustcode/apps/desktop/src && grep -rnE 'status|state' ." },
+    });
+    expect(agentStepLabel(item)).toBe("Running grep -rnE …");
+    const short = tool({
+      toolCallId: "b2",
+      title: "Bash",
+      kind: "execute",
+      status: "in_progress",
+      rawInput: { command: "bun test src/ui" },
+    });
+    expect(agentStepLabel(short)).toBe("Running bun test …");
+  });
+
+  test("a step the row has no shorter form for keeps its label", () => {
+    const item = tool({
+      toolCallId: "w1",
+      title: "WebFetch",
+      status: "in_progress",
+      rawInput: { url: "https://example.com" },
+    });
+    expect(agentStepLabel(item)).toBe("WebFetch");
+  });
+});
+
 describe("messageTime", () => {
   const now = new Date(2026, 10, 4, 15, 0).getTime();
   test("says the day once it is not today", () => {
@@ -547,5 +717,38 @@ describe("messageTime", () => {
     expect(at(new Date(2026, 9, 20, 9, 30))).toMatch(/Oct/);
     expect(at(new Date(2025, 9, 20, 9, 30))).toMatch(/2025/);
     expect(messageTime(undefined, now)).toBe("");
+  });
+});
+
+describe("wake turns and the queue they hold", () => {
+  test("a wake turn replayed from history is still a wake, never a user message", () => {
+    // The engine keeps the text a turn was started with, not the app's flag, so the message marks
+    // itself (state/thread.ts `WAKE_MARK`).
+    const text = withWakeMark("1 child finished\n\nFinished:\n- link_id a/b · done");
+    const s = apply([{ kind: "user", text }]);
+    const item = s.items[0];
+    expect(item?.kind).toBe("user");
+    expect(item?.kind === "user" && item.wake).toBe(true);
+    // What the transcript shows is its first line, the summary.
+    expect(wakeLine(text)).toBe("1 child finished");
+    // A message the user typed is not one.
+    expect(apply([{ kind: "user", text: "1 child finished" }]).items[0]).toMatchObject({
+      kind: "user",
+      wake: undefined,
+    });
+  });
+
+  test("a turn that completed runs the queue on; a stopped or failed one holds it", () => {
+    const queued = { id: "q1", text: "next" };
+    const running = { ...emptyThread("s", "/p"), running: true, queue: [queued] };
+    expect(finishTurn(running, "completed").queueHeld).toBeUndefined();
+    expect(finishTurn(running, "cancelled").queueHeld).toBe(true);
+    expect(finishTurn(running, "failed").queueHeld).toBe(true);
+    // Nothing queued: nothing to hold.
+    const empty = { ...emptyThread("s", "/p"), running: true };
+    expect(finishTurn(empty, "cancelled").queueHeld).toBeUndefined();
+    // A turn starting clears it: the held queue runs again.
+    const held = { ...emptyThread("s", "/p"), queueHeld: true, queue: [queued] };
+    expect(beginTurn(held, "go").queueHeld).toBeUndefined();
   });
 });

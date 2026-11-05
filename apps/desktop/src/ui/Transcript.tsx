@@ -9,9 +9,13 @@ import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
-import { RESUME_TEXT, shortcutFor, useApp } from "../state/store";
+import type { Link } from "../state/orchestration";
+import { queueView } from "../state/queue";
+import { canSteer, RESUME_TEXT, shortcutFor, useApp } from "../state/store";
 import {
+  type QueuedPrompt,
   splitSubagentSteps,
+  startedLinks,
   subagentOf,
   type ThreadState,
   type TranscriptItem,
@@ -19,10 +23,11 @@ import {
   turnCompletion,
   workingLabel,
 } from "../state/thread";
-import { SubagentGroupRow, SubagentRow } from "./AgentViews";
+import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow } from "./AttentionCards";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
+import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
 import {
   AssistantRow,
   HandoffRow,
@@ -48,6 +53,8 @@ type Row = {
   working?: true;
   /** Two or more subagents in a row, shown as one. */
   agents?: { items: Extract<TranscriptItem, { kind: "tool" }>[]; open: boolean };
+  /** The threads a run of `start_session` calls started, shown as one row or card. */
+  threads?: { links: Link[]; open: boolean };
   /** The running turn's foot: what it does now, when no row of its own shows it. */
   activity?: string;
   /** The turn parked on this many background commands. */
@@ -61,6 +68,19 @@ type Row = {
   approvalNumber?: number;
   /** The plan a paused thread keeps to, at the foot. */
   plan?: { threadId: string; entries: PlanEntry[] };
+  /** A message waiting for the thread, at the end of it. */
+  queued?: {
+    item: QueuedPrompt;
+    index: number;
+    count: number;
+    held: boolean;
+    steerable: boolean;
+    from?: string;
+  };
+  /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
+  queueWake?: { line: string; text: string };
+  /** Resume, under a queue a stopped or failed turn held. */
+  resume?: { threadId: string; count: number };
 };
 
 /** The turns the reader opened, by thread: kept while the app runs, so going back keeps them. */
@@ -184,32 +204,63 @@ export function Transcript({
     () => splitSubagentSteps(thread.items),
     [thread.items],
   );
+  // The threads this one started, by the call that started them (its book of links).
+  const links = useApp((s) => s.links.links);
+  const started = useMemo(
+    () =>
+      startedLinks(
+        visible,
+        links.filter((l) => l.orchestrator === thread.id),
+      ),
+    [visible, links, thread.id],
+  );
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
     const shown = searching ? ALL_OPEN : open;
     const grouped: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown);
-    // Subagents started together read as one row: `3 subagents · 2 working`.
-    const isAgent = (r?: Row) =>
-      r?.item?.kind === "tool" && (!!subagentOf(r.item) || subagentSteps.has(r.item.id));
+    // Subagents started together read as one row (`3 agents · 2 working`), and so do the
+    // threads a run of `start_session` calls started (`2 threads · done`).
+    const kindOf = (r?: Row): "agents" | "threads" | undefined => {
+      const item = r?.item;
+      if (item?.kind !== "tool") return undefined;
+      if (subagentOf(item) || subagentSteps.has(item.id)) return "agents";
+      return started.has(item.id) ? "threads" : undefined;
+    };
     const out: Row[] = [];
     for (let i = 0; i < grouped.length; ) {
+      const kind = kindOf(grouped[i]);
       let j = i;
-      while (j < grouped.length && isAgent(grouped[j]) && grouped[j]!.inFold === grouped[i]!.inFold) j++;
-      if (j - i >= 2) {
-        const key = `agents-${grouped[i]!.key}`;
+      if (kind) {
+        while (j < grouped.length && kindOf(grouped[j]) === kind && grouped[j]!.inFold === grouped[i]!.inFold)
+          j++;
+      }
+      if (kind && j - i >= 2) {
+        const key = `${kind}-${grouped[i]!.key}`;
+        const items = grouped.slice(i, j).map((r) => r.item as Extract<TranscriptItem, { kind: "tool" }>);
         out.push({
           key,
           inFold: grouped[i]!.inFold,
-          agents: {
-            items: grouped.slice(i, j).map((r) => r.item as Extract<TranscriptItem, { kind: "tool" }>),
-            open: shown.has(key),
-          },
+          ...(kind === "agents"
+            ? { agents: { items, open: shown.has(key) } }
+            : {
+                threads: { links: items.flatMap((item) => started.get(item.id) ?? []), open: shown.has(key) },
+              }),
         });
         i = j;
+        continue;
+      }
+      const single = kind === "threads" ? started.get(grouped[i]!.item!.id) : undefined;
+      if (single) {
+        // One started thread is a row of its own, and stays hidden until its thread settles.
+        out.push({
+          key: grouped[i]!.key,
+          inFold: grouped[i]!.inFold,
+          threads: { links: [single], open: false },
+        });
       } else {
         out.push(grouped[i]!);
-        i++;
       }
+      i++;
     }
     // A pending approval sits at the call it is about, so what it wants is read where the work
     // stopped; one whose call is not on screen (yet, or folded away) goes to the foot, where it
@@ -251,18 +302,31 @@ export function Transcript({
     // finished plan, or one a running turn is working through, is not repeated here.
     if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
       out.push({ key: "plan", plan: { threadId: thread.id, entries: thread.plan } });
+    // What waits for the thread comes after all of it: its queued messages, the one quiet line a
+    // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
+    // the transcript, and the pinned view follows them like any other row.
+    const queue = queueView(thread);
+    const waking = thread.queue.find((q) => q.wake);
+    if (queue.wake && waking)
+      out.push({ key: "queue-wake", queueWake: { line: queue.wake, text: waking.text } });
+    const steer = canSteer(thread);
+    queue.messages.forEach((q, i) => {
+      out.push({
+        key: `queued-${q.id}`,
+        queued: {
+          item: q,
+          index: i,
+          count: queue.messages.length,
+          held: queue.held,
+          steerable: steer,
+          from: q.link ? links.find((l) => l.id === q.link)?.orchestratorTitle : undefined,
+        },
+      });
+    });
+    if (queue.resumable)
+      out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
     return out;
-  }, [
-    visible,
-    subagentSteps,
-    thread.running,
-    thread.waiting,
-    thread.permissions,
-    thread.plan,
-    thread.id,
-    open,
-    searching,
-  ]);
+  }, [visible, subagentSteps, started, links, thread, open, searching]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -321,6 +385,9 @@ export function Transcript({
       if (rows[i]?.approval) return 96;
       if (rows[i]?.plan) return 260;
       if (rows[i]?.fold || rows[i]?.group) return 26;
+      if (rows[i]?.queued) return 96;
+      if (rows[i]?.resume) return 30;
+      if (rows[i]?.queueWake) return 26;
       if (!item) return 24;
       if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
       return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
@@ -678,6 +745,7 @@ export function Transcript({
               const workLike = (r?: Row) =>
                 !!r?.group ||
                 !!r?.agents ||
+                !!r?.threads ||
                 !!r?.activity ||
                 !!r?.approval ||
                 r?.item?.kind === "tool" ||
@@ -712,10 +780,28 @@ export function Transcript({
                         open={row.agents.open}
                         onToggle={() => toggleFold(row.key)}
                       />
+                    ) : row.threads ? (
+                      <StartedThreadsRow
+                        links={row.threads.links}
+                        open={row.threads.open}
+                        onToggle={() => toggleFold(row.key)}
+                      />
                     ) : row.group ? (
                       <ToolGroupRow group={row.group} onToggle={toggleFold} />
                     ) : row.waiting ? (
                       <WaitingRow count={row.waiting} />
+                    ) : row.queued ? (
+                      <QueuedMessageRow threadId={thread.id} {...row.queued} />
+                    ) : row.queueWake ? (
+                      // The same quiet line its turn leaves once it runs: the wake's first line, the
+                      // whole message in the title. Never a bubble that reads as the user's own.
+                      <div title={row.queueWake.text}>
+                        <NoticeRow
+                          item={{ kind: "notice", id: "queue-wake", text: row.queueWake.line, tone: "info" }}
+                        />
+                      </div>
+                    ) : row.resume ? (
+                      <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (
                       <WorkingRow startedAt={thread.turnStartedAt} now={now} />
                     ) : row.activity ? (

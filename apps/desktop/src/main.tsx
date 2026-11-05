@@ -48,6 +48,9 @@ if (import.meta.env.DEV || new URLSearchParams(window.location.search).get("tran
 
 if (!catalog) void defaultTransport().then(store.connect);
 
+// `?queuePreview` in a dev browser with the mock: a thread's queue, for screenshots (state/queuePreview.ts).
+if (import.meta.env.DEV) void import("./state/queuePreview").then((m) => m.installQueuePreview());
+
 // A draft written in the last moment before the window closes still reaches app storage.
 window.addEventListener("beforeunload", () => store.flushDrafts());
 

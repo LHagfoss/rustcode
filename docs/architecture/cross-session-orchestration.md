@@ -212,6 +212,14 @@ Decisions:
 - `wait_session` accepts one `link_id` or several (first to finish wins),
   default timeout 60 s, maximum 1 h, and wakes on completion, a question or an
   approval waiting in the target.
+- A wait and a wake never both carry the same link. The wait marks what it hands
+  back as heard — including a link that settles just as the wait times out — and
+  a settled link that a newer link from the same parent to the same target
+  replaced is retired unread: its answer is already out of date. A wake is
+  queued behind a running turn and only sent once the app sees the thread idle;
+  it is never a second prompt into a turn in flight (a harness may interrupt the
+  tools that turn is running). In the transcript a wake is one quiet line, never
+  a message that reads as the user's own.
 
 ## Cancellation
 

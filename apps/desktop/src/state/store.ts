@@ -111,6 +111,7 @@ import {
 } from "./host";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
+import { nextQueued } from "./queue";
 import { dueSnoozes } from "./snooze";
 import {
   appendSteer,
@@ -122,7 +123,6 @@ import {
   foldingBatch,
   localId,
   messagesAfter,
-  type QueuedPrompt,
   questionItem,
   requeueSteers,
   type ThreadState,
@@ -263,6 +263,16 @@ export interface AppState {
   archived: Record<string, number>;
   /** A sent message being edited in the composer: sending rewinds the thread to it first. */
   editing: Record<string, { itemId: string; userIndex: number; original: string }>;
+  /**
+   * A queued message opened in the composer (⏎ saves it in the queue, never sends it). It carries
+   * what the composer held before, which comes back when the edit ends either way.
+   */
+  queuedEdit: {
+    threadId: string;
+    queuedId: string;
+    text: string;
+    extras: ComposeExtras;
+  } | null;
   /** Smart UI blocks run in the transcript (Settings › Chat). */
   smartUi: boolean;
   /** The engine learned a different Smart UI setting at initialize: a restart applies the new one. */
@@ -443,6 +453,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   pinned: storedJson<string[]>(STORAGE.pinned, []),
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   editing: {},
+  queuedEdit: null,
   confirm: null,
   // On unless turned off: an agent asks before it starts or messages a thread (Ask), so
   // delegating is there to use without first finding the setting.
@@ -1807,6 +1818,19 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     void forkThread(id);
     return true;
   }
+  // Messages a stopped turn held keep their place: a new one goes behind them and Resumes the queue,
+  // so nothing the user wrote is skipped or reordered.
+  if (thread.queue.length) {
+    updateThread(id, (t) => ({
+      ...t,
+      queue: [
+        ...t.queue,
+        { id: localId("queued"), text: trimmed, extras: hasExtras(extras) ? extras : undefined },
+      ],
+    }));
+    void resumeQueue(id);
+    return true;
+  }
   void runPrompt(id, trimmed, extras);
   return true;
 }
@@ -1913,36 +1937,99 @@ export async function sendQueuedNow(id: string, queuedId: string) {
   }
 }
 
+/**
+ * Resume: the first message a stopped or failed turn held starts a turn of its own. The rest follow
+ * it, each when the turn before completes; a new message sent meanwhile waits behind them.
+ */
+export async function resumeQueue(id: string): Promise<boolean> {
+  const thread = get().threads[id];
+  if (!thread || thread.running) return false;
+  const next = nextQueued(thread.queue, { running: false });
+  updateThread(id, (t) => ({ ...t, queueHeld: undefined }));
+  if (!next) return false;
+  removeQueued(id, next.id);
+  await runPrompt(id, next.text, next.extras, {
+    fromView: next.fromView,
+    link: next.link,
+    wake: next.wake,
+  });
+  return true;
+}
+
+/**
+ * Open a queued message in the composer (its pencil, or ↑ at the start of an empty one). The item
+ * stays where it waits, marked as being edited, and whatever the composer held comes back when the
+ * edit ends. A message another thread sent cannot be edited: sending it again would lose its link.
+ */
+export function startQueuedEdit(id: string, queuedId: string): boolean {
+  const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
+  if (!item || item.link || item.wake) return false;
+  const before = { text: get().drafts[id] ?? "", extras: get().extras[id] ?? emptyExtras };
+  set({ queuedEdit: { threadId: id, queuedId, ...before } });
+  setDraft(id, item.text);
+  setExtras(id, () => item.extras ?? emptyExtras);
+  return true;
+}
+
+/** ⏎ or the check button on a queued message being edited: saved where it waits, never sent. */
+export function saveQueuedEdit(): boolean {
+  const edit = get().queuedEdit;
+  if (!edit) return false;
+  updateQueued(edit.threadId, edit.queuedId, get().drafts[edit.threadId] ?? "", get().extras[edit.threadId]);
+  restoreComposer(edit);
+  return true;
+}
+
+/** Esc or Cancel: the queued message stays as it was, and the composer gets its own message back. */
+export function cancelQueuedEdit(): boolean {
+  const edit = get().queuedEdit;
+  if (!edit) return false;
+  restoreComposer(edit);
+  return true;
+}
+
+/**
+ * The item left the queue while it was being edited (it started, or was removed): the edit ends. What
+ * was typed stays in the composer when it was empty before the edit, and is dropped when it was not.
+ */
+export function endQueuedEdit(): void {
+  const edit = get().queuedEdit;
+  if (!edit) return;
+  if (!edit.text.trim() && !hasExtras(edit.extras)) {
+    set({ queuedEdit: null });
+    return;
+  }
+  restoreComposer(edit);
+}
+
+function restoreComposer(edit: NonNullable<AppState["queuedEdit"]>): void {
+  set({ queuedEdit: null });
+  setDraft(edit.threadId, edit.text);
+  setExtras(edit.threadId, () => edit.extras);
+}
+
 export function removeQueued(id: string, queuedId: string) {
   const link = get().threads[id]?.queue.find((q) => q.id === queuedId)?.link;
   updateThread(id, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== queuedId) }));
   if (link) queuedLinkDropped(link);
+  // Editing a message that just left the queue (it started, or it was removed): the edit ends.
+  if (get().queuedEdit?.queuedId === queuedId) endQueuedEdit();
 }
 
-/**
- * Take a queued message back out of the queue, whole, for the composer (↑ or
- * Edit in composer). A message delivered for another thread keeps its link and
- * stays queued, since sending it again would lose the way back.
- */
-export function takeQueued(id: string, queuedId: string): QueuedPrompt | undefined {
-  const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
-  if (!item || item.link) return undefined;
-  removeQueued(id, queuedId);
-  return item;
-}
-
-/** A queued message edited in place; an empty text removes it. */
-export function updateQueued(id: string, queuedId: string, text: string) {
+/** A queued message edited where it waits; its attachments are replaced with the composer's. */
+export function updateQueued(id: string, queuedId: string, text: string, extras?: ComposeExtras) {
   const trimmed = text.trim();
-  updateThread(id, (t) => ({
-    ...t,
+  updateThread(id, (t) => {
+    const item = t.queue.find((q) => q.id === queuedId);
+    if (!item) return t;
+    const next = extras ?? item.extras;
     // Its attachments stay; one with attachments survives an emptied text.
-    queue: trimmed
-      ? t.queue.map((q) => (q.id === queuedId ? { ...q, text: trimmed } : q))
-      : t.queue
-          .filter((q) => q.id !== queuedId || q.extras?.attachments.length)
-          .map((q) => (q.id === queuedId ? { ...q, text: "" } : q)),
-  }));
+    if (!trimmed && !hasExtras(next)) return { ...t, queue: t.queue.filter((q) => q.id !== queuedId) };
+    return {
+      ...t,
+      queue: t.queue.map((q) => (q.id === queuedId ? { ...q, text: trimmed, extras: next } : q)),
+    };
+  });
 }
 
 /** Move a queued message one place earlier (-1) or later (1). */
@@ -1965,6 +2052,26 @@ export async function runPrompt(
 ): Promise<void> {
   const conn = engine();
   const thread = get().threads[id];
+  // Never a second prompt into a running turn: an external harness takes it as the next turn and can
+  // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
+  // message typed meanwhile, and starts when this turn ends.
+  if (thread?.running) {
+    updateThread(id, (t) => ({
+      ...t,
+      queue: [
+        ...t.queue,
+        {
+          id: localId("queued"),
+          text,
+          extras: hasExtras(extras) ? extras : undefined,
+          fromView: options.fromView,
+          link: options.link,
+          wake: options.wake,
+        },
+      ],
+    }));
+    return;
+  }
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
   if (id in get().snoozed) snoozeThread(id, null);
@@ -2031,9 +2138,12 @@ export async function runPrompt(
       { action: { label: "Open", run: () => selectThread(id) } },
     );
   }
-  // A queued message starts at once, so "working" stays up across the hand-off.
-  const next = get().threads[id]?.queue[0];
-  if (outcome === "completed" && next) {
+  // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
+  // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
+  // Resume starts them.
+  const after = get().threads[id];
+  const next = after ? nextQueued(after.queue, after) : undefined;
+  if (next) {
     removeQueued(id, next.id);
     await runPrompt(id, next.text, next.extras, {
       fromView: next.fromView,

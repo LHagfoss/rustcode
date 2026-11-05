@@ -135,8 +135,7 @@ theme and `#0000001a` in the light one), a small blur, close to the edge.
 A raised surface is told apart by its edge and glass, not by a dark halo.
 
 - `--rc-shadow-1` (`shadow-1`, `0 1px 1px` + ring): things resting above the
-  chat: the jump-to-latest button, queued messages, error cards over the
-  transcript. (The composer and toasts share a slight shadow under them,
+  chat: the jump-to-latest button, error cards over the transcript. (The composer and toasts share a slight shadow under them,
   `0 2px 8px -4px`.)
 - `--rc-shadow-2` (`shadow-2`, `0 2px 8px` + ring): things that open over
   everything: popovers, menus, tooltips, dialogs, the command palette.
@@ -422,6 +421,21 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   window closes), so an unsent message is still there after a restart:
   sending clears the entry, a draft over 100 KB is not kept, and only the
   200 newest survive (`state/drafts.ts`).
+- **Queued message:** what waits for the thread, at the end of its transcript
+  (`ui/QueuedMessages.tsx`), as a sent bubble's twin: right-aligned, at most
+  80% wide, `rounded-2xl`, a dashed `border-strong` edge and `bg-message/40`
+  instead of the fill, the command and links as chips over the text, pictures
+  and files above it. Under it a quiet row: a `Clock` and `Queued` — or `Held`
+  once a stopped turn left it there — and, on hover or keyboard focus, 22px
+  icon buttons: Send now (a steer, only on a harness that steers live), edit,
+  move up and down (with two or more), remove. It is edited in the composer,
+  never in a field of its own: its pencil, or ↑ at the start of an empty
+  composer, loads its text, command, links and attachments there, the row says
+  `Editing in the composer` with Cancel, ⏎ saves it back in the queue and Esc
+  leaves it. A held queue ends with Resume, which starts its first message. A
+  wake turn the app sends is one quiet line (its first line, in the notice
+  divider's style), never a bubble; a message another thread sent says
+  `From “…”` and is not the user's to edit.
 - **Jump to latest:** the pill over the composer's foot (`shadow-1`,
   `.rc-glass-strong`, 30px) says `Latest` and, while a turn runs, what
   that turn is doing now after a `·` (`Reading files`, `Thinking · …`), so
