@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { foldLabel, foldTurns, groupTools, inferToolKind, toolGroupLabel } from "./fold";
+import { foldLabel, foldTurns, groupTools, inferToolKind, type TurnFold, toolGroupLabel } from "./fold";
 import type { TranscriptItem } from "./thread";
 
 const user = (id: string): TranscriptItem => ({ kind: "user", id, text: id });
@@ -111,6 +111,42 @@ describe("turn folding", () => {
     expect(stopped && "fold" in stopped ? foldLabel(stopped.fold, seconds) : "").toBe(
       "You stopped after 12s",
     );
+  });
+
+  test("a failed step marks itself, never the header of a turn that finished", () => {
+    const fold = (rows: ReturnType<typeof foldTurns>) => rows.find((r) => "fold" in r) as { fold: TurnFold };
+    // Two calls failed inside a turn that then answered: the header stays clean, so a reader
+    // cannot take the turn for a failure.
+    expect(fold(foldTurns(items, false, new Set())).fold).toMatchObject({
+      failed: 1,
+      failedTurn: false,
+      stopped: false,
+    });
+    const failedTurn = [
+      user("u"),
+      tool("c"),
+      { kind: "turnEnd", id: "e", elapsedMs: 3_000, at: 9, outcome: "failed" },
+    ] as TranscriptItem[];
+    expect(fold(foldTurns(failedTurn, false, new Set())).fold).toMatchObject({ failedTurn: true });
+  });
+
+  test("a turn that wrote no answer keeps the time in its header", () => {
+    const answered = foldTurns(items, false, new Set()).find((r) => "fold" in r) as { fold: TurnFold };
+    expect(answered.fold.answered).toBe(true);
+    const empty = [
+      user("u"),
+      tool("c"),
+      { kind: "turnEnd", id: "e", elapsedMs: 4_000, at: 1_700_000_000_000, outcome: "completed" },
+    ] as TranscriptItem[];
+    const fold = foldTurns(empty, false, new Set()).find((r) => "fold" in r) as { fold: TurnFold };
+    expect(fold.fold).toMatchObject({ answered: false, time: 1_700_000_000_000, elapsedMs: 4_000 });
+    // A reply of spaces is no answer either.
+    const blank = foldTurns(
+      [user("u"), tool("c"), reply(" "), { kind: "turnEnd", id: "e", elapsedMs: 4_000 }] as TranscriptItem[],
+      false,
+      new Set(),
+    ).find((r) => "fold" in r) as { fold: TurnFold };
+    expect(blank.fold.answered).toBe(false);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { replyActions } from "./replyActions";
+import { replyActions, turnFooterHidden } from "./replyActions";
+import { estimatedRowHeight } from "./Transcript";
 
 const at = 1_776_758_100_000;
 
@@ -64,11 +65,12 @@ describe("the action row in a finished turn's footer", () => {
     });
   });
 
-  test("a turn with no reply before it shows only its own text", () => {
+  test("a turn with no reply before it shows only its own time", () => {
+    // Nothing to copy, so nothing to fork either: the row is the time alone.
     expect(replyActions({ where: "turnEnd", at, threadId: "t1" })).toEqual({
       row: true,
       copy: null,
-      fork: true,
+      fork: false,
       time: true,
     });
   });
@@ -84,5 +86,42 @@ describe("the action row in a finished turn's footer", () => {
       fork: false,
       time: true,
     });
+  });
+});
+
+describe("a finished turn's footer that adds nothing", () => {
+  test("a folded turn with no answer draws no footer, so its row takes no room", () => {
+    expect(turnFooterHidden({ folded: true, reply: "", outcome: "completed" })).toBe(true);
+    expect(turnFooterHidden({ folded: true, reply: "  \n", outcome: "completed" })).toBe(true);
+    expect(turnFooterHidden({ folded: true, outcome: "completed" })).toBe(true);
+  });
+
+  test("an answer, a completion card or a changes chip keeps the footer", () => {
+    expect(turnFooterHidden({ folded: true, reply: "Done.", outcome: "completed" })).toBe(false);
+    expect(turnFooterHidden({ folded: true, completion: true, outcome: "completed" })).toBe(false);
+    expect(turnFooterHidden({ folded: true, changes: true, outcome: "completed" })).toBe(false);
+  });
+
+  test("a turn that failed or was stopped always says so", () => {
+    expect(turnFooterHidden({ folded: true, outcome: "failed" })).toBe(false);
+    expect(turnFooterHidden({ folded: true, outcome: "cancelled" })).toBe(false);
+  });
+
+  test("a turn with no fold keeps its footer: the time is all it has", () => {
+    expect(turnFooterHidden({ outcome: "completed" })).toBe(false);
+  });
+});
+
+describe("the height a row starts at", () => {
+  const at = 1_776_758_100_000;
+  const footer = { key: "e1", item: { kind: "turnEnd", id: "e1", at, outcome: "completed" } } as never;
+
+  test("a turn footer estimates its own 26px", () => {
+    expect(estimatedRowHeight(footer)).toBe(26);
+  });
+
+  test("a footer that draws nothing estimates 0, so nothing below it drifts", () => {
+    expect(estimatedRowHeight(footer, true)).toBe(0);
+    expect(estimatedRowHeight(undefined)).toBe(24);
   });
 });

@@ -46,10 +46,11 @@ import {
   WaitingRow,
   WorkingRow,
 } from "./Rows";
+import { turnFooterHidden } from "./replyActions";
 import { plainPreview, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
-type Row = {
+export type Row = {
   key: string;
   item?: TranscriptItem;
   working?: true;
@@ -120,6 +121,27 @@ function useNow(active: boolean) {
     return () => clearInterval(t);
   }, [active]);
   return now;
+}
+
+/**
+ * The height a row starts at, before it is measured. `hidden` rows (a turn footer that renders
+ * nothing) take no room: nothing mounts to measure them, so an estimate above zero would push every
+ * row below it down and leave a blank strip at the end of the scroll.
+ */
+export function estimatedRowHeight(row: Row | undefined, hidden = false): number {
+  if (hidden) return 0;
+  if (!row) return 24;
+  if (row.approval) return 96;
+  if (row.childRequest) return row.childRequest.request.question ? 240 : 52;
+  if (row.plan) return 260;
+  if (row.fold || row.group) return 26;
+  if (row.queued) return 96;
+  if (row.resume) return 30;
+  if (row.queueWake) return 26;
+  const item = row.item;
+  if (!item) return 24;
+  if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
+  return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
 }
 
 function searchable(item: TranscriptItem): string {
@@ -359,6 +381,17 @@ export function Transcript({
     return set;
   }, [rows]);
 
+  // Folded turns that wrote no answer: their summary row says the time, so the footer leaves it out.
+  // Only when the header itself carries a time (`TurnFoldRow`): a `turnEnd` without one would
+  // otherwise lose it altogether.
+  const timeInFold = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of rows)
+      if (row.fold && !row.fold.answered && row.fold.time !== undefined)
+        set.add(row.fold.key.slice("fold-".length));
+    return set;
+  }, [rows]);
+
   // The reply each turn footer takes over: the last reply before it, whose own row then
   // stays clean, so a finished turn shows one action row under its last reply, not two.
   const turnReply = useMemo(() => {
@@ -396,32 +429,54 @@ export function Transcript({
   // Each finished turn's checkpoint, for its Changes chip.
   const turnCheckpoints = useMemo(() => {
     if (!checkpoints?.length) return {};
-    const turns: { id: string; prompt: string }[] = [];
+    const turns: { id: string; prompt: string; at?: number }[] = [];
     let prompt = "";
     for (const item of thread.items) {
       if (item.kind === "user") prompt = item.text;
-      else if (item.kind === "turnEnd") turns.push({ id: item.id, prompt });
+      else if (item.kind === "turnEnd") turns.push({ id: item.id, prompt, at: item.at });
     }
     return checkpointsByTurn(turns, checkpoints);
   }, [thread.items, checkpoints]);
+
+  // Turn footers that render nothing at all. Nothing measures a row that never mounts, so the
+  // virtualizer has to estimate no height for it, or every row below drifts by a footer.
+  const footerless = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of rows) {
+      const item = row.item;
+      if (item?.kind !== "turnEnd") continue;
+      const hidden = turnFooterHidden({
+        folded: foldedEnds.has(item.id),
+        reply: turnReply.byEnd[item.id]?.text,
+        completion: !!completions[item.id],
+        // A checkpoint with no files changed draws no chip either.
+        changes: !!turnCheckpoints[item.id]?.filesChanged,
+        outcome: item.outcome,
+      });
+      if (hidden) set.add(item.id);
+    }
+    return set;
+  }, [rows, foldedEnds, turnReply, completions, turnCheckpoints]);
+
+  // The newest finished turn keeps its actions in view; the older ones wait for a hover.
+  const lastEnd = useMemo(() => {
+    for (let i = rows.length - 1; i >= 0; i--)
+      if (rows[i]!.item?.kind === "turnEnd") return rows[i]!.item!.id;
+    return undefined;
+  }, [rows]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => {
-      const known = rowSizes.get(rows[i]?.key ?? "");
+      const row = rows[i];
+      // A footer nothing renders never mounts, so no measurement follows to correct an estimate,
+      // and one measured while it still drew something must not keep that height.
+      const hidden = row?.item?.kind === "turnEnd" && footerless.has(row.item.id);
+      if (hidden) return 0;
+      const known = rowSizes.get(row?.key ?? "");
       if (known !== undefined) return known;
-      const item = rows[i]?.item;
-      if (rows[i]?.approval) return 96;
-      if (rows[i]?.childRequest) return rows[i].childRequest!.request.question ? 240 : 52;
-      if (rows[i]?.plan) return 260;
-      if (rows[i]?.fold || rows[i]?.group) return 26;
-      if (rows[i]?.queued) return 96;
-      if (rows[i]?.resume) return 30;
-      if (rows[i]?.queueWake) return 26;
-      if (!item) return 24;
-      if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
-      return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
+      return estimatedRowHeight(row, false);
     },
     getItemKey: (i) => rows[i]?.key ?? i,
     // Read lazily, after `attachScroll` put the view at the end (scroll events come later).
@@ -758,6 +813,14 @@ export function Transcript({
             {items.map((v) => {
               const row = rows[v.index]!;
               const item = row.item;
+              const prev = rows[v.index - 1];
+              // A divider (a wake, a notice) already draws the line a fold header would draw again.
+              const afterDivider =
+                (prev?.item?.kind === "notice" && prev.item.tone === "info") ||
+                (prev?.item?.kind === "user" && !!prev.item.wake);
+              // A wake divider is the turn's own first line: the work under it sits on it, and the
+              // next turn starts a full gap below, the same one a message gets.
+              const dividerGap = afterDivider ? 10 : 16;
               if (row.fold) {
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
@@ -766,15 +829,14 @@ export function Transcript({
                         "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
                         LANE_MOTION,
                       )}
-                      style={{ paddingTop: v.index === 0 ? 0 : 16, ...LANE_SHIFT }}
+                      style={{ paddingTop: v.index === 0 ? 0 : dividerGap, ...LANE_SHIFT }}
                     >
-                      <TurnFoldRow fold={row.fold} onToggle={toggleFold} />
+                      <TurnFoldRow fold={row.fold} onToggle={toggleFold} rule={!afterDivider} />
                     </div>
                   </div>
                 );
               }
               // 16 between messages, 8 around work, steps of one run tight.
-              const prev = rows[v.index - 1];
               const workLike = (r?: Row) =>
                 !!r?.group ||
                 !!r?.agents ||
@@ -791,6 +853,11 @@ export function Transcript({
                     : prev?.working || prev?.fold || workLike(row) || workLike(prev)
                       ? 10
                       : 16;
+              // A wake divider is the turn's own first line: the work under it sits on it, and the
+              // next turn starts a full gap below, the same one a message gets.
+              const turnGap = afterDivider ? 10 : gap;
+              // A turn whose footer has nothing to add leaves no row, and no gap for one.
+              if (item?.kind === "turnEnd" && footerless.has(item.id)) return null;
               return (
                 <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                   <div
@@ -799,7 +866,7 @@ export function Transcript({
                       LANE_MOTION,
                       row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
                     )}
-                    style={{ paddingTop: gap, ...LANE_SHIFT }}
+                    style={{ paddingTop: turnGap, ...LANE_SHIFT }}
                   >
                     {row.approval ? (
                       <ApprovalRow request={row.approval} pending={approvals} number={row.approvalNumber} />
@@ -838,6 +905,7 @@ export function Transcript({
                       // whole message in the title. Never a bubble that reads as the user's own.
                       <div title={row.queueWake.text}>
                         <NoticeRow
+                          flat
                           item={{ kind: "notice", id: "queue-wake", text: row.queueWake.line, tone: "info" }}
                         />
                       </div>
@@ -892,13 +960,15 @@ export function Transcript({
                       <TurnEndRow
                         item={item}
                         folded={foldedEnds.has(item.id)}
+                        timeInFold={timeInFold.has(item.id)}
+                        lastTurn={item.id === lastEnd}
                         threadId={thread.id}
                         reply={turnReply.byEnd[item.id]?.text}
                         completion={completions[item.id]}
                         changes={
-                          turnCheckpoints[item.id] && (
+                          turnCheckpoints[item.id]?.filesChanged ? (
                             <TurnChanges threadId={thread.id} checkpoint={turnCheckpoints[item.id]!} />
-                          )
+                          ) : undefined
                         }
                       />
                     ) : null}
