@@ -5,9 +5,9 @@ import type { Json } from "../acp/jsonrpc";
 import type {
   ConfigOption,
   FileDiff,
-  HarnessCapabilities,
   PermissionRequest,
   PlanEntry,
+  SessionHarness,
   SessionUpdate,
   SessionUsage,
   ToolStatus,
@@ -166,7 +166,7 @@ export interface ThreadState {
   /** The replay of `session/load` is still arriving. */
   loading: boolean;
   loaded: boolean;
-  harness?: { id: string; capabilities: HarnessCapabilities };
+  harness?: SessionHarness;
   /** The worktree the thread runs in, from `session/new` or the list. */
   worktree?: import("../acp/v2").Worktree;
   error?: string;

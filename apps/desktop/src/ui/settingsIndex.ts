@@ -72,6 +72,17 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
+    title: "Claude accounts",
+    keywords:
+      "claude login account accounts separate second config dir claude_config_dir sign in plan limits",
+  },
+  {
+    section: "agents",
+    title: "An account's sign-in command",
+    keywords: "claude auth login copy command terminal mkdir config dir claude_config_dir",
+  },
+  {
+    section: "agents",
     title: "Threads can start and message other threads",
     keywords: "orchestration subagents spawn compare message agents",
   },
@@ -149,6 +160,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "usage",
     title: "Show Claude usage in the composer",
     keywords: "plan keychain limits windows read composer usage",
+  },
+  {
+    section: "usage",
+    title: "Each account's plan",
+    keywords: "claude account login plan usage windows separate limits",
   },
 
   // ------------------------------------------------------------ Advanced

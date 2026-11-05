@@ -1428,6 +1428,11 @@ pub struct AppConfig {
     /// only: a checked-out project must not choose a command to run.
     #[serde(default)]
     pub harnesses: Vec<crate::harness::config::HarnessEntry>,
+    /// Named logins of a harness, each a config directory of its own (a
+    /// Claude Code `CLAUDE_CONFIG_DIR`). Global only: a checked-out project
+    /// must not choose where a thread signs in.
+    #[serde(default)]
+    pub harness_accounts: Vec<crate::harness::config::HarnessAccount>,
     #[serde(default)]
     #[serde(with = "serde_millis")]
     pub start_time: Option<std::time::SystemTime>,
@@ -1676,6 +1681,8 @@ struct TomlConfig {
     harness_defaults: Option<crate::harness::config::HarnessDefaults>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     harnesses: Option<Vec<crate::harness::config::HarnessEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    harness_accounts: Option<Vec<crate::harness::config::HarnessAccount>>,
 }
 
 fn default_false() -> bool {
@@ -1824,6 +1831,7 @@ impl Default for AppConfig {
             disabled_skills: Vec::new(),
             harness_defaults: crate::harness::config::HarnessDefaults::default(),
             harnesses: Vec::new(),
+            harness_accounts: Vec::new(),
             start_time: None,
             is_valid: true,
             session_model: SessionModelScope::default(),
@@ -2256,6 +2264,8 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
             != crate::harness::config::HarnessDefaults::default())
         .then(|| config.harness_defaults.clone()),
         harnesses: (!config.harnesses.is_empty()).then(|| config.harnesses.clone()),
+        harness_accounts: (!config.harness_accounts.is_empty())
+            .then(|| config.harness_accounts.clone()),
     };
 
     let path = dir.join(CONFIG_TOML_FILE);
@@ -2426,6 +2436,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(harnesses) = file.harnesses {
         config.harnesses = harnesses;
     }
+    if let Some(accounts) = file.harness_accounts {
+        config.harness_accounts = accounts;
+    }
     if file.start_time.is_some() {
         config.start_time = file.start_time;
     }
@@ -2477,6 +2490,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // A harness entry names a command to run; only the user may choose one.
     file.harness_defaults = None;
     file.harnesses = None;
+    // A harness account names where a thread signs in; only the user may choose one.
+    file.harness_accounts = None;
     // Provider definitions and OS credential bindings are user-owned. Keep
     // project model profiles selectable, but never let the checkout create or
     // redirect a binding to a machine's credential-store entry.
@@ -2607,6 +2622,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         start_time: None,
         harness_defaults: None,
         harnesses: None,
+        harness_accounts: None,
     };
     let contents = toml::to_string_pretty(&file)
         .map_err(|error| format!("could not serialize project config: {error}"))?;

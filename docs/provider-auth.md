@@ -67,6 +67,21 @@ api_protocol = "anthropic_messages"
 
 Add the profile before running `/login anthropic`. Login binds the active matching profile, or the sole matching profile if there is only one. If no profile can be selected, it saves the key and prints the credential reference to add manually. Use Anthropic's current model catalog for a model ID available to your account. Existing `claude_cli` profiles are retained when loading old config, but requests and catalog refreshes for those profiles now fail with a message explaining that this sign-in method is unsupported.
 
+## Claude Code accounts (harness)
+
+Threads on the Claude Code harness can run on one of several named Claude
+Code logins (`docs/harnesses.md`). Each is only a `CLAUDE_CONFIG_DIR` that
+Claude Code signs in to with its own command; RustCode names it, starts the
+harness with it, and never reads, copies, stores or proxies its tokens. The
+one exception is the read-only plan-usage lookup: with the user's consent,
+Settings › Usage reads an account's stored sign-in and asks Anthropic for
+that account's windows. It never refreshes a token, so an expired sign-in is
+reported and left to Claude Code. On macOS the Keychain item for a named
+account is `Claude Code-credentials-` plus the first 8 hex digits of the
+SHA-256 of its directory path; that name is undocumented, and a missing item
+reads as not signed in. Every account has its own plan and limits, and
+RustCode never switches or pools them automatically.
+
 ## Add an API-key provider
 
 Provider definitions can be added to the configuration without changing existing model profiles:

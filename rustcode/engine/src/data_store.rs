@@ -989,6 +989,8 @@ struct FolderFacts {
     model: Option<String>,
     effort: Option<String>,
     native_session_id: Option<String>,
+    /// The named account the thread ran on (`harness.json` `account`).
+    account: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
     /// The thread ran on an external harness, so its usage is a session total.
@@ -999,6 +1001,8 @@ struct FolderFacts {
 #[derive(serde::Deserialize)]
 struct HarnessFile {
     harness: String,
+    #[serde(default)]
+    account: Option<String>,
     #[serde(default)]
     native_session_id: Option<String>,
     #[serde(default)]
@@ -1088,6 +1092,7 @@ fn facts(dir: &Path) -> FolderFacts {
         native_session_id: harness_file
             .as_ref()
             .and_then(|file| file.native_session_id.clone()),
+        account: harness_file.as_ref().and_then(|file| file.account.clone()),
         external: harness_file.is_some(),
         usage: harness_file.as_ref().and_then(|file| file.usage.clone()),
         created_at,
@@ -1181,10 +1186,18 @@ pub fn backfill(connection: &Connection, config_dir: &Path) -> Result<BackfillRe
         // falls back to the session totals in `_meta.rustcode`, and keeps NULL
         // when it reports neither.
         let harness = facts.harness.as_deref().unwrap_or_default();
+        let account_dir = facts.account.as_deref().and_then(|account| {
+            let dir = crate::harness::config::config_dir().ok()?;
+            crate::harness::config::load_accounts_in(&dir)
+                .into_iter()
+                .find(|known| known.id == account && known.harness == harness)
+                .map(|known| known.resolved_dir())
+        });
         let from_log = crate::harness_usage::session_usage(
             harness,
             facts.native_session_id.as_deref(),
             facts.cwd.as_deref().map(Path::new),
+            account_dir.as_deref(),
         );
         let totals = from_log
             .as_ref()

@@ -5,7 +5,7 @@
 
 use super::HarnessKind;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessDefaults {
@@ -45,6 +45,59 @@ impl HarnessEntry {
     pub fn is_enabled(&self) -> bool {
         self.enabled.unwrap_or(true)
     }
+}
+
+/// One `[[harness_accounts]]` entry: a named `CLAUDE_CONFIG_DIR` for a
+/// harness, so a thread can run on another login of the same tool. RustCode
+/// only names the directory; the harness keeps its own sign-in there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessAccount {
+    pub id: String,
+    /// The harness this account belongs to (`claude-code` for now).
+    pub harness: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The account's config directory, as written (`~` allowed).
+    pub config_dir: String,
+}
+
+impl HarnessAccount {
+    /// The name the account goes by in the app.
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// The directory with `~` expanded.
+    pub fn resolved_dir(&self) -> PathBuf {
+        PathBuf::from(expand_tilde(&self.config_dir))
+    }
+}
+
+/// Expand a leading `~` with the user's home directory.
+pub fn expand_tilde(path: &str) -> String {
+    let Some(rest) = path.strip_prefix('~') else {
+        return path.to_owned();
+    };
+    let Some(home) = std::env::var_os("HOME") else {
+        return path.to_owned();
+    };
+    let mut resolved = PathBuf::from(home);
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    if !rest.is_empty() {
+        resolved.push(rest);
+    }
+    resolved.to_string_lossy().into_owned()
+}
+
+/// What `_rustcode/harnesses/accounts/add` asks for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountChange {
+    pub harness: String,
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub config_dir: Option<String>,
 }
 
 /// What `_rustcode/harnesses/set` asks for.
@@ -231,6 +284,154 @@ pub(crate) fn config_dir() -> Result<std::path::PathBuf, String> {
 pub(crate) fn load_in(dir: &Path) -> (HarnessDefaults, Vec<HarnessEntry>) {
     let (_, _, config) = crate::config::load_config_from(dir);
     (config.harness_defaults, config.harnesses)
+}
+
+/// The user's named harness accounts (`[[harness_accounts]]`).
+pub(crate) fn load_accounts_in(dir: &Path) -> Vec<HarnessAccount> {
+    let (_, _, config) = crate::config::load_config_from(dir);
+    config.harness_accounts
+}
+
+/// The accounts of `harness`, in config order.
+pub(crate) fn accounts_of(accounts: &[HarnessAccount], harness: &str) -> Vec<HarnessAccount> {
+    accounts
+        .iter()
+        .filter(|account| account.harness == harness)
+        .cloned()
+        .collect()
+}
+
+/// The account `id` of `harness`, or a message a client can show. An
+/// unknown account is an error, never a quiet fall back to the default login.
+pub(crate) fn find_account(
+    accounts: &[HarnessAccount],
+    harness: &str,
+    id: &str,
+) -> Result<HarnessAccount, String> {
+    accounts
+        .iter()
+        .find(|account| account.harness == harness && account.id == id)
+        .cloned()
+        .ok_or_else(|| format!("unknown {harness} account '{id}'; add it in Settings › Agents"))
+}
+
+/// The account a loaded thread names, for its `_meta` and snapshot row: the
+/// real entry, or a placeholder with the record's id when it was removed.
+/// Loading never fails on a removed account; only a prompt then does.
+pub(crate) fn account_for_load(
+    accounts: &[HarnessAccount],
+    record: &crate::harness::store::HarnessRecord,
+) -> Option<HarnessAccount> {
+    let id = record.account.as_deref()?;
+    Some(
+        find_account(accounts, &record.harness, id).unwrap_or_else(|_| HarnessAccount {
+            id: id.to_owned(),
+            harness: record.harness.clone(),
+            name: None,
+            config_dir: String::new(),
+        }),
+    )
+}
+
+/// Whether `config_dir` is the harness's own default sign-in.
+fn is_default_dir(dir: &Path) -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    dir == home.join(".claude")
+}
+
+/// Where an account's own directory goes when the client names none.
+pub(crate) fn default_config_dir(id: &str) -> String {
+    format!("~/.claude-{id}")
+}
+
+/// Add an account to the user config. Validates it, derives
+/// `~/.claude-<id>` when no directory is given, and creates the directory.
+pub(crate) fn add_account_in(dir: &Path, change: AccountChange) -> Result<HarnessAccount, String> {
+    let harness = change.harness.trim().to_owned();
+    if harness != "claude-code" {
+        return Err(format!(
+            "{harness} has no named logins yet; only Claude Code does"
+        ));
+    }
+    let id = change.id.trim().to_owned();
+    if !valid_id(&id) {
+        return Err(format!(
+            "invalid account id '{id}': use letters, digits, '-', '_' or '.'"
+        ));
+    }
+    let name = change
+        .name
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "an account needs a name".to_owned())?;
+    let config_dir = change
+        .config_dir
+        .map(|dir| dir.trim().to_owned())
+        .filter(|dir| !dir.is_empty())
+        .unwrap_or_else(|| default_config_dir(&id));
+    let account = HarnessAccount {
+        id,
+        harness,
+        name: Some(name),
+        config_dir,
+    };
+    let resolved = account.resolved_dir();
+    if !resolved.is_absolute() {
+        return Err("the account's config directory must be an absolute path".to_owned());
+    }
+    if is_default_dir(&resolved) {
+        return Err(
+            "~/.claude is your default Claude Code login; give the account its own directory"
+                .to_owned(),
+        );
+    }
+    crate::config::edit_user_config_in(dir, |config| {
+        if let Some(existing) = config
+            .harness_accounts
+            .iter()
+            .find(|existing| existing.harness == account.harness && existing.id == account.id)
+        {
+            return Err(format!(
+                "there is already a {} account '{}'",
+                existing.harness, existing.id
+            ));
+        }
+        if let Some(existing) = config
+            .harness_accounts
+            .iter()
+            .find(|existing| existing.resolved_dir() == resolved)
+        {
+            return Err(format!(
+                "{} already uses {}",
+                existing.display_name(),
+                existing.config_dir
+            ));
+        }
+        config.harness_accounts.push(account.clone());
+        Ok(())
+    })?;
+    std::fs::create_dir_all(&resolved)
+        .map_err(|error| format!("could not create {}: {error}", resolved.display()))?;
+    Ok(account)
+}
+
+/// Remove an account from the user config. The directory stays on disk: it
+/// holds the login and the conversations.
+pub(crate) fn remove_account_in(
+    dir: &Path,
+    harness: &str,
+    id: &str,
+) -> Result<HarnessAccount, String> {
+    crate::config::edit_user_config_in(dir, |config| {
+        config
+            .harness_accounts
+            .iter()
+            .position(|account| account.harness == harness && account.id == id)
+            .map(|at| config.harness_accounts.remove(at))
+            .ok_or_else(|| format!("unknown {harness} account '{id}'"))
+    })
 }
 
 pub(crate) fn edit_in<T>(
@@ -464,6 +665,165 @@ enabled = true
         );
         assert!(remove(&mut harnesses, "codex").is_err());
         assert!(remove(&mut harnesses, "nope").is_err());
+    }
+
+    #[test]
+    fn named_accounts_parse_validate_and_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            r#"
+[[harness_accounts]]
+id = "paral-2"
+harness = "claude-code"
+name = "Paral 2"
+config_dir = "~/.claude-paral-2"
+"#,
+        )
+        .unwrap();
+        let accounts = load_accounts_in(dir.path());
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].display_name(), "Paral 2");
+        assert_eq!(accounts[0].config_dir, "~/.claude-paral-2");
+        assert!(
+            accounts[0].resolved_dir().is_absolute(),
+            "the user's home is expanded"
+        );
+        assert_eq!(
+            find_account(&accounts, "claude-code", "paral-2")
+                .unwrap()
+                .id,
+            "paral-2"
+        );
+        assert!(
+            find_account(&accounts, "claude-code", "nope").is_err(),
+            "an unknown account is an error, never the default login"
+        );
+        assert!(
+            find_account(&accounts, "codex", "paral-2").is_err(),
+            "an account belongs to one harness"
+        );
+
+        let own = dir.path().join("claude-work");
+        let added = add_account_in(
+            dir.path(),
+            AccountChange {
+                harness: "claude-code".into(),
+                id: "work".into(),
+                name: Some(" Work ".into()),
+                config_dir: Some(own.to_string_lossy().into_owned()),
+            },
+        )
+        .unwrap();
+        assert_eq!(added.name.as_deref(), Some("Work"));
+        assert!(own.is_dir(), "the account's directory is created");
+        let accounts = load_accounts_in(dir.path());
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(
+            accounts[1].config_dir,
+            own.to_string_lossy(),
+            "an explicit directory is kept as given"
+        );
+
+        let duplicate = add_account_in(
+            dir.path(),
+            AccountChange {
+                harness: "claude-code".into(),
+                id: "work".into(),
+                name: Some("Work again".into()),
+                config_dir: Some(own.to_string_lossy().into_owned()),
+            },
+        );
+        assert!(duplicate.is_err(), "two accounts cannot share an id");
+        let shared = add_account_in(
+            dir.path(),
+            AccountChange {
+                harness: "claude-code".into(),
+                id: "work-2".into(),
+                name: Some("Work 2".into()),
+                config_dir: Some(own.to_string_lossy().into_owned()),
+            },
+        );
+        assert!(shared.is_err(), "two accounts cannot share a directory");
+        for (id, name) in [
+            ("bad id", Some("Bad")),
+            ("work-3", None),
+            ("work-4", Some("   ")),
+        ] {
+            assert!(
+                add_account_in(
+                    dir.path(),
+                    AccountChange {
+                        harness: "claude-code".into(),
+                        id: id.into(),
+                        name: name.map(str::to_owned),
+                        config_dir: Some(own.to_string_lossy().into_owned()),
+                    },
+                )
+                .is_err(),
+                "{id} / {name:?} must be rejected"
+            );
+        }
+        assert!(
+            add_account_in(
+                dir.path(),
+                AccountChange {
+                    harness: "codex".into(),
+                    id: "work-5".into(),
+                    name: Some("Work 5".into()),
+                    config_dir: Some(own.to_string_lossy().into_owned()),
+                },
+            )
+            .is_err(),
+            "only Claude Code has named logins for now"
+        );
+        assert_eq!(default_config_dir("paral-2"), "~/.claude-paral-2");
+
+        let removed = remove_account_in(dir.path(), "claude-code", "work").unwrap();
+        assert_eq!(removed.id, "work");
+        assert!(own.is_dir(), "removing an account never deletes its login");
+        assert_eq!(load_accounts_in(dir.path()).len(), 1);
+        assert!(remove_account_in(dir.path(), "claude-code", "work").is_err());
+    }
+
+    #[test]
+    fn the_default_claude_directory_is_not_an_account() {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let Some(home) = home else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let rejected = add_account_in(
+            dir.path(),
+            AccountChange {
+                harness: "claude-code".into(),
+                id: "default".into(),
+                name: Some("Default".into()),
+                config_dir: Some(home.join(".claude").to_string_lossy().into_owned()),
+            },
+        );
+        assert!(
+            rejected.is_err(),
+            "the default login is not an account of its own"
+        );
+        assert!(load_accounts_in(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn project_config_cannot_add_accounts() {
+        let workspace = tempfile::tempdir().unwrap();
+        let project = workspace.path().join(".rustcode");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("config.toml"),
+            "[[harness_accounts]]\nid = \"evil\"\nharness = \"claude-code\"\nname = \"Evil\"\nconfig_dir = \"/tmp/evil\"\n",
+        )
+        .unwrap();
+        let (_, _, config) = crate::config::load_config_for_workspace(workspace.path());
+        assert!(
+            config.harness_accounts.is_empty(),
+            "a checked-out project must not choose where a thread signs in"
+        );
     }
 
     #[test]

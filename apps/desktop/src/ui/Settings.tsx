@@ -515,7 +515,10 @@ function ConnectionsPage() {
           <Row title="Not signed in" subtitle="Run: gh auth login" />
         )}
       </Group>
-      <Group title="Model accounts" footer="Sign in or switch accounts with `rustcode auth` in a terminal.">
+      <Group
+        title="Model accounts"
+        footer="Sign in or out with `/login` in a thread, or switch with the model picker's Account row."
+      >
         {data.accounts.length ? (
           data.accounts.map((a, i) => (
             <Row
@@ -523,7 +526,7 @@ function ConnectionsPage() {
               title={a.display || a.provider}
               subtitle={`${a.provider} · ${a.method}${a.needsSignIn ? " · sign in again" : ""}`}
             >
-              {a.active && <span className="text-caption text-success">Active</span>}
+              {a.active && !a.needsSignIn && <span className="text-caption text-success">Active</span>}
             </Row>
           ))
         ) : (

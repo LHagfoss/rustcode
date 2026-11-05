@@ -10,8 +10,13 @@
 
 use super::rate_limits::RateLimitWindow;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+/// The Keychain item Claude Code keeps the default login in.
+const DEFAULT_KEYCHAIN_ITEM: &str = "Claude Code-credentials";
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const FRESH: Duration = Duration::from_secs(60);
@@ -37,24 +42,39 @@ pub(crate) enum ClaudeUsage {
     Unavailable(String),
 }
 
-static CACHE: Mutex<Option<(Instant, ClaudeUsage)>> = Mutex::new(None);
+/// One entry per config directory: `None` is the default login, `Some` a
+/// named account's own `CLAUDE_CONFIG_DIR`, whose numbers are its own.
+static CACHE: Mutex<Option<HashMap<Option<PathBuf>, (Instant, ClaudeUsage)>>> = Mutex::new(None);
 
-/// The account's plan windows, from the cache while fresh.
-pub(crate) async fn usage() -> ClaudeUsage {
-    if let Some((at, cached)) = CACHE.lock().ok().and_then(|cache| cache.clone())
-        && at.elapsed() < FRESH
-    {
+/// The plan windows of the login in `config_dir` (the default login when
+/// `None`), from the cache while fresh. Two accounts never share numbers.
+pub(crate) async fn usage(config_dir: Option<&Path>) -> ClaudeUsage {
+    let key = config_dir.map(Path::to_path_buf);
+    if let Some(cached) = cached(&key) {
         return cached;
     }
-    let read = read().await;
-    if let Ok(mut cache) = CACHE.lock() {
-        *cache = Some((Instant::now(), read.clone()));
-    }
+    let read = read(config_dir).await;
+    remember(key, &read);
     read
 }
 
-async fn read() -> ClaudeUsage {
-    let Some(credentials) = credentials().await else {
+/// The fresh cached answer for one config directory, if there is one.
+fn cached(key: &Option<PathBuf>) -> Option<ClaudeUsage> {
+    let cache = CACHE.lock().ok()?;
+    let (at, usage) = cache.as_ref()?.get(key)?;
+    (at.elapsed() < FRESH).then(|| usage.clone())
+}
+
+fn remember(key: Option<PathBuf>, usage: &ClaudeUsage) {
+    if let Ok(mut cache) = CACHE.lock() {
+        cache
+            .get_or_insert_with(HashMap::new)
+            .insert(key, (Instant::now(), usage.clone()));
+    }
+}
+
+async fn read(config_dir: Option<&Path>) -> ClaudeUsage {
+    let Some(credentials) = credentials(config_dir).await else {
         return ClaudeUsage::NotSignedIn;
     };
     let Some(token) = access_token(&credentials, chrono::Utc::now().timestamp_millis()) else {
@@ -101,17 +121,56 @@ async fn read() -> ClaudeUsage {
     }
 }
 
-/// Claude Code's stored sign-in, as JSON.
-async fn credentials() -> Option<Value> {
+/// The Keychain item a config directory's sign-in is kept in: the default
+/// item for the default login, else `Claude Code-credentials-` and the first
+/// 8 hex digits of the directory path's SHA-256. Claude Code does not document
+/// the name; a missing item is reported as no sign-in, never guessed at.
+pub(crate) fn keychain_item_name(config_dir: &Path) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(config_dir.to_string_lossy().as_bytes());
+    let prefix = digest
+        .iter()
+        .take(4)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{DEFAULT_KEYCHAIN_ITEM}-{prefix}")
+}
+
+/// Whether the Keychain holds a sign-in for `config_dir`. Reads no secret:
+/// only asks whether the item exists.
+pub(crate) fn keychain_item_exists(config_dir: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
-        let output = tokio::process::Command::new("/usr/bin/security")
+        return std::process::Command::new("/usr/bin/security")
             .args([
                 "find-generic-password",
                 "-s",
-                "Claude Code-credentials",
-                "-w",
+                &keychain_item_name(config_dir),
             ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = config_dir;
+        false
+    }
+}
+
+/// Claude Code's stored sign-in, as JSON, for `config_dir` (the default login
+/// when `None`).
+async fn credentials(config_dir: Option<&Path>) -> Option<Value> {
+    #[cfg(target_os = "macos")]
+    {
+        let item = config_dir.map_or_else(
+            || DEFAULT_KEYCHAIN_ITEM.to_owned(),
+            |dir| keychain_item_name(dir),
+        );
+        let output = tokio::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", &item, "-w"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output()
@@ -122,13 +181,26 @@ async fn credentials() -> Option<Value> {
         {
             return Some(value);
         }
+        // A named account whose Keychain item is missing is reported as not
+        // signed in, after its own credentials file had its chance below.
+        let file = config_dir.map(Path::to_path_buf).or_else(default_dir);
+        return read_credentials_file(file?).await;
     }
-    let dir = crate::shell_env::env_var("CLAUDE_CONFIG_DIR")
+    #[cfg(not(target_os = "macos"))]
+    {
+        let dir = config_dir.map(Path::to_path_buf).or_else(default_dir)?;
+        read_credentials_file(dir).await
+    }
+}
+
+fn default_dir() -> Option<PathBuf> {
+    crate::shell_env::env_var("CLAUDE_CONFIG_DIR")
         .filter(|dir| !dir.trim().is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".claude"))
-        })?;
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+}
+
+async fn read_credentials_file(dir: PathBuf) -> Option<Value> {
     let text = tokio::fs::read_to_string(dir.join(".credentials.json"))
         .await
         .ok()?;
@@ -194,6 +266,54 @@ mod tests {
         assert_eq!(windows[1].label, "Weekly");
         assert_eq!(windows[2].label, "Weekly · Sonnet");
         assert_eq!(windows[2].window.resets_at, None);
+    }
+
+    #[test]
+    fn each_config_directory_has_its_own_answer() {
+        let first = Some(PathBuf::from("/tmp/claude-account-a"));
+        let second = Some(PathBuf::from("/tmp/claude-account-b"));
+        remember(
+            first.clone(),
+            &ClaudeUsage::Windows {
+                plan: Some("max".into()),
+                windows: Vec::new(),
+            },
+        );
+        remember(second.clone(), &ClaudeUsage::NotSignedIn);
+        assert!(matches!(cached(&first), Some(ClaudeUsage::Windows { .. })));
+        assert_eq!(cached(&second), Some(ClaudeUsage::NotSignedIn));
+        // The default login is its own entry too.
+        assert_eq!(cached(&None), None);
+        remember(None, &ClaudeUsage::Unavailable("no".into()));
+        assert_eq!(cached(&None), Some(ClaudeUsage::Unavailable("no".into())));
+        assert!(
+            matches!(cached(&first), Some(ClaudeUsage::Windows { .. })),
+            "one account's answer never replaces another's"
+        );
+    }
+
+    #[test]
+    fn the_keychain_item_is_named_after_the_directory() {
+        let account = std::path::Path::new("/Users/me/.claude-paral-2");
+        let name = keychain_item_name(account);
+        assert!(name.starts_with("Claude Code-credentials-"), "{name}");
+        let suffix = name.trim_start_matches("Claude Code-credentials-");
+        assert_eq!(suffix.len(), 8, "{name}");
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()), "{name}");
+        assert_eq!(
+            name,
+            keychain_item_name(account),
+            "the same directory always names the same item"
+        );
+        assert_ne!(
+            name,
+            keychain_item_name(std::path::Path::new("/Users/me/.claude-paral-3")),
+            "another directory is another login"
+        );
+        // Pinned: Claude Code derives it from the directory path's SHA-256.
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(account.to_string_lossy().as_bytes());
+        assert_eq!(suffix, &format!("{digest:x}")[..8]);
     }
 
     #[test]

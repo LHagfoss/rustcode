@@ -93,6 +93,10 @@ All methods are on the client's existing `rustcode --acp` connection.
     "models": [{ "id": "gpt-6-luna", "name": "gpt-6-luna",
                  "efforts": ["low", "medium", "high"], "default_effort": "medium" }],
     "last": { "model": "gpt-6-luna", "effort": "high" },  // last new-thread choice, or null
+    "accounts": [{              // named logins of this harness; [] for most
+      "id": "paral-2", "name": "Paral 2",
+      "config_dir": "~/.claude-paral-2", "auth": "ok" | "unknown"
+    }],
     "error": null               // last detection/start error, if any
   }],
   "default": { "harness": "rustcode", "model": null, "effort": null },
@@ -185,6 +189,69 @@ new threads start on; that stays `[harness_defaults].harness`. A known
 harness without an entry gets one with `enabled = false` (as it was);
 `rustcode` gets an entry of its own. An unknown harness is `invalid_params`.
 
+### Named accounts (Claude Code)
+
+A harness may have named logins, each only a config directory of its own; for
+Claude Code that is `CLAUDE_CONFIG_DIR`. RustCode names the directory and
+starts the harness with it. It never reads, copies, stores or proxies the
+tokens in it, except the read-only plan-usage lookup below. Accounts are
+chosen by hand per thread: there is no automatic switching, rotation or
+pooling, and each login keeps its own plan and limits. Only `claude-code` has
+accounts for now; `[[harness_accounts]]` is shaped for others.
+
+```toml
+[[harness_accounts]]
+id = "paral-2"                 # letters, digits, '-', '_' or '.'
+harness = "claude-code"
+name = "Paral 2"
+config_dir = "~/.claude-paral-2"  # optional; defaults to ~/.claude-<id>
+```
+
+The engine creates the directory when it is missing and refuses `~/.claude`
+(the default login is not an account). The section is read from the user
+config only: a checked-out project cannot choose where a thread signs in.
+
+| request | answer |
+| --- | --- |
+| `_rustcode/harnesses/accounts/add` `{ "harness": "claude-code", "id": "paral-2", "name": "Paral 2", "config_dir": "~/.claude-paral-2" }` | `HarnessSnapshot` |
+| `_rustcode/harnesses/accounts/remove` `{ "harness": "claude-code", "id": "paral-2" }` | `HarnessSnapshot` |
+| `_rustcode/harnesses/accounts/check` `{}` | `HarnessSnapshot`, each account's `auth` read again |
+
+*Remove* drops the config entry only: the directory, with the login and the
+conversations in it, stays on disk, and the request is refused while a live
+thread runs on that account. Threads that ran on it stay readable: they open
+and replay their history, and only their next prompt reports the missing
+account (they can be moved to another account or the default login). `auth` for an account means its own credentials
+exist (`<dir>/.credentials.json`, or on macOS the Keychain item its directory
+names); `unknown` means they could not be found cheaply. `check` looks the
+macOS item up too, without reading the secret. Nothing is started to answer
+either.
+
+A thread picks an account in `session/new`'s `_meta.rustcode.account`, next
+to `harness`, or on `_rustcode/session/harness` when it moves to another
+login. An unknown account id is an error, never a quiet fall back to the
+default login. Moving an idle thread to another account is exactly a harness
+switch: its native session id is cleared, the handoff marker is recorded, the
+new account's process starts, and the next prompt carries the conversation so
+far as a summary (the conversation lives in the other directory). A running
+turn is refused. The thread's `harness.json` keeps the account, so a resume
+starts in the same directory.
+
+The started process gets `CLAUDE_CONFIG_DIR` only; `HOME` is untouched (it
+would hide the macOS Keychain login) and `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are removed from that
+child, so a login-shell variable cannot override the chosen login.
+
+Plan usage is read per account, but only when a client asks explicitly:
+`_rustcode/usage/plans` with `claudeAccounts: true` returns one Claude row per
+login (`account` and its name), which Settings › Usage sends when the page is
+shown or refreshed. The background poll reads only the default login, so
+opening Settings › Agents never reads an unseen account's Keychain item. On
+macOS a named account's
+Keychain item is `Claude Code-credentials-` plus the first 8 hex digits of
+the SHA-256 of its directory path; that name is undocumented, and a missing
+item is reported as not signed in rather than guessed at.
+
 ### `_rustcode/onboarding/complete` `{}` → `HarnessSnapshot`
 
 Marks first-run onboarding done (`onboarded: true`).
@@ -196,6 +263,9 @@ Marks first-run onboarding done (`onboarded: true`).
 ```jsonc
 "_meta": { "rustcode": { "harness": "codex", "model": "gpt-6-luna", "effort": "low" } }
 ```
+
+For a harness with named accounts, `"account": "paral-2"` picks one; without
+it the harness's default login runs, exactly as before accounts existed.
 
 No `harness` (or `"rustcode"`) starts a built-in thread, exactly as before.
 A missing `model` or `effort` falls back, in order, to the harness's last
@@ -211,8 +281,11 @@ starts the harness before it answers, so a harness that cannot start fails
 response carries:
 
 ```jsonc
-"_meta": { "rustcode": { "harness": { "id": "codex", "capabilities": { … } } } }
+"_meta": { "rustcode": { "harness": { "id": "codex", "capabilities": { … } },
+                         "account": { "id": "paral-2", "name": "Paral 2" } } }
 ```
+
+`account` is there only for a thread on a named login.
 
 (built-in threads carry it too, on `session/new` and `session/load`, with
 `id: "rustcode"`) and the usual `configOptions` (`model`, `effort` when supported), so model
@@ -376,6 +449,13 @@ name = "My agent"
 kind = "acp"
 command = ["my-agent", "--acp"]
 enabled = true
+
+# A named login of a harness, each its own config directory (Claude Code only).
+[[harness_accounts]]
+id = "paral-2"
+harness = "claude-code"
+name = "Paral 2"
+config_dir = "~/.claude-paral-2"
 ```
 
 Known harnesses (`rustcode`, `codex`, `claude-code`, `gemini`, `opencode`)
@@ -384,6 +464,10 @@ overridden with `command`. An entry without `enabled` is on. `model` and
 `effort` are optional on any entry (older configs without them load
 unchanged). Both sections are optional and only read from the user config: a
 project's `.rustcode/config.toml` cannot add a harness or change a command.
+
+Named accounts are chosen by hand. There is no pooling or rotation: a
+thread uses the account it was given until the user picks another, and
+limits are that account's own.
 
 The terminal UI starts every thread on the built-in harness with its own
 `[default]` model and does not read the per-harness choice; it has no
@@ -407,7 +491,7 @@ choices in its own storage instead.
   harness enforces its own rules, and the client says so.
 - Permission requests from a harness go to the client unchanged; nothing is
   auto-approved unless the user picked a mode the harness enforces.
-- Thread metadata (harness id, native session id, cwd, title, model,
+- Thread metadata (harness id, account, native session id, cwd, title, model,
   effort, timestamps) is stored with the thread in
   `~/.config/rustcode/threads/…/harness.json`. The transcript is recorded in
   the thread's `history.json` too (the user's messages, the harness's

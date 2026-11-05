@@ -2,10 +2,10 @@
 // onboarding and Settings › Agents (docs/harnesses.md). RustCode never
 // signs in for a harness: "Sign in" shows the harness's own login command.
 
-import { Check, ChevronRight, Minus, RefreshCw, SquareTerminal } from "lucide-react";
+import { Check, ChevronRight, Minus, Plus, RefreshCw, SquareTerminal, X } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
-import { effortLabel, type Harness, type HarnessSnapshot } from "../acp/types";
+import { effortLabel, type Harness, type HarnessAccount, type HarnessSnapshot } from "../acp/types";
 import { canOpenTerminal, openInTerminal } from "../lib/native";
 import {
   capabilityRows,
@@ -18,11 +18,16 @@ import {
   validateDefault,
 } from "../state/harness";
 import {
+  accountSlug,
+  addHarnessAccount,
+  askConfirm,
+  checkHarnessAccounts,
   ensureHarnessModels,
   fetchHarnessModels,
   type NewThreadChoice,
   refreshHarnesses,
   removeHarness,
+  removeHarnessAccount,
   setHarnessEnabled,
   useApp,
 } from "../state/store";
@@ -76,6 +81,144 @@ function SignIn({ harness }: { harness: Harness }) {
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+/** The command that signs Claude Code in under the account's own directory. */
+export function accountLoginCommand(account: Pick<HarnessAccount, "config_dir">): string {
+  return `mkdir -p ${account.config_dir} && CLAUDE_CONFIG_DIR=${account.config_dir} claude auth login`;
+}
+
+/** The accounts' sign-in state, as the engine last read it. */
+function accountStatus(account: HarnessAccount): string {
+  return account.auth === "ok" ? "Signed in" : "Sign-in not found";
+}
+
+/**
+ * A harness's named logins: each its own config directory, added and
+ * removed by hand (`docs/harnesses.md`). RustCode never reads or copies their
+ * tokens; "Sign in" is Claude Code's own command, run in a terminal.
+ */
+export function AccountsList({ harness }: { harness: Harness }) {
+  const accounts = harness.accounts ?? [];
+  // Threads the list already knows about: no request, just a count for the
+  // remove dialog.
+  const threads = useApp((s) => s.sessions);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    const id = accountSlug(name);
+    if (!id) return;
+    setBusy(true);
+    const snapshot = await addHarnessAccount(harness.id, id, name.trim());
+    setBusy(false);
+    if (snapshot) {
+      setAdding(false);
+      setName("");
+    }
+  };
+  const refresh = async () => {
+    setBusy(true);
+    await checkHarnessAccounts();
+    setBusy(false);
+  };
+  const remove = (account: HarnessAccount) => {
+    const used = threads.filter(
+      (thread) => thread.harness === harness.id && thread.account === account.id,
+    ).length;
+    askConfirm({
+      title: `Remove the account “${account.name}”?`,
+      message:
+        `RustCode forgets the account. Its directory, ${account.config_dir}, stays on disk with the sign-in and conversations in it. ` +
+        `Threads on this account stay readable, but they need another account to continue.` +
+        (used ? ` ${used} thread${used === 1 ? "" : "s"} use${used === 1 ? "s" : ""} it now.` : ""),
+      action: "Remove account",
+      destructive: true,
+      run: () => void removeHarnessAccount(harness.id, account.id),
+    });
+  };
+  return (
+    <div className="ml-11 flex flex-col gap-2 rounded-lg border border-border/70 px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className="text-caption text-fg-muted">Accounts</span>
+        <span className="flex-1" />
+        <Action size="sm" quiet onClick={() => void refresh()} disabled={busy}>
+          {busy ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
+        </Action>
+      </div>
+      {accounts.length ? (
+        <ul className="flex flex-col gap-2">
+          {accounts.map((account) => (
+            <li key={account.id} className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-body">{account.name}</span>
+                <span
+                  className={cx(
+                    "shrink-0 text-caption",
+                    account.auth === "ok" ? "text-success" : "text-fg-faint",
+                  )}
+                >
+                  {accountStatus(account)}
+                </span>
+                <Tooltip label="Remove from RustCode; the directory stays">
+                  <button
+                    type="button"
+                    aria-label={`Remove the ${account.name} account`}
+                    onClick={() => remove(account)}
+                    className="text-fg-faint hover:text-danger"
+                  >
+                    <X size={12} />
+                  </button>
+                </Tooltip>
+              </div>
+              <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
+                <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
+                  {accountLoginCommand(account)}
+                </code>
+                <CopyButton text={accountLoginCommand(account)} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-caption text-fg-muted">
+          One login at a time. Add an account to run a thread on another Claude login; each keeps its own plan
+          and limits.
+        </p>
+      )}
+      {adding ? (
+        <div className="flex items-center gap-1.5">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void add();
+              if (e.key === "Escape") setAdding(false);
+            }}
+            placeholder="Name, e.g. Work"
+            aria-label="Account name"
+            className="h-7 min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 text-callout outline-none focus:border-accent"
+          />
+          <Action size="sm" onClick={() => void add()} disabled={busy || !accountSlug(name)}>
+            Add
+          </Action>
+          <Action size="sm" quiet onClick={() => setAdding(false)}>
+            Cancel
+          </Action>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="flex items-center gap-1 self-start text-caption text-accent hover:underline"
+        >
+          <Plus size={11} />
+          Add account
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -182,6 +325,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           <code className="selectable flex-1 truncate font-mono text-callout">{harness.install_hint}</code>
           <CopyButton text={harness.install_hint} />
         </div>
+      )}
+      {(harness.id === "claude-code" || (harness.accounts?.length ?? 0) > 0) && (
+        <AccountsList harness={harness} />
       )}
       {(result || harness.error) && (
         <div

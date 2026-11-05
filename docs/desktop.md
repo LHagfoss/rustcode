@@ -187,7 +187,20 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   card per harness with its mark, status and version, *Sign in* only until
   the harness is known to be signed in, *Check* (lists the models, the
   cheapest proof it runs) and the on/off switch; turning a harness on
-  checks it. The command and what it supports fold under *Details*.
+  checks it. The command and what it supports fold under *Details*. On the
+  Claude Code card, *Accounts* lists each named login (its own
+  `CLAUDE_CONFIG_DIR`) with its sign-in state, a copyable
+  `mkdir -p … && CLAUDE_CONFIG_DIR=… claude auth login`, *Refresh*, and a
+  remove that says the directory stays on disk. *Add account* asks only for a
+  name; the engine derives `~/.claude-<id>`. RustCode never reads or copies
+  those tokens. The model picker's *Account* row picks *Default login* or an
+  account for the thread: a new thread starts there, an idle thread moves to
+  it with the conversation so far as a summary, and a running thread shows it
+  disabled with the reason. The composer's model pill names the account when
+  it is not the default. Settings › Usage and the composer's plan meter show
+  one row (or meter) per account: a thread's meter never shows another
+  login's numbers. Separate accounts are chosen by hand, limits stay per
+  account, and there is no pooling.
 - **UI** (`src/ui/`): every colour, radius and shadow is a token from
   [design.md](design.md), defined once in `src/index.css` (the Tailwind
   `@theme` maps `--rc-*` variables to classes; the palette is switched

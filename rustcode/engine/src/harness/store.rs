@@ -11,6 +11,10 @@ const RECORD_FILE: &str = "harness.json";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HarnessRecord {
     pub harness: String,
+    /// The named account of that harness the thread runs on, when it runs on
+    /// one; its conversation lives in that account's config directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_session_id: Option<String>,
     pub cwd: PathBuf,
@@ -89,11 +93,34 @@ mod tests {
         save(&session_id, &record);
         assert_eq!(load(&session_id), Some(record));
 
+        let mut with_account = HarnessRecord::new("claude-code", PathBuf::from("/tmp/project"));
+        with_account.account = Some("paral-2".into());
+        save(&session_id, &with_account);
+        assert_eq!(load(&session_id), Some(with_account));
+
         let builtin = HarnessRecord::new("rustcode", PathBuf::from("/tmp"));
         save(&session_id, &builtin);
         assert!(
             load(&session_id).is_none(),
             "built-in threads have no record"
         );
+    }
+
+    #[test]
+    fn old_records_without_an_account_still_load() {
+        let record: HarnessRecord = serde_json::from_str(
+            r#"{"harness":"claude-code","cwd":"/tmp","created_at":"2026-01-01T00:00:00Z",
+                "updated_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(record.account, None);
+        let text = serde_json::to_string(&record).unwrap();
+        assert!(!text.contains("account"), "{text}");
+        let with = HarnessRecord {
+            account: Some("paral-2".into()),
+            ..record
+        };
+        let text = serde_json::to_string(&with).unwrap();
+        assert!(text.contains("\"account\":\"paral-2\""), "{text}");
     }
 }

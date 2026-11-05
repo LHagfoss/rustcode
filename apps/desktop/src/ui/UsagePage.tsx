@@ -6,7 +6,7 @@
 
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { parsePlans, planHarness, resetLabel, type UsagePlan } from "../acp/rustcode";
+import { parsePlans, planOf, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import {
   CLAUDE_USAGE_DEFAULT,
@@ -31,7 +31,11 @@ export function UsagePage() {
   const load = useCallback(async (withClaude: boolean) => {
     setLoading(true);
     try {
-      const answer = parsePlans(await request(Method.usagePlans, { claude: withClaude }, 20_000));
+      // Showing this page (or Refresh) is the explicit consent that also
+      // reads each account's own sign-in; the background poll never does.
+      const answer = parsePlans(
+        await request(Method.usagePlans, { claude: withClaude, claudeAccounts: withClaude }, 20_000),
+      );
       setPlans(answer);
       // The same answer fills the cache the composer's meter reads, and asking
       // here is what lets the background poll read Claude again after a pause.
@@ -94,7 +98,7 @@ export function UsagePage() {
               }
             />
           )}
-          {planHarness(p.id) === "claude-code" && (
+          {planOf(p) === "claude-code" && !p.account && (
             <Row
               title="Show Claude usage in the composer"
               reset={

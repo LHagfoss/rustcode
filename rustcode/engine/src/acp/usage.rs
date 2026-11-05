@@ -246,6 +246,11 @@ pub(crate) async fn harness_limits(harness: &str) -> serde_json::Value {
 pub(crate) struct UsagePlansRequest {
     #[serde(default)]
     pub claude: bool,
+    /// Read each named Claude account's own sign-in too. Only an explicit
+    /// look in Settings › Usage asks for that, never the background poll: an
+    /// unseen Keychain item can raise a macOS prompt.
+    #[serde(default)]
+    pub claude_accounts: bool,
 }
 
 /// Answer `_rustcode/usage/plans`: `{plans: [{id, name, status, plan?, error?,
@@ -278,24 +283,76 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
         Err(CodexUsageError::SignedOut) => codex("signedOut", None, vec![]),
         Err(CodexUsageError::Unavailable(error)) => codex("unavailable", Some(&error), vec![]),
     };
-    let claude = if request.claude {
-        use crate::provider_auth::claude_usage::{ClaudeUsage, usage};
-        match usage().await {
-            ClaudeUsage::Windows { plan, windows } => serde_json::json!({
-                "id": "claude", "name": "Claude", "via": "Claude Code", "status": "ok", "plan": plan,
-                "windows": windows.iter().map(|w| window(w.label, &w.window)).collect::<Vec<_>>(),
-            }),
-            ClaudeUsage::NotSignedIn => {
-                serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code", "status": "signedOut", "windows": []})
-            }
-            ClaudeUsage::Unavailable(error) => {
-                serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code", "status": "unavailable", "error": error, "windows": []})
-            }
+    // One Claude row per login: the default one, and each named account of
+    // its own. Their windows are per account; RustCode only reads them.
+    let mut claude = Vec::new();
+    if request.claude {
+        use crate::provider_auth::claude_usage::usage;
+        claude.push(claude_row("claude", "Claude", None, usage(None).await));
+        let accounts = if request.claude_accounts {
+            crate::harness::config::config_dir()
+                .map(|dir| crate::harness::config::load_accounts_in(&dir))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for account in accounts
+            .iter()
+            .filter(|account| account.harness == "claude-code")
+        {
+            let id = format!("claude:{}", account.id);
+            let dir = account.resolved_dir();
+            claude.push(claude_row(
+                &id,
+                account.display_name(),
+                Some(&account.id),
+                usage(Some(&dir)).await,
+            ));
         }
     } else {
-        serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code", "status": "notAsked", "windows": []})
+        claude.push(
+            serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code",
+                               "harness": "claude-code", "account": null,
+                               "status": "notAsked", "windows": []}),
+        );
+    }
+    let mut plans = claude;
+    plans.push(codex);
+    serde_json::json!({ "plans": plans })
+}
+
+fn claude_row(
+    id: &str,
+    name: &str,
+    account: Option<&str>,
+    usage: crate::provider_auth::claude_usage::ClaudeUsage,
+) -> serde_json::Value {
+    use crate::provider_auth::claude_usage::ClaudeUsage;
+    let row = |status: &str, error: Option<&str>, plan: Option<&str>, windows: Vec<_>| {
+        serde_json::json!({
+            "id": id, "name": name, "via": "Claude Code", "harness": "claude-code",
+            "account": account, "status": status, "error": error,
+            "plan": plan, "windows": windows,
+        })
     };
-    serde_json::json!({ "plans": [claude, codex] })
+    match usage {
+        ClaudeUsage::Windows { plan, windows } => {
+            let windows: Vec<_> = windows
+                .iter()
+                .map(|w| {
+                    serde_json::json!({
+                        "label": w.label,
+                        "usedPercent": w.window.used_percent,
+                        "windowMinutes": w.window.window_minutes,
+                        "resetsAt": w.window.resets_at,
+                    })
+                })
+                .collect();
+            row("ok", None, plan.as_deref(), windows)
+        }
+        ClaudeUsage::NotSignedIn => row("signedOut", None, None, vec![]),
+        ClaudeUsage::Unavailable(error) => row("unavailable", Some(&error), None, vec![]),
+    }
 }
 
 fn window_label(minutes: Option<u64>) -> &'static str {
