@@ -112,6 +112,13 @@ describe("displayTool", () => {
     ).toBe("Fanned out to 2 harnesses");
   });
 
+  test("a summary cut at an emoji drops it whole rather than ending in half of one", () => {
+    const summary = displayTool("mcp__rustcode__start_session", {
+      prompt: `${"a".repeat(58)}👍🏽 and more`,
+    }).summary;
+    expect(summary).toBe(`${"a".repeat(58)}…`);
+  });
+
   test("a wait speaks in the tense its row is in", () => {
     const input = { link_ids: ["o/1", "o/2", "o/3"] };
     expect(displayTool("mcp__rustcode__wait_session", input).title).toBe("Waited for 3 threads");

@@ -26,6 +26,7 @@ import {
   repositoryOf,
 } from "../acp/rustcode";
 import { Method } from "../acp/types";
+import { clip } from "../lib/clip";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { gitChanges } from "../lib/native";
 import { type Piece, runWordMarks } from "../lib/wordDiff";
@@ -504,7 +505,7 @@ export function Review({ threadId }: { threadId: string }) {
               { value: "", label: "Turn…" },
               ...checkpoints.map((c) => ({
                 value: String(c.turn),
-                label: `${c.turn}. ${c.prompt.slice(0, 40)}`,
+                label: `${c.turn}. ${clip(c.prompt, 40)}`,
               })),
             ]}
           />

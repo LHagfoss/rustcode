@@ -14,6 +14,14 @@ test("a message that opens with a blank line still names its thread", () => {
   expect(titleFrom("\n   \n", 60)).toBe("");
 });
 
+test("a cut inside an emoji drops it whole, so a title never ends in half a character", () => {
+  const family = "👨‍👩‍👧‍👦";
+  // 58 units, then an 11-unit family: the cut at 59 lands inside it.
+  expect(titleFrom(`${"x".repeat(58)}${family} and more`, 60)).toBe(`${"x".repeat(58)}…`);
+  // Easy to miss: an emoji just before the cut is kept whole.
+  expect(titleFrom(`${"x".repeat(50)}🚀${"y".repeat(20)}`, 60)).toBe(`${"x".repeat(50)}🚀${"y".repeat(7)}…`);
+});
+
 test("a child is named by its parent, or by the task when the parent gave no title", () => {
   expect(childTitle("Fix the inset", "do whatever")).toBe("Fix the inset");
   expect(childTitle(undefined, "Add a subtract(a, b) function to calc.py")).toBe(
