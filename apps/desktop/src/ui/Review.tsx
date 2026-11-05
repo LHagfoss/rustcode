@@ -28,6 +28,7 @@ import {
 import { Method } from "../acp/types";
 import { clip } from "../lib/clip";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
+import { comparisonBase, shortRef } from "../lib/gitRef";
 import { gitChanges } from "../lib/native";
 import { type Piece, runWordMarks } from "../lib/wordDiff";
 import {
@@ -429,6 +430,9 @@ export function Review({ threadId }: { threadId: string }) {
   const tree = useMemo(() => fileTree((files ?? []).map((f) => f.path)), [files]);
   const file = files?.find((f) => f.path === selected);
   const label = sourceLabel(source, wt?.branch);
+  // The branch's counts compare against the base its worktree was made from; the
+  // other scopes name their comparison themselves (HEAD, a turn, a pull request).
+  const base = source.kind === "branch" ? comparisonBase(wt) : undefined;
   const sources: { value: string; label: string }[] = [
     { value: "uncommitted", label: "Uncommitted" },
     ...(wt ? [{ value: "branch", label: "Branch" }] : []),
@@ -547,8 +551,13 @@ export function Review({ threadId }: { threadId: string }) {
           className="w-[260px] shrink-0 overflow-y-auto border-border border-r px-2 pb-4 max-[1099px]:hidden"
         >
           <div className="flex h-9 items-center gap-2 px-2">
-            <span className="font-semibold text-body">Files</span>
-            <span className="text-caption text-fg-faint tabular">{files?.length ?? 0}</span>
+            <span className="shrink-0 font-semibold text-body">Files</span>
+            <span className="shrink-0 text-caption text-fg-faint tabular">{files?.length ?? 0}</span>
+            {base && (
+              <Tooltip label={base}>
+                <span className="min-w-0 truncate text-caption text-fg-faint">vs {shortRef(base)}</span>
+              </Tooltip>
+            )}
           </div>
           {error && <p className="px-2 py-3 text-callout text-fg-muted">{error}</p>}
           {files && !files.length && (

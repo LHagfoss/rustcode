@@ -46,7 +46,10 @@ export interface Worktree {
   path: string;
   branch: string;
   repo: string;
+  /** The commit it branched from. */
   base?: string;
+  /** The branch (or ref) that commit was resolved from, as the engine recorded it. */
+  baseRef?: string;
   createdAt?: number;
   dirty?: boolean;
   ahead?: number;
@@ -64,6 +67,7 @@ export function parseWorktree(value: Json | undefined): Worktree | undefined {
     branch: str(o.branch) ?? "",
     repo: str(o.repo) ?? "",
     base: str(o.base),
+    baseRef: str(o.base_ref),
     createdAt: created ? Date.parse(created) || undefined : undefined,
     dirty: bool(o.dirty),
     ahead: num(o.ahead),

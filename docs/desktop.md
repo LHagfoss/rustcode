@@ -572,7 +572,8 @@ composer's keys stay outside the table.
   checkpoint (`_rustcode/checkpoints/list|diff`) with *Restore…* (files only,
   or files and conversation when the harness rewinds). The Review screen
   (thread menu, header menu or ⌘K) shows the uncommitted changes, the
-  worktree branch since its base, one turn, or the branch's open pull
+  worktree branch since its base (the base named beside the file count, as
+  `vs main`, with the full ref on hover), one turn, or the branch's open pull
   request as a file tree and a unified or side-by-side diff coloured by
   Shiki. Click a line number to draft a comment; the drafts go to the agent
   as one message, or to the pull request as one review with line comments

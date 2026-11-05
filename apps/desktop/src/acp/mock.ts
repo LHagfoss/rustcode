@@ -42,6 +42,7 @@ interface MockWorktree {
   branch: string;
   repo: string;
   base: string;
+  base_ref?: string;
   created_at: string;
   dirty: boolean;
   ahead: number;
@@ -430,6 +431,7 @@ function seedThreads(): MockThread[] {
         branch: "feat/login-form",
         repo: "/Users/you/code/rustcode",
         base: "c1ace820",
+        base_ref: "origin/main",
         created_at: new Date(minutes(45)).toISOString(),
         dirty: true,
         ahead: 2,
@@ -1510,6 +1512,7 @@ export class MockEngine {
       branch: name,
       repo,
       base: "c1ace820",
+      base_ref: "origin/main",
       created_at: new Date().toISOString(),
       dirty: false,
       ahead: 0,
