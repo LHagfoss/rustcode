@@ -24,9 +24,9 @@ const Review = lazy(() => import("./ui/Review").then((m) => ({ default: m.Review
 const Compare = lazy(() => import("./ui/Compare").then((m) => ({ default: m.Compare })));
 
 /**
- * Paints the theme on :root (lib/themes.ts) whenever the mode, the picked
- * theme, the engine's themes or the system appearance change. It subscribes
- * outside React, so a theme change re-renders nothing.
+ * Paints the appearance on :root (lib/themes.ts) whenever the mode, the picked
+ * theme, the engine's themes, the system appearance, the font or the chat width
+ * change. It subscribes outside React, so a theme change re-renders nothing.
  */
 function useTheme() {
   useEffect(() => {
@@ -38,6 +38,7 @@ function useTheme() {
       applyTheme(theme);
       document.documentElement.dataset.theme = mode;
       document.documentElement.dataset.font = s.roundedFont ? "rounded" : "standard";
+      document.documentElement.dataset.chatWidth = s.chatWidth;
     };
     paint();
     media.addEventListener("change", paint);
@@ -46,7 +47,8 @@ function useTheme() {
         s.theme !== prev.theme ||
         s.themeActive !== prev.themeActive ||
         s.themes !== prev.themes ||
-        s.roundedFont !== prev.roundedFont
+        s.roundedFont !== prev.roundedFont ||
+        s.chatWidth !== prev.chatWidth
       )
         paint();
     });

@@ -181,9 +181,12 @@ stacked on the first, no blur on a pane or a scrolling row.
 
 Tailwind's 4px grid. Common steps: 4 (icon to label), 8 (between controls
 in a row), 12 (card padding block), 14 (card padding inline), 16 (between
-groups), 24 (between sections). The chat lane is **736px**
-(`--rc-chat-content-max-width`, 46rem) for the transcript's rows and the
+groups), 24 (between sections). The chat lane is **832px**
+(`--rc-chat-content-max-width`, 52rem) for the transcript's rows and the
 composer alike, inset by a 12px gutter, 20px from the `sm` breakpoint.
+Settings › Chat › Chat width moves that one cap and nothing else: Wide is
+72rem, Full is the pane's own width (the details card then overlays the
+lane, as it does on a narrow window).
 
 ## Type
 

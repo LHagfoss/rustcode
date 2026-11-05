@@ -201,9 +201,18 @@
   --rc-composer-radius: calc(var(--rc-radius-2xl) + 4px);
 }
 
-/* The chat lane: the transcript's rows and the composer share one measure (docs/design.md). */
+/* The chat lane: the transcript's rows and the composer share one measure (docs/design.md).
+   Wider settings move the cap only (Settings › Chat); "full" lets the pane decide. */
 :root {
-  --rc-chat-content-max-width: 46rem;
+  --rc-chat-content-max-width: 52rem;
+}
+
+:root[data-chat-width="wide"] {
+  --rc-chat-content-max-width: 72rem;
+}
+
+:root[data-chat-width="full"] {
+  --rc-chat-content-max-width: 100%;
 }
 
 :root[data-radius="sharp"] {
