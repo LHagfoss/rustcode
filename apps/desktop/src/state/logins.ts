@@ -4,8 +4,10 @@
 // sign-in command (`auth_probe: None` in `rustcode/engine/src/harness/mod.rs`),
 // so its `auth` is always `unknown`, signed in or not. The plan read
 // (`_rustcode/usage/plans`) is what reports a login as signed out: the default
-// login every few minutes while the composer's meter is on, and each named
-// account's own row when Settings › Usage is shown or refreshed.
+// login and the account of the thread on screen every few minutes while the
+// composer's meter is on, and each named account's own row when Settings › Usage
+// is shown or refreshed. An answer often holds one login's row only, so a row
+// that is absent says nothing about that login.
 
 import { harnessPlanKey, planKey, planOf, type UsagePlan } from "../acp/rustcode";
 import type { Harness, HarnessAccount } from "../acp/types";

@@ -310,7 +310,10 @@ composer's keys stay outside the table.
   (5-hour, weekly, weekly per model), read-only and never refreshed
   (`provider_auth/claude_usage.rs`). Claude is read only after the user
   presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
-  allow Keychain access. Each source is cached a minute.
+  allow Keychain access. Each source is cached a minute. Showing the page
+  reads every Claude login; the background reads one at a time, the account
+  of the thread on screen (`claudeAccount`), and stops reading a login whose
+  Keychain read was denied until the user looks again.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
   and `PlanUsageMeter`: a ring filling with the context window in use, and
   the plan's shortest window from `_rustcode/usage/limits` as a short bar
@@ -321,10 +324,13 @@ composer's keys stay outside the table.
   bar opens Settings › Usage (the page's entry in the app now that the
   sidebar's footer has no Usage button). Hovering the
   bar opens every window at once with a bar, quarter ticks and the time to
-  its reset. The plan numbers refresh on hover, every 5 minutes while the
-  app is in front and just after a window resets; a failed refresh keeps
-  the last numbers and says so. A new thread shows the limits the last
-  thread learnt. The chat header no longer repeats them.
+  its reset. The plan numbers refresh on hover, when a thread is selected,
+  when a turn in it ends, every 3 minutes while the app is in front and just
+  after a window resets; a failed refresh keeps the last numbers and says so.
+  Each login has its own numbers: the meter shows the account the thread runs
+  on, read when the thread first opens, never another login's. A new thread
+  shows the limits the last thread learnt. The chat header no longer repeats
+  them.
 - **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
   model has the `fast` option) and the model with its effort on one line;
   the model's name drills into the list. Effort is a slider with a dot per

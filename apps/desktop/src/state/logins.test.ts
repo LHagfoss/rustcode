@@ -81,6 +81,21 @@ describe("signed out logins", () => {
     expect(newThreadAccountOn(claude([account("work")]), null, signedOutFrom([denied]))).toBeNull();
   });
 
+  test("an answer that read one account says nothing about the logins it skipped", () => {
+    const before = { "claude-code": true, "claude-code#home": true };
+    // The app reads one login at a time: the rows of the others are absent, and
+    // the default login's row says it was not asked.
+    const record = signedOutFrom(
+      [plan({ status: "notAsked" }), plan({ id: "claude:work", account: "work", status: "ok" })],
+      before,
+    );
+    expect(record).toEqual(before);
+    // A row that is there is still read: that account signed out.
+    expect(
+      signedOutFrom([plan({ id: "claude:work", account: "work", status: "signedOut" })], before),
+    ).toEqual({ ...before, "claude-code#work": true });
+  });
+
   test("keeps each login apart", () => {
     const record = signedOutFrom([
       plan({ id: "claude:work", account: "work", status: "ok" }),
@@ -171,6 +186,16 @@ describe("Settings › Usage groups", () => {
   test("drops nothing when the meter is off and the default login was not read", () => {
     const rows = usageRows([plan({ status: "notAsked" }), plan({ id: "claude:work", account: "work" })]);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude", "claude:work"]);
+  });
+
+  test("draws only the accounts an answer read", () => {
+    // One account at a time: the page's rows are what came back, and the
+    // switch lands in the first Claude group that is there.
+    const rows = usageRows([plan({ id: "claude:work", account: "work" })]);
+    expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
+    expect(rows.switchIn).toBe("claude:work");
+    // A row the answer skipped is not reported as signed out, so nothing is dropped.
+    expect(rows.plans).toHaveLength(1);
   });
 
   test("draws the switch once, in the first remaining Claude group", () => {

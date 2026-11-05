@@ -251,15 +251,19 @@ that same first login (`apps/desktop/src/state/logins.ts`). Claude Code has no
 cheap sign-in command, so its harness `auth` says `unknown` either way; what
 reports a login as signed out is the plan read described below.
 
-Plan usage is read per account, but only when a client asks explicitly:
-`_rustcode/usage/plans` with `claudeAccounts: true` returns one Claude row per
-login (`account` and its name), which Settings › Usage sends when the page is
-shown or refreshed. The background poll reads only the default login, so
-opening Settings › Agents never reads an unseen account's Keychain item. On
-macOS a named account's
-Keychain item is `Claude Code-credentials-` plus the first 8 hex digits of
-the SHA-256 of its directory path; that name is undocumented, and a missing
-item is reported as not signed in rather than guessed at.
+Plan usage is read per account, one login at a time:
+`_rustcode/usage/plans` with `claudeAccount: "<id>"` returns only that account's
+Claude row (`account` and its name) — the one the thread on screen runs on, so
+its numbers are there when the thread opens — and `claude: false` beside it
+leaves the default login unread. `claudeAccounts: true` reads every account's
+row instead, which Settings › Usage sends when the page is shown or refreshed.
+An id that names no `claude-code` account of the config reads nothing, so an
+unseen account's Keychain item is never read in the background. On macOS a
+named account's Keychain item is `Claude Code-credentials-` plus the first 8
+hex digits of the SHA-256 of its directory path; that name is undocumented, and
+a missing item is reported as not signed in rather than guessed at. A read that
+a denied Keychain prompt (or a signed-out login) stops pauses that one login;
+Settings › Usage, Refresh and Check in Settings › Agents read it again.
 
 ### `_rustcode/onboarding/complete` `{}` → `HarnessSnapshot`
 

@@ -33,6 +33,7 @@ import {
   pickNewThreadChoice,
   planCacheStale,
   planIsStale,
+  planKeyFor,
   planNow,
   plansToCache,
   prunePlans,
@@ -510,7 +511,7 @@ describe("engine controller with the mock engine", () => {
 
   test("thread actions: pin, archive, rename and trash", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().sessions.length === 4);
+    await until(() => useApp.getState().sessions.length === 5);
     const id = useApp.getState().sessions[1]!.id;
     togglePin(id);
     expect(useApp.getState().pinned).toEqual([id]);
@@ -541,7 +542,7 @@ describe("engine controller with the mock engine", () => {
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 4);
+    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 5);
     const id = useApp.getState().sessions[2]!.id;
     togglePin(id);
     await new Promise((r) => setTimeout(r, 10));
@@ -1360,6 +1361,87 @@ describe("plan usage cache", () => {
     const cache = useApp.getState().planCache;
     expect(cache.codex).toBeUndefined();
     expect(cache["claude-code"]?.windows[0]?.usedPercent).toBe(30);
+    resetForTests();
+  });
+
+  test("a partial answer never drops another account's numbers", () => {
+    // The app asks for one login at a time, so an answer often holds one row.
+    const before = {
+      "claude-code": plan(20, 1000),
+      "claude-code#work": plan(40, 1000),
+      "claude-code#home": plan(60, 1000),
+      codex: plan(80, 1000),
+    };
+    const answer = plansToCache(
+      parsePlans({
+        plans: [
+          { id: "claude", name: "Claude", harness: "claude-code", status: "notAsked", windows: [] },
+          {
+            id: "claude:work",
+            name: "Work",
+            harness: "claude-code",
+            account: "work",
+            status: "ok",
+            windows: [{ label: "5-hour", usedPercent: 50, windowMinutes: 300 }],
+          },
+        ],
+      }),
+      5000,
+    );
+    const after = mergePlans(forgetPlans(before, []), answer);
+    expect(after["claude-code#work"]?.windows[0]?.usedPercent).toBe(50);
+    // What the answer did not read keeps its numbers, untouched.
+    expect(after["claude-code"]).toBe(before["claude-code"]);
+    expect(after["claude-code#home"]).toBe(before["claude-code#home"]);
+    expect(after.codex).toBe(before.codex);
+  });
+
+  test("a partial answer leaves the other logins' cache and sign-out record alone", () => {
+    resetForTests();
+    useApp.setState({
+      planCache: {
+        "claude-code": plan(20, 1000),
+        "claude-code#work": plan(40, 1000),
+        codex: plan(80, 1000),
+      },
+      signedOutLogins: { "claude-code": true },
+    });
+    commitPlansAnswer(
+      parsePlans({
+        plans: [
+          { id: "claude", name: "Claude", harness: "claude-code", status: "notAsked", windows: [] },
+          {
+            id: "claude:work",
+            name: "Work",
+            harness: "claude-code",
+            account: "work",
+            status: "ok",
+            windows: [{ label: "5-hour", usedPercent: 12, windowMinutes: 300 }],
+          },
+        ],
+      }),
+    );
+    const state = useApp.getState();
+    expect(state.planCache["claude-code#work"]?.windows[0]?.usedPercent).toBe(12);
+    expect(state.planCache["claude-code"]).toBeDefined();
+    expect(state.planCache.codex).toBeDefined();
+    // The default login was not read, so what an earlier answer found stands.
+    expect(state.signedOutLogins).toEqual({ "claude-code": true });
+    resetForTests();
+  });
+
+  test("a thread's numbers belong to the account it runs on, known from the list", () => {
+    resetForTests();
+    useApp.setState({
+      sessions: [
+        { id: "listed", cwd: "/tmp", harness: "claude-code", account: "work" },
+        { id: "default-login", cwd: "/tmp", harness: "claude-code" },
+      ],
+    });
+    const state = useApp.getState();
+    // Before the thread is opened, the list's summary names its account.
+    expect(planKeyFor(state, "listed")).toBe("claude-code#work");
+    expect(planKeyFor(state, "default-login")).toBe("claude-code");
     resetForTests();
   });
 

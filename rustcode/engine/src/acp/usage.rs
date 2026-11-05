@@ -247,10 +247,37 @@ pub(crate) struct UsagePlansRequest {
     #[serde(default)]
     pub claude: bool,
     /// Read each named Claude account's own sign-in too. Only an explicit
-    /// look in Settings › Usage asks for that, never the background poll: an
-    /// unseen Keychain item can raise a macOS prompt.
+    /// look in Settings › Usage asks for that: an unseen Keychain item can
+    /// raise a macOS prompt.
     #[serde(default)]
     pub claude_accounts: bool,
+    /// Read only this named Claude account's own sign-in, and nothing else: the
+    /// app asks for the account of the thread on screen, so one Keychain item at
+    /// a time is read in the background. Independent of `claude`, so a default
+    /// login that is not read (or is signed out) does not keep the account's
+    /// numbers away. An id that names no account of the config reads nothing.
+    #[serde(default)]
+    pub claude_account: Option<String>,
+}
+
+/// The named Claude accounts a request reads, in row order: every one on an
+/// explicit look (Settings › Usage), else only the id the app named. Accounts
+/// of other harnesses, and an id that names none, are not read at all.
+pub(crate) fn named_claude_accounts<'a>(
+    request: &UsagePlansRequest,
+    known: &'a [crate::harness::config::HarnessAccount],
+) -> Vec<&'a crate::harness::config::HarnessAccount> {
+    let accounts = known
+        .iter()
+        .filter(|account| account.harness == "claude-code");
+    if request.claude && request.claude_accounts {
+        accounts.collect()
+    } else {
+        match request.claude_account.as_deref() {
+            Some(id) => accounts.filter(|account| account.id == id).collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// Answer `_rustcode/usage/plans`: `{plans: [{id, name, status, plan?, error?,
@@ -283,40 +310,53 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
         Err(CodexUsageError::SignedOut) => codex("signedOut", None, vec![]),
         Err(CodexUsageError::Unavailable(error)) => codex("unavailable", Some(&error), vec![]),
     };
-    // One Claude row per login: the default one, and each named account of
-    // its own. Their windows are per account; RustCode only reads them.
-    let mut claude = Vec::new();
-    if request.claude {
-        use crate::provider_auth::claude_usage::usage;
-        claude.push(claude_row("claude", "Claude", None, usage(None).await));
-        let accounts = if request.claude_accounts {
-            crate::harness::config::config_dir()
-                .map(|dir| crate::harness::config::load_accounts_in(&dir))
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        for account in accounts
-            .iter()
-            .filter(|account| account.harness == "claude-code")
-        {
-            let id = format!("claude:{}", account.id);
-            let dir = account.resolved_dir();
-            claude.push(claude_row(
-                &id,
-                account.display_name(),
-                Some(&account.id),
-                usage(Some(&dir)).await,
-            ));
-        }
+    // Only what was asked for is read: the default login when `claude`, and
+    // the named accounts the request names (one at a time unless Settings ›
+    // Usage looks at all of them). Their windows are per account; RustCode
+    // only reads them.
+    use crate::provider_auth::claude_usage::usage;
+    let default = if request.claude {
+        Some(usage(None).await)
     } else {
-        claude.push(
-            serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code",
-                               "harness": "claude-code", "account": null,
-                               "status": "notAsked", "windows": []}),
-        );
+        None
+    };
+    let known = crate::harness::config::config_dir()
+        .map(|dir| crate::harness::config::load_accounts_in(&dir))
+        .unwrap_or_default();
+    let mut named = Vec::new();
+    for account in named_claude_accounts(&request, &known) {
+        let read = usage(Some(&account.resolved_dir())).await;
+        named.push((account, read));
     }
-    let mut plans = claude;
+    plans_answer(default, &named, codex)
+}
+
+/// The answer's rows: the default login first (silent when it was not read),
+/// then each named account read, in the order they were read, then the other
+/// subscriptions. Pure, so the row shape is tested without a Keychain.
+fn plans_answer(
+    default: Option<crate::provider_auth::claude_usage::ClaudeUsage>,
+    named: &[(
+        &crate::harness::config::HarnessAccount,
+        crate::provider_auth::claude_usage::ClaudeUsage,
+    )],
+    codex: serde_json::Value,
+) -> serde_json::Value {
+    let mut plans = Vec::new();
+    plans.push(match default {
+        Some(read) => claude_row("claude", "Claude", None, read),
+        None => serde_json::json!({"id": "claude", "name": "Claude", "via": "Claude Code",
+                                   "harness": "claude-code", "account": null,
+                                   "status": "notAsked", "windows": []}),
+    });
+    for (account, read) in named {
+        plans.push(claude_row(
+            &format!("claude:{}", account.id),
+            account.display_name(),
+            Some(&account.id),
+            read.clone(),
+        ));
+    }
     plans.push(codex);
     serde_json::json!({ "plans": plans })
 }
@@ -412,6 +452,113 @@ mod tests {
             ..Default::default()
         });
         message
+    }
+
+    /// A named account as the config lists it, for the plans request's shaping.
+    fn account(id: &str, harness: &str) -> crate::harness::config::HarnessAccount {
+        crate::harness::config::HarnessAccount {
+            id: id.to_owned(),
+            harness: harness.to_owned(),
+            name: None,
+            config_dir: format!("/tmp/{id}"),
+        }
+    }
+
+    fn claude_windows(
+        used_percent: f64,
+        minutes: u64,
+    ) -> crate::provider_auth::claude_usage::ClaudeUsage {
+        crate::provider_auth::claude_usage::ClaudeUsage::Windows {
+            plan: Some("max".into()),
+            windows: vec![crate::provider_auth::claude_usage::LabelledWindow {
+                label: "5-hour",
+                window: crate::provider_auth::RateLimitWindow {
+                    used_percent,
+                    window_minutes: Some(minutes),
+                    resets_at: None,
+                },
+            }],
+        }
+    }
+
+    /// The composer's meter asks for the account of the thread on screen; the
+    /// default login beside it is a separate ask.
+    #[test]
+    fn a_plans_request_reads_the_one_account_it_names() {
+        let known = [
+            account("work", "claude-code"),
+            account("home", "claude-code"),
+            account("other", "codex"),
+        ];
+        let named = super::named_claude_accounts(
+            &super::UsagePlansRequest {
+                claude: true,
+                claude_accounts: false,
+                claude_account: Some("work".into()),
+            },
+            &known,
+        );
+        assert_eq!(
+            named.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            ["work"]
+        );
+        // Without an id, or with one that belongs to another harness, nothing is read.
+        let none = super::UsagePlansRequest {
+            claude: true,
+            claude_accounts: false,
+            claude_account: None,
+        };
+        assert!(super::named_claude_accounts(&none, &known).is_empty());
+        let unknown = super::UsagePlansRequest {
+            claude: true,
+            claude_accounts: false,
+            claude_account: Some("gone".into()),
+        };
+        assert!(super::named_claude_accounts(&unknown, &known).is_empty());
+        // An explicit look in Settings › Usage reads every one of them.
+        let all = super::named_claude_accounts(
+            &super::UsagePlansRequest {
+                claude: true,
+                claude_accounts: true,
+                claude_account: None,
+            },
+            &known,
+        );
+        assert_eq!(
+            all.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            ["work", "home"]
+        );
+    }
+
+    /// `claude: false` asks for the account only: its row is answered, and the
+    /// default login's row says nothing rather than being read.
+    #[test]
+    fn an_account_is_answered_without_the_default_login() {
+        let work = account("work", "claude-code");
+        let value = super::plans_answer(
+            None,
+            &[(&work, claude_windows(71.0, 300))],
+            serde_json::json!({"id": "codex", "name": "ChatGPT", "status": "notInstalled",
+                               "windows": []}),
+        );
+        let plans = value["plans"].as_array().unwrap();
+        // Rows keep their shape and order: the default login first, then the
+        // account's own, then the other subscriptions.
+        assert_eq!(
+            plans
+                .iter()
+                .map(|p| p["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["claude", "claude:work", "codex"]
+        );
+        assert_eq!(plans[0]["status"], "notAsked");
+        assert!(plans[0]["windows"].as_array().unwrap().is_empty());
+        assert_eq!(plans[1]["status"], "ok");
+        assert_eq!(plans[1]["account"], "work");
+        assert_eq!(plans[1]["name"], "work");
+        assert_eq!(plans[1]["windows"][0]["usedPercent"], 71.0);
+        assert_eq!(plans[1]["windows"][0]["label"], "5-hour");
+        assert_eq!(plans[1]["plan"], "max");
     }
 
     #[test]
