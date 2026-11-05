@@ -36,6 +36,7 @@ import {
   setBannerStyle,
   useBanner,
 } from "../lib/banner";
+import { CHAT_WIDTH_LABEL, type ChatWidth } from "../lib/chatWidth";
 import { HAPTICS_DEFAULT, haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
 import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { openExternal, pickFolder, revealPath } from "../lib/native";
@@ -43,6 +44,7 @@ import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { validateDefault } from "../state/harness";
+import { MAX_ACTIVE_LIMIT, MIN_ACTIVE_LINKS } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   APP_VERSION,
@@ -57,6 +59,7 @@ import {
   type SettingsSection,
   setActiveTheme,
   setAnimateStreaming,
+  setChatWidth,
   setDefaultCwd,
   setDefaultHarness,
   setDefaultPermissionMode,
@@ -67,6 +70,7 @@ import {
   setRoundedFont,
   setSmartUi,
   setTheme,
+  setThreadLimit,
   toast,
   useApp,
 } from "../state/store";
@@ -94,6 +98,7 @@ import {
   Row,
   RowResets,
   SectionTitle,
+  Select,
   useEngineData,
   useRowResets,
 } from "./settingsKit";
@@ -290,10 +295,31 @@ function GeneralPage() {
 function ChatPage() {
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
+  const chatWidth = useApp((s) => s.chatWidth);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   return (
     <Group title="In the chat">
+      <Row
+        title="Chat width"
+        reset={
+          chatWidth !== SETTINGS_DEFAULTS.chatWidth
+            ? () => setChatWidth(SETTINGS_DEFAULTS.chatWidth)
+            : undefined
+        }
+        subtitle="How wide the transcript and the composer grow on a large window. They always share one measure."
+      >
+        <Choice<ChatWidth>
+          label="Chat width"
+          value={chatWidth}
+          onChange={setChatWidth}
+          options={[
+            { value: "comfortable", label: CHAT_WIDTH_LABEL.comfortable },
+            { value: "wide", label: CHAT_WIDTH_LABEL.wide },
+            { value: "full", label: CHAT_WIDTH_LABEL.full },
+          ]}
+        />
+      </Row>
       <Row
         title="Smart UI"
         reset={smartUi ? undefined : () => setSmartUi(SETTINGS_DEFAULTS.smartUi)}
@@ -414,9 +440,14 @@ function AgentsPage() {
 /** Threads that start and message other threads (`state/host.ts`, docs/orchestrator.md). */
 function OrchestrationGroup() {
   const orchestration = useApp((s) => s.orchestration);
+  const threadLimit = useApp((s) => s.threadLimit);
   const readAcrossProjects = useApp((s) => s.readAcrossProjects);
   const pending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const limits = Array.from({ length: MAX_ACTIVE_LIMIT - MIN_ACTIVE_LINKS + 1 }, (_, i) => ({
+    value: String(MIN_ACTIVE_LINKS + i),
+    label: `${MIN_ACTIVE_LINKS + i} thread${MIN_ACTIVE_LINKS + i === 1 ? "" : "s"}`,
+  }));
   return (
     <Group title="Orchestration">
       <Row
@@ -428,6 +459,22 @@ function OrchestrationGroup() {
           label="Threads can start and message other threads"
           checked={orchestration}
           onChange={setOrchestration}
+        />
+      </Row>
+      <Row
+        title="Threads one thread can run at once"
+        reset={
+          threadLimit === SETTINGS_DEFAULTS.threadLimit
+            ? undefined
+            : () => setThreadLimit(SETTINGS_DEFAULTS.threadLimit)
+        }
+        subtitle={`How many distinct threads one thread may have working at the same time. A message to a thread it is already running is a follow-up and takes no slot. The whole delegation tree holds twice as many: ${threadLimit * 2} now.`}
+      >
+        <Select
+          label="Threads one thread can run at once"
+          value={String(threadLimit)}
+          options={limits}
+          onChange={(value) => setThreadLimit(Number(value))}
         />
       </Row>
       <Row

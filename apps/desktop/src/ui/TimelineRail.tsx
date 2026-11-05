@@ -7,6 +7,7 @@
 
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { type MouseEvent, memo, type ReactNode, useRef, useState } from "react";
+import { clip } from "../lib/clip";
 import { cx, Tooltip } from "./primitives";
 
 export interface Turn {
@@ -57,7 +58,7 @@ export function turnTitle(text: string, limit = 120): string {
   let out = "";
   for (const word of text.split(/\s+/).filter(Boolean)) {
     const next = out ? `${out} ${word}` : word;
-    if (next.length > limit) return out ? `${out}…` : `${word.slice(0, limit)}…`;
+    if (next.length > limit) return out ? `${out}…` : `${clip(word, limit)}…`;
     out = next;
   }
   return out || "Message";

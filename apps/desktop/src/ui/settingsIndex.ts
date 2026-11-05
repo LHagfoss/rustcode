@@ -48,6 +48,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // ------------------------------------------------------------ Chat
   {
     section: "chat",
+    title: "Chat width",
+    keywords: "lane transcript composer measure column wide full comfortable narrow",
+  },
+  {
+    section: "chat",
     title: "Smart UI",
     keywords: "interactive view chart table sandbox html agent answer",
   },
@@ -85,6 +90,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "agents",
     title: "Threads can start and message other threads",
     keywords: "orchestration subagents spawn compare message agents",
+  },
+  {
+    section: "agents",
+    title: "Threads one thread can run at once",
+    keywords: "orchestration delegation parallel slots limit concurrent children tree",
   },
   {
     section: "agents",

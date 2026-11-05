@@ -5,6 +5,7 @@
 
 import { ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
+import { clip } from "../lib/clip";
 import { CodeBlock, CopyButton } from "./Markdown";
 import { cx } from "./primitives";
 
@@ -14,7 +15,7 @@ const cut = (value: unknown, n: number) => {
   const s = [...String(value ?? "")]
     .map((ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? " " : ch))
     .join("");
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+  return s.length > n ? `${clip(s, n - 1)}…` : s;
 };
 const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);

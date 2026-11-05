@@ -35,6 +35,7 @@ import {
 import { memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
+import { clip } from "../lib/clip";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
 import { splitReply } from "../smartui/parse";
@@ -59,6 +60,7 @@ import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
 import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
+import { replyActions } from "./replyActions";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 
@@ -259,42 +261,56 @@ export const QuestionRow = memo(function QuestionRow({
   );
 });
 
+/** The fork action in a reply's row and in a finished turn's footer. */
+function ReplyForkButton({ threadId }: { threadId: string }) {
+  return (
+    <Tooltip label="Fork the chat: a new thread gets this conversation">
+      <button
+        type="button"
+        aria-label="Fork chat"
+        onClick={() => void forkThread(threadId)}
+        className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+      >
+        <GitFork size={12} />
+      </button>
+    </Tooltip>
+  );
+}
+
 export const AssistantRow = memo(function AssistantRow({
   item,
   streaming = false,
   threadId,
+  inTurnFoot = false,
 }: {
   item: Item<"assistant">;
   streaming?: boolean;
   threadId?: string;
+  /** The turn footer draws this reply's copy and fork: the row under it stays clean. */
+  inTurnFoot?: boolean;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
   const reveal = useApp((s) => s.animateStreaming);
   // Under the reply, on hover: copy, fork and the time, 12px, in that order.
-  const canCopy = !!item.text.trim();
-  const actions =
-    canCopy || (threadId && item.at) ? (
-      <div className="mt-0.5 flex h-[22px] items-center gap-1 text-sub text-fg-faint tabular opacity-0 transition-opacity focus-within:opacity-100 group-hover/reply:opacity-100">
-        {canCopy && <CopyButton text={item.text} iconOnly label="Copy this reply" />}
-        {threadId && !streaming && (
-          <Tooltip label="Fork the chat: a new thread gets this conversation">
-            <button
-              type="button"
-              aria-label="Fork chat"
-              onClick={() => void forkThread(threadId)}
-              className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
-            >
-              <GitFork size={12} />
-            </button>
-          </Tooltip>
-        )}
-        {item.at && (
-          <Tooltip label={new Date(item.at).toLocaleString()}>
-            <span className="truncate">{messageTime(item.at)}</span>
-          </Tooltip>
-        )}
-      </div>
-    ) : null;
+  const row = replyActions({
+    where: "reply",
+    text: item.text,
+    at: item.at,
+    threadId,
+    streaming,
+    lastInTurn: inTurnFoot,
+  });
+  const actions = row.row ? (
+    <div className="mt-0.5 flex h-[22px] items-center gap-1 text-sub text-fg-faint tabular opacity-0 transition-opacity focus-within:opacity-100 group-hover/reply:opacity-100 [@media(pointer:coarse)]:opacity-100">
+      {row.copy && <CopyButton text={row.copy} iconOnly label="Copy this reply" />}
+      {row.fork && <ReplyForkButton threadId={threadId!} />}
+      {row.time && (
+        <Tooltip label={new Date(item.at!).toLocaleString()}>
+          <span className="truncate">{messageTime(item.at)}</span>
+        </Tooltip>
+      )}
+    </div>
+  ) : null;
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
       <div className="group/reply">
@@ -487,7 +503,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
   // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
   const reason =
-    failed && item.exitCode === undefined ? (item.output?.trim().split("\n")[0]?.slice(0, 120) ?? "") : "";
+    failed && item.exitCode === undefined ? clip(item.output?.trim().split("\n")[0] ?? "", 120) : "";
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
@@ -833,14 +849,18 @@ export function TurnEndRow({
   completion,
   changes,
   folded,
+  threadId,
 }: {
   item: Item<"turnEnd">;
   /** The turn's work is folded into a summary row that already says how long it took. */
   folded?: boolean;
+  /** The turn's last reply, whose copy and fork show here rather than under the reply. */
   reply?: string;
   completion?: TurnCompletion | null;
   /** The turn's checkpoint chip (Changes), when the engine keeps checkpoints. */
   changes?: ReactNode;
+  /** The thread, so the footer's fork can copy its conversation. */
+  threadId?: string;
 }) {
   const parts = [
     item.outcome === "cancelled" && !folded
@@ -852,11 +872,14 @@ export function TurnEndRow({
           : undefined,
     messageTime(item.at),
   ].filter(Boolean);
+  // One row for the turn: copy, fork, then its outcome and time, then the changes chip.
+  const row = replyActions({ where: "turnEnd", text: reply, at: item.at, threadId });
   return (
     <div className="-mt-2">
       {completion && <CompletionCard completion={completion} />}
       <div className="flex h-[22px] items-center gap-1.5 text-caption text-fg-faint">
-        {reply && <CopyButton text={reply} iconOnly label="Copy reply" />}
+        {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
+        {row.fork && <ReplyForkButton threadId={threadId!} />}
         {item.outcome === "cancelled" && !folded && <SquareStop size={11} />}
         <span className="tabular">{parts.join(" · ")}</span>
         {changes}

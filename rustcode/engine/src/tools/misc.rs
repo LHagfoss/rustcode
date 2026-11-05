@@ -325,7 +325,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
 
 pub const WAIT_SESSION: Tool = Tool {
     name: crate::orchestration::WAIT_SESSION,
-    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. needs_user means that thread waits for the user. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
+    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. needs_user means that thread waits for the user. When the answer was cut, it says answer_truncated: true and gives the session_id: read the rest with read_session, which pages. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
     arguments: r#"{"link_id": "from message_session", "timeout_ms": 60000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -348,8 +348,8 @@ pub const WAIT_SESSION: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 2`.
 pub const READ_SESSION: Tool = Tool {
     name: crate::orchestration::READ_SESSION,
-    description: "Read the last turns of one thread by id: title, status, project, and each turn's request, answer and changed files (at most 16 KiB). Any thread of any project. Given a thread id, read it before answering about it.",
-    arguments: r#"{"session_id": "id from list_sessions", "last_turns": 3}"#,
+    description: "Read the last turns of one thread by id as text: title, status, project, and each turn's request, answer and changed files. Any thread of any project. Given a thread id, read it before answering about it. Long answers are paged: the answer carries text, offset and next_offset; pass next_offset as offset to continue. Pages join with nothing lost or repeated, and next_offset is absent on the last page.",
+    arguments: r#"{"session_id": "id from list_sessions", "last_turns": 3, "offset": 0}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -357,7 +357,8 @@ pub const READ_SESSION: Tool = Tool {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
-                "last_turns": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_LAST_TURNS, "default": crate::orchestration::DEFAULT_LAST_TURNS}
+                "last_turns": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_LAST_TURNS, "default": crate::orchestration::DEFAULT_LAST_TURNS},
+                "offset": {"type": "integer", "minimum": 0, "description": "Bytes into the rendered answer to start from; pass the previous page's next_offset"}
             },
             "required": ["session_id"],
             "additionalProperties": false
