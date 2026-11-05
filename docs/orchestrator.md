@@ -224,7 +224,10 @@ they finish or ask, instead of having to poll with sleeps.
   `askedRequest`), which now lives in the data store (`docs/data-store.md`),
   so a restart does not deliver it again. A parent blocked in `wait_session`
   on that link already has the answer — the wait marks it heard — and is not
-  sent a second copy. A thread that is itself a child is woken the same way a
+  sent a second copy. That hold lasts only while the turn that asked runs: a
+  wait whose turn ended (the user stopped it, or the harness dropped the call)
+  stops at its next poll and marks nothing, so the result still comes as a wake
+  instead of being answered into a turn nobody reads. A thread that is itself a child is woken the same way a
   top-level parent is: its children's results are its to read, and its own
   parent hears about it when its own subtree is quiet, not before. A wake turn
   carries no link, so being woken never settles the woken thread in its

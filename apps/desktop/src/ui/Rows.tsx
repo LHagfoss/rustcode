@@ -52,6 +52,7 @@ import {
   thoughtHeadings,
 } from "../state/thread";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
+import { type Waiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { DiffView } from "./DiffView";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
@@ -866,19 +867,21 @@ export function TurnEndRow({
 
 /** The live line under a running turn: what it does now and for how long, with a shimmer. */
 /**
- * The turn is done for now but parked on background commands: a slow pulse
- * and a plain line, quieter than Working. The turn resumes when they finish.
+ * The foot of a quiet thread that waits on background work: the threads it
+ * started or messaged that still run, or the commands its last turn parked on.
+ * Not a turn (the composer stays idle), and it goes when they finish.
  */
-export function WaitingRow({ count }: { count: number }) {
+export function WaitingRow({ wait }: { wait: Waiting }) {
   return (
-    <div className="flex items-center gap-2 text-callout text-fg-muted" role="status" aria-live="polite">
-      <span className="relative flex size-2 items-center justify-center">
-        <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
-        <span className="size-1.5 rounded-full bg-accent" />
-      </span>
-      Waiting on {count === 1 ? "a background command" : `${count} background commands`}
-      <span className="text-fg-faint">· continues when {count === 1 ? "it finishes" : "they finish"}</span>
-    </div>
+    <Tooltip label={waitingTitle(wait)}>
+      <div className="flex items-center gap-2 text-callout text-fg-muted" role="status" aria-live="polite">
+        <span className="relative flex size-2 items-center justify-center">
+          <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
+          <span className="size-1.5 rounded-full bg-accent" />
+        </span>
+        {waitingLabel(wait)}
+      </div>
+    </Tooltip>
   );
 }
 

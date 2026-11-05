@@ -364,7 +364,12 @@ describe("a turn the engine wakes", () => {
     const parked = { ...finishTurn(beginTurn(emptyThread("s", "/p"), "go", 0), "completed", 5), waiting: 2 };
     const woken = wakeTurn(parked, 10);
     expect(woken).toMatchObject({ running: true, woken: true, waiting: undefined, turnStartedAt: 10 });
-    expect(woken.items.at(-1)).toMatchObject({ kind: "notice", tone: "info" });
+    expect(woken.items.at(-1)).toMatchObject({
+      kind: "notice",
+      tone: "info",
+      // It says what happened, not what the turn then does with it.
+      text: "Background task finished",
+    });
     // Already running (the prompt has not answered yet): nothing to add.
     const running = beginTurn(emptyThread("s", "/p"), "go", 0);
     expect(wakeTurn(running, 10).items).toHaveLength(running.items.length);

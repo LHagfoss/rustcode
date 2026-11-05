@@ -65,6 +65,7 @@ import {
   togglePin,
   trashThread,
   updateQueued,
+  updateThread,
   useApp,
   windowNow,
 } from "./store";
@@ -573,6 +574,41 @@ describe("engine controller with the mock engine", () => {
     expect(reply?.kind === "assistant" && reply.text).toContain("Here is what came back");
     // "Allow for This Thread" is kept: the next start does not ask.
     expect(s.links.grants[selected()!.id]).toContain("start");
+  });
+
+  test("a wait_session its ended turn left behind stops swallowing the settled child's wake", async () => {
+    setOrchestration(true);
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.worktrees === true);
+    setProjectCwd("/Users/you/code/rustcode");
+    const parent = useApp.getState().sessions[0]!.id;
+    selectThread(parent);
+    await until(() => selected()?.loaded === true);
+    // The turn that asks: it runs, so the wait it opens belongs to one.
+    updateThread(parent, (t) => ({ ...t, running: true }));
+    const starting = answerOrchestration({
+      sessionId: parent,
+      tool: "start_session",
+      args: { prompt: "do it (yolo)", title: "Child" },
+    });
+    await until(() => useApp.getState().grant !== null);
+    resolveGrant("once");
+    const link = String((await starting).link_id);
+    const linkOf = () => useApp.getState().links.links.find((l) => l.id === link);
+    // A wait that outlives the turn that opened it: the user stopped it, or the harness dropped the call.
+    const waited = answerOrchestration({
+      sessionId: parent,
+      tool: "wait_session",
+      args: { link_ids: [link], timeout_ms: 5000 },
+    });
+    updateThread(parent, (t) => ({ ...t, running: false }));
+    // The child settling is the parent's news, not a wait's answer nobody reads: it is woken with it.
+    const woken = () =>
+      useApp.getState().threads[parent]!.items.some((i) => i.kind === "user" && !!i.wake) ||
+      useApp.getState().threads[parent]!.queue.some((q) => !!q.wake);
+    await until(woken, 3000);
+    expect(linkOf()?.notifiedAt).toBeDefined();
+    await waited;
   });
 
   test("review and done marks, and the engine's auto-done", async () => {

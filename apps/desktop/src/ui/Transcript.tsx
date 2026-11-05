@@ -23,6 +23,7 @@ import {
   turnCompletion,
   workingLabel,
 } from "../state/thread";
+import { useWaiting, type Waiting, waitingLabel } from "../state/waiting";
 import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow } from "./AttentionCards";
 import { PlanCard } from "./PlanCard";
@@ -57,8 +58,8 @@ type Row = {
   threads?: { links: Link[]; open: boolean };
   /** The running turn's foot: what it does now, when no row of its own shows it. */
   activity?: string;
-  /** The turn parked on this many background commands. */
-  waiting?: number;
+  /** The thread's background work, when no turn of its own runs (state/waiting.ts). */
+  waiting?: Waiting;
   fold?: TurnFold;
   group?: ToolGroup;
   inFold?: string;
@@ -206,6 +207,8 @@ export function Transcript({
   );
   // The threads this one started, by the call that started them (its book of links).
   const links = useApp((s) => s.links.links);
+  // No turn runs, but the threads it started or messaged still work: not finished, not working.
+  const wait = useWaiting(thread.id);
   const started = useMemo(
     () =>
       startedLinks(
@@ -297,7 +300,7 @@ export function Transcript({
         last?.kind === "assistant";
       // With an approval waiting, the turn is not working: the row that asks is the foot.
       if (!shows && !waiting) out.push({ key: "activity", activity: workingLabel(visible) });
-    } else if (thread.waiting) out.push({ key: "waiting", waiting: thread.waiting });
+    } else if (wait) out.push({ key: "waiting", waiting: wait });
     // The plan a paused thread still has work on, at the foot: what is left, and Implement. A
     // finished plan, or one a running turn is working through, is not repeated here.
     if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
@@ -326,7 +329,7 @@ export function Transcript({
     if (queue.resumable)
       out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
     return out;
-  }, [visible, subagentSteps, started, links, thread, open, searching]);
+  }, [visible, subagentSteps, started, links, thread, open, searching, wait]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -564,6 +567,7 @@ export function Transcript({
     const approvals = thread.permissions.filter((p) => !p.question).length;
     if (approvals) return approvals === 1 ? "Approval" : `${approvals} approvals`;
     if (thread.running) return workingLabel(visible);
+    if (wait) return waitingLabel(wait);
     // The last turn's subagents, once they have all stopped: what the reader scrolled away from.
     let agents = 0;
     let finished = 0;
@@ -582,7 +586,7 @@ export function Transcript({
     }
     if (!ended || !agents || finished !== agents) return undefined;
     return `${agents} ${agents === 1 ? "agent" : "agents"} finished`;
-  }, [thread.permissions, thread.running, showLatest, visible]);
+  }, [thread.permissions, thread.running, showLatest, visible, wait]);
 
   const onWheel = (e: React.WheelEvent) => {
     // Scrolling up during a stream unpins at once, before the next chunk pulls the view down.
@@ -789,7 +793,7 @@ export function Transcript({
                     ) : row.group ? (
                       <ToolGroupRow group={row.group} onToggle={toggleFold} />
                     ) : row.waiting ? (
-                      <WaitingRow count={row.waiting} />
+                      <WaitingRow wait={row.waiting} />
                     ) : row.queued ? (
                       <QueuedMessageRow threadId={thread.id} {...row.queued} />
                     ) : row.queueWake ? (

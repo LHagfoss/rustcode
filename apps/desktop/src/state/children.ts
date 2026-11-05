@@ -11,8 +11,6 @@ export type ChildState = "needs" | "working" | "finished" | "failed";
 export interface ChildInfo {
   id: string;
   state: ChildState;
-  /** It finished (or failed) while you were looking elsewhere: the group's dot. */
-  unseen?: boolean;
   /**
    * How far under the group's parent the row sits: 0 for its own child, 1 for a
    * grandchild shown flat in the same group (see `flatChildren`).
@@ -72,7 +70,7 @@ export function childState(status: ThreadStatus, failed = false): ChildState {
  */
 export function childInfo(
   id: string,
-  read: { status?: ThreadStatus; link?: LinkState; failed?: boolean; unseen?: boolean },
+  read: { status?: ThreadStatus; link?: LinkState; failed?: boolean },
 ): ChildInfo {
   const live =
     read.link && isActive(read.link)
@@ -80,7 +78,7 @@ export function childInfo(
         ? "needs_input"
         : "running"
       : (read.status ?? "idle");
-  return { id, state: childState(live, read.failed), unseen: read.unseen };
+  return { id, state: childState(live, read.failed) };
 }
 
 /**
@@ -183,10 +181,10 @@ export function pruneOpenGroups(
   return next;
 }
 
-/** The group's dot: one child finished unseen, or one failed there. */
+/**
+ * The group's dot: a child that failed while you were looking elsewhere (a
+ * failure you have opened reads as finished). A child finishing says nothing
+ * about its parent, so it is not flagged here at all.
+ */
 export const unseenChild = (children: ChildInfo[]) =>
-  children.some((c) => c.unseen)
-    ? children.some((c) => c.state === "failed")
-      ? "failed"
-      : "finished"
-    : undefined;
+  children.some((c) => c.state === "failed") ? ("failed" as const) : undefined;
