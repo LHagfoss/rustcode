@@ -4,10 +4,11 @@
 // (settingsIndex.ts) and shows one page at a time beside it; picking a result
 // opens its page and lights the row. After SettingsView.swift.
 // Engine-backed pages (Agents, Connections, Capabilities, Appearance's
-// themes, Usage) read and write through `_rustcode/*` requests.
+// themes, Usage, Statistics) read and write through `_rustcode/*` requests.
 
 import {
   Blocks,
+  ChartColumn,
   Check,
   FolderOpen,
   Gauge,
@@ -89,6 +90,7 @@ import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
 import { ShortcutsPage } from "./ShortcutSettings";
+import { StatisticsPage } from "./StatisticsPage";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -137,6 +139,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
       { id: "appearance", label: "Appearance", icon: Palette },
       { id: "keyboard", label: "Keyboard", icon: Keyboard },
       { id: "usage", label: "Usage", icon: Gauge },
+      { id: "statistics", label: "Statistics", icon: ChartColumn },
     ],
   },
   {
@@ -1245,6 +1248,7 @@ export function Settings() {
                   {section === "appearance" && <AppearancePage />}
                   {section === "keyboard" && <ShortcutsPage />}
                   {section === "usage" && <UsagePage />}
+                  {section === "statistics" && <StatisticsPage />}
                   {section === "advanced" && <AdvancedPage />}
                   {section === "about" && <AboutPage />}
                 </div>

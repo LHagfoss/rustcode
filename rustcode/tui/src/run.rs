@@ -585,24 +585,33 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
         .iter()
         .map(|row| count(row, "turns_without_tokens"))
         .sum();
-    let input: i64 = rows
-        .iter()
-        .map(|row| maybe_count(row, "input_tokens").unwrap_or(0))
-        .sum();
-    let output: i64 = rows
-        .iter()
-        .map(|row| maybe_count(row, "output_tokens").unwrap_or(0))
-        .sum();
-    let cached: i64 = rows
-        .iter()
-        .map(|row| maybe_count(row, "cached_tokens").unwrap_or(0))
-        .sum();
-    let cache_write: i64 = rows
-        .iter()
-        .map(|row| maybe_count(row, "cache_write_tokens").unwrap_or(0))
-        .sum();
+    // A column no row reported stays blank in the total, not 0.
+    let total = |key: &str| {
+        let values: Vec<i64> = rows
+            .iter()
+            .filter_map(|row| maybe_count(row, key))
+            .collect();
+        (!values.is_empty()).then(|| values.into_iter().sum::<i64>())
+    };
+    let input = total("input_tokens");
+    let output = total("output_tokens");
+    let cached = total("cached_tokens");
+    let cache_write = total("cache_write_tokens");
     let cost: f64 = rows.iter().filter_map(maybe_cost).sum();
     let any_cost = rows.iter().any(|row| maybe_cost(row).is_some());
+    let missing_column = |key: &str| -> i64 { rows.iter().map(|row| count(row, key)).sum() };
+    let missing_input = missing_column("turns_without_input_tokens");
+    let missing_output = missing_column("turns_without_output_tokens");
+    let missing_cached = missing_column("turns_without_cached_tokens");
+    let missing_cache_write = missing_column("turns_without_cache_write_tokens");
+    let missing_cost = missing_column("turns_without_cost");
+    // A total is partial when some turns did not report the column: mark it,
+    // as the page does, and explain the marks once under the table.
+    let total_cell = |value: Option<i64>, missing: i64| match value {
+        Some(value) if missing > 0 && turns > 0 => format!("{}*", thousands(value)),
+        Some(value) => thousands(value),
+        None => "—".to_owned(),
+    };
     match &since {
         Some(day) => println!("RustCode usage · tokens per harness and model · since {day}"),
         None => println!("RustCode usage · tokens per harness and model"),
@@ -623,12 +632,17 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     table_rows.push(vec![
         "total".to_owned(),
         String::new(),
-        thousands(input),
-        thousands(output),
-        thousands(cached),
-        thousands(cache_write),
+        total_cell(input, missing_input),
+        total_cell(output, missing_output),
+        total_cell(cached, missing_cached),
+        total_cell(cache_write, missing_cache_write),
         if any_cost {
-            money(Some(cost))
+            let total = money(Some(cost));
+            if missing_cost > 0 && turns > 0 {
+                format!("{total}†")
+            } else {
+                total
+            }
         } else {
             "—".to_owned()
         },
@@ -645,10 +659,37 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
             "cache write",
             "cost (USD)",
             "turns",
-            "no tokens",
+            "no in+out",
         ],
         &table_rows,
     );
+    let partial: Vec<String> = [
+        (missing_input, "input"),
+        (missing_output, "output"),
+        (missing_cached, "cached"),
+        (missing_cache_write, "cache write"),
+    ]
+    .into_iter()
+    .filter(|(missing, _)| *missing > 0 && turns > 0)
+    .map(|(missing, column)| format!("{column} {} of {turns}", turns - missing))
+    .collect();
+    if !partial.is_empty() {
+        print!(
+            "* reported on fewer than all turns: {}{}",
+            partial.join(", "),
+            if missing_cost > 0 && any_cost {
+                format!("; † cost {} of {turns}", turns - missing_cost)
+            } else {
+                String::new()
+            }
+        );
+        println!(".");
+    } else if missing_cost > 0 && any_cost {
+        println!(
+            "† cost reported on {} of {turns} turns.",
+            turns - missing_cost
+        );
+    }
     Ok(())
 }
 

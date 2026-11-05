@@ -642,7 +642,7 @@ pub const LIST_PULL_REQUESTS: Tool = Tool {
 /// "Let agents read threads in other projects".
 pub const THREAD_USAGE: Tool = Tool {
     name: crate::orchestration::THREAD_USAGE,
-    description: "Tokens and cost from what RustCode recorded of every turn, as rows with totals: input, output, cached and cache-write tokens, cost_usd (only the USD a harness reported, never a price RustCode computed), turns, and how many turns reported no tokens. Ask it when the user asks what they have spent or used. group_by: harness (default), model, day, project or thread; since is a day or month, YYYY-MM-DD or YYYY-MM; project limits it to one project's threads.",
+    description: "Tokens and cost from what RustCode recorded of every turn, as rows with totals: input, output, cached and cache-write tokens, cost_usd (only the USD a harness reported, never a price RustCode computed), turns, per-column counts of turns that reported no input, output, cached or cache-write tokens, and how many reported no cost. Ask it when the user asks what they have spent or used. group_by: harness (default), model, day, project or thread; since is a day or month, YYYY-MM-DD or YYYY-MM; project limits it to one project's threads.",
     arguments: r#"{"since": "2026-11-01", "group_by": "harness", "project": "/abs/project"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

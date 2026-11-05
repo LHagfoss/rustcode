@@ -331,6 +331,20 @@ composer's keys stay outside the table.
   Keychain refusal is remembered while the engine runs: the background reads
   then use the credentials file only, so a denial cannot prompt again even when
   that file answers and its numbers keep showing; Refresh asks macOS once more.
+- **Settings › Statistics.** What the local data store recorded of every
+  turn, by harness and model and by thread: `_rustcode/data/usage`
+  (`engine/src/acp/data.rs`) read twice, once `group_by=model` and once
+  `group_by=thread`. A thread's total includes the threads it started, from
+  the parent recorded in its metadata or the link book, so delegated work is
+  counted once; a parent known only by title is listed on its own and says so.
+  Parents ride on the usage rows from the store; when a row has no parent id,
+  the link book that started it is the fallback, and an older engine also
+  falls back to the session list, which the page marks as incomplete if it was
+  capped or missing threads. Tokens and cost stay blank where a harness
+  reported none, and
+  each token column marks the turns that reported no value for it rather than
+  treating them as zero. A read that was truncated at the store's 1,000-group
+  cap says so.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
   and `PlanUsageMeter`: a ring filling with the context window in use, and
   the plan's shortest window from `_rustcode/usage/limits` as a short bar

@@ -456,3 +456,117 @@ export function nextPlanRefresh(plan: PlanUsage | null | undefined, now = Date.n
   const afterReset = resets.length ? Math.min(...resets) + 5_000 - now : Infinity;
   return Math.max(5_000, Math.min(PLAN_REFRESH_MS, afterReset));
 }
+
+// ---------------------------------------------------------------- recorded usage
+
+/** Tokens one row holds. A count a harness did not report is absent, never 0. */
+export interface UsageCounts {
+  input?: number;
+  output?: number;
+  cached?: number;
+  cacheWrite?: number;
+}
+
+/** A group's tokens, the USD a harness reported, and how many turns reported nothing. */
+export interface UsageTotals extends UsageCounts {
+  /** The USD a harness reported. Never a price RustCode computed. */
+  cost?: number;
+  turns: number;
+  /** Turns with neither input nor output reported (the older, narrower count). */
+  turnsWithoutTokens: number;
+  /** Turns missing at least one of the four token counts. */
+  turnsWithoutAnyTokens: number;
+  turnsWithoutInputTokens: number;
+  turnsWithoutOutputTokens: number;
+  turnsWithoutCachedTokens: number;
+  turnsWithoutCacheWriteTokens: number;
+  turnsWithoutCost: number;
+}
+
+/** One row of `_rustcode/data/usage`, with the key its `group_by` chose. */
+export interface UsageRow extends UsageTotals {
+  harness: string;
+  model?: string;
+  thread?: string;
+  title?: string;
+  project?: string;
+  day?: string;
+  /** The thread that started this one (`threads.parent_id`). */
+  parentId?: string;
+  /** A parent known only by title, for a thread an older release started. */
+  parentTitle?: string;
+}
+
+export interface UsageReport {
+  groupBy: string;
+  rows: UsageRow[];
+  totals: UsageTotals;
+  /** The answer stopped at the store's row cap, so its totals cover only what it returned. */
+  truncated: boolean;
+  /**
+   * Thread rows carry their parent from the store, so the app need not join
+   * them to a session list that may be capped or newer.
+   */
+  parentsReported: boolean;
+}
+
+function parseCounts(o: { [key: string]: Json } | undefined): UsageCounts {
+  return {
+    input: num(o?.input_tokens),
+    output: num(o?.output_tokens),
+    cached: num(o?.cached_tokens),
+    cacheWrite: num(o?.cache_write_tokens),
+  };
+}
+
+function parseTotals(o: { [key: string]: Json } | undefined): UsageTotals {
+  return {
+    ...parseCounts(o),
+    cost: num(o?.cost_usd),
+    turns: num(o?.turns) ?? 0,
+    turnsWithoutTokens: num(o?.turns_without_tokens) ?? 0,
+    turnsWithoutAnyTokens: num(o?.turns_without_any_tokens) ?? 0,
+    turnsWithoutInputTokens: num(o?.turns_without_input_tokens) ?? 0,
+    turnsWithoutOutputTokens: num(o?.turns_without_output_tokens) ?? 0,
+    turnsWithoutCachedTokens: num(o?.turns_without_cached_tokens) ?? 0,
+    turnsWithoutCacheWriteTokens: num(o?.turns_without_cache_write_tokens) ?? 0,
+    turnsWithoutCost: num(o?.turns_without_cost) ?? 0,
+  };
+}
+
+/**
+ * `_rustcode/data/usage` (`engine/src/acp/data.rs`). The engine groups by one
+ * key at a time; a null token or cost stays absent so the page can say so.
+ */
+export function parseUsageReport(result: Json | undefined): UsageReport {
+  const root = obj(result);
+  const raw = arr(root?.rows);
+  return {
+    groupBy: str(root?.group_by) ?? "",
+    rows: raw.flatMap((entry) => {
+      const o = obj(entry);
+      if (!o) return [];
+      return [
+        {
+          harness: str(o.harness) ?? "unknown",
+          model: str(o.model) || undefined,
+          thread: str(o.thread) || undefined,
+          title: str(o.title) || undefined,
+          project: str(o.project) || undefined,
+          day: str(o.day) || undefined,
+          parentId: str(o.parent_id) || undefined,
+          parentTitle: str(o.parent_title) || undefined,
+          ...parseTotals(o),
+        },
+      ];
+    }),
+    totals: parseTotals(obj(root?.totals)),
+    truncated: root?.truncated === true,
+    // A thread row always carries these keys, as null when it has no parent;
+    // an older engine that does not know them has neither key.
+    parentsReported: raw.some((entry) => {
+      const row = obj(entry);
+      return row?.parent_id !== undefined || row?.parent_title !== undefined;
+    }),
+  };
+}

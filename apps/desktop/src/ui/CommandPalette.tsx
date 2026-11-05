@@ -71,6 +71,7 @@ const SETTINGS: [SettingsSection, string][] = [
   ["appearance", "Appearance"],
   ["keyboard", "Keyboard"],
   ["usage", "Usage"],
+  ["statistics", "Statistics: recorded tokens and reported cost"],
   ["advanced", "Advanced: engine, updates and setup"],
 ];
 
