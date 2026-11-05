@@ -22,6 +22,8 @@ export interface UsageView {
   readAt: number | null;
   /** Whether opening the page should read now. */
   fetch: boolean;
+  /** Whether that read must bypass the engine's cache, because a retry can fix it. */
+  force: boolean;
   /** The error page: a failure with nothing to draw. */
   fatal: string | null;
   /** A quiet failure in the foot: the last numbers stay. */
@@ -35,6 +37,9 @@ export interface UsageView {
  * between pages costs nothing and cannot raise a Keychain prompt.
  * A failed read keeps the shown numbers in the foot's note, and is the page
  * only when there is nothing else to show.
+ * While a Claude login's sign-in expired or was refused, the page reads again
+ * even when that answer is fresh, and forces the read past the engine's minute
+ * of cache: the user may have just renewed it in Claude Code.
  */
 export function usageView(
   answer: PageAnswer<UsageAnswer> | null,
@@ -43,13 +48,63 @@ export function usageView(
   now = Date.now(),
 ): UsageView {
   const plans = answer ? (allowed ? answer.data.plans : withoutClaudeData(answer.data.plans)) : null;
+  const force = plans?.some(retryable) ?? false;
   return {
     plans,
     readAt: answer?.readAt ?? null,
-    fetch: !answer || answer.data.asked !== allowed || !pageIsFresh(answer, now),
+    fetch: force || !answer || answer.data.asked !== allowed || !pageIsFresh(answer, now),
+    force,
     fatal: plans === null ? error : null,
     note: plans === null ? null : error,
   };
+}
+
+/**
+ * A failed Claude read that a retry can fix: Claude Code renews an expired
+ * sign-in, and the user signs in again after a refusal. A denied Keychain
+ * prompt is left to an explicit Refresh (asking again would prompt again), a
+ * forbidden sign-in to the user (renewing does not change it), and a transient
+ * failure to the next poll.
+ */
+function retryable(plan: UsagePlan): boolean {
+  return (
+    planOf(plan) === "claude-code" &&
+    plan.status === "unavailable" &&
+    (plan.reason === "expired" || plan.reason === "refused")
+  );
+}
+
+/** The words for a plan row that has no numbers: the reason first, then its error. */
+export function failureText(plan: UsagePlan): { title: string; subtitle?: string } {
+  switch (plan.reason) {
+    case "expired":
+      return {
+        title: "Claude Code's sign-in has expired",
+        subtitle: "Open Claude Code to renew it, then press Refresh.",
+      };
+    case "refused":
+      return {
+        title: "Claude Code did not accept the sign-in",
+        subtitle: "Sign in again in Claude Code, then press Refresh.",
+      };
+    case "forbidden":
+      return {
+        title: "Anthropic does not allow reading this plan's usage",
+        subtitle: "Signing in again does not change that. Press Refresh to try once more.",
+      };
+    case "denied":
+      return {
+        title: "Could not read the sign-in from the Keychain",
+        subtitle: "macOS did not allow it. Press Refresh to be asked again.",
+      };
+    case "transient":
+      return {
+        title: "Could not read the usage",
+        subtitle: "The next read will try again.",
+      };
+    default:
+      return { title: "Could not read the usage" };
+  }
 }
 
 /**
@@ -64,7 +119,16 @@ function withoutClaudeData(plans: UsagePlan[]): UsagePlan[] {
   return plans.flatMap((p) => {
     if (planOf(p) !== "claude-code") return [p];
     if (p !== claude) return [];
-    return [{ ...claude, status: "notAsked" as const, plan: undefined, error: undefined, windows: [] }];
+    return [
+      {
+        ...claude,
+        status: "notAsked" as const,
+        plan: undefined,
+        error: undefined,
+        reason: undefined,
+        windows: [],
+      },
+    ];
   });
 }
 
