@@ -15,7 +15,7 @@ import {
   unseenChild,
 } from "./children";
 
-const child = (id: string, state: ChildInfo["state"], unseen = false): ChildInfo => ({ id, state, unseen });
+const child = (id: string, state: ChildInfo["state"]): ChildInfo => ({ id, state });
 
 describe("a child's state", () => {
   test("a thread waiting on you comes before one that works, and the rest are finished", () => {
@@ -39,11 +39,6 @@ describe("a child read as its group sees it", () => {
     expect(childInfo("a", { status: "running", link: "done" }).state).toBe("working");
     expect(childInfo("a", { status: "idle", link: "cancelled", failed: true }).state).toBe("failed");
     expect(childInfo("a", {}).state).toBe("finished");
-  });
-
-  test("it carries whether the reader has seen the change", () => {
-    expect(childInfo("a", { status: "idle", unseen: true }).unseen).toBe(true);
-    expect(childInfo("a", { status: "idle" }).unseen).toBeUndefined();
   });
 });
 
@@ -181,10 +176,11 @@ describe("the finished ones behind the group's last line", () => {
 });
 
 describe("the group's dot", () => {
-  test("says a child finished unseen, and failure reads stronger", () => {
+  test("says only that a child failed unseen", () => {
     expect(unseenChild([child("a", "finished")])).toBeUndefined();
-    expect(unseenChild([child("a", "finished", true)])).toBe("finished");
-    expect(unseenChild([child("a", "finished", true), child("b", "failed", true)])).toBe("failed");
+    expect(unseenChild([child("a", "failed")])).toBe("failed");
+    expect(unseenChild([child("a", "working"), child("b", "failed")])).toBe("failed");
+    expect(unseenChild([child("a", "working"), child("b", "needs")])).toBeUndefined();
   });
 });
 

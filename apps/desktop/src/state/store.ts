@@ -101,6 +101,7 @@ import {
   linkStarted,
   loadBook,
   queuedLinkDropped,
+  resetWaits,
   stopLinksFrom,
   syncLinkBook,
   threadTurnEnded,
@@ -3220,6 +3221,7 @@ export async function request<T = Json>(
 export function resetForTests() {
   clearTimeout(slowTimer);
   stopPlanPolling();
+  resetWaits();
   engineWatch?.();
   engineWatch = undefined;
   crashed = false;

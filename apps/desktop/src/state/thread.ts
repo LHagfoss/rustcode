@@ -514,7 +514,8 @@ export function beginTurn(
 
 /**
  * The engine resumed a turn on its own (the background commands it parked on
- * finished): it runs again, with a quiet line saying why.
+ * finished): it runs again, with a quiet line saying why. Whether it carries on
+ * is the turn's own business, so the line does not claim it does.
  */
 export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
   if (state.running) return { ...state, waiting: undefined };
@@ -527,7 +528,7 @@ export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
     error: undefined,
     items: [
       ...state.items,
-      { kind: "notice", id: localId("wake"), text: "Background work finished — continuing", tone: "info" },
+      { kind: "notice", id: localId("wake"), text: "Background task finished", tone: "info" },
     ],
   };
 }

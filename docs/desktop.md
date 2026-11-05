@@ -281,7 +281,8 @@ composer's keys stay outside the table.
   `_rustcode/session/activity` (the engine asks the adapter for its async
   tasks, `harness/background.rs`): the thread shows "Waiting on a background
   command", the command's row runs until it ends, and a turn Claude starts
-  itself shows as working.
+  itself shows as working with a quiet "Background task finished" line saying
+  why it ran again.
 - **Pull requests.** A panel lists the project's pull requests
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
@@ -534,7 +535,11 @@ composer's keys stay outside the table.
   named from the task's first words (`childTitle` in `src/lib/title.ts`), so
   that header never becomes a thread title in the sidebar. Chips above the composer (state, open,
   stop), a *Working for* banner, sidebar badges. Stopping a thread stops the
-  work it gave others, and theirs, in one cascade.
+  work it gave others, and theirs, in one cascade. A thread whose turn ended
+  while the threads it handed work to still run says so instead of looking
+  finished: *Waiting on 2 threads* at the foot of the transcript (the titles in
+  its tooltip) and *Waiting* in its sidebar row's status slot, one state read in
+  one place (`src/state/waiting.ts`).
 - **Worktree threads.** The new-thread composer's *Worktree* toggle starts
   the thread in its own worktree, with a branch name suggested from the
   message (`<type>/<slug>`) that can be edited. A worktree thread's menu

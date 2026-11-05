@@ -1,0 +1,88 @@
+import { describe, expect, test } from "bun:test";
+import type { Link, LinkState } from "./orchestration";
+import { type Waiting, waitingLabel, waitingOn, waitingTitle } from "./waiting";
+
+const link = (id: string, orchestrator: string, target: string, state: LinkState): Link => ({
+  id,
+  orchestrator,
+  target,
+  orchestratorTitle: "Parent",
+  targetTitle: `Thread ${target}`,
+  message: "do it",
+  state,
+  createdAt: 0,
+});
+
+/** The reads `waitingOn` needs of the app: the showing state, and what owes it an answer. */
+const read = (
+  shown: Record<string, LinkState>,
+  rest: { running?: boolean; commands?: number; links: Link[]; quiet?: string[] },
+) =>
+  waitingOn({
+    id: "p",
+    running: rest.running ?? false,
+    commands: rest.commands,
+    links: rest.links,
+    state: (l) => shown[l.id] ?? l.state,
+    quiet: (target) => !(rest.quiet ?? []).includes(target),
+  });
+
+describe("waiting on background work", () => {
+  test("a live link it started or messaged is what it waits on", () => {
+    const links = [
+      link("p/1", "p", "a", "working"),
+      link("p/2", "p", "b", "queued"),
+      link("p/3", "p", "c", "needs_user"),
+    ];
+    expect(read({}, { links })?.links.map((l) => l.id)).toEqual(["p/1", "p/2", "p/3"]);
+  });
+
+  test("a settled link whose own subtree still works is not an answer yet", () => {
+    const links = [link("p/1", "p", "a", "done")];
+    // Quiet: done is done.
+    expect(read({}, { links })).toBeUndefined();
+    // The child's own child still works: the parent is not finished either.
+    expect(read({}, { links, quiet: ["a"] })?.links.map((l) => l.id)).toEqual(["p/1"]);
+  });
+
+  test("the state as shown counts: a child waiting on you is still worked with", () => {
+    const links = [link("p/1", "p", "a", "working")];
+    expect(read({ "p/1": "needs_user" }, { links })?.links).toHaveLength(1);
+    // Its own turn ended.
+    expect(read({ "p/1": "done" }, { links })).toBeUndefined();
+  });
+
+  test("a turn of its own means it works, not that it waits", () => {
+    const links = [link("p/1", "p", "a", "working")];
+    expect(read({}, { links, running: true })).toBeUndefined();
+    expect(read({}, { links, running: true, commands: 2 })).toBeUndefined();
+  });
+
+  test("background commands its last turn parked on count on their own", () => {
+    expect(read({}, { links: [], commands: 2 })?.commands).toBe(2);
+    expect(read({}, { links: [], commands: 0 })).toBeUndefined();
+    expect(read({}, { links: [] })).toBeUndefined();
+  });
+
+  test("another thread's links are not what this one waits on", () => {
+    const links = [link("q/1", "q", "a", "working"), link("p/1", "p", "b", "working")];
+    expect(read({}, { links })?.links.map((l) => l.id)).toEqual(["p/1"]);
+  });
+
+  test("the line names the threads, then the commands", () => {
+    const one = (links: Link[], commands = 0): Waiting => ({ links, commands });
+    expect(waitingLabel(one([link("p/1", "p", "a", "working")]))).toBe("Waiting on 1 thread");
+    expect(waitingLabel(one([link("p/1", "p", "a", "working"), link("p/2", "p", "b", "working")]))).toBe(
+      "Waiting on 2 threads",
+    );
+    expect(waitingLabel(one([], 1))).toBe("Waiting on a background command");
+    expect(waitingLabel(one([], 3))).toBe("Waiting on 3 background commands");
+    expect(waitingLabel(one([link("p/1", "p", "a", "working")], 2))).toBe(
+      "Waiting on 1 thread and 2 background commands",
+    );
+    // The tooltip names them: the line has no room for a title.
+    expect(waitingTitle(one([link("p/1", "p", "a", "working"), link("p/2", "p", "b", "working")]))).toBe(
+      "Thread a, Thread b",
+    );
+  });
+});

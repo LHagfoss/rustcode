@@ -121,6 +121,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
+import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
@@ -590,7 +591,7 @@ const ThreadRow = memo(function ThreadRow({
     /** How the group reads in one line, for the chevron's tooltip. */
     summary: string;
     /** Children waiting to be read, when the fold is closed over them. */
-    dot?: "finished" | "failed";
+    dot?: "failed";
     onToggle: () => void;
   };
   /** The row the keyboard is on: it holds the list's one tab stop, ↑ ↓ move it. */
@@ -605,6 +606,8 @@ const ThreadRow = memo(function ThreadRow({
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
   const waiting = useApp((s) => s.threads[session.id]?.waiting ?? 0);
+  // No turn runs, but the threads it started or messaged still work (state/waiting.ts).
+  const wait = useWaiting(session.id);
   const wake = useApp((s) => s.snoozed[session.id]);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
@@ -843,10 +846,13 @@ const ThreadRow = memo(function ThreadRow({
                       {startedAt ? <Elapsed since={startedAt} /> : "Working"}
                     </span>
                   </>
-                ) : waiting ? (
+                ) : wait ? (
+                  // The titles go in the title, which the app reads out as the row's label (lib/quietNative.ts).
                   <span
                     className="flex items-center gap-1 text-fg-muted"
-                    title={`Waiting on ${waiting} background command${waiting === 1 ? "" : "s"}`}
+                    title={
+                      waitingTitle(wait) ? `${waitingLabel(wait)}: ${waitingTitle(wait)}` : waitingLabel(wait)
+                    }
                   >
                     <span className="relative flex size-2 items-center justify-center">
                       <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
@@ -883,7 +889,7 @@ const ThreadRow = memo(function ThreadRow({
                   // What wants you reads strong; what works, waits or has been read recedes.
                   selected || picked || request || fresh || failed
                     ? "font-medium text-fg"
-                    : done || running || waiting
+                    : done || running || wait
                       ? "font-normal text-fg/75 group-hover:text-fg"
                       : "font-medium text-fg",
                 )}
@@ -893,11 +899,8 @@ const ThreadRow = memo(function ThreadRow({
               {fold?.dot && (
                 <span
                   role="img"
-                  aria-label={fold.dot === "failed" ? "A child thread failed" : "A child thread finished"}
-                  className={cx(
-                    "size-1.5 shrink-0 rounded-full",
-                    fold.dot === "failed" ? "bg-danger" : "bg-success",
-                  )}
+                  aria-label="A child thread failed"
+                  className="size-1.5 shrink-0 rounded-full bg-danger"
                 />
               )}
               <LinkBadge threadId={session.id} childrenListed={!!fold} />
@@ -984,8 +987,8 @@ interface ChildGroup {
   foldOpen: boolean;
   /** Whether the group lists anything: what its parent row's chevron says. */
   listed: boolean;
-  /** A child finished (or failed) while you were reading elsewhere. */
-  dot?: "finished" | "failed";
+  /** A child failed (or is about to report that it failed) while you were reading elsewhere. */
+  dot?: "failed";
   /** How the group reads in one line, for the chevron's tooltip. */
   summary: string;
   /** Folds the whole group away, or lists it again. */
@@ -1644,17 +1647,16 @@ export function Sidebar() {
           status: statusOf(s, c.id),
           link: linked.get(c.id),
           failed: !!s.failed[c.id],
-          unseen: !!s.finished[c.id],
         });
-        return `${info.id}:${info.state}:${info.unseen ? 1 : 0}`;
+        return `${info.id}:${info.state}`;
       })
       .join(" ");
   });
   const infos = useMemo(() => {
     const by = new Map<string, ChildInfo>();
     for (const part of childStates.split(" ")) {
-      const [id, state, unseen] = part.split(":");
-      if (id) by.set(id, { id, state: state as ChildInfo["state"], unseen: unseen === "1" });
+      const [id, state] = part.split(":");
+      if (id) by.set(id, { id, state: state as ChildInfo["state"] });
     }
     return by;
   }, [childStates]);

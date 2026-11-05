@@ -231,6 +231,14 @@ const WAKE_WAIT_TRIES = 10;
 /** How often each parent's wake has waited so far, by thread id. */
 const wakeWaits = new Map<string, number>();
 
+/** Between tests: no wait is in flight and no wake timer is armed by the case before. */
+export function resetWaits(): void {
+  waiting.clear();
+  wakeWaits.clear();
+  clearTimeout(wakeTimer);
+  wakeTimer = undefined;
+}
+
 function ruleThread(s: AppState, id: string): RuleThread | undefined {
   const summary = s.sessions.find((x) => x.id === id);
   const thread = s.threads[id];
@@ -1153,6 +1161,21 @@ async function wait(callerId: string, ids: string[], timeoutMs: number): Promise
   try {
     for (;;) {
       const s = useApp.getState();
+      // The turn that asked is over (the user stopped it, or the harness dropped the call): nobody
+      // will read this answer, and holding the links back would keep their wakes from arriving.
+      // A thread the app holds no state for keeps waiting: it cannot tell whether a turn runs.
+      const caller = s.threads[callerId];
+      if (caller && !caller.running) {
+        return {
+          status: "timeout",
+          waited_until: until,
+          links: mine.flatMap((id) => {
+            const link = book().links.find((l) => l.id === id);
+            return link ? [result(link)] : [];
+          }),
+          note: "The turn that waited has ended, so the wait stopped. Anything that settles still comes as a wake; do not poll.",
+        };
+      }
       for (const id of mine) {
         const link = book().links.find((l) => l.id === id);
         if (!link) continue;
@@ -1226,8 +1249,12 @@ function filledWith(link: Link, reply: string): Link {
   return { ...link, answer: text, truncated };
 }
 
-/** Whether a thread owes its parent nothing more: no child of it works, none waits to be told. */
-function subtreeQuiet(id: string): boolean {
+/**
+ * Whether a thread owes its parent nothing more: no child of it works, none
+ * waits to be told. Also what the app calls a link that is still going long
+ * after it settled (state/waiting.ts).
+ */
+export function subtreeQuiet(id: string): boolean {
   return quietTree(book(), wakeContext(Date.now()), id);
 }
 
@@ -1393,11 +1420,13 @@ export function threadTurnEnded(
   failed: string | undefined,
   items: TranscriptItem[],
 ) {
-  // A stopped turn is not an answer: the link turns record their own, and nothing else does.
-  if (outcome === "cancelled") return;
-  const now = Date.now();
-  const says = answerFor(thread, items, outcome === "completed" ? undefined : failed);
-  setBook((b) => restateLinks(b, thread, says, now, woken));
+  // A stopped turn is not an answer: the link turns record their own, and nothing else does. Its
+  // end still matters to a parent: this thread no longer runs, so what it owes may be due now.
+  if (outcome !== "cancelled") {
+    const now = Date.now();
+    const says = answerFor(thread, items, outcome === "completed" ? undefined : failed);
+    setBook((b) => restateLinks(b, thread, says, now, woken));
+  }
   wakeTick();
 }
 
