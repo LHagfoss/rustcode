@@ -1,3 +1,28 @@
+## [v1.10.1-beta.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.10.1-beta.1) - 2026-11-05
+
+### Features
+- Add a Chat width setting (Comfortable, Wide, Full) and show one action row under a finished reply instead of two. (#3020)
+- Follow-ups no longer take a delegation slot, the default is 8 threads at once (2–16 in Settings › Agents), prompts and messages may be 32 KiB, and long answers are paged from `read_session`. (#3022)
+- fix(desktop): stop cutting titles and tool labels inside an emoji or an accented letter (#3023)
+- The Review screen names the base its branch totals compare against (`vs main`, full ref on hover). (#3024)
+- fix(desktop): hide a signed-out default Claude login in Usage, the picker and delegated threads (#3021)
+- A thread started by another thread now runs at no more than the access of the thread that started it, so an Ask or Auto-edit thread can no longer hand a child Full access. (#3025)
+- Threads started with a worktree now appear in the sidebar and chat immediately, with Setting up and elapsed time, instead of looking as if nothing happened. (#3027)
+- Child threads' approvals and questions now appear in the parent thread's transcript, and can be answered there. (#3028)
+- A failed worktree setup no longer leaves its new branch and half-made checkout behind, so retrying a thread keeps the same branch name. (#3029)
+- A harness turn that stops sending output now ends as failed after 10 minutes with nothing running (no unfinished tool call, no permission or question waiting on the user, no background work), and the next message resumes the thread instead of staying "Working" until Stop. (#3026)
+- A thread blocked in `wait_session` no longer keeps its links and its children's answers for up to an hour when the harness drops that call: the wait ends at once and the finished child's answer still arrives as a wake. (#3030)
+- A thread an agent started no longer shows up as a stray top-level row: it stays with its parent, or in Settled once finished when the parent is gone. (#3031)
+- Give the chat's thread strip, group card and Latest pill one glass, and fade the long-draft composer instead of cutting it. (#3032)
+- The composer's plan meter now has numbers on threads that run on a named Claude account, reads them when the thread opens, and stops re-reading an account whose Keychain access was denied. (#3033)
+- Reopening Settings › Usage, Connections or Capabilities now draws the last data at once and refreshes behind it, instead of starting from a skeleton every time. (#3035)
+- Queued messages show their state and actions on hover, like a sent message, and Send now steers pictures on harnesses that take them mid-turn. (#3034)
+- Delegated threads no longer add sidebar rows: the parent shows an overlapping stack of agent marks, and the chat's group cards use the same stack. (#3036)
+- Toasts stack up to three, keep their own timers when another is in front, pause while hovered, focused, dragged or in a background window, never select text while dragged, and Escape dismisses them again; notices that repeated what the screen already showed are gone. (#3037)
+- Claude Code's built-in subagents now show as the same agent icons in the composer tray, sidebar and chat, and the tray stays on one row. (#3038)
+- Opening a picture now blurs the background, and one click zooms in and out. (#3039)
+- Threads stopped by a usage limit now continue on their own when the limit resets, unless you moved them to another harness or account, sent them something else, or turned this off in Settings › General. (#3040)
+- Agents now answer structured questions with designed Smart UI views built from a component kit, and views run when they scroll into sight. (#3041)
 ## [v1.10.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.10.0) - 2026-11-05
 
 ### Features
