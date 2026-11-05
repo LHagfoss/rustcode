@@ -123,6 +123,7 @@ import {
 } from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { nextQueued } from "./queue";
+import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
   appendSteer,
@@ -377,6 +378,11 @@ export interface AppState {
   checkpoints: Record<string, Checkpoint[]>;
   /** The new-thread composer's worktree choice. */
   newWorktree: { on: boolean; branch: string; edited: boolean };
+  /**
+   * A thread sent with a worktree before the engine has its session: the row and the chat show it
+   * while `session/new` runs (state/setup.ts). In memory only, so a reload leaves no ghost row.
+   */
+  pendingSetup: PendingSetup | null;
 }
 
 /** A cached plan older than this is dropped on launch: its windows have moved on. */
@@ -516,6 +522,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   view: { kind: "chat" },
   checkpoints: {},
   newWorktree: { on: false, branch: "", edited: false },
+  pendingSetup: null,
   smartUi: storedFlag(STORAGE.smartUi, SETTINGS_DEFAULTS.smartUi),
   smartUiPending: false,
   terminalOpen: false,
@@ -1238,6 +1245,9 @@ if (typeof window !== "undefined") {
 }
 
 export function selectThread(id: string | null) {
+  // The pending row is not a session: opening it shows the new thread it will become, and sends
+  // nothing to the engine with its client id.
+  if (id && id === get().pendingSetup?.id) id = null;
   clearFinished(id);
   dismissOverlays();
   set({ selectedId: id, switcherOpen: false, settings: null, view: { kind: "chat" } });
@@ -1403,6 +1413,8 @@ export interface NewSession {
   worktree?: { repo: string; branch?: string; title?: string };
   title?: string;
   select?: boolean;
+  /** The setup this session finishes (state/setup.ts): it is listed and the setup cleared together. */
+  pendingId?: string;
 }
 
 /** `session/new` with the harness, model, effort and worktree in `_meta.rustcode`; the thread is added to the list. */
@@ -1438,24 +1450,35 @@ export async function createSession(options: NewSession): Promise<string> {
     harness: parseSessionHarness(result),
     worktree,
   };
+  const summary: SessionSummary = {
+    id,
+    cwd,
+    updatedAt: Date.now(),
+    harness: thread.harness?.id ?? options.harness,
+    account: thread.harness?.account ?? options.account ?? undefined,
+    worktree,
+    title: options.title,
+  };
+  // A pending setup keeps its row and its message until the thread is listed below, so nothing it
+  // shows goes away and comes back between the session and its model. Any other session is listed
+  // at once.
+  const pending = !!options.pendingId && get().pendingSetup?.id === options.pendingId;
   set((st) => ({
     threads: { ...st.threads, [id]: thread },
-    ...(options.select ? { selectedId: id, newThread: null } : {}),
-    sessions: [
-      {
-        id,
-        cwd,
-        updatedAt: Date.now(),
-        harness: thread.harness?.id ?? options.harness,
-        account: thread.harness?.account ?? options.account ?? undefined,
-        worktree,
-        title: options.title,
-      },
-      ...st.sessions,
-    ],
+    ...(pending
+      ? {}
+      : {
+          ...(options.select ? { selectedId: id, newThread: null } : {}),
+          sessions: [summary, ...st.sessions],
+          pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
+        }),
   }));
   // Saved, not only shown: otherwise the thread's first message replaces it at the next list.
-  if (options.title) await renameThread(id, options.title);
+  // A pending setup lets its rename run beside it: the message starts the moment the thread is listed.
+  if (options.title) {
+    const saved = renameThread(id, options.title);
+    if (!pending) await saved;
+  }
   // A model or effort picked before the thread existed applies now, when the thread did not take it
   // from `session/new` (an older engine, or a harness that ignores it there).
   const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
@@ -1465,6 +1488,15 @@ export async function createSession(options: NewSession): Promise<string> {
   }
   if (options.effort && current("effort") !== options.effort && has("effort")) {
     await setConfigOption(id, "effort", options.effort);
+  }
+  if (pending) {
+    // Listed now, with the setup gone in the same update: the row the message was sent to becomes
+    // the thread, in place, and the chat goes on from the message it already shows.
+    set((st) => ({
+      sessions: [summary, ...st.sessions],
+      ...(options.select && !st.selectedId ? { selectedId: id, newThread: null } : {}),
+      pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
+    }));
   }
   return id;
 }
@@ -1488,8 +1520,12 @@ export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): N
   return restoreChoice(s.harnesses, s.harnesses.default.harness, appChoices(s.harnesses));
 }
 
-/** Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and selects it. */
-async function createThread(firstMessage = ""): Promise<string> {
+/**
+ * Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and
+ * selects it. A worktree takes a while, so the thread appears while `session/new` runs; its message
+ * comes back to the composer if the worktree or the harness cannot start.
+ */
+async function createThread(firstMessage = ""): Promise<string | null> {
   const s = get();
   const cwd = s.projectCwd;
   if (!cwd) throw new Error("Choose a project folder for this thread first.");
@@ -1500,7 +1536,7 @@ async function createThread(firstMessage = ""): Promise<string> {
     wt.on && s.features.worktrees
       ? { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) }
       : undefined;
-  const id = await createSession({
+  const options = {
     cwd,
     harness: choice?.harness,
     // The account shown for the new thread: a signed-out default login is not one.
@@ -1509,7 +1545,40 @@ async function createThread(firstMessage = ""): Promise<string> {
     effort: choice?.effort,
     worktree,
     select: true,
-  });
+  };
+  let id: string;
+  if (!worktree) {
+    id = await createSession(options);
+  } else {
+    // The user sent a message: the row and the chat show it while the worktree is made. A second
+    // send finds this one and starts nothing; only a failed setup can be sent again (the retry).
+    const setup = beginSetup(get().pendingSetup, {
+      id: localId("setup"),
+      text: firstMessage,
+      title: titleFrom(firstMessage, 80) || "New thread",
+      cwd,
+      worktree,
+    });
+    if (!setup) {
+      const failed = get().pendingSetup?.failure;
+      if (failed) toast(failed.text, "error");
+      else toast("Setting up the worktree: the thread appears when it is ready.");
+      return null;
+    }
+    set({ pendingSetup: setup });
+    try {
+      // The title the row already shows is the title the thread starts with, so it does not blink
+      // back to "New thread" when the row becomes real.
+      id = await createSession({ ...options, pendingId: setup.id, title: setup.title });
+    } catch (error) {
+      const text = errorText(error);
+      // The setup stays, failed, with the message it holds; the composer gets the text back.
+      set((st) =>
+        st.pendingSetup?.id === setup.id ? { pendingSetup: setupFailed(st.pendingSetup, text) } : {},
+      );
+      return null;
+    }
+  }
   // The access level chosen on the new-thread composer belongs to the thread it started.
   const pendingMode = get().newThreadPermissionMode;
   if (pendingMode) {
@@ -1522,6 +1591,11 @@ async function createThread(firstMessage = ""): Promise<string> {
     toast(branch ? `Working in a new worktree on ${branch}` : "Working in a new worktree", "success");
   }
   return id;
+}
+
+/** Gives up a failed setup: its row and its error leave, and the new-thread screen stays. */
+export function dismissPendingSetup() {
+  set({ pendingSetup: dismissSetup() });
 }
 
 // ---------------------------------------------------------------- thread actions
@@ -1812,6 +1886,7 @@ export function runCommandAction(text: string, from: string | null): boolean {
 }
 
 export async function submit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
+  // A worktree still setting up owns the new-thread screen: sending again must not make a second.
   const trimmed = text.trim();
   if (!trimmed && !hasExtras(extras)) return false;
   // A command the app answers itself, typed alone or left as a bare token.
@@ -1823,7 +1898,11 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   if (bare && runCommandAction(bare, get().selectedId)) return true;
   let id = get().selectedId;
   try {
-    if (!id) id = await createThread(trimmed);
+    if (!id) {
+      const started = await createThread(trimmed);
+      if (!started) return false;
+      id = started;
+    }
   } catch (error) {
     toast(`Could not start the thread: ${errorText(error)}`, "error");
     return false;
@@ -3503,6 +3582,7 @@ export function resetForTests() {
     view: { kind: "chat" },
     checkpoints: {},
     newWorktree: { on: false, branch: "", edited: false },
+    pendingSetup: null,
   });
 }
 

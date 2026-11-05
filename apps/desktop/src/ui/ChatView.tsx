@@ -26,7 +26,9 @@ import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
+import type { PendingSetup } from "../state/setup";
 import {
+  dismissPendingSetup,
   refreshSessions,
   repairThread,
   setPanel,
@@ -39,7 +41,7 @@ import {
   useShortcutHint,
   worktreeOf,
 } from "../state/store";
-import type { ThreadState } from "../state/thread";
+import { formatClock, type ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
@@ -56,10 +58,12 @@ import {
   menuSeparator,
   Pill,
   Skeleton,
+  Spinner,
   Tooltip,
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
 import { DETAILS_CARD } from "./RightPanel";
+import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
 
@@ -253,13 +257,22 @@ export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   changes: { label: "Changes", icon: FileDiff, kind: "cluster", Button: ChangesHeaderButton },
 };
 
-function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boolean }) {
+function Header({
+  thread,
+  pending,
+  overBanner,
+}: {
+  thread?: ThreadState;
+  /** A thread setting up has no session yet, but its title and folder are known (state/setup.ts). */
+  pending?: PendingSetup;
+  overBanner?: boolean;
+}) {
   const projectCwd = useApp((s) => s.projectCwd);
   const shown = useApp((s) => s.headerButtons);
   const folderKey = useShortcutHint("thread-folder");
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
-  const title = thread ? (thread.title ?? listed ?? "New thread") : "New thread";
-  const cwd = thread?.cwd ?? projectCwd;
+  const title = pending?.title ?? (thread ? (thread.title ?? listed ?? "New thread") : "New thread");
+  const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
   // The buttons the user keeps, in their order. Each one decides whether this
   // thread shows it, and the icon buttons share one cluster wherever they land.
   const right: ReactNode[] = [];
@@ -451,8 +464,49 @@ export function laneShift(pane: number, card = DETAILS_CARD, laneMax = LANE_MAX)
   return Math.round(Math.max(0, Math.min(needed, slack)));
 }
 
+/** The setup's clock, ticking on its own so the chat does not re-render every second. */
+function PendingClock({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <>{formatClock(now - since)}</>;
+}
+
+/**
+ * The message a thread was sent with, while its worktree is made: the same user row the transcript
+ * draws, then Setting up with its clock. Failed, the error takes its place with the way to dismiss.
+ */
+function PendingSetupView({ pending }: { pending: PendingSetup }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5 px-3 pb-4 sm:px-5"
+        style={{ paddingTop: HEADER_HEIGHT + 20 }}
+      >
+        <UserRow item={{ kind: "user", id: pending.id, text: pending.text || pending.title }} />
+        {pending.failure ? (
+          <Callout action={<Pill onClick={dismissPendingSetup}>Dismiss</Pill>}>
+            {pending.failure.text}
+          </Callout>
+        ) : (
+          <div className="flex items-center gap-2 text-body text-fg-muted" role="status">
+            <Spinner size={14} />
+            <span>Setting up worktree…</span>
+            <span className="text-fg-faint tabular">
+              <PendingClock since={pending.startedAt} />
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
+  const pending = useApp((s) => s.pendingSetup);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   const stackRef = useRef<HTMLDivElement>(null);
   const [stackHeight, setStackHeight] = useState(140);
@@ -488,7 +542,10 @@ export function ChatView() {
     return observeSize(el, measure);
   }, []);
 
-  const isNew = !selectedId;
+  // A thread setting up owns the new-thread screen until its session exists: the chat keeps its
+  // message and the composer sits at the foot, where the thread's own will be.
+  const showsPending = !!pending && !selectedId;
+  const isNew = !selectedId && !showsPending;
 
   // Toasts sit centred at the top of the chat column, under its header (ui/Toaster.tsx).
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-place when the column resizes
@@ -501,7 +558,6 @@ export function ChatView() {
     doc.setProperty("--rc-toast-top", `${Math.round(r.top + HEADER_HEIGHT + 8)}px`);
   }, [isNew, stackHeight, width, height]);
   const ownRequest = thread?.permissions[0];
-  const request = ownRequest;
   const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   // The lane's gutter is `px-3 sm:px-5` on the row itself, the same classes the transcript's rows use,
@@ -525,12 +581,14 @@ export function ChatView() {
           className="!absolute top-0 left-0 rc-fade-in"
         />
       )}
-      <Header thread={thread} overBanner={showsBanner} />
+      <Header thread={thread} pending={showsPending ? pending : undefined} overBanner={showsBanner} />
       {thread && !thread.loading ? (
         // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
         <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 32} topInset={HEADER_HEIGHT} />
       ) : thread?.loading ? (
         <TranscriptSkeleton />
+      ) : showsPending && pending ? (
+        <PendingSetupView pending={pending} />
       ) : (
         <div className="flex-1" />
       )}
@@ -573,9 +631,9 @@ export function ChatView() {
         )}
         {thread && <LinkedThreads threadId={thread.id} />}
         {report && report.threadId === thread?.id && <ReportPanel text={report.text} />}
-        {request && (
+        {ownRequest && (
           <AttentionCard
-            request={request}
+            request={ownRequest}
             pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
           />
         )}

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { RpcError } from "../acp/jsonrpc";
+import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans } from "../acp/rustcode";
 import { emptyExtras } from "./compose";
 import { answerOrchestration, resolveGrant } from "./host";
+import { pendingRequestsOn } from "./pending";
 import {
   agentHistory,
   answerPermission,
@@ -173,6 +174,62 @@ describe("engine controller with the mock engine", () => {
     expect(menu).toContain("/model");
     // The open thread still reads its own session, whatever the new-thread picker shows.
     expect(commandsFor(useApp.getState(), first.id).map((c) => c.name)).toContain("/status");
+  });
+
+  test("a full-access request for an unloaded thread is answered, not shown in the parent", async () => {
+    const transport = new MockTransport({ delayMs: 0 });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: [
+          {
+            id: "mock-thread-1/full",
+            orchestrator: "mock-thread-1",
+            target: "mock-thread-3",
+            orchestratorTitle: "Parent",
+            targetTitle: "Child",
+            message: "do it",
+            state: "working",
+            createdAt: 1,
+          },
+        ],
+      },
+    }));
+    setPermissionMode("mock-thread-3", "full");
+    expect(useApp.getState().threads["mock-thread-3"]).toBeUndefined();
+    const engine = (
+      transport as unknown as {
+        engine: { ask(method: string, params: JsonObject): Promise<JsonObject> };
+      }
+    ).engine;
+    const answer = await engine.ask("session/request_permission", {
+      sessionId: "mock-thread-3",
+      toolCall: {
+        toolCallId: "call-full",
+        title: "bash",
+        kind: "execute",
+        rawInput: { command: "bun test" },
+      },
+      options: [
+        { optionId: "reject", name: "Reject", kind: "reject_once" },
+        { optionId: "allow", name: "Allow once", kind: "allow_once" },
+      ],
+    });
+    // Full access answered it; loading the thread first did not turn it into a card.
+    expect(answer).toMatchObject({ outcome: { outcome: "selected", optionId: "allow" } });
+    const s = useApp.getState();
+    expect(s.threads["mock-thread-3"]?.loaded).toBe(true);
+    expect(s.threads["mock-thread-3"]?.permissions).toEqual([]);
+    expect(
+      pendingRequestsOn({
+        id: "mock-thread-1",
+        links: s.links.links,
+        requests: (id) => s.threads[id]?.permissions,
+        title: (id) => s.threads[id]?.title,
+      }),
+    ).toEqual([]);
   });
 
   test("a message with images queues whole while a turn runs, and stays editable", async () => {
@@ -814,6 +871,110 @@ test("changing the default access leaves the listed threads as they were", () =>
   expect(permissionModeOf(s, "a")).toBe("ask");
   expect(permissionModeOf(s, "a-new-one")).toBe("edits");
   resetForTests();
+});
+
+describe("what a delegated thread may do without asking", () => {
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    return useApp.getState().sessions[0]!.id;
+  };
+  /** A call whose card, if the caller's own access does not already allow it, is allowed once. */
+  const call = async (params: JsonObject) => {
+    const answering = answerOrchestration(params);
+    let settled = false;
+    void answering.finally(() => {
+      settled = true;
+    });
+    while (!settled) {
+      if (useApp.getState().grant) resolveGrant("once");
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    return answering;
+  };
+  const start = (caller: string, args: JsonObject = {}) =>
+    call({ sessionId: caller, tool: "start_session", args: { prompt: "do it", title: "Child", ...args } });
+
+  test("an Ask parent's child runs at Ask, though Default access is Full", async () => {
+    const parent = await ready();
+    setDefaultPermissionMode("full");
+    setPermissionMode(parent, "ask");
+    const answer = await start(parent);
+    const child = String(answer.session_id);
+    // Reported, so the agent is not told it started a thread it may not have.
+    expect(answer.access).toBe("ask");
+    expect(permissionModeOf(useApp.getState(), child)).toBe("ask");
+  });
+
+  test("an Auto-edit parent's child stops at Auto-edit, and Full hands out Full", async () => {
+    const parent = await ready();
+    setDefaultPermissionMode("full");
+    setPermissionMode(parent, "edits");
+    expect((await start(parent)).access).toBe("edits");
+    setPermissionMode(parent, "full");
+    expect((await start(parent)).access).toBe("full");
+  });
+
+  test("a fan-out gives every child the same capped access", async () => {
+    const parent = await ready();
+    setDefaultPermissionMode("full");
+    setPermissionMode(parent, "edits");
+    const answer = await call({
+      sessionId: parent,
+      tool: "fan_out",
+      args: { prompt: "do it", harnesses: [{ harness: "rustcode" }, { harness: "codex" }] },
+    });
+    const links = answer.links as unknown as { session_id: string; access: string }[];
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link.access).toBe("edits");
+      expect(permissionModeOf(useApp.getState(), link.session_id)).toBe("edits");
+    }
+  });
+
+  test("a grandchild is capped by its own parent, not by Default access", async () => {
+    const parent = await ready();
+    setDefaultPermissionMode("full");
+    setPermissionMode(parent, "ask");
+    const child = String((await start(parent)).session_id);
+    const grandchild = await start(child);
+    expect(grandchild.access).toBe("ask");
+    expect(permissionModeOf(useApp.getState(), String(grandchild.session_id))).toBe("ask");
+  });
+
+  test("a person can still raise a child by hand, and its own children stay capped", async () => {
+    const parent = await ready();
+    setDefaultPermissionMode("ask");
+    setPermissionMode(parent, "ask");
+    const child = String((await start(parent)).session_id);
+    expect(permissionModeOf(useApp.getState(), child)).toBe("ask");
+    // The shield under the child's own composer is the user's choice, which no cap overrides.
+    setPermissionMode(child, "full");
+    expect(permissionModeOf(useApp.getState(), child)).toBe("full");
+    // What an agent starts is still only what the app hands out: Full parent, Ask default.
+    expect((await start(child)).access).toBe("ask");
+  });
+
+  test("lowering a parent later leaves the children it already started as they were", async () => {
+    const parent = await ready();
+    setDefaultPermissionMode("full");
+    setPermissionMode(parent, "full");
+    const child = String((await start(parent)).session_id);
+    expect(permissionModeOf(useApp.getState(), child)).toBe("full");
+    setPermissionMode(parent, "ask");
+    expect(permissionModeOf(useApp.getState(), child)).toBe("full");
+  });
+
+  test("configure_session reports a child's access and never changes it", async () => {
+    const parent = await ready();
+    setDefaultPermissionMode("full");
+    setPermissionMode(parent, "ask");
+    const child = String((await start(parent)).session_id);
+    setPermissionMode(parent, "full");
+    const read = await call({ sessionId: parent, tool: "configure_session", args: { session_id: child } });
+    expect(read.access).toBe("ask");
+    expect(permissionModeOf(useApp.getState(), child)).toBe("ask");
+  });
 });
 
 describe("plan usage cache", () => {

@@ -7,6 +7,7 @@
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
+import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
 import { withWakeMark } from "./thread";
 
@@ -1347,6 +1348,8 @@ export interface GrantAsk {
   detail: string;
   project?: string;
   harnesses?: string[];
+  /** The access a new thread starts at (`start`, `fan_out`): never more than the caller's own. */
+  access?: PermissionMode;
   worktree?: boolean;
 }
 
