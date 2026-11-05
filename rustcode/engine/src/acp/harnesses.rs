@@ -408,12 +408,11 @@ pub(crate) async fn load_session(
     let dir = harness::config::config_dir().map_err(failure)?;
     let (_, entries) = harness::config::load_in(&dir);
     let accounts = harness::config::load_accounts_in(&dir);
-    let account = match record.account.as_deref() {
-        Some(id) => {
-            Some(harness::config::find_account(&accounts, &record.harness, id).map_err(failure)?)
-        }
-        None => None,
-    };
+    // A removed account must not lock a thread out of its own history. The
+    // thread opens and replays what it recorded; nothing is started, and its
+    // next prompt says the account is gone (`ensure_started`). The meta still
+    // names the account, so the client can show it was removed.
+    let account = harness::config::account_for_load(&accounts, &record);
     let resolved = harness::resolve(&entries, &record.harness).ok_or_else(|| {
         failure(format!(
             "this thread ran on '{}', which is no longer configured",
@@ -474,6 +473,25 @@ pub(crate) async fn load_session(
         )))
 }
 
+/// Where a switch starts from: the open session, a built-in thread's folder,
+/// or the record of a thread that is not open (for example one whose account
+/// was removed). Never starts a harness.
+fn switch_origin(
+    current: Option<&ExternalSession>,
+    builtin_cwd: Option<std::path::PathBuf>,
+    to: &str,
+    session_id: &str,
+) -> Option<(String, store::HarnessRecord)> {
+    match (current, builtin_cwd) {
+        (Some(current), _) => Some((current.harness.id.clone(), current.record())),
+        (None, Some(cwd)) => Some((
+            harness::BUILTIN_ID.to_owned(),
+            store::HarnessRecord::new(to, cwd),
+        )),
+        (None, None) => store::load(session_id).map(|record| (record.harness.clone(), record)),
+    }
+}
+
 /// Why a thread cannot change harness or account now: its turn is running.
 fn switch_refusal(session_id: &str) -> Option<&'static str> {
     crate::thread_status::is_running(session_id)
@@ -527,14 +545,8 @@ pub(crate) async fn switch(
         None => None,
     };
     let current = get(sessions, &session_id).await;
-    let (from, mut record) = match (&current, builtin_cwd) {
-        (Some(current), _) => (current.harness.id.clone(), current.record()),
-        (None, Some(cwd)) => (
-            harness::BUILTIN_ID.to_owned(),
-            store::HarnessRecord::new(&to, cwd),
-        ),
-        (None, None) => return Err(failure(format!("unknown session '{session_id}'"))),
-    };
+    let (from, mut record) = switch_origin(current.as_deref(), builtin_cwd, &to, &session_id)
+        .ok_or_else(|| failure(format!("unknown session '{session_id}'")))?;
     let account_id = account.as_ref().map(|account| account.id.as_str());
     if from == to && record.account.as_deref() == account_id {
         return Err(failure(format!(
@@ -657,11 +669,15 @@ pub(crate) fn config_value(value: &SessionConfigOptionValue) -> Value {
 }
 
 /// `_meta.rustcode.harness` of a listed thread, for one on an external
-/// harness.
+/// harness, and the account it runs on (so a client can count a login's
+/// threads without opening each one).
 pub(crate) fn list_meta(session_id: &str) -> Option<(Value, Option<String>)> {
     let record = store::load(session_id)?;
     Some((
-        serde_json::json!({ "harness": { "id": record.harness } }),
+        serde_json::json!({
+            "harness": { "id": record.harness },
+            "account": record.account,
+        }),
         record.model,
     ))
 }
@@ -685,6 +701,65 @@ mod tests {
             "{error}"
         );
         assert!(find_account(&accounts, "claude-code", "paral-2").is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_thread_loads_with_its_removed_account_and_its_history() {
+        let record = store::HarnessRecord {
+            harness: "claude-code".into(),
+            account: Some("gone".into()),
+            ..store::HarnessRecord::new("claude-code", std::env::temp_dir())
+        };
+        // Loading resolves the record's account without the config entry.
+        let account = harness::config::account_for_load(&[], &record).expect("account named");
+        assert_eq!(account.id, "gone");
+        assert_eq!(account.display_name(), "gone");
+        let resolved = harness::resolve(&[], "claude-code").unwrap();
+        let meta = harness::session_meta_for(&resolved, Some(&account), false);
+        assert_eq!(
+            meta["rustcode"]["account"]["id"], "gone",
+            "the client still learns which account the record names"
+        );
+
+        // The history the load replays, with no harness started.
+        let history = vec![
+            crate::app::ChatMessage::new("user", "hello"),
+            crate::app::ChatMessage::new("assistant", "hi"),
+        ];
+        let updates = harness::transcript::replay(&history, None);
+        assert!(updates.len() >= 2, "the recorded conversation replays");
+        let thread = crate::harness::session::test_support::with_record(&resolved, record, None);
+        // Offline options: reading them never starts the harness.
+        let _ = thread.session.config_options().await;
+        assert_eq!(
+            thread.session.record().account.as_deref(),
+            Some("gone"),
+            "no quiet fall back to the default login"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_thread_with_a_removed_account_can_switch() {
+        let session_id = crate::config::create_detached_session();
+        let mut record = store::HarnessRecord::new("claude-code", std::env::temp_dir());
+        record.account = Some("gone".into());
+        store::save(&session_id, &record);
+        // Not open in this engine: its own record is the starting point.
+        let (from, origin) = switch_origin(None, None, "claude-code", &session_id)
+            .expect("a closed thread still switches");
+        assert_eq!(from, "claude-code");
+        assert_eq!(origin.account.as_deref(), Some("gone"));
+
+        // An open thread is used as it is.
+        let harness = crate::harness::session::test_support::harness(
+            "claude-code",
+            harness::HarnessKind::Acp,
+        );
+        let thread = crate::harness::session::test_support::with_record(&harness, origin, None);
+        let (from, origin) =
+            switch_origin(Some(&thread.session), None, "claude-code", "ignored").unwrap();
+        assert_eq!(from, "claude-code");
+        assert_eq!(origin.account.as_deref(), Some("gone"));
     }
 
     #[test]

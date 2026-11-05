@@ -31,7 +31,11 @@ export function UsagePage() {
   const load = useCallback(async (withClaude: boolean) => {
     setLoading(true);
     try {
-      const answer = parsePlans(await request(Method.usagePlans, { claude: withClaude }, 20_000));
+      // Showing this page (or Refresh) is the explicit consent that also
+      // reads each account's own sign-in; the background poll never does.
+      const answer = parsePlans(
+        await request(Method.usagePlans, { claude: withClaude, claudeAccounts: withClaude }, 20_000),
+      );
       setPlans(answer);
       // The same answer fills the cache the composer's meter reads, and asking
       // here is what lets the background poll read Claude again after a pause.

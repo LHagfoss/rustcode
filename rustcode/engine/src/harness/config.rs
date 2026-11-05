@@ -315,6 +315,24 @@ pub(crate) fn find_account(
         .ok_or_else(|| format!("unknown {harness} account '{id}'; add it in Settings › Agents"))
 }
 
+/// The account a loaded thread names, for its `_meta` and snapshot row: the
+/// real entry, or a placeholder with the record's id when it was removed.
+/// Loading never fails on a removed account; only a prompt then does.
+pub(crate) fn account_for_load(
+    accounts: &[HarnessAccount],
+    record: &crate::harness::store::HarnessRecord,
+) -> Option<HarnessAccount> {
+    let id = record.account.as_deref()?;
+    Some(
+        find_account(accounts, &record.harness, id).unwrap_or_else(|_| HarnessAccount {
+            id: id.to_owned(),
+            harness: record.harness.clone(),
+            name: None,
+            config_dir: String::new(),
+        }),
+    )
+}
+
 /// Whether `config_dir` is the harness's own default sign-in.
 fn is_default_dir(dir: &Path) -> bool {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {

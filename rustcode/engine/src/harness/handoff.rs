@@ -215,6 +215,44 @@ mod tests {
     }
 
     #[test]
+    fn an_old_harness_id_and_a_new_account_label_both_read() {
+        let history = vec![ChatMessage::new("user", "hello")];
+        // Records written before accounts kept the harness id.
+        let old = context(&history, "claude-code", "codex").unwrap();
+        assert!(
+            old.starts_with(
+                "<context>\nThis conversation started on Claude Code and continues here on Codex"
+            ),
+            "{old}"
+        );
+        // Since accounts, the value may be a display label; it is not looked
+        // up as a harness id and reads as written.
+        let label = "Claude Code · Paral 2";
+        let new = context(&history, label, "claude-code").unwrap();
+        assert!(
+            new.starts_with(
+                "<context>\nThis conversation started on Claude Code · Paral 2 and continues here on Claude Code"
+            ),
+            "{new}"
+        );
+        let update = divider(&marker_with(
+            "claude-code",
+            Some("Paral 2"),
+            "claude-code",
+            Some("Paral 3"),
+            None,
+        ))
+        .unwrap();
+        let value = serde_json::to_value(&update).unwrap();
+        assert_eq!(
+            value["content"]["text"],
+            "Switched from Claude Code · Paral 2 to Claude Code · Paral 3"
+        );
+        assert_eq!(value["_meta"]["rustcode"]["from_account"], "Paral 2");
+        assert_eq!(value["_meta"]["rustcode"]["to_account"], "Paral 3");
+    }
+
+    #[test]
     fn nothing_to_hand_over_is_none() {
         assert!(context(&[], "codex", "pi").is_none());
     }

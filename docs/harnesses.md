@@ -219,7 +219,9 @@ config only: a checked-out project cannot choose where a thread signs in.
 
 *Remove* drops the config entry only: the directory, with the login and the
 conversations in it, stays on disk, and the request is refused while a live
-thread runs on that account. `auth` for an account means its own credentials
+thread runs on that account. Threads that ran on it stay readable: they open
+and replay their history, and only their next prompt reports the missing
+account (they can be moved to another account or the default login). `auth` for an account means its own credentials
 exist (`<dir>/.credentials.json`, or on macOS the Keychain item its directory
 names); `unknown` means they could not be found cheaply. `check` looks the
 macOS item up too, without reading the secret. Nothing is started to answer
@@ -240,8 +242,12 @@ would hide the macOS Keychain login) and `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are removed from that
 child, so a login-shell variable cannot override the chosen login.
 
-Plan usage is read per account (`_rustcode/usage/plans` returns one Claude
-row per login, each with `account` and its name). On macOS a named account's
+Plan usage is read per account, but only when a client asks explicitly:
+`_rustcode/usage/plans` with `claudeAccounts: true` returns one Claude row per
+login (`account` and its name), which Settings › Usage sends when the page is
+shown or refreshed. The background poll reads only the default login, so
+opening Settings › Agents never reads an unseen account's Keychain item. On
+macOS a named account's
 Keychain item is `Claude Code-credentials-` plus the first 8 hex digits of
 the SHA-256 of its directory path; that name is undocumented, and a missing
 item is reported as not signed in rather than guessed at.

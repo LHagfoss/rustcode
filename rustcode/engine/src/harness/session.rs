@@ -995,6 +995,19 @@ pub(crate) mod test_support {
     /// A thread on `harness` with no store, its permission requests answered
     /// with `choice`.
     pub(crate) fn thread(harness: &ResolvedHarness, choice: Option<&str>) -> Thread {
+        with_record(
+            harness,
+            HarnessRecord::new(&harness.id, std::env::temp_dir()),
+            choice,
+        )
+    }
+
+    /// A thread on `harness` with its own record (an account, a model) and no store.
+    pub(crate) fn with_record(
+        harness: &ResolvedHarness,
+        record: HarnessRecord,
+        choice: Option<&str>,
+    ) -> Thread {
         let (updates_tx, updates) = mpsc::unbounded_channel();
         let (permissions_tx, permissions) = mpsc::unbounded_channel();
         let sink = Arc::new(ChannelSink {
@@ -1005,7 +1018,7 @@ pub(crate) mod test_support {
         let session = ExternalSession::new(
             "test-thread".to_owned(),
             harness.clone(),
-            HarnessRecord::new(&harness.id, std::env::temp_dir()),
+            record,
             Vec::new(),
             sink,
             false,
@@ -1065,5 +1078,38 @@ pub(crate) mod test_support {
                 })
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod removed_account_tests {
+    use super::*;
+    use crate::harness::store::HarnessRecord;
+
+    #[tokio::test]
+    async fn a_prompt_on_a_removed_account_errors_without_starting() {
+        let harness = super::test_support::harness("claude-code", HarnessKind::Acp);
+        let mut record = HarnessRecord::new("claude-code", std::env::temp_dir());
+        record.account = Some("removed-login".to_owned());
+        let thread = super::test_support::with_record(&harness, record, None);
+        let error = thread
+            .session
+            .prompt(vec![ContentBlock::Text(TextContent::new(
+                "hello".to_owned(),
+            ))])
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("unknown claude-code account 'removed-login'"),
+            "{error}"
+        );
+        assert!(
+            thread.session.history().is_empty(),
+            "the failed start recorded nothing and started no process"
+        );
+        assert!(
+            thread.session.record().account.as_deref() == Some("removed-login"),
+            "the record keeps the account, never a quiet fall back"
+        );
     }
 }

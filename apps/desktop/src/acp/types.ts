@@ -154,6 +154,8 @@ export interface SessionSummary {
   harness?: string;
   /** The worktree the thread runs in (`_meta.rustcode.worktree`). */
   worktree?: Worktree;
+  /** The named account the thread runs on (`_meta.rustcode.account`). */
+  account?: string;
   /** Engine-reported status (`_meta.rustcode.status`). */
   status?: ThreadStatus;
   /** Pinned in the engine (`_meta.rustcode.pinned`). */
@@ -175,6 +177,7 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
       worktree: parseWorktree(rc?.worktree),
       status: parseStatus(rc?.status),
       pinned: bool(rc?.pinned),
+      account: str(rc?.account),
       id,
       cwd: str(e?.cwd) ?? "",
       title: str(e?.title),

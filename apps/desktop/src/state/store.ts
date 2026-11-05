@@ -1402,6 +1402,7 @@ export async function createSession(options: NewSession): Promise<string> {
         cwd,
         updatedAt: Date.now(),
         harness: thread.harness?.id ?? options.harness,
+        account: thread.harness?.account ?? options.account ?? undefined,
         worktree,
         title: options.title,
       },
@@ -2504,12 +2505,6 @@ export function switchNewThreadHarness(harness: string) {
 }
 
 /**
- * Move a thread to another harness: the
- * harness starts fresh and its first prompt carries the conversation so far
- * (`_rustcode/session/harness`). It starts on the model and effort it was
- * last left on; the thread shows a divider where it switched.
- */
-/**
  * Move an idle thread to another account of its harness: the new account's
  * process starts, the conversation moves as a handoff summary with the next
  * message, and the thread keeps its history. Never while a turn runs.
@@ -2532,6 +2527,9 @@ export async function switchThreadAccount(id: string, account: string | null): P
       harness: next,
       configOptions: parseConfigOptions(result?.configOptions),
     }));
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, account: next?.account } : x)),
+    }));
     toast(
       named
         ? `This thread now runs on ${named.name}. The conversation so far moves over as a summary with your next message.`
@@ -2546,6 +2544,12 @@ export async function switchThreadAccount(id: string, account: string | null): P
   }
 }
 
+/**
+ * Move a thread to another harness: the
+ * harness starts fresh and its first prompt carries the conversation so far
+ * (`_rustcode/session/harness`). It starts on the model and effort it was
+ * last left on; the thread shows a divider where it switched.
+ */
 export async function switchThreadHarness(id: string, harness: string): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread || thread.running) return false;
@@ -2564,7 +2568,9 @@ export async function switchThreadHarness(id: string, harness: string): Promise<
       harness: next,
       configOptions: parseConfigOptions(result?.configOptions),
     }));
-    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, harness } : x)) }));
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, harness, account: undefined } : x)),
+    }));
     const opened = get().threads[id];
     if (opened && lacksModels(opened)) void ensureHarnessModels(harness);
     void refreshPlanUsage(id);
@@ -3217,9 +3223,14 @@ export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
   const kept = forgetPlans(get().planCache, gone);
   const learned = plansToCache(answers);
   setPlanCache(mergePlans(kept, learned));
+  // Only the default login's failure pauses the poll; an account without a
+  // sign-in is that account's own row and must not stop Claude's meter.
   if (
     answers.some(
-      (p) => planHarness(p.id) === "claude-code" && (p.status === "signedOut" || p.status === "unavailable"),
+      (p) =>
+        planHarness(p.id) === "claude-code" &&
+        !p.account &&
+        (p.status === "signedOut" || p.status === "unavailable"),
     )
   ) {
     claudePaused = true;

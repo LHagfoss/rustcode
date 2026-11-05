@@ -246,6 +246,11 @@ pub(crate) async fn harness_limits(harness: &str) -> serde_json::Value {
 pub(crate) struct UsagePlansRequest {
     #[serde(default)]
     pub claude: bool,
+    /// Read each named Claude account's own sign-in too. Only an explicit
+    /// look in Settings › Usage asks for that, never the background poll: an
+    /// unseen Keychain item can raise a macOS prompt.
+    #[serde(default)]
+    pub claude_accounts: bool,
 }
 
 /// Answer `_rustcode/usage/plans`: `{plans: [{id, name, status, plan?, error?,
@@ -284,9 +289,13 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     if request.claude {
         use crate::provider_auth::claude_usage::usage;
         claude.push(claude_row("claude", "Claude", None, usage(None).await));
-        let accounts = crate::harness::config::config_dir()
-            .map(|dir| crate::harness::config::load_accounts_in(&dir))
-            .unwrap_or_default();
+        let accounts = if request.claude_accounts {
+            crate::harness::config::config_dir()
+                .map(|dir| crate::harness::config::load_accounts_in(&dir))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for account in accounts
             .iter()
             .filter(|account| account.harness == "claude-code")

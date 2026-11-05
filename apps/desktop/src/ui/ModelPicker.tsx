@@ -469,8 +469,12 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const accounts = harness?.accounts ?? [];
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
   const accountName = accounts.find((a) => a.id === account)?.name;
+  // A thread keeps its account id when that login is removed from Settings:
+  // it stays readable, and the picker says which one is gone.
+  const accountRemoved = !isNew && !!account && !accountName;
+  const accountLabel = accountRemoved ? "Removed account" : (accountName ?? "Default login");
   // A running thread keeps its login, as it keeps its harness.
-  const accountBlocked = accounts.length > 0 && !isNew && !!thread?.running;
+  const accountBlocked = (accounts.length > 0 || accountRemoved) && !isNew && !!thread?.running;
   // An external harness lists its models only when asked: ask for a new thread on it, or a restored
   // thread that knows only its own model. A failed ask is tried again when the picker opens.
   const listsLater =
@@ -641,7 +645,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                   {effortReason}
                 </div>
               )}
-              {accounts.length > 0 && (
+              {(accounts.length > 0 || accountRemoved) && (
                 <Tooltip label={accountBlocked ? "Stop the turn to switch account" : undefined}>
                   <button
                     type="button"
@@ -653,8 +657,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                     )}
                   >
                     <span className="text-callout text-fg-muted">Account</span>
-                    <span className="flex flex-1 items-center justify-end gap-1.5 truncate font-medium text-callout">
-                      {accountName ?? "Default login"}
+                    <span
+                      className={cx(
+                        "flex flex-1 items-center justify-end gap-1.5 truncate font-medium text-callout",
+                        accountRemoved && "text-warning",
+                      )}
+                    >
+                      {accountLabel}
                     </span>
                     <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
                   </button>
@@ -686,6 +695,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                 <ChevronLeft size={13} />
                 Account
               </button>
+              {accountRemoved && (
+                <div className="flex flex-col gap-0.5 rounded-lg bg-fill-subtle px-2.5 py-1.5">
+                  <span className="text-callout text-warning">Removed account · {account}</span>
+                  <span className="text-caption text-fg-faint">
+                    This login is no longer in Settings › Agents. The thread stays readable; choose Default
+                    login or another account to continue it.
+                  </span>
+                </div>
+              )}
               {[
                 { id: null, name: "Default login" },
                 ...accounts.map((a) => ({ id: a.id, name: a.name })),

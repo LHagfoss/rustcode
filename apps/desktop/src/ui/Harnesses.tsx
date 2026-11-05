@@ -101,6 +101,9 @@ function accountStatus(account: HarnessAccount): string {
  */
 export function AccountsList({ harness }: { harness: Harness }) {
   const accounts = harness.accounts ?? [];
+  // Threads the list already knows about: no request, just a count for the
+  // remove dialog.
+  const threads = useApp((s) => s.sessions);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -121,9 +124,15 @@ export function AccountsList({ harness }: { harness: Harness }) {
     setBusy(false);
   };
   const remove = (account: HarnessAccount) => {
+    const used = threads.filter(
+      (thread) => thread.harness === harness.id && thread.account === account.id,
+    ).length;
     askConfirm({
       title: `Remove the account “${account.name}”?`,
-      message: `RustCode forgets the account. Its directory, ${account.config_dir}, stays on disk with the sign-in and conversations in it.`,
+      message:
+        `RustCode forgets the account. Its directory, ${account.config_dir}, stays on disk with the sign-in and conversations in it. ` +
+        `Threads on this account stay readable, but they need another account to continue.` +
+        (used ? ` ${used} thread${used === 1 ? "" : "s"} use${used === 1 ? "s" : ""} it now.` : ""),
       action: "Remove account",
       destructive: true,
       run: () => void removeHarnessAccount(harness.id, account.id),

@@ -716,7 +716,8 @@ export class MockEngine {
               _meta: {
                 model: t.model,
                 rustcode: {
-                  harness: t.harness,
+                  harness: { id: t.harness },
+                  ...(t.account ? { account: t.account } : {}),
                   ...(t.status ? { status: t.status } : {}),
                   ...(t.pinned ? { pinned: true } : {}),
                   ...(t.worktree ? { worktree: t.worktree as unknown as Json } : {}),
