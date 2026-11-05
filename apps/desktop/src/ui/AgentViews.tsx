@@ -33,7 +33,7 @@ import {
   type TranscriptItem,
   workingLabel,
 } from "../state/thread";
-import { AgentStack } from "./AgentStack";
+import { AgentMarks, AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
 import { Markdown } from "./Markdown";
 import { cx, Orb, Skeleton, Spinner, Tooltip } from "./primitives";
@@ -703,8 +703,8 @@ interface Working {
 }
 
 /**
- * Over the composer while agents work: a ring and `2 agents working`; hover
- * lists each with the step it is on.
+ * In the composer's tray while agents work: the same marks as everywhere else,
+ * so one icon wide or three and `+N`; hover lists each with the step it is on.
  */
 export function AgentPill({ threadId }: { threadId?: string }) {
   const agents = useApp((s) => (threadId ? (s.agents[threadId] ?? EMPTY) : EMPTY));
@@ -742,6 +742,12 @@ export function AgentPill({ threadId }: { threadId?: string }) {
     return out;
   }, [agents, thread?.items, thread?.running]);
   const now = useNow(working.length > 0);
+  // The same marks as the sidebar's row and the chat's group cards, whatever runs the agent.
+  const harness = thread?.harness?.id;
+  const marks = useMemo<StackAgent[]>(
+    () => working.map((w) => ({ id: w.key, state: "working", harness, label: w.name })),
+    [working, harness],
+  );
   // Agents leaving the list finished: say so for a moment instead of the pill just going away.
   const [finished, setFinished] = useState(0);
   const before = useRef({ threadId, count: working.length });
@@ -762,7 +768,7 @@ export function AgentPill({ threadId }: { threadId?: string }) {
     return (
       <span
         role="status"
-        className="flex h-[26px] items-center gap-1.5 rounded-full bg-success/10 px-2.5 text-callout text-success rc-in"
+        className="flex h-[26px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-success/10 px-2.5 text-callout text-success rc-in"
       >
         <CircleCheck size={13} className="rc-dot-in" />
         {finished === 1 ? "Agent finished" : `${finished} agents finished`}
@@ -774,10 +780,10 @@ export function AgentPill({ threadId }: { threadId?: string }) {
       <HoverCard.Trigger asChild>
         <button
           type="button"
-          className="flex h-[26px] cursor-default items-center gap-2 rounded-full bg-accent/[0.08] px-2.5 text-callout text-accent rc-in"
+          aria-label={working.length === 1 ? "1 agent working" : `${working.length} agents working`}
+          className="flex h-[28px] shrink-0 cursor-default items-center rounded-full px-2 hover:bg-fill data-[state=open]:bg-fill rc-in"
         >
-          <Orb />
-          {working.length === 1 ? "1 agent working" : `${working.length} agents working`}
+          <AgentMarks agents={marks} tone="surface" />
         </button>
       </HoverCard.Trigger>
       <HoverCard.Portal>

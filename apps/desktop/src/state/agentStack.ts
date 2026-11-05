@@ -3,6 +3,9 @@
 // Pure, so the sidebar, the chat's group cards and their tests share one answer
 // (ui/AgentStack.tsx).
 
+import { agentActive, type SubagentInfo } from "../acp/rustcode";
+import { subagentOf, type TranscriptItem } from "./thread";
+
 /** A delegate as the stack reads it: what it is doing and what runs it. */
 export type StackState = "needs" | "working" | "done" | "failed";
 
@@ -77,4 +80,28 @@ export function agentStack(
     running: needs + working > 0,
     label: stackLabel(needs, working, order.length),
   };
+}
+
+/**
+ * A thread's own subagents at work, as stack marks: the harness's built-in ones
+ * (Claude Code's Agent and Task calls) and RustCode's. They have no thread of
+ * their own, so they show the mark of the thread they run on, and only a running
+ * turn has any: a replayed call is over.
+ */
+export function liveSubagents(
+  items: readonly TranscriptItem[] | undefined,
+  agents: readonly SubagentInfo[],
+  running: boolean,
+  harness?: string,
+): StackAgent[] {
+  const out: StackAgent[] = agents
+    .filter(agentActive)
+    .map((a) => ({ id: `rc-${a.id}`, state: "working", harness, label: a.name }));
+  if (!running) return out;
+  for (const item of items ?? []) {
+    if (item.kind !== "tool" || (item.status !== "pending" && item.status !== "in_progress")) continue;
+    const agent = subagentOf(item);
+    if (agent) out.push({ id: item.id, state: "working", harness, label: agent.task || agent.name });
+  }
+  return out;
 }

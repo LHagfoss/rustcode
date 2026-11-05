@@ -909,8 +909,7 @@ export const Composer = memo(function Composer({
         <PlanMeter threadId={thread?.id} />
         {thread && <ContextRing threadId={thread.id} />}
         <ModelPicker thread={thread} compact={compact} />
-        {/* The harness shows in the model picker; the agents are not repeated here either. */}
-        <span className="empty:hidden @max-lg/composer:hidden">
+        <span className="empty:hidden">
           <AgentPill threadId={thread?.id} />
         </span>
       </div>
@@ -1059,10 +1058,13 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
           <button
             type="button"
             disabled={!!thread && !cwd}
-            className={cx(footerButton, "data-[state=open]:bg-fill disabled:hover:bg-transparent")}
+            className={cx(
+              footerButton,
+              "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
+            )}
           >
             <Folder size={12} />
-            <span className="max-w-[220px] truncate @max-lg/composer:max-w-[96px]">
+            <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px]">
               {cwd ? projectName(cwd) : "Choose a folder"}
             </span>
             <ChevronDown size={11} className="text-fg-faint" />
@@ -1147,7 +1149,7 @@ function FolderActions({ cwd }: { cwd: string }) {
 
 // A button in the composer's footer: quiet until hovered, and its fill is its open state.
 const footerButton =
-  "flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
+  "flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
 const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
   ask: Shield,
