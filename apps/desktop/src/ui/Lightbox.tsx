@@ -1,8 +1,8 @@
-// A picture opened from the composer or the transcript: over a dimmed backdrop,
-// fit to the window. Esc or a click outside closes it, ←→ step through the
-// message's pictures. Pinch or ⌘-scroll zooms at the pointer, a double-click
-// toggles 2× there, + − 0 zoom from the keyboard, and a zoomed picture pans by
-// dragging or scrolling.
+// A picture opened from the composer or the transcript: over a dimmed, blurred
+// backdrop, fit to the window. Esc or a click outside closes it, ←→ step through
+// the message's pictures. Pinch or ⌘-scroll zooms at the pointer, a click on the
+// picture toggles 2× there, + − 0 zoom from the keyboard, and a zoomed picture
+// pans by dragging or scrolling.
 //
 // Gestures must not wait for a React render: the live view lives in a ref and
 // the frame is written to the picture's transform straight from a
@@ -76,6 +76,9 @@ export function zoomAt(view: View, zoom: number, px: number, py: number): View {
   return { zoom: next, x: px - (px - view.x) * k, y: py - (py - view.y) * k };
 }
 
+/** More travel than this and a press was a pan, not a click. */
+const CLICK_SLOP_PX = 4;
+
 export function Lightbox() {
   const current = useSyncExternalStore(subscribe, () => state);
   const open = current !== null;
@@ -89,6 +92,8 @@ export function Lightbox() {
   const frame = useRef(0);
   const eased = useRef(false);
   const dragging = useRef<{ x: number; y: number } | null>(null);
+  // How far this press travelled: a pan that ends on the picture is not a click on it.
+  const pressTravel = useRef(0);
   const zoomSyncedAt = useRef(0);
   const zoomIdle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const index = current?.index;
@@ -216,7 +221,8 @@ export function Lightbox() {
   const many = current.images.length > 1;
   const zoomed = zoomLevel > MIN_ZOOM;
   // Solid, not glass: these sit over a picture that moves, and a backdrop blur
-  // there would be recomputed on every frame of a pan.
+  // there would be recomputed on every frame of a pan. The scrim's own blur sits
+  // under the picture, over a transcript that holds still.
   const round =
     "absolute flex size-9 items-center justify-center rounded-full bg-surface-2 text-fg shadow-1 hover:bg-surface-3";
   const nav = cx(round, "top-1/2 -translate-y-1/2");
@@ -225,7 +231,7 @@ export function Lightbox() {
       role="dialog"
       aria-modal="true"
       aria-label={image.alt || "Picture"}
-      className="rc-overlay fixed inset-0 z-[60] bg-bg/80"
+      className="rc-overlay fixed inset-0 z-[60] bg-bg/70 [-webkit-backdrop-filter:var(--rc-glass-filter)] [backdrop-filter:var(--rc-glass-filter)]"
       data-state="open"
     >
       <div
@@ -240,6 +246,7 @@ export function Lightbox() {
           draggable={false}
           decoding="async"
           onPointerDown={(e) => {
+            pressTravel.current = 0;
             if (view.current.zoom <= MIN_ZOOM || e.button !== 0) return;
             e.currentTarget.setPointerCapture(e.pointerId);
             dragging.current = { x: e.clientX, y: e.clientY };
@@ -248,6 +255,7 @@ export function Lightbox() {
             const d = dragging.current;
             if (!d) return;
             const v = view.current;
+            pressTravel.current += Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y);
             commit({ zoom: v.zoom, x: v.x + e.clientX - d.x, y: v.y + e.clientY - d.y }, { live: true });
             d.x = e.clientX;
             d.y = e.clientY;
@@ -255,7 +263,8 @@ export function Lightbox() {
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           onLostPointerCapture={endDrag}
-          onDoubleClick={(e) => {
+          onClick={(e) => {
+            if (pressTravel.current > CLICK_SLOP_PX) return;
             const { cx: ccx, cy: ccy } = centre();
             const v = view.current;
             commit(v.zoom > MIN_ZOOM ? FITTED : zoomAt(v, 2, e.clientX - ccx, e.clientY - ccy), {
