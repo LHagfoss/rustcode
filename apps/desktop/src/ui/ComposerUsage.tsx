@@ -16,9 +16,9 @@ import {
 } from "../acp/rustcode";
 import type { SessionUsage } from "../acp/types";
 import {
-  harnessOf,
   onlyCachedPlan,
   openSettings,
+  planKeyFor,
   refreshPlanCache,
   refreshPlanUsage,
   shownPlan,
@@ -215,9 +215,15 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
  */
 export function PlanMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
-  const harness = useApp((s) => harnessOf(s, threadId));
   const usageOpen = useApp((s) => s.settings === "usage");
-  const cached = useApp((s) => (harness ? s.planCache[harness] : onlyCachedPlan(s.planCache)));
+  // The thread's own account has its own numbers: the meter never shows
+  // another login's plan, not even the same harness's default one.
+  const cached = useApp((s) => {
+    const key = planKeyFor(s, threadId);
+    if (!key) return onlyCachedPlan(s.planCache);
+    if (key.includes("#")) return s.planCache[key];
+    return s.planCache[key] ?? (threadId ? undefined : onlyCachedPlan(s.planCache));
+  });
   const { plan, cached: fromCache } = shownPlan(own, cached);
   const shown = plan ? shownWindow(plan) : undefined;
   if (!plan || !shown) return null;

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
-import { parsePlans } from "../acp/rustcode";
+import { harnessPlanKey, parsePlans } from "../acp/rustcode";
 import { emptyExtras } from "./compose";
 import { answerOrchestration, resolveGrant } from "./host";
 import {
@@ -746,7 +746,38 @@ describe("plan usage cache", () => {
       fetchedAt: 5000,
       name: "Claude",
       plan: "max",
+      harness: "claude-code",
+      account: null,
     });
+  });
+
+  test("each account is its own cache entry", () => {
+    const cache = plansToCache(
+      parsePlans({
+        plans: [
+          {
+            id: "claude",
+            name: "Claude",
+            harness: "claude-code",
+            status: "ok",
+            windows: [{ label: "5-hour", usedPercent: 18, windowMinutes: 300 }],
+          },
+          {
+            id: "claude:paral-2",
+            name: "Paral 2",
+            harness: "claude-code",
+            account: "paral-2",
+            status: "ok",
+            windows: [{ label: "5-hour", usedPercent: 71, windowMinutes: 300 }],
+          },
+        ],
+      }),
+    );
+    expect(Object.keys(cache).sort()).toEqual(["claude-code", "claude-code#paral-2"]);
+    expect(cache["claude-code#paral-2"]?.account).toEqual("paral-2");
+    expect(cache["claude-code"]?.windows[0]?.usedPercent).toBe(18);
+    expect(harnessPlanKey("claude-code", "paral-2")).toBe("claude-code#paral-2");
+    expect(harnessPlanKey("claude-code", null)).toBe("claude-code");
   });
 
   test("a thread's own limits always win over the cache", () => {

@@ -310,6 +310,10 @@ export interface UsagePlan {
   name: string;
   /** The CLI it was read from ("Claude Code"). */
   via?: string;
+  /** The harness it belongs to; names an account's row apart from the default one. */
+  harness?: string;
+  /** The named account it was read from, null or absent for the default login. */
+  account?: string | null;
   status: PlanStatus;
   /** The tier the provider named ("max"). */
   plan?: string;
@@ -322,6 +326,24 @@ const PLAN_HARNESS: Record<string, string> = { claude: "claude-code" };
 
 export function planHarness(id: string): string {
   return PLAN_HARNESS[id] ?? id;
+}
+
+/** The harness a plan row belongs to: the engine names it, older ones only by id. */
+export function planOf(p: UsagePlan): string {
+  return p.harness ?? planHarness(p.id);
+}
+
+/**
+ * The cache key of a plan row: the harness for its default login, and the
+ * account's id for a named one, so two accounts never share numbers.
+ */
+export function planKey(p: UsagePlan): string {
+  return p.account ? `${planOf(p)}#${p.account}` : planOf(p);
+}
+
+/** The cache key of a harness's login, with the account when the thread uses one. */
+export function harnessPlanKey(harness: string, account?: string | null): string {
+  return account ? `${harness}#${account}` : harness;
 }
 
 export function parsePlans(result: Json | undefined): UsagePlan[] {
@@ -349,6 +371,8 @@ export function parsePlans(result: Json | undefined): UsagePlan[] {
         id,
         name: str(o.name) ?? id,
         via: str(o.via),
+        harness: str(o.harness),
+        account: str(o.account),
         status: status as PlanStatus,
         plan: str(o.plan),
         error: str(o.error),

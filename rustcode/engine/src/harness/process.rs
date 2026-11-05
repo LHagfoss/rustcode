@@ -82,13 +82,15 @@ pub(crate) fn not_found_message(program: &str) -> String {
 }
 
 /// Start `command` in `cwd`. `log_session` names the thread whose debug log
-/// receives the child's stderr.
+/// receives the child's stderr. `env` adds variables; `remove` drops ones the
+/// login shell brought in, so a chosen harness account is not overridden.
 pub(crate) fn spawn(
     harness_id: &str,
     command: &[String],
     cwd: &Path,
     log_session: Option<String>,
     env: &[(String, String)],
+    remove: &[&str],
 ) -> Result<(HarnessProcess, ChildStdout, ChildStdin), String> {
     let program = command
         .first()
@@ -109,6 +111,9 @@ pub(crate) fn spawn(
         if name.to_string_lossy().starts_with("RUSTCODE_") {
             builder.env_remove(name);
         }
+    }
+    for name in remove {
+        builder.env_remove(name);
     }
     builder.envs(env.iter().map(|(name, value)| (name, value)));
     #[cfg(unix)]
@@ -163,6 +168,7 @@ mod tests {
             dir.path(),
             None,
             &[],
+            &[],
         )
         .err()
         .unwrap();
@@ -173,6 +179,7 @@ mod tests {
             &["sh".into(), "-c".into(), "sleep 30 & sleep 30".into()],
             dir.path(),
             None,
+            &[],
             &[],
         )
         .unwrap();

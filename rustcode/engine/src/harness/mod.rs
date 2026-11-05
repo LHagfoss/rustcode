@@ -447,11 +447,31 @@ pub(crate) fn session_meta(
     )])
 }
 
+/// [`session_meta`] that also names the account the thread runs on, if any.
+pub(crate) fn session_meta_for(
+    harness: &ResolvedHarness,
+    account: Option<&config::HarnessAccount>,
+    orchestration: bool,
+) -> serde_json::Map<String, Value> {
+    let mut meta = session_meta(harness, orchestration);
+    if let Some(account) = account
+        && let Some(Value::Object(rustcode)) = meta.get_mut("rustcode")
+    {
+        rustcode.insert(
+            "account".to_owned(),
+            json!({ "id": account.id, "name": account.display_name() }),
+        );
+    }
+    meta
+}
+
 /// One `harnesses` row of the snapshot.
 fn snapshot_entry(
     harness: &ResolvedHarness,
     detection: &detect::Detection,
     entries: &[config::HarnessEntry],
+    accounts: &[config::HarnessAccount],
+    probe: bool,
 ) -> Value {
     let learned = learned_for(&harness.id);
     let builtin = harness.kind == HarnessKind::Builtin;
@@ -465,6 +485,19 @@ fn snapshot_entry(
         .find(|entry| entry.id == harness.id)
         .filter(|entry| entry.model.is_some() || entry.effort.is_some())
         .map(|entry| json!({ "model": entry.model, "effort": entry.effort }));
+    // A named login is only a directory; whether it is signed in is read from
+    // its own credentials, never by starting the harness.
+    let accounts = config::accounts_of(accounts, &harness.id)
+        .into_iter()
+        .map(|account| {
+            json!({
+                "id": account.id,
+                "name": account.display_name(),
+                "config_dir": account.config_dir,
+                "auth": detect::account_auth(&account, probe),
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "id": harness.id,
         "name": harness.name,
@@ -481,6 +514,7 @@ fn snapshot_entry(
         "models": models,
         // The model and effort last chosen for a new thread on it.
         "last": last,
+        "accounts": accounts,
         "error": learned.error.or_else(|| detection.error.clone()),
     })
 }
@@ -528,13 +562,21 @@ pub(crate) async fn snapshot() -> Result<Value, String> {
 }
 
 pub(crate) async fn snapshot_in(dir: &std::path::Path) -> Result<Value, String> {
+    snapshot_in_with(dir, false).await
+}
+
+/// The snapshot with each account's sign-in read from its credentials;
+/// `probe` also looks for the macOS Keychain item an account's directory
+/// names. Only a client's explicit Refresh asks for that.
+pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Result<Value, String> {
     let (defaults, entries) = config::load_in(dir);
+    let accounts = config::load_accounts_in(dir);
     let harnesses = resolve_all(&entries);
     let detections = futures_detect(&harnesses).await;
     let rows = harnesses
         .iter()
         .zip(detections.iter())
-        .map(|(harness, detection)| snapshot_entry(harness, detection, &entries))
+        .map(|(harness, detection)| snapshot_entry(harness, detection, &entries, &accounts, probe))
         .collect::<Vec<_>>();
     Ok(json!({
         "harnesses": rows,
@@ -578,6 +620,32 @@ pub(crate) async fn remove(id: &str) -> Result<Value, String> {
     config::edit_in(&dir, |_, harnesses| config::remove(harnesses, id))?;
     detect::forget(id);
     snapshot_in(&dir).await
+}
+
+/// `_rustcode/harnesses/accounts/add`: name a config directory of its own.
+pub(crate) fn add_account(change: config::AccountChange) -> Result<Value, String> {
+    let dir = config::config_dir()?;
+    let account = config::add_account_in(&dir, change)?;
+    Ok(json!({
+        "id": account.id,
+        "harness": account.harness,
+        "name": account.display_name(),
+        "config_dir": account.config_dir,
+    }))
+}
+
+/// `_rustcode/harnesses/accounts/remove`: forget an account. Its directory,
+/// with the login and conversations in it, stays on disk.
+pub(crate) fn remove_account(harness: &str, id: &str) -> Result<(), String> {
+    let dir = config::config_dir()?;
+    config::remove_account_in(&dir, harness.trim(), id.trim()).map(|_| ())
+}
+
+/// The snapshot with each account's sign-in looked up in its own credentials
+/// (`_rustcode/harnesses/accounts/check`, the Accounts list's Refresh).
+pub(crate) async fn check_accounts() -> Result<Value, String> {
+    let dir = config::config_dir()?;
+    snapshot_in_with(&dir, true).await
 }
 
 /// `_rustcode/harnesses/default`.
@@ -710,6 +778,7 @@ pub(crate) fn builtin_start(asked: &HarnessRequest) -> HarnessRequest {
         starting_choice(BUILTIN_ID, asked, &defaults, &entries, &builtin_models());
     HarnessRequest {
         harness: asked.harness.clone(),
+        account: asked.account.clone(),
         model,
         effort,
     }
@@ -818,6 +887,9 @@ fn refresh_if_stale(harness: ResolvedHarness) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HarnessRequest {
     pub harness: Option<String>,
+    /// The named account of that harness (`[[harness_accounts]]`), when the
+    /// thread runs on one.
+    pub account: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
 }
@@ -834,6 +906,7 @@ pub(crate) fn requested(meta: Option<&serde_json::Map<String, Value>>) -> Harnes
     };
     HarnessRequest {
         harness: field("harness"),
+        account: field("account"),
         model: field("model"),
         effort: field("effort"),
     }
@@ -853,6 +926,7 @@ mod tests {
             requested(Some(&meta)),
             HarnessRequest {
                 harness: Some("codex".into()),
+                account: None,
                 model: Some("gpt-6-luna".into()),
                 effort: None,
             }
@@ -1037,6 +1111,7 @@ mod tests {
         );
         let asked = HarnessRequest {
             harness: Some("claude-code".into()),
+            account: None,
             model: Some("sonnet".into()),
             effort: None,
         };

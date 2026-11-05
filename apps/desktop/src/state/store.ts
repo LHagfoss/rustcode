@@ -5,12 +5,14 @@ import { create } from "zustand";
 import { AcpConnection, type Inbound, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import {
   agentActive,
+  harnessPlanKey,
   nextPlanRefresh,
   type PlanUsage,
   parseAgentList,
   parsePlans,
   parsePlanUsage,
   planHarness,
+  planKey,
   type SubagentInfo,
   type UsagePlan,
   type UsageWindow,
@@ -21,6 +23,7 @@ import {
   byActivity,
   displayPath,
   fallbackHarnessSnapshot,
+  type HarnessAccount,
   type HarnessLast,
   type HarnessSnapshot,
   initializeParams,
@@ -203,6 +206,9 @@ export interface NewThreadChoice {
 export interface CachedPlan extends PlanUsage {
   /** The subscription as Settings › Usage names it ("Claude"), when it was read there. */
   name?: string;
+  /** The harness it belongs to, and the account when it is not the default login. */
+  harness?: string;
+  account?: string | null;
   /** Its tier ("max"), when the provider named one. */
   plan?: string;
 }
@@ -224,6 +230,8 @@ export interface AppState {
   /** Where new threads start by default (Settings › General, ⌘⇧O). */
   defaultCwd: string;
   newThread: NewThreadChoice | null;
+  /** The account a new thread on that harness starts on; null is its default login. */
+  newThreadAccount: string | null;
   harnesses: HarnessSnapshot | null;
   /** The engine's own catalog (`_rustcode/commands`), so a new thread's drawer works before it starts. */
   baseCommands: SlashCommand[];
@@ -367,6 +375,8 @@ const STORAGE = {
   permissionModes: "rustcode.permissionModes",
   /** Each harness's last new-thread choice, for an engine that does not remember it. */
   harnessChoices: "rustcode.harnessChoices",
+  /** Each harness's last account picked for new threads, by harness id. */
+  harnessAccountChoices: "rustcode.harnessAccountChoices",
   /** Each harness's last advertised slash commands, so a new thread's drawer is filled in. */
   harnessCommands: "rustcode.harnessCommands",
   /** Each harness's plan windows, so the composer's meter is there on launch. */
@@ -477,6 +487,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   projectCwd: stored(STORAGE.project) ?? "",
   defaultCwd: stored(STORAGE.project) ?? "",
   newThread: null,
+  newThreadAccount: null,
   harnesses: null,
   baseCommands: [],
   harnessCommands: parseHarnessCommands(stored(STORAGE.harnessCommands)),
@@ -1328,6 +1339,8 @@ export async function closeThread(id: string) {
 export interface NewSession {
   cwd: string;
   harness?: string;
+  /** The harness account to run on; omitted is its default login. */
+  account?: string | null;
   model?: string | null;
   effort?: string | null;
   /** Create a worktree first and run the thread in it (docs/orchestrator.md). */
@@ -1344,6 +1357,7 @@ export async function createSession(options: NewSession): Promise<string> {
   const meta: JsonObject = {};
   if (options.harness && !s.harnesses?.unsupported) {
     meta.harness = options.harness;
+    if (options.account) meta.account = options.account;
     if (options.model) meta.model = options.model;
     if (options.effort) meta.effort = options.effort;
   }
@@ -1431,6 +1445,7 @@ async function createThread(firstMessage = ""): Promise<string> {
   const id = await createSession({
     cwd,
     harness: choice?.harness,
+    account: s.newThreadAccount,
     model: choice?.model,
     effort: choice?.effort,
     worktree,
@@ -2199,6 +2214,59 @@ export async function setHarnessEnabled(id: string, enabled: boolean): Promise<H
   if (snapshot) toast(`${name} ${enabled ? "is on" : "is off"}`, "success");
   return snapshot;
 }
+/** The account id a harness was last given for new threads; null is its default login. */
+export function lastAccountFor(harness: string): string | null {
+  try {
+    const raw = obj(JSON.parse(stored(STORAGE.harnessAccountChoices) ?? "{}")) ?? {};
+    return str(raw[harness]) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function storeAccount(harness: string, account: string | null) {
+  let all: JsonObject;
+  try {
+    all = obj(JSON.parse(stored(STORAGE.harnessAccountChoices) ?? "{}")) ?? {};
+  } catch {
+    all = {};
+  }
+  if (account) all[harness] = account;
+  else delete all[harness];
+  store(STORAGE.harnessAccountChoices, JSON.stringify(all));
+}
+
+/** The named accounts of `harness`, as the snapshot lists them. */
+export function accountsOf(s: Pick<AppState, "harnesses">, harness: string | undefined): HarnessAccount[] {
+  return harness ? (s.harnesses?.harnesses.find((h) => h.id === harness)?.accounts ?? []) : [];
+}
+
+/** The domain part of an account name, as the account's id must read. */
+export function accountSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
+/** The user picked an account for new threads on the current harness. */
+export function pickNewThreadAccount(account: string | null) {
+  const harness = newThreadChoice(get())?.harness;
+  set({ newThreadAccount: account });
+  if (harness) storeAccount(harness, account);
+}
+
+export const addHarnessAccount = (harness: string, id: string, name: string) =>
+  harnessCall(Method.harnessAccountAdd, { harness, id, name });
+export const removeHarnessAccount = (harness: string, id: string) =>
+  harnessCall(Method.harnessAccountRemove, { harness, id });
+
+/** Reads each account's own credentials again (nothing is started, no token is read). */
+export async function checkHarnessAccounts(): Promise<HarnessSnapshot | null> {
+  return harnessCall(Method.harnessAccountCheck, {});
+}
+
 export const addHarness = (id: string, name: string, command: string[]) =>
   harnessCall(Method.harnessSet, { id, name, kind: "acp", command, enabled: true });
 export const removeHarness = (id: string) => harnessCall(Method.harnessRemove, { id });
@@ -2317,7 +2385,12 @@ export function pickNewThreadChoice(choice: NewThreadChoice) {
 export function switchNewThreadHarness(harness: string) {
   const snapshot = get().harnesses;
   if (!snapshot) return;
-  set({ newThread: restoreChoice(snapshot, harness, appChoices(snapshot)) });
+  const known = snapshot.harnesses.find((h) => h.id === harness)?.accounts ?? [];
+  const remembered = lastAccountFor(harness);
+  set({
+    newThread: restoreChoice(snapshot, harness, appChoices(snapshot)),
+    newThreadAccount: known.some((a) => a.id === remembered) ? remembered : null,
+  });
 }
 
 /**
@@ -2326,6 +2399,43 @@ export function switchNewThreadHarness(harness: string) {
  * (`_rustcode/session/harness`). It starts on the model and effort it was
  * last left on; the thread shows a divider where it switched.
  */
+/**
+ * Move an idle thread to another account of its harness: the new account's
+ * process starts, the conversation moves as a handoff summary with the next
+ * message, and the thread keeps its history. Never while a turn runs.
+ */
+export async function switchThreadAccount(id: string, account: string | null): Promise<boolean> {
+  const thread = get().threads[id];
+  if (!thread || thread.running) return false;
+  const harness = thread.harness?.id;
+  if (!harness) return false;
+  const named = accountsOf(get(), harness).find((a) => a.id === account);
+  try {
+    const result = (await engine().request(
+      Method.sessionHarness,
+      { sessionId: id, harness, account },
+      30_000,
+    )) as JsonObject | null;
+    const next = parseSessionHarness(result) ?? thread.harness;
+    updateThread(id, (t) => ({
+      ...t,
+      harness: next,
+      configOptions: parseConfigOptions(result?.configOptions),
+    }));
+    toast(
+      named
+        ? `This thread now runs on ${named.name}. The conversation so far moves over as a summary with your next message.`
+        : "This thread now runs on the default Claude login, with the conversation so far as a summary.",
+      "success",
+    );
+    void refreshPlanUsage(id);
+    return true;
+  } catch (error) {
+    toast(`Could not switch account: ${errorText(error)}`, "error");
+    return false;
+  }
+}
+
 export async function switchThreadHarness(id: string, harness: string): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread || thread.running) return false;
@@ -2752,6 +2862,20 @@ export function harnessOf(
   return s.threads[threadId]?.harness?.id ?? s.sessions.find((x) => x.id === threadId)?.harness;
 }
 
+/**
+ * The plan-cache key of a thread's login: its harness with the account id
+ * when it runs on a named one. A new thread uses the account picked for it.
+ */
+export function planKeyFor(
+  s: Pick<AppState, "threads" | "sessions" | "newThread" | "newThreadAccount" | "harnesses">,
+  threadId?: string,
+): string | undefined {
+  const harness = harnessOf(s, threadId);
+  if (!harness) return undefined;
+  const account = threadId ? s.threads[threadId]?.harness?.account : s.newThreadAccount;
+  return harnessPlanKey(harness, account ?? null);
+}
+
 /** The state `commandsFor` reads. */
 type CommandsSource = Pick<
   AppState,
@@ -2849,8 +2973,8 @@ export function plansToCache(plans: UsagePlan[], fetchedAt = Date.now()): Record
   const out: Record<string, CachedPlan> = {};
   for (const p of plans) {
     if (p.status !== "ok" || !p.windows.length) continue;
-    const harness = planHarness(p.id);
-    out[harness] = {
+    const harness = p.harness ?? planHarness(p.id);
+    out[planKey(p)] = {
       source: harness,
       windows: p.windows.map((w) => ({
         usedPercent: w.usedPercent,
@@ -2860,6 +2984,8 @@ export function plansToCache(plans: UsagePlan[], fetchedAt = Date.now()): Record
       fetchedAt,
       name: p.name,
       plan: p.plan,
+      harness,
+      account: p.account ?? null,
     };
   }
   return out;
@@ -2923,7 +3049,11 @@ export async function refreshPlanUsage(id: string): Promise<void> {
     // other native thread reads them as its own.
     const harness = harnessOf(get(), id);
     if (usage && harness && harness !== "rustcode") {
-      commitPlans({ [harness]: { ...usage, fetchedAt, source: harness } });
+      // The account's own row, so it never overwrites another login's numbers.
+      const key = harnessPlanKey(harness, get().threads[id]?.harness?.account);
+      commitPlans({
+        [key]: { ...usage, fetchedAt, source: harness, harness },
+      });
     }
   } catch {
     set((s) => {
@@ -2957,7 +3087,11 @@ export function claudeUsageAllowed(): boolean {
 export function setClaudeUsageAllowed(on: boolean): void {
   store(CLAUDE_USAGE_KEY, on ? "1" : "0");
   claudePaused = false;
-  if (!on) setPlanCache(forgetPlans(get().planCache, ["claude-code"]));
+  // Every Claude login, the default one and each account's own row.
+  if (!on)
+    setPlanCache(
+      Object.fromEntries(Object.entries(get().planCache).filter(([key]) => !key.startsWith("claude-code"))),
+    );
 }
 
 /**
@@ -2969,9 +3103,7 @@ export function setClaudeUsageAllowed(on: boolean): void {
  */
 export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
   if (asked) claudePaused = false;
-  const gone = answers
-    .filter((p) => p.status === "signedOut" || p.status === "notInstalled")
-    .map((p) => planHarness(p.id));
+  const gone = answers.filter((p) => p.status === "signedOut" || p.status === "notInstalled").map(planKey);
   const kept = forgetPlans(get().planCache, gone);
   const learned = plansToCache(answers);
   setPlanCache(mergePlans(kept, learned));

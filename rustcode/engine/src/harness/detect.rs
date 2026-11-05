@@ -46,6 +46,20 @@ pub(crate) fn forget(id: &str) {
         .remove(id);
 }
 
+/// Whether a named account's config directory holds a sign-in: its own
+/// `.credentials.json`, else (when `probe`) the macOS Keychain item Claude
+/// Code keeps for that directory. Nothing is started and no token is read.
+pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool) -> &'static str {
+    let dir = account.resolved_dir();
+    if dir.join(".credentials.json").is_file() {
+        return "ok";
+    }
+    if probe && crate::provider_auth::claude_usage::keychain_item_exists(&dir) {
+        return "ok";
+    }
+    "unknown"
+}
+
 /// The version the last detection of `id` found, without running anything.
 pub(crate) fn cached_version(id: &str) -> Option<String> {
     cache()

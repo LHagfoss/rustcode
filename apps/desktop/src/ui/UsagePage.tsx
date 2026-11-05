@@ -6,7 +6,7 @@
 
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { parsePlans, planHarness, resetLabel, type UsagePlan } from "../acp/rustcode";
+import { parsePlans, planOf, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import {
   CLAUDE_USAGE_DEFAULT,
@@ -94,7 +94,7 @@ export function UsagePage() {
               }
             />
           )}
-          {planHarness(p.id) === "claude-code" && (
+          {planOf(p) === "claude-code" && !p.account && (
             <Row
               title="Show Claude usage in the composer"
               reset={

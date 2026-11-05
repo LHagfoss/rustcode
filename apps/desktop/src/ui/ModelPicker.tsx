@@ -22,9 +22,11 @@ import {
   lacksModels,
   type NewThreadChoice,
   newThreadChoice,
+  pickNewThreadAccount,
   pickNewThreadChoice,
   setConfigOption,
   switchNewThreadHarness,
+  switchThreadAccount,
   switchThreadHarness,
   useApp,
 } from "../state/store";
@@ -450,7 +452,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     seenAsk.current = ask;
     setOpen(true);
   }, [ask]);
-  const [pane, setPane] = useState<"main" | "models">("main");
+  const [pane, setPane] = useState<"main" | "models" | "accounts">("main");
   const [preview, setPreview] = useState<string | null>(null);
 
   const isNew = !thread;
@@ -463,6 +465,12 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     (h) => h.id === (isNew ? effective.harness : (thread?.harness?.id ?? "rustcode")),
   );
   const caps = isNew ? harness?.capabilities : thread?.harness?.capabilities;
+  const newAccount = useApp((s) => s.newThreadAccount);
+  const accounts = harness?.accounts ?? [];
+  const account = isNew ? newAccount : (thread?.harness?.account ?? null);
+  const accountName = accounts.find((a) => a.id === account)?.name;
+  // A running thread keeps its login, as it keeps its harness.
+  const accountBlocked = accounts.length > 0 && !isNew && !!thread?.running;
   // An external harness lists its models only when asked: ask for a new thread on it, or a restored
   // thread that knows only its own model. A failed ask is tried again when the picker opens.
   const listsLater =
@@ -491,6 +499,22 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const pickEffort = (value: string) => {
     if (thread) void setConfigOption(thread.id, "effort", value);
     else setChoice({ effort: value });
+  };
+  /**
+   * The login a thread runs on. A new thread keeps the choice for its next
+   * one; an idle thread moves to the other account with the conversation so
+   * far as a summary, exactly as switching harness does.
+   */
+  const pickAccount = (id: string | null) => {
+    if (isNew) {
+      pickNewThreadAccount(id);
+      setPane("main");
+      return;
+    }
+    if (!thread || thread.running) return;
+    void switchThreadAccount(thread.id, id).then((switched) => {
+      if (switched) setOpen(false);
+    });
   };
 
   // The providers worth listing: RustCode turned off in Settings › Agents leaves the list, and a
@@ -550,6 +574,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           {fast?.currentBool && <Zap size={11} className="shrink-0 text-fg" fill="currentColor" />}
           <span className="truncate">{label.name}</span>
           {label.effort && <span className="text-fg-faint">{effortLabel(label.effort)}</span>}
+          {accountName && <span className="shrink-0 truncate text-caption text-fg-faint">{accountName}</span>}
           <ChevronUp
             size={11}
             strokeWidth={2.5}
@@ -616,6 +641,25 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                   {effortReason}
                 </div>
               )}
+              {accounts.length > 0 && (
+                <Tooltip label={accountBlocked ? "Stop the turn to switch account" : undefined}>
+                  <button
+                    type="button"
+                    onClick={() => !accountBlocked && setPane("accounts")}
+                    aria-disabled={accountBlocked}
+                    className={cx(
+                      "flex h-8 items-center gap-2 rounded-lg px-2.5 text-left",
+                      accountBlocked ? "text-fg-muted opacity-45" : "hover:bg-fill",
+                    )}
+                  >
+                    <span className="text-callout text-fg-muted">Account</span>
+                    <span className="flex flex-1 items-center justify-end gap-1.5 truncate font-medium text-callout">
+                      {accountName ?? "Default login"}
+                    </span>
+                    <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
+                  </button>
+                </Tooltip>
+              )}
               {showHarness && (
                 <button
                   type="button"
@@ -630,6 +674,50 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                   <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
                 </button>
               )}
+            </div>
+          )}
+          {shownPane === "accounts" && (
+            <div key="accounts" className="flex flex-col gap-1.5 rc-drill">
+              <button
+                type="button"
+                onClick={() => setPane("main")}
+                className="flex h-7 items-center gap-1 self-start rounded-full px-2 font-semibold text-callout text-fg-muted hover:bg-fill"
+              >
+                <ChevronLeft size={13} />
+                Account
+              </button>
+              {[
+                { id: null, name: "Default login" },
+                ...accounts.map((a) => ({ id: a.id, name: a.name })),
+              ].map((option) => {
+                const current = (option.id ?? null) === (account ?? null);
+                return (
+                  <Tooltip
+                    key={option.id ?? "default"}
+                    label={accountBlocked ? "Stop the turn to switch account" : undefined}
+                  >
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={current}
+                      aria-disabled={accountBlocked}
+                      onClick={() => !accountBlocked && pickAccount(option.id)}
+                      className={cx(
+                        "flex w-full items-center gap-2 rounded-lg px-2.5 py-[7px] text-left text-body",
+                        current ? "bg-fill" : "hover:bg-fill-subtle",
+                        accountBlocked && "opacity-45",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{option.name}</span>
+                      {current && <span className="shrink-0 text-accent">✓</span>}
+                    </button>
+                  </Tooltip>
+                );
+              })}
+              <p className="px-2.5 pt-0.5 text-caption text-fg-faint">
+                Each login has its own plan and limits. Changing account moves the conversation so far as a
+                summary, on your next message.
+              </p>
             </div>
           )}
           {shownPane === "models" && (

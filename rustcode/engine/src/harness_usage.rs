@@ -37,11 +37,12 @@ pub fn session_usage(
     harness: &str,
     native_session_id: Option<&str>,
     cwd: Option<&Path>,
+    account_config_dir: Option<&Path>,
 ) -> Option<SessionUsage> {
     let id = native_session_id.filter(|id| !id.trim().is_empty())?;
     match harness {
         "claude-code" => {
-            let logs = claude_logs(id, cwd);
+            let logs = claude_logs(id, cwd, account_config_dir);
             (!logs.is_empty()).then(|| read_claude_logs(&logs))
         }
         "pi" => pi_log(id).map(|path| read_pi(&path)),
@@ -52,7 +53,7 @@ pub fn session_usage(
 /// Claude Code's transcripts of a session: in each config folder, the project
 /// folder named after the working directory, else any project folder that
 /// holds it. A session resumed under another profile has a log in both.
-fn claude_logs(id: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
+fn claude_logs(id: &str, cwd: Option<&Path>, account_config_dir: Option<&Path>) -> Vec<PathBuf> {
     if !safe_id(id) {
         return Vec::new();
     }
@@ -60,7 +61,7 @@ fn claude_logs(id: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
     let configured = std::env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    claude_config_dirs(configured, home.as_deref())
+    claude_config_dirs(configured, home.as_deref(), account_config_dir)
         .iter()
         .filter_map(|base| claude_log_in(&base.join("projects"), id, cwd))
         .collect()
@@ -70,8 +71,17 @@ fn claude_logs(id: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
 /// other profiles such as `~/.claude-work`. A thread keeps its log in the
 /// profile it ran under, whichever one this process was started with. Session
 /// ids are UUIDs, so looking in another profile cannot find the wrong log.
-fn claude_config_dirs(configured: Option<PathBuf>, home: Option<&Path>) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = configured.into_iter().collect();
+fn claude_config_dirs(
+    configured: Option<PathBuf>,
+    home: Option<&Path>,
+    account_config_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    // The account's own directory first: that is where the thread ran.
+    let mut dirs: Vec<PathBuf> = account_config_dir
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect();
+    dirs.extend(configured);
     if let Some(home) = home {
         dirs.push(home.join(".claude"));
         let mut profiles: Vec<PathBuf> = std::fs::read_dir(home)
@@ -368,15 +378,21 @@ mod tests {
         std::fs::create_dir_all(home.path().join(".claude-empty")).unwrap();
         std::fs::create_dir_all(home.path().join(".claude/projects")).unwrap();
 
-        let dirs = claude_config_dirs(Some(PathBuf::from("/set")), Some(home.path()));
+        let account = home.path().join(".claude-paral-2");
+        let dirs = claude_config_dirs(
+            Some(PathBuf::from("/set")),
+            Some(home.path()),
+            Some(&account),
+        );
         assert_eq!(
             dirs,
             vec![
+                account,
                 PathBuf::from("/set"),
                 home.path().join(".claude"),
                 home.path().join(".claude-personal"),
             ],
-            "the configured folder first, then the default, then other profiles"
+            "the account's own folder first, then the configured one, the default, other profiles"
         );
         let found = dirs
             .iter()
@@ -466,12 +482,12 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            session_usage("codex", Some("abc"), None),
+            session_usage("codex", Some("abc"), None, None),
             None,
             "no log format for codex"
         );
-        assert_eq!(session_usage("claude-code", None, None), None);
-        assert_eq!(session_usage("pi", Some("../etc/passwd"), None), None);
+        assert_eq!(session_usage("claude-code", None, None, None), None);
+        assert_eq!(session_usage("pi", Some("../etc/passwd"), None, None), None);
     }
 
     #[test]

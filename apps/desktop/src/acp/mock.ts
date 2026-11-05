@@ -26,6 +26,8 @@ interface MockThread {
   title?: string;
   updatedAt: number;
   harness: string;
+  /** The named account of that harness, when the thread runs on one. */
+  account?: string;
   model: string;
   effort: string;
   history: JsonObject[];
@@ -127,6 +129,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         installed: true,
         auth: "ok",
         capabilities: BUILTIN_CAPABILITIES,
+        accounts: [],
         models: RUSTCODE_MODELS.map((m) => ({
           id: m.value,
           name: m.name,
@@ -148,6 +151,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         login_command: ["codex", "login"],
         install_hint: "brew install codex",
         capabilities: CODEX_CAPS,
+        accounts: [],
         models: [],
         error: null,
       },
@@ -164,6 +168,14 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         login_command: ["claude", "/login"],
         install_hint: "npm install -g @zed-industries/claude-agent-acp",
         capabilities: ACP_CAPS,
+        accounts: [
+          {
+            id: "paral-2",
+            name: "Paral 2",
+            config_dir: "~/.claude-paral-2",
+            auth: "ok",
+          },
+        ],
         models: [],
         error: null,
       },
@@ -179,6 +191,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         login_command: ["gemini"],
         install_hint: "brew install gemini-cli",
         capabilities: ACP_CAPS,
+        accounts: [],
         models: [],
         error: null,
       },
@@ -195,6 +208,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         login_command: ["opencode", "auth", "login"],
         install_hint: "brew install opencode",
         capabilities: ACP_CAPS,
+        accounts: [],
         models: [],
         error: null,
       },
@@ -715,6 +729,9 @@ export class MockEngine {
         const harness = str(meta?.harness) ?? this.harnesses.default.harness;
         const h = this.harnesses.harnesses.find((x) => x.id === harness);
         if (!h) throw Object.assign(new Error(`Unknown harness ${harness}`), { code: -32602 });
+        const account = str(meta?.account);
+        if (account && !(h.accounts ?? []).some((a) => a.id === account))
+          throw Object.assign(new Error(`unknown ${harness} account '${account}'`), { code: -32602 });
         const wanted = obj(meta?.worktree);
         let worktree: MockWorktree | undefined;
         if (wanted) {
@@ -728,6 +745,7 @@ export class MockEngine {
           checkpoints: [],
           updatedAt: Date.now(),
           harness,
+          ...(account ? { account } : {}),
           model:
             str(meta?.model) ??
             h.last?.model ??
@@ -753,6 +771,7 @@ export class MockEngine {
           _meta: {
             rustcode: {
               harness: { id: harness, capabilities: h.capabilities as unknown as Json },
+              ...(account ? { account: { id: account } } : {}),
               ...(worktree ? { worktree: worktree as unknown as Json } : {}),
             },
           },
@@ -813,7 +832,10 @@ export class MockEngine {
               ]
             : configOptions(thread, this.harnesses),
           _meta: {
-            rustcode: { harness: { id: thread.harness, capabilities: (h?.capabilities ?? {}) as Json } },
+            rustcode: {
+              harness: { id: thread.harness, capabilities: (h?.capabilities ?? {}) as Json },
+              ...(thread.account ? { account: { id: thread.account } } : {}),
+            },
           },
         };
       }
@@ -1017,6 +1039,23 @@ export class MockEngine {
                   ],
                 }
               : { id: "claude", name: "Claude", via: "Claude Code", status: "notAsked", windows: [] },
+            ...(p?.claude
+              ? [
+                  {
+                    id: "claude:paral-2",
+                    name: "Paral 2",
+                    via: "Claude Code",
+                    harness: "claude-code",
+                    account: "paral-2",
+                    status: "ok",
+                    plan: "max",
+                    windows: [
+                      { label: "5-hour", usedPercent: 4, windowMinutes: 300, resetsAt: at(4) },
+                      { label: "Weekly", usedPercent: 12, windowMinutes: 10080, resetsAt: at(90) },
+                    ],
+                  },
+                ]
+              : []),
             {
               id: "codex",
               name: "ChatGPT",
@@ -1242,6 +1281,7 @@ export class MockEngine {
             installed: true,
             auth: "unknown",
             capabilities: ACP_CAPS,
+            accounts: [],
             models: [],
             error: null,
           };
@@ -1269,24 +1309,86 @@ export class MockEngine {
           effort: str(params.effort) ?? null,
         };
         return this.snapshot();
+      case "_rustcode/harnesses/accounts/add": {
+        const harness = str(params.harness) ?? "";
+        const h = this.harnesses.harnesses.find((x) => x.id === harness);
+        if (!h) throw Object.assign(new Error(`Unknown harness ${harness}`), { code: -32602 });
+        const id = str(params.id) ?? "";
+        if (!id || !/^[a-z0-9_.-]+$/.test(id))
+          throw Object.assign(new Error(`invalid account id '${id}'`), { code: -32602 });
+        if ((h.accounts ?? []).some((a) => a.id === id))
+          throw Object.assign(new Error(`there is already a ${harness} account '${id}'`), {
+            code: -32602,
+          });
+        h.accounts = [
+          ...(h.accounts ?? []),
+          {
+            id,
+            name: str(params.name) ?? id,
+            config_dir: `~/.claude-${id}`,
+            auth: "unknown",
+          },
+        ];
+        return this.snapshot();
+      }
+      case "_rustcode/harnesses/accounts/remove": {
+        const harness = str(params.harness) ?? "";
+        const h = this.harnesses.harnesses.find((x) => x.id === harness);
+        if (!h) throw Object.assign(new Error(`Unknown harness ${harness}`), { code: -32602 });
+        const id = str(params.id) ?? "";
+        if ((h.accounts ?? []).some((a) => a.id === id && this.threads.some((t) => t.account === id)))
+          throw Object.assign(new Error(`a thread is running on the account '${id}'`), {
+            code: -32602,
+          });
+        h.accounts = (h.accounts ?? []).filter((a) => a.id !== id);
+        return this.snapshot();
+      }
+      case "_rustcode/harnesses/accounts/check":
+        return this.snapshot();
       case "_rustcode/session/harness": {
         const thread = this.thread(params.sessionId);
         const id = str(params.harness) ?? "";
         const h = this.harnesses.harnesses.find((x) => x.id === id);
         if (!h || h.builtin) throw Object.assign(new Error(`cannot switch to '${id}'`), { code: -32602 });
+        const account = str(params.account) ?? null;
+        if (account && !(h.accounts ?? []).some((a) => a.id === account))
+          throw Object.assign(new Error(`unknown ${id} account '${account}'`), { code: -32602 });
         const from = thread.harness;
+        const fromAccount = (this.harnesses.harnesses.find((x) => x.id === from)?.accounts ?? []).find(
+          (a) => a.id === thread.account,
+        )?.name;
         thread.harness = id;
+        thread.account = account ?? undefined;
         thread.model = str(params.model) ?? h.models[0]?.id ?? thread.model;
+        const toAccount = (h.accounts ?? []).find((a) => a.id === account)?.name;
+        const label = (name: string, login?: string) => (login ? `${name} · ${login}` : name);
         const divider = update(thread.id, {
           sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: `Switched from ${from} to ${id}` },
-          _meta: { rustcode: { kind: "handoff", from, to: id, model: thread.model } },
+          content: {
+            type: "text",
+            text: `Switched from ${label(from, fromAccount)} to ${label(id, toAccount)}`,
+          },
+          _meta: {
+            rustcode: {
+              kind: "handoff",
+              from,
+              to: id,
+              from_account: fromAccount ?? null,
+              to_account: toAccount ?? null,
+              model: thread.model,
+            },
+          },
         });
         thread.history.push(divider);
         queueMicrotask(() => this.notify(divider));
         return {
           configOptions: configOptions(thread, this.harnesses),
-          _meta: { rustcode: { harness: { id, capabilities: h.capabilities as unknown as Json } } },
+          _meta: {
+            rustcode: {
+              harness: { id, capabilities: h.capabilities as unknown as Json },
+              ...(account ? { account: { id: account } } : {}),
+            },
+          },
         };
       }
       case "_rustcode/harnesses/remember": {

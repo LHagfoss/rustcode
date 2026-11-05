@@ -1831,6 +1831,46 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: harnesses::AddHarnessAccountRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::add_account(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: harnesses::RemoveHarnessAccountRequest, responder, connection| {
+                    let external = server.external.clone();
+                    connection.spawn(async move {
+                        match harnesses::remove_account(&external, request).await {
+                            Ok(value) => responder.respond(value)?,
+                            Err(error) => responder.respond_with_error(error)?,
+                        }
+                        Ok(())
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: harnesses::CheckHarnessAccountsRequest, responder, connection| {
+                connection.spawn(async move {
+                    match harnesses::check_accounts().await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             {
                 let server = server.clone();
                 async move |request: harnesses::SwitchHarnessRequest, responder, connection| {
@@ -4451,6 +4491,7 @@ mod tests {
             &mut state,
             &crate::harness::HarnessRequest {
                 harness: None,
+                account: None,
                 model: Some("no-such-model".into()),
                 effort: Some("low".into()),
             },
@@ -4461,6 +4502,7 @@ mod tests {
             &mut state,
             &crate::harness::HarnessRequest {
                 harness: None,
+                account: None,
                 model: None,
                 effort: Some("ludicrous".into()),
             },

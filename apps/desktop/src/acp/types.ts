@@ -43,6 +43,9 @@ export const Method = {
   harnessRemove: "_rustcode/harnesses/remove",
   harnessDefault: "_rustcode/harnesses/default",
   harnessRemember: "_rustcode/harnesses/remember",
+  harnessAccountAdd: "_rustcode/harnesses/accounts/add",
+  harnessAccountRemove: "_rustcode/harnesses/accounts/remove",
+  harnessAccountCheck: "_rustcode/harnesses/accounts/check",
   sessionHarness: "_rustcode/session/harness",
   onboardingComplete: "_rustcode/onboarding/complete",
   capabilities: "_rustcode/capabilities",
@@ -725,6 +728,15 @@ export interface HarnessModel {
   default_effort?: string;
 }
 
+/** A named login of a harness: a config directory of its own (`CLAUDE_CONFIG_DIR`). */
+export interface HarnessAccount {
+  id: string;
+  name: string;
+  config_dir: string;
+  /** Whether its own credentials were found; `unknown` when they cannot be read cheaply. */
+  auth: "ok" | "unknown";
+}
+
 export interface Harness {
   id: string;
   name: string;
@@ -741,6 +753,8 @@ export interface Harness {
   models: HarnessModel[];
   /** The model and effort last chosen for a new thread on it (`[[harnesses]]` `model`/`effort`). */
   last?: HarnessLast | null;
+  /** Named logins of this harness (`[[harness_accounts]]`); empty for most harnesses. */
+  accounts?: HarnessAccount[];
   error?: string | null;
 }
 
@@ -816,6 +830,23 @@ export function parseHarnessModels(value: Json | undefined): HarnessModel[] {
   });
 }
 
+export function parseHarnessAccounts(value: Json | undefined): HarnessAccount[] {
+  return arr(value).flatMap((entry) => {
+    const o = obj(entry);
+    const id = str(o?.id);
+    if (!o || !id) return [];
+    const auth = str(o.auth);
+    return [
+      {
+        id,
+        name: str(o.name) ?? id,
+        config_dir: str(o.config_dir) ?? "",
+        auth: auth === "ok" ? "ok" : "unknown",
+      },
+    ];
+  });
+}
+
 export function parseHarnessLast(value: Json | undefined): HarnessLast | null {
   const last = obj(value);
   if (!last) return null;
@@ -853,6 +884,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         capabilities: parseCapabilities(o.capabilities),
         models: parseHarnessModels(o.models),
         last: parseHarnessLast(o.last),
+        accounts: parseHarnessAccounts(o.accounts),
         error: str(o.error) ?? null,
       },
     ];
@@ -885,6 +917,7 @@ export function fallbackHarnessSnapshot(): HarnessSnapshot {
         auth: "ok",
         capabilities: BUILTIN_CAPABILITIES,
         models: [],
+        accounts: [],
         error: null,
       },
     ],
@@ -895,10 +928,18 @@ export function fallbackHarnessSnapshot(): HarnessSnapshot {
 }
 
 /** The harness a `session/new` response says the thread runs on. */
-export function parseSessionHarness(
-  result: Json,
-): { id: string; capabilities: HarnessCapabilities } | undefined {
-  const h = obj(rustcodeMeta(result)?.harness);
+export interface SessionHarness {
+  id: string;
+  capabilities: HarnessCapabilities;
+  /** The named account the thread runs on, when it is not the default login. */
+  account?: string;
+}
+
+export function parseSessionHarness(result: Json): SessionHarness | undefined {
+  const meta = rustcodeMeta(result);
+  const h = obj(meta?.harness);
   const id = str(h?.id);
-  return id ? { id, capabilities: parseCapabilities(h?.capabilities) } : undefined;
+  if (!id) return undefined;
+  const account = str(obj(meta?.account)?.id);
+  return { id, capabilities: parseCapabilities(h?.capabilities), ...(account ? { account } : {}) };
 }

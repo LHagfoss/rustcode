@@ -18,14 +18,42 @@ const BUDGET: usize = 64 * 1024;
 /// A tool call's result is cut to this much.
 const TOOL_LIMIT: usize = 600;
 
-/// The history message that records a switch from `from` to `to`.
-pub(crate) fn marker(from: &str, to: &str, model: Option<&str>) -> ChatMessage {
+/// How a thread's origin or destination is named in a divider: the harness,
+/// with the account's name in brackets when it runs on a named login.
+pub(crate) fn label(harness: &str, account: Option<&str>) -> String {
+    let harness = super::display_name(harness);
+    match account {
+        Some(account) => format!("{harness} · {account}"),
+        None => harness,
+    }
+}
+
+/// The history message that records a switch from `from` to `to`, and the
+/// named accounts either side runs on.
+pub(crate) fn marker_with(
+    from: &str,
+    from_account: Option<&str>,
+    to: &str,
+    to_account: Option<&str>,
+    model: Option<&str>,
+) -> ChatMessage {
     let mut message = ChatMessage::new(
         ROLE,
-        json!({ "from": from, "to": to, "model": model }).to_string(),
+        json!({
+            "from": from, "to": to,
+            "from_account": from_account, "to_account": to_account,
+            "model": model,
+        })
+        .to_string(),
     );
     message.timestamp = chrono::Local::now().to_rfc3339();
     message
+}
+
+/// The history message that records a switch from `from` to `to`.
+#[cfg(test)]
+pub(crate) fn marker(from: &str, to: &str, model: Option<&str>) -> ChatMessage {
+    marker_with(from, None, to, None, model)
 }
 
 /// The divider the client draws for a recorded switch.
@@ -34,15 +62,20 @@ pub(crate) fn divider(marker: &ChatMessage) -> Option<SessionUpdate> {
     let from = value.get("from").and_then(Value::as_str)?;
     let to = value.get("to").and_then(Value::as_str)?;
     let model = value.get("model").and_then(Value::as_str);
+    let from_account = value.get("from_account").and_then(Value::as_str);
+    let to_account = value.get("to_account").and_then(Value::as_str);
     let text = format!(
         "Switched from {} to {}",
-        super::display_name(from),
-        super::display_name(to)
+        label(from, from_account),
+        label(to, to_account)
     );
     let mut meta = serde_json::Map::new();
     meta.insert(
         "rustcode".to_owned(),
-        json!({ "kind": "handoff", "from": from, "to": to, "model": model }),
+        json!({
+            "kind": "handoff", "from": from, "to": to,
+            "from_account": from_account, "to_account": to_account, "model": model,
+        }),
     );
     Some(SessionUpdate::AgentMessageChunk(
         ContentChunk::new(ContentBlock::Text(TextContent::new(text))).meta(meta),

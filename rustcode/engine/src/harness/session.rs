@@ -59,6 +59,10 @@ pub(crate) trait ClientSink: Send + Sync + 'static {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StartOptions {
     pub resume: Option<String>,
+    /// The harness account this thread runs on: a config directory of its
+    /// own, so another login of the same tool is used. `None` is the harness's
+    /// default sign-in, exactly as before accounts existed.
+    pub account: Option<super::config::HarnessAccount>,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub log_session: Option<String>,
@@ -74,6 +78,41 @@ pub(crate) enum Adapter {
     Codex(codex::CodexAdapter),
 }
 
+/// The variables a harness's process is started with, and the ones it must
+/// not inherit. A named account is only a `CLAUDE_CONFIG_DIR`: the harness
+/// keeps its own sign-in there. HOME stays untouched, which would hide the
+/// macOS Keychain login, and the login shell's API keys are dropped so they
+/// cannot override the chosen login.
+fn launch_env(
+    harness: &ResolvedHarness,
+    options: &StartOptions,
+) -> (Vec<(String, String)>, Vec<&'static str>) {
+    let mut env = match (&options.orchestrator, harness.id.as_str()) {
+        (Some(launch), "pi") => match super::config::config_dir() {
+            Ok(config) => super::pi_mcp::environment(launch, &config.join("run").join("pi")),
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let mut remove: Vec<&'static str> = Vec::new();
+    let account = options
+        .account
+        .as_ref()
+        .filter(|account| account.harness == harness.id);
+    if let Some(account) = account {
+        env.push((
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            account.resolved_dir().to_string_lossy().into_owned(),
+        ));
+        remove.extend([
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ]);
+    }
+    (env, remove)
+}
+
 impl Adapter {
     pub(crate) async fn start(
         harness: &ResolvedHarness,
@@ -81,19 +120,14 @@ impl Adapter {
         options: StartOptions,
         out: OutputSender,
     ) -> Result<Self, String> {
-        let env = match (&options.orchestrator, harness.id.as_str()) {
-            (Some(launch), "pi") => match super::config::config_dir() {
-                Ok(config) => super::pi_mcp::environment(launch, &config.join("run").join("pi")),
-                Err(_) => Vec::new(),
-            },
-            _ => Vec::new(),
-        };
+        let (env, remove) = launch_env(harness, &options);
         let (child, stdout, stdin) = process::spawn(
             &harness.id,
             &harness.command,
             cwd,
             options.log_session.clone(),
             &env,
+            &remove,
         )?;
         let (peer, incoming) = RpcPeer::start(stdout, stdin);
         let started = tokio::time::timeout(
@@ -480,6 +514,20 @@ impl ExternalSession {
             dead.kill();
         }
         let record = self.record();
+        // The record names the account; a removed one is an error, never a
+        // quiet fall back to the default login.
+        let account = match record.account.as_deref() {
+            Some(id) => {
+                let dir = super::config::config_dir()?;
+                let accounts = super::config::load_accounts_in(&dir);
+                Some(super::config::find_account(
+                    &accounts,
+                    &self.harness.id,
+                    id,
+                )?)
+            }
+            None => None,
+        };
         let orchestrator = self
             .orchestrator
             .lock()
@@ -500,6 +548,7 @@ impl ExternalSession {
             &self.cwd,
             StartOptions {
                 resume: record.native_session_id.clone(),
+                account,
                 model: record.model.clone(),
                 effort: record.effort.clone(),
                 log_session: self.persist.then(|| self.id.clone()),
@@ -684,11 +733,22 @@ impl ExternalSession {
             let harness = self.harness.id.clone();
             let native = record.native_session_id.clone();
             let cwd = self.cwd.clone();
+            // The log lies in the account's own config directory when the
+            // thread runs on a named login.
+            let account_dir = record.account.as_deref().and_then(|account| {
+                let dir = super::config::config_dir().ok()?;
+                let accounts = super::config::load_accounts_in(&dir);
+                accounts
+                    .into_iter()
+                    .find(|known| known.id == account && known.harness == self.harness.id)
+                    .map(|known| known.resolved_dir())
+            });
             let scanned = tokio::task::spawn_blocking(move || {
                 crate::harness_usage::session_usage(
                     &harness,
                     native.as_deref(),
                     Some(cwd.as_path()),
+                    account_dir.as_deref(),
                 )
             })
             .await
@@ -829,6 +889,70 @@ impl ExternalSession {
         {
             adapter.kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+    use crate::harness::config::HarnessAccount;
+
+    fn account(harness: &str, dir: &str) -> HarnessAccount {
+        HarnessAccount {
+            id: "paral-2".to_owned(),
+            harness: harness.to_owned(),
+            name: Some("Paral 2".to_owned()),
+            config_dir: dir.to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_account_launch_sets_its_directory_and_drops_ambient_keys() {
+        let harness = test_support::harness("claude-code", HarnessKind::Acp);
+        let options = StartOptions {
+            account: Some(account("claude-code", "/tmp/claude-paral-2")),
+            ..Default::default()
+        };
+        let (env, remove) = launch_env(&harness, &options);
+        assert_eq!(
+            env,
+            vec![(
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                "/tmp/claude-paral-2".to_owned()
+            )]
+        );
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ] {
+            assert!(remove.contains(&name), "{name} must not reach the child");
+        }
+        assert!(
+            remove.iter().all(|name| *name != "HOME"),
+            "HOME stays: the macOS Keychain login needs it"
+        );
+    }
+
+    #[test]
+    fn no_account_launch_keeps_todays_environment() {
+        let harness = test_support::harness("claude-code", HarnessKind::Acp);
+        let (env, remove) = launch_env(&harness, &StartOptions::default());
+        assert!(env.is_empty(), "no env change without an account");
+        assert!(remove.is_empty(), "nothing removed without an account");
+    }
+
+    #[test]
+    fn an_account_of_another_harness_is_ignored() {
+        let harness = test_support::harness("codex", HarnessKind::Codex);
+        let options = StartOptions {
+            account: Some(account("claude-code", "/tmp/claude-paral-2")),
+            ..Default::default()
+        };
+        let (env, remove) = launch_env(&harness, &options);
+        assert!(env.is_empty());
+        assert!(remove.is_empty());
+        assert_eq!(harness.id, "codex");
     }
 }
 
