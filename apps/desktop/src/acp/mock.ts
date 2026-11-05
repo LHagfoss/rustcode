@@ -1943,6 +1943,14 @@ export class MockEngine {
           return done("end_turn");
         }
       }
+      // Claude Code's own words when a plan's limit stops a turn: a reply, not a failure.
+      if (/\bhit the limit\b/i.test(prompt)) {
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text("You've hit your 5-hour limit · resets 11:59pm"),
+        });
+        return done("end_turn");
+      }
       if (/\btask agents\b/i.test(prompt)) await this.claudeAgents(push, run);
       else if (/\bagents\b|subagents?/i.test(prompt)) await this.spawnAgents(sid, push, run);
       push({
