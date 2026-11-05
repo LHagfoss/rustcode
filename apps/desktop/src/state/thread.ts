@@ -905,6 +905,84 @@ export function splitSubagentSteps(items: TranscriptItem[]): {
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
 const NO_STEPS: ReadonlyMap<string, ToolItem[]> = new Map();
 
+/**
+ * The tag blocks a harness writes at the head of a subagent's output: Claude
+ * Code's list of the tools it used, and the reminders it wraps around a prompt.
+ * They are for the model, not for the reader.
+ */
+const HARNESS_TAG_BLOCK = /^\s*<(tools-used-before-summary|system-reminder)>[\s\S]*?<\/\1>\s*/;
+
+/**
+ * An agent's answer without the harness tags it starts with, and without the
+ * space they leave. Only leading blocks of the two known tags go: a reply that
+ * talks about XML, or quotes one of these tags mid-sentence, is left intact.
+ */
+export function stripHarnessMarkup(text: string): string {
+  let out = text;
+  while (HARNESS_TAG_BLOCK.test(out)) out = out.replace(HARNESS_TAG_BLOCK, "");
+  return out;
+}
+
+/** The names a harness gives an agent whose call names no type: they say nothing on a row. */
+const GENERIC_AGENT_NAME = new Set(["agent", "task", "default", "general-purpose"]);
+
+/**
+ * A subagent's row title: its agent type (`Explore`), or the task's first line
+ * when the type is only the generic `Agent`/`Task` every call gets.
+ */
+export function subagentTitle(name: string, task: string): string {
+  const type = name.trim();
+  if (type && !GENERIC_AGENT_NAME.has(type.toLowerCase())) return type;
+  const line = task
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  return line || type || "Agent";
+}
+
+/** A shell line without a leading `cd <path> &&`, cut to its command and first argument. */
+function shortCommand(command: string): string {
+  let line = unwrapShell(command.trim());
+  // A `cd` says where the work happens, not what it is; so does a leading `FOO=1`.
+  for (;;) {
+    const next = line.replace(/^cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*/, "");
+    if (next === line) break;
+    line = next;
+  }
+  const tokens = line.split(/\s+/).filter(Boolean);
+  while (tokens.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]!)) tokens.shift();
+  const [name, first] = tokens;
+  if (!name) return "";
+  const head = first ? `${name} ${first}` : name;
+  return tokens.length > 2 ? `${head} …` : head;
+}
+
+/**
+ * A subagent's current step, short enough for its row: `Reading Composer.tsx`,
+ * `Searching for focusComposer`, `Running bun test`. The full label lives in
+ * the steps fold, where there is room for it.
+ */
+export function agentStepLabel(item: ToolItem): string {
+  const input = item.input && typeof item.input === "object" && !Array.isArray(item.input) ? item.input : {};
+  const field = (value: Json | undefined) => (typeof value === "string" ? value.trim() : "");
+  const kind = item.toolKind?.toLowerCase() ?? "";
+  const title = item.title.trim();
+  if (kind === "execute" || /^(bash|shell)\b/i.test(title)) {
+    const command = shortCommand(field(input.command) || item.summary || title);
+    return command ? `Running ${command}` : "Running a command";
+  }
+  if (kind === "read" || /^read\b/i.test(title)) {
+    const path = field(input.file_path) || field(input.path) || /^read\s+(.+)$/i.exec(title)?.[1] || "";
+    const file = path.split(/[\\/]/).filter(Boolean).at(-1);
+    return file ? `Reading ${file}` : "Reading a file";
+  }
+  if (kind === "search" || /^(grep|glob|search|find)\b/i.test(title)) {
+    const query = field(input.pattern) || field(input.query) || usefulSummary(item.summary);
+    return query ? `Searching for ${query}` : "Searching the files";
+  }
+  return stepLabel(item);
+}
+
 /** A step's one-line label: `Running <command>` for a shell, else its summary or title. */
 export function stepLabel(item: ToolItem): string {
   const label = displayTool(item.title, item.input, item.status);

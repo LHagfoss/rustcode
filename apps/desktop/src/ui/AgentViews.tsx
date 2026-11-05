@@ -12,7 +12,15 @@ import { modelName } from "../acp/types";
 import { stateOf } from "../state/host";
 import { isActive, type Link, type LinkState } from "../state/orchestration";
 import { agentHistory, peekThread, selectThread, useApp } from "../state/store";
-import { formatDuration, stepLabel, subagentOf, type TranscriptItem } from "../state/thread";
+import {
+  agentStepLabel,
+  formatDuration,
+  stepLabel,
+  stripHarnessMarkup,
+  subagentOf,
+  subagentTitle,
+  type TranscriptItem,
+} from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
 import { Markdown } from "./Markdown";
 import { cx, Orb, Skeleton, Spinner, Tooltip } from "./primitives";
@@ -170,6 +178,7 @@ export function AgentRow({
   label,
   onClick,
   expanded,
+  showWord = true,
   action,
 }: {
   harness?: string;
@@ -182,10 +191,15 @@ export function AgentRow({
   label?: string;
   onClick?: () => void;
   expanded?: boolean;
+  /**
+   * Whether the state word sits beside the row. Off while a row shows its own
+   * step: a running agent's elapsed time already says it is working.
+   */
+  showWord?: boolean;
   /** A control beside the row, after the chevron: stop this work, show it beside this thread. */
   action?: ReactNode;
 }) {
-  const word = detail !== undefined && state !== "done" ? AGENT_LABEL[state] : undefined;
+  const word = showWord && detail !== undefined && state !== "done" ? AGENT_LABEL[state] : undefined;
   const bottom = detail ?? AGENT_LABEL[state];
   const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left";
   const body = (
@@ -343,8 +357,12 @@ export function SubagentRow({
     : elapsedMs !== undefined && elapsedMs >= 1000
       ? formatDuration(elapsedMs)
       : undefined;
-  const output = info ? info.completion : item.title === "spawn_agent" ? undefined : item.output;
+  const raw = info ? info.completion : item.title === "spawn_agent" ? undefined : item.output;
+  // The harness tags a subagent's answer may open with are for the model, not the row.
+  const output = raw === undefined ? undefined : stripHarnessMarkup(raw) || undefined;
   const name = info?.agentType && info.agentType !== "default" ? info.agentType : agent.name;
+  // `Agent` says nothing; the task does. A named type keeps its name, and the tooltip its task.
+  const title = subagentTitle(name, agent.task);
   // A subagent runs on its parent's harness, and on its model unless the call chose another.
   const parentHarness = useApp((s) => s.threads[threadId]?.harness?.id);
   const parentModel = useApp((s) => s.sessions.find((x) => x.id === threadId)?.model);
@@ -360,13 +378,14 @@ export function SubagentRow({
       <AgentRow
         harness={parentHarness}
         state={state}
-        title={name}
-        detail={running ? (current ? stepLabel(current) : "Starting") : firstLine(output)}
+        title={title}
+        detail={running ? (current ? agentStepLabel(current) : "Starting") : firstLine(output)}
         elapsed={elapsed}
-        label={`${name}: ${agent.task}`}
+        label={title === agent.task.trim() ? title : `${title}: ${agent.task}`}
         expanded={open}
         onClick={() => setOpen(!open)}
         tooltip={<AgentTip title={name} meta={meta} task={agent.task} />}
+        showWord={state !== "working"}
       />
       {open && (
         <div className="rc-expand mt-0.5 mb-1 ml-[42px] flex flex-col rounded-xl border border-border bg-surface-2 px-3 py-2">
@@ -440,7 +459,7 @@ export function SubagentGroupRow({
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1 text-left hover:bg-fill-subtle"
+        className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle"
       >
         <AgentAvatar harness={parentHarness} state={groupState} />
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
@@ -469,7 +488,7 @@ export function SubagentGroupRow({
         />
       </button>
       {open && (
-        <div className="rc-expand mt-0.5 flex flex-col gap-0.5 pb-0.5">
+        <div className="rc-expand flex flex-col gap-0.5">
           {items.map((item) => (
             <SubagentRow key={item.id} item={item} steps={stepsOf(item.id)} threadId={threadId} />
           ))}

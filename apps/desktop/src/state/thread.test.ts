@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseSessionUpdate, type SessionUpdate } from "../acp/types";
 import {
+  agentStepLabel,
   appendSteer,
   applyUpdate,
   attachAutoAllowed,
@@ -19,7 +20,9 @@ import {
   requeueSteers,
   shortAge,
   splitSubagentSteps,
+  stripHarnessMarkup,
   subagentOf,
+  subagentTitle,
   thoughtHeadings,
   wakeTurn,
   workingLabel,
@@ -535,6 +538,108 @@ describe("checkCommands", () => {
     expect(checkCommands("git diff --check")).toEqual([]);
     expect(checkCommands("cat build/test.log")).toEqual([]);
     expect(checkCommands("bun --version")).toEqual([]);
+  });
+});
+
+describe("a subagent row's text", () => {
+  const tool = (body: Record<string, unknown>) => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: { sessionUpdate: "tool_call", ...body },
+    } as never);
+    const item = applyUpdate(emptyThread("s", "/p"), update).items.at(-1);
+    if (item?.kind !== "tool") throw new Error("not a tool call");
+    return item;
+  };
+
+  test("the tags a harness puts at the head of an answer are dropped", () => {
+    const tagged = "<tools-used-before-summary>WebFetch</tools-used-before-summary>\n\nFound the file.";
+    expect(stripHarnessMarkup(tagged)).toBe("Found the file.");
+    expect(stripHarnessMarkup("<system-reminder>be careful</system-reminder>\nDone.")).toBe("Done.");
+    expect(
+      stripHarnessMarkup(
+        "<tools-used-before-summary>Read</tools-used-before-summary>\n<system-reminder>note</system-reminder>\nDone.",
+      ),
+    ).toBe("Done.");
+  });
+
+  test("an answer that is only the tag leaves nothing to show", () => {
+    expect(stripHarnessMarkup("<tools-used-before-summary>WebFetch</tools-used-before-summary>\n")).toBe("");
+  });
+
+  test("a tag named mid-text, or any other markup, stays", () => {
+    const answer = "The `<tools-used-before-summary>` tag wraps the tools a subagent used.";
+    expect(stripHarnessMarkup(answer)).toBe(answer);
+    const xml = "<answer>\nA real reply about <system-reminder> tags.\n</answer>";
+    expect(stripHarnessMarkup(xml)).toBe(xml);
+  });
+
+  test("a generic agent name gives way to the task; a specific one stays", () => {
+    expect(subagentTitle("Agent", "Locate desktop UI code\nand more")).toBe("Locate desktop UI code");
+    expect(subagentTitle("Task", "Map the code")).toBe("Map the code");
+    expect(subagentTitle("Explore", "Map the code")).toBe("Explore");
+    expect(subagentTitle("Agent", "  ")).toBe("Agent");
+  });
+
+  test("a read step names the file", () => {
+    const item = tool({
+      toolCallId: "r1",
+      title: "Read",
+      kind: "read",
+      status: "in_progress",
+      rawInput: { file_path: "/repo/apps/desktop/src/ui/Lightbox.tsx" },
+    });
+    expect(agentStepLabel(item)).toBe("Reading Lightbox.tsx");
+    const titled = tool({
+      toolCallId: "r2",
+      title: "Read Composer.tsx",
+      kind: "read",
+      status: "in_progress",
+      rawInput: {},
+    });
+    expect(agentStepLabel(titled)).toBe("Reading Composer.tsx");
+    const bare = tool({ toolCallId: "r3", title: "Read", kind: "read", status: "in_progress" });
+    expect(agentStepLabel(bare)).toBe("Reading a file");
+  });
+
+  test("a search step names what it looks for", () => {
+    const item = tool({
+      toolCallId: "g1",
+      title: "Grep",
+      kind: "search",
+      status: "in_progress",
+      rawInput: { pattern: "focusComposer" },
+    });
+    expect(agentStepLabel(item)).toBe("Searching for focusComposer");
+  });
+
+  test("a shell step drops the cd prefix and keeps the command and its first argument", () => {
+    const item = tool({
+      toolCallId: "b1",
+      title: "Bash",
+      kind: "execute",
+      status: "in_progress",
+      rawInput: { command: "cd /Users/lagos/code/rustcode/apps/desktop/src && grep -rnE 'status|state' ." },
+    });
+    expect(agentStepLabel(item)).toBe("Running grep -rnE …");
+    const short = tool({
+      toolCallId: "b2",
+      title: "Bash",
+      kind: "execute",
+      status: "in_progress",
+      rawInput: { command: "bun test src/ui" },
+    });
+    expect(agentStepLabel(short)).toBe("Running bun test …");
+  });
+
+  test("a step the row has no shorter form for keeps its label", () => {
+    const item = tool({
+      toolCallId: "w1",
+      title: "WebFetch",
+      status: "in_progress",
+      rawInput: { url: "https://example.com" },
+    });
+    expect(agentStepLabel(item)).toBe("WebFetch");
   });
 });
 
