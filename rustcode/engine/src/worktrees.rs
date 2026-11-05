@@ -384,16 +384,21 @@ pub(crate) fn create(request: &CreateRequest) -> Result<Worktree, WorktreeError>
     });
     let path = parent.join(&slug);
     let path_text = path.to_string_lossy().into_owned();
-    let added = if existing {
-        git(&repo, &["worktree", "add", &path_text, &branch])
-    } else {
-        git(
-            &repo,
-            &["worktree", "add", "-b", &branch, &path_text, &base],
-        )
-    };
-    added
-        .map_err(|message| WorktreeError::failed(format!("git worktree add failed: {message}")))?;
+    // Remembered so a failed add undoes only what it made itself.
+    let path_existed = path.exists();
+    if !existing && let Err(message) = git(&repo, &["branch", "--no-track", &branch, &base]) {
+        return Err(WorktreeError::failed(format!(
+            "git branch failed: {message}"
+        )));
+    }
+    if let Err(message) = git(&repo, &["worktree", "add", &path_text, &branch]) {
+        // A failed add can leave its new branch and a half-made checkout
+        // behind; clearing them keeps the name free for the retry.
+        abandon_create(&repo, &path, path_existed, &branch, !existing, &base);
+        return Err(WorktreeError::failed(format!(
+            "git worktree add failed: {message}"
+        )));
+    }
     let path = std::fs::canonicalize(&path).unwrap_or(path);
     let worktree = Worktree {
         path,
@@ -408,6 +413,121 @@ pub(crate) fn create(request: &CreateRequest) -> Result<Worktree, WorktreeError>
         session_ids: Vec::new(),
     });
     Ok(worktree)
+}
+
+/// Undo what a failed `git worktree add` made, so the next attempt gets the
+/// same branch name and leaves no half-made checkout behind.
+///
+/// `git worktree add` registers the worktree and checks it out before the step
+/// that can fail (a failing post-checkout hook, say), so a failure can leave a
+/// live worktree holding the branch. Only what this call made is touched:
+/// `path_existed` says whether the path was there before the add, `branch` is
+/// the one the add asked for, and `created_branch` whether this call made it.
+fn abandon_create(
+    repo: &Path,
+    path: &Path,
+    path_existed: bool,
+    branch: &str,
+    created_branch: bool,
+    base: &str,
+) {
+    if !path_existed && let Err(error) = remove_leftover_worktree(repo, path, branch) {
+        crate::dbg_log!(
+            "[worktrees] a failed add left {} and it could not be removed: {error}",
+            path.display()
+        );
+    }
+    // The worktree has to be gone first: git refuses to delete a branch that
+    // one still has checked out.
+    if created_branch && let Err(error) = delete_created_branch(repo, branch, base) {
+        crate::dbg_log!(
+            "[worktrees] a failed add left the branch {branch} and it could not be deleted: {error}"
+        );
+    }
+}
+
+/// Remove the worktree a failed add registered at `path`, if git registered
+/// one there for `branch`. Nothing else at that path is touched: a worktree on
+/// another branch is someone else's, however the paths came to collide.
+fn remove_leftover_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), String> {
+    let listed = git(repo, &["worktree", "list", "--porcelain"])?;
+    let expected = format!("refs/heads/{branch}");
+    let field = |block: &str, prefix: &str| {
+        block
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .map(str::to_owned)
+    };
+    let ours = listed.split("\n\n").any(|block| {
+        field(block, "worktree ").is_some_and(|listed| same_path(Path::new(&listed), path))
+            && field(block, "branch ").as_deref() == Some(expected.as_str())
+    });
+    if !ours {
+        return Ok(());
+    }
+    let path_text = path.to_string_lossy();
+    // Plain first, then `--force` for a half-made checkout git would otherwise
+    // keep: its files are this call's checkout of a branch nothing has
+    // committed to, so there is nothing of anyone's in them to lose.
+    for force in [false, true] {
+        let mut args = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(path_text.as_ref());
+        if git(repo, &args).is_ok() {
+            return Ok(());
+        }
+    }
+    // A worktree `worktree remove` will not take still holds a registration;
+    // drop the directory and prune that entry.
+    if let Err(error) = std::fs::remove_dir_all(path)
+        && path.exists()
+    {
+        return Err(format!("could not remove {}: {error}", path.display()));
+    }
+    git(repo, &["worktree", "prune"]).map(|_| ())
+}
+
+/// Delete `branch`, which this call made, once its failed add is undone.
+/// It still points at `base`, so no commit can be lost; a branch whose tip
+/// moved is left alone, since something else is working on it.
+fn delete_created_branch(repo: &Path, branch: &str, base: &str) -> Result<(), String> {
+    // A branch that is already gone is nothing to undo.
+    let Some(tip) = branch_tip(repo, branch) else {
+        return Ok(());
+    };
+    if tip != base {
+        return Err("its tip is no longer the base commit".to_owned());
+    }
+    // `-d` refuses a branch `HEAD` does not contain, which a base that is not
+    // an ancestor of `HEAD` legitimately is; the tip is still `base`,
+    // checked again below, so forcing the delete loses nothing.
+    if git(repo, &["branch", "-d", branch]).is_ok() {
+        return Ok(());
+    }
+    if branch_tip(repo, branch).as_deref() != Some(base) {
+        return Err("its tip is no longer the base commit".to_owned());
+    }
+    git(repo, &["branch", "-D", branch]).map(|_| ())
+}
+
+fn branch_tip(repo: &Path, branch: &str) -> Option<String> {
+    git_line(
+        repo,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    )
+    .ok()
+}
+
+/// Whether two paths name the same place, for a path git printed and one this
+/// process built (a worktree git registered may be gone, so canonicalizing can
+/// fail for either).
+fn same_path(left: &Path, right: &Path) -> bool {
+    fn canonical(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+    canonical(left) == canonical(right)
 }
 
 fn status_counts(path: &Path, base: &str) -> (bool, u64, u64) {
@@ -808,6 +928,172 @@ pub(crate) mod tests {
         assert_eq!(row["session_ids"], json!(["worktree-test-session"]));
         // Listing from inside a worktree finds the same repository.
         assert_eq!(list(&first.path).unwrap().len(), 2);
+    }
+
+    /// How many worktrees git has registered for `repo`: the main checkout
+    /// counts as one.
+    fn worktree_count(repo: &Path) -> usize {
+        git(repo, &["worktree", "list", "--porcelain"])
+            .unwrap()
+            .split("\n\n")
+            .filter(|block| !block.trim().is_empty())
+            .count()
+    }
+
+    /// Make the checkout step of `git worktree add` fail in `repo`: git
+    /// registers the worktree and checks it out, then the hook exits 1. A real
+    /// setup failure (a hook, a checkout that cannot finish) leaves the same
+    /// pieces behind: the new branch, the registration and the directory.
+    #[cfg(unix)]
+    fn fail_checkout(repo: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let hook = repo.join(".git/hooks/post-checkout");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_add_removes_the_branch_and_worktree_it_made() {
+        let (_dir, repo) = repo();
+        fail_checkout(&repo);
+        let error = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap_err();
+        // git's own failure text, not the cleanup's.
+        assert!(
+            error.message.starts_with("git worktree add failed: "),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("Preparing worktree"),
+            "{}",
+            error.message
+        );
+        // Both the branch and the worktree its failed checkout held are gone.
+        assert!(!branch_exists(&repo, "feat/login-form"));
+        assert_eq!(worktree_count(&repo), 1);
+        let parent = root().unwrap().join(repo_name(&repo));
+        let leftovers: Vec<String> = std::fs::read_dir(&parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+
+        // The failed attempt freed the name, so the retry is not `-2`.
+        std::fs::remove_file(repo.join(".git/hooks/post-checkout")).unwrap();
+        let retried = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(retried.branch, "feat/login-form");
+        assert!(retried.path.join("README.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_that_existed_before_survives_a_failed_add() {
+        let (_dir, repo) = repo();
+        git(&repo, &["branch", "feat/taken"]).unwrap();
+        let tip = git_line(&repo, &["rev-parse", "feat/taken"]).unwrap();
+        fail_checkout(&repo);
+        let error = create(&CreateRequest {
+            repo: repo.clone(),
+            branch: Some("feat/taken".into()),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.message.starts_with("git worktree add failed: "));
+        assert!(branch_exists(&repo, "feat/taken"));
+        assert_eq!(git_line(&repo, &["rev-parse", "feat/taken"]).unwrap(), tip);
+        assert_eq!(worktree_count(&repo), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_with_a_commit_survives_a_failed_add() {
+        let (_dir, repo) = repo();
+        git(&repo, &["switch", "-q", "-c", "feat/keep"]).unwrap();
+        std::fs::write(repo.join("keep.txt"), "keep\n").unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "keep"]).unwrap();
+        git(&repo, &["switch", "-q", "main"]).unwrap();
+        let tip = git_line(&repo, &["rev-parse", "feat/keep"]).unwrap();
+        assert_ne!(tip, git_line(&repo, &["rev-parse", "main"]).unwrap());
+        fail_checkout(&repo);
+        create(&CreateRequest {
+            repo: repo.clone(),
+            branch: Some("feat/keep".into()),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(branch_exists(&repo, "feat/keep"));
+        assert_eq!(git_line(&repo, &["rev-parse", "feat/keep"]).unwrap(), tip);
+        assert_eq!(worktree_count(&repo), 1);
+    }
+
+    #[test]
+    fn cleanup_leaves_another_branch_worktree_at_the_path() {
+        let (dir, repo) = repo();
+        let path = dir.path().join("shared-path");
+        git(&repo, &["branch", "feat/other"]).unwrap();
+        git(
+            &repo,
+            &["worktree", "add", path.to_str().unwrap(), "feat/other"],
+        )
+        .unwrap();
+        // A colliding slug is not enough: the worktree has to be on our
+        // branch to be ours.
+        remove_leftover_worktree(&repo, &path, "feat/mine").unwrap();
+        assert!(path.exists());
+        assert_eq!(worktree_count(&repo), 2);
+        remove_leftover_worktree(&repo, &path, "feat/other").unwrap();
+        assert!(!path.exists());
+        assert_eq!(worktree_count(&repo), 1);
+        assert!(branch_exists(&repo, "feat/other"));
+    }
+
+    #[test]
+    fn cleanup_never_deletes_a_branch_that_moved() {
+        let (_dir, repo) = repo();
+        let base = git_line(&repo, &["rev-parse", "HEAD"]).unwrap();
+        git(&repo, &["switch", "-q", "-c", "feat/moved"]).unwrap();
+        std::fs::write(repo.join("moved.txt"), "m\n").unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "moved"]).unwrap();
+        git(&repo, &["switch", "-q", "main"]).unwrap();
+        let moved = git_line(&repo, &["rev-parse", "feat/moved"]).unwrap();
+        assert!(delete_created_branch(&repo, "feat/moved", &base).is_err());
+        assert_eq!(
+            git_line(&repo, &["rev-parse", "feat/moved"]).unwrap(),
+            moved
+        );
+        // A branch that is not there is nothing to undo.
+        assert!(delete_created_branch(&repo, "feat/absent", &base).is_ok());
+    }
+
+    #[test]
+    fn cleanup_deletes_a_base_head_does_not_contain() {
+        let (_dir, repo) = repo();
+        // A commit on a branch `main` does not contain: `git branch -d`
+        // refuses it, and the forced delete has to be safe by the base check.
+        git(&repo, &["switch", "-q", "-c", "side"]).unwrap();
+        std::fs::write(repo.join("side.txt"), "s\n").unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "side"]).unwrap();
+        let base = git_line(&repo, &["rev-parse", "HEAD"]).unwrap();
+        git(&repo, &["switch", "-q", "main"]).unwrap();
+        git(&repo, &["branch", "feat/side", &base]).unwrap();
+        assert!(git(&repo, &["branch", "-d", "feat/side"]).is_err());
+        delete_created_branch(&repo, "feat/side", &base).unwrap();
+        assert!(!branch_exists(&repo, "feat/side"));
+        assert!(branch_exists(&repo, "side"));
     }
 
     #[test]
