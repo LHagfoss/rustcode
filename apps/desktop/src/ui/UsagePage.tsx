@@ -10,6 +10,14 @@ import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { usageRows } from "../state/logins";
 import {
+  beginPageRead,
+  cachedPage,
+  commitPage,
+  isLatestPageRead,
+  type PageAnswer,
+  sameValue,
+} from "../state/pageCache";
+import {
   CLAUDE_USAGE_DEFAULT,
   claudeUsageAllowed,
   commitPlansAnswer,
@@ -18,6 +26,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { answeredPlans, USAGE_PLANS_KEY, type UsageAnswer, usageView } from "../state/usagePage";
 import { PlanWindow } from "./ComposerUsage";
 import { Skeleton, Spinner, Switch } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
@@ -25,44 +34,68 @@ import { Action, Group, Row } from "./settingsKit";
 export function UsagePage() {
   const status = useApp((s) => s.status);
   const [claude, setClaude] = useState(claudeUsageAllowed);
-  const [plans, setPlans] = useState<UsagePlan[] | null>(null);
+  const [answer, setAnswer] = useState<PageAnswer<UsageAnswer> | null>(
+    () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [readAt, setReadAt] = useState<number | null>(null);
   const load = useCallback(async (withClaude: boolean) => {
+    const token = beginPageRead(USAGE_PLANS_KEY);
     setLoading(true);
     try {
       // Showing this page (or Refresh) is the explicit consent that also
       // reads each account's own sign-in at once; the background reads one
       // account at a time, the one the thread on screen runs on.
-      const answer = parsePlans(
+      const plans = parsePlans(
         await request(Method.usagePlans, { claude: withClaude, claudeAccounts: withClaude }, 20_000),
       );
-      setPlans(answer);
+      // A whole read replaces the list; one with Claude off replaces only the
+      // rows it asked, so turning the switch back on has numbers to draw while
+      // it reads the logins again.
+      const shown = cachedPage<UsageAnswer>(USAGE_PLANS_KEY)?.data.plans ?? [];
+      const next = commitPage(USAGE_PLANS_KEY, token, {
+        plans: answeredPlans(shown, plans, withClaude),
+        asked: withClaude,
+      });
+      if (!next) return;
       // The same answer fills the cache the composer's meter reads, and asking
       // here is what lets the background poll read Claude again after a pause.
-      commitPlansAnswer(answer, withClaude);
-      setReadAt(Date.now());
+      commitPlansAnswer(plans, withClaude);
+      // An answer equal to what is drawn keeps its list and rows, so the bars do
+      // not re-animate; only the foot's read time changes.
+      setAnswer((current) =>
+        current && sameValue(current.data, next.data) ? { data: current.data, readAt: next.readAt } : next,
+      );
       setError(null);
     } catch (e) {
+      if (!isLatestPageRead(USAGE_PLANS_KEY, token)) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (isLatestPageRead(USAGE_PLANS_KEY, token)) setLoading(false);
     }
   }, []);
   useEffect(() => {
-    if (status === "ready") void load(claude);
+    if (status !== "ready") {
+      // The engine went away, and with it its answers: draw nothing from it.
+      setAnswer(cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    const cached = cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null;
+    if (usageView(cached, claude, null).fetch) void load(claude);
   }, [status, claude, load]);
   const allowClaude = (on: boolean) => {
     setClaudeUsageAllowed(on);
     setClaude(on);
   };
-  if (!plans) {
-    return error ? <p className="text-callout text-warning">{error}</p> : <PlansSkeleton />;
+  const view = usageView(answer, claude, error);
+  if (view.plans === null) {
+    return view.fatal ? <p className="text-callout text-warning">{view.fatal}</p> : <PlansSkeleton />;
   }
   // The default login's row is dropped when it is signed out and named accounts are there; the
   // composer's switch moves to the first Claude group left (state/logins.ts).
-  const rows = usageRows(plans);
+  const rows = usageRows(view.plans);
   return (
     <>
       {rows.plans.map((p) => (
@@ -123,10 +156,12 @@ export function UsagePage() {
       ))}
       <div className="flex items-center gap-2 px-3 text-caption text-fg-faint sm:px-4">
         <span className="flex-1">
-          {error ? (
-            <span className="text-warning">Could not refresh: {error}</span>
-          ) : readAt ? (
-            `Read ${Date.now() - readAt < 60_000 ? "just now" : relativeAge(readAt)}. ${soonestReset(plans) ?? ""}`
+          {view.note ? (
+            <span className="text-warning">Could not refresh: {view.note}</span>
+          ) : view.readAt ? (
+            `Read ${Date.now() - view.readAt < 60_000 ? "just now" : relativeAge(view.readAt)}. ${
+              soonestReset(view.plans) ?? ""
+            }`
           ) : null}
         </span>
         <Action onClick={() => void load(claude)} disabled={loading}>
