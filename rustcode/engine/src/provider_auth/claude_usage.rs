@@ -74,8 +74,12 @@ fn remember(key: Option<PathBuf>, usage: &ClaudeUsage) {
 }
 
 async fn read(config_dir: Option<&Path>) -> ClaudeUsage {
-    let Some(credentials) = credentials(config_dir).await else {
-        return ClaudeUsage::NotSignedIn;
+    let credentials = match credentials(config_dir).await {
+        Ok(credentials) => credentials,
+        Err(NoCredentials::None) => return ClaudeUsage::NotSignedIn,
+        Err(NoCredentials::Unavailable(error)) => {
+            return ClaudeUsage::Unavailable(error.to_owned());
+        }
     };
     let Some(token) = access_token(&credentials, chrono::Utc::now().timestamp_millis()) else {
         return ClaudeUsage::Unavailable(
@@ -160,9 +164,58 @@ pub(crate) fn keychain_item_exists(config_dir: &Path) -> bool {
     }
 }
 
+/// Why a login's stored sign-in was not handed over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NoCredentials {
+    /// There is none: no Keychain item and no credentials file either.
+    None,
+    /// There may be one, but it could not be read; the text says why. Never
+    /// reported as signed out: a denied Keychain prompt or a locked Keychain is
+    /// not the user signing out.
+    Unavailable(&'static str),
+}
+
+/// macOS would not hand the item over: a denied prompt, a locked Keychain, no
+/// UI to ask in.
+const KEYCHAIN_REFUSED: &str =
+    "macOS did not allow reading Claude Code's sign-in from the Keychain.";
+
+/// The item was printed but held no sign-in.
+const KEYCHAIN_UNREADABLE: &str = "Claude Code's sign-in in the Keychain could not be read.";
+
+/// What a failed `security find-generic-password -w` means for a login.
+///
+/// `security` exits with the low byte of the Security framework's `OSStatus`, and
+/// only `errSecItemNotFound` (`-25300` → 44) means there is no such item. A
+/// denied prompt exits 128 (`errSecUserCanceled`), a locked or UI-less Keychain
+/// 36 (`errSecInteractionNotAllowed`), a refused one 51 (`errSecAuthFailed`);
+/// none of them says the user is signed out. Neither does `security` failing to
+/// run at all (no status).
+fn keychain_miss(code: Option<i32>) -> NoCredentials {
+    match code {
+        Some(44) => NoCredentials::None,
+        _ => NoCredentials::Unavailable(KEYCHAIN_REFUSED),
+    }
+}
+
+/// What one `security find-generic-password -w` run left: the stored sign-in, or
+/// why there is none. A run that succeeded but printed something else reads as
+/// signed in but unreadable, never as signed out.
+fn keychain_outcome(
+    success: bool,
+    code: Option<i32>,
+    stdout: &[u8],
+) -> Result<Value, NoCredentials> {
+    if success {
+        serde_json::from_slice(stdout).map_err(|_| NoCredentials::Unavailable(KEYCHAIN_UNREADABLE))
+    } else {
+        Err(keychain_miss(code))
+    }
+}
+
 /// Claude Code's stored sign-in, as JSON, for `config_dir` (the default login
 /// when `None`).
-async fn credentials(config_dir: Option<&Path>) -> Option<Value> {
+async fn credentials(config_dir: Option<&Path>) -> Result<Value, NoCredentials> {
     #[cfg(target_os = "macos")]
     {
         let item = config_dir.map_or_else(
@@ -175,21 +228,32 @@ async fn credentials(config_dir: Option<&Path>) -> Option<Value> {
             .stderr(std::process::Stdio::null())
             .output()
             .await
-            .ok()?;
-        if output.status.success()
-            && let Ok(value) = serde_json::from_slice::<Value>(&output.stdout)
-        {
-            return Some(value);
-        }
-        // A named account whose Keychain item is missing is reported as not
-        // signed in, after its own credentials file had its chance below.
+            .map_err(|_| NoCredentials::Unavailable(KEYCHAIN_REFUSED))?;
+        let miss = match keychain_outcome(
+            output.status.success(),
+            output.status.code(),
+            &output.stdout,
+        ) {
+            Ok(value) => return Ok(value),
+            Err(miss) => miss,
+        };
+        // The credentials file may still hold the sign-in (and does elsewhere),
+        // so it has its chance before a failed lookup is called a sign-out.
         let file = config_dir.map(Path::to_path_buf).or_else(default_dir);
-        return read_credentials_file(file?).await;
+        if let Some(dir) = file
+            && let Some(value) = read_credentials_file(dir).await
+        {
+            return Ok(value);
+        }
+        Err(miss)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let dir = config_dir.map(Path::to_path_buf).or_else(default_dir)?;
-        read_credentials_file(dir).await
+        let file = config_dir.map(Path::to_path_buf).or_else(default_dir);
+        match file {
+            Some(dir) => read_credentials_file(dir).await.ok_or(NoCredentials::None),
+            None => Err(NoCredentials::None),
+        }
     }
 }
 
@@ -289,6 +353,46 @@ mod tests {
         assert!(
             matches!(cached(&first), Some(ClaudeUsage::Windows { .. })),
             "one account's answer never replaces another's"
+        );
+    }
+
+    #[test]
+    fn only_a_missing_item_is_not_signed_in() {
+        // `security` exits with the low byte of the OSStatus: errSecItemNotFound
+        // (-25300) is 44, the one code that means the item does not exist.
+        assert_eq!(keychain_miss(Some(44)), NoCredentials::None);
+        // A denied prompt (errSecUserCanceled, -128), a locked or UI-less
+        // Keychain (errSecInteractionNotAllowed, -25308 -> 36), a refused one
+        // (errSecAuthFailed, -25293 -> 51), an I/O error (-36 -> 220) and no
+        // status at all are all "could not read", never "signed out".
+        for code in [Some(128), Some(36), Some(51), Some(220), Some(1), None] {
+            assert_eq!(
+                keychain_miss(code),
+                NoCredentials::Unavailable(KEYCHAIN_REFUSED),
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_keychain_answer_is_a_sign_in_or_a_reason() {
+        let stored = json!({"claudeAiOauth": {"accessToken": "t"}});
+        assert_eq!(
+            keychain_outcome(true, Some(0), stored.to_string().as_bytes()),
+            Ok(stored.clone())
+        );
+        // Printed, but no sign-in in it: signed in and unreadable, not signed out.
+        assert_eq!(
+            keychain_outcome(true, Some(0), b"not json"),
+            Err(NoCredentials::Unavailable(KEYCHAIN_UNREADABLE))
+        );
+        assert_eq!(
+            keychain_outcome(false, Some(44), b""),
+            Err(NoCredentials::None)
+        );
+        assert_eq!(
+            keychain_outcome(false, Some(128), b""),
+            Err(NoCredentials::Unavailable(KEYCHAIN_REFUSED))
         );
     }
 

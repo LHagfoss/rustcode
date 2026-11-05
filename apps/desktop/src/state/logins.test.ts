@@ -69,6 +69,18 @@ describe("signed out logins", () => {
     expect(signedOutFrom([plan({ status: "notAsked" })], before)).toEqual(before);
   });
 
+  test("a login it could not read is not a sign-out", () => {
+    // A denied Keychain prompt, a locked Keychain: signed in as far as anyone knows.
+    const denied = plan({ status: "unavailable", error: "macOS did not allow reading it." });
+    expect(signedOutFrom([denied], { "claude-code": true })).toEqual({});
+    // So its group is drawn (with the reason), its switch stays in it, and
+    // "Default login" is still offered.
+    const rows = usageRows([denied, plan({ id: "claude:work", account: "work" })]);
+    expect(rows.plans.map((p) => p.id)).toEqual(["claude", "claude:work"]);
+    expect(rows.switchIn).toBe("claude");
+    expect(newThreadAccountOn(claude([account("work")]), null, signedOutFrom([denied]))).toBeNull();
+  });
+
   test("keeps each login apart", () => {
     const record = signedOutFrom([
       plan({ id: "claude:work", account: "work", status: "ok" }),

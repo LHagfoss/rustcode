@@ -2395,9 +2395,10 @@ export async function checkHarnessAccounts(): Promise<HarnessSnapshot | null> {
   const snapshot = await harnessCall(Method.harnessAccountCheck, {});
   // Claude Code signs in with its own credentials, which that snapshot does not
   // report (`auth_probe: None`), and its plan read pauses once it finds the
-  // default login signed out, so a Keychain denial cannot prompt again and
-  // again. An explicit check is the user asking to look now: read the default
-  // login again, or "Default login" would stay away after signing back in.
+  // default login signed out or cannot read it (a denied Keychain prompt), so
+  // neither asks again and again. An explicit check is the user asking to look
+  // now: read the default login again, or it would stay as it was found after
+  // signing in or out.
   if (claudeUsageAllowed()) void refreshPlanCache(true);
   return snapshot;
 }
