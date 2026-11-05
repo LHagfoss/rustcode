@@ -2545,10 +2545,18 @@ No emoji, filler, or recap of what the reply already said. End with a next step 
 /// `rustcode-viz`: without it the reply repeated a chart as a table.
 pub(crate) const OUTPUT_STYLE_VIZ_HINT: &str = "A rustcode-viz block replaces a table or list, never repeats one in prose; its summary carries the takeaway.\n";
 
-/// The output-style text for a frontend's visualization level.
-pub(crate) fn output_style_hint(visualization_level: u8) -> String {
+/// Added to [`OUTPUT_STYLE_PROMPT_HINT`] while Smart UI is on, so "a table for
+/// comparisons" does not contradict the rule to default to a view.
+pub(crate) const OUTPUT_STYLE_SMART_UI_HINT: &str =
+    "A Markdown table only when the reader will copy it; otherwise a view.\n";
+
+/// The output-style text for a frontend. With Smart UI on the agent is taught
+/// views instead of `rustcode-viz`; otherwise it depends on the viz level.
+pub(crate) fn output_style_hint(visualization_level: u8, smart_ui: crate::app::SmartUi) -> String {
     let mut hint = String::from(OUTPUT_STYLE_PROMPT_HINT);
-    if visualization_level > 0 {
+    if smart_ui == crate::app::SmartUi::On {
+        hint.push_str(OUTPUT_STYLE_SMART_UI_HINT);
+    } else if visualization_level > 0 {
         hint.push_str(OUTPUT_STYLE_VIZ_HINT);
     }
     hint.push('\n');
@@ -2558,18 +2566,22 @@ pub(crate) fn output_style_hint(visualization_level: u8) -> String {
 /// The output-style guidance for an external harness that takes developer
 /// instructions (Codex `thread/start` `developerInstructions`). It never
 /// gets RustCode's root prompt, so it also carries the citation rule from
-/// the Workflow section. The `rustcode-viz` clause is added by
-/// [`harness_instructions`], only for a client that draws the blocks.
-pub(crate) fn harness_output_style() -> String {
+/// the Workflow section.
+pub(crate) fn harness_output_style(smart_ui: crate::app::SmartUi) -> String {
+    let views = if smart_ui == crate::app::SmartUi::On {
+        OUTPUT_STYLE_SMART_UI_HINT
+    } else {
+        ""
+    };
     format!(
-        "{OUTPUT_STYLE_PROMPT_HINT}Cite code as `path:line` with the full repo-relative path.\n"
+        "{OUTPUT_STYLE_PROMPT_HINT}{views}Cite code as `path:line` with the full repo-relative path.\n"
     )
 }
 
 /// What an external harness adds to its own system prompt: where it runs, so it can say so when asked and
-/// link what it makes so the app opens it, that RustCode is what owns its threads and projects, the
-/// `rustcode-viz` types the connected client draws (none at level 0), Smart UI when the user has it on,
-/// then [`harness_output_style`]. Codex takes this as `developerInstructions` and Claude Code's adapter
+/// link what it makes so the app opens it, that RustCode is what owns its threads and projects, then
+/// either Smart UI when the user has it on or the `rustcode-viz` types the connected client draws (none
+/// at level 0), then [`harness_output_style`]. Codex takes this as `developerInstructions` and Claude Code's adapter
 /// as its `systemPrompt`: it goes in every prompt, so every byte here is paid on every turn.
 pub(crate) fn harness_instructions(
     harness: &str,
@@ -2588,9 +2600,9 @@ pub(crate) fn harness_instructions(
          database. Tokens and reported cost are `thread_usage` (or `rustcode usage`), and what the \
          harnesses recorded of turns and tool calls is `query_data` (or `rustcode data query \"<sql>\"`); \
          its description lists the tables.</runtime_info>\n\n{}{}{}",
-        visualization_prompt_hint(visualization_level),
+        taught_visualization_hint(visualization_level, smart_ui),
         harness_smart_ui_hint(smart_ui),
-        harness_output_style()
+        harness_output_style(smart_ui)
     )
 }
 
@@ -2611,14 +2623,16 @@ pub(crate) fn runtime_reminder(instructions: &str) -> String {
 }
 
 /// Smart UI for a harness that has no root prompt and no `use_skill`: the
-/// fence, the lib and theme names, what the sandbox blocks, and when a view
-/// beats a `rustcode-viz` chart. The format itself is `docs/smart-ui.md`.
+/// fence, when to write a view, the kit's names, and what the sandbox blocks.
+/// The format itself is `docs/smart-ui.md`.
 pub(crate) const SMART_UI_HARNESS_HINT: &str = "\
 # Smart UI
-This app runs small designs of yours in the chat. A reply may carry one ```rustcode-ui v1 fence: a self-contained HTML fragment with inline <style> and <script>, no imports and no network, at most 64 KB and 5,000 elements. \
-Asked for a visualization, a graph, a chart, a dashboard or anything you would design, write such a view with a real design: a short title, the finding in a sentence, big numbers where the point is a number, spacing and labels. Keep rustcode-viz for a quick plain chart or table. \
-Colours and fonts come from the app's variables (--rc-text --rc-muted --rc-faint --rc-accent --rc-surface --rc-separator --rc-danger --rc-success --rc-warning --rc-font --rc-mono --rc-radius --rc-series-1 … --rc-series-8) and its classes (.rc-row .rc-col .rc-grid .rc-gap-1 … .rc-gap-4 .rc-muted .rc-mono .rc-num .rc-card .rc-scroll). Chart.js is bundled: <script src=\"rustcode-lib:chart.js\"></script>, and its defaults are themed, so set no colours. \
-No card chrome: no outer border, background or repeated title. Size to a narrow column: relative widths, no vh or viewport heights. When the rustcode tools list `smart_ui_check`, check the block with it first.
+This app runs your views in the chat: a ```rustcode-ui v1 fence of one HTML fragment with a <title>, inline <style> and <script>, no imports or network, max 64 KB, 5,000 elements. \
+Default to a view for anything structured: a table, comparison, breakdown, status overview, plan, numbers, a chart or a dashboard, asked or not. Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in a sentence before the view. A report to another thread stays plain Markdown.
+Use the app's kit rather than CSS: set no colours and write as little CSS as you can, every byte is a token. Classes: .rc-title .rc-lead .rc-label; .rc-stats > .rc-stat > .rc-stat-value .rc-stat-label .rc-stat-note; .rc-badge .rc-callout (tint .rc-ok .rc-warn .rc-bad .rc-info); .rc-progress > span[width%]; .rc-bars > .rc-bar > span i[width%] b; table.rc-table; .rc-list > .rc-item; .rc-steps > li.rc-step.rc-done|rc-active|rc-failed|rc-todo; details.rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span (hover text); .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-muted .rc-mono .rc-num .rc-card .rc-scroll. \
+No script needed: data-rc-send=\"text\" sends a follow-up, data-rc-copy=\"text\" copies, and .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] and section[data-rc-panel=a]. \
+Variables: --rc-text --rc-muted --rc-accent --rc-separator --rc-series-1…8. Chart.js: <script src=\"rustcode-lib:chart.js\"></script> in a sized div, already themed. \
+No outer border, background or repeated title. Relative widths, no vh. If `smart_ui_check` is listed, run it first.
 
 ";
 
@@ -2639,9 +2653,10 @@ pub(crate) fn append_output_style_hint(
     prompt: &mut String,
     policy: ToolSchemaPolicy,
     visualization_level: u8,
+    smart_ui: crate::app::SmartUi,
 ) {
     if !policy.is_subagent() && !policy.compact_text_prompt {
-        prompt.push_str(&output_style_hint(visualization_level));
+        prompt.push_str(&output_style_hint(visualization_level, smart_ui));
     }
 }
 
@@ -2670,6 +2685,16 @@ pub(crate) fn visualization_prompt_hint(level: u8) -> String {
     }
 }
 
+/// What an agent is taught of `rustcode-viz`. With Smart UI on, nothing: one
+/// tool per client state, so the rules never conflict. The blocks still render.
+pub(crate) fn taught_visualization_hint(level: u8, smart_ui: crate::app::SmartUi) -> String {
+    if smart_ui == crate::app::SmartUi::On {
+        String::new()
+    } else {
+        visualization_prompt_hint(level)
+    }
+}
+
 /// Append the visualization hint when the frontend renders `rustcode-viz`
 /// blocks. Only the root agent writes user-facing replies, and compact prompts
 /// are for small models where every token counts. Frontends that cannot draw
@@ -2679,18 +2704,20 @@ pub(crate) fn append_visualization_hint(
     prompt: &mut String,
     policy: ToolSchemaPolicy,
     visualization_level: u8,
+    smart_ui: crate::app::SmartUi,
 ) {
     if !policy.is_subagent() && !policy.compact_text_prompt {
-        prompt.push_str(&visualization_prompt_hint(visualization_level));
+        prompt.push_str(&taught_visualization_hint(visualization_level, smart_ui));
     }
 }
 
 /// Guidance for `rustcode-ui v1` blocks (#2484), sent only to frontends that
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
-This app runs small interactive designs in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat. \
-Use one, even unasked, when the user asks for a visualization, a graph or a dashboard, or when controls (sort, filter, sliders) help; \
-keep rustcode-viz for a quick plain chart or table. First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
+This app runs small views in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat. \
+Default to a view for anything structured: a table, comparison, breakdown, status overview, plan, numbers, a chart or a dashboard, asked or not. \
+Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in a sentence before the view. A report to another thread stays plain Markdown. \
+First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
 
 /// Sent instead of [`SMART_UI_PROMPT_HINT`] when the frontend could run the
 /// blocks but the user has the setting off. Without it an agent asked for

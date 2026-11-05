@@ -13,9 +13,13 @@ never reached it): Settings › Chat › Smart UI turns it off. The engine learn
 switching it Settings offers **Restart Engine** (shown once no chat is
 running).
 
-Native `rustcode-viz` widgets ([visualizations.md](visualizations.md)) stay the
-default for charts, tables and trees. They run no code, and they keep working
-whether Smart UI is on or off.
+While it is on, a view is the default for anything structured: a table,
+comparison, breakdown, status overview, plan, numbers, a chart or a dashboard,
+asked or not. The page ships a component kit (below), so views look consistent
+and agents write little CSS. Native `rustcode-viz` widgets
+([visualizations.md](visualizations.md)) are what agents are taught while Smart
+UI is off or the client has none; a block already written keeps rendering
+either way.
 
 ## Format
 
@@ -64,8 +68,15 @@ in both.
 | Part | What the page gets |
 | --- | --- |
 | Base | A transparent body in the app's font and text color. Headings, paragraphs, tables, inputs, selects, buttons and code are already styled like the chat, so a view needs little CSS. |
-| CSS variables on `:root` | `--rc-text`, `--rc-muted`, `--rc-faint`, `--rc-accent`, `--rc-surface`, `--rc-separator`, `--rc-danger`, `--rc-success`, `--rc-warning`, `--rc-font`, `--rc-mono`, `--rc-radius`, `--rc-series-1` … `--rc-series-8`. They follow light and dark mode. |
+| CSS variables on `:root` | `--rc-text`, `--rc-bg`, `--rc-muted`, `--rc-faint`, `--rc-accent`, `--rc-surface`, `--rc-separator`, `--rc-danger`, `--rc-success`, `--rc-warning`, `--rc-font`, `--rc-mono`, `--rc-radius`, `--rc-series-1` … `--rc-series-8`. They follow light and dark mode. |
 | Layout classes | `.rc-row` and `.rc-col` (flex row / column, wrapping), `.rc-grid` (auto-fit grid), `.rc-gap-1` … `.rc-gap-4`, `.rc-muted`, `.rc-mono`, `.rc-num` (tabular figures, right-aligned in tables), `.rc-card` (a quiet inner group, not an outer frame), `.rc-scroll` (bounded, scrolls inside). |
+| Kit: text and numbers | `.rc-title`, `.rc-lead` (the finding, muted), `.rc-label`; `.rc-stats` (auto-fit grid) of `.rc-stat` with `.rc-stat-value`, `.rc-stat-label`, `.rc-stat-note`. |
+| Kit: status | `.rc-badge`, `.rc-callout`, tinted by `.rc-ok`, `.rc-warn`, `.rc-bad`, `.rc-info` (also on a stat, a bar, a progress bar or a line in `.rc-term`); `.rc-progress` around `<span style="width:72%">`. |
+| Kit: bars, tables, lists | `.rc-bars` of `<div class="rc-bar"><span>Name</span><i style="width:40%"></i><b>40</b></div>`, a bar chart with no canvas; `table.rc-table` (its header sticks inside `.rc-scroll`; elsewhere the runtime wraps it in a box that scrolls sideways on a narrow window); `.rc-list` of `.rc-item`. |
+| Kit: traces and folding | `.rc-steps` of `li.rc-step` with `.rc-done`, `.rc-active`, `.rc-failed` or `.rc-todo`; `details.rc-details` with a chevron drawn in CSS, `.rc-tree` for nested ones, `.rc-file` rows; `.rc-term`, a terminal block. |
+| Kit: actions and citations | `.rc-chip`, a pill follow-up button; `.rc-tabs`; `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`, opening on hover and focus inside the page's width. |
+| Kit: behaviour, no script | One delegated listener: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check. `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
+| Height | The page reports its content, not the document: the body's height or its `scrollHeight`, plus its margins. The body is `position: relative`, so that also counts what is absolutely placed in it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
 | Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colors), so agents set no colors. A page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. System color keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
 | `window.rustcode` | `send(text)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X". It works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
 
@@ -84,18 +95,35 @@ without the classes, so one block works in both.
 
 A client that runs blocks advertises `clientCapabilities._meta.rustcode.smartUi = 1`
 at `initialize` while the setting is on. Sessions of that engine then get a
-short `# Smart UI` section in the root system prompt: when to use Smart UI,
-the fence name, and to call `use_skill` with `smart-ui` directly before
-writing one. Agents used to call `list_skills` first, a wasted round. It is 96
-estimated tokens (`estimate_tokens`; 93 before the "asked for a visualization"
-rule, 139 when the format lived there, #2625).
+short `# Smart UI` section in the root system prompt: the rule (below), the
+fence name, and to call `use_skill` with `smart-ui` directly before
+writing one. Agents used to call `list_skills` first, a wasted round. It is 116
+estimated tokens (`estimate_tokens`, capped at 150; 96 before the rule, 139
+when the format lived there, #2625).
+
+The rule, in both the root prompt and the harness text: "Default to a view for
+anything structured: a table, comparison, breakdown, status overview, plan,
+numbers, a chart or a dashboard, asked or not. Prose, a single fact, a few
+bullets, code and diffs stay Markdown. Put the finding in a sentence before the
+view. A report to another thread stays plain Markdown."
+
+One tool per client state, so the rules never conflict. With the setting on,
+the `# Visualizations` section and the output style's `rustcode-viz` sentence
+are not sent at all, and the output style gains "A Markdown table only when the
+reader will copy it; otherwise a view". That pays for the rule: the tail of the
+root prompt these decide goes from 1,738 bytes / 436 tokens to 1,078 / 243.
+With it off or unsupported the text is exactly what it was;
+`smart_ui_off_and_unsupported_prompts_keep_their_exact_text` holds it byte for
+byte against `rustcode/engine/src/tools/testdata/smart_ui_off_prompts.txt`. The
+skill's `description` is listed in every client's prompt, so it did not change
+either.
 
 The `smart-ui` skill is built into the engine
-(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,063 estimated tokens
-with its front matter, 1,071 before; a test keeps it under 1,100) and is
-listed with the other skills as `<built-in>/smart-ui`. It holds the format,
-limits, the runtime above and design guidance: pick Markdown or
-`rustcode-viz` first, one compact component per question, no outer card,
+(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,097 estimated tokens
+with its front matter; a test keeps it under 1,100) and is
+listed with the other skills as `<built-in>/smart-ui`. It holds the rule, the
+format, limits, the kit with one short example per family and design guidance:
+one view per question, no outer card,
 border, background or repeated title, sized for a 320 px column, accessible
 controls. A thread that built a weather chart (2026-11-02, 7 rounds, 143 s)
 spent 3 of its 4 previews on a blank Chart.js canvas because the skill then
@@ -107,9 +135,7 @@ While the setting is off the app sends `smartUi = 0`. The root prompt then
 carries a one-line note instead (under 80 tokens): Smart UI exists but is off,
 so when the user asks for it the agent names Settings › Chat › Smart
 UI rather than inventing a fence the app shows as source. A client that sends
-no `smartUi` gets neither. It tells the agent to use Smart UI only when the user asks
-for an interactive view or controls clearly help, and to use Markdown or
-`rustcode-viz` otherwise. Subagent prompts and compact prompts never carry it.
+no `smartUi` gets neither. Subagent prompts and compact prompts never carry it.
 The engine announces `agentCapabilities._meta.rustcode.smartUi = 1`.
 
 ### External harnesses
@@ -119,18 +145,20 @@ prompt and has no `use_skill`, so it learns Smart UI from
 `harness_instructions` (`rustcode/engine/src/tools/schema.rs`), which Codex
 takes as `developerInstructions` and a Claude Code adapter as its appended
 system prompt. While the setting is on it carries a `# Smart UI` block with
-the one thing the skill would have given: the fence, inline `<style>` and
-`<script>`, `rustcode-lib:chart.js`, the `--rc-*` variables and `.rc-*`
-classes, no card chrome, no `vh`, and the rule that a request for a
-visualization, a graph or a dashboard gets a real design rather than a plain
-`rustcode-viz` chart. While the setting is off it carries the same off note as
+what the skill would have given: the fence, inline `<style>` and `<script>`,
+the rule, the kit's class names and the `data-rc-*` attributes with the
+instruction to use them rather than write CSS, `rustcode-lib:chart.js`, the main
+`--rc-*` variables, no card chrome, no `vh`. It carries no `rustcode-viz` types.
+While the setting is off it carries the same off note as
 the root prompt, so the agent points at Settings › Chat instead of inventing a
 fence. A client that never advertised `smartUi` hears nothing about it.
 
-The block costs 1,180 bytes (302 estimated tokens): the whole
-`harness_instructions` text goes from 1,997 bytes / 496 tokens to 3,177 / 798
-with Smart UI on. It is paid on every turn of every external thread, so the
-test in `rustcode/engine/src/tools/tests.rs` caps the whole text at 4 KB.
+The block is 1,597 bytes (1,180 before), and a test caps it under 1,600. Dropping
+the `rustcode-viz` types pays for it: at visualization level 2 the whole
+`harness_instructions` text goes from 3,386 bytes / 849 tokens to 3,144 / 827 with
+Smart UI on, against 2,206 / 547 with no Smart UI and no viz taught. It is paid
+on every turn of every external thread, so the test in
+`rustcode/engine/src/tools/tests.rs` caps the whole text at 4 KB.
 
 ## Agent preview (`smart_ui_preview`)
 
@@ -192,20 +220,30 @@ instructions tell the harness to run it before writing the fence.
 
 ## Runtime and lifecycle
 
-`SmartUIHost` (`macos/Sources/RustCode/SmartUIView.swift`) runs **at most
-three** pages at once (`SmartUIHost.maxLive`; #2484 ran one):
+The host (`apps/desktop/src/ui/SmartUIView.tsx`, `src/smartui/host.ts`) runs
+**at most six** pages at once (`MAX_LIVE`; #2484 ran one, then three):
 
-- No web view or WebContent process exists until a block runs. A block runs
-  automatically when it finishes streaming in front of you. Blocks in a chat
-  you open later show a **Run interactive view** button.
-- Each run gets a new web view in its own card. Starting a fourth page stops
-  the one that started longest ago, and its card shows the Run button
-  again. This is not a failure, so it does not show source. Reloading pages
+- A view runs when it is seen. A complete block with Smart UI on and no problem
+  starts by itself when it comes within 200 px of the viewport, including in a
+  chat you open later, so history stays readable now that views replace tables.
+  Until then it shows its title, muted, at the height it will need.
+- The **Run interactive view** pill stays only for a block you pressed Stop on,
+  or one that failed. Both stick after its row unmounts, for as long as the app
+  runs: nothing starts it again until you press Run. A failure sticks so a busy
+  loop does not stall the app again each time it scrolls into sight.
+- The last measured height of each source is kept (the 200 newest), so a
+  re-run or a return does not move the transcript.
+- Each run gets a new frame. Starting a seventh page stops another: one out of
+  sight if there is one, else the one that started longest ago. This is not a
+  failure, so it shows its placeholder, and no source. **An evicted view does
+  not start by itself again until it has left the viewport and come back**
+  (`AutoRun`), or views in sight past the limit would keep evicting each other
+  for ever. Its Run icon, on hover, still works. Reloading pages
   into one web view grows its WebContent process
   ([preview.md](preview.md#measurements) measured 78 → 616 MB), so a new
-  view per run lets the old process exit.
-- A page out of sight for 30 s is torn down. The Stop button tears it down
-  at once.
+  frame per run lets the old one go.
+- A page out of sight for 30 s is torn down, and runs again when it comes back.
+  The Stop button tears it down at once.
 - While the page fits the card, wheel events pass to the transcript, so
   scrolling over a card scrolls the chat.
 
@@ -230,7 +268,9 @@ blocked, `location` changes to `https:` and `file:` left the page on
 (macOS app).
 
 Residual risks: the page can use CPU until the watchdog's next poll, and up to
-WebKit's own memory limit. It can draw anything inside its card, including
+WebKit's own memory limit. A frame that shares the app's web process can stall
+it while a busy loop runs; now that views run when seen, that can happen on
+opening a chat, once per app run for each such block, since a failure sticks. It can draw anything inside its card, including
 text that imitates the app. It cannot reach anything outside the card, except
 that in the desktop app a click on it can send a message into the thread.
 
@@ -263,9 +303,10 @@ Comparison:
 - **Native `rustcode-viz`**: no process, no code. It draws only its six
   types, and its interactions are limited to hover, column sort and tree
   folding.
-- **Up to three web views (this design)**: about 30 MB per running block
-  and nothing otherwise, about 60 ms to show, any interaction. At most three
-  WebContent processes, about 90 MB. The first design ran one, which made a
+- **Up to six frames (this design)**: measured at about 30 MB per running block
+  on the macOS host and nothing otherwise, about 60 ms to show, any
+  interaction. At most about 180 MB by that figure; six was not measured on its
+  own. The first design ran one, which made a
   reply or chat with several views stop all but the last.
 - **One web view per block, unbounded**: rejected. The memory cost scales
   with the number of blocks in a transcript.

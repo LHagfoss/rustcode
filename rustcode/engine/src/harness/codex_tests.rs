@@ -654,7 +654,11 @@ async fn the_workspaces_mcp_servers_are_thread_config() {
     assert!(
         instructions.starts_with("<runtime_info>In case you're asked: you are running in RustCode")
     );
-    assert!(instructions.ends_with(&crate::tools::schema::harness_output_style()));
+    assert!(
+        instructions.ends_with(&crate::tools::schema::harness_output_style(
+            crate::harness::client_smart_ui()
+        ))
+    );
 }
 
 #[tokio::test]

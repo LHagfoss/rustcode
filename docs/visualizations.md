@@ -46,18 +46,17 @@ sandboxed web view.
 
 ## When to draw a chart, and when to design a view
 
-`rustcode-viz` is the quick, plain answer: a bar or line chart, a table, a
+`rustcode-viz` is the plain answer: a bar or line chart, a table, a
 stat list, a tree, with no code and no web view. Smart UI is the designed
-answer: a real layout, big numbers where the point is one number, and controls
-when the reader has to explore.
+answer, built from the page's component kit.
 
-The rule every client is taught is the same: a request for a visualization, a
-graph, a chart, a dashboard or "something nice" gets a `rustcode-ui v1` view
-when Smart UI is on, and `rustcode-viz` is kept for a quick plain chart or
-table. A RustCode thread reads that in its `# Smart UI` prompt section, an
-external harness (Codex, Claude Code, …) in its `harness_instructions`. With
-Smart UI off, the agent is told to offer Markdown or `rustcode-viz` and to
-name Settings › Chat, never to write a fence the client would show as source.
+An agent is taught one or the other, so the rules never conflict. With Smart UI
+on it is told to default to a `rustcode-ui v1` view for anything structured, and
+hears nothing of `rustcode-viz`: no `# Visualizations` section, no viz types in
+`harness_instructions`. A block already in a thread still renders. With Smart UI
+off or a client without it, the agent is taught `rustcode-viz` exactly as
+before; with it off it is also told to name Settings › Chat when asked for a
+view, never to write a fence the client would show as source.
 
 ## Widget allowlist (version 1)
 
@@ -284,15 +283,15 @@ Selecting rendered rows with the mouse copies their text.
 
 The agent learns the format from a short `# Visualizations` section (about
 120 tokens) that is appended to the system prompt **only when the frontend
-renders the blocks**; a frontend that also runs Smart UI gets its `# Smart UI`
-section after it (native threads) or the same guidance inside
+renders the blocks** and Smart UI is not on; with Smart UI on it gets the
+`# Smart UI` section instead (native threads) or that guidance inside
 `harness_instructions` (external harnesses).
 `AppState::visualization_level` holds that decision. It is set once, when the
 frontend creates the session state, so the prompt and its cached prefix do not
 change during a session. The default is `0`.
-A frontend with a level above `0` also gets one sentence in the
-`# Output style` section saying a block replaces a table rather than repeating
-it ([output-style.md](output-style.md)).
+A frontend with a level above `0`, and Smart UI not on, also gets one sentence
+in the `# Output style` section saying a block replaces a table rather than
+repeating it ([output-style.md](output-style.md)).
 
 ### Widget levels
 

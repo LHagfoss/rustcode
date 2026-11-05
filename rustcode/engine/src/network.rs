@@ -1754,11 +1754,13 @@ async fn prepare_turn_request_pass(
             &mut system_prompt,
             schema_policy,
             s.visualization_level,
+            s.smart_ui,
         );
         crate::tools::schema::append_visualization_hint(
             &mut system_prompt,
             schema_policy,
             s.visualization_level,
+            s.smart_ui,
         );
         crate::tools::schema::append_smart_ui_hint(&mut system_prompt, schema_policy, s.smart_ui);
         crate::tools::schema::append_preview_hint(&mut system_prompt, schema_policy);

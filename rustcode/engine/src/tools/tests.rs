@@ -4893,7 +4893,7 @@ fn smart_ui_hint_needs_the_capability_and_a_root_prompt() {
     use crate::config::AgentMode;
     // The format and design guidance moved to the built-in `smart-ui`
     // skill (#2625); the root prompt keeps only when to use it.
-    assert!(crate::network::compaction::estimate_tokens(SMART_UI_PROMPT_HINT) < 100);
+    assert!(crate::network::compaction::estimate_tokens(SMART_UI_PROMPT_HINT) < 150);
     assert!(crate::network::compaction::estimate_tokens(SMART_UI_OFF_PROMPT_HINT) < 80);
     assert!(SMART_UI_PROMPT_HINT.contains("```rustcode-ui v1"));
     assert!(SMART_UI_PROMPT_HINT.contains("`use_skill` with `smart-ui` directly"));
@@ -4927,9 +4927,18 @@ fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
     assert!(crate::network::compaction::estimate_tokens(HINT_2) < 90);
     let with = |policy: ToolSchemaPolicy, level: u8| {
         let mut prompt = String::new();
-        append_visualization_hint(&mut prompt, policy, level);
+        append_visualization_hint(&mut prompt, policy, level, crate::app::SmartUi::Unsupported);
         prompt
     };
+    // Smart UI on is taught views instead, at any level.
+    let mut with_views = String::new();
+    append_visualization_hint(
+        &mut with_views,
+        ToolSchemaPolicy::root(false),
+        2,
+        crate::app::SmartUi::On,
+    );
+    assert_eq!(with_views, "");
     for mode in [AgentMode::Build, AgentMode::Plan] {
         let root = ToolSchemaPolicy::root_for_mode(false, mode);
         // Level 1 frontends (the TUI) keep exactly the level 1 prompt.
@@ -4961,14 +4970,14 @@ fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
 #[test]
 fn output_style_reaches_root_prompts_within_budget() {
     use super::schema::{
-        OUTPUT_STYLE_PROMPT_HINT as STYLE, OUTPUT_STYLE_VIZ_HINT as VIZ, SMART_UI_PROMPT_HINT,
+        OUTPUT_STYLE_PROMPT_HINT as STYLE, OUTPUT_STYLE_VIZ_HINT as VIZ, SMART_UI_OFF_PROMPT_HINT,
         append_output_style_hint, harness_output_style, visualization_prompt_hint,
     };
     use crate::config::{AgentMode, ToolProtocol};
     let tokens = crate::network::compaction::estimate_tokens;
     let with = |policy: ToolSchemaPolicy, level: u8| {
         let mut prompt = String::new();
-        append_output_style_hint(&mut prompt, policy, level);
+        append_output_style_hint(&mut prompt, policy, level, crate::app::SmartUi::Unsupported);
         prompt
     };
     for mode in [AgentMode::Build, AgentMode::Plan] {
@@ -4989,16 +4998,25 @@ fn output_style_reaches_root_prompts_within_budget() {
     assert!(!STYLE.contains("rustcode-viz") && !STYLE.contains("rustcode-ui"));
     assert!(VIZ.contains("rustcode-viz"));
     // Budget (docs/output-style.md): under 250 extra tokens for the desktop
-    // app (viz level 2, Smart UI on), less for the TUI and plain ACP clients.
+    // app with Smart UI off or a viz client, less for plain ACP clients.
     assert!(tokens(&with(ToolSchemaPolicy::root(false), 0)) < 120);
     assert!(tokens(&with(ToolSchemaPolicy::root(false), 2)) < 140);
-    let desktop = format!(
-        "{}{}{SMART_UI_PROMPT_HINT}",
+    let viz_client = format!(
+        "{}{}{SMART_UI_OFF_PROMPT_HINT}",
         with(ToolSchemaPolicy::root(false), 2),
         visualization_prompt_hint(2)
     );
-    let before = format!("{}{SMART_UI_PROMPT_HINT}", visualization_prompt_hint(2));
-    assert!(tokens(&desktop) - tokens(&before) <= 250);
+    let before = format!("{}{SMART_UI_OFF_PROMPT_HINT}", visualization_prompt_hint(2));
+    assert!(tokens(&viz_client) - tokens(&before) <= 250);
+    // With Smart UI on the output style carries the one On sentence instead.
+    let mut desktop = String::new();
+    append_output_style_hint(
+        &mut desktop,
+        ToolSchemaPolicy::root(false),
+        2,
+        crate::app::SmartUi::On,
+    );
+    assert!(tokens(&desktop) <= 250);
     // The cached base prompt never carries it, so the prefix stays shared.
     for protocol in [
         ToolProtocol::ApiNative,
@@ -5010,7 +5028,7 @@ fn output_style_reaches_root_prompts_within_budget() {
                 .contains("# Output style")
         );
     }
-    let harness = harness_output_style();
+    let harness = harness_output_style(crate::app::SmartUi::Unsupported);
     assert!(harness.starts_with(STYLE) && harness.contains("`path:line`"));
     assert!(!harness.contains("rustcode-viz"));
     assert!(tokens(&harness) < 140);
@@ -5031,11 +5049,12 @@ fn harness_instructions_teach_the_viz_types_the_client_draws() {
     assert!(none.contains("`query_data`"));
     assert!(none.contains("`rustcode data query"));
     assert!(!none.contains("rustcode-viz"));
-    assert!(none.ends_with(&harness_output_style()));
+    let style = harness_output_style(crate::app::SmartUi::Unsupported);
+    assert!(none.ends_with(&style));
 
     let level_1 = harness_instructions("Codex", 1, crate::app::SmartUi::Unsupported);
     assert!(level_1.contains("```rustcode-viz") && !level_1.contains("line_chart"));
-    assert!(level_1.ends_with(&harness_output_style()));
+    assert!(level_1.ends_with(&style));
 
     let level_2 = harness_instructions("Pi", 2, crate::app::SmartUi::Unsupported);
     assert!(level_2.contains("line_chart") && level_2.contains("checklist"));
@@ -5049,24 +5068,40 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     use crate::app::SmartUi;
     let instructions = |smart_ui| harness_instructions("Codex", 2, smart_ui);
 
-    // On: the fence, the runtime names, the design rule and what the card refuses.
+    // On: the fence, the rule, the kit's names and what the card refuses.
     let on = instructions(SmartUi::On);
     for part in [
         "```rustcode-ui v1",
         "inline <style> and <script>",
         "rustcode-lib:chart.js",
-        "--rc-series-8",
+        "--rc-series-1…8",
         ".rc-num",
-        "a real design",
-        "big numbers where the point is a number",
-        "Keep rustcode-viz for a quick plain chart or table",
-        "No card chrome",
-        "no vh or viewport heights",
+        "Default to a view for anything structured",
+        "A report to another thread stays plain Markdown",
+        "set no colours",
+        "as little CSS as you can",
+        ".rc-stat-value",
+        ".rc-badge",
+        ".rc-bar",
+        ".rc-table",
+        ".rc-steps",
+        ".rc-details",
+        ".rc-term",
+        ".rc-chip",
+        ".rc-tip",
+        ".rc-tabs",
+        "data-rc-send",
+        "data-rc-copy",
+        "data-rc-tab",
+        "data-rc-panel",
+        "No outer border",
+        "no vh",
         "smart_ui_check",
     ] {
         assert!(on.contains(part), "{part}");
     }
-    assert!(on.ends_with(&harness_output_style()));
+    assert!(!on.contains("rustcode-viz"));
+    assert!(on.ends_with(&harness_output_style(SmartUi::On)));
 
     // Off: the off note, and no format to write.
     let off = instructions(SmartUi::Off);
@@ -5082,12 +5117,12 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // keep the whole thing (runtime info, viz, Smart UI, style) under 4 KB.
     let bytes = on.len();
     let tokens = crate::network::compaction::estimate_tokens(&on);
-    // Unsupported is byte-for-byte the text this function produced before Smart UI.
     let before = crate::network::compaction::estimate_tokens(&absent);
     println!(
-        "harness instructions: {} bytes before, {bytes} with Smart UI on ({before} -> {tokens} tokens); \
-         the root Smart UI hint is {} tokens, its off note {}",
+        "harness instructions: {} bytes without Smart UI, {bytes} with it on ({before} -> {tokens} tokens); \
+         the harness hint is {} bytes, the root Smart UI hint {} tokens, its off note {}",
         absent.len(),
+        SMART_UI_HARNESS_HINT.len(),
         crate::network::compaction::estimate_tokens(super::schema::SMART_UI_PROMPT_HINT),
         crate::network::compaction::estimate_tokens(super::schema::SMART_UI_OFF_PROMPT_HINT),
     );
@@ -5097,6 +5132,88 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );
+}
+
+/// The tail of a root prompt that Smart UI decides.
+fn root_prompt_hints(level: u8, smart_ui: crate::app::SmartUi) -> String {
+    use super::schema::{
+        append_output_style_hint, append_smart_ui_hint, append_visualization_hint,
+    };
+    let root = ToolSchemaPolicy::root(false);
+    let mut prompt = String::new();
+    append_output_style_hint(&mut prompt, root, level, smart_ui);
+    append_visualization_hint(&mut prompt, root, level, smart_ui);
+    append_smart_ui_hint(&mut prompt, root, smart_ui);
+    prompt
+}
+
+#[test]
+fn smart_ui_off_and_unsupported_prompts_keep_their_exact_text() {
+    use super::schema::harness_instructions;
+    use crate::app::SmartUi;
+    // Captured before Smart UI became the default for structured replies, so
+    // the TUI and other clients do not change. Every byte is on purpose: to
+    // change it, edit the file with the prompt and say why.
+    let expected = include_str!("testdata/smart_ui_off_prompts.txt").replace("\r\n", "\n");
+    let mut actual = String::new();
+    for (level, smart_ui, name) in [
+        (0, SmartUi::Unsupported, "0/unsupported"),
+        (1, SmartUi::Unsupported, "1/unsupported"),
+        (2, SmartUi::Unsupported, "2/unsupported"),
+        (0, SmartUi::Off, "0/off"),
+        (1, SmartUi::Off, "1/off"),
+        (2, SmartUi::Off, "2/off"),
+    ] {
+        actual.push_str(&format!(
+            "=== root {name}\n{}=== harness {name}\n{}",
+            root_prompt_hints(level, smart_ui),
+            harness_instructions("Codex", level, smart_ui)
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn smart_ui_on_teaches_views_and_not_rustcode_viz() {
+    use super::schema::{
+        OUTPUT_STYLE_PROMPT_HINT as STYLE, OUTPUT_STYLE_SMART_UI_HINT as VIEWS,
+        SMART_UI_HARNESS_HINT, SMART_UI_PROMPT_HINT, harness_instructions, output_style_hint,
+    };
+    use crate::app::SmartUi;
+    let tokens = crate::network::compaction::estimate_tokens;
+    for level in [0, 1, 2] {
+        let root = root_prompt_hints(level, SmartUi::On);
+        assert_eq!(root, format!("{STYLE}{VIEWS}\n{SMART_UI_PROMPT_HINT}"));
+        assert_eq!(
+            output_style_hint(level, SmartUi::On),
+            format!("{STYLE}{VIEWS}\n")
+        );
+        let harness = harness_instructions("Codex", level, SmartUi::On);
+        for text in [&root, &harness] {
+            assert!(!text.contains("rustcode-viz"), "{text}");
+            assert!(!text.contains("# Visualizations"), "{text}");
+            assert!(text.contains(VIEWS.trim()), "{text}");
+        }
+    }
+    // The same rule in both, in the same words.
+    for rule in [
+        "Default to a view for anything structured: a table, comparison, breakdown, status overview, plan, numbers, a chart or a dashboard, asked or not.",
+        "Prose, a single fact, a few bullets, code and diffs stay Markdown.",
+        "Put the finding in a sentence before the view.",
+        "A report to another thread stays plain Markdown.",
+    ] {
+        assert!(SMART_UI_PROMPT_HINT.contains(rule), "{rule}");
+        assert!(SMART_UI_HARNESS_HINT.contains(rule), "{rule}");
+    }
+    // Dropping `# Visualizations` pays for the longer rule: the desktop app's
+    // tail is shorter than the 436 tokens it was (docs/smart-ui.md).
+    let root = root_prompt_hints(2, SmartUi::On);
+    println!(
+        "root prompt hints with Smart UI on: {} bytes, {} tokens",
+        root.len(),
+        tokens(&root)
+    );
+    assert!(tokens(&root) < 436, "{}", tokens(&root));
 }
 
 #[test]

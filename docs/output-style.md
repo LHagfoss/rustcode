@@ -21,25 +21,32 @@ The root agent's prompt gets a `# Output style` section
 - No emoji, filler, or recap of what the reply already said.
 - A next step only when the user has one to take.
 
-Frontends that draw `rustcode-viz` get one more sentence
-(`OUTPUT_STYLE_VIZ_HINT`): a block replaces a table or list instead of
-repeating it, and its `summary` carries the takeaway. When to draw a block at
-all is the `# Visualizations` section ([visualizations.md](visualizations.md));
-when to use an interactive component is the `# Smart UI` section and the
-`smart-ui` skill ([smart-ui.md](smart-ui.md)). This section does not repeat
-either.
+One more sentence depends on the client, and only one is ever sent:
+
+- Smart UI on (`OUTPUT_STYLE_SMART_UI_HINT`): a Markdown table only when the
+  reader will copy it; otherwise a view. It also rides in the harness text.
+- Otherwise, frontends that draw `rustcode-viz` (`OUTPUT_STYLE_VIZ_HINT`): a
+  block replaces a table or list instead of repeating it, and its `summary`
+  carries the takeaway.
+
+When to draw a block at all is the `# Visualizations` section
+([visualizations.md](visualizations.md)); when to write a view is the
+`# Smart UI` section and the `smart-ui` skill ([smart-ui.md](smart-ui.md)). A
+client with Smart UI on gets the second and not the first. This section does
+not repeat either.
 
 ## Who gets what
 
 | Client | Visualization level | Smart UI | Output style | Extra tokens |
 | --- | --- | --- | --- | --- |
 | TUI | 1 | none | rules + viz sentence | ~130 |
-| Desktop app (Tauri) | 2 | per setting | rules + viz sentence | ~130 (plus the existing viz and Smart UI sections) |
+| Desktop app (Tauri), Smart UI on | 2, not taught | on | rules + views sentence | ~127 (plus the Smart UI section; no viz section) |
+| Desktop app (Tauri), Smart UI off | 2 | off | rules + viz sentence | ~130 (plus the viz section and the off note) |
 | macOS app | 2 | per setting | rules + viz sentence | ~130 |
 | Other ACP clients (Zed, …) | 0 | none | rules only | ~110 |
 | Subagents, compact prompts (small local models) | any | any | none | 0 |
-| Codex harness | n/a | n/a | runtime info + rules + citation rule, as `developerInstructions` | ~190 |
-| ACP harnesses that take a client system prompt (Claude Code) | n/a | n/a | runtime info + rules + citation rule, as `systemPrompt` (`append`) | ~190 |
+| Codex harness | n/a | n/a | runtime info + rules + citation rule (+ views sentence with Smart UI on), as `developerInstructions` | ~190 |
+| ACP harnesses that take a client system prompt (Claude Code) | n/a | n/a | runtime info + rules + citation rule (+ views sentence with Smart UI on), as `systemPrompt` (`append`) | ~190 |
 | Other ACP harnesses (Gemini, OpenCode) | n/a | n/a | none | 0 |
 
 Every RustCode frontend renders CommonMark with tables and highlighted

@@ -7,7 +7,7 @@ export const MAX_SOURCE_BYTES = 64 * 1024;
 export const MAX_ELEMENTS = 5000;
 export const MIN_HEIGHT = 48;
 export const MAX_HEIGHT = 720;
-export const MAX_LIVE = 3;
+export const MAX_LIVE = 6;
 
 export type Segment =
   | { kind: "markdown"; text: string }

@@ -619,9 +619,11 @@ composer's keys stay outside the table.
 ([smart-ui.md](smart-ui.md), "Runtime" holds the contract shared with the
 engine's `smart-ui` skill). The view has no chrome: no title row,
 background or border. Copy source, Show source and Stop/Run are small
-icons at its top right on hover or focus. A block that finishes streaming
-in front of you runs on its own; others show Run. At most three run;
-starting a fourth stops the oldest. 64 KB of source, 5,000 elements,
+icons at its top right on hover or focus. A complete block runs by itself
+when it comes into sight, also in a chat opened later, and shows its title
+at its reserved height until then; Run stays only for one you stopped or one
+that failed. At most six run; starting a seventh stops one out of sight, else
+the oldest, which waits until it has left the viewport and come back. 64 KB of source, 5,000 elements,
 48–720 px tall and fitting the content; a page that does not load in 5 s,
 goes 3 s without its heartbeat (a busy loop) or builds too many elements is
 stopped with its source shown; one out of sight for 30 s is torn down.
@@ -631,7 +633,8 @@ Each page gets, before the block (`src/smartui/page.ts`): the CSP
 img-src data:; font-src data:` (plus `connect-src`, `frame-src`,
 `worker-src`, `object-src`, `form-action`, `base-uri` `'none'`); the
 variables `--rc-text … --rc-series-8` resolved from the app's theme and
-updated live; base styles; the `.rc-*` layout classes; Chart.js 4.5.1 (MIT,
+updated live; base styles; the `.rc-*` layout classes and component kit;
+Chart.js 4.5.1 (MIT,
 bundled from npm, loaded only for a page that names
 `rustcode-lib:chart.js`) with `Chart.defaults` and series colours set from
 the variables; and `window.rustcode`:
