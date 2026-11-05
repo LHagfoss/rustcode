@@ -60,6 +60,7 @@ import {
   setActiveTheme,
   setAnimateStreaming,
   setChatWidth,
+  setContinueAfterLimit,
   setDefaultCwd,
   setDefaultHarness,
   setDefaultPermissionMode,
@@ -216,6 +217,7 @@ function PresenceRow() {
 function GeneralPage() {
   const defaultCwd = useApp((s) => s.defaultCwd);
   const resume = useApp((s) => s.resumeAfterRestart);
+  const afterLimit = useApp((s) => s.continueAfterLimit);
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
   const [haptics, setHapticsState] = useState(hapticsEnabled);
   return (
@@ -260,6 +262,17 @@ function GeneralPage() {
             label="Continue threads after a restart"
             checked={resume}
             onChange={setResumeAfterRestart}
+          />
+        </Row>
+        <Row
+          title="Continue threads when a usage limit resets"
+          reset={afterLimit ? undefined : () => setContinueAfterLimit(SETTINGS_DEFAULTS.continueAfterLimit)}
+          subtitle="A thread stopped by its plan's limit is sent “Continue where you left off” when the limit resets, unless you have moved it to another harness or account, or sent it something else."
+        >
+          <Switch
+            label="Continue threads when a usage limit resets"
+            checked={afterLimit}
+            onChange={setContinueAfterLimit}
           />
         </Row>
       </Group>

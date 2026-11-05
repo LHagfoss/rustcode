@@ -1680,3 +1680,18 @@ describe("an error's words", () => {
     expect(errorText("text")).toBe("text");
   });
 });
+
+describe("continuing after a limit", () => {
+  test("dropping a wait and turning the setting off clear it", async () => {
+    const { continueDueThreads, dropLimitWait, setContinueAfterLimit } = await import("./store");
+    const wait = { until: 1, harness: "claude-code", account: null, attempts: 1 };
+    useApp.setState({ limitWaits: { gone: wait } });
+    dropLimitWait("gone");
+    expect(useApp.getState().limitWaits).toEqual({});
+    useApp.setState({ limitWaits: { a: wait } });
+    setContinueAfterLimit(false);
+    expect(useApp.getState().limitWaits).toEqual({});
+    setContinueAfterLimit(true);
+    await continueDueThreads();
+  });
+});

@@ -13,6 +13,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  Clock,
   Command,
   Copy,
   FileText,
@@ -71,8 +72,10 @@ import {
   cancelQueuedEdit,
   canSteer,
   commandsFor,
+  dropLimitWait,
   endQueuedEdit,
   featureMissing,
+  limitTime,
   newThreadChoice,
   permissionModeOf,
   saveQueuedEdit,
@@ -707,6 +710,7 @@ export const Composer = memo(function Composer({
             void attachmentsFromFiles([...e.dataTransfer.files], images, harnessName).then(attach);
           }}
         >
+          {thread && <LimitWaitRow threadId={thread.id} />}
           {queuedEdit && (
             // A queued message is edited here, not in an input of its own: its text, command, links
             // and attachments are the composer's while it is open, and ⏎ saves them where it waits.
@@ -923,6 +927,23 @@ export const Composer = memo(function Composer({
     </div>
   );
 }, sameComposer);
+
+/** The thread stopped on its plan's limit and carries on by itself when it resets. */
+function LimitWaitRow({ threadId }: { threadId: string }) {
+  const wait = useApp((s) => s.limitWaits[threadId]);
+  // Once it is continuing, the turn says so; the wait is settled when it ends.
+  const running = useApp((s) => s.threads[threadId]?.running);
+  if (!wait || running) return null;
+  return (
+    <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-fg-muted">
+      <Clock size={11} className="shrink-0" />
+      <span className="min-w-0 truncate">Continues when the limit resets, at {limitTime(wait.until)}</span>
+      <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => dropLimitWait(threadId)}>
+        Don't continue
+      </Pill>
+    </div>
+  );
+}
 
 function AttachmentStrip({
   attachments,

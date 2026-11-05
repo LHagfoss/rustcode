@@ -40,6 +40,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "Continue threads when a usage limit resets",
+    keywords: "resume 5-hour weekly rate limit plan automatically auto start",
+  },
+  {
+    section: "general",
     title: "Discord Rich Presence",
     keywords: "rich presence status shared project",
   },
