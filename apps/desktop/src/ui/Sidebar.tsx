@@ -82,6 +82,7 @@ import {
   pullsVersion,
   subscribePulls,
 } from "../state/pulls";
+import { type PendingSetup, pendingSummary } from "../state/setup";
 import {
   keepListed,
   nextRow,
@@ -96,6 +97,7 @@ import { snoozePresets, wakeLabel } from "../state/snooze";
 import {
   askConfirm,
   askCustomSnooze,
+  dismissPendingSetup,
   featureMissing,
   markUnread,
   removeWorktree,
@@ -973,6 +975,85 @@ const ThreadRow = memo(function ThreadRow({
   );
 });
 
+/**
+ * A thread sent with a worktree, before the engine has its session (state/setup.ts): the message's
+ * title, where it will run, and Setting up with its own clock. Failed, it keeps the error and the
+ * one action it has, Dismiss; there is no session yet for a menu to act on.
+ */
+const PendingRow = memo(function PendingRow({
+  pending,
+  selected,
+  navActive,
+}: {
+  pending: PendingSetup;
+  selected: boolean;
+  navActive?: boolean;
+}) {
+  const project = projectName(pending.worktree.repo || pending.cwd);
+  const branch = pending.worktree.branch;
+  const failure = pending.failure;
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        data-row-id={pending.id}
+        tabIndex={navActive ? 0 : -1}
+        onClick={() => selectThread(pending.id)}
+        aria-current={selected ? "page" : undefined}
+        title={failure ? `${pending.title} · ${failure.text}` : pending.title}
+        className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2.5 pl-2.5 text-left"
+      >
+        <RowFill selected={selected} radius="rounded-xl" />
+        <span
+          className={cx(
+            "relative flex h-[17px] w-full min-w-0 items-center gap-1",
+            failure ? "pr-7" : "group-hover:pr-7 group-has-[:focus-visible]:pr-7",
+          )}
+        >
+          <ProjectMark name={project} />
+          <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">{project}</span>
+          {branch && (
+            <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
+              <GitBranch size={9} className="shrink-0" />
+              <span className="truncate">{branch}</span>
+            </span>
+          )}
+          <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible">
+            {failure ? (
+              <>
+                <CircleAlert size={12} className="text-danger" />
+                <span className="font-medium text-danger">Failed</span>
+              </>
+            ) : (
+              <>
+                <Spinner size={11} />
+                <span className="text-accent">
+                  Setting up <Elapsed since={pending.startedAt} />
+                </span>
+              </>
+            )}
+          </span>
+        </span>
+        <span className={cx("relative min-w-0 truncate text-body", failure ? "pr-7" : "pr-0")}>
+          {pending.title}
+        </span>
+        {failure && (
+          <span className="relative truncate text-danger text-sub" title={failure.text}>
+            {failure.text}
+          </span>
+        )}
+      </button>
+      <div className="absolute top-1 right-1.5 flex items-center">
+        {failure && (
+          <RowAction label="Dismiss" onClick={dismissPendingSetup}>
+            <X size={12} />
+          </RowAction>
+        )}
+      </div>
+    </div>
+  );
+});
+
 /** A parent's children as the list draws them: its rows, the fold and what it hides. */
 interface ChildGroup {
   /** The children's threads, and the grandchildren drawn flat under them, for their rows. */
@@ -1425,6 +1506,7 @@ function SettledRow({
 
 export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
+  const pending = useApp((s) => s.pendingSetup);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
   const selectedId = useApp((s) => s.selectedId);
   // Which threads need you or work, as a string so a streamed chunk does not change it.
@@ -1562,6 +1644,15 @@ export function Sidebar() {
     const settled: SessionSummary[] = [];
     const working: SessionSummary[] = [];
     const sleeping: SessionSummary[] = [];
+    // The thread setting up is a row of the list until the session exists: first, where its real
+    // row will be, so it keeps its place when it becomes one.
+    const q = query.trim().toLowerCase();
+    const pendingRow =
+      pending &&
+      (!q || `${pending.title} ${pending.cwd}`.toLowerCase().includes(q)) &&
+      (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree.repo === projectCwd)
+        ? pendingSummary(pending)
+        : null;
     for (const s of filtered) {
       if (parentOf[s.id]) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
@@ -1581,6 +1672,7 @@ export function Sidebar() {
       else active.push(s);
     }
     pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
+    if (pendingRow) active.unshift(pendingRow);
     // The active threads by project: a worktree thread belongs to its repository.
     const byKey = new Map<string, SessionSummary[]>();
     for (const s of active) {
@@ -1613,7 +1705,22 @@ export function Sidebar() {
             : undefined;
     }
     return all.filter((g) => g.items.length);
-  }, [filtered, flags, marks, finished, pinned, parentOf, byProject, now, snoozed, showWorking]);
+  }, [
+    filtered,
+    flags,
+    marks,
+    finished,
+    pinned,
+    parentOf,
+    byProject,
+    now,
+    snoozed,
+    showWorking,
+    pending,
+    query,
+    onlyProject,
+    projectCwd,
+  ]);
 
   const footShelf = sections.some((g) => g.id === "snoozed") ? "snoozed" : "settled";
   // A search shows every match, folded sections too.
@@ -1803,6 +1910,17 @@ export function Sidebar() {
   const onListClick = (e: React.MouseEvent) => {
     const id = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-row-id]")?.dataset.rowId;
     if (!id) return;
+    // The pending row has no session to pin, settle or rename: it opens, and never joins a bulk pick.
+    if (pending && id === pending.id) {
+      if (e.metaKey || e.ctrlKey || e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      setActiveId(id);
+      anchor.current = id;
+      clearSelection();
+      return;
+    }
     const mod = e.metaKey || e.ctrlKey;
     if (!mod && !e.shiftKey) {
       setActiveId(id);
@@ -1842,6 +1960,10 @@ export function Sidebar() {
   const rows = (items: SessionSummary[], grouped: boolean) => (
     <div className="flex flex-col gap-0.5">
       {items.map((s) => {
+        if (pending && s.id === pending.id)
+          return (
+            <PendingRow key={s.id} pending={pending} selected={!selectedId} navActive={s.id === currentId} />
+          );
         const kids = childrenOf[s.id]?.length ? group(s.id) : undefined;
         return (
           <div key={s.id} className="flex flex-col gap-0.5">
