@@ -157,35 +157,41 @@ mode and subagents never get any of them. Each call is forwarded as today:
 | Tool | Args | Answer |
 | --- | --- | --- |
 | `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
-| `read_session` | `{ session_id, last_turns?: 1..10 }` (default 3) | `{ title, status, project, turns: [{ user, assistant, files_changed }] }` (bounded, 16 KiB); any project's thread |
+| `read_session` | `{ session_id, last_turns?: 1..10, offset?: bytes }` (default 3 turns, offset 0) | `{ session_id, title, status, project, offset, text, next_offset?, complete }`: the rendered answer as text, one page at a time (16 KiB); when `next_offset` is present, pass it as `offset` for the rest. Pages join with nothing lost or repeated, cut on a UTF-8 character boundary. Any project's thread |
 
 | `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the model and effort the thread actually runs, and the approval card shows harness · model · effort |
 | `message_session` | M1 | M1 |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
-| `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come |
+| `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
 | `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
-Checked in the engine before anything is sent (`validate`): `prompt` is
-required and at most 8 KiB; `title` at most 200 characters; `harness`,
-`model`, `effort` non-empty strings when given; `worktree` a boolean;
-`project` an absolute path; `fan_out` takes 2 to 4 entries, each with a
-`harness`, and no entry twice (the same harness on two models is fine).
-The engine waits for the client's answer 15 min for `start_session` and
-`fan_out` (approval, worktrees, harness start), `timeout_ms` + 30 s for
-`wait_session`, and 10 min otherwise. Answers over 16 KiB are cut.
+Checked in the engine before anything is sent (`validate`): `prompt` and
+`message` are required and at most 32 KiB; `title` at most 200 characters;
+`harness`, `model`, `effort` non-empty strings when given; `worktree` a
+boolean; `project` an absolute path; `offset` a whole number of bytes;
+`fan_out` takes 2 to 4 entries, each with a `harness`, and no entry twice (the
+same harness on two models is fine). The engine waits for the client's answer
+15 min for `start_session` and `fan_out` (approval, worktrees, harness start),
+`timeout_ms` + 30 s for `wait_session`, and 10 min otherwise. The client bounds
+an answer: `wait_session` at 8 KiB (with `answer_truncated`), `read_session`
+at a 16 KiB page (with `next_offset`).
 
 The version 2 prompt hint replaces the M1 one (about 80 tokens, tested).
 
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
-at most 4 active links per thread (a `busy` refusal says `links_left` and that
-`wait_session` on one comes first); delegation goes two levels deep — a
+at most 8 distinct threads working for one thread at once by default, set to 2
+to 16 in Settings › Agents (a `busy` refusal says `links_left` and that
+`wait_session` on one comes first). A message to a thread it already works
+with is a follow-up: it queues on that thread and takes no slot, though its
+link is still created and waitable. Delegation goes two levels deep — a
 top-level thread may start children, and they may start grandchildren, while a
 thread at that depth is refused with the limit in the reason (`MAX_DEPTH` in
-`state/orchestration.ts`); a whole delegation tree holds at most 8 active
-links, whatever their depth (a `busy` refusal says how many slots the tree has
-left); a message that would close a loop — to a thread that already works for
-the caller, directly or further up — is refused; the user can stop any link;
+`state/orchestration.ts`); a whole delegation tree holds at most twice the
+setting in active threads, 16 by default and whatever their depth (a `busy`
+refusal says how many slots the tree has left); a message that would close a
+loop — to a thread that already works for the caller, directly or further up —
+is refused; the user can stop any link;
 nothing starts without the user's approval (*Allow for This Thread* / *Allow
 Once* / *Don't Allow*).
 

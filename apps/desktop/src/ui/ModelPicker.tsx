@@ -8,6 +8,7 @@ import { ChevronLeft, ChevronRight, ChevronUp, Lock, Search, Zap } from "lucide-
 import { Popover } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type ConfigOption, effortLabel, type Harness, modelName } from "../acp/types";
+import { clip } from "../lib/clip";
 import { matchModels } from "../lib/modelSearch";
 import {
   controlDisabledReason,
@@ -339,7 +340,7 @@ function ModelBrowser({
 function pillLabel(model?: string | null, effort?: string | null, compact = false) {
   const name = modelName(model ?? undefined) ?? "Default model";
   return {
-    name: compact && name.length > 14 ? `${name.slice(0, 14)}…` : name,
+    name: compact && name.length > 14 ? `${clip(name, 13)}…` : name,
     effort: compact ? undefined : effort,
   };
 }

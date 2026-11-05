@@ -1,3 +1,5 @@
+import { clip } from "./clip";
+
 /**
  * A title from a message's first line that says something, at most `max` characters: cut at a
  * word and marked with "…" when it is shortened, so it never ends mid-word ("…with pytest te").
@@ -7,7 +9,8 @@
 export function titleFrom(text: string, max: number): string {
   const line = (text.split("\n").find((l) => l.trim()) ?? text.split("\n")[0] ?? "").trim();
   if (line.length <= max) return line;
-  const cut = line.slice(0, max - 1);
+  // A character (an emoji, an accented letter) is never cut in half by the "…".
+  const cut = clip(line, max - 1);
   const space = cut.lastIndexOf(" ");
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
