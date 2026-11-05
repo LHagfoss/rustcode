@@ -159,6 +159,10 @@ describe("orchestration rules", () => {
     ).toBe(true);
     const wait = parseCall({ tool: "wait_session", args: { link_id: "a/1", timeout_ms: 9e9 } });
     expect(!isFailure(wait) && wait.tool === "wait_session" && wait.timeoutMs).toBe(3_600_000);
+    // Each answer once: a repeated link id is asked about once.
+    expect(parseCall({ tool: "wait_session", args: { link_ids: ["a/1", "a/1", "a/2"] } })).toMatchObject({
+      links: ["a/1", "a/2"],
+    });
   });
 
   test("same project, the thread limit, one orchestrator per target", () => {

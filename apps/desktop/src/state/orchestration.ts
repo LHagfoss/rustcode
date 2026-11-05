@@ -352,8 +352,9 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "message_session", target, text };
     }
     case "wait_session": {
+      // One answer per link: a repeated id is asked about once.
       const links = Array.isArray(args.link_ids)
-        ? args.link_ids.flatMap((x) => (typeof x === "string" ? [x] : []))
+        ? [...new Set(args.link_ids.flatMap((x) => (typeof x === "string" ? [x] : [])))]
         : [];
       const one = s(args.link_id);
       if (one && !links.includes(one)) links.unshift(one);

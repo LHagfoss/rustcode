@@ -1141,7 +1141,9 @@ export function stateOf(s: AppState, link: Link) {
  * no wake repeats what the wait itself returns.
  */
 async function wait(callerId: string, ids: string[], timeoutMs: number): Promise<JsonObject> {
-  const mine = ids.filter((id) => book().links.find((l) => l.id === id)?.orchestrator === callerId);
+  const mine = [...new Set(ids)].filter(
+    (id) => book().links.find((l) => l.id === id)?.orchestrator === callerId,
+  );
   if (!mine.length) return failureJson(failure("not_found", "no such link from this thread"));
   const deadline = Date.now() + timeoutMs;
   const set = waiting.get(callerId) ?? new Set<string>();
