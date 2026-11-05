@@ -90,6 +90,12 @@ import {
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { restoreChoice, selectOption } from "./harness";
 import {
+  DEFAULT_HEADER_BUTTONS,
+  HEADER_BUTTON_IDS,
+  type HeaderButtonId,
+  sanitizeHeaderButtons,
+} from "./headerButtons";
+import {
   answerOrchestration,
   linkFinished,
   linkStarted,
@@ -289,6 +295,8 @@ export interface AppState {
   roundedFont: boolean;
   /** A streaming reply's new words fade in as the model writes them. */
   animateStreaming: boolean;
+  /** Which buttons the thread header shows, in order (Settings › Chat); anything absent is hidden. */
+  headerButtons: HeaderButtonId[];
   /** Shortcuts the user changed, by command id (lib/keys.ts holds the defaults). */
   shortcuts: Record<string, string>;
   orchestrationPending: boolean;
@@ -352,6 +360,7 @@ const STORAGE = {
   runningThreads: "rustcode.runningThreads",
   roundedFont: "rustcode.roundedFont",
   animateStreaming: "rustcode.animateStreaming",
+  headerButtons: "rustcode.headerButtons",
   statusMarks: "rustcode.statusMarks",
   snoozed: "rustcode.snoozed",
   permissionMode: "rustcode.permissionMode",
@@ -376,6 +385,7 @@ export const SETTINGS_DEFAULTS = {
   theme: "system" as AppState["theme"],
   roundedFont: false,
   animateStreaming: true,
+  headerButtons: DEFAULT_HEADER_BUTTONS,
   resumeAfterRestart: true,
   orchestration: true,
   readAcrossProjects: true,
@@ -433,6 +443,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
+  headerButtons: sanitizeHeaderButtons(storedJson<unknown>(STORAGE.headerButtons, null)),
   shortcuts: parseOverrides(stored(STORAGE.shortcuts)),
   orchestrationPending: false,
   links: loadBook(),
@@ -2398,6 +2409,15 @@ export function resetShortcut(id: string) {
 export function setAnimateStreaming(on: boolean) {
   set({ animateStreaming: on });
   store(STORAGE.animateStreaming, on ? "1" : "0");
+}
+
+/**
+ * The header's buttons, in the order they show. The ids this build knows are
+ * saved beside them, so a button added later shows by default (headerButtons.ts).
+ */
+export function setHeaderButtons(shown: HeaderButtonId[]) {
+  set({ headerButtons: shown });
+  store(STORAGE.headerButtons, JSON.stringify({ shown, known: HEADER_BUTTON_IDS }));
 }
 
 export function setReadAcrossProjects(on: boolean) {

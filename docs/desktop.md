@@ -394,6 +394,16 @@ composer's keys stay outside the table.
   stay mounted for every view. The header floats in glass over its view
   (the chat, new or open), with a soft fade at its foot, and content
   scrolls under it; views leave `HEADER_HEIGHT` (42 px) at their top.
+- **Thread header buttons.** The chat header's buttons come from one
+  registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): status,
+  plan, pull requests, terminal, details, changes. Settings › Chat › Thread
+  header buttons lists them as Shown and Hidden: drag a row to reorder it or
+  move it across (pointer capture, so the webview's own drops never see it),
+  ⌥↑/⌥↓ moves a focused row, and each row's Show/Hide button does the same
+  without a pointer. A button's own condition still applies (no plan, no
+  pull requests), and hiding every button leaves the title alone. The order
+  is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
+  in a later release shows by default.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the
   thread comes back exactly where it was (scroll, drafts, open rows). A

@@ -80,6 +80,7 @@ import {
 } from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
+import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
 import { ShortcutsPage } from "./ShortcutSettings";
@@ -331,6 +332,7 @@ function ChatPage() {
           }}
         />
       </Row>
+      <HeaderButtonsSetting />
     </Group>
   );
 }
@@ -1074,7 +1076,7 @@ export function Settings() {
         <div
           ref={panel}
           tabIndex={-1}
-          className="relative flex size-full max-h-[60rem] max-w-[80rem] overflow-hidden rounded-3xl border border-border bg-bg shadow-2 outline-none"
+          className="relative flex size-full max-h-[60rem] max-w-[80rem] overflow-hidden rounded-2xl border border-border bg-bg shadow-2 outline-none"
         >
           <RowResets>
             <nav
