@@ -903,7 +903,9 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {/* The tray under the box: where the thread works and what it runs on. Labels drop out with
-          the card's width; the controls do not. */}
+          the card's width (the folder falls back to its icon); the controls do not, and the two
+          labels that can still be long (the folder and the model) shrink and ellipsize before the
+          meters or the row overflows. */}
       <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[58px] items-end gap-0.5 px-2 pt-[18px] pb-1.5">
         <FolderMenu thread={thread} cwd={cwd} />
         {!thread && <WorktreeToggle draft={draft} compact={compact} />}
@@ -918,9 +920,16 @@ export const Composer = memo(function Composer({
         <PermissionMenu threadId={thread?.id} compact={compact} />
         <span className="flex-1" />
         <PlanMeter threadId={thread?.id} />
-        {thread && <ContextRing threadId={thread.id} />}
+        {/* The meters keep their size: a ring squeezed under 30px is unreadable. */}
+        {thread && (
+          <span className="flex shrink-0 empty:hidden">
+            <ContextRing threadId={thread.id} />
+          </span>
+        )}
         <ModelPicker thread={thread} compact={compact} />
-        <span className="empty:hidden">
+        {/* The marks keep their size; the card drops the whole pill below 24rem, the same step at
+            which the folder falls back to its icon, and the thread's own agent card says the same. */}
+        <span className="shrink-0 empty:hidden @max-sm/composer:hidden">
           <AgentPill threadId={thread?.id} />
         </span>
       </div>
@@ -1026,7 +1035,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
   }, [suggested, wt.on, wt.edited]);
   const valid = !wt.branch.trim() || validBranch(wt.branch.trim());
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex min-w-0 items-center gap-1">
       <Tooltip
         side="bottom"
         label={
@@ -1036,16 +1045,17 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
         <button
           type="button"
           aria-pressed={wt.on}
+          aria-label="Run in a new worktree"
           disabled={!!missing}
           onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
           className={cx(
-            "flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40",
+            "flex h-[28px] shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40",
             wt.on
               ? "bg-fill-strong text-fg"
               : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong",
           )}
         >
-          <GitBranch size={12} />
+          <GitBranch size={12} className="shrink-0" />
           {!compact && !wt.on && <span>Worktree</span>}
         </button>
       </Tooltip>
@@ -1059,7 +1069,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           placeholder={suggested}
           size={Math.min(32, Math.max(12, wt.branch.length + 1))}
           className={cx(
-            "h-[24px] rounded-full bg-fill px-2.5 font-mono text-caption rc-in",
+            "h-[24px] min-w-0 max-w-[220px] rounded-full bg-fill px-2.5 font-mono text-caption rc-in",
             valid ? "focus:bg-fill-strong" : "text-danger",
           )}
         />
@@ -1085,17 +1095,20 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         <DropdownMenu.Trigger asChild>
           <button
             type="button"
+            // The name is the trigger's own text at full width and its icon's label when it drops
+            // out under a container width, so the button keeps a name either way.
+            aria-label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
             disabled={!!thread && !cwd}
             className={cx(
               footerButton,
               "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
             )}
           >
-            <Folder size={12} />
-            <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px]">
+            <Folder size={12} className="shrink-0" />
+            <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
               {cwd ? projectName(cwd) : "Choose a folder"}
             </span>
-            <ChevronDown size={11} className="text-fg-faint" />
+            <ChevronDown size={11} className="shrink-0 text-fg-faint" />
           </button>
         </DropdownMenu.Trigger>
       </Tooltip>
@@ -1175,9 +1188,10 @@ function FolderActions({ cwd }: { cwd: string }) {
   );
 }
 
-// A button in the composer's footer: quiet until hovered, and its fill is its open state.
+// A button in the composer's footer: quiet until hovered, and its fill is its open state. It is
+// not `shrink-0`: a long folder name gives way to the controls to its right (see FolderMenu).
 const footerButton =
-  "flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
+  "flex h-[28px] items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
 const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
   ask: Shield,
@@ -1199,7 +1213,7 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
             aria-label={`Permissions: ${current.label}`}
             className={cx(
               footerButton,
-              "data-[state=open]:bg-fill",
+              "shrink-0 data-[state=open]:bg-fill",
               mode === "full" && "text-warning hover:text-warning",
             )}
           >
