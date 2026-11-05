@@ -356,8 +356,8 @@ composer's keys stay outside the table.
   sidebar and every surface paint solid token colours, so greys no longer
   pick up the wallpaper through the window's material (`windowEffects` is
   still set in `tauri.conf.json` but nothing shows it). What floats (the
-  composer, popovers, menus, tooltips, dialogs, toasts, the right panel,
-  the lightbox) shares one glass, `--rc-glass-bg` + `--rc-glass-filter`; Reduce transparency (the media query, or the system setting
+  composer, popovers, menus, tooltips, dialogs, toasts, the lightbox)
+  shares one glass, `--rc-glass-bg` + `--rc-glass-filter`; Reduce transparency (the media query, or the system setting
   read by the shell's `reduce_transparency`) makes them solid. Hover is
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
@@ -551,9 +551,13 @@ composer's keys stay outside the table.
   open the file in the editor at that line, resolved against the thread's
   folder (`open_in_editor`: VS Code, Cursor or Zed when installed, else
   the default text editor).
-- **Right panel.** Changes, Agents and Pull requests share one floating
-  panel (`src/ui/RightPanel.tsx`): tabs between them, a close button, a
-  draggable left edge (kept), ⌘⌥B to toggle it.
+- **Right panel.** Changes, Agents and Pull requests share one docked,
+  full-height pane at the window's right edge (`src/ui/RightPanel.tsx`),
+  the sidebar's twin: tabs between them, a close button, a draggable left
+  edge (kept, and moved with ←/→ or Home/End), Escape to close, and ⌘⌥B
+  to toggle it. It narrows to leave the chat its room; when the column
+  beside the sidebar cannot hold both, it floats over the transcript and
+  stops above the composer.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
