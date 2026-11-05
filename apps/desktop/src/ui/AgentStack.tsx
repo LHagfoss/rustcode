@@ -16,6 +16,72 @@ const STATE_WORD = {
   failed: "failed",
 } as const;
 
+/** The icons alone, for a trigger that has its own card: at most three, `+N`, one sign of work. */
+export function AgentMarks({
+  agents,
+  size = "sidebar",
+  tone = "sidebar",
+}: {
+  agents: readonly StackAgent[];
+  size?: "sidebar" | "chat";
+  tone?: "sidebar" | "surface";
+}) {
+  const harnesses = useApp((s) => s.harnesses?.harnesses);
+  const view = agentStack(agents, { idle: size === "chat" ? "show" : "hide" });
+  const chat = size === "chat";
+  const ring = tone === "sidebar" ? "ring-sidebar" : "ring-surface";
+  const icon = chat ? 24 : 18;
+  return (
+    <span className="flex items-center">
+      {view.visible.map((agent, i) => (
+        <span
+          key={agent.id}
+          className={cx(
+            "relative flex shrink-0 items-center justify-center rounded-full bg-fill ring-2",
+            // What needs you keeps a warning ring: the one mark that has to be seen at a glance.
+            agent.state === "needs" ? "ring-warning" : ring,
+            i > 0 && (chat ? "-ml-2" : "-ml-1.5"),
+          )}
+          style={{ width: icon, height: icon }}
+        >
+          {agent.harness ? (
+            <HarnessIcon
+              id={agent.harness}
+              name={harnesses?.find((h) => h.id === agent.harness)?.name}
+              size={chat ? 13 : 11}
+            />
+          ) : (
+            <Bot size={chat ? 13 : 10} className="text-fg-muted" />
+          )}
+          {chat && (agent.state === "done" || agent.state === "failed") && (
+            // The group card keeps the avatar's own badge once its agents are done.
+            <span
+              aria-hidden
+              className={cx(
+                "-right-1 -bottom-1 absolute flex size-3 items-center justify-center rounded-full bg-bg ring-2",
+                ring,
+              )}
+            >
+              {agent.state === "failed" ? (
+                <X size={9} strokeWidth={3} className="text-danger" />
+              ) : (
+                <Check size={9} strokeWidth={3} className="text-success" />
+              )}
+            </span>
+          )}
+        </span>
+      ))}
+      {view.extra > 0 && (
+        <span className={cx("ml-1 shrink-0 text-fg-muted tabular", chat ? "text-caption" : "text-[10px]")}>
+          +{view.extra}
+        </span>
+      )}
+      {/* One sign for the stack, not a spinner per icon. */}
+      {view.working > 0 && <Spinner size={chat ? 10 : 9} className="ml-1 text-accent" />}
+    </span>
+  );
+}
+
 export function AgentStack({
   agents,
   size = "sidebar",
@@ -29,14 +95,11 @@ export function AgentStack({
   tone?: "sidebar" | "surface";
   className?: string;
 }) {
-  const harnesses = useApp((s) => s.harnesses?.harnesses);
   // A group card keeps its finished delegates once they all are; a sidebar row
   // shows nothing then.
   const view = agentStack(agents, { idle: size === "chat" ? "show" : "hide" });
   if (!view.order.length) return null;
   const chat = size === "chat";
-  const ring = tone === "sidebar" ? "ring-sidebar" : "ring-surface";
-  const icon = chat ? 24 : 18;
   const tip = (
     <div className="flex flex-col gap-1">
       <span className="font-medium">{view.label}</span>
@@ -72,55 +135,7 @@ export function AgentStack({
           className,
         )}
       >
-        <span className="flex items-center">
-          {view.visible.map((agent, i) => (
-            <span
-              key={agent.id}
-              className={cx(
-                "relative flex shrink-0 items-center justify-center rounded-full bg-fill ring-2",
-                // What needs you keeps a warning ring: the one mark that has to be seen at a glance.
-                agent.state === "needs" ? "ring-warning" : ring,
-                i > 0 && (chat ? "-ml-2" : "-ml-1.5"),
-              )}
-              style={{ width: icon, height: icon }}
-            >
-              {agent.harness ? (
-                <HarnessIcon
-                  id={agent.harness}
-                  name={harnesses?.find((h) => h.id === agent.harness)?.name}
-                  size={chat ? 13 : 11}
-                />
-              ) : (
-                <Bot size={chat ? 13 : 10} className="text-fg-muted" />
-              )}
-              {chat && (agent.state === "done" || agent.state === "failed") && (
-                // The group card keeps the avatar's own badge once its agents are done.
-                <span
-                  aria-hidden
-                  className={cx(
-                    "-right-1 -bottom-1 absolute flex size-3 items-center justify-center rounded-full bg-bg ring-2",
-                    ring,
-                  )}
-                >
-                  {agent.state === "failed" ? (
-                    <X size={9} strokeWidth={3} className="text-danger" />
-                  ) : (
-                    <Check size={9} strokeWidth={3} className="text-success" />
-                  )}
-                </span>
-              )}
-            </span>
-          ))}
-          {view.extra > 0 && (
-            <span
-              className={cx("ml-1 shrink-0 text-fg-muted tabular", chat ? "text-caption" : "text-[10px]")}
-            >
-              +{view.extra}
-            </span>
-          )}
-          {/* One sign for the stack, not a spinner per icon. */}
-          {view.working > 0 && <Spinner size={chat ? 10 : 9} className="ml-1 text-accent" />}
-        </span>
+        <AgentMarks agents={agents} size={size} tone={tone} />
       </span>
     </Tooltip>
   );

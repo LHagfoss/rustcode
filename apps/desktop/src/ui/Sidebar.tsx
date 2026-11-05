@@ -57,12 +57,12 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { PullRequest } from "../acp/rustcode";
+import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
-import type { StackAgent } from "../state/agentStack";
+import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type ChildInfo, childInfo } from "../state/children";
 import {
   cachedPulls,
@@ -598,6 +598,12 @@ const ThreadRow = memo(function ThreadRow({
   // here has no items, and shows nothing rather than a made-up zero.
   const items = useApp((s) => s.threads[session.id]?.items);
   const diff = useMemo(() => threadDiff(items), [items]);
+  // Its own subagents count with the threads it started: one stack, whichever way they were spawned.
+  const ownAgents = useApp((s) => s.agents[session.id] ?? NO_AGENTS);
+  const stack = useMemo(() => {
+    const own = liveSubagents(items, ownAgents, running, session.harness);
+    return own.length ? [...own, ...(agents ?? [])] : agents;
+  }, [items, ownAgents, running, session.harness, agents]);
   // Done or Failed while you were elsewhere, until you open it.
   const fresh = !!finishedAt && !selected;
   const failed = !!failedAt && !selected;
@@ -761,8 +767,8 @@ const ThreadRow = memo(function ThreadRow({
                 {session.title || "New thread"}
               </span>
               <LinkBadge threadId={session.id} />
-              {agents?.length ? (
-                <AgentStack agents={agents} />
+              {stack?.length ? (
+                <AgentStack agents={stack} />
               ) : (
                 external && (
                   <HarnessIcon
@@ -1178,6 +1184,7 @@ const NO_MARKS: Record<string, ThreadStatus> = {};
 
 /** Nothing picked: one set, so clearing an empty selection never re-renders the list. */
 const NO_PICKS: ReadonlySet<string> = new Set();
+const NO_AGENTS: SubagentInfo[] = [];
 
 /**
  * The sidebar's search: a row that reads "Search" until it is clicked (or ⌘F

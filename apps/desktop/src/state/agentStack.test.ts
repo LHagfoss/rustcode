@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { agentStack, STACK_VISIBLE, type StackAgent, type StackState } from "./agentStack";
+import { agentStack, liveSubagents, STACK_VISIBLE, type StackAgent, type StackState } from "./agentStack";
+import type { TranscriptItem } from "./thread";
 
 const agent = (id: string, state: StackState, harness = "codex"): StackAgent => ({
   id,
@@ -61,5 +62,27 @@ describe("the icons a stack draws", () => {
     // While anything runs, only what runs is shown, even when idle is shown.
     const mixed = [agent("done", "done"), agent("work", "working")];
     expect(agentStack(mixed, { idle: "show" }).order.map((a) => a.id)).toEqual(["work"]);
+  });
+});
+
+describe("a thread's own subagents", () => {
+  const call = (id: string, status: "in_progress" | "completed", toolName = "Agent") =>
+    ({
+      kind: "tool",
+      id,
+      title: "Agent",
+      toolName,
+      status,
+      input: { description: "Build the kit", subagent_type: "general-purpose" },
+    }) as unknown as TranscriptItem;
+
+  test("a built-in subagent at work is a mark of the thread's harness", () => {
+    const marks = liveSubagents([call("a", "in_progress"), call("b", "completed")], [], true, "claude-code");
+    expect(marks).toEqual([{ id: "a", state: "working", harness: "claude-code", label: "Build the kit" }]);
+  });
+
+  test("other tools are not agents, and a turn that ended has none", () => {
+    expect(liveSubagents([call("a", "in_progress", "Read")], [], true, "claude-code")).toEqual([]);
+    expect(liveSubagents([call("a", "in_progress")], [], false, "claude-code")).toEqual([]);
   });
 });
