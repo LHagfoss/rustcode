@@ -3,6 +3,7 @@ import type { FileDiff } from "../acp/types";
 import {
   contextRow,
   keepListed,
+  listedPicks,
   nextRow,
   rangeRows,
   rowKeyAction,
@@ -116,6 +117,18 @@ describe("dropping what left the list", () => {
   test("the same set comes back when nothing left, so nothing re-renders", () => {
     const selected = new Set(["a", "c"]);
     expect(keepListed(selected, ROWS)).toBe(selected);
+  });
+});
+
+describe("the selection bar's threads", () => {
+  test("only picked threads still in the list are acted on", () => {
+    const sessions = [
+      { id: "a", cwd: "/one" },
+      { id: "b", cwd: "/two" },
+    ];
+    expect(listedPicks(sessions, new Set(["a", "b", "gone"])).map((s) => s.id)).toEqual(["a", "b"]);
+    expect(listedPicks(sessions, new Set(["gone"]))).toEqual([]);
+    expect(listedPicks(sessions, new Set())).toEqual([]);
   });
 });
 

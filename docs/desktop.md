@@ -395,8 +395,13 @@ composer's keys stay outside the table.
   Unread* in the menu brings Done back). What wants you reads in medium
   weight; what works, waits or is settled recedes. Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
   Double-click or F2 renames. Settling is marking a thread Done, with an
-  Undo toast; a new message brings it back. The filter button by the
-  search groups Threads by project (off by default; each
+  Undo toast (the row, the selection bar, the chat's menu, the palette and the
+  board all offer it); a new message brings it back. Settling the selected
+  thread while the chat is showing closes its panel and leaves it for the
+  new-thread screen in the same folder. Settling from the board, review or
+  compare stays on that view, settling any other thread changes nothing on
+  screen, and a status set by an agent or the engine never moves it. The
+  filter button by the search groups Threads by project (off by default; each
   project folds and has New thread on hover; a worktree thread sits under
   its repository), keeps to the current project, and opens the Board.
   Search matches titles and folders at once, and from three characters
@@ -555,9 +560,16 @@ composer's keys stay outside the table.
   full-height pane at the window's right edge (`src/ui/RightPanel.tsx`),
   the sidebar's twin: tabs between them, a close button, a draggable left
   edge (kept, and moved with ←/→ or Home/End), Escape to close, and ⌘⌥B
-  to toggle it. It narrows to leave the chat its room; when the column
-  beside the sidebar cannot hold both, it floats over the transcript and
-  stops above the composer.
+  to toggle it. A thread opens with the panel on the view it last showed
+  (Changes when that view has nothing to show here), unless the user closed it
+  on that thread; the new-thread screen opens without a panel (⌘⌥B still
+  opens one), and settling the selected thread while the chat is showing
+  closes it and leaves that thread. Its Changes read belongs to the thread's
+  folder: an answer for the last thread's folder is dropped and never drawn
+  with this thread's name, and while the turn runs the panel says the changes
+  are read when it ends. It narrows to leave the chat its room; when the
+  column beside the sidebar cannot hold both, it floats over the transcript
+  and stops above the composer.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).

@@ -2,6 +2,7 @@
 // the rules that move and pick them. Pure, so the sidebar and its tests share one answer
 // (ui/Sidebar.tsx).
 
+import type { SessionSummary } from "../acp/types";
 import { diffCounts, type TranscriptItem } from "./thread";
 
 /** A row the list draws. A delegated thread has no row of its own: it is in its parent's stack. */
@@ -77,6 +78,14 @@ export function rangeRows(rows: readonly string[], from: string | null, to: stri
   if (b < 0) return [];
   if (a < 0) return [to];
   return rows.slice(Math.min(a, b), Math.max(a, b) + 1);
+}
+
+/** The picked threads still in the list: the only ones the selection bar acts on. */
+export function listedPicks(
+  sessions: readonly SessionSummary[],
+  picked: ReadonlySet<string>,
+): SessionSummary[] {
+  return sessions.filter((s) => picked.has(s.id));
 }
 
 /** The selection without the threads the list no longer draws; the same set when none left. */

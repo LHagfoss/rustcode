@@ -11,6 +11,7 @@ import { STATUS_LABEL, type ThreadStatus } from "../acp/v2";
 import {
   selectThread,
   setThreadStatus,
+  settleThread,
   startNewThread,
   statusOf,
   toggleSidebar,
@@ -107,7 +108,7 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
         <div className="mt-2 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
           {status === "review" ? (
             <Tooltip label="Mark done">
-              <Pill size="sm" aria-label="Mark done" onClick={() => void setThreadStatus(session.id, "done")}>
+              <Pill size="sm" aria-label="Mark done" onClick={() => settleThread(session.id)}>
                 <CircleCheck size={11} /> Done
               </Pill>
             </Tooltip>
@@ -178,7 +179,9 @@ export function Board() {
               onDrop={(e) => {
                 setOver(null);
                 const id = e.dataTransfer.getData("text/rustcode-thread");
-                if (id && droppable) void setThreadStatus(id, c.status as "review" | "done");
+                if (!id || !droppable) return;
+                if (c.status === "done") settleThread(id);
+                else void setThreadStatus(id, c.status as "review" | "idle");
               }}
               className={cx(
                 "flex min-h-0 min-w-[200px] flex-col rounded-xl bg-fill-subtle transition-[background-color,box-shadow] duration-150",
