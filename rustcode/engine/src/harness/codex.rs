@@ -1204,10 +1204,17 @@ async fn relay(
     while let Some(message) = incoming.recv().await {
         match message {
             Incoming::Notification { method, params } => {
-                for update in translate(&state, &method, &params) {
+                let updates = translate(&state, &method, &params);
+                // Not every notification becomes an update, but each one says
+                // Codex is alive (`watchdog`).
+                let spoke = !updates.is_empty();
+                for update in updates {
                     let _ = out.send(Output::Update(update));
                 }
                 settle(&state, &method, &params);
+                if !spoke {
+                    let _ = out.send(Output::Heartbeat);
+                }
             }
             Incoming::Barrier(done) => {
                 let _ = done.send(());
