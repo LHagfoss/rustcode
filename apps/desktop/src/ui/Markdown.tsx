@@ -273,7 +273,9 @@ const components: Components = {
     if (block) return <CodeBlock code={text.replace(/\n$/, "")} lang={lang} />;
     if (text.startsWith(COMMAND_MARK))
       return (
-        <span className="rounded-md bg-accent/12 px-1.5 py-0.5 font-medium font-mono text-[0.85em] text-accent">
+        // A sent message's leading slash command: roomier than body `code`, since it heads the
+        // message rather than sitting inside a sentence.
+        <span className="mr-1 rounded-md bg-accent/12 px-2 py-0.5 font-medium font-mono text-[0.85em] text-accent">
           {text.slice(COMMAND_MARK.length)}
         </span>
       );
