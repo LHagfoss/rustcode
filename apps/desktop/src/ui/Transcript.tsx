@@ -337,16 +337,21 @@ export function Transcript({
     return set;
   }, [rows]);
 
-  // The reply each turn footer copies: the last reply before it.
-  const replyBefore = useMemo(() => {
-    const map: Record<string, string> = {};
+  // The reply each turn footer takes over: the last reply before it, whose own row then
+  // stays clean, so a finished turn shows one action row under its last reply, not two.
+  const turnReply = useMemo(() => {
+    const byEnd: Record<string, { id: string; text: string }> = {};
+    const terminal = new Set<string>();
     let last: { id: string; text: string } | undefined;
     for (const item of thread.items) {
       if (item.kind === "assistant") last = { id: item.id, text: item.text };
       else if (item.kind === "user") last = undefined;
-      else if (item.kind === "turnEnd" && last) map[item.id] = last.text;
+      else if (item.kind === "turnEnd" && last) {
+        byEnd[item.id] = last;
+        terminal.add(last.id);
+      }
     }
-    return map;
+    return { byEnd, terminal };
   }, [thread.items]);
 
   const completions = useMemo(() => {
@@ -831,6 +836,7 @@ export function Transcript({
                         item={item}
                         threadId={thread.id}
                         streaming={thread.running && v.index === lastIndex}
+                        inTurnFoot={turnReply.terminal.has(item.id)}
                       />
                     ) : item?.kind === "thought" ? (
                       <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
@@ -854,7 +860,8 @@ export function Transcript({
                       <TurnEndRow
                         item={item}
                         folded={foldedEnds.has(item.id)}
-                        reply={foldedEnds.has(item.id) ? replyBefore[item.id] : undefined}
+                        threadId={thread.id}
+                        reply={turnReply.byEnd[item.id]?.text}
                         completion={completions[item.id]}
                         changes={
                           turnCheckpoints[item.id] && (

@@ -21,6 +21,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
+import { CHAT_WIDTH_REM } from "../lib/chatWidth";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { chooseFolder } from "../state/folders";
@@ -434,8 +435,8 @@ function releaseComposer(e: React.MouseEvent) {
   active.blur();
 }
 
-/** The chat lane's cap: `--rc-chat-content-max-width` (46rem) in index.css. */
-const LANE_MAX = 736;
+/** The chat lane's cap at its default setting: `--rc-chat-content-max-width` (52rem). */
+const LANE_MAX = 52 * 16;
 
 /**
  * How far the lane moves left to clear the details card, and no further than
@@ -443,9 +444,9 @@ const LANE_MAX = 736;
  * would run under it is shifted, never narrowed. When the pane has no room to
  * give, the lane stays put and the card overlays it.
  */
-export function laneShift(pane: number, card = DETAILS_CARD): number {
+export function laneShift(pane: number, card = DETAILS_CARD, laneMax = LANE_MAX): number {
   if (pane <= 0) return 0;
-  const lane = Math.min(LANE_MAX, pane);
+  const lane = Math.min(laneMax, pane);
   const needed = (lane - pane) / 2 + card.width + card.gap * 2;
   const slack = Math.max(0, (pane - lane) / 2);
   return Math.round(Math.max(0, Math.min(needed, slack)));
@@ -462,7 +463,10 @@ export function ChatView() {
   const banner = useBanner();
   const detailsOpen = useApp((s) => s.panel === "details");
   // The transcript's rows and the composer both read this in ui/Transcript.tsx and below.
-  const laneInset = detailsOpen ? laneShift(width) : 0;
+  const chatWidth = useApp((s) => s.chatWidth);
+  // "Full" hands the lane the pane and the details card overlays it, as it does on a narrow one.
+  const laneRem = CHAT_WIDTH_REM[chatWidth];
+  const laneInset = detailsOpen ? laneShift(width, DETAILS_CARD, laneRem === null ? width : laneRem * 16) : 0;
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

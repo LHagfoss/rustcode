@@ -48,6 +48,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // ------------------------------------------------------------ Chat
   {
     section: "chat",
+    title: "Chat width",
+    keywords: "lane transcript composer measure column wide full comfortable narrow",
+  },
+  {
+    section: "chat",
     title: "Smart UI",
     keywords: "interactive view chart table sandbox html agent answer",
   },

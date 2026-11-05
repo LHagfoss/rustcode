@@ -36,6 +36,7 @@ import {
   setBannerStyle,
   useBanner,
 } from "../lib/banner";
+import { CHAT_WIDTH_LABEL, type ChatWidth } from "../lib/chatWidth";
 import { HAPTICS_DEFAULT, haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
 import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { openExternal, pickFolder, revealPath } from "../lib/native";
@@ -57,6 +58,7 @@ import {
   type SettingsSection,
   setActiveTheme,
   setAnimateStreaming,
+  setChatWidth,
   setDefaultCwd,
   setDefaultHarness,
   setDefaultPermissionMode,
@@ -290,10 +292,31 @@ function GeneralPage() {
 function ChatPage() {
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
+  const chatWidth = useApp((s) => s.chatWidth);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   return (
     <Group title="In the chat">
+      <Row
+        title="Chat width"
+        reset={
+          chatWidth !== SETTINGS_DEFAULTS.chatWidth
+            ? () => setChatWidth(SETTINGS_DEFAULTS.chatWidth)
+            : undefined
+        }
+        subtitle="How wide the transcript and the composer grow on a large window. They always share one measure."
+      >
+        <Choice<ChatWidth>
+          label="Chat width"
+          value={chatWidth}
+          onChange={setChatWidth}
+          options={[
+            { value: "comfortable", label: CHAT_WIDTH_LABEL.comfortable },
+            { value: "wide", label: CHAT_WIDTH_LABEL.wide },
+            { value: "full", label: CHAT_WIDTH_LABEL.full },
+          ]}
+        />
+      </Row>
       <Row
         title="Smart UI"
         reset={smartUi ? undefined : () => setSmartUi(SETTINGS_DEFAULTS.smartUi)}

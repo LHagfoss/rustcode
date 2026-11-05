@@ -61,6 +61,7 @@ import {
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
 import {
   APP_COMMANDS,
   bindingOf,
@@ -314,6 +315,8 @@ export interface AppState {
   roundedFont: boolean;
   /** A streaming reply's new words fade in as the model writes them. */
   animateStreaming: boolean;
+  /** How wide the chat lane grows, transcript and composer alike (Settings › Chat). */
+  chatWidth: ChatWidth;
   /** Which buttons the thread header shows, in order (Settings › Chat); anything absent is hidden. */
   headerButtons: HeaderButtonId[];
   /** Shortcuts the user changed, by command id (lib/keys.ts holds the defaults). */
@@ -379,6 +382,7 @@ const STORAGE = {
   runningThreads: "rustcode.runningThreads",
   roundedFont: "rustcode.roundedFont",
   animateStreaming: "rustcode.animateStreaming",
+  chatWidth: "rustcode.chatWidth",
   headerButtons: "rustcode.headerButtons",
   statusMarks: "rustcode.statusMarks",
   snoozed: "rustcode.snoozed",
@@ -406,6 +410,7 @@ export const SETTINGS_DEFAULTS = {
   theme: "system" as AppState["theme"],
   roundedFont: false,
   animateStreaming: true,
+  chatWidth: CHAT_WIDTH_DEFAULT,
   headerButtons: DEFAULT_HEADER_BUTTONS,
   resumeAfterRestart: true,
   orchestration: true,
@@ -465,6 +470,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
+  chatWidth: parseChatWidth(stored(STORAGE.chatWidth)),
   headerButtons: sanitizeHeaderButtons(storedJson<unknown>(STORAGE.headerButtons, null)),
   shortcuts: parseOverrides(stored(STORAGE.shortcuts)),
   orchestrationPending: false,
@@ -2636,6 +2642,11 @@ export function resetShortcut(id: string) {
 export function setAnimateStreaming(on: boolean) {
   set({ animateStreaming: on });
   store(STORAGE.animateStreaming, on ? "1" : "0");
+}
+
+export function setChatWidth(width: ChatWidth) {
+  set({ chatWidth: width });
+  store(STORAGE.chatWidth, width);
 }
 
 /**
