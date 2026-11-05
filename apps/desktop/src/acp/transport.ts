@@ -170,6 +170,9 @@ export async function defaultTransport(): Promise<Transport> {
       scenario: q.get("scenario") ?? undefined,
       bootMs: Number(q.get("boot")) || undefined,
       crashAfterMs: Number(q.get("crash")) || undefined,
+      claudeUsage: (["expired", "refused", "forbidden", "denied"] as const).find(
+        (f) => f === q.get("claudeUsage"),
+      ),
     });
   }
   const port = import.meta.env.VITE_BRIDGE_PORT ?? "1421";

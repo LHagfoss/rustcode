@@ -26,7 +26,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
-import { answeredPlans, USAGE_PLANS_KEY, type UsageAnswer, usageView } from "../state/usagePage";
+import { answeredPlans, failureText, USAGE_PLANS_KEY, type UsageAnswer, usageView } from "../state/usagePage";
 import { PlanWindow } from "./ComposerUsage";
 import { Skeleton, Spinner, Switch } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
@@ -39,15 +39,21 @@ export function UsagePage() {
   );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const load = useCallback(async (withClaude: boolean) => {
+  const load = useCallback(async (withClaude: boolean, force: boolean) => {
     const token = beginPageRead(USAGE_PLANS_KEY);
     setLoading(true);
     try {
       // Showing this page (or Refresh) is the explicit consent that also
       // reads each account's own sign-in at once; the background reads one
-      // account at a time, the one the thread on screen runs on.
+      // account at a time, the one the thread on screen runs on. Refresh forces
+      // the read past the engine's minute of cache, so a sign-in renewed in
+      // Claude Code shows now rather than after that minute.
       const plans = parsePlans(
-        await request(Method.usagePlans, { claude: withClaude, claudeAccounts: withClaude }, 20_000),
+        await request(
+          Method.usagePlans,
+          { claude: withClaude, claudeAccounts: withClaude, ...(force ? { force: true } : {}) },
+          20_000,
+        ),
       );
       // A whole read replaces the list; one with Claude off replaces only the
       // rows it asked, so turning the switch back on has numbers to draw while
@@ -83,7 +89,8 @@ export function UsagePage() {
       return;
     }
     const cached = cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null;
-    if (usageView(cached, claude, null).fetch) void load(claude);
+    const view = usageView(cached, claude, null);
+    if (view.fetch) void load(claude, view.force);
   }, [status, claude, load]);
   const allowClaude = (on: boolean) => {
     setClaudeUsageAllowed(on);
@@ -124,10 +131,11 @@ export function UsagePage() {
                     ? `${p.via ?? p.name} not found`
                     : p.status === "ok"
                       ? "No plan windows reported"
-                      : "Could not read the usage"
+                      : failureText(p).title
               }
               subtitle={
                 p.error ??
+                failureText(p).subtitle ??
                 (p.status === "signedOut"
                   ? `Sign in with ${p.via ?? p.name} on this Mac to see this plan here.`
                   : p.status === "notInstalled"
@@ -164,7 +172,7 @@ export function UsagePage() {
             }`
           ) : null}
         </span>
-        <Action onClick={() => void load(claude)} disabled={loading}>
+        <Action onClick={() => void load(claude, true)} disabled={loading}>
           {loading ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
         </Action>
       </div>

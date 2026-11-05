@@ -304,6 +304,21 @@ export function parsePlanUsage(result: Json | undefined): PlanUsage | null {
  */
 export type PlanStatus = "ok" | "signedOut" | "notInstalled" | "unavailable" | "notAsked";
 
+/**
+ * Why a plan could not be read, as the engine names it (`_rustcode/usage/plans`
+ * `reason`). It decides what the app does next:
+ *
+ * - `expired` and `refused` are fixed in the CLI itself (Claude Code renews an
+ *   expired sign-in, or the user signs in again), so the background read keeps
+ *   asking and Settings › Usage offers a forced Refresh.
+ * - `forbidden` is Anthropic refusing this sign-in access to the usage endpoint:
+ *   renewing it does not change that, so it is not retried on its own.
+ * - `denied` is a macOS Keychain prompt the user declined: asking again on every
+ *   poll would just prompt again, so only an explicit look retries it.
+ * - `transient` is no answer or an unreadable one, which the next poll tries again.
+ */
+export type PlanFailure = "expired" | "refused" | "forbidden" | "denied" | "transient";
+
 export interface UsagePlan {
   /** The subscription's own id (`claude`, `codex`); see `planHarness`. */
   id: string;
@@ -318,6 +333,8 @@ export interface UsagePlan {
   /** The tier the provider named ("max"). */
   plan?: string;
   error?: string;
+  /** Why an `unavailable` row has no numbers; absent from engines before this. */
+  reason?: PlanFailure;
   windows: (UsageWindow & { label: string })[];
 }
 
@@ -376,10 +393,19 @@ export function parsePlans(result: Json | undefined): UsagePlan[] {
         status: status as PlanStatus,
         plan: str(o.plan),
         error: str(o.error),
+        reason: planFailure(o.reason),
         windows,
       },
     ];
   });
+}
+
+/** The engine's failure reason, when this app knows it. */
+const PLAN_FAILURES: readonly PlanFailure[] = ["expired", "refused", "forbidden", "denied", "transient"];
+
+function planFailure(value: unknown): PlanFailure | undefined {
+  const reason = str(value);
+  return PLAN_FAILURES.find((known) => known === reason);
 }
 
 export function windowTitle(w: UsageWindow): string {

@@ -258,6 +258,12 @@ pub(crate) struct UsagePlansRequest {
     /// numbers away. An id that names no account of the config reads nothing.
     #[serde(default)]
     pub claude_account: Option<String>,
+    /// Read every Claude login again instead of the last answer, even one under
+    /// a minute old. Only Settings › Usage's Refresh sends it, which is how a
+    /// sign-in renewed in Claude Code is seen at once rather than after the
+    /// cache's minute or a paused background read.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// The named Claude accounts a request reads, in row order: every one on an
@@ -281,8 +287,10 @@ pub(crate) fn named_claude_accounts<'a>(
 }
 
 /// Answer `_rustcode/usage/plans`: `{plans: [{id, name, status, plan?, error?,
-/// windows: [{label, usedPercent, windowMinutes, resetsAt}]}]}`, where status
-/// is `ok`, `signedOut`, `notInstalled`, `unavailable` or `notAsked`.
+/// reason?, windows: [{label, usedPercent, windowMinutes, resetsAt}]}]}`, where
+/// status is `ok`, `signedOut`, `notInstalled`, `unavailable` or `notAsked`,
+/// and an `unavailable` Claude row's `reason` is `expired`, `refused`,
+/// `forbidden`, `denied` or `transient` (see `claude_usage::NoUsage`).
 pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     let window = |label: &str, window: &crate::provider_auth::RateLimitWindow| {
         serde_json::json!({
@@ -313,10 +321,16 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     // Only what was asked for is read: the default login when `claude`, and
     // the named accounts the request names (one at a time unless Settings ›
     // Usage looks at all of them). Their windows are per account; RustCode
-    // only reads them.
-    use crate::provider_auth::claude_usage::usage;
+    // only reads them. A forced read ignores the minute-old cached answer, so
+    // Refresh sees a sign-in renewed in Claude Code at once.
+    use crate::provider_auth::claude_usage::{Freshness, usage};
+    let freshness = if request.force {
+        Freshness::Now
+    } else {
+        Freshness::Cached
+    };
     let default = if request.claude {
-        Some(usage(None).await)
+        Some(usage(None, freshness).await)
     } else {
         None
     };
@@ -325,7 +339,7 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
         .unwrap_or_default();
     let mut named = Vec::new();
     for account in named_claude_accounts(&request, &known) {
-        let read = usage(Some(&account.resolved_dir())).await;
+        let read = usage(Some(&account.resolved_dir()), freshness).await;
         named.push((account, read));
     }
     plans_answer(default, &named, codex)
@@ -391,7 +405,14 @@ fn claude_row(
             row("ok", None, plan.as_deref(), windows)
         }
         ClaudeUsage::NotSignedIn => row("signedOut", None, None, vec![]),
-        ClaudeUsage::Unavailable(error) => row("unavailable", Some(&error), None, vec![]),
+        // `reason` is what tells the app whether to retry on its own: an
+        // expired sign-in is renewed in Claude Code, a denied Keychain prompt
+        // must not be raised again every poll.
+        ClaudeUsage::Unavailable { reason, message } => {
+            let mut value = row("unavailable", Some(&message), None, vec![]);
+            value["reason"] = serde_json::json!(reason.as_str());
+            value
+        }
     }
 }
 
@@ -495,6 +516,7 @@ mod tests {
                 claude: true,
                 claude_accounts: false,
                 claude_account: Some("work".into()),
+                force: false,
             },
             &known,
         );
@@ -507,12 +529,14 @@ mod tests {
             claude: true,
             claude_accounts: false,
             claude_account: None,
+            force: false,
         };
         assert!(super::named_claude_accounts(&none, &known).is_empty());
         let unknown = super::UsagePlansRequest {
             claude: true,
             claude_accounts: false,
             claude_account: Some("gone".into()),
+            force: false,
         };
         assert!(super::named_claude_accounts(&unknown, &known).is_empty());
         // An explicit look in Settings › Usage reads every one of them.
@@ -521,6 +545,7 @@ mod tests {
                 claude: true,
                 claude_accounts: true,
                 claude_account: None,
+                force: false,
             },
             &known,
         );
@@ -528,6 +553,59 @@ mod tests {
             all.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
             ["work", "home"]
         );
+    }
+
+    /// A login that could not be read says why in a word the app can act on,
+    /// and its numbers are not reported as if they were read.
+    #[test]
+    fn a_failed_login_carries_its_reason() {
+        use crate::provider_auth::claude_usage::{ClaudeUsage, NoUsage};
+        let value = super::claude_row(
+            "claude",
+            "Claude",
+            None,
+            ClaudeUsage::Unavailable {
+                reason: NoUsage::Expired,
+                message: "expired".into(),
+            },
+        );
+        assert_eq!(value["status"], "unavailable");
+        assert_eq!(value["reason"], "expired");
+        assert_eq!(value["error"], "expired");
+        assert!(value["windows"].as_array().unwrap().is_empty());
+        // A row that was read has no reason to give.
+        let ok = super::claude_row("claude", "Claude", None, claude_windows(4.0, 300));
+        assert!(ok.get("reason").is_none());
+        // An account's row carries its own id and reason, apart from the default login's.
+        let denied = super::claude_row(
+            "claude:work",
+            "Work",
+            Some("work"),
+            ClaudeUsage::Unavailable {
+                reason: NoUsage::Denied,
+                message: "denied".into(),
+            },
+        );
+        assert_eq!(denied["account"], "work");
+        assert_eq!(denied["reason"], "denied");
+    }
+
+    /// `force` is what Settings › Usage's Refresh sends, and an older app that
+    /// does not send it still gets the cached read.
+    #[test]
+    fn a_forced_read_is_asked_for_and_optional() {
+        let quiet: super::UsagePlansRequest = serde_json::from_value(serde_json::json!({
+            "claude": true,
+            "claudeAccounts": true
+        }))
+        .unwrap();
+        assert!(!quiet.force);
+        let forced: super::UsagePlansRequest = serde_json::from_value(serde_json::json!({
+            "claude": true,
+            "force": true
+        }))
+        .unwrap();
+        assert!(forced.force);
     }
 
     /// `claude: false` asks for the account only: its row is answered, and the

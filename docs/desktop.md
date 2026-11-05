@@ -303,8 +303,8 @@ composer's keys stay outside the table.
   thread draft naming the commit.
 - **Settings › Usage.** Every subscription this machine is signed in to, with
   no thread open: `_rustcode/usage/plans` (engine `acp/usage.rs`) answers
-  `{plans: [{id, name, via, status, plan?, error?, windows}]}`. ChatGPT comes
-  from the Codex CLI's `account/rateLimits/read` (as the composer meter);
+  `{plans: [{id, name, via, status, plan?, error?, reason?, windows}]}`. ChatGPT
+  comes from the Codex CLI's `account/rateLimits/read` (as the composer meter);
   Claude from Claude Code's OAuth sign-in (Keychain `Claude Code-credentials`,
   else `~/.claude/.credentials.json`) against `api.anthropic.com/api/oauth/usage`
   (5-hour, weekly, weekly per model), read-only and never refreshed
@@ -312,8 +312,25 @@ composer's keys stay outside the table.
   presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
   allow Keychain access. Each source is cached a minute. Showing the page
   reads every Claude login; the background reads one at a time, the account
-  of the thread on screen (`claudeAccount`), and stops reading a login whose
-  Keychain read was denied until the user looks again.
+  of the thread on screen (`claudeAccount`).
+  A Claude row that has no numbers is `unavailable` and says why: `expired`
+  (the stored token passed its expiry), `refused` (Anthropic answered 401),
+  `forbidden` (Anthropic answered 403: renewing the same sign-in does not grant
+  the usage read), `denied` (macOS would not hand the Keychain item over) or
+  `transient` (no answer). The page retries `expired` and `refused` on its own
+  and sends `force: true` then, which reads again instead of answering from the
+  engine's minute of cache — so a sign-in renewed in Claude Code shows on return
+  to the page, and the background poll picks it up within its three minutes. A
+  `forbidden` login is not retried on its own (renewing does not fix it), nor is
+  a `denied` one (that would only prompt again); Settings › Usage, Refresh and
+  Check in Settings › Agents read them again, and Refresh always forces. With
+  Claude's switch off the page asks for no Claude login at all, so even a forced
+  Refresh reads no Keychain item. Reads of one login are serialized in the
+  engine (`provider_auth/claude_usage.rs`), and a forced read whose login was
+  read after the user asked shares that answer instead of asking macOS again. A
+  Keychain refusal is remembered while the engine runs: the background reads
+  then use the credentials file only, so a denial cannot prompt again even when
+  that file answers and its numbers keep showing; Refresh asks macOS once more.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
   and `PlanUsageMeter`: a ring filling with the context window in use, and
   the plan's shortest window from `_rustcode/usage/limits` as a short bar

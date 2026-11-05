@@ -13,8 +13,11 @@ const plan = (over: Partial<UsagePlan>): UsagePlan => ({
   ...over,
 });
 
-const accountPlan = (id: string, status: UsagePlan["status"] = "ok"): UsagePlan =>
-  plan({ id: `claude:${id}`, name: id, account: id, status });
+const accountPlan = (
+  id: string,
+  status: UsagePlan["status"] = "ok",
+  reason?: UsagePlan["reason"],
+): UsagePlan => plan({ id: `claude:${id}`, name: id, account: id, status, reason });
 
 const paused = (claude: boolean, ...accounts: string[]): PlanPauses => ({
   claude,
@@ -40,8 +43,13 @@ describe("what a refresh asks for", () => {
     expect(onAccount({ account: "home" })).toEqual({ claude: true, account: "home" });
   });
 
-  test("nothing without consent", () => {
+  test("nothing without consent, not even a forced look", () => {
     expect(onAccount({ allowed: false })).toEqual({ claude: false });
+    // Refresh while Claude's sign-in is switched off must not reach the
+    // Keychain, whatever the page asks the engine.
+    expect(onAccount({ allowed: false, explicit: true, pauses: paused(true, "work") })).toEqual({
+      claude: false,
+    });
   });
 
   test("only a Claude Code thread has an account to read", () => {
@@ -61,10 +69,11 @@ describe("what a refresh asks for", () => {
     expect(onAccount({ pauses: paused(false, "home") })).toEqual({ claude: true, account: "work" });
   });
 
-  test("an explicit look is not held back by a pause", () => {
+  test("an explicit look is not held back by a pause, and forces the engine to read", () => {
     expect(onAccount({ pauses: paused(true, "work"), explicit: true })).toEqual({
       claude: true,
       account: "work",
+      force: true,
     });
   });
 });
@@ -72,7 +81,10 @@ describe("what a refresh asks for", () => {
 describe("a plans answer pauses the login it could not read", () => {
   test("a denied account pauses that account only", () => {
     const before = NO_PAUSES;
-    const after = pausesAfter([plan({ status: "notAsked" }), accountPlan("work", "unavailable")], before);
+    const after = pausesAfter(
+      [plan({ status: "notAsked" }), accountPlan("work", "unavailable", "denied")],
+      before,
+    );
     expect(after).toEqual(paused(false, "work"));
     // The default login was not read, so it stays as it was: still asked for.
     expect(plansAskFor({ allowed: true, harness: "codex", pauses: after })).toEqual({ claude: true });
@@ -88,10 +100,38 @@ describe("a plans answer pauses the login it could not read", () => {
   });
 
   test("the default login's failure pauses the default login only", () => {
-    const after = pausesAfter([plan({ status: "unavailable" }), accountPlan("work")], NO_PAUSES);
+    const after = pausesAfter(
+      [plan({ status: "unavailable", reason: "denied" }), accountPlan("work")],
+      NO_PAUSES,
+    );
     expect(after).toEqual(paused(true));
     // The account is still read, and the default login is not.
     expect(onAccount({ pauses: after })).toEqual({ claude: false, account: "work" });
+  });
+
+  /**
+   * The reported bug: Claude Code renewed the sign-in, but the app had paused
+   * the login when it read "expired", so it never saw the new one until the
+   * user visited Settings › Usage. Only a denial is paused now.
+   */
+  test("an expired sign-in is retried in the background, so a renewal is noticed", () => {
+    const after = pausesAfter(
+      [plan({ status: "unavailable", reason: "expired" }), accountPlan("work", "unavailable", "expired")],
+      NO_PAUSES,
+    );
+    expect(after).toEqual(NO_PAUSES);
+    // The next background read asks for both again.
+    expect(onAccount({ pauses: after })).toEqual({ claude: true, account: "work" });
+    // A refusal is repaired the same way, by signing in again in Claude Code.
+    expect(pausesAfter([plan({ status: "unavailable", reason: "refused" })], NO_PAUSES)).toBe(NO_PAUSES);
+    // So is a read that simply did not come back.
+    expect(pausesAfter([plan({ status: "unavailable", reason: "transient" })], NO_PAUSES)).toBe(NO_PAUSES);
+  });
+
+  test("an older engine's failure without a reason is still paused, as it always was", () => {
+    // Nothing on the wire says whether it was a Deny: never risk a prompt loop.
+    expect(pausesAfter([plan({ status: "unavailable" })], NO_PAUSES)).toEqual(paused(true));
+    expect(pausesAfter([accountPlan("work", "unavailable")], NO_PAUSES)).toEqual(paused(false, "work"));
   });
 
   test("a partial answer says nothing about the logins it did not read", () => {
@@ -105,6 +145,17 @@ describe("a plans answer pauses the login it could not read", () => {
     // A Deny is cleared by an explicit look, not by the next background read.
     const before = paused(false, "work");
     expect(pausesAfter([accountPlan("work")], before)).toBe(before);
+  });
+
+  test("a forbidden sign-in is not retried, since renewing it does not help", () => {
+    expect(pausesAfter([accountPlan("work", "unavailable", "forbidden")], NO_PAUSES)).toEqual(
+      paused(false, "work"),
+    );
+    expect(pausesAfter([plan({ status: "unavailable", reason: "forbidden" })], NO_PAUSES)).toEqual(
+      paused(true),
+    );
+    // The account is still read, and the forbidden default login is not.
+    expect(onAccount({ pauses: paused(true) })).toEqual({ claude: false, account: "work" });
   });
 });
 
@@ -126,6 +177,18 @@ describe("asks that arrive while one is in flight", () => {
 
   test("an empty ask queues nothing", () => {
     expect(queueAsks([], { claude: false })).toEqual([]);
+  });
+
+  test("an explicit look folded into a waiting ask still forces the read", () => {
+    // Check in Settings › Agents while the poll is in flight: the request that
+    // runs next must not be answered from the engine's cache.
+    expect(queueAsks([{ claude: true }], { claude: false, account: "work", force: true })).toEqual([
+      { claude: true, account: "work", force: true },
+    ]);
+    // A forced ask that already waits keeps its force.
+    expect(queueAsks([{ claude: true, force: true }], { claude: false })).toEqual([
+      { claude: true, force: true },
+    ]);
   });
 
   test("a thread switch to another account is kept, in order", () => {

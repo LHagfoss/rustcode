@@ -3576,7 +3576,9 @@ let plansQueued: PlansAsk[] = [];
 /**
  * The Claude logins the background read leaves alone: the default login, and
  * each account whose Keychain read was denied (or which is signed out), so a
- * Deny never prompts every three minutes. Settings' own look clears them.
+ * Deny never prompts every three minutes. Settings' own look clears them. An
+ * expired sign-in is not here: Claude Code renews it, and the background read
+ * must notice that without the user opening Settings.
  */
 let planPauses: PlanPauses = NO_PAUSES;
 
@@ -3658,7 +3660,9 @@ function currentPlansAsk(explicit: boolean): PlansAsk {
  * meter has numbers without a visit to Settings › Usage, one Keychain item at a
  * time. One request at a time: anything asked for while one is in flight runs
  * after it, coalesced, so a hover during the poll is not dropped. A failed one
- * keeps the last numbers for the next poll.
+ * keeps the last numbers for the next poll. An explicit check (`again`) bypasses
+ * the engine's minute-long cache, so a sign-in renewed in Claude Code shows at
+ * once instead of after that minute.
  */
 export async function refreshPlanCache(again = false): Promise<void> {
   if (!connection || get().status !== "ready") return;
@@ -3675,7 +3679,13 @@ export async function refreshPlanCache(again = false): Promise<void> {
     try {
       const result = await connection.request(
         Method.usagePlans,
-        next.account ? { claude: next.claude, claudeAccount: next.account } : { claude: next.claude },
+        {
+          claude: next.claude,
+          ...(next.account ? { claudeAccount: next.account } : {}),
+          // An explicit look reads the Keychain and Anthropic again rather
+          // than answer from the engine's minute of cache (state/plans.ts).
+          ...(next.force ? { force: true } : {}),
+        },
         20_000,
       );
       commitPlansAnswer(parsePlans(result));

@@ -18,6 +18,14 @@ export interface MockOptions {
   bootMs?: number;
   /** Crash this many ms after the first start (`?crash=`); it comes back after `bootMs`, as the shell restarts it. */
   crashAfterMs?: number;
+  /**
+   * How the default Claude login's plan reads (`?claudeUsage=`), for looking at
+   * the expired and denied states without a Keychain: `expired` is the sign-in
+   * RustCode cannot use until Claude Code renews it, `denied` a Keychain prompt
+   * the user declined, `forbidden` Anthropic refusing this sign-in access.
+   * Named accounts stay readable, as their own rows.
+   */
+  claudeUsage?: "expired" | "refused" | "forbidden" | "denied";
 }
 
 interface MockThread {
@@ -1135,8 +1143,29 @@ export class MockEngine {
       case "_rustcode/usage/plans": {
         const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
         const p = params as
-          | { claude?: boolean; claudeAccounts?: boolean; claudeAccount?: string }
+          | { claude?: boolean; claudeAccounts?: boolean; claudeAccount?: string; force?: boolean }
           | undefined;
+        // `?claudeUsage=expired|refused|denied` stages a sign-in RustCode could
+        // not read, so Settings › Usage's expired and denied rows can be seen
+        // (and its Refresh tried) without a Keychain. A forced read answers the
+        // same: the real engine re-reads and only then knows it is still broken.
+        const failure = this.options.claudeUsage;
+        const failed = (reason: NonNullable<MockOptions["claudeUsage"]>) => ({
+          id: "claude",
+          name: "Claude",
+          via: "Claude Code",
+          status: "unavailable",
+          reason,
+          error:
+            reason === "expired"
+              ? "Claude Code's sign-in has expired. Open Claude Code to renew it, then Refresh."
+              : reason === "refused"
+                ? "Claude Code's sign-in was refused. Sign in again in Claude Code, then Refresh."
+                : reason === "forbidden"
+                  ? "Anthropic does not allow this sign-in to read plan usage. Press Refresh to try once more."
+                  : "macOS did not allow reading Claude Code's sign-in from the Keychain.",
+          windows: [],
+        });
         // One row per login, as the engine answers it: the default login when
         // asked for, and each account the client names (all of them on an
         // explicit look in Settings › Usage, else the one the app asks for).
@@ -1153,18 +1182,20 @@ export class MockEngine {
         return {
           plans: [
             p?.claude
-              ? {
-                  id: "claude",
-                  name: "Claude",
-                  via: "Claude Code",
-                  status: "ok",
-                  plan: "max",
-                  windows: [
-                    { label: "5-hour", usedPercent: 18, windowMinutes: 300, resetsAt: at(3) },
-                    { label: "Weekly", usedPercent: 46, windowMinutes: 10080, resetsAt: at(80) },
-                    { label: "Weekly · Opus", usedPercent: 83, windowMinutes: 10080, resetsAt: at(80) },
-                  ],
-                }
+              ? failure
+                ? failed(failure)
+                : {
+                    id: "claude",
+                    name: "Claude",
+                    via: "Claude Code",
+                    status: "ok",
+                    plan: "max",
+                    windows: [
+                      { label: "5-hour", usedPercent: 18, windowMinutes: 300, resetsAt: at(3) },
+                      { label: "Weekly", usedPercent: 46, windowMinutes: 10080, resetsAt: at(80) },
+                      { label: "Weekly · Opus", usedPercent: 83, windowMinutes: 10080, resetsAt: at(80) },
+                    ],
+                  }
               : { id: "claude", name: "Claude", via: "Claude Code", status: "notAsked", windows: [] },
             ...accounts.map((a) => ({
               id: `claude:${a.id}`,

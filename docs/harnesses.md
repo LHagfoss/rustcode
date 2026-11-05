@@ -273,9 +273,28 @@ An id that names no `claude-code` account of the config reads nothing, so an
 unseen account's Keychain item is never read in the background. On macOS a
 named account's Keychain item is `Claude Code-credentials-` plus the first 8
 hex digits of the SHA-256 of its directory path; that name is undocumented, and
-a missing item is reported as not signed in rather than guessed at. A read that
-a denied Keychain prompt (or a signed-out login) stops pauses that one login;
-Settings › Usage, Refresh and Check in Settings › Agents read it again.
+a missing item is reported as not signed in rather than guessed at. A Claude
+row that could not be read is `unavailable` with a `reason` beside its `error`:
+`expired`, `refused`, `forbidden`, `denied` or `transient`. A read that a denied
+Keychain prompt stops pauses that one login (a signed-out login is not read
+again in the background either); Settings › Usage, Refresh and
+Check in Settings › Agents read it again. A Keychain item macOS refused whose
+credentials-file fallback holds an expired sign-in, or whose request to Anthropic
+does not succeed, is reported as `denied` rather than as `expired`, `refused` or
+`transient`, so the retry policy cannot turn a refusal into a prompt on every
+poll; a fallback whose request does answer reports its windows normally. The
+refusal itself is remembered for the engine's lifetime: background reads then
+use the credentials file only and never ask macOS again, while a fallback that
+answers keeps drawing its numbers. An explicit look (Refresh, Check) asks macOS
+once more, and a handover clears the memory. An expired or refused sign-in is not
+paused: Claude Code renews it, so the background read keeps asking and picks the
+new sign-in up without a visit to Settings. A `forbidden` one (HTTP 403) is not
+retried on its own either, since renewing it does not grant the usage read.
+`Refresh` sends `force: true`, which reads the logins again rather than answering
+from the engine's one-minute cache; with Claude's switch off no login is read,
+forced or not. One login is read once at a time: a forced read that arrives
+while the background poll is reading it waits, and shares an answer whose read
+began after the ask instead of reading the Keychain a second time.
 
 ### `_rustcode/onboarding/complete` `{}` → `HarnessSnapshot`
 

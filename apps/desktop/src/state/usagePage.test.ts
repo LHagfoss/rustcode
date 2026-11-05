@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { UsagePlan } from "../acp/rustcode";
 import { PAGE_FRESH_MS, type PageAnswer } from "./pageCache";
-import { answeredPlans, type UsageAnswer, usageView } from "./usagePage";
+import { answeredPlans, failureText, type UsageAnswer, usageView } from "./usagePage";
 
 const NOW = 10_000_000;
 
@@ -37,6 +37,7 @@ describe("what Settings › Usage shows", () => {
       plans: null,
       readAt: null,
       fetch: true,
+      force: false,
       fatal: null,
       note: null,
     });
@@ -84,6 +85,90 @@ describe("what Settings › Usage shows", () => {
     expect(view.plans).toBeNull();
     expect(view.fatal).toBe("Keychain denied");
     expect(view.note).toBeNull();
+  });
+
+  test("a denied Keychain read, a forbidden sign-in or a transient failure keeps the ordinary freshness", () => {
+    for (const reason of ["denied", "forbidden", "transient", undefined] as const) {
+      const cached = answer(
+        [plan({ status: "unavailable", reason, error: "no", windows: [] }), codex],
+        true,
+        NOW - 1,
+      );
+      const view = usageView(cached, true, null, NOW);
+      // A Deny must not turn every page open into another prompt, and a 403 is
+      // not fixed by asking again.
+      expect(view.fetch).toBe(false);
+      expect(view.force).toBe(false);
+    }
+  });
+
+  test("an expired answer behind consent off never forces a Keychain read", () => {
+    // The page still holds the row it drew before the switch went off; opening
+    // it must not read the Keychain, and must not draw the old numbers.
+    const cached = answer(
+      [plan({ status: "unavailable", reason: "expired", error: "no", windows: [] }), codex],
+      false,
+    );
+    const view = usageView(cached, false, null, NOW);
+    expect(view.force).toBe(false);
+    expect(view.fetch).toBe(false);
+    expect(view.plans?.[0]).toMatchObject({ status: "notAsked", windows: [] });
+    expect(view.plans?.[0]?.reason).toBeUndefined();
+  });
+
+  test("an expired or refused Claude sign-in reads again at once, past the engine's cache", () => {
+    // Even an answer younger than the page's own 30 seconds: the user may have
+    // just renewed the sign-in in Claude Code, and the numbers on screen are
+    // the ones that stopped working.
+    for (const reason of ["expired", "refused"] as const) {
+      const cached = answer(
+        [plan({ status: "unavailable", reason, error: "no", windows: [] }), codex],
+        true,
+        NOW - 1,
+      );
+      const view = usageView(cached, true, null, NOW);
+      expect(view.fetch).toBe(true);
+      expect(view.force).toBe(true);
+      expect(view.plans).toBe(cached.data.plans);
+    }
+  });
+
+  test("a denied Keychain read or a transient failure keeps the ordinary freshness", () => {
+    for (const reason of ["denied", "transient", undefined] as const) {
+      const cached = answer(
+        [plan({ status: "unavailable", reason, error: "no", windows: [] }), codex],
+        true,
+        NOW - 1,
+      );
+      const view = usageView(cached, true, null, NOW);
+      // A Deny must not turn every page open into another prompt.
+      expect(view.fetch).toBe(false);
+      expect(view.force).toBe(false);
+    }
+  });
+
+  test("a named account's expired row is retried as well", () => {
+    const cached = answer(
+      [claude, plan({ ...work, status: "unavailable", reason: "expired", error: "no", windows: [] })],
+      true,
+    );
+    expect(usageView(cached, true, null, NOW)).toMatchObject({ fetch: true, force: true });
+  });
+});
+
+describe("what a failed row says", () => {
+  test("each reason has its own words, and the engine's message wins beside them", () => {
+    const failed = (reason: UsagePlan["reason"]) =>
+      plan({ status: "unavailable", reason, error: `engine: ${reason ?? "none"}`, windows: [] });
+    expect(failureText(failed("expired")).title).toMatch(/expired/);
+    expect(failureText(failed("expired")).subtitle).toMatch(/Open Claude Code/);
+    expect(failureText(failed("refused")).title).toMatch(/did not accept/);
+    expect(failureText(failed("forbidden")).title).toMatch(/does not allow/);
+    expect(failureText(failed("forbidden")).subtitle).toMatch(/does not change/);
+    expect(failureText(failed("denied")).title).toMatch(/Keychain/);
+    expect(failureText(failed("transient")).title).toBe("Could not read the usage");
+    // An older engine's row keeps the old words.
+    expect(failureText(failed(undefined))).toEqual({ title: "Could not read the usage" });
   });
 });
 
