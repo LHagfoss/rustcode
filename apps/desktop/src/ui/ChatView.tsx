@@ -504,6 +504,29 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
   );
 }
 
+/**
+ * A stack child that rides the lane's shift clear of the details card (`--rc-lane-inset-end`). It
+ * is per child, not on the stack, because a transform would make one stacking context of the hero
+ * and the footer: the composer's slash drawer has to paint above a floating right panel (z-20)
+ * while a new thread's hero stays under it. `over` lifts a footer control — the composer with the
+ * drawer over it, an approval card, an error's actions — above that panel.
+ */
+function LaneItem({ over = false, children }: { over?: boolean; children: ReactNode }) {
+  return (
+    <div
+      // `empty:hidden`: a child that renders nothing (no linked threads, no report, no approval)
+      // leaves no flex item behind, so the stack's gap does not turn into a phantom one.
+      className={cx("empty:hidden", over && "relative z-30")}
+      style={{
+        translate: "calc(var(--rc-lane-inset-end, 0px) * -1)",
+        transition: "translate 200ms var(--ease-snappy)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
   const pending = useApp((s) => s.pendingSetup);
@@ -557,6 +580,36 @@ export function ChatView() {
     doc.setProperty("--rc-toast-center", `${Math.round(r.left + r.width / 2)}px`);
     doc.setProperty("--rc-toast-top", `${Math.round(r.top + HEADER_HEIGHT + 8)}px`);
   }, [isNew, stackHeight, width, height]);
+
+  // How far the composer (its box and tray) reaches up from the foot of the pane: the right panel
+  // floats over the transcript and stops above it (ui/RightPanel.tsx). Measured on the composer
+  // rather than the stack, whose hero fills an empty thread, and from the foot of the column the
+  // panel is placed in — not this chat's own, which the terminal shortens from below. Its own size
+  // covers a drawer opening; the stack's `bottom` transition, an empty thread settling into a
+  // thread, republishes at its end, and so does the chat column resizing.
+  useEffect(() => {
+    const root = rootRef.current;
+    const stack = stackRef.current;
+    const composer = stack?.querySelector<HTMLElement>(".rc-composer-shell");
+    if (!root || !stack || !composer) return;
+    const doc = document.documentElement.style;
+    const publish = () => {
+      // The chat is `relative`, so its offset parent is the column that holds it and the terminal:
+      // the same box the floating panel is positioned against, whose foot the terminal moves.
+      const host = root.offsetParent instanceof HTMLElement ? root.offsetParent : root;
+      const foot = host.getBoundingClientRect().bottom;
+      doc.setProperty("--rc-composer-top", `${Math.round(foot - composer.getBoundingClientRect().top)}px`);
+    };
+    publish();
+    stack.addEventListener("transitionend", publish);
+    const stops = [observeSize(composer, publish), observeSize(stack, publish), observeSize(root, publish)];
+    // No chat column, no composer to stop above: a floating panel takes the pane height again.
+    return () => {
+      for (const stop of stops) stop();
+      stack.removeEventListener("transitionend", publish);
+      doc.removeProperty("--rc-composer-top");
+    };
+  }, []);
   const ownRequest = thread?.permissions[0];
   const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
@@ -603,41 +656,58 @@ export function ChatView() {
       )}
       <div
         ref={stackRef}
-        className="absolute bottom-4 left-1/2 flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5 px-3 sm:px-5"
-        // The lane clears the details card and comes back with it, at the card's own pace;
-        // an empty thread sits half the stack up from the middle of the pane, measured.
+        // Centred by `mx-auto` and not by a transform, so its children can set their own z-index
+        // (LaneItem). An empty thread sits half the stack up from the middle of the pane, measured.
         style={{
-          translate: "calc(-50% - var(--rc-lane-inset-end, 0px))",
-          transition: "bottom 500ms var(--ease-snappy), translate 200ms var(--ease-snappy)",
+          transition: "bottom 500ms var(--ease-snappy)",
           ...(isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined),
         }}
+        className="absolute inset-x-0 bottom-4 mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5 px-3 sm:px-5"
       >
-        {isNew && <EmptyState banner={showsBanner} />}
+        {isNew && (
+          <LaneItem>
+            <EmptyState banner={showsBanner} />
+          </LaneItem>
+        )}
         {error && (
-          <ErrorBanner
-            text={error}
-            action={
-              thread && error.startsWith("Could not open this thread") ? (
-                <Pill prominent onClick={() => void repairThread(thread.id)}>
-                  Repair Thread
-                </Pill>
-              ) : undefined
-            }
-            onDismiss={() => {
-              setDismissed(error);
-              void refreshSessions();
-            }}
-          />
+          <LaneItem over>
+            <ErrorBanner
+              text={error}
+              action={
+                thread && error.startsWith("Could not open this thread") ? (
+                  <Pill prominent onClick={() => void repairThread(thread.id)}>
+                    Repair Thread
+                  </Pill>
+                ) : undefined
+              }
+              onDismiss={() => {
+                setDismissed(error);
+                void refreshSessions();
+              }}
+            />
+          </LaneItem>
         )}
-        {thread && <LinkedThreads threadId={thread.id} />}
-        {report && report.threadId === thread?.id && <ReportPanel text={report.text} />}
+        {thread && (
+          <LaneItem over>
+            <LinkedThreads threadId={thread.id} />
+          </LaneItem>
+        )}
+        {report && report.threadId === thread?.id && (
+          <LaneItem over>
+            <ReportPanel text={report.text} />
+          </LaneItem>
+        )}
         {ownRequest && (
-          <AttentionCard
-            request={ownRequest}
-            pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
-          />
+          <LaneItem over>
+            <AttentionCard
+              request={ownRequest}
+              pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
+            />
+          </LaneItem>
         )}
-        <Composer thread={thread} compact={width < 600} />
+        <LaneItem over>
+          <Composer thread={thread} compact={width < 600} />
+        </LaneItem>
       </div>
     </main>
   );

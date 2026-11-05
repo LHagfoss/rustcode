@@ -376,7 +376,7 @@ export function Segments<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "relative h-5 rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
+            "relative h-5 whitespace-nowrap rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
             o.value === value
               ? cx("text-fg", !thumb && "bg-surface-3 shadow-1")
               : "text-fg-muted hover:text-fg",

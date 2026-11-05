@@ -149,7 +149,7 @@ own `rounded-lg` recipe below.
 ## Glass
 
 One translucency, one recipe, for every floating surface: popovers, menus,
-tooltips, dialogs, toasts, the right panel and the lightbox.
+tooltips, dialogs, toasts and the lightbox.
 `--rc-glass-bg` (`surface-2` at 84%; `--rc-glass-bg-strong` at 93% for
 popovers, menus and floating pills) with `--rc-glass-filter`
 (`saturate(1.2) blur(13px)`). Use `.rc-glass` or the `elevated` utility,
@@ -539,14 +539,31 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).
   When the control stacks under the text, the icon leaves the flow for the
   row's top right, so stacked controls share one left edge.
-- **Right panel:** one `RightPanel` for every side view (Changes, Agents,
 - **Right panel:** one `RightPanel` for every side view (Details, Changes,
-  Pull requests): floating, inset 8px from the window's top, right and
-  bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has
-  a segmented switch between the views and a close button; views add a
-  slim toolbar (`h-9`) under it. The left edge drags (320–760px, kept);
-  its slot takes its width at once and the panel slides and fades in 200ms
-  (see Motion). ⌘⌥B toggles it with the last view.
+  Pull requests): a docked, full-height pane at the window's right edge — the
+  sidebar's twin, `bg-sidebar` with a 1px `border-l` seam, no inset and no
+  rounded corners. Its header row is a `HEADER_HEIGHT` band with a segmented
+  switch between the views and a close button, divided from the view by a
+  hairline; views add a slim toolbar (`h-9`) under it. It is responsive: it
+  never takes more than the column it shares with the chat leaves it (the chat
+  keeps 420px, or 360px when that column is under 900px wide), and when the
+  column cannot hold both it floats over the transcript instead, ending just
+  above the composer (its top measured into `--rc-composer-top` by
+  `ui/ChatView.tsx`) with a bottom hairline and no shadow, so the composer stays
+  usable and the chat keeps its full width. The left edge drags (320–760px, kept
+  as asked, fitted when drawn) and answers the keyboard too: ←/→ 24px from the
+  width on screen (Shift 96px), Home/End to the ends, ⏎ the default. Escape
+  inside either surface closes the panel (unless a field in it is being edited),
+  focus goes into it when a shortcut opens it with nothing focused, and closing
+  hands focus back. Every control under the transcript — composer, its slash
+  drawer, approvals, linked threads, a report — paints above a floating pane, so
+  none of it is ever out of reach; a new thread's hero is not a control and the
+  pane covers it. Each stack child rides the lane's shift on its own
+  (`LaneItem`, `empty:hidden` so one that renders nothing leaves no gap), not the
+  stack, so the hero and those
+  controls are separate stacking contexts. Its slot takes its width at once and
+  the panel slides and fades in 200ms (see Motion). ⌘⌥B toggles it with the last
+  view.
   Details lists what a thread is, in titled sections that drop out when
   they have nothing to say: harness, workspace, linked threads, subagents with
   status and elapsed time, plan and usage.
