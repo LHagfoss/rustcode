@@ -5,11 +5,10 @@
 // became, above its title and the mark of the harness that runs it. What it is
 // doing (Working, Approval, Input, Failed, Done until you open it) takes the
 // time's slot on the top line, the threads it started fold under it as slim
-// rows, and Settled (threads marked Done) opens from the foot, above the app's
-// own pages: settings, pull requests, usage.
+// rows, and Settled (threads marked Done) opens from the foot. The app's own
+// pages (settings, pull requests) are buttons in the toolbar's titlebar row.
 
 import {
-  ChartNoAxesColumn,
   Check,
   ChevronDown,
   ChevronRight,
@@ -99,7 +98,6 @@ import {
   askCustomSnooze,
   featureMissing,
   markUnread,
-  openSettings,
   removeWorktree,
   renameThread,
   repairThread,
@@ -143,16 +141,18 @@ import {
   Tooltip,
 } from "./primitives";
 import { StatusChip } from "./Status";
-import { TitlebarRow } from "./Titlebar";
+import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
 
-const MIN = 208;
+// The toolbar's buttons start past the traffic lights, so the sidebar cannot be narrower than
+// that row: four 32 px buttons, the cluster's 6 px padding and its 10 px trailing gap.
+const MIN = LIGHTS_INSET + 144;
 const MAX = 460;
 
 function useSidebarWidth() {
   const [width, setWidth] = useState(() => {
     try {
-      return Number(localStorage.getItem("rustcode.sidebarWidth")) || 256;
+      return Math.max(MIN, Number(localStorage.getItem("rustcode.sidebarWidth")) || 256);
     } catch {
       return 256;
     }
@@ -1442,8 +1442,7 @@ export function Sidebar() {
   const [searchOpen, setSearchOpen] = useState(false);
   // Each thread's branch's pull request, from the projects' one read (state/pulls.ts).
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
-  // The foot's icon buttons open the same places the header does.
-  const settings = useApp((s) => s.settings);
+  // The titlebar's icon buttons open the same places the header's do.
   const panel = useApp((s) => s.panel);
   // The cache's version: a landed read re-renders the rows that read it.
   useSyncExternalStore(subscribePulls, pullsVersion);
@@ -1921,6 +1920,17 @@ export function Sidebar() {
             >
               <SquarePen size={14} />
             </ClusterButton>
+            <SettingsButton />
+            {pullsOn && (
+              <ClusterButton
+                label="Pull requests"
+                tooltip="Pull requests of this project"
+                on={panel === "pulls"}
+                onClick={() => setPanel("pulls")}
+              >
+                <GitPullRequest size={14} />
+              </ClusterButton>
+            )}
           </Cluster>
         </TitlebarRow>
         <div className="mx-2 mt-2 mb-1.5 flex shrink-0 items-center gap-0.5">
@@ -2079,28 +2089,6 @@ export function Sidebar() {
             hidden={settledSection?.hidden}
             onToggle={() => toggle("settled")}
           />
-          {/* The app's own pages, quiet until hovered. */}
-          <div className="flex items-center gap-0.5">
-            <SettingsButton />
-            {pullsOn && (
-              <ClusterButton
-                label="Pull requests"
-                tooltip="Pull requests of this project"
-                on={panel === "pulls"}
-                onClick={() => setPanel("pulls")}
-              >
-                <GitPullRequest size={14} />
-              </ClusterButton>
-            )}
-            <ClusterButton
-              label="Usage"
-              tooltip={`Usage${settings === "usage" ? " (open)" : ""}`}
-              on={settings === "usage"}
-              onClick={() => openSettings(settings === "usage" ? null : "usage")}
-            >
-              <ChartNoAxesColumn size={14} />
-            </ClusterButton>
-          </div>
         </div>
         <UpdateRow />
       </div>

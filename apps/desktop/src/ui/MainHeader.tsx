@@ -10,7 +10,7 @@ import { openSettings, startNewThread, toggleSidebar, useApp, useShortcutHint } 
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { useLightsInset } from "./Titlebar";
 
-/** Settings, in the header's row when the sidebar is hidden. */
+/** Settings, in the sidebar's toolbar and in the header's row when the sidebar is hidden. */
 export function SettingsButton() {
   const open = useApp((s) => s.settings !== null);
   const key = useShortcutHint("settings");
