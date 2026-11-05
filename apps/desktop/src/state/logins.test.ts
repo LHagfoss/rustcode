@@ -2,9 +2,14 @@ import { describe, expect, test } from "bun:test";
 import type { UsagePlan } from "../acp/rustcode";
 import type { Harness, HarnessAccount } from "../acp/types";
 import {
+  accountLabelOf,
+  accountNameOf,
+  accountSignedOut,
+  childAccountFor,
   childAccountOn,
   defaultLoginGone,
   firstSignedInAccount,
+  namedAccountOn,
   newThreadAccountOn,
   signedOutFrom,
   usageRows,
@@ -156,6 +161,87 @@ describe("a thread started by another thread", () => {
     const h = claude([account("work")]);
     // Another harness's account is not one of this harness's, so the default login stands.
     expect(childAccountOn(h, { harness: "codex", account: "home" }, {})).toBeNull();
+  });
+
+  test("runs on the named login it was told to use, by id or by name", () => {
+    const work = { ...account("work"), name: "Work" };
+    const h = claude([work, account("home")]);
+    // A named login wins over the parent's, since the agent asked for it.
+    expect(childAccountFor(h, "work", { harness: "claude-code", account: "home" }, {})).toEqual({
+      account: "work",
+    });
+    // A display name picks the same login, whatever its case.
+    expect(childAccountFor(h, "Work", undefined, {})).toEqual({ account: "work" });
+    expect(namedAccountOn(h, "HOME")).toEqual({ kind: "one", account: h.accounts![1]! });
+    expect(accountNameOf(h, "work")).toBe("Work");
+    expect(accountNameOf(h, "gone")).toBe("gone");
+    expect(accountNameOf(h, null)).toBeUndefined();
+    // The approval card names both the display name and the id.
+    expect(accountLabelOf(h, "work")).toBe("Work (work)");
+    expect(accountLabelOf(h, "home")).toBe("home");
+    expect(accountLabelOf(h, null)).toBeUndefined();
+  });
+
+  test("refuses an account the harness does not list, never a quiet fall back", () => {
+    const h = claude([account("work")]);
+    expect(childAccountFor(h, "home", undefined, {})).toEqual({
+      refused: { kind: "unknown", asked: "home", available: ["work"] },
+    });
+    expect(childAccountFor(claude(), "work", undefined, {})).toEqual({
+      refused: { kind: "unknown", asked: "work", available: [] },
+    });
+    // Without a name, the inherited rules are exactly as they were.
+    expect(childAccountFor(h, undefined, { harness: "claude-code", account: "work" }, {})).toEqual({
+      account: "work",
+    });
+    expect(childAccountFor(h, "  ", { harness: "codex", account: "home" }, {})).toEqual({ account: null });
+  });
+
+  test("refuses an ambiguous name rather than picking one login", () => {
+    // Two logins whose display name is the same.
+    const h = claude([
+      { ...account("work"), name: "Paral" },
+      { ...account("home"), name: "Paral" },
+      { ...account("other"), name: "other" },
+    ]);
+    expect(childAccountFor(h, "paral", undefined, {})).toEqual({
+      refused: { kind: "ambiguous", asked: "paral", matches: ["work", "home"] },
+    });
+  });
+
+  test("an exact id stays reachable when another login is named the same", () => {
+    const clash = claude([
+      { ...account("work"), name: "Work" },
+      { ...account("other"), name: "work" },
+    ]);
+    // The exact id is the most precise name and wins over the other account's display name.
+    expect(namedAccountOn(clash, "work")).toEqual({ kind: "one", account: clash.accounts![0]! });
+    expect(childAccountFor(clash, "work", undefined, {})).toEqual({ account: "work" });
+    expect(childAccountFor(clash, "Work", undefined, {})).toEqual({ account: "work" });
+  });
+
+  test("refuses ids that only match case-insensitively more than once", () => {
+    const h = claude([account("work"), account("Work")]);
+    expect(namedAccountOn(h, "WORK")).toEqual({ kind: "ambiguous", ids: ["work", "Work"] });
+    expect(childAccountFor(h, "WORK", undefined, {})).toEqual({
+      refused: { kind: "ambiguous", asked: "WORK", matches: ["work", "Work"] },
+    });
+    // The exact spelling still picks its own id.
+    expect(childAccountFor(h, "Work", undefined, {})).toEqual({ account: "Work" });
+  });
+
+  test("refuses an explicitly signed-out login", () => {
+    const h = claude([{ ...account("work"), name: "Work" }, account("home")]);
+    // The plan read keys a named login as `harness#account`.
+    const signedOut = { "claude-code#work": true };
+    expect(accountSignedOut("claude-code", "work", signedOut)).toBe(true);
+    expect(accountSignedOut("claude-code", "home", signedOut)).toBe(false);
+    expect(childAccountFor(h, "work", undefined, signedOut)).toEqual({
+      refused: { kind: "signedOut", account: "work", name: "Work", available: ["work", "home"] },
+    });
+    // Another login is unaffected, and the default login is not an account.
+    expect(childAccountFor(h, "home", undefined, signedOut)).toEqual({ account: "home" });
+    expect(childAccountFor(h, "work", undefined, { "claude-code": true })).toEqual({ account: "work" });
   });
 });
 

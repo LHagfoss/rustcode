@@ -104,6 +104,16 @@ describe("displayTool", () => {
       }),
     ).toEqual({ title: "Started thread", source: "rustcode", summary: "Polish the composer · claude opus" });
     expect(displayTool("mcp__rustcode__start_session", { prompt: "x".repeat(80) }).summary).toHaveLength(60);
+    // The named login the call asked for reads beside the harness and model.
+    expect(
+      displayTool("mcp__rustcode__start_session", {
+        title: "Polish the composer",
+        prompt: "…",
+        harness: "claude-code",
+        account: "work",
+        model: "opus",
+      }).summary,
+    ).toBe("Polish the composer · claude-code work opus");
     expect(displayTool("mcp__rustcode__message_session").title).toBe("Messaged thread");
     expect(displayTool("mcp__rustcode__read_session").title).toBe("Read thread");
     expect(displayTool("mcp__rustcode__list_sessions").title).toBe("Listed threads");

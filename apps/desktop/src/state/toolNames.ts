@@ -152,7 +152,8 @@ function orchestrationLabel(
     case "start_session": {
       const prompt = text(args.prompt).split("\n")[0] ?? "";
       const named = text(args.title) || prompt;
-      const harness = [text(args.harness), text(args.model)].filter(Boolean).join(" ");
+      // What it was told to run on, in the order the approval card names them.
+      const harness = [text(args.harness), text(args.account), text(args.model)].filter(Boolean).join(" ");
       const summary = [named ? cut(named, 60) : "", harness].filter(Boolean).join(" · ");
       return { title: "Started thread", summary: summary || undefined };
     }

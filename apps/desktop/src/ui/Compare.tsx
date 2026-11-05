@@ -7,6 +7,7 @@ import { Check, ExternalLink, FileDiff, GitBranch } from "lucide-react";
 import { useEffect, useState } from "react";
 import { gitChanges } from "../lib/native";
 import { keepFanOut, stateOf } from "../state/host";
+import { accountLabelOf } from "../state/logins";
 import { LINK_LABEL, type Link } from "../state/orchestration";
 import { selectThread, setView, statusOf, useApp, worktreeOf } from "../state/store";
 import { ViewHeader } from "./Board";
@@ -47,6 +48,13 @@ function CompareCard({ link, fanOut, kept }: { link: Link; fanOut: string; kept?
   const harness = useApp(
     (s) => s.harnesses?.harnesses.find((h) => h.id === link.harness)?.name ?? link.harness ?? "RustCode",
   );
+  // Two logins of one harness read apart here too, not only on the approval card.
+  const account = useApp((s) =>
+    accountLabelOf(
+      s.harnesses?.harnesses.find((h) => h.id === link.harness),
+      link.account,
+    ),
+  );
   const wt = useApp((s) => worktreeOf(s, link.target));
   const running = state === "working" || state === "queued";
   const stat = useBranchStat(link.target, running);
@@ -59,6 +67,7 @@ function CompareCard({ link, fanOut, kept }: { link: Link; fanOut: string; kept?
     >
       <header className="flex items-center gap-2">
         <span className="font-semibold text-body">{harness}</span>
+        {account && <span className="truncate text-caption text-fg-muted">{account}</span>}
         <StatusChip status={status} />
         <span className="flex-1" />
         <span className="flex items-center gap-1 text-caption text-fg-muted">

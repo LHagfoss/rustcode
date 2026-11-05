@@ -154,6 +154,9 @@ pub struct ToolSchemaPolicy {
     pub(crate) include_orchestration_v2_tools: bool,
     pub(crate) include_orchestration_v3_tools: bool,
     pub(crate) include_orchestration_v4_tools: bool,
+    /// What the client advertised, capped at [`crate::orchestration::VERSION`]:
+    /// the tool set follows the flags above, and the args follow this one.
+    pub(crate) orchestration_version: u8,
     pub(crate) profile: ToolSchemaProfile,
     pub(crate) compact_text_prompt: bool,
 }
@@ -217,6 +220,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
             include_orchestration_v4_tools: false,
+            orchestration_version: 0,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
         }
@@ -242,6 +246,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
             include_orchestration_v4_tools: false,
+            orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
         }
@@ -260,6 +265,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
             include_orchestration_v4_tools: false,
+            orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
         }
@@ -315,6 +321,7 @@ impl ToolSchemaPolicy {
         self.include_orchestration_v2_tools = self.include_orchestration_tools && version >= 2;
         self.include_orchestration_v3_tools = self.include_orchestration_tools && version >= 3;
         self.include_orchestration_v4_tools = self.include_orchestration_tools && version >= 4;
+        self.orchestration_version = version.min(crate::orchestration::VERSION);
         self
     }
 
@@ -1098,7 +1105,10 @@ fn build_builtin_native_tools_schema(policy: ToolSchemaPolicy) -> (Vec<Value>, V
             "function": {
                 "name": t.name,
                 "description": t.description,
-                "parameters": provider_compatible_schema(schema_for_tool(t.name)),
+                "parameters": provider_compatible_schema(schema_for_tool_version(
+                    t.name,
+                    policy.orchestration_version,
+                )),
             }
         }));
     }
@@ -2413,13 +2423,21 @@ pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<S
 /// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
 /// definition. Unknown names fall back to an empty permissive object schema.
 pub(super) fn schema_for_tool(name: &str) -> Value {
-    with_call_summary(
+    schema_for_tool_version(name, crate::orchestration::VERSION)
+}
+
+/// [`schema_for_tool`] for a client of `version`: an orchestration arg added in
+/// a later version is not advertised to an older client.
+fn schema_for_tool_version(name: &str, version: u8) -> Value {
+    with_call_summary(crate::orchestration::schema_for(
+        name,
+        version,
         TOOLS
             .iter()
             .find(|t| t.name == name)
             .map(|t| (t.schema)())
             .unwrap_or_else(|| schema_from_arguments("{}")),
-    )
+    ))
 }
 
 /// The optional argument every built-in and agent tool takes: a few words on
@@ -2759,7 +2777,11 @@ pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy)
     if policy.include_smart_ui_preview_tool {
         prompt.push_str(crate::smart_ui::PREVIEW_PROMPT_HINT);
     }
-    if policy.include_orchestration_v4_tools {
+    if policy.include_orchestration_tools
+        && policy.orchestration_version >= crate::orchestration::ACCOUNT_VERSION
+    {
+        prompt.push_str(crate::orchestration::PROMPT_HINT_V5);
+    } else if policy.include_orchestration_v4_tools {
         prompt.push_str(crate::orchestration::PROMPT_HINT_V4);
     } else if policy.include_orchestration_v3_tools {
         prompt.push_str(crate::orchestration::PROMPT_HINT_V3);
@@ -3159,7 +3181,7 @@ mod schema_budget_tests {
         // A client at the newest version gets every orchestration tool in its
         // built-in schema; the hard cap must not start withholding any of them
         // (which would drop tools the client can answer).
-        for version in [1, 2, 3, 4] {
+        for version in [1, 2, 3, 4, 5] {
             let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
             let advertised = crate::tools::TOOLS
                 .iter()
@@ -3178,6 +3200,17 @@ mod schema_budget_tests {
                 "v{version} is {bytes} bytes, over the hard cap"
             );
         }
+        // A client below 5 is not shown an argument its app cannot answer.
+        let start_schema = |version: u8| {
+            let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
+            let (tools, _) = build_builtin_native_tools_schema(policy);
+            tools
+                .into_iter()
+                .find(|tool| tool["function"]["name"] == crate::orchestration::START_SESSION)
+                .expect("start_session")
+        };
+        assert!(start_schema(4)["function"]["parameters"]["properties"]["account"].is_null());
+        assert!(start_schema(5)["function"]["parameters"]["properties"]["account"].is_object());
     }
 
     #[test]

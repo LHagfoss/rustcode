@@ -68,7 +68,12 @@ pub const V3_TOOL_NAMES: [&str; 10] = [
 /// Added by version 4: the data store — tokens and reported cost, and SQL.
 pub const V4_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 4;
+pub const VERSION: u8 = 5;
+/// Version 5 adds named account targeting to the existing `start_session` and
+/// `fan_out` args. No tool is added, but a client that advertised less never
+/// sees the `account` field and has it refused, so an older app cannot quietly
+/// ignore it and start the child on another login.
+pub const ACCOUNT_VERSION: u8 = 5;
 /// What `update_session` may set a thread's status to.
 pub const SESSION_STATUSES: [&str; 3] = ["active", "review", "settled"];
 /// What `list_pull_requests` may ask for.
@@ -113,6 +118,9 @@ pub const PROMPT_HINT_V3: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V3`] for version 4 clients, which can read the data store.
 pub const PROMPT_HINT_V4: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
+/// [`PROMPT_HINT_V4`] for version 5 clients, which can name a login.
+pub const PROMPT_HINT_V5: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -120,7 +128,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         1 => PROMPT_HINT,
         2 => PROMPT_HINT_V2,
         3 => PROMPT_HINT_V3,
-        _ => PROMPT_HINT_V4,
+        4 => PROMPT_HINT_V4,
+        _ => PROMPT_HINT_V5,
     }
 }
 
@@ -181,6 +190,55 @@ pub fn client_meta_version(meta: Option<&serde_json::Map<String, Value>>) -> u8 
         .and_then(|rustcode| rustcode.get("orchestration"))
         .and_then(Value::as_u64)
         .map_or(0, |version| version.min(u64::from(VERSION)) as u8)
+}
+
+/// The schema a client of `version` gets. Named-account targeting arrived in
+/// version 5, so a client that advertised less is never told about `account`;
+/// [`execute_versioned`] refuses one it sends anyway.
+pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
+    if version >= ACCOUNT_VERSION {
+        return schema;
+    }
+    match name {
+        START_SESSION => {
+            if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+                properties.remove("account");
+            }
+        }
+        FAN_OUT => {
+            if let Some(properties) = schema
+                .get_mut("properties")
+                .and_then(|properties| properties.get_mut("harnesses"))
+                .and_then(|harnesses| harnesses.get_mut("items"))
+                .and_then(|items| items.get_mut("properties"))
+                .and_then(Value::as_object_mut)
+            {
+                properties.remove("account");
+            }
+        }
+        _ => {}
+    }
+    schema
+}
+
+/// Whether a call tries to name a login, which only a version 5 client can do.
+pub(crate) fn names_an_account(name: &str, args: &Value) -> bool {
+    match name {
+        START_SESSION => args
+            .get("account")
+            .is_some_and(|account| !account.is_null()),
+        FAN_OUT => args
+            .get("harnesses")
+            .and_then(Value::as_array)
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry
+                        .get("account")
+                        .is_some_and(|account| !account.is_null())
+                })
+            }),
+        _ => false,
+    }
 }
 
 fn text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
@@ -364,7 +422,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
         START_SESSION => {
             bounded_text(args, "prompt")?;
             optional_title(args)?;
-            for key in ["harness", "model", "effort"] {
+            for key in ["harness", "model", "effort", "account"] {
                 optional_name(args, key)?;
             }
             if !matches!(
@@ -395,13 +453,15 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 if !entry.is_object() || text(entry, "harness").is_none() {
                     return Err("each harnesses entry needs a harness".to_owned());
                 }
-                for key in ["harness", "model", "effort"] {
+                for key in ["harness", "model", "effort", "account"] {
                     optional_name(entry, key)?;
                 }
+                // The same harness on two models, or on two named accounts, is a fair comparison.
                 let key = (
                     text(entry, "harness"),
                     text(entry, "model"),
                     text(entry, "effort"),
+                    text(entry, "account"),
                 );
                 if seen.contains(&key) {
                     return Err("harnesses has the same entry twice".to_owned());
@@ -486,6 +546,15 @@ pub async fn execute_versioned(
     if client.is_some() && !tool_names(version).contains(&name) {
         return ToolExecutionOutput::failure_with_kind(
             format!("error: {name} needs a newer RustCode app. Nothing was sent."),
+            ToolErrorKind::UnavailableDependency,
+            false,
+        );
+    }
+    // An older client ignores arguments it does not know, so a login it would
+    // ignore is refused here instead of starting the thread on another one.
+    if client.is_some() && version < ACCOUNT_VERSION && names_an_account(name, args) {
+        return ToolExecutionOutput::failure_with_kind(
+            format!("error: {name} with account needs a newer RustCode app. Nothing was sent."),
             ToolErrorKind::UnavailableDependency,
             false,
         );
@@ -650,12 +719,14 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 4);
+        assert_eq!(VERSION, 5);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
         assert_eq!(v4.len(), v3.len() + 2, "{v4:?}");
         assert!(v4.contains(&THREAD_USAGE) && v4.contains(&QUERY_DATA));
+        // Version 5 adds account targeting to existing tools, not another tool.
+        assert_eq!(tool_names(5), v4);
         assert_eq!(
             tool_names(9),
             v4,
@@ -671,7 +742,12 @@ mod tests {
         assert_eq!(prompt_hint(2), PROMPT_HINT_V2);
         assert_eq!(prompt_hint(3), PROMPT_HINT_V3);
         assert_eq!(prompt_hint(4), PROMPT_HINT_V4);
+        assert_eq!(prompt_hint(5), PROMPT_HINT_V5);
+        assert_eq!(prompt_hint(9), PROMPT_HINT_V5);
         assert_eq!(prompt_hint(0), "");
+        // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
+        assert!(!PROMPT_HINT_V4.contains("account"));
+        assert!(PROMPT_HINT_V5.contains("account"));
         assert_eq!(
             client_meta_version(Some(
                 &json!({"rustcode": {"orchestration": 9}})
@@ -679,7 +755,7 @@ mod tests {
                     .cloned()
                     .unwrap()
             )),
-            4
+            5
         );
         assert_eq!(
             client_meta_version(Some(
@@ -691,11 +767,12 @@ mod tests {
             3
         );
         // It rides in the root prompt and in the MCP server's instructions, so
-        // it is bounded: v3 was 149 tokens, v4 adds the two data tools.
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V4);
+        // it is bounded: v4 adds the two data tools, v5 the account line.
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V5);
         println!(
-            "prompt hints: v3 {} tokens, v4 {tokens} tokens",
-            crate::network::compaction::estimate_tokens(PROMPT_HINT_V3)
+            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {tokens} tokens",
+            crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
+            crate::network::compaction::estimate_tokens(PROMPT_HINT_V4)
         );
         assert!(tokens < 260, "{tokens}");
     }
@@ -901,6 +978,13 @@ mod tests {
             json!({"prompt": "a", "worktree": "yes"})
         ));
         assert!(!ok(START_SESSION, json!({"prompt": "a", "harness": ""})));
+        // A named login is optional, and when given a non-empty string.
+        assert!(ok(
+            START_SESSION,
+            json!({"prompt": "a", "harness": "claude-code", "account": "work"})
+        ));
+        assert!(!ok(START_SESSION, json!({"prompt": "a", "account": ""})));
+        assert!(!ok(START_SESSION, json!({"prompt": "a", "account": 5})));
         let title = "t".repeat(MAX_TITLE_CHARS + 1);
         assert!(!ok(START_SESSION, json!({"prompt": "a", "title": title})));
 
@@ -919,6 +1003,17 @@ mod tests {
         let models =
             json!([{"harness": "codex", "model": "a"}, {"harness": "codex", "model": "b"}]);
         assert!(ok(FAN_OUT, json!({"prompt": "a", "harnesses": models})));
+        // So are two named accounts of one harness and model.
+        let accounts = json!([
+            {"harness": "claude-code", "model": "opus", "account": "work"},
+            {"harness": "claude-code", "model": "opus", "account": "home"}
+        ]);
+        assert!(ok(FAN_OUT, json!({"prompt": "a", "harnesses": accounts})));
+        assert!(!ok(
+            FAN_OUT,
+            json!({"prompt": "a", "harnesses": [{"harness": "a", "account": ""},
+                                                  {"harness": "b"}]})
+        ));
         assert!(!ok(
             FAN_OUT,
             json!({"prompt": "a", "harnesses": [{"model": "x"}, {"harness": "b"}]})
@@ -928,6 +1023,90 @@ mod tests {
         assert_eq!(timeout(START_SESSION, &json!({})), START_TIMEOUT);
         assert_eq!(timeout(FAN_OUT, &json!({})), START_TIMEOUT);
         assert_eq!(timeout(READ_SESSION, &json!({})), REQUEST_TIMEOUT);
+    }
+
+    #[test]
+    fn a_named_login_is_optional_and_advertised_where_it_is_used() {
+        let tool = |name: &str| {
+            crate::tools::TOOLS
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        // The schema is what tells an agent it may name an account, from v5 on.
+        let start = (tool(START_SESSION).schema)();
+        assert!(start["properties"]["account"].is_object());
+        let fan = (tool(FAN_OUT).schema)();
+        assert!(fan["properties"]["harnesses"]["items"]["properties"]["account"].is_object());
+        // A v4 client is not told about a field its app cannot answer.
+        let start_v4 = schema_for(START_SESSION, 4, start);
+        assert!(start_v4["properties"]["account"].is_null());
+        let fan_v4 = schema_for(FAN_OUT, 4, fan);
+        assert!(fan_v4["properties"]["harnesses"]["items"]["properties"]["account"].is_null());
+        // Other fields stay as they were.
+        assert!(start_v4["properties"]["prompt"].is_object());
+        assert!(fan_v4["properties"]["harnesses"]["items"]["properties"]["model"].is_object());
+        // The MCP server builds its tools from the same versioned schema.
+        let mcp_v4 = crate::orchestration::mcp_server::tools(4, false);
+        let mcp_start = mcp_v4
+            .iter()
+            .find(|tool| tool["name"] == START_SESSION)
+            .expect("start_session for a v4 client");
+        assert!(mcp_start["inputSchema"]["properties"]["account"].is_null());
+        let mcp_v5 = crate::orchestration::mcp_server::tools(5, false);
+        let mcp_start = mcp_v5
+            .iter()
+            .find(|tool| tool["name"] == START_SESSION)
+            .expect("start_session for a v5 client");
+        assert!(mcp_start["inputSchema"]["properties"]["account"].is_object());
+        assert!(tool(START_SESSION).description.contains("named account"));
+        assert!(tool(FAN_OUT).description.contains("named account"));
+        // Discovery: list_harnesses names the accounts start_session takes.
+        assert!(tool(LIST_HARNESSES).description.contains("named accounts"));
+    }
+
+    #[tokio::test]
+    async fn an_older_client_cannot_smuggle_an_account_past_its_version() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let start = json!({"prompt": "go", "account": "work"});
+        // Version 4 would otherwise ignore the argument and pick another login.
+        let refused = execute_versioned(
+            client(json!({"session_id": "c"})),
+            4,
+            &cancel,
+            START_SESSION,
+            &start,
+        )
+        .await;
+        assert!(!refused.success);
+        assert!(refused.content.contains("newer RustCode app"));
+        assert!(refused.content.contains("Nothing was sent"));
+        let fan = json!({"prompt": "go", "harnesses": [
+            {"harness": "a"},
+            {"harness": "b", "account": "work"}
+        ]});
+        let refused =
+            execute_versioned(client(json!({"links": []})), 4, &cancel, FAN_OUT, &fan).await;
+        assert!(!refused.success);
+        assert!(refused.content.contains("newer RustCode app"));
+        // The same calls go through for a v5 client.
+        for (name, args) in [(START_SESSION, start), (FAN_OUT, fan)] {
+            let sent =
+                execute_versioned(client(json!({"session_id": "c"})), 5, &cancel, name, &args)
+                    .await;
+            assert!(sent.success, "{name}: {}", sent.content);
+        }
+        // A null is no login, so it is not a version 5 argument.
+        let null = json!({"prompt": "go", "account": null});
+        let sent = execute_versioned(
+            client(json!({"session_id": "c"})),
+            4,
+            &cancel,
+            START_SESSION,
+            &null,
+        )
+        .await;
+        assert!(sent.success, "{}", sent.content);
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ import { emptyBook, type Link } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
 import { steerability } from "./queue";
 import {
+  addHarnessAccount,
   agentHistory,
   answerPermission,
   answerQuestionOptions,
@@ -550,6 +551,32 @@ describe("engine controller with the mock engine", () => {
     const wrong = error(await start({ harness: "rustcode", model: "gpt-6" }));
     expect(wrong).toContain("has no model “gpt-6”");
     expect(wrong).toContain("chatgpt/gpt-6-");
+    // A named login it cannot have is refused rather than quietly ignored.
+    expect(error(await start({ harness: "rustcode", account: "work" }))).toContain(
+      "RustCode has no named accounts",
+    );
+  });
+
+  test("list_harnesses names the accounts start_session can target, and which are signed out", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    const caller = useApp.getState().sessions[0]!.id;
+    await addHarnessAccount("codex", "work", "Work");
+    // The plan read found this login signed out, so naming it will be refused.
+    useApp.setState({ signedOutLogins: { "codex#work": true } });
+    const answer = await answerOrchestration({ sessionId: caller, tool: "list_harnesses", args: {} });
+    const listed = answer.harnesses as {
+      id: string;
+      accounts?: { id: string; name: string; signed_out?: boolean }[];
+    }[];
+    expect(listed.find((h) => h.id === "claude-code")?.accounts?.map((a) => a.id)).toEqual(["paral-2"]);
+    expect(listed.find((h) => h.id === "codex")?.accounts?.find((a) => a.id === "work")).toMatchObject({
+      id: "work",
+      name: "Work",
+      signed_out: true,
+    });
+    // A harness with no named logins says nothing rather than an empty list.
+    expect(listed.find((h) => h.id === "rustcode")?.accounts).toBeUndefined();
   });
 
   test("a thread moves to another folder, and the default folder is separate", async () => {
@@ -1345,6 +1372,91 @@ describe("what a delegated thread may do without asking", () => {
     const read = await call({ sessionId: parent, tool: "configure_session", args: { session_id: child } });
     expect(read.access).toBe("ask");
     expect(permissionModeOf(useApp.getState(), child)).toBe("ask");
+  });
+
+  test("start_session starts on the login it names, and the card shows its id and name", async () => {
+    const parent = await ready();
+    await addHarnessAccount("codex", "work", "Work");
+    const answering = answerOrchestration({
+      sessionId: parent,
+      tool: "start_session",
+      args: { prompt: "do it", title: "Child", harness: "codex", account: "Work" },
+    });
+    await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant?.harnesses).toEqual(["Codex · Work (work)"]);
+    resolveGrant("once");
+    const answer = await answering;
+    expect(answer.error).toBeUndefined();
+    expect(answer.account).toBe("work");
+    expect(useApp.getState().threads[String(answer.session_id)]?.harness?.account).toBe("work");
+  });
+
+  test("fan_out runs one task on each login it names", async () => {
+    const parent = await ready();
+    await addHarnessAccount("codex", "work", "Work");
+    await addHarnessAccount("codex", "home", "Home");
+    const answer = await call({
+      sessionId: parent,
+      tool: "fan_out",
+      args: {
+        prompt: "do it",
+        harnesses: [
+          { harness: "codex", account: "work" },
+          { harness: "codex", account: "Home" },
+        ],
+      },
+    });
+    const links = answer.links as unknown as { session_id: string }[];
+    expect(links).toHaveLength(2);
+    const accounts = links.map((link) => useApp.getState().threads[link.session_id]?.harness?.account);
+    expect(accounts).toEqual(["work", "home"]);
+    // The link keeps the login too, so the Compare card names it.
+    const shown = useApp.getState().links.links.filter((link) => link.fanOut === answer.fan_out_id);
+    expect(shown.map((link) => link.account)).toEqual(["work", "home"]);
+  });
+
+  test("fan_out refuses entries that resolve to the same login", async () => {
+    const parent = await ready();
+    await addHarnessAccount("codex", "work", "Work");
+    // Two spellings the engine sees as different, but which name one login.
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "fan_out",
+      args: {
+        prompt: "do it",
+        harnesses: [
+          { harness: "codex", account: "work" },
+          { harness: "codex", account: "Work" },
+        ],
+      },
+    });
+    const message = (answer.error as { message: string } | undefined)?.message ?? "";
+    expect(message).toContain("same target twice");
+    expect(useApp.getState().grant).toBeNull();
+  });
+
+  test("an ambiguous or signed-out login is refused before the card", async () => {
+    const parent = await ready();
+    await addHarnessAccount("codex", "a", "Shared");
+    await addHarnessAccount("codex", "b", "Shared");
+    const ambiguous = await answerOrchestration({
+      sessionId: parent,
+      tool: "start_session",
+      args: { prompt: "do it", harness: "codex", account: "Shared" },
+    });
+    const said = (ambiguous.error as { message: string } | undefined)?.message ?? "";
+    expect(said).toContain("more than one account matching");
+    expect(useApp.getState().grant).toBeNull();
+    // A login the plan read found signed out cannot run a turn.
+    useApp.setState({ signedOutLogins: { "codex#a": true } });
+    const signedOut = await answerOrchestration({
+      sessionId: parent,
+      tool: "start_session",
+      args: { prompt: "do it", harness: "codex", account: "a" },
+    });
+    const no = (signedOut.error as { message: string } | undefined)?.message ?? "";
+    expect(no).toContain("is signed out");
+    expect(useApp.getState().grant).toBeNull();
   });
 });
 

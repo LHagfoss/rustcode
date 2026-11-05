@@ -247,7 +247,19 @@ does, so no thread starts on a default login that is signed out: the picker
 leaves out "Default login", a new thread starts on the first named login that
 is signed in, and a thread started by another thread (`start_session`,
 `fan_out`) runs on its parent's account when it uses the same harness, else on
-that same first login (`apps/desktop/src/state/logins.ts`). Claude Code has no
+that same first login (`apps/desktop/src/state/logins.ts`). Either tool also
+takes an explicit `account` naming one of that harness's accounts (an id, or a
+display name; `list_harnesses` lists them), which wins over the inherited
+choice. An exact id wins over a display name, so an id stays reachable when
+another login is named the same; a case-insensitive id that matches more than
+one account, an ambiguous display name, an id the harness does not list, and
+an explicitly signed-out login are all refused with the ids that would work,
+never a quiet fall back to another login. `list_harnesses` carries each
+account's `signed_out` flag so an agent can avoid one before asking, and the
+approval card shows the account's display name and id. That argument is
+orchestration version 5: an
+older client is not shown it, and the engine refuses it from one that sends it
+(`docs/orchestrator.md` › "Orchestration tools v5"). Claude Code has no
 cheap sign-in command, so its harness `auth` says `unknown` either way; what
 reports a login as signed out is the plan read described below.
 

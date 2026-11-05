@@ -166,6 +166,10 @@ impl Launch {
 struct Registered {
     token: String,
     client: Arc<dyn PreviewClient>,
+    /// The orchestration version this thread's client advertised. The socket
+    /// carries calls for one thread, so its version travels with its token and
+    /// governs what the hub may forward, whatever the server in front assumes.
+    version: u8,
 }
 
 pub struct Hub {
@@ -196,14 +200,20 @@ impl Hub {
     }
 
     /// Let `session_id` call through `client`; returns its token. A thread
-    /// registered again gets a new token.
-    pub fn register(&self, session_id: &str, client: Arc<dyn PreviewClient>) -> String {
+    /// registered again gets a new token, and its version replaces the old one.
+    pub fn register(
+        &self,
+        session_id: &str,
+        client: Arc<dyn PreviewClient>,
+        version: u8,
+    ) -> String {
         let token = random_token();
         self.lock().insert(
             session_id.to_owned(),
             Registered {
                 token: token.clone(),
                 client,
+                version: version.min(super::VERSION),
             },
         );
         token
@@ -219,11 +229,12 @@ impl Hub {
             .unwrap_or_else(|error| error.into_inner())
     }
 
-    /// The client for a call, when its session and token match.
-    fn authorize(&self, request: &CallRequest) -> Option<Arc<dyn PreviewClient>> {
+    /// The client and its version for a call, when its session and token match.
+    fn authorize(&self, request: &CallRequest) -> Option<(Arc<dyn PreviewClient>, u8)> {
         let sessions = self.lock();
         let registered = sessions.get(&request.session_id)?;
-        same_token(&registered.token, &request.token).then(|| Arc::clone(&registered.client))
+        same_token(&registered.token, &request.token)
+            .then(|| (Arc::clone(&registered.client), registered.version))
     }
 
     /// Answer one decoded call.
@@ -232,7 +243,7 @@ impl Hub {
         request: CallRequest,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> CallAnswer {
-        let Some(client) = self.authorize(&request) else {
+        let Some((client, version)) = self.authorize(&request) else {
             return CallAnswer::failure(
                 "error: RustCode did not accept this orchestrator's session or token. Nothing was sent.",
             );
@@ -243,14 +254,9 @@ impl Hub {
                 request.tool
             ));
         }
-        let output = super::execute_versioned(
-            Some(client),
-            super::VERSION,
-            cancel,
-            &request.tool,
-            &request.args,
-        )
-        .await;
+        let output =
+            super::execute_versioned(Some(client), version, cancel, &request.tool, &request.args)
+                .await;
         CallAnswer {
             success: output.success,
             content: output.content,
@@ -432,7 +438,7 @@ pub async fn launch_for(
             }
         };
         let command = std::env::current_exe().ok()?;
-        let token = hub.register(session_id, client);
+        let token = hub.register(session_id, client, version);
         // Smart UI is the client's setting, not the thread's: an engine serves one client.
         let smart_ui = crate::harness::client_smart_ui() == crate::app::SmartUi::On;
         Some(
@@ -459,4 +465,54 @@ pub fn release(session_id: &str) {
     }
     #[cfg(not(unix))]
     let _ = session_id;
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::preview::PreviewFuture;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The app: counts what reached it, then answers like a started thread.
+    struct Counted(Arc<AtomicUsize>);
+
+    impl PreviewClient for Counted {
+        fn request(&self, _params: Value) -> PreviewFuture {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(json!({ "session_id": "child" })) })
+        }
+    }
+
+    /// A call for a version 4 thread that names a login: the hub, not the
+    /// server in front, must refuse it with the version the thread registered.
+    #[tokio::test]
+    async fn the_hub_forwards_with_the_version_the_thread_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::bind(dir.path().join("run").join("orchestrator-test.sock"))
+            .await
+            .unwrap();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let request = |token: String| CallRequest {
+            session_id: "thread-1".to_owned(),
+            token,
+            tool: super::super::START_SESSION.to_owned(),
+            args: json!({ "prompt": "go", "account": "work" }),
+        };
+        let token = hub.register("thread-1", Arc::new(Counted(Arc::clone(&asked))), 4);
+        let refused = super::call(hub.path(), &request(token)).await;
+        assert!(!refused.success);
+        assert!(refused.content.contains("newer RustCode app"));
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "a v4 call never reaches the app"
+        );
+
+        // The same thread after its client advertises 5: the same call goes through.
+        let token = hub.register("thread-1", Arc::new(Counted(Arc::clone(&asked))), 5);
+        let sent = super::call(hub.path(), &request(token)).await;
+        assert!(sent.success, "{}", sent.content);
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
 }
