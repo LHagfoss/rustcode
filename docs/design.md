@@ -443,17 +443,25 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   (`ui/QueuedMessages.tsx`), as a sent bubble's twin: right-aligned, at most
   80% wide, `rounded-2xl`, a dashed `border-strong` edge and `bg-message/40`
   instead of the fill, the command and links as chips over the text, pictures
-  and files above it. Under it a quiet row: a `Clock` and `Queued` — or `Held`
-  once a stopped turn left it there — and, on hover or keyboard focus, 22px
-  icon buttons: Send now (a steer, only on a harness that steers live), edit,
-  move up and down (with two or more), remove. It is edited in the composer,
+  and files above it. The dashed edge is what says it waits, so under it the
+  `Clock` and `Queued` and its 22px icon buttons — Send now, edit, move up and
+  down (with two or more), remove — are one `.rc-meta-reveal`, hidden at rest
+  on the row's reserved 22px and in together on hover or keyboard focus, the
+  way a sent message's time and actions are (and shown on a coarse pointer,
+  which cannot hover). `Held` stays at rest when a stopped or failed turn left
+  the queue waiting, since that is why nothing runs; so does `Editing in the
+  composer` with Cancel. Send now follows one rule, shared with ⌘⏎ and
+  `state/queue.ts` (`steerability`): plain text steers; pictures steer on a
+  harness that takes images mid-turn and is not the built-in one; a command, a
+  link chip or a file waits for the next turn, and the dimmed arrow's tooltip
+  is that reason (`Files go with the next turn`, `Commands go with the next
+  turn`, or the harness cannot take a message mid-turn). It is edited in the composer,
   never in a field of its own: its pencil, or ↑ at the start of an empty
-  composer, loads its text, command, links and attachments there, the row says
-  `Editing in the composer` with Cancel, ⏎ saves it back in the queue and Esc
-  leaves it. A held queue ends with Resume, which starts its first message. A
-  wake turn the app sends is one quiet line (its first line, in the notice
-  divider's style), never a bubble; a message another thread sent says
-  `From “…”` and is not the user's to edit.
+  composer, loads its text, command, links and attachments there, ⏎ saves it
+  back in the queue and Esc leaves it. A held queue ends with Resume, which
+  starts its first message. A wake turn the app sends is one quiet line (its
+  first line, in the notice divider's style), never a bubble; a message another
+  thread sent says `From “…”` and is not the user's to edit.
 - **Jump to latest:** the pill over the composer's foot (`shadow-1`,
   `.rc-glass-overlay` — the strip below it shares that surface — 30px)
   says `Latest` and, while a turn runs, what

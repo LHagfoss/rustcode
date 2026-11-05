@@ -1,13 +1,15 @@
 // What waits at the end of a thread: the messages queued for it, drawn as the bubbles of the
 // messages already sent but on a dashed edge, and one quiet line for a turn the app will wake it
-// with. A queue a stopped or failed turn left reads Held, with Resume under it. The composer edits a
-// queued message in place (its pencil, or ↑), so a row never opens a field of its own.
+// with. The dashed edge says it is waiting at rest; its state and what can be done with it appear
+// on hover or keyboard focus, as a sent message's do. A queue a stopped or failed turn left reads
+// Held at rest, with Resume under it. The composer edits a queued message in place (its pencil, or
+// ↑), so a row never opens a field of its own.
 
 import { ArrowUp, ChevronDown, ChevronUp, Clock, FileText, Pencil, RotateCw, X } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Attachment } from "../state/compose";
-import { isOwnQueued, queuedAnnouncement, queueView } from "../state/queue";
+import { isOwnQueued, queuedAnnouncement, queueView, STEER_REFUSAL, steerability } from "../state/queue";
 import {
   cancelQueuedEdit,
   moveQueued,
@@ -106,6 +108,8 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
   count,
   held,
   steerable,
+  images,
+  builtin,
   from,
 }: {
   threadId: string;
@@ -113,7 +117,10 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
   index: number;
   count: number;
   held: boolean;
+  /** The harness-level half of the steer rule; `images` and `builtin` come from the same thread. */
   steerable: boolean;
+  images: boolean;
+  builtin: boolean;
   /** The thread that sent it, for a message delivered for another thread. */
   from?: string;
 }) {
@@ -125,6 +132,9 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
   const links = item.extras?.links ?? [];
   const state = held ? "Held" : "Queued";
   const label = `${state} message ${index + 1} of ${count}, not sent`;
+  // The same rule ⌘⏎ and `sendQueuedNow` follow: the arrow is active whenever it says yes — for
+  // pictures too, on a harness that takes them mid-turn — and otherwise says exactly why it waits.
+  const steer = steerability(item.extras, { live: steerable, images, builtin });
   return (
     <div className="group flex flex-col items-end" role="group" aria-label={label}>
       {/* A message another thread sent is that thread's, not the user's: it says whose it is, and
@@ -165,10 +175,13 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
           <p className="text-callout text-fg-muted">Attachments only</p>
         )}
       </div>
-      {/* Its state, and what can be done with it. A wake is never a row (it is one quiet line), and a
-          message another thread sent is not the user's to edit. */}
-      <div className="mt-1 flex min-h-[22px] items-center gap-1.5 text-caption text-fg-muted">
-        <span className="flex items-center gap-1">
+      {/* Its state, and what can be done with it, in one reveal: hidden at rest (the dashed edge says
+          it waits) and in together on hover of the row or keyboard focus inside it. A held queue says
+          Held at rest, since that is why nothing runs; one being edited says so at rest too. A wake is
+          never a row (it is one quiet line), and a message another thread sent is not the user's to
+          edit. */}
+      <div className="mt-1 flex h-[22px] items-center gap-1.5 text-caption text-fg-muted">
+        <span className={cx("flex items-center gap-1", !held && !editing && "rc-meta-reveal")}>
           <Clock size={11} className="text-fg-faint" />
           {state}
         </span>
@@ -186,42 +199,27 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
             </button>
           </span>
         ) : (
-          <span
-            className={cx(
-              "flex items-center gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
-            )}
-          >
-            {!held && steerable && attachments.length > 0 && (
-              <Tooltip label="Send now is not available with attachments: they go with the next turn">
-                <span
-                  role="img"
-                  aria-label="Send now is not available with attachments"
-                  className="flex size-[22px] items-center justify-center text-fg-faint"
+          <span className="rc-meta-reveal flex items-center gap-0.5">
+            {!held &&
+              (steer.ok ? (
+                <RowAction
+                  label="Send now"
+                  tip="Send now: the turn reads it after its current step"
+                  onClick={() => void sendQueuedNow(threadId, item.id)}
                 >
                   <ArrowUp size={13} />
-                </span>
-              </Tooltip>
-            )}
-            {!held && steerable && attachments.length === 0 && (
-              <RowAction
-                label="Send now"
-                tip="Send now: the turn reads it after its current step"
-                onClick={() => void sendQueuedNow(threadId, item.id)}
-              >
-                <ArrowUp size={13} />
-              </RowAction>
-            )}
-            {!held && !steerable && (
-              <Tooltip label="This harness can't take a message mid-turn: it waits for the next one">
-                <span
-                  role="img"
-                  aria-label="Send now is not available on this harness"
-                  className="flex size-[22px] items-center justify-center text-fg-faint"
-                >
-                  <ArrowUp size={13} />
-                </span>
-              </Tooltip>
-            )}
+                </RowAction>
+              ) : (
+                <Tooltip label={STEER_REFUSAL[steer.reason]}>
+                  <span
+                    role="img"
+                    aria-label={STEER_REFUSAL[steer.reason]}
+                    className="flex size-[22px] items-center justify-center text-fg-faint"
+                  >
+                    <ArrowUp size={13} />
+                  </span>
+                </Tooltip>
+              ))}
             {own && (
               <RowAction
                 label="Edit in the composer"

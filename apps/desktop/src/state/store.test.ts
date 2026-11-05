@@ -3,10 +3,11 @@ import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans } from "../acp/rustcode";
 import { V2Method } from "../acp/v2";
-import { emptyExtras } from "./compose";
+import { type ComposeExtras, emptyExtras } from "./compose";
 import { answerOrchestration, linkFinished, orchestrationCallDropped, resolveGrant } from "./host";
 import { emptyBook, type Link } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
+import { steerability } from "./queue";
 import {
   agentHistory,
   answerPermission,
@@ -63,6 +64,7 @@ import {
   startNewThread,
   startQueuedEdit,
   statusOf,
+  steerConditions,
   steerOrSubmit,
   submit,
   switchNewThreadHarness,
@@ -249,7 +251,8 @@ describe("engine controller with the mock engine", () => {
       mimeType: "image/png",
       data: "AAAA",
     });
-    // ⌘⏎ with images: a steer takes text only, so the whole prompt queues, in order.
+    // ⌘⏎ with images on the built-in harness: the engine reads a steer as text, so the whole
+    // prompt queues, in order.
     expect(await steerOrSubmit("look at this", { ...emptyExtras, attachments: [image(1), image(2)] })).toBe(
       true,
     );
@@ -261,9 +264,13 @@ describe("engine controller with the mock engine", () => {
       ["", 1],
       ["then this", 0],
     ]);
-    // Sending one with images now is refused, and it stays queued with them.
-    await sendQueuedNow(id, queue[0]!.id);
+    // Send now refuses it by the same rule (the built-in harness takes pictures only with a turn),
+    // and it stays queued with them, saying why.
+    expect(await sendQueuedNow(id, queue[0]!.id)).toBe(false);
     expect(useApp.getState().threads[id]!.queue.length).toBe(3);
+    expect(useApp.getState().toasts.at(-1)?.text).toBe(
+      "This harness can't take a message mid-turn: it waits for the next one",
+    );
     // Its text can be edited or emptied; the images stay.
     updateQueued(id, queue[0]!.id, "look at these two");
     updateQueued(id, queue[1]!.id, "");
@@ -278,6 +285,104 @@ describe("engine controller with the mock engine", () => {
       "look at these two",
       "then this",
     ]);
+    await cancel();
+    await done;
+  });
+
+  test("Send now steers pictures where the harness takes them, and a file waits", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    // Codex in the mock steers live and takes images, and is not the built-in harness.
+    switchNewThreadHarness("codex");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    expect(selected()!.harness?.id).toBe("codex");
+    expect(selected()!.harness?.capabilities.steer).toBe("live");
+    const picture = {
+      id: "img1",
+      kind: "image" as const,
+      name: "shot1.png",
+      mimeType: "image/png",
+      data: "AAAA",
+    };
+    const file = { id: "file1", kind: "file" as const, name: "notes.txt", path: "/tmp/notes.txt" };
+    await submit("look at this", { ...emptyExtras, attachments: [picture] });
+    await submit("read that", { ...emptyExtras, attachments: [file] });
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["look at this", "read that"]);
+
+    // Send now takes the pictures into the running turn: the transcript shows the steered message
+    // with them, and the row leaves the queue.
+    expect(await sendQueuedNow(id, selected()!.queue[0]!.id)).toBe(true);
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["read that"]);
+    const steered = selected()!.items.flatMap((i) =>
+      i.kind === "user" && i.steered ? [[i.text, i.attachments?.length ?? 0] as const] : [],
+    );
+    expect(steered).toEqual([["look at this", 1]]);
+
+    // A file is not steered, and stays queued with its reason.
+    expect(await sendQueuedNow(id, selected()!.queue[0]!.id)).toBe(false);
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["read that"]);
+    expect(useApp.getState().toasts.at(-1)?.text).toBe("Files go with the next turn");
+    await cancel();
+    await done;
+  });
+
+  test("⌘⏎ and the queued row's Send now agree, case by case", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    switchNewThreadHarness("codex");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    const picture = {
+      id: "img9",
+      kind: "image" as const,
+      name: "shot9.png",
+      mimeType: "image/png",
+      data: "AAAA",
+    };
+    const file = { id: "file9", kind: "file" as const, name: "notes.txt", path: "/tmp/notes.txt" };
+    const cases: { why: string; extras: ComposeExtras }[] = [
+      { why: "plain text", extras: emptyExtras },
+      { why: "a picture", extras: { links: [], attachments: [picture] } },
+      { why: "a file", extras: { links: [], attachments: [file] } },
+      {
+        why: "a command",
+        extras: {
+          links: [],
+          attachments: [],
+          command: {
+            name: "/review",
+            description: "Review the diff",
+            takesArguments: false,
+            report: false,
+            action: "execute",
+          },
+        },
+      },
+      { why: "a link chip", extras: { links: ["https://example.com"], attachments: [] } },
+    ];
+    for (const { why, extras } of cases) {
+      const text = `steer ${why}`;
+      const steeredBefore = selected()!.items.filter((i) => i.kind === "user" && i.steered).length;
+      const rule = steerability(extras, steerConditions(selected()!));
+      // ⌘⏎ first: the same rule decides whether the turn reads it now or the queue takes it.
+      expect(await steerOrSubmit(text, extras)).toBe(true);
+      const steered = selected()!.items.filter((i) => i.kind === "user" && i.steered).length;
+      const queued = selected()!.queue.find((q) => q.text === text);
+      expect([why, steered - steeredBefore, !!queued]).toEqual([why, rule.ok ? 1 : 0, !rule.ok]);
+      // Then the row: Send now on that queued message does exactly what the rule said.
+      if (queued) {
+        expect([why, await sendQueuedNow(id, queued.id)]).toEqual([why, rule.ok]);
+        // A refusal leaves it where it was; a steer takes it out of the queue.
+        const still = selected()!.queue.some((q) => q.id === queued.id);
+        expect([why, still]).toEqual([why, !rule.ok]);
+        if (still) removeQueued(id, queued.id);
+      }
+    }
     await cancel();
     await done;
   });

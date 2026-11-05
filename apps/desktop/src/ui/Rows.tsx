@@ -195,8 +195,9 @@ export const UserRow = memo(function UserRow({
           </Pill>
         )}
       </div>
-      {/* Time and actions show on hover, clipped to the bubble's width. */}
-      <div className="mt-0.5 flex h-[22px] max-w-[80%] min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[.rc-keep]:opacity-100">
+      {/* Time and actions show on hover, clipped to the bubble's width; `.rc-meta-reveal` is the
+          same reveal the queued row's foot uses. */}
+      <div className="rc-meta-reveal mt-0.5 flex h-[22px] max-w-[80%] min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular">
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>

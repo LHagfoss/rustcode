@@ -124,7 +124,7 @@ import {
 } from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
-import { nextQueued } from "./queue";
+import { nextQueued, STEER_REFUSAL, type SteerConditions, steerability } from "./queue";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
@@ -2010,8 +2010,9 @@ export async function forkThread(id: string): Promise<void> {
 
 /**
  * ⌘⏎: hand the running turn a message to read after its current step, else
- * send. A steer carries text only, so a message with attachments (or a
- * command token, or links) queues whole for the next turn, and says so.
+ * send. It follows `steerability`, the one rule the queued row's Send now
+ * uses too: plain text steers, pictures steer where the harness takes them
+ * mid-turn, and a command, links or a file queue whole for the next turn.
  */
 export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
   const id = get().selectedId;
@@ -2020,15 +2021,14 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
   // ⌘⏎ always tries: a harness learns it can steer when its first thread starts, so a thread
   // started before that still reads "none" though the engine can steer it now.
   if (!id || !thread?.running || !get().agent?.steer) return submit(text, extras);
-  // Images ride along when the harness takes them mid-turn; other extras wait for the next turn.
-  const imagesOnly =
-    extras.attachments.length > 0 &&
-    extras.attachments.every((a) => a.kind === "image") &&
-    !extras.command &&
-    !extras.links.length &&
-    acceptsImages(thread) &&
-    !(threadHarness(thread)?.builtin ?? true);
-  if (imagesOnly && (await steer(id, trimmed, extras))) return true;
+  // Nothing typed and nothing attached: take what waits first, by the row's own rule.
+  if (!trimmed && !hasExtras(extras)) {
+    const next = thread.queue[0];
+    if (next) return sendQueuedNow(id, next.id);
+    return submit(text, extras);
+  }
+  const verdict = steerability(extras, steerConditions(thread));
+  if (verdict.ok && (await steer(id, trimmed, extras))) return true;
   if (hasExtras(extras)) {
     const sent = await submit(text, extras);
     if (sent)
@@ -2039,15 +2039,9 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
       );
     return sent;
   }
-  if (!trimmed) {
-    const next = thread.queue[0];
-    if (next) await sendQueuedNow(id, next.id);
-    return true;
-  }
-  if (await steer(id, trimmed)) return true;
   updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
   toast(
-    canSteer(thread)
+    verdict.ok
       ? "Queued: the turn is waiting for you"
       : `Queued: ${threadHarness(thread)?.name ?? "this harness"} can’t take a message mid-turn`,
   );
@@ -2059,10 +2053,28 @@ export function canSteer(thread: ThreadState): boolean {
   return !thread.harness || thread.harness.capabilities.steer === "live";
 }
 
+/**
+ * The harness-level half of the steer rule (`canSteer`, `acceptsImages`, the built-in harness), read
+ * once for ⌘⏎, Send now and the queued row. `ui/Transcript.tsx` passes the same three down to a row,
+ * so the row never decides anything the store does not.
+ */
+export function steerConditions(thread?: ThreadState): SteerConditions {
+  return {
+    live: !!thread && canSteer(thread),
+    images: acceptsImages(thread),
+    builtin: threadHarness(thread)?.builtin ?? true,
+  };
+}
+
 async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
   const thread = get().threads[id];
+  const conditions = steerConditions(thread);
   const prompt = extras?.attachments.length
-    ? promptBlocks(text, extras, { images: true, builtin: false, cwd: thread?.cwd ?? "" })
+    ? promptBlocks(text, extras, {
+        images: conditions.images,
+        builtin: conditions.builtin,
+        cwd: thread?.cwd ?? "",
+      })
     : undefined;
   try {
     const result = (await engine().request(
@@ -2079,19 +2091,25 @@ async function steer(id: string, text: string, extras?: ComposeExtras): Promise<
   }
 }
 
-export async function sendQueuedNow(id: string, queuedId: string) {
-  const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
-  if (!item) return;
+/**
+ * Send now: steer a queued message into the running turn, by the same rule ⌘⏎ follows. One the rule
+ * refuses stays queued and says why; one the engine refuses stays queued too.
+ */
+export async function sendQueuedNow(id: string, queuedId: string): Promise<boolean> {
   const thread = get().threads[id];
-  if (item.extras?.attachments.length && (threadHarness(thread)?.builtin ?? true)) {
-    toast("Attachments go with the next turn: RustCode takes text only mid-turn");
-    return;
+  const item = thread?.queue.find((q) => q.id === queuedId);
+  if (!item || !thread) return false;
+  const verdict = steerability(item.extras, steerConditions(thread));
+  if (!verdict.ok) {
+    toast(STEER_REFUSAL[verdict.reason]);
+    return false;
   }
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
-  } else {
-    toast("The turn can't take it now. It stays queued");
+    return true;
   }
+  toast("The turn can't take it now. It stays queued");
+  return false;
 }
 
 /**
