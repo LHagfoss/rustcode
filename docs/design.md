@@ -563,7 +563,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   stack, so the hero and those
   controls are separate stacking contexts. Its slot takes its width at once and
   the panel slides and fades in 200ms (see Motion). ⌘⌥B toggles it with the last
-  view.
+  view. A thread opens with the panel on the view it last showed (Changes
+  when that view has nothing to show here; `state/store.ts`
+  `panelForThread`); closing it by hand is kept for the thread on screen, so
+  picking that thread again leaves it closed, and viewing another thread opens
+  it again. Opening the thread its Thread tab shows ends the peek and returns
+  the panel to Changes, and a new thread ends it too. The new-thread screen
+  opens without a panel, though ⌘⌥B still opens one there. Settling the selected
+  thread while the chat is showing (its menu, the palette, the sidebar) closes
+  the panel and leaves it for the new-thread screen in the same folder, with
+  the same Undo the sidebar offers; settling from the board, review or compare
+  stays on that view, and a status set by an agent or the engine never moves
+  the screen.
   Details lists what a thread is, in titled sections that drop out when
   they have nothing to say: harness, workspace, linked threads, subagents with
   status and elapsed time, plan and usage.

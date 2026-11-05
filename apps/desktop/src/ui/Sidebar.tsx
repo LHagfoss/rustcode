@@ -77,6 +77,7 @@ import { type PendingSetup, pendingSummary } from "../state/setup";
 import {
   contextRow,
   keepListed,
+  listedPicks,
   nextRow,
   type OrderRow,
   type OrderSection,
@@ -100,7 +101,8 @@ import {
   setPanel,
   setPinned,
   setThreadStatus,
-  setThreadsStatus,
+  settleThread,
+  settleThreads,
   setView,
   snoozeThread,
   startNewThread,
@@ -246,7 +248,7 @@ function ThreadMenuItems({
         <Item
           className={menuItem}
           onSelect={() => {
-            settleThreads(bulk);
+            settleThreads(bulk.map((x) => x.id));
             onClear?.();
           }}
         >
@@ -282,7 +284,7 @@ function ThreadMenuItems({
         </Item>
       )}
       {status !== "done" && (
-        <Item className={menuItem} onSelect={() => settleThread(session, status)}>
+        <Item className={menuItem} onSelect={() => settleThread(session.id)}>
           <CircleCheck size={13} /> Settle
         </Item>
       )}
@@ -500,47 +502,6 @@ function PullMark({ pull }: { pull: PullRequest }) {
       <Icon size={12} />
     </span>
   );
-}
-
-/**
- * Marks several threads Done at once: one toast, and an Undo that puts each one back the way it
- * was (review stays review, the rest go back to idle).
- */
-function settleThreads(sessions: SessionSummary[]) {
-  const state = useApp.getState();
-  const before = sessions
-    .map((s) => ({ id: s.id, status: statusOf(state, s.id) }))
-    .filter((x) => x.status !== "done");
-  if (!before.length) {
-    toast("Already settled", "info");
-    return;
-  }
-  void setThreadsStatus(
-    before.map((x) => x.id),
-    "done",
-  );
-  toast(`Settled ${before.length} threads`, "info", {
-    action: {
-      label: "Undo",
-      run: () => {
-        const review = before.filter((x) => x.status === "review").map((x) => x.id);
-        const rest = before.filter((x) => x.status !== "review").map((x) => x.id);
-        if (review.length) void setThreadsStatus(review, "review");
-        if (rest.length) void setThreadsStatus(rest, "idle");
-      },
-    },
-  });
-}
-
-/** Marks a thread Done, with an Undo that puts back the status it had. */
-function settleThread(session: SessionSummary, before: ThreadStatus | undefined) {
-  void setThreadStatus(session.id, "done");
-  toast(`Settled "${session.title || "New thread"}"`, "info", {
-    action: {
-      label: "Undo",
-      run: () => void setThreadStatus(session.id, before === "review" ? "review" : "idle"),
-    },
-  });
 }
 
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
@@ -792,7 +753,7 @@ const ThreadRow = memo(function ThreadRow({
               {pinned ? <PinOff size={12} /> : <Pin size={12} />}
             </RowAction>
             {!done && (
-              <RowAction label="Settle" onClick={() => settleThread(session, status)}>
+              <RowAction label="Settle" onClick={() => settleThread(session.id)}>
                 <Check size={13} />
               </RowAction>
             )}
@@ -1657,7 +1618,7 @@ export function Sidebar() {
     setPicked((prev) => (prev.size ? keepListed(prev, orderIds) : prev));
   }, [orderIds]);
 
-  const pickedSessions = useMemo(() => sessions.filter((s) => picked.has(s.id)), [sessions, picked]);
+  const pickedSessions = useMemo(() => listedPicks(sessions, picked), [sessions, picked]);
   const allPickedPinned = pickedSessions.length > 0 && pickedSessions.every((s) => pinned.includes(s.id));
   const clearSelection = useCallback(() => setPicked(NO_PICKS), []);
   const focusRow = (id: string) =>
@@ -1947,19 +1908,22 @@ export function Sidebar() {
             })}
           </div>
         </nav>
-        {picked.size > 1 && (
+        {pickedSessions.length > 1 && (
           <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
             <span
               className="min-w-0 flex-1 truncate px-1 font-medium text-caption text-fg-muted tabular"
               aria-live="polite"
             >
-              {picked.size} selected
+              {pickedSessions.length} selected
             </span>
             <Pill
               size="sm"
               quiet
               onClick={() => {
-                setPinned([...picked], !allPickedPinned);
+                setPinned(
+                  pickedSessions.map((s) => s.id),
+                  !allPickedPinned,
+                );
                 clearSelection();
               }}
             >
@@ -1969,7 +1933,7 @@ export function Sidebar() {
               size="sm"
               quiet
               onClick={() => {
-                settleThreads(pickedSessions);
+                settleThreads(pickedSessions.map((s) => s.id));
                 clearSelection();
               }}
             >

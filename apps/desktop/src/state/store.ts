@@ -303,6 +303,12 @@ export interface AppState {
   panel: "details" | "changes" | "pulls" | "peek" | null;
   /** The thread shown beside this one in the panel's Thread tab. */
   peekId: string | null;
+  /**
+   * The thread whose panel the user closed with its own controls. A thread
+   * opens with the panel by default, and this keeps that choice for the thread
+   * on screen; opening the panel, or viewing another thread, forgets it.
+   */
+  panelClosedFor: string | null;
   /** Each thread's subagents, as `_rustcode/agents` last listed them. */
   agents: Record<string, SubagentInfo[]>;
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
@@ -547,6 +553,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   terminalOpen: false,
   panel: null,
   peekId: null,
+  panelClosedFor: null,
   agents: {},
   planUsage: {},
   planCache: prunePlans(storedJson<Record<string, CachedPlan>>(STORAGE.planCache, {})),
@@ -1305,7 +1312,12 @@ export function selectThread(id: string | null) {
   if (id && id === get().pendingSetup?.id) id = null;
   clearFinished(id);
   dismissOverlays();
-  set({ selectedId: id, switcherOpen: false, settings: null, view: { kind: "chat" } });
+  set((s) => ({
+    ...viewingThread(s, id),
+    switcherOpen: false,
+    settings: null,
+    view: { kind: "chat" },
+  }));
   // The account this thread runs on may never have been read: its meter has no
   // numbers until it is, and it appears without a visit to Settings › Usage.
   // The list's summary names the account before the thread itself is opened.
@@ -1322,6 +1334,12 @@ export function startNewThread(cwd?: string) {
   set({
     selectedId: null,
     projectCwd,
+    // The panel belongs to a thread: the new-thread screen has none, and a
+    // thread picked next opens it again (unless it was closed there by hand).
+    panel: null,
+    panelClosedFor: null,
+    // The Thread tab shows a thread beside this one; a new thread has none.
+    peekId: null,
     settings: null,
     switcherOpen: false,
     newThread: null,
@@ -1532,7 +1550,7 @@ export async function createSession(options: NewSession): Promise<string> {
     ...(pending
       ? {}
       : {
-          ...(options.select ? { selectedId: id, newThread: null } : {}),
+          ...(options.select ? { ...viewingThread(st, id), newThread: null } : {}),
           sessions: [summary, ...st.sessions],
           pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
         }),
@@ -1558,7 +1576,7 @@ export async function createSession(options: NewSession): Promise<string> {
     // the thread, in place, and the chat goes on from the message it already shows.
     set((st) => ({
       sessions: [summary, ...st.sessions],
-      ...(options.select && !st.selectedId ? { selectedId: id, newThread: null } : {}),
+      ...(options.select && !st.selectedId ? { ...viewingThread(st, id), newThread: null } : {}),
       pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
     }));
   }
@@ -1826,13 +1844,20 @@ export async function trashThread(id: string): Promise<boolean> {
   const archived = { ...get().archived };
   delete archived[id];
   const pinned = get().pinned.filter((x) => x !== id);
-  set((s) => ({
-    threads,
-    archived,
-    pinned,
-    sessions: s.sessions.filter((x) => x.id !== id),
-    links: forget(s.links, id),
-  }));
+  set((s) => {
+    const peeking = s.peekId === id;
+    return {
+      threads,
+      archived,
+      pinned,
+      sessions: s.sessions.filter((x) => x.id !== id),
+      links: forget(s.links, id),
+      // A thread in the panel's Thread tab that no longer exists is not shown,
+      // and the panel does not stay open on the tab it was in.
+      peekId: peeking ? null : s.peekId,
+      ...(peeking && s.panel === "peek" ? { panel: null } : {}),
+    };
+  });
   // Links into the trashed thread failed: their parents may now have something to hear.
   wakeTick();
   store(STORAGE.archived, JSON.stringify(archived));
@@ -2988,6 +3013,52 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
   return errors.length;
 }
 
+/**
+ * Settles threads (marks them Done) because the user asked: one Undo toast puts
+ * each back the way it was (review stays review, the rest go back to idle).
+ *
+ * Settling the thread on screen in the chat leaves it, with the panel, for the
+ * new-thread screen in the same folder; the board, review and compare have no
+ * new-thread screen, so settling there stays on that view. A caller that is
+ * not the user — an agent's `organize`, a fan-out's cleanup, a thread merged on
+ * the engine — calls `setThreadStatus` instead, which never moves the screen.
+ */
+export function settleThreads(ids: string[]): void {
+  const state = get();
+  const before = ids.map((id) => ({ id, status: statusOf(state, id) })).filter((x) => x.status !== "done");
+  if (!before.length) {
+    toast("Already settled", "info");
+    return;
+  }
+  void setThreadsStatus(
+    before.map((x) => x.id),
+    "done",
+  );
+  if (state.view.kind === "chat" && state.selectedId && before.some((x) => x.id === state.selectedId)) {
+    startNewThread();
+  }
+  const title =
+    before.length === 1
+      ? sessionById(state, before[0]!.id)?.title || get().threads[before[0]!.id]?.title || "New thread"
+      : "";
+  toast(before.length === 1 ? `Settled "${title}"` : `Settled ${before.length} threads`, "info", {
+    action: {
+      label: "Undo",
+      run: () => {
+        const review = before.filter((x) => x.status === "review").map((x) => x.id);
+        const rest = before.filter((x) => x.status !== "review").map((x) => x.id);
+        if (review.length) void setThreadsStatus(review, "review");
+        if (rest.length) void setThreadsStatus(rest, "idle");
+      },
+    },
+  });
+}
+
+/** Settles one thread, with the same Undo and the same rule about leaving the screen. */
+export function settleThread(id: string): void {
+  settleThreads([id]);
+}
+
 export function setView(view: AppState["view"]) {
   dismissOverlays();
   set({ view, switcherOpen: false, settings: null });
@@ -3135,13 +3206,57 @@ export function setTerminalOpen(open: boolean) {
 /** The panel last shown, so ⌘⌥B brings it back. */
 let lastPanel: NonNullable<AppState["panel"]> = "changes";
 
+/**
+ * The view to show: the one last shown, when this project or thread offers it
+ * (a project without pull requests has no Pull requests tab, and the Thread
+ * tab needs a thread to show).
+ */
+function rememberedPanel(s: AppState): NonNullable<AppState["panel"]> {
+  if (lastPanel === "pulls" && !s.agent?.pullRequests) return "changes";
+  if (lastPanel === "peek" && !s.peekId) return "changes";
+  return lastPanel;
+}
+
+/**
+ * The panel a thread opens with: the view last shown, unless the user closed
+ * the panel on this very thread; a new thread has none.
+ */
+function panelForThread(s: AppState, id: string | null): AppState["panel"] {
+  if (!id || s.panelClosedFor === id) return null;
+  return rememberedPanel(s);
+}
+
+/**
+ * The state a thread opens with: selected, on the panel it last showed, and
+ * the close it was given by hand kept on it alone (another thread opens the
+ * panel again).
+ */
+function viewingThread(
+  s: AppState,
+  id: string | null,
+): Pick<AppState, "selectedId" | "panel" | "panelClosedFor" | "peekId"> {
+  // The Thread tab shows another thread beside this one: opening the thread it
+  // shows ends the peek, so the panel goes back to Changes.
+  const shown = id && s.peekId === id ? { ...s, peekId: null } : s;
+  return {
+    selectedId: id,
+    panel: panelForThread(shown, id),
+    panelClosedFor: s.panelClosedFor === id ? id : null,
+    peekId: shown.peekId,
+  };
+}
+
 /** Opens `panel`, or closes it when it is the one open (the header's buttons). */
 export function setPanel(panel: AppState["panel"]) {
   if (panel) lastPanel = panel;
-  set((s) => ({ panel: s.panel === panel ? null : panel }));
+  set((s) => {
+    const next = s.panel === panel ? null : panel;
+    // Closing by hand is kept for the thread on screen, so the next auto-open
+    // (picking the same thread again) leaves it closed.
+    return { panel: next, panelClosedFor: next ? null : s.selectedId };
+  });
 }
 
-/** Shows `panel` (the panel's tabs): never closes. */
 /** Shows a thread in the side panel, next to the one you are in. */
 export function peekThread(id: string) {
   set({ peekId: id });
@@ -3149,14 +3264,18 @@ export function peekThread(id: string) {
   void openThread(id);
 }
 
+/** Shows `panel` (the panel's tabs): never closes. */
 export function showPanel(panel: NonNullable<AppState["panel"]>) {
   lastPanel = panel;
-  set({ panel });
+  set({ panel, panelClosedFor: null });
 }
 
 /** ⌘⌥B: the right panel open or closed, with what it showed last. */
 export function toggleRightPanel() {
-  set((s) => ({ panel: s.panel ? null : lastPanel }));
+  set((s) => ({
+    panel: s.panel ? null : rememberedPanel(s),
+    panelClosedFor: s.panel ? s.selectedId : null,
+  }));
 }
 
 /** Whether the thread's harness lists subagents (`_rustcode/agents`). */
@@ -3671,6 +3790,8 @@ export async function request<T = Json>(
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  // The module's remembered panel view is state too: a test starts from the default.
+  lastPanel = "changes";
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
   limitTimer = null;
@@ -3713,6 +3834,7 @@ export function resetForTests() {
     editing: {},
     confirm: null,
     panel: null,
+    panelClosedFor: null,
     agents: {},
     planUsage: {},
     planCache: {},

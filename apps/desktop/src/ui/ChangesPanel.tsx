@@ -5,8 +5,9 @@
 // Reloads when a turn ends.
 
 import { ChevronRight, CircleCheck, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
+import { latest } from "../lib/latest";
 import { type GitChanges, gitChanges } from "../lib/native";
 import { parsePatch } from "../state/diff";
 import { useApp } from "../state/store";
@@ -54,6 +55,23 @@ export function splitUnifiedDiff(diff: string): Record<string, string[]> {
     current.push(line);
   }
   return out;
+}
+
+/** What the panel may draw for `cwd`: the read made for that folder, never the last thread's. */
+export function changesForFolder<T extends { folder: string }>(
+  shown: T | null,
+  cwd: string | undefined,
+): T | null {
+  return shown && shown.folder === cwd ? shown : null;
+}
+
+/**
+ * Why the body has no changes to draw yet: a read is in flight, or the thread's
+ * turn is, and changes are read when it ends.
+ */
+export function bodyWithoutChanges(o: { loading: boolean; running: boolean }): "loading" | "waiting" | null {
+  if (o.loading) return "loading";
+  return o.running ? "waiting" : null;
 }
 
 /** One file's section: its header stays put, its diff folds away under it. */
@@ -112,10 +130,21 @@ function FileSection({
 export function ChangesPanel() {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const running = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.running : false) ?? false);
-  const [data, setData] = useState<GitChanges | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // What was read, and for which folder: an answer for another thread's folder
+  // is not drawn with this thread's name, even for the frame before it is
+  // dropped.
+  const [shown, setShown] = useState<{ folder: string; changes: GitChanges; at: number } | null>(null);
+  const [failure, setFailure] = useState<{ folder: string; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadedAt, setLoadedAt] = useState<number>();
+  // Each read takes a ticket; only the newest one may set what the panel shows
+  // (`lib/latest.ts`), so a slow answer for the last folder cannot land on this one.
+  const asks = useRef(latest());
+  const folder = useRef(cwd);
+  const here = changesForFolder(shown, cwd);
+  const data = here?.changes ?? null;
+  const error = failure?.folder === cwd ? failure.text : null;
+  const loadedAt = here?.at;
+  const body = bodyWithoutChanges({ loading, running });
   // Split is measured on this pane's own column, not the window: a wide window
   // with a narrow panel still has no room for two columns.
   const [bodyRef, bodyWidth] = useDiffWidth<HTMLDivElement>();
@@ -123,20 +152,32 @@ export function ChangesPanel() {
 
   const load = useCallback(async () => {
     if (!cwd) return;
+    const ticket = asks.current.take();
     setLoading(true);
     try {
       const result = await gitChanges(cwd);
-      if (!result) setError("Changes need the desktop app: git runs in its native shell.");
+      if (!asks.current.current(ticket)) return;
+      if (!result)
+        setFailure({ folder: cwd, text: "Changes need the desktop app: git runs in its native shell." });
       else {
-        setData(result);
-        setError(null);
-        setLoadedAt(Date.now());
+        setShown({ folder: cwd, changes: result, at: Date.now() });
+        setFailure(null);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!asks.current.current(ticket)) return;
+      setFailure({ folder: cwd, text: e instanceof Error ? e.message : String(e) });
     } finally {
-      setLoading(false);
+      if (asks.current.current(ticket)) setLoading(false);
     }
+  }, [cwd]);
+
+  // Another thread's folder drops what is in flight for the last one, and its
+  // spinner with it; what it showed stays keyed to its own folder above.
+  useEffect(() => {
+    if (folder.current === cwd) return;
+    folder.current = cwd;
+    asks.current.drop();
+    setLoading(false);
   }, [cwd]);
 
   // Reload on open, on a folder change, and when a turn ends.
@@ -215,10 +256,15 @@ export function ChangesPanel() {
             ))}
           </>
         )}
-        {!error && !data && loading && (
+        {!error && !data && body === "loading" && (
           <div className="flex items-center gap-2 text-callout text-fg-muted">
             <Spinner /> Reading changes…
           </div>
+        )}
+        {!error && !data && body === "waiting" && (
+          <p className="text-callout text-fg-muted">
+            Waiting for this turn to end before reading the changes.
+          </p>
         )}
       </div>
     </div>

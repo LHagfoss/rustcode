@@ -35,6 +35,7 @@ import {
   setProjectCwd,
   setTerminalOpen,
   setThreadStatus,
+  settleThread,
   setView,
   statusOf,
   useApp,
@@ -149,7 +150,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
           <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
             <Eye size={13} /> Mark for Review
           </DropdownMenu.Item>
-          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "done")}>
+          <DropdownMenu.Item className={menuItem} onSelect={() => settleThread(threadId)}>
             <CircleCheck size={13} /> Mark Done
           </DropdownMenu.Item>
           <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>

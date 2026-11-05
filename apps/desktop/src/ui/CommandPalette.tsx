@@ -39,6 +39,7 @@ import {
   setTerminalOpen,
   setTheme,
   setThreadStatus,
+  settleThread,
   setView,
   shortcutHint,
   showPanel,
@@ -136,7 +137,7 @@ function baseActions(): PaletteAction[] {
             label: "Mark this thread done",
             icon: CircleCheck,
             words: "status",
-            run: () => void setThreadStatus(s.selectedId!, "done"),
+            run: () => settleThread(s.selectedId!),
           },
         ]
       : []),

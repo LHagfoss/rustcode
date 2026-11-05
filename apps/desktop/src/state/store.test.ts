@@ -32,6 +32,7 @@ import {
   onlyCachedPlan,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
+  peekThread,
   permissionModeOf,
   pickNewThreadChoice,
   planCacheStale,
@@ -59,10 +60,15 @@ import {
   setHarnessEnabled,
   setNewThreadChoice,
   setOrchestration,
+  setPanel,
   setPermissionMode,
   setProjectCwd,
   setThreadStatus,
+  settleThread,
+  settleThreads,
+  setView,
   shownPlan,
+  showPanel,
   startNewThread,
   startQueuedEdit,
   statusOf,
@@ -71,6 +77,7 @@ import {
   submit,
   switchNewThreadHarness,
   togglePin,
+  toggleRightPanel,
   trashThread,
   updateQueued,
   updateThread,
@@ -1055,6 +1062,174 @@ describe("engine controller with the mock engine", () => {
     await setThreadStatus(id, "idle");
     expect(statusOf(useApp.getState(), id)).toBe("idle");
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
+  });
+
+  test("a thread opens with the panel, and a close by hand stands on it", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [a, b] = useApp.getState().sessions;
+
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBe("changes");
+    // Closed by hand, then opened again from the sidebar: it stays closed on this thread.
+    setPanel(null);
+    expect(useApp.getState().panel).toBeNull();
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBeNull();
+    // The keyboard toggle closes it the same way, and opens it again.
+    toggleRightPanel();
+    expect(useApp.getState().panel).toBe("changes");
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBe("changes");
+
+    // Another thread opens the panel, with the view it last showed; the close
+    // a thread was given does not follow the user to the next one.
+    showPanel("changes");
+    setPanel(null);
+    selectThread(b!.id);
+    expect(useApp.getState().panel).toBe("changes");
+    showPanel("pulls");
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBe("pulls");
+
+    // A view with nothing to show falls back to Changes: the Thread tab needs
+    // a thread to peek, and a project without pull requests has no tab for one.
+    showPanel("peek");
+    selectThread(b!.id);
+    expect(useApp.getState().panel).toBe("changes");
+
+    // Opening the thread the Thread tab shows ends the peek, so the panel is
+    // not left showing the thread that is now the one on screen.
+    peekThread(b!.id);
+    expect(useApp.getState().panel).toBe("peek");
+    selectThread(b!.id);
+    expect(useApp.getState().peekId).toBeNull();
+    expect(useApp.getState().panel).toBe("changes");
+
+    // A new thread has nothing beside it to show in the Thread tab.
+    peekThread(a!.id);
+    startNewThread();
+    expect(useApp.getState().peekId).toBeNull();
+    expect(useApp.getState().panel).toBeNull();
+  });
+
+  test("trashing the thread in the Thread tab closes that view, and only that view", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length > 2);
+    const [a, b] = useApp.getState().sessions;
+
+    peekThread(a!.id);
+    expect(useApp.getState().panel).toBe("peek");
+    expect(await trashThread(a!.id)).toBe(true);
+    let s = useApp.getState();
+    expect(s.peekId).toBeNull();
+    expect(s.panel).toBeNull();
+
+    // A pane that is not the Thread tab stays open when the peeked thread goes.
+    peekThread(b!.id);
+    showPanel("changes");
+    expect(await trashThread(b!.id)).toBe(true);
+    s = useApp.getState();
+    expect(s.peekId).toBeNull();
+    expect(s.panel).toBe("changes");
+  });
+
+  test("settling the thread on screen leaves it for a new thread, with an Undo", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
+    const [a, b, c] = useApp.getState().sessions;
+    selectThread(a!.id);
+    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    expect(useApp.getState().panel).toBe("changes");
+
+    settleThread(a!.id);
+    let s = useApp.getState();
+    expect(s.selectedId).toBeNull();
+    expect(s.panel).toBeNull();
+    expect(statusOf(s, a!.id)).toBe("done");
+    // The new thread starts in the folder of the one that was settled.
+    expect(s.projectCwd).toBe(a!.cwd);
+    // One Undo puts the status back, without dragging the screen back with it.
+    const settled = s.toasts.at(-1)!;
+    expect(settled.text).toContain("Settled");
+    expect(settled.action?.label).toBe("Undo");
+    settled.action!.run();
+    expect(statusOf(useApp.getState(), a!.id)).toBe("idle");
+    expect(useApp.getState().selectedId).toBeNull();
+
+    // An agent or the engine settling the thread on screen does not move it.
+    selectThread(b!.id);
+    await setThreadStatus(b!.id, "done");
+    s = useApp.getState();
+    expect(s.selectedId).toBe(b!.id);
+    expect(s.panel).toBe("changes");
+    expect(statusOf(s, b!.id)).toBe("done");
+
+    // Settling a thread in the background with the user's action changes
+    // nothing on screen either.
+    settleThread(c!.id);
+    s = useApp.getState();
+    expect(s.selectedId).toBe(b!.id);
+    expect(s.panel).toBe("changes");
+
+    // Opening a thread that is already settled does not send the user away.
+    selectThread(a!.id);
+    expect(useApp.getState().selectedId).toBe(a!.id);
+    expect(useApp.getState().panel).toBe("changes");
+  });
+
+  test("settling on the board stays on the board, and its Undo restores every status", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [a, b] = useApp.getState().sessions;
+    selectThread(a!.id);
+    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    setView({ kind: "board" });
+    expect(useApp.getState().view.kind).toBe("board");
+
+    settleThreads([a!.id, b!.id]);
+    let s = useApp.getState();
+    expect(s.view.kind).toBe("board");
+    expect(s.selectedId).toBe(a!.id);
+    expect(statusOf(s, a!.id)).toBe("done");
+    expect(statusOf(s, b!.id)).toBe("done");
+    const settled = s.toasts.at(-1)!;
+    expect(settled.text).toBe("Settled 2 threads");
+    settled.action!.run();
+    s = useApp.getState();
+    expect(statusOf(s, a!.id)).not.toBe("done");
+    expect(statusOf(s, b!.id)).not.toBe("done");
+    expect(s.view.kind).toBe("board");
+  });
+
+  test("settling keeps drafts and the turn that is still running", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const a = useApp.getState().sessions[0]!;
+    selectThread(a.id);
+    await until(() => useApp.getState().threads[a.id]?.loaded === true);
+    setDraft(a.id, "half-written reply");
+    setDraft("new", "the next idea");
+    updateThread(a.id, (t) => ({ ...t, running: true }));
+
+    settleThread(a.id);
+    const s = useApp.getState();
+    expect(s.selectedId).toBeNull();
+    expect(s.drafts[a.id]).toBe("half-written reply");
+    expect(s.drafts.new).toBe("the next idea");
+    expect(s.threads[a.id]?.running).toBe(true);
+  });
+
+  test("the new-thread screen has no panel, and starting a thread opens it", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    selectThread(useApp.getState().sessions[0]!.id);
+    startNewThread();
+    expect(useApp.getState().panel).toBeNull();
+
+    await submit("hello there");
+    await until(() => !!selected());
+    expect(useApp.getState().panel).toBe("changes");
   });
 });
 
