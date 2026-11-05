@@ -632,19 +632,29 @@ async fn relay(
     while let Some(message) = incoming.recv().await {
         match message {
             Incoming::Notification { method, params } if method == "session/update" => {
+                // Anything the agent sends means it is alive, even when it
+                // becomes no update of its own (`watchdog`).
                 if lock(&state).muted {
+                    let _ = out.send(Output::Heartbeat);
                     continue;
                 }
                 let Some(update) = params.get("update").cloned() else {
+                    let _ = out.send(Output::Heartbeat);
                     continue;
                 };
                 if super::background::Background::is_task_update(&update) {
                     let effects = lock(&state).background.apply(&update);
+                    let mut spoke = false;
                     if let Some(update) = effects.update {
                         let _ = out.send(Output::Update(update));
+                        spoke = true;
                     }
                     if let Some(activity) = effects.activity {
                         let _ = out.send(Output::Activity(activity));
+                        spoke = true;
+                    }
+                    if !spoke {
+                        let _ = out.send(Output::Heartbeat);
                     }
                     continue;
                 }
@@ -654,12 +664,14 @@ async fn relay(
                     && update.get("sessionUpdate").and_then(Value::as_str)
                         == Some("agent_message_chunk")
                 {
+                    let _ = out.send(Output::Heartbeat);
                     continue;
                 }
                 let update = match serde_json::from_value::<SessionUpdate>(update) {
                     Ok(update) => update,
                     Err(error) => {
                         crate::dbg_log!("harness sent an update RustCode does not know: {error}");
+                        let _ = out.send(Output::Heartbeat);
                         continue;
                     }
                 };
@@ -683,7 +695,10 @@ async fn relay(
                                 SessionUpdate::UserMessageChunk(chunk)
                             }
                             // All of it was RustCode's block: no user message.
-                            None => continue,
+                            None => {
+                                let _ = out.send(Output::Heartbeat);
+                                continue;
+                            }
                         }
                     }
                     SessionUpdate::ConfigOptionUpdate(changed) => {

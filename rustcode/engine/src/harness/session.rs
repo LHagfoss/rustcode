@@ -5,7 +5,7 @@
 use super::rpc::RpcPeer;
 use super::store::{self, HarnessRecord};
 use super::transcript::Transcript;
-use super::{HarnessKind, HarnessModel, ResolvedHarness, acp_child, codex, process};
+use super::{HarnessKind, HarnessModel, ResolvedHarness, acp_child, codex, process, watchdog};
 use agent_client_protocol::schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionConfigOption, SessionUpdate, StopReason, TextContent,
@@ -40,6 +40,9 @@ pub(crate) enum Output {
     Flush(oneshot::Sender<()>),
     /// The harness's background work changed (`harness/background.rs`).
     Activity(super::background::Activity),
+    /// The harness sent something that became no update of its own: any event
+    /// counts as output for the silence deadline (`watchdog`).
+    Heartbeat,
 }
 
 pub(crate) type OutputSender = mpsc::UnboundedSender<Output>;
@@ -265,6 +268,7 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
                     let _ = reply.send(());
                 }
                 Output::Update(_) | Output::Marker(_) | Output::Activity(_) => {}
+                Output::Heartbeat => {}
             }
         }
     });
@@ -347,6 +351,39 @@ pub(crate) fn prompt_text(prompt: &[ContentBlock]) -> String {
     parts.join("\n")
 }
 
+/// How long a silent turn waited, in the words a person reads: "10 minutes",
+/// "1 minute", "45 seconds".
+fn waited(timeout: Duration) -> String {
+    let seconds = timeout.as_secs().max(1);
+    if seconds < 60 {
+        return if seconds == 1 {
+            "1 second".to_owned()
+        } else {
+            format!("{seconds} seconds")
+        };
+    }
+    let minutes = seconds / 60;
+    if minutes == 1 {
+        "1 minute".to_owned()
+    } else {
+        format!("{minutes} minutes")
+    }
+}
+
+/// Count one output of the harness toward the turn's silence deadline
+/// (`watchdog`): its updates, including a thought or a usage report, are
+/// output.
+fn note_output(progress: &watchdog::Progress, output: &Output) {
+    match output {
+        Output::Update(update) | Output::Marker(update) => progress.observe(update),
+        Output::Activity(activity) => progress.activity(activity),
+        Output::Heartbeat => progress.touch(),
+        // The guard a permission request takes counts it; a flush is the
+        // engine's own barrier, not the harness speaking.
+        Output::Permission { .. } | Output::Flush(_) => {}
+    }
+}
+
 pub(crate) struct ExternalSession {
     pub id: String,
     pub harness: ResolvedHarness,
@@ -360,6 +397,12 @@ pub(crate) struct ExternalSession {
     closed: AtomicBool,
     persist: bool,
     orchestrator: StdMutex<Option<crate::orchestration::hub::Launch>>,
+    /// The turn in flight's progress, for the silence deadline.
+    progress: Arc<watchdog::Progress>,
+    /// How long a turn may send nothing with nothing running. `None` reads
+    /// `[harness_defaults].silence_timeout_minutes`; `Some(Duration::ZERO)`
+    /// turns the deadline off (tests, which cannot rely on the user's config).
+    silence: StdMutex<Option<Duration>>,
 }
 
 impl ExternalSession {
@@ -375,10 +418,13 @@ impl ExternalSession {
     ) -> Arc<Self> {
         let (out, mut outputs) = mpsc::unbounded_channel::<Output>();
         let transcript = Arc::new(StdMutex::new(Transcript::new(history)));
+        let progress = watchdog::Progress::new();
         {
             let transcript = Arc::clone(&transcript);
+            let progress = Arc::clone(&progress);
             tokio::spawn(async move {
                 while let Some(output) = outputs.recv().await {
+                    note_output(&progress, &output);
                     match output {
                         Output::Update(update) => {
                             transcript
@@ -389,15 +435,18 @@ impl ExternalSession {
                         }
                         Output::Marker(update) => sink.update(update),
                         Output::Permission { request, reply } => {
+                            let waiting = progress.waiting();
                             let asked = sink.request_permission(request);
                             tokio::spawn(async move {
                                 let _ = reply.send(asked.await);
+                                drop(waiting);
                             });
                         }
                         Output::Flush(reply) => {
                             let _ = reply.send(());
                         }
                         Output::Activity(activity) => sink.activity(activity),
+                        Output::Heartbeat => {}
                     }
                 }
             });
@@ -415,6 +464,8 @@ impl ExternalSession {
             closed: AtomicBool::new(false),
             persist,
             orchestrator: StdMutex::new(None),
+            progress,
+            silence: StdMutex::new(None),
         })
     }
 
@@ -486,6 +537,24 @@ impl ExternalSession {
     #[cfg(test)]
     pub(crate) fn output(&self) -> OutputSender {
         self.out.clone()
+    }
+
+    /// How many permission requests and questions wait on the user (tests).
+    #[cfg(test)]
+    pub(crate) fn waiting_requests(&self) -> usize {
+        self.progress.waiting_count()
+    }
+
+    /// When the harness last counted as output (tests).
+    #[cfg(test)]
+    pub(crate) fn last_output_at(&self) -> Option<tokio::time::Instant> {
+        self.progress.last_output_at()
+    }
+
+    /// Whether a harness is attached (tests).
+    #[cfg(test)]
+    pub(crate) async fn has_adapter(&self) -> bool {
+        self.adapter.lock().await.is_some()
     }
 
     /// The transcript recorded so far (tests).
@@ -566,6 +635,8 @@ impl ExternalSession {
             record.effort = effort.or(record.effort.take());
         });
         let adapter = Arc::new(adapter);
+        // A fresh process: nothing the old one left open still runs.
+        self.progress.reset();
         *slot = Some(Arc::clone(&adapter));
         Ok(adapter)
     }
@@ -814,8 +885,18 @@ impl ExternalSession {
         if let Some(context) = handoff {
             prompt.insert(0, ContentBlock::Text(TextContent::new(context)));
         }
+        // Nothing a finished turn left running still counts against this one.
+        self.progress.begin_turn();
+        let silence = self.silence_timeout();
         let turn = adapter.prompt(prompt);
         tokio::pin!(turn);
+        let silent = async {
+            match silence {
+                Some(timeout) => self.progress.silence(timeout).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::pin!(silent);
         // The turn is polled first, so its request is on the wire before a
         // cancel that is already waiting goes out.
         tokio::select! {
@@ -848,7 +929,57 @@ impl ExternalSession {
                     }
                 }
             }
+            () = &mut silent => {
+                // Unreachable when the deadline is off: that future never resolves.
+                let timeout = silence.unwrap_or(watchdog::DEFAULT_TIMEOUT);
+                crate::logger::operational_event(
+                    "harness.turn_silent",
+                    serde_json::json!({
+                        "session_id": self.id,
+                        "harness": self.harness.id,
+                        "native_session_id": self.record().native_session_id,
+                        "timeout_ms": timeout.as_millis() as u64,
+                    }),
+                );
+                crate::dbg_log!(
+                    "harness {} sent nothing for {}; killing it",
+                    self.harness.id,
+                    waited(timeout)
+                );
+                // The same teardown a harness that ignores a cancel gets: the
+                // process goes, and the next message starts a new one from the
+                // recorded native session.
+                adapter.kill();
+                self.forget_adapter(&adapter).await;
+                Err(format!(
+                    "No output from {} for {}. Send a message to try again.",
+                    self.harness.name,
+                    waited(timeout)
+                ))
+            }
         }
+    }
+
+    /// The turn's silence deadline: what a test picked, else
+    /// `[harness_defaults].silence_timeout_minutes`.
+    fn silence_timeout(&self) -> Option<Duration> {
+        match *self
+            .silence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            Some(picked) => (picked > Duration::ZERO).then_some(picked),
+            None => super::config::silence_timeout(),
+        }
+    }
+
+    /// Pick the silence deadline instead of reading the user's config (tests).
+    #[cfg(test)]
+    pub(crate) fn set_silence_timeout(&self, timeout: Option<Duration>) {
+        *self
+            .silence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(timeout.unwrap_or(Duration::ZERO));
     }
 
     async fn forget_adapter(&self, adapter: &Arc<Adapter>) {
@@ -858,6 +989,8 @@ impl ExternalSession {
             .is_some_and(|current| Arc::ptr_eq(current, adapter))
         {
             *slot = None;
+            // Its tools, permissions and background work went with it.
+            self.progress.reset();
         }
     }
 

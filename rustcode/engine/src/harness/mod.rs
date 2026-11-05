@@ -22,6 +22,7 @@ pub(crate) mod session;
 pub(crate) mod store;
 pub(crate) mod switch;
 pub(crate) mod transcript;
+pub(crate) mod watchdog;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1093,6 +1094,7 @@ mod tests {
             model: Some("sonnet".into()),
             effort: Some("medium".into()),
             onboarded: true,
+            ..Default::default()
         };
         let none = HarnessRequest::default();
         let empty = config::HarnessDefaults::default();
