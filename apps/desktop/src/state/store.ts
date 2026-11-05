@@ -273,6 +273,11 @@ export interface AppState {
   pinned: string[];
   /** Archived threads and when, kept in app storage; they leave the list until shown. */
   archived: Record<string, number>;
+  /**
+   * Threads the user sent a message to themselves, and when. A delegated thread
+   * here is the user's own and keeps its place in the sidebar (state/topLevel.ts).
+   */
+  messaged: Record<string, number>;
   /** A sent message being edited in the composer: sending rewinds the thread to it first. */
   editing: Record<string, { itemId: string; userIndex: number; original: string }>;
   /**
@@ -392,6 +397,7 @@ const STORAGE = {
   smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
   archived: "rustcode.archived",
+  messaged: "rustcode.messaged",
   project: "rustcode.projectCwd",
   theme: "rustcode.theme",
   themeActive: "rustcode.themeActive",
@@ -491,6 +497,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   ...batcher.attach(api),
   pinned: storedJson<string[]>(STORAGE.pinned, []),
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
+  messaged: storedJson<Record<string, number>>(STORAGE.messaged, {}),
   editing: {},
   queuedEdit: null,
   confirm: null,
@@ -1201,7 +1208,18 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
   );
 }
 
-/** Mark a thread unread again: its row says Done until you open it. */
+/**
+ * The user sent `id` a message themselves: a delegated thread is their own now
+ * and keeps its place in the sidebar (state/topLevel.ts). Recorded once, and
+ * only for a prompt an agent did not ask for (`runPrompt`).
+ */
+export function markMessaged(id: string) {
+  if (get().messaged[id] !== undefined) return;
+  const messaged = { ...get().messaged, [id]: Date.now() };
+  set({ messaged });
+  store(STORAGE.messaged, JSON.stringify(messaged));
+}
+
 /** Take a thread out of the list until `at`, or bring it back now with `null`. */
 export function snoozeThread(id: string, at: number | null) {
   const { [id]: _, ...rest } = get().snoozed;
@@ -1411,6 +1429,8 @@ export interface NewSession {
   effort?: string | null;
   /** Create a worktree first and run the thread in it (docs/orchestrator.md). */
   worktree?: { repo: string; branch?: string; title?: string };
+  /** The thread an agent starts this one from (`state/host.ts` `newThread`). */
+  parent?: string;
   title?: string;
   select?: boolean;
   /** The setup this session finishes (state/setup.ts): it is listed and the setup cleared together. */
@@ -1435,6 +1455,9 @@ export async function createSession(options: NewSession): Promise<string> {
     if (options.worktree.title) w.title = options.worktree.title;
     meta.worktree = w;
   }
+  // The engine keeps this in the thread's own metadata, so pruning the link
+  // book does not make the child a top-level thread (`state/topLevel.ts`).
+  if (options.parent) meta.parent = options.parent;
   if (Object.keys(meta).length) params._meta = { rustcode: meta };
   const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
   const id = str(result.sessionId);
@@ -2175,10 +2198,14 @@ export async function runPrompt(
   id: string,
   text: string,
   extras: ComposeExtras = emptyExtras,
-  options: { fromView?: boolean; link?: string; wake?: boolean } = {},
+  options: { fromView?: boolean; link?: string; wake?: boolean; automatic?: boolean } = {},
 ): Promise<void> {
   const conn = engine();
   const thread = get().threads[id];
+  // A prompt no agent asked for is the user's: the thread is theirs now, even
+  // when it was started by an agent (state/topLevel.ts). A resume after a
+  // restart is not a message the user sent.
+  if (!options.link && !options.wake && !options.automatic) markMessaged(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can
   // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
   // message typed meanwhile, and starts when this turn ends.
@@ -3651,7 +3678,7 @@ async function resumeInterrupted(ids: string[]): Promise<void> {
     for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) await new Promise((r) => setTimeout(r, 100));
     const thread = get().threads[id];
     if (!thread?.loaded || thread.running) continue;
-    void runPrompt(id, RESUME_TEXT);
+    void runPrompt(id, RESUME_TEXT, undefined, { automatic: true });
   }
   if (resumable.length) {
     toast(

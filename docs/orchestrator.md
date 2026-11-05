@@ -216,6 +216,24 @@ does not move it.
   children it already started as they were — the grant was made when they
   started, as with every other grant in the link book.
 
+### A delegated thread's place in the sidebar
+
+A thread an agent started is never a stray top-level row. The parent is kept in
+the child's own `metadata.json` (`parent` in `rustcode-session`, written at
+`session/new` from `_meta.rustcode.parent`), so pruning the link book's oldest
+finished links (`prune` in `state/orchestration.ts`) cannot forget it.
+`topLevel` (`apps/desktop/src/state/topLevel.ts`) picks one of three places:
+*nested* under a parent that is in the list; *settled*, with no row of its own,
+when the parent is gone, filtered out or in another project and the child is
+finished; or *shown* where it would be anyway. The user's own actions win: a
+pinned child stays in Pinned, and one the user sent a message to is a row of its
+own. A child that is working or waits on the user is never hidden, whatever
+became of its parent. Search still finds all of them, and opening one does not
+move it. Threads started before the record existed are classified once, before
+the first session list, from the first message's `From thread “…” (agent):`
+heading, with a surviving `thread_links` row for the parent's id when there is
+one (`rustcode/engine/src/thread_parent.rs`).
+
 ## Waking a parent thread
 
 Built in the app (`apps/desktop/src/state/host.ts`, rules in

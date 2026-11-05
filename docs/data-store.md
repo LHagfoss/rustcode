@@ -117,6 +117,14 @@ is never overwritten and a refreshed summary is never added twice.
 `rustcode usage` and `rustcode data` run the same pass if they are the first
 thing to open the file.
 
+A second one-time pass runs at engine start, before the first session list
+is read (`thread_parent::ensure_ready`): it records the parent of threads
+delegated before that record existed, reading each thread's first
+`From thread “…” (agent):` heading (a byte scan; only a match is parsed) and
+writing `metadata.json`'s `parent`, then marks itself done with
+`store_meta.thread_parents_version`. It changes no transcript and calls no
+model; after the first run it reads that one row and returns.
+
 The backfill cannot invent per-turn history for threads that ran before this
 release: an external thread gets one summary turn, a built-in thread gets a
 thread row and no turns.

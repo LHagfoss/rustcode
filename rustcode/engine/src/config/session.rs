@@ -739,6 +739,23 @@ pub fn load_session_compaction(session_id: &str) -> Option<rustcode_session::Ses
     store()?.load_session_compaction(session_id)
 }
 
+/// Record the thread an agent started this one from. Sessions without a valid
+/// ID are skipped, as every other session-metadata write does.
+pub fn save_session_parent(session_id: &str, parent: &rustcode_session::SessionParent) {
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_session_parent(session_id, parent.clone())
+    {
+        crate::dbg_log!("failed to record the parent of session {session_id}: {error}");
+    }
+}
+
+pub fn load_session_parent(session_id: &str) -> Option<rustcode_session::SessionParent> {
+    store()?.load_session_parent(session_id)
+}
+
 pub fn load_session_model(session_id: &str) -> Option<rustcode_session::SessionModel> {
     store()?.load_session_model(session_id)
 }
@@ -764,6 +781,14 @@ pub fn save_session_workspace(
 
 pub fn list_sessions() -> Vec<SessionMeta> {
     store().map_or_else(Vec::new, |session_store| session_store.list_sessions())
+}
+
+/// Every transcript file in the store, in a stable order, without reading them
+/// (`SessionStore::session_history_paths`).
+pub fn session_history_paths() -> Vec<PathBuf> {
+    store().map_or_else(Vec::new, |session_store| {
+        session_store.session_history_paths()
+    })
 }
 
 pub fn archive_live_history() {}

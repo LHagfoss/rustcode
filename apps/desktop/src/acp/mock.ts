@@ -34,6 +34,8 @@ interface MockThread {
   worktree?: MockWorktree;
   status?: string;
   pinned?: boolean;
+  /** The thread an agent started this one from, as the engine records it. */
+  parent?: { id?: string; title?: string };
   checkpoints: MockCheckpoint[];
 }
 
@@ -247,6 +249,82 @@ function update(sessionId: string, body: JsonObject): JsonObject {
 }
 
 const text = (t: string) => ({ type: "text", text: t });
+
+/** A recorded parent as `session/list` carries it in `_meta.rustcode.parent`. */
+const mockParent = (parent: { id?: string; title?: string }): Json => ({
+  ...(parent.id ? { sessionId: parent.id } : {}),
+  ...(parent.title ? { title: parent.title } : {}),
+});
+
+/**
+ * `?scenario=delegated`: a parent with a child whose link is long pruned, and a
+ * thread an older release started whose parent is gone. The child is nested
+ * under its parent; the orphan has no row of its own and sits in Settled
+ * (`state/topLevel.ts`).
+ */
+function seedDelegatedThreads(): MockThread[] {
+  const turn = (id: string, ask: string, say: string): JsonObject[] => [
+    update(id, { sessionUpdate: "user_message_chunk", content: text(ask) }),
+    update(id, { sessionUpdate: "agent_message_chunk", content: text(say) }),
+  ];
+  return [
+    {
+      id: "mock-parent",
+      cwd: "/Users/you/code/rustcode",
+      title: "Update the desktop sidebar",
+      updatedAt: minutes(2),
+      harness: "rustcode",
+      model: "chatgpt/gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: turn("mock-parent", "Make the sidebar calmer.", "Done: fewer rows, same information."),
+    },
+    {
+      id: "mock-child",
+      cwd: "/Users/you/code/rustcode",
+      title: "Research: agents querying the orchestrator",
+      updatedAt: minutes(4),
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "low",
+      parent: { id: "mock-parent", title: "Update the desktop sidebar" },
+      checkpoints: [],
+      history: turn(
+        "mock-child",
+        "From thread “Update the desktop sidebar” (agent):\n\nRead how agents query the orchestrator.",
+        "Agents reach the data store through the app's rules.",
+      ),
+    },
+    {
+      id: "mock-orphan",
+      cwd: "/Users/you/code/rustcode",
+      title: "Review fixes: chat noise + sidebar children",
+      updatedAt: minutes(3),
+      harness: "pi",
+      model: "deepseek/flash",
+      effort: "high",
+      // Only the title survived: the parent thread and its link are gone.
+      parent: { title: "my orchestrator app im working on" },
+      checkpoints: [],
+      history: turn(
+        "mock-orphan",
+        "From thread “my orchestrator app im working on” (agent):\n\nFix the reported review items.",
+        "Fixed: the notices fold into one line.",
+      ),
+    },
+    {
+      id: "mock-plain",
+      cwd: "/Users/you/code/rustcode",
+      title: "Pick a name for the new command",
+      updatedAt: minutes(8),
+      harness: "rustcode",
+      model: "chatgpt/gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: turn("mock-plain", "What should the new command be called?", "`rustcode data query`."),
+    },
+  ];
+}
 
 function seedThreads(): MockThread[] {
   const a = "mock-thread-1";
@@ -605,7 +683,8 @@ export class MockEngine {
     private readonly options: MockOptions = {},
   ) {
     const scenario = options.scenario ?? "default";
-    this.threads = scenario === "default" ? seedThreads() : [];
+    this.threads =
+      scenario === "default" ? seedThreads() : scenario === "delegated" ? seedDelegatedThreads() : [];
     this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
   }
 
@@ -722,6 +801,7 @@ export class MockEngine {
                   ...(t.account ? { account: t.account } : {}),
                   ...(t.status ? { status: t.status } : {}),
                   ...(t.pinned ? { pinned: true } : {}),
+                  ...(t.parent ? { parent: mockParent(t.parent) } : {}),
                   ...(t.worktree ? { worktree: t.worktree as unknown as Json } : {}),
                 },
               },
@@ -741,6 +821,10 @@ export class MockEngine {
           const repo = str(wanted.repo) ?? str(params.cwd) ?? "/";
           worktree = this.makeWorktree(repo, str(wanted.branch), str(wanted.title));
         }
+        // The thread an agent starts this one from: like the engine, keep it so
+        // pruning the link book cannot make the child a top-level thread.
+        const parent = str(meta?.parent);
+        const parentTitle = this.threads.find((t) => t.id === parent)?.title;
         const thread: MockThread = {
           id: `mock-${Date.now().toString(36)}-${++this.counter}`,
           cwd: worktree?.path ?? str(params.cwd) ?? "/",
@@ -749,6 +833,7 @@ export class MockEngine {
           updatedAt: Date.now(),
           harness,
           ...(account ? { account } : {}),
+          ...(parent ? { parent: { id: parent, title: parentTitle } } : {}),
           model:
             str(meta?.model) ??
             h.last?.model ??

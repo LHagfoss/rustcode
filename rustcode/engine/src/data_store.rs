@@ -1310,6 +1310,36 @@ pub fn warm() {
     });
 }
 
+/// One `store_meta` value, for a pass that must remember it ran once
+/// (`docs/data-store.md` › Schema).
+pub fn meta(key: &str) -> Option<String> {
+    let path = data_path()?;
+    let connection = open(&path).ok()?;
+    connection
+        .query_row(
+            "SELECT value FROM store_meta WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+}
+
+/// Remember that a one-time pass ran (`meta`).
+pub fn set_meta(key: &str, value: &str) -> Result<(), String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    let connection = open(&path)?;
+    connection
+        .execute(
+            "INSERT INTO store_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 // ------------------------------------------------------------------ reads
 
 /// Opens the store read-only with the guards every query runs under: no
@@ -1463,6 +1493,15 @@ fn single_statement(sql: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_one_time_pass_remembers_that_it_ran() {
+        assert_eq!(meta("test_one_time_pass"), None);
+        set_meta("test_one_time_pass", "1").unwrap();
+        assert_eq!(meta("test_one_time_pass").as_deref(), Some("1"));
+        set_meta("test_one_time_pass", "2").unwrap();
+        assert_eq!(meta("test_one_time_pass").as_deref(), Some("2"));
+    }
 
     fn turn(thread: &str, started: &str, tokens: (i64, i64), status: &str) -> TurnRow {
         TurnRow {
