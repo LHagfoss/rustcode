@@ -98,7 +98,7 @@ export function queuedAnnouncement(view: QueueView, editing: boolean): string {
   const what = count === 1 ? "1 message" : `${count} messages`;
   const parts: string[] = [];
   if (count) parts.push(`${what} ${view.held ? "held" : "queued"}`);
-  if (view.wake) parts.push("a wake-up waiting");
+  if (view.wake) parts.push(`a wake-up waiting: ${view.wake}`);
   if (editing) parts.push("Editing a queued message in the composer");
   if (!parts.length) return "The queue is empty";
   return parts.join(" · ");

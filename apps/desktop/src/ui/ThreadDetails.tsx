@@ -98,6 +98,7 @@ function LinkRow({
   id,
   now,
   relationship,
+  count = 1,
 }: {
   link: Link;
   /** The thread the row opens: the other end of the link. */
@@ -105,6 +106,8 @@ function LinkRow({
   now: number;
   /** `Thread it started`, `Thread that started this one`. */
   relationship: string;
+  /** How many links this one row stands for: more than one message to the same thread. */
+  count?: number;
 }) {
   const state = useApp((s) => stateOf(s, link));
   const opened = useApp((s) => s.sessions.find((x) => x.id === id));
@@ -122,7 +125,9 @@ function LinkRow({
   const elapsedMs =
     started && end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
   const elapsed = elapsedMs === undefined ? undefined : formatDuration(elapsedMs);
-  const meta = [harnessName, modelName(opened?.model)].filter(Boolean).join(" · ");
+  const meta = [harnessName, modelName(opened?.model), count > 1 ? `${count} messages` : undefined]
+    .filter(Boolean)
+    .join(" · ");
   const status = LINK_LABEL[state];
   // A row with nowhere to open exposes its relation and prompt in its accessible name instead.
   const description = openable
@@ -371,8 +376,15 @@ export function ThreadDetails() {
                 <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
                   Started · {lineage.started.length}
                 </div>
-                {lineage.started.map((l) => (
-                  <LinkRow key={l.id} link={l} id={l.target} now={now} relationship="Thread it started" />
+                {lineage.started.map((group) => (
+                  <LinkRow
+                    key={group.links[0]!.id}
+                    link={group.link}
+                    id={group.link.target}
+                    now={now}
+                    relationship="Thread it started"
+                    count={group.links.length}
+                  />
                 ))}
               </>
             )}
@@ -381,8 +393,15 @@ export function ThreadDetails() {
                 <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
                   Messaged · {lineage.messaged.length}
                 </div>
-                {lineage.messaged.map((l) => (
-                  <LinkRow key={l.id} link={l} id={l.target} now={now} relationship="Thread it messaged" />
+                {lineage.messaged.map((group) => (
+                  <LinkRow
+                    key={group.links[0]!.id}
+                    link={group.link}
+                    id={group.link.target}
+                    now={now}
+                    relationship="Thread it messaged"
+                    count={group.links.length}
+                  />
                 ))}
               </>
             )}

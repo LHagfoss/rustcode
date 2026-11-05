@@ -123,6 +123,17 @@ export interface QueuedPrompt {
   fromView?: boolean;
   /** The app woke the thread for its children: it runs as a wake turn when its turn comes. */
   wake?: boolean;
+  /**
+   * The links a queued wake reports, so a newer wake can be folded into it: a busy parent runs one
+   * wake turn for everything that finished (state/host.ts `sendWake`).
+   */
+  wakeLinks?: string[];
+  /**
+   * The links that row named as waiting on the user, of `wakeLinks`. What a row promised decides what
+   * may be marked when it runs (state/orchestration.ts `markDelivered`): a child reported as asking
+   * that finished meanwhile is still owed its finish, and a question is its own notice.
+   */
+  wakeAsking?: string[];
   /** Delivered for another thread (orchestration link id): its answer goes back there. */
   link?: string;
 }
@@ -1042,6 +1053,8 @@ export function agentStepLabel(item: ToolItem): string {
  * The thread each `start_session` call started, by call id. A call that has not
  * answered yet is matched by the prompt it asked for: the link exists before
  * the answer does, so its row knows the thread while the thread still starts.
+ * One link is one row: a start row takes the link that started that thread (a
+ * follow-up message to it is not one), and never a link another call already shows.
  */
 export function startedLinks(items: readonly TranscriptItem[], links: readonly Link[]): Map<string, Link> {
   const out = new Map<string, Link>();
@@ -1052,7 +1065,10 @@ export function startedLinks(items: readonly TranscriptItem[], links: readonly L
   // The calls that answered first, so a prompt match cannot take a link whose call already names it.
   for (const item of starts) {
     const target = sessionIdOf(item.output);
-    const link = target === undefined ? undefined : links.find((l) => l.target === target);
+    if (target === undefined) continue;
+    const link =
+      links.find((l) => l.target === target && l.started && !claimed.has(l.id)) ??
+      links.find((l) => l.target === target && !claimed.has(l.id));
     if (!link) continue;
     out.set(item.id, link);
     claimed.add(link.id);

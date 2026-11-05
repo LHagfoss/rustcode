@@ -94,7 +94,18 @@ describe("what the live region says", () => {
 
   test("a wake is announced as waiting, and an edit says where it is", () => {
     const view = queueView(thread([item("w", { text: "1 child finished", wake: true })]));
-    expect(queuedAnnouncement(view, false)).toBe("a wake-up waiting");
+    expect(queuedAnnouncement(view, false)).toBe("a wake-up waiting: 1 child finished");
+    // A wake folded into an earlier one keeps its row but not its line: the new summary is announced.
+    const folded = queueView(
+      thread([
+        item("w", {
+          text: "2 children finished\n\nFinished:\n- link_id a/b · done",
+          wake: true,
+          wakeLinks: ["a/b", "a/c"],
+        }),
+      ]),
+    );
+    expect(queuedAnnouncement(folded, false)).toBe("a wake-up waiting: 2 children finished");
     expect(queuedAnnouncement(queueView(thread([item("a")])), true)).toBe(
       "1 message queued · Editing a queued message in the composer",
     );

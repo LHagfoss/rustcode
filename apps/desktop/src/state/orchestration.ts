@@ -9,7 +9,7 @@ import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
-import { withWakeMark } from "./thread";
+import { type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
 export const CAPABILITY_VERSION = 5;
@@ -1079,6 +1079,12 @@ export interface WakeContext {
   /** The links each parent is blocked on in `wait_session` right now. */
   waiting: Readonly<Record<string, readonly string[]>>;
   /**
+   * The links each parent's queued wake rows already carry, by parent: they are reported when that
+   * row's turn starts (`markDelivered`), so no second wake may report them first. A queue is the
+   * app's memory only, so a row that is lost to a restart leaves its links unmarked and due again.
+   */
+  queued?: Readonly<Record<string, readonly string[]>>;
+  /**
    * The threads these rules need, by id: every link's orchestrator and every
    * link's target, with the title a wake message names and whether a turn runs.
    * A thread that is missing is gone.
@@ -1107,13 +1113,19 @@ export function quietTree(book: LinkBook, ctx: WakeContext, id: string): boolean
 /**
  * A child result `id` has not been told about yet: a wake for it is due or
  * about to be. Only `done` and `failed` wake a parent, so an interrupted or
- * stopped child is not a reason to wait: nothing will ever report it.
+ * stopped child is not a reason to wait: nothing will ever report it. A result
+ * a newer link to the same thread replaced is not owed either — the newer answer
+ * is — which is what lets the tree settle without marking the old one for good:
+ * should that successor be stopped or interrupted, this one is owed again.
  */
 export function pendingWakeUnder(book: LinkBook, ctx: WakeContext, id: string): boolean {
   return book.links.some((link) => {
     if (link.orchestrator !== id) return false;
     const state = stateOfLink(link, ctx);
-    if (state === "done" || state === "failed") return link.notifiedAt === undefined;
+    if (state === "done" || state === "failed") {
+      if (link.notifiedAt !== undefined) return false;
+      return !replaced(link, book, ctx);
+    }
     if (state !== "needs_user") return false;
     const request = ctx.pending[link.id];
     return request !== undefined && link.askedRequest !== request;
@@ -1237,18 +1249,44 @@ export function unheard(book: LinkBook, marks: readonly HeardMark[]): LinkBook {
  * unreported links count: one the parent already heard about leaves nothing to fix.
  */
 export function supersededLinks(book: LinkBook, ctx: WakeContext): Link[] {
-  const newest = new Map<string, number>();
-  const key = (link: Link) => `${link.orchestrator}\n${link.target}`;
-  for (const link of book.links) {
-    const at = newest.get(key(link)) ?? 0;
-    if (link.createdAt > at) newest.set(key(link), link.createdAt);
-  }
+  const replaced = replacedIds(book, ctx);
   return book.links.filter((link) => {
     const state = stateOfLink(link, ctx);
     if (state !== "done" && state !== "failed") return false;
     if (link.notifiedAt !== undefined) return false;
-    return (newest.get(key(link)) ?? 0) > link.createdAt;
+    return replaced.has(link.id);
   });
+}
+
+/** A link a restart or the user's Stop ended: it never answered anything. */
+const stoppedLink = (link: Link, ctx: WakeContext) => {
+  const state = stateOfLink(link, ctx);
+  return state === "cancelled" || state === "interrupted";
+};
+
+/**
+ * Whether a newer link to the same thread replaced `link`: the parent messaged that thread since, so
+ * this answer is out of date and the newer turn's is the one it needs.
+ *
+ * A successor that was stopped never answered, so it replaces nothing: the older answer is still the
+ * last real one. Nothing is written down for a replaced link either (`wakeTick` leaves it unmarked) —
+ * the successor can itself be stopped or interrupted by a restart, and then the older answer is owed
+ * again, which only a rule read afresh can tell.
+ */
+function replaced(link: Link, book: LinkBook, ctx: WakeContext): boolean {
+  if (stoppedLink(link, ctx)) return false;
+  return book.links.some(
+    (other) =>
+      other.orchestrator === link.orchestrator &&
+      other.target === link.target &&
+      other.createdAt > link.createdAt &&
+      !stoppedLink(other, ctx),
+  );
+}
+
+/** The ids of the links a newer one to the same thread replaced, heard about or not ({@link replaced}). */
+function replacedIds(book: LinkBook, ctx: WakeContext): Set<string> {
+  return new Set(book.links.filter((link) => replaced(link, book, ctx)).map((link) => link.id));
 }
 
 /**
@@ -1265,6 +1303,10 @@ export function supersededLinks(book: LinkBook, ctx: WakeContext): Link[] {
  * Parallel children are coalesced: while any of a parent's links still runs, a
  * settled one waits up to `WAKE_COALESCE_MS` for its siblings; with none active
  * the message goes at once.
+ *
+ * A link a queued wake row already carries is left to that row (`ctx.queued`): it
+ * is reported when the row's turn starts, so a second wake would be the same
+ * result twice.
  */
 export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
   const byParent = new Map<string, Link[]>();
@@ -1279,17 +1321,20 @@ export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
     const here = ctx.threads[parent];
     if (!here) continue;
     const waiting = new Set(ctx.waiting[parent] ?? []);
+    const carried = new Set(ctx.queued?.[parent] ?? []);
     const active = links.some((l) => isActive(stateOfLink(l, ctx)));
     const settled = links.filter((link) => {
       const state = stateOfLink(link, ctx);
       if (state !== "done" && state !== "failed") return false;
       if (link.notifiedAt !== undefined || waiting.has(link.id)) return false;
+      if (carried.has(link.id)) return false;
       if (stale.has(link.id)) return false;
       if (!quietTree(book, ctx, link.target)) return false;
       return !active || ctx.now - (link.settledAt ?? 0) >= WAKE_COALESCE_MS;
     });
     const asking = links.filter((link) => {
       if (stateOfLink(link, ctx) !== "needs_user" || waiting.has(link.id)) return false;
+      if (carried.has(link.id)) return false;
       const request = ctx.pending[link.id];
       return request !== undefined && link.askedRequest !== request;
     });
@@ -1301,16 +1346,51 @@ export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
 }
 
 /**
- * The book after a wake has been delivered: each reported link is marked heard
- * (and, for a question, with the request it was about) so no restart or tick
- * reports it twice.
+ * What a wake row promised, by the two things a wake can say: a child finished, or a child waits on
+ * the user. The row's own words, so what it may mark is what it reported — not what its links happen
+ * to be when it finally runs.
  */
-export function markWoken(book: LinkBook, wake: Wake, ctx: WakeContext, now: number): LinkBook {
-  const settled = wake.settled.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), book);
-  return wake.asking.reduce(
-    (acc, l) => updateLink(acc, l.id, { askedRequest: ctx.pending[l.id] ?? l.askedRequest }),
-    settled,
-  );
+export interface WakeReport {
+  /** Links the row named as finished (or failed). */
+  settled: Iterable<string>;
+  /** Links the row named as waiting on the user. */
+  asking: Iterable<string>;
+}
+
+/**
+ * The book after a queued wake row's turn starts: the links it reported are heard now, and nothing
+ * else is. This is where a queued wake marks, not where the row is written: the queue is the app's
+ * memory only, so a mark written there would outlive the row and the notice with it (`host.ts`
+ * `sendWake`, `store.ts` `runPrompt`).
+ *
+ * Each link is marked by what the row said about it. A child the row named as *asking* that finished
+ * meanwhile is left unmarked: its finish is still owed, and the ordinary wake reports it once the row
+ * has run (a question is its own notice, and a finish is another). A child the row named as finished
+ * that is still running, or that now asks something, is left unmarked for the same reason the other
+ * way round. The call is idempotent, so a row delivered twice cannot double-mark.
+ */
+export function markDelivered(book: LinkBook, reported: WakeReport, ctx: WakeContext, now: number): LinkBook {
+  const settled = new Set(reported.settled);
+  const asking = new Set(reported.asking);
+  let changed = false;
+  const links = book.links.map((link) => {
+    const state = stateOfLink(link, ctx);
+    if (settled.has(link.id)) {
+      // What it was told: this child finished. Only a finish can be marked as one.
+      if (state !== "done" && state !== "failed") return link;
+      if (link.notifiedAt !== undefined) return link;
+      changed = true;
+      return { ...link, notifiedAt: now };
+    }
+    if (!asking.has(link.id)) return link;
+    // What it was told: this child waits on the user. A finish it reached since is a separate notice.
+    if (state !== "needs_user") return link;
+    const request = ctx.pending[link.id];
+    if (request === undefined || link.askedRequest === request) return link;
+    changed = true;
+    return { ...link, askedRequest: request };
+  });
+  return changed ? { ...book, links } : book;
 }
 
 /** Settled links whose parent thread is gone: nothing will ever deliver them. */
@@ -1330,16 +1410,158 @@ export function orphanedLinks(book: LinkBook, ctx: WakeContext): Link[] {
 export function nextWakeAt(book: LinkBook, ctx: WakeContext): number | null {
   let next: number | null = null;
   const stale = new Set(supersededLinks(book, ctx).map((l) => l.id));
+  const carried = new Set(Object.values(ctx.queued ?? {}).flat());
   for (const link of book.links) {
     const state = stateOfLink(link, ctx);
     if (state !== "done" && state !== "failed") continue;
-    if (link.notifiedAt !== undefined || stale.has(link.id)) continue;
+    if (link.notifiedAt !== undefined || stale.has(link.id) || carried.has(link.id)) continue;
     if (!quietTree(book, ctx, link.target)) continue;
     const at = (link.settledAt ?? 0) + WAKE_COALESCE_MS;
     if (at <= ctx.now) continue;
     if (next === null || at < next) next = at;
   }
   return next;
+}
+
+/** The link ids a wake reports: what a queued wake keeps, so a newer one can be folded into it. */
+export function wakeIds(wake: Wake): string[] {
+  return [...wake.settled, ...wake.asking].map((link) => link.id);
+}
+
+/** The ids a wake names as waiting on the user, of {@link wakeIds}: what the row said it was. */
+export function askingIds(wake: Wake): string[] {
+  return wake.asking.map((link) => link.id);
+}
+
+/**
+ * The wake those links make now, with each link's state as shown. It is how a wake waiting for a busy
+ * parent is rebuilt around a newer one: one turn reports everything, not a queue of turns each saying
+ * "1 child finished".
+ *
+ * It follows `wakesDue`'s rules, so a rebuild never restates what that rule withdrew: a settled link a
+ * newer one to the same thread replaced is out of date, and one the parent is blocked on in
+ * `wait_session` is already in that call's answer. The two rules it leaves out are the ones about
+ * timing and the mark: the coalescing window (this row already waited for it), and `notifiedAt` — a
+ * queued wake's links are marked when its turn starts, not when the row is written. A link still
+ * marked new is judged like `wakesDue` does, though: a settled child whose own subtree still works is
+ * not finished for its parent yet. A link the row being rebuilt already carries (`promised`), or one
+ * delivered before (`notifiedAt`), keeps its line whatever its thread does meanwhile, or the notice
+ * the parent is waiting for would vanish with nothing else to deliver it.
+ *
+ * Null when nothing is left to report.
+ */
+export function wakeFor(
+  parent: string,
+  parentTitle: string,
+  ids: Iterable<string>,
+  book: LinkBook,
+  ctx: WakeContext,
+  promised?: ReadonlySet<string>,
+): Wake | null {
+  const want = new Set(ids);
+  const replaced = replacedIds(book, ctx);
+  const waiting = new Set(ctx.waiting[parent] ?? []);
+  const settled: Link[] = [];
+  const asking: Link[] = [];
+  for (const link of book.links) {
+    if (link.orchestrator !== parent || !want.has(link.id)) continue;
+    if (waiting.has(link.id)) continue;
+    const state = stateOfLink(link, ctx);
+    if (state === "done" || state === "failed") {
+      if (replaced.has(link.id)) continue;
+      // Reported already, or promised by the row being rebuilt: its line stands whatever its thread
+      // does meanwhile, because nothing else would deliver that answer.
+      const told = link.notifiedAt !== undefined || !!promised?.has(link.id);
+      if (!told && !quietTree(book, ctx, link.target)) continue;
+      settled.push(link);
+    } else if (state === "needs_user") {
+      asking.push(link);
+    }
+  }
+  return settled.length || asking.length ? { parent, parentTitle, settled, asking } : null;
+}
+
+/**
+ * A queued wake with a newer one folded into it: one wake turn for everything that finished, instead
+ * of a queue of turns each saying "1 child finished". Its text is rebuilt from the links the waiting
+ * row already carried plus the new wake's ({@link wakeFor}), so a child that asked and then finished
+ * reads once, as finished. The row keeps its place among the user's own messages; when nothing is
+ * left to report it is returned as it is.
+ *
+ * Null when the row cannot be rebuilt faithfully: one of the links it already reports is gone from
+ * the book (pruned after many finished children), so rewriting its text would drop a report the parent
+ * is still waiting for, or the row names no links at all (written by a build before the row kept them,
+ * or by a preview). `queueWake` then queues the new wake beside it instead, and the old row is left as
+ * it was.
+ */
+export function foldWake(
+  waiting: QueuedPrompt,
+  wake: Wake,
+  book: LinkBook,
+  ctx: WakeContext,
+  now: number,
+): QueuedPrompt | null {
+  // No `wakeLinks`: what it reports cannot be read back, so its text must not be rewritten.
+  if (!waiting.wakeLinks?.length) return null;
+  const carried = waiting.wakeLinks;
+  const known = new Set(
+    book.links.filter((link) => link.orchestrator === wake.parent).map((link) => link.id),
+  );
+  if (carried.some((id) => !known.has(id))) return null;
+  const merged = wakeFor(
+    wake.parent,
+    wake.parentTitle,
+    [...carried, ...wakeIds(wake)],
+    book,
+    ctx,
+    new Set(carried),
+  );
+  if (!merged) return waiting;
+  return {
+    ...waiting,
+    text: wakeMessage(merged, now),
+    wakeLinks: wakeIds(merged),
+    wakeAsking: askingIds(merged),
+  };
+}
+
+/**
+ * A busy parent's queue with this wake in it: folded into the newest wake row that can take it, so one
+ * turn reports everything that finished, else a row of its own. The user's own messages keep their
+ * places, and the row keeps the id it was queued with, so nothing a reader is looking at moves.
+ *
+ * Nothing is marked here: the row carries its links and the marks are written when its turn starts
+ * (`markDelivered`). The queue lives in memory, so a mark written now would survive a restart that the
+ * row does not, and the wake would be lost.
+ */
+export function queueWake(
+  queue: readonly QueuedPrompt[],
+  wake: Wake,
+  book: LinkBook,
+  ctx: WakeContext,
+  now: number,
+  id: string,
+): QueuedPrompt[] {
+  const rows = [...queue];
+  for (let at = rows.length - 1; at >= 0; at--) {
+    const row = rows[at]!;
+    if (!row.wake) continue;
+    const folded = foldWake(row, wake, book, ctx, now);
+    // A row whose own reports the book no longer holds: leave it whole and try the one before it.
+    if (!folded) continue;
+    rows[at] = folded;
+    return rows;
+  }
+  return [
+    ...rows,
+    {
+      id,
+      text: wakeMessage(wake, now),
+      wake: true,
+      wakeLinks: wakeIds(wake),
+      wakeAsking: askingIds(wake),
+    },
+  ];
 }
 
 /** A wake's compact first line, and the transcript's: "2 children finished · 1 needs you". */

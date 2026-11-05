@@ -26,6 +26,11 @@ export interface MockOptions {
    * Named accounts stay readable, as their own rows.
    */
   claudeUsage?: "expired" | "refused" | "forbidden" | "denied";
+  /**
+   * The link book the engine keeps: data on disk, so it outlives a restart of the engine (a new
+   * `MockEngine` on the same transport). Seeded here when a test starts from a stored book.
+   */
+  links?: JsonObject;
 }
 
 interface MockThread {
@@ -679,8 +684,13 @@ export class MockEngine {
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
   private presence = true;
   private removedWorktrees = new Set<string>();
-  /** The link book the app keeps in the data store: none until it saves one. */
-  private linkBook: JsonObject | undefined;
+  /** The link book the app keeps in the data store: none until it saves one, and kept in `options` as the engine's disk does. */
+  private get linkBook(): JsonObject | undefined {
+    return this.options.links;
+  }
+  private set linkBook(book: JsonObject | undefined) {
+    this.options.links = book;
+  }
   /** The engine's themes: the app's built-ins plus one user theme, as `_rustcode/themes` lists them. */
   private themes: JsonObject[] = [
     ...BUILTIN_THEMES.map((t) => ({ ...t, tokens: { ...t.tokens } }) as unknown as JsonObject),

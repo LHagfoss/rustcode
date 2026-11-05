@@ -18,6 +18,7 @@ import { accountLabelOf, accountNameOf, accountSignedOut, childAccountFor } from
 import {
   activeDescendants,
   activityOf,
+  askingIds,
   capped,
   checkManage,
   checkMessage,
@@ -48,7 +49,7 @@ import {
   MAX_ACTIVE_LINKS,
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
-  markWoken,
+  markDelivered,
   mergeBooks,
   nextId,
   nextWakeAt,
@@ -59,19 +60,21 @@ import {
   parseCall,
   projectOf,
   prune,
+  queueWake,
   quietTree,
   type RuleThread,
   renderRead,
   restateLinks,
   sameProject,
   shownState,
-  supersededLinks,
   type TurnAnswer,
   unheard,
   updateLink,
   usageScope,
   type Wake,
   type WakeContext,
+  type WakeReport,
+  wakeIds,
   wakeMessage,
   wakesDue,
 } from "./orchestration";
@@ -1554,7 +1557,17 @@ function wakeContext(now: number): WakeContext {
     if (!answers[link.target]) answers[link.target] = latestReply(target?.items ?? []);
   }
   for (const [id, ids] of waiting) said[id] = [...ids];
-  return { states, pending, waiting: said, threads, now, answers };
+  // What each parent's queued wake rows already report: their turn delivers it, marked when it starts.
+  const queued: Record<string, string[]> = {};
+  for (const [id, thread] of Object.entries(s.threads)) {
+    for (const item of thread.queue) {
+      if (!item.wake || !item.wakeLinks?.length) continue;
+      const list = queued[id] ?? [];
+      queued[id] = list;
+      list.push(...item.wakeLinks);
+    }
+  }
+  return { states, pending, waiting: said, queued, threads, now, answers };
 }
 
 /** A link with the target's last reply when it holds no answer of its own. */
@@ -1576,8 +1589,9 @@ export function subtreeQuiet(id: string): boolean {
 /**
  * Delivers what each parent should hear — children settling, children waiting
  * on the user — once per child, and schedules the re-check a coalescing window
- * needs. Called when a link settles, when a child asks the user, and when a
- * wait returns; nothing here polls.
+ * needs. Called when a link settles, when a child asks the user, when a wait
+ * returns, and once at start-up after the book is read from the data store
+ * (state/store.ts `connect`); nothing here polls.
  */
 export function wakeTick(): void {
   clearTimeout(wakeTimer);
@@ -1589,18 +1603,17 @@ export function wakeTick(): void {
   // from the thread's own last reply before anyone reads it.
   const filled = fillAnswers(book(), ctx.answers ?? {});
   if (filled !== book()) setBook(() => filled);
-  // A parent that is gone for good: its children's results are never delivered.
-  const orphaned = orphanedLinks(filled, ctx);
+  // A parent that is gone for good: its children's results are never delivered. Only when the app has
+  // a thread list to judge by: an engine that could not list threads at start-up must not retire every
+  // unread result in the book.
+  const orphaned = useApp.getState().sessions.length ? orphanedLinks(filled, ctx) : [];
   if (orphaned.length) {
     setBook((b) => orphaned.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), b));
   }
-  // A settled link a newer one to the same thread replaced: the parent messaged that thread since, so
-  // this answer is out of date. Mark it heard instead of waking the parent with it (it would arrive
-  // long after the answer the parent already read).
-  const superseded = supersededLinks(book(), ctx);
-  if (superseded.length) {
-    setBook((b) => superseded.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), b));
-  }
+  // A settled link a newer one to the same thread replaced is not reported: that answer is out of date
+  // (wakesDue's own rule). It is deliberately NOT marked heard. The successor may still be stopped or
+  // interrupted by a restart without ever answering, and then this is the last real answer the parent
+  // has; a permanent mark here would lose it for good.
   for (const wake of wakesDue(book(), ctx)) sendWake(wake, ctx, now);
   const at = nextWakeAt(book(), ctx);
   if (at !== null) scheduleWake(Math.max(250, at - now + 50));
@@ -1614,16 +1627,25 @@ function scheduleWake(ms: number): void {
 
 /**
  * One message per parent, in a turn of its own: queued behind a running turn
- * (never interrupting its tools), started at once when the thread is idle. Links
- * are marked before it is sent, so a wake turn's own activity cannot deliver the
- * same result twice. The wake turn carries no link, so waking a thread that is
- * itself a child does not settle its own link in its parent's book while that
- * turn runs: a wake is a message, not a delegation.
+ * (never interrupting its tools), started at once when the thread is idle. The wake turn carries no
+ * link, so waking a thread that is itself a child does not settle its own link in its parent's book
+ * while that turn runs: a wake is a message, not a delegation.
  *
  * A parent the app cannot see running (its history is still replaying, or it is
  * not open yet) is never sent a prompt: a second prompt into a turn can interrupt
  * the tools it is running (a parent's own `wait_session`). The wake waits, unmarked,
  * until the app knows where the turn is.
+ *
+ * A busy parent gets one wake turn for everything that finished, however many ticks
+ * report it: a wake already waiting in its queue takes the new one in (the links it
+ * carried are kept on the row), rather than queueing another turn that repeats
+ * "1 child finished". A wake for an idle parent still starts at once.
+ *
+ * Nothing is marked here. A queued row marks its links when its turn starts (`wakeDelivered`,
+ * called by `runPrompt`): the queue is this window's memory, and a mark written at queue time would
+ * survive a restart that the row does not, so the wake would never be delivered. For an idle parent
+ * the mark happens in `runPrompt` too, just before the prompt goes out — early enough that the wake
+ * turn's own activity cannot report the same result twice.
  */
 function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
   const state = useApp.getState();
@@ -1638,16 +1660,45 @@ function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
     return;
   }
   wakeWaits.delete(wake.parent);
-  const text = wakeMessage(wake, now);
-  setBook((b) => markWoken(b, wake, ctx, now));
+  const wakeLinks = wakeIds(wake);
+  const wakeAsking = askingIds(wake);
   if (parent.running) {
+    // One row, one turn: folded into the wake already waiting, or queued on its own.
     updateThread(wake.parent, (t) => ({
       ...t,
-      queue: [...t.queue, { id: localId("queued"), text, wake: true }],
+      queue: queueWake(t.queue, wake, book(), ctx, now, localId("queued")),
     }));
     return;
   }
-  void runPrompt(wake.parent, text, undefined, { wake: true });
+  void runPrompt(wake.parent, wakeMessage(wake, now), undefined, {
+    wake: true,
+    wakeLinks,
+    wakeAsking,
+  });
+}
+
+/**
+ * A queued wake row's turn is starting: what its words promised is heard from here
+ * (`markDelivered`), not from `sendWake`. A link it named as asking that finished meanwhile is left
+ * owed, so its finish comes as its own wake. Idempotent, so a row that starts twice cannot mark twice.
+ */
+export function wakeDelivered(links: readonly string[] | undefined, asking: readonly string[]): void {
+  if (!links?.length) return;
+  const s = useApp.getState();
+  const want = new Set(links);
+  const states: Record<string, LinkState> = {};
+  const pending: Record<string, string> = {};
+  for (const link of s.links.links) {
+    if (!want.has(link.id)) continue;
+    const target = s.threads[link.target];
+    states[link.id] = shownState(link, !!target?.permissions.length);
+    const request = target?.permissions[0];
+    if (request) pending[link.id] = String(request.rpcId);
+  }
+  const asked = new Set(asking);
+  const reported: WakeReport = { settled: links.filter((id) => !asked.has(id)), asking: asked };
+  const ctx: WakeContext = { states, pending, waiting: {}, threads: {}, now: Date.now() };
+  setBook((b) => markDelivered(b, reported, ctx, ctx.now));
 }
 
 /**

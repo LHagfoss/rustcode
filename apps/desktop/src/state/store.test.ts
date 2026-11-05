@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans } from "../acp/rustcode";
+import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
-import { answerOrchestration, linkFinished, orchestrationCallDropped, resolveGrant } from "./host";
+import { answerOrchestration, linkFinished, orchestrationCallDropped, resolveGrant, wakeTick } from "./host";
 import { emptyBook, type Link } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
 import { steerability } from "./queue";
@@ -30,6 +31,7 @@ import {
   mergePlans,
   moveThread,
   onlyCachedPlan,
+  openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
   peekThread,
@@ -46,6 +48,7 @@ import {
   refreshSessions,
   removeQueued,
   renameThread,
+  request,
   resetForTests,
   resumeQueue,
   saveQueuedEdit,
@@ -897,6 +900,35 @@ describe("engine controller with the mock engine", () => {
       .map((q) => q.text)
       .join("\n");
 
+  /** The links the queued wake rows already report: delivered when their turn starts, not before. */
+  const wakeLinks = (thread: string) =>
+    (useApp.getState().threads[thread]?.queue ?? []).flatMap((q) => q.wakeLinks ?? []);
+
+  /** What each wake turn this thread ran was told: the app's own words, never a user message. */
+  const wakeTurns = (thread: string) =>
+    (useApp.getState().threads[thread]?.items ?? [])
+      .filter((i) => i.kind === "user" && !!i.wake)
+      .map((i) => (i as { text: string }).text);
+
+  /**
+   * Runs the wake row waiting at the head of `thread`'s queue. The mock asks before it edits, and a
+   * wake that reports one thing can start another one after it, so every approval is answered.
+   */
+  const runQueuedWake = async (thread: string) => {
+    updateThread(thread, (t) => ({ ...t, running: false }));
+    let done = false;
+    const run = resumeQueue(thread).then(() => {
+      done = true;
+    });
+    for (let i = 0; i < 250 && !done; i++) {
+      const request = useApp.getState().threads[thread]?.permissions[0];
+      if (request) answerPermission(request, request.options[0]!);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    if (!done) throw new Error("the queued wake never finished");
+    await run;
+  };
+
   test("a wait whose call is dropped frees its links, and the child's answer wakes the parent", async () => {
     // The method the engine names in `orchestration::CANCELLED_METHOD`.
     expect(V2Method.orchestrationCancelled).toBe("_rustcode/orchestration/cancelled");
@@ -920,7 +952,10 @@ describe("engine controller with the mock engine", () => {
     await until(() => wakes(parent) === 1, 3000);
     expect(wakes(parent)).toBe(1);
     expect(wakeText(parent)).toContain("the child's answer");
-    expect(linkOf()?.notifiedAt).toBeDefined();
+    // The row reports the link; the mark is written when its turn starts, not when it is queued
+    // (a queue is memory only: a mark now would outlive a restart that the row does not).
+    expect(wakeLinks(parent)).toEqual([link.id]);
+    expect(linkOf()?.notifiedAt).toBeUndefined();
   });
 
   test("a child that finishes as the call drops is delivered exactly once", async () => {
@@ -945,7 +980,199 @@ describe("engine controller with the mock engine", () => {
     await new Promise((r) => setTimeout(r, 500));
     expect(wakes(parent)).toBe(1);
     expect(wakeText(parent)).toContain("the child's answer");
+    expect(wakeLinks(parent)).toEqual([link.id]);
+  });
+
+  test("a wake queued for a busy parent marks its links when its turn starts", async () => {
+    const { parent, link, target, linkOf } = await stagedWait();
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    await until(() => wakes(parent) === 1, 3000);
+    // Queued and unmarked: the report is the row's, not the book's, until it runs.
+    expect(linkOf()?.notifiedAt).toBeUndefined();
+    await runQueuedWake(parent);
+    // Its turn started with the answer reported, and nothing reports it a second time.
     expect(linkOf()?.notifiedAt).toBeDefined();
+    expect(wakes(parent)).toBe(0);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(wakes(parent)).toBe(0);
+  });
+
+  test("a tick does not mark a replaced answer for good: a stopped successor leaves it due", async () => {
+    const { parent, target } = await stagedWait();
+    const at = Date.now() - 60_000;
+    const first: Link = {
+      id: `${parent}/1`,
+      orchestrator: parent,
+      target,
+      orchestratorTitle: "Parent",
+      targetTitle: "Child",
+      message: "do it",
+      state: "done",
+      answer: "the first answer",
+      createdAt: at,
+      settledAt: at,
+    };
+    const followUp: Link = { ...first, id: `${parent}/2`, state: "working", createdAt: at + 1_000 };
+    useApp.setState({ links: { ...emptyBook(), links: [first, followUp], counters: { [parent]: 2 } } });
+    // The parent messaged that thread since: the first answer is out of date, so no wake for it…
+    wakeTick();
+    expect(wakes(parent)).toBe(0);
+    // …and nothing is written down for it: a mark here would outlive the successor that replaced it.
+    expect(useApp.getState().links.links[0]?.notifiedAt).toBeUndefined();
+    // The follow-up is interrupted by a restart without ever answering: the first answer is due.
+    const interrupted: Link = { ...followUp, state: "interrupted" };
+    useApp.setState({
+      links: { ...emptyBook(), links: [first, interrupted], counters: { [parent]: 2 } },
+    });
+    wakeTick();
+    await until(() => wakes(parent) === 1, 3000);
+    expect(wakeText(parent)).toContain("the first answer");
+  });
+
+  test('a row queued as "needs you" keeps the child\'s finish, which arrives once', async () => {
+    const { parent, link, target } = await stagedWait();
+    // The child asks the user while the parent's turn still runs: the notice waits in its queue.
+    const request = {
+      rpcId: 42,
+      sessionId: target,
+      toolCallId: "call-q",
+      title: "Run the checks",
+      options: [{ id: "allow", name: "Allow", kind: "allow_once" as const }],
+      diffs: [],
+    };
+    // The child's thread has to be open for its pending request to be the app's to see.
+    await openThread(target);
+    await until(() => !!useApp.getState().threads[target], 3000);
+    updateThread(target, (t) => ({ ...t, permissions: [request] }));
+    wakeTick();
+    await until(() => wakes(parent) === 1, 3000);
+    expect(wakeText(parent)).toContain("1 needs you");
+    expect(wakeLinks(parent)).toEqual([link.id]);
+    // The user answers, and the child finishes before the parent's turn ends: the queued row still
+    // says "needs you", and the finish has not been reported to anyone.
+    updateThread(target, (t) => ({ ...t, permissions: [] }));
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(wakes(parent)).toBe(1);
+    expect(wakeTurns(parent)).toHaveLength(0);
+    // The row runs: it told the parent about a question, so the finish is still owed, and comes once.
+    await runQueuedWake(parent);
+    await until(() => wakeTurns(parent).some((t) => t.includes("the child's answer")), 5000);
+    const finishes = wakeTurns(parent).filter((t) => t.includes("1 child finished"));
+    expect(finishes).toHaveLength(1);
+    expect(finishes[0]).toContain("the child's answer");
+    expect(useApp.getState().links.links.find((l) => l.id === link.id)?.notifiedAt).toBeDefined();
+    // Nothing reports it a second time.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(wakeTurns(parent).filter((t) => t.includes("the child's answer"))).toHaveLength(1);
+  }, 20_000);
+
+  test("a start-up does not wake a result that was already delivered", async () => {
+    const transport = new MockTransport({ delayMs: 0 });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    setOrchestration(true);
+    const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
+    const at = Date.now() - 600_000;
+    await request(Method.dataLinksSave, {
+      book: {
+        links: [
+          {
+            id: `${parent}/1`,
+            orchestrator: parent,
+            target,
+            orchestratorTitle: "Parent",
+            targetTitle: "Child",
+            message: "do it",
+            state: "done",
+            answer: "the child's answer",
+            createdAt: at,
+            settledAt: at,
+            notifiedAt: at + 1_000,
+          },
+        ],
+        grants: {},
+        counters: {},
+        fanOuts: [],
+      },
+    });
+    resetForTests();
+    setOrchestration(true);
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    // Long enough for the start-up tick to open the parent and start a turn, were it going to.
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(wakeTurns(parent)).toHaveLength(0);
+    expect(useApp.getState().threads[parent]?.queue ?? []).toHaveLength(0);
+    expect(useApp.getState().links.links[0]?.notifiedAt).toBe(at + 1_000);
+  }, 20_000);
+
+  test("a start-up reads the stored book and wakes what nobody was told about", async () => {
+    // An engine whose stored book holds a child result that never reached its parent: the window that
+    // queued it was closed first, so only the book knows.
+    const transport = new MockTransport({ delayMs: 0 });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    setOrchestration(true);
+    const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
+    const at = Date.now() - 60_000;
+    await request(Method.dataLinksSave, {
+      book: {
+        links: [
+          {
+            id: `${parent}/1`,
+            orchestrator: parent,
+            target,
+            orchestratorTitle: "Parent",
+            targetTitle: "Child",
+            message: "do it",
+            state: "done",
+            answer: "the child's answer",
+            createdAt: at,
+            settledAt: at,
+          },
+        ],
+        grants: {},
+        counters: {},
+        fanOuts: [],
+      },
+    });
+    // The same engine, a new window: its queue is memory and starts empty, its book is what it reads.
+    resetForTests();
+    setOrchestration(true);
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    // Nothing here ticks the wake machinery: getting ready is what does it (`syncLinkBook` then tick).
+    const wakeTurn = () =>
+      (useApp.getState().threads[parent]?.items ?? []).some((i) => i.kind === "user" && !!i.wake);
+    await until(wakeTurn, 8000);
+    expect(wakeTurn()).toBe(true);
+    expect(useApp.getState().links.links.find((l) => l.id === `${parent}/1`)?.notifiedAt).toBeDefined();
+  }, 20_000);
+
+  test("a wake the queue lost in a restart is delivered again, not dropped", async () => {
+    const { parent, link, target, linkOf } = await stagedWait();
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    await until(() => wakes(parent) === 1, 3000);
+    expect(linkOf()?.notifiedAt).toBeUndefined();
+    // A restart: the queue lives in this window's memory, so it is gone, and so is the row.
+    updateThread(parent, (t) => ({ ...t, queue: [] }));
+    // The book never heard that the result was delivered, so the wake is due again.
+    wakeTick();
+    await until(() => wakes(parent) === 1, 3000);
+    expect(wakeText(parent)).toContain("the child's answer");
+    expect(wakeLinks(parent)).toEqual([link.id]);
+    // And it runs: the mark lands with the turn, once.
+    await runQueuedWake(parent);
+    expect(linkOf()?.notifiedAt).toBeDefined();
+    wakeTick();
+    expect(wakes(parent)).toBe(0);
   });
 
   test("an ordinary wait still answers with the child's result, and no wake repeats it", async () => {

@@ -110,6 +110,7 @@ import {
   stopLinksFrom,
   syncLinkBook,
   threadTurnEnded,
+  wakeDelivered,
   wakeTick,
 } from "./host";
 import { LIMIT_RESUME_TEXT, type LimitWait, limitReset, nextWait, waitDue, waitHolds } from "./limitResume";
@@ -895,8 +896,10 @@ async function handshake(): Promise<void> {
     // The composer's meter is ready before the first thread opens.
     void refreshPlanCache();
     if (connection === conn) await syncPinsAndSettled(conn);
-    // The link book now lives in the data store; local storage is the first paint only.
-    void syncLinkBook();
+    // The link book now lives in the data store; local storage is the first paint only. Once the
+    // store's copy is in, a child result nobody was told about (a window closed with its wake still
+    // queued) is due: the queue is memory, the book is not, so the wake is read back from it here.
+    void syncLinkBook().then(() => wakeTick());
     const selected = get().selectedId;
     if (selected) void openThread(selected);
     if (connection === conn) void resumeInterrupted(interrupted);
@@ -2183,6 +2186,8 @@ export async function resumeQueue(id: string): Promise<boolean> {
     fromView: next.fromView,
     link: next.link,
     wake: next.wake,
+    wakeLinks: next.wakeLinks,
+    wakeAsking: next.wakeAsking,
   });
   return true;
 }
@@ -2283,6 +2288,10 @@ export async function runPrompt(
     fromView?: boolean;
     link?: string;
     wake?: boolean;
+    /** The links a queued wake row reports: marked as heard when its turn starts (host.ts). */
+    wakeLinks?: string[];
+    /** The links that row named as waiting on the user: a question, not a finish (host.ts). */
+    wakeAsking?: string[];
     automatic?: boolean;
     /** The turn that continues after a limit: its wait is settled when it ends. */
     limitResume?: boolean;
@@ -2311,6 +2320,8 @@ export async function runPrompt(
           fromView: options.fromView,
           link: options.link,
           wake: options.wake,
+          wakeLinks: options.wakeLinks,
+          wakeAsking: options.wakeAsking,
         },
       ],
     }));
@@ -2318,6 +2329,9 @@ export async function runPrompt(
   }
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
+  // A queued wake reports its links now, as its turn starts: late enough that a restart before this
+  // point brings the wake back, early enough that nothing in the turn reports it again.
+  if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
   if (id in get().snoozed) snoozeThread(id, null);
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
@@ -2402,6 +2416,8 @@ export async function runPrompt(
       fromView: next.fromView,
       link: next.link,
       wake: next.wake,
+      wakeLinks: next.wakeLinks,
+      wakeAsking: next.wakeAsking,
     });
   }
 }
