@@ -97,7 +97,8 @@ the accent marks state (on, selected, linked), it does not shout.
 | md | 10 | `rounded-md` | Icon buttons, list rows, inputs |
 | lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, tooltips, pictures in replies |
 | xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels |
-| 2xl | 20 | `rounded-2xl` | The composer, the settings panel, toasts |
+| 2xl | 20 | `rounded-2xl` | The settings panel, toasts |
+| composer | 24 | `--rc-composer-radius` | The composer's box and tray, one step above 2xl so the floating box reads rounder than the cards |
 | 3xl | 26 | `rounded-3xl` | The largest floating surface, above the composer's step (nothing uses it yet) |
 | full | — | `rounded-full` | Switches, avatars, dots, trackbars; never a labelled button |
 
@@ -165,10 +166,12 @@ tucked behind its foot with every other control. Its slash and `@` menus are an 
 attached to the box's top edge.
 
 The composer is its own, lighter pair, because it is the one surface text
-scrolls under all day: `surface-2` at **92%** (96% focused), its own
-`--rc-composer-filter` (`saturate(1.14) blur(12px)`; `saturate(1.08)
-blur(16px)` in dark), and a 1px `--rc-composer-outline` (`black` at 8% in
+scrolls under all day: `surface-2` at **75%** (84% focused), its own
+`--rc-composer-filter` (`saturate(1.14) blur(16px)`; `saturate(1.08)
+blur(20px)` in dark), and a 1px `--rc-composer-outline` (`black` at 8% in
 light, `white` at 5% in dark) with a 3% `white` inner highlight in dark.
+It is the one surface with a radius of its own, one step above the
+largest card's.
 
 Near-solid and lightly blurred on purpose: text scrolling under a panel
 should be a hint, not a smear. One filter per surface, two recipes in all
@@ -395,17 +398,20 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   reset button of the bullet below where the value differs from its default.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
-- **Composer:** one card, `.rc-composer rounded-2xl`, with no padding of
-  its own: the field is padded `px-3 pt-2` and the footer `px-2 pb-2`.
-  Glass at `--rc-composer-bg` (80%, 88% focused) with
-  `--rc-composer-filter` and a 1px `--rc-composer-outline`; no ring or
-  colour on focus, the glass step is the focus. The editor reads at
-  `text-body leading-relaxed` (22.75px), two lines at rest and 208px at
-  most, then it scrolls. The footer is one row **inside** the card: attach
-  (**+**), the folder, the worktree or branch and the permissions mode on
-  the left; the plan meter, the context ring, the model pill, the working
-  agents and send/stop on the right. No tucked tray, no second surface.
-  What rests on the card's own surface (the **+**, the model pill) is
+- **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
+  24px, one step above 2xl), with no padding of its own: the field is
+  padded `px-3 pt-2` and the foot `px-3 pb-2`. Glass at
+  `--rc-composer-bg` (75%, 84% focused) with `--rc-composer-filter` and a
+  1px `--rc-composer-outline`; no ring or colour on focus, the glass step
+  is the focus. The card clips to its own corner. The editor reads at
+  `text-body leading-relaxed` (22.75px), one line at rest above the foot
+  and 208px at most, then it scrolls; a slash-command chip in front of it
+  is that same line box, so it keeps the field's baseline. The foot is one
+  row **inside** the card: attach (**+**) on the left, send/queue/stop on
+  the right. The tray tucked behind the foot carries the rest: the folder,
+  the worktree or branch and the permissions mode on the left; the plan
+  meter, the context ring, the model pill and the working agents on the
+  right. What rests on the card's own surface (the **+**, the model pill) is
   `bg-fill-subtle`, `bg-fill` on hover, `bg-fill-strong` when open. The
   card is a container (`@container`), so a narrow window drops labels (the
   folder name shortens, then the permission label, the branch chip and

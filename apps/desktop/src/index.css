@@ -88,9 +88,9 @@
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e8e8ea;
   /* The composer is glass on the raised surface (see `Glass` in index.css). */
-  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 92%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 96%, transparent);
-  --rc-composer-filter: saturate(1.14) blur(12px);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 75%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
+  --rc-composer-filter: saturate(1.14) blur(16px);
   --rc-composer-outline: #00000014;
   --rc-composer-highlight: transparent;
   --rc-border: #0000000f;
@@ -119,9 +119,9 @@
     --rc-surface: #18181a;
     --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
-    --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 92%, transparent);
-    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 96%, transparent);
-    --rc-composer-filter: saturate(1.08) blur(16px);
+    --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 75%, transparent);
+    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
+    --rc-composer-filter: saturate(1.08) blur(20px);
     --rc-composer-outline: #ffffff0d;
     --rc-composer-highlight: #ffffff08;
     --rc-border: #ffffff0f;
@@ -149,9 +149,9 @@
   --rc-surface: #18181a;
   --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
-  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 92%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 96%, transparent);
-  --rc-composer-filter: saturate(1.08) blur(16px);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 75%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
+  --rc-composer-filter: saturate(1.08) blur(20px);
   --rc-composer-outline: #ffffff0d;
   --rc-composer-highlight: #ffffff08;
   --rc-border: #ffffff0f;
@@ -196,6 +196,9 @@
   --rc-radius-xl: 16px;
   --rc-radius-2xl: 20px;
   --rc-radius-3xl: 26px;
+  /* The composer's box and tray take a step of their own, one size above the largest cards:
+     they are the one surface the chat floats in, and the rounder corner reads as one piece. */
+  --rc-composer-radius: calc(var(--rc-radius-2xl) + 4px);
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md). */
@@ -712,10 +715,11 @@
 }
 
 /*
- * The composer floats over the transcript in glass on the raised surface: 80% at rest,
- * 88% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
- * coloured ring. Its drawer and its tray are the same glass, tucked behind its edge,
- * so the three read as one surface.
+ * The composer floats over the transcript in glass on the raised surface: 75% at rest,
+ * 84% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
+ * coloured ring. Its corner is one step rounder than a card's (`--rc-composer-radius`),
+ * and its drawer and its tray are the same glass, tucked behind its edge, so the three
+ * read as one surface.
  */
 .rc-composer,
 .rc-toast {
@@ -741,6 +745,12 @@
     inset 0 0 0 1px var(--rc-composer-highlight),
     0 0 0 1px var(--rc-composer-outline);
 }
+/* The box clips to its own corner, so the attachment thumbnails and a scrolled field stop at the
+   curve instead of painting over it. Nothing in it opens a popover: they are portalled. */
+.rc-composer {
+  border-radius: var(--rc-composer-radius);
+  overflow: hidden;
+}
 /* The tray's glass starts where the box ends: the box is translucent, so glass under it would
    show as a darker band. It sits on a pseudo-element so the tray's menus are not clipped. */
 .rc-composer-tray {
@@ -752,10 +762,12 @@
   position: absolute;
   inset: 17px 0 0;
   z-index: -1;
-  border-radius: 0 0 var(--rc-radius-2xl) var(--rc-radius-2xl);
+  border-radius: 0 0 var(--rc-composer-radius) var(--rc-composer-radius);
 }
-/* A drawer is read, not looked through: opaque, its foot cut where the box begins. */
+/* A drawer is read, not looked through: opaque, its foot cut where the box begins. Its top
+   corners are the box's own radius, one inset inside them. */
 .rc-composer-drawer {
+  border-radius: var(--rc-composer-radius) var(--rc-composer-radius) 0 0;
   background: var(--rc-surface-2);
   box-shadow:
     inset 0 1px 0 0 var(--rc-composer-highlight),
