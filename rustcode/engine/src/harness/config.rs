@@ -6,6 +6,7 @@
 use super::HarnessKind;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessDefaults {
@@ -15,8 +16,33 @@ pub struct HarnessDefaults {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// How long a turn on an external harness may send nothing with nothing
+    /// running before it ends as failed (`watchdog`). 0 turns the deadline
+    /// off; left out, it is [`super::watchdog::DEFAULT_TIMEOUT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silence_timeout_minutes: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub onboarded: bool,
+}
+
+/// How long a turn on an external harness may send nothing with nothing
+/// running before the engine ends it ([`super::watchdog`]). `None` turns the
+/// deadline off; an unreadable config keeps the default.
+pub(crate) fn silence_timeout() -> Option<Duration> {
+    let minutes = config_dir()
+        .ok()
+        .and_then(|dir| load_in(&dir).0.silence_timeout_minutes);
+    silence_from(minutes)
+}
+
+/// What `[harness_defaults].silence_timeout_minutes` means: left out is the
+/// default, 0 turns the deadline off, anything else is that many minutes.
+fn silence_from(minutes: Option<u64>) -> Option<Duration> {
+    match minutes {
+        None => Some(super::watchdog::DEFAULT_TIMEOUT),
+        Some(0) => None,
+        Some(minutes) => Some(Duration::from_secs(minutes.saturating_mul(60))),
+    }
 }
 
 /// One `[[harnesses]]` entry. A known harness needs only `id` and
@@ -510,6 +536,38 @@ mod tests {
 
         edit_in(dir.path(), |_, harnesses| remove(harnesses, "my-agent")).unwrap();
         assert_eq!(load_in(dir.path()).1.len(), 1);
+    }
+
+    #[test]
+    fn the_silence_deadline_parses_and_off_is_zero() {
+        assert_eq!(
+            silence_from(None),
+            Some(super::super::watchdog::DEFAULT_TIMEOUT)
+        );
+        assert_eq!(silence_from(Some(0)), None, "0 turns the deadline off");
+        assert_eq!(silence_from(Some(25)), Some(Duration::from_secs(25 * 60)));
+        assert_eq!(
+            silence_from(Some(u64::MAX)),
+            Some(Duration::from_secs(u64::MAX.saturating_mul(60))),
+            "a silly value saturates instead of overflowing"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[harness_defaults]\nsilence_timeout_minutes = 0\n",
+        )
+        .unwrap();
+        assert_eq!(load_in(dir.path()).0.silence_timeout_minutes, Some(0));
+        edit_in(dir.path(), |defaults, _| {
+            defaults.silence_timeout_minutes = None;
+            Ok(())
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(
+            !text.contains("silence_timeout_minutes"),
+            "an unset deadline is left out: {text}"
+        );
     }
 
     #[test]

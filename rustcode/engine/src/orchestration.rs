@@ -26,6 +26,10 @@ pub mod hub;
 pub mod mcp_server;
 
 pub const METHOD: &str = "_rustcode/orchestration";
+/// Told to the client when a call was dropped before its answer arrived: the
+/// harness stopped waiting for it (its own timeout, a cancel, the MCP server
+/// closing), so the client ends the call at once instead of holding on to it.
+pub const CANCELLED_METHOD: &str = "_rustcode/orchestration/cancelled";
 pub const LIST_SESSIONS: &str = "list_sessions";
 pub const MESSAGE_SESSION: &str = "message_session";
 pub const WAIT_SESSION: &str = "wait_session";
@@ -439,6 +443,20 @@ pub fn timeout(name: &str, args: &Value) -> Duration {
     }
 }
 
+/// The params that end a dropped call on the client: the session it was made
+/// for, and the call id its request carried.
+pub fn cancelled_params(session_id: &str, call_id: &str) -> Value {
+    json!({ "sessionId": session_id, "callId": call_id })
+}
+
+/// An id for one forwarded call, unique in this process: the client keys what a
+/// call holds by it, and drops that when the call goes.
+fn next_call_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CALLS: AtomicU64 = AtomicU64::new(1);
+    format!("call-{}", CALLS.fetch_add(1, Ordering::Relaxed))
+}
+
 /// Run one call through the session's host.
 pub async fn execute(
     state: &Arc<Mutex<crate::app::AppState>>,
@@ -495,10 +513,14 @@ pub async fn execute_with(
             false,
         );
     };
-    let request = client.request(json!({ "tool": name, "args": args }));
+    // The client is told this call by an id of its own, so a dropped call can be
+    // ended on its side: an answer it is still preparing would be read by nobody.
+    let call_id = next_call_id();
+    let request = client.request(json!({ "tool": name, "args": args, "callId": call_id }));
     let answer = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
+            client.call_cancelled(&call_id);
             return ToolExecutionOutput::failure_with_kind(
                 format!("error: {name} was cancelled before the app answered; if it was a message, it may have been delivered"),
                 ToolErrorKind::Cancelled,
@@ -1038,5 +1060,60 @@ mod tests {
         .await;
         assert_eq!(output.error_kind, Some(ToolErrorKind::Cancelled));
         assert!(output.content.contains("may have been delivered"));
+    }
+
+    /// A client whose call stays pending until it is cancelled: the harness
+    /// dropped it, and the app is still preparing an answer nobody will read.
+    struct Held(Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl PreviewClient for Held {
+        fn request(&self, params: Value) -> crate::preview::PreviewFuture {
+            let call = params["callId"].as_str().unwrap_or_default().to_owned();
+            self.0.lock().unwrap().push(format!("asked:{call}"));
+            Box::pin(std::future::pending())
+        }
+
+        fn call_cancelled(&self, call_id: &str) {
+            self.0.lock().unwrap().push(format!("cancelled:{call_id}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_call_is_reported_to_the_client_by_its_own_id() {
+        let said = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let token = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            token.cancel();
+        });
+        let output = execute_with(
+            Some(Arc::new(Held(Arc::clone(&said))) as Arc<dyn PreviewClient>),
+            &cancel,
+            WAIT_SESSION,
+            &json!({"link_ids": ["a/1"], "timeout_ms": 600_000}),
+        )
+        .await;
+        assert_eq!(output.error_kind, Some(ToolErrorKind::Cancelled));
+        let said = said.lock().unwrap().clone();
+        assert_eq!(said.len(), 2, "{said:?}");
+        let asked = said[0]
+            .strip_prefix("asked:")
+            .expect("the call id")
+            .to_owned();
+        assert!(!asked.is_empty(), "{said:?}");
+        // The very call the request carried is the one the client is told to end.
+        assert_eq!(said[1], format!("cancelled:{asked}"));
+    }
+
+    #[test]
+    fn a_dropped_call_is_named_by_its_session_and_id() {
+        assert!(CANCELLED_METHOD.starts_with("_rustcode/orchestration"));
+        assert_eq!(
+            cancelled_params("s-1", "call-7"),
+            json!({"sessionId": "s-1", "callId": "call-7"})
+        );
+        // Every call of this engine gets an id of its own.
+        assert_ne!(next_call_id(), next_call_id());
     }
 }

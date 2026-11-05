@@ -440,6 +440,7 @@ panel has *Compact now*, which sends `/compact`.
 harness = "codex"
 model = "gpt-6-luna"
 effort = "low"
+silence_timeout_minutes = 10   # optional; 0 turns the silence deadline off
 onboarded = true
 
 [[harnesses]]
@@ -474,6 +475,10 @@ overridden with `command`. An entry without `enabled` is on. `model` and
 unchanged). Both sections are optional and only read from the user config: a
 project's `.rustcode/config.toml` cannot add a harness or change a command.
 
+`silence_timeout_minutes` is the turn silence deadline below: 10 minutes by
+default, `0` turns it off. It is read when a turn starts, so it applies to
+the next message of a thread already open.
+
 Named accounts are chosen by hand. There is no pooling or rotation: a
 thread uses the account it was given until the user picks another, and
 limits are that account's own.
@@ -491,6 +496,16 @@ choices in its own storage instead.
   the engine exiting kills the group.
 - `session/cancel` asks the harness to stop; a harness that does not stop in
   5 s is killed and the turn ends as cancelled.
+- A turn that sends nothing for 10 minutes with no tool call in flight ends
+  as failed ("No output from <harness> for 10 minutes. Send a message to try
+  again.") and its process is killed; the next message starts a new one that
+  resumes the harness's session, so the conversation stays intact. Silence is
+  expected while work runs: an unfinished tool call (a build, a test run, a
+  `wait_session`), a permission request or question waiting on the user, and
+  the harness's own background tasks hold the deadline, and every message the
+  harness sends — a thought or a usage update included — restarts it. It is
+  reported as a `harness.turn_silent` `[op]` event in the thread's
+  `logs/debug.log`. `[harness_defaults].silence_timeout_minutes` tunes it.
 - The child's stderr goes to the thread's `logs/debug.log` (lines prefixed
   `[harness <id>]`), never to the transcript.
 - The engine passes no RustCode credentials, provider keys or tokens to a

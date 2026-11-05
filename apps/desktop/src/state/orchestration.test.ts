@@ -51,6 +51,7 @@ import {
   sameProject,
   stripLinks,
   supersededLinks,
+  unheard,
   updateLink,
   usageScope,
   WAKE_ANSWER_CHARS,
@@ -159,6 +160,13 @@ describe("orchestration rules", () => {
     ).toBe(true);
     const wait = parseCall({ tool: "wait_session", args: { link_id: "a/1", timeout_ms: 9e9 } });
     expect(!isFailure(wait) && wait.tool === "wait_session" && wait.timeoutMs).toBe(3_600_000);
+    // The engine's name for the call rides along, so a dropped call can end its wait.
+    expect(
+      parseCall({ tool: "wait_session", callId: "call-7", args: { link_id: "a/1", timeout_ms: 5 } }),
+    ).toMatchObject({ callId: "call-7" });
+    expect(parseCall({ tool: "wait_session", args: { link_id: "a/1", timeout_ms: 5 } })).toMatchObject({
+      callId: undefined,
+    });
     // Each answer once: a repeated link id is asked about once.
     expect(parseCall({ tool: "wait_session", args: { link_ids: ["a/1", "a/1", "a/2"] } })).toMatchObject({
       links: ["a/1", "a/2"],
@@ -552,6 +560,28 @@ describe("waking a parent", () => {
     // The window passed and the sibling still runs: report what is done.
     const later = ctx({ now: 9_500 + WAKE_COALESCE_MS });
     expect(wakesDue(mixed, later)[0]!.settled.map((l) => l.target)).toEqual(["b"]);
+  });
+
+  test("a mark a dropped call leaves behind is taken back, and a newer one stands", () => {
+    const heard = (id: string, at: number): Link => ({ ...done("a", id), notifiedAt: at });
+    const b = book([heard("b", 1_000), heard("c", 1_000)]);
+    // The wait that handed both over was dropped before its answer was read.
+    const back = unheard(b, [
+      { id: "a/b", notifiedAt: 1_000 },
+      { id: "a/c", notifiedAt: 1_000 },
+    ]);
+    expect(back.links.map((l) => l.notifiedAt)).toEqual([undefined, undefined]);
+    // They are due again: the answer nobody read comes as the ordinary wake.
+    expect(wakesDue(back, ctx())[0]!.settled.map((l) => l.target)).toEqual(["b", "c"]);
+    // A mark another delivery made since stands: nothing arrives twice.
+    const newer = book([heard("b", 5_000)]);
+    expect(unheard(newer, [{ id: "a/b", notifiedAt: 1_000 }])).toBe(newer);
+    // A question mark is taken back the same way.
+    const asked = book([{ ...done("a", "b", 1_000, "needs_user"), askedRequest: "7" }]);
+    expect(unheard(asked, [{ id: "a/b", askedRequest: "7" }]).links[0]!.askedRequest).toBeUndefined();
+    expect(unheard(asked, [{ id: "a/b", askedRequest: "6" }])).toBe(asked);
+    // Nothing listed: the same book, unchanged.
+    expect(unheard(b, [])).toBe(b);
   });
 
   test("a parent already blocked in wait_session gets no duplicate", () => {

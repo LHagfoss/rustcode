@@ -104,6 +104,7 @@ import {
   linkFinished,
   linkStarted,
   loadBook,
+  orchestrationCallDropped,
   queuedLinkDropped,
   resetWaits,
   stopLinksFrom,
@@ -1071,6 +1072,7 @@ async function handleInbound(message: Inbound) {
     case "notification":
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
       else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
+      else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       return;
     case "request":
