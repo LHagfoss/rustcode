@@ -516,6 +516,30 @@
   animation: rc-row-in 260ms var(--ease-snappy) both;
 }
 
+/*
+ * The idle meta under a message — its time, what can be done with it, and the `Queued` under a
+ * queued one — hidden at rest and in on hover of its row or on keyboard focus inside it, so the
+ * transcript reads calm and the row keeps its height either way (no layout on hover). A coarse
+ * pointer cannot hover, so there it stays. `.rc-keep` marks a part that is news rather than idle
+ * meta (a steer, a message from a view) and holds the whole line open. 150ms is what
+ * `transition-opacity` uses in the rows that predate this class.
+ */
+.rc-meta-reveal {
+  opacity: 0;
+  transition: opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.group:hover .rc-meta-reveal,
+.group:focus-within .rc-meta-reveal,
+.rc-meta-reveal:focus-within,
+.rc-meta-reveal:has(.rc-keep) {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .rc-meta-reveal {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

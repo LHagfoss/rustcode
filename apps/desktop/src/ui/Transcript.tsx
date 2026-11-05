@@ -12,7 +12,7 @@ import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/f
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView } from "../state/queue";
-import { canSteer, RESUME_TEXT, shortcutFor, useApp } from "../state/store";
+import { RESUME_TEXT, shortcutFor, steerConditions, useApp } from "../state/store";
 import {
   type QueuedPrompt,
   splitSubagentSteps,
@@ -81,6 +81,9 @@ type Row = {
     count: number;
     held: boolean;
     steerable: boolean;
+    /** The same thread's `acceptsImages` and built-in flag: the rest of the steer rule. */
+    images: boolean;
+    builtin: boolean;
     from?: string;
   };
   /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
@@ -329,7 +332,7 @@ export function Transcript({
     const waking = thread.queue.find((q) => q.wake);
     if (queue.wake && waking)
       out.push({ key: "queue-wake", queueWake: { line: queue.wake, text: waking.text } });
-    const steer = canSteer(thread);
+    const steer = steerConditions(thread);
     queue.messages.forEach((q, i) => {
       out.push({
         key: `queued-${q.id}`,
@@ -338,7 +341,9 @@ export function Transcript({
           index: i,
           count: queue.messages.length,
           held: queue.held,
-          steerable: steer,
+          steerable: steer.live,
+          images: steer.images,
+          builtin: steer.builtin,
           from: q.link ? links.find((l) => l.id === q.link)?.orchestratorTitle : undefined,
         },
       });

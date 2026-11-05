@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { isOwnQueued, isQueuedMessage, nextQueued, queuedAnnouncement, queueView } from "./queue";
+import type { SlashCommand } from "../acp/types";
+import type { ComposeExtras } from "./compose";
+import {
+  isOwnQueued,
+  isQueuedMessage,
+  nextQueued,
+  queuedAnnouncement,
+  queueView,
+  STEER_REFUSAL,
+  type SteerConditions,
+  type SteerRefusal,
+  steerability,
+} from "./queue";
 import type { QueuedPrompt } from "./thread";
 
 const item = (id: string, extra: Partial<QueuedPrompt> = {}): QueuedPrompt => ({
@@ -86,5 +98,110 @@ describe("what the live region says", () => {
     expect(queuedAnnouncement(queueView(thread([item("a")])), true)).toBe(
       "1 message queued · Editing a queued message in the composer",
     );
+  });
+});
+
+describe("the steer rule", () => {
+  const image = { id: "i", kind: "image" as const, name: "shot.png", mimeType: "image/png", data: "AAAA" };
+  const file = { id: "f", kind: "file" as const, name: "notes.txt", path: "/tmp/notes.txt" };
+  const extras = (over: Partial<ComposeExtras> = {}): ComposeExtras => ({
+    links: [],
+    attachments: [],
+    ...over,
+  });
+  const command: SlashCommand = {
+    name: "/review",
+    description: "Review",
+    takesArguments: false,
+    report: false,
+    action: "execute",
+  };
+  const harness = (over: Partial<SteerConditions>): SteerConditions => ({
+    live: true,
+    images: true,
+    builtin: false,
+    ...over,
+  });
+  const no = (reason: SteerRefusal) => ({ ok: false, reason });
+
+  test("plain text steers wherever the turn takes a message at all", () => {
+    expect(steerability(undefined, harness({}))).toEqual({ ok: true });
+    expect(steerability(extras(), harness({}))).toEqual({ ok: true });
+    expect(steerability(extras(), harness({ live: false }))).toEqual(no("harness"));
+  });
+
+  test("pictures steer only where the harness takes them mid-turn, and not on the built-in one", () => {
+    const pictures = extras({ attachments: [image] });
+    expect(steerability(pictures, harness({}))).toEqual({ ok: true });
+    expect(steerability(pictures, harness({ images: false }))).toEqual(no("harness"));
+    // The engine answers `accepted: false` to a steer with an image block on the built-in harness.
+    expect(steerability(pictures, harness({ builtin: true }))).toEqual(no("harness"));
+    expect(steerability(pictures, harness({ live: false }))).toEqual(no("harness"));
+  });
+
+  test("a file, a command or a link waits for the next turn, pictures or not", () => {
+    expect(steerability(extras({ attachments: [file] }), harness({}))).toEqual(no("files"));
+    expect(steerability(extras({ command }), harness({}))).toEqual(no("commands"));
+    expect(steerability(extras({ links: ["https://example.com"] }), harness({}))).toEqual(no("links"));
+    expect(steerability(extras({ attachments: [image, file] }), harness({}))).toEqual(no("files"));
+    expect(
+      steerability(extras({ attachments: [image], links: ["https://example.com"] }), harness({})),
+    ).toEqual(no("links"));
+    // A command is the headline when both wait: it is what the message runs.
+    expect(steerability(extras({ command, links: ["https://example.com"] }), harness({}))).toEqual(
+      no("commands"),
+    );
+    // A file outranks the harness: it would wait for the next turn there too.
+    expect(steerability(extras({ attachments: [file] }), harness({ live: false }))).toEqual(no("files"));
+  });
+
+  test("every combination of text, pictures, files, commands, links and harness has one answer", () => {
+    const lists = [[], [image], [file], [image, file]];
+    const kinds = [
+      { cmd: undefined, links: [] as string[] },
+      { cmd: command, links: [] as string[] },
+      { cmd: undefined, links: ["https://example.com"] },
+      { cmd: command, links: ["https://example.com"] },
+    ];
+    const seen: string[] = [];
+    for (const attachments of lists)
+      for (const { cmd, links } of kinds)
+        for (const live of [true, false])
+          for (const images of [true, false])
+            for (const builtin of [true, false]) {
+              const verdict = steerability(extras({ attachments, command: cmd, links }), {
+                live,
+                images,
+                builtin,
+              });
+              // The refusal names the reason the user is shown, never a blank arrow.
+              if (!verdict.ok) expect(STEER_REFUSAL[verdict.reason]).toBeTruthy();
+              seen.push(
+                `${attachments.map((a) => a.kind).join("+") || "text"}|${cmd ? "cmd" : ""}${links.length ? "link" : ""}|${live}${images}${builtin}|${
+                  verdict.ok ? "yes" : verdict.reason
+                }`,
+              );
+            }
+    // 4 contents × 4 command/link shapes × 8 harness shapes, each answered once.
+    expect(seen).toHaveLength(128);
+    expect(seen).toContain("text||truetruefalse|yes");
+    expect(seen).toContain("image||truetruefalse|yes");
+    expect(seen).toContain("image||truetruetrue|harness");
+    expect(seen).toContain("image||truefalsetrue|harness");
+    expect(seen).toContain("text||falsetruefalse|harness");
+    expect(seen).toContain("file||truetruefalse|files");
+    expect(seen).toContain("image+file|cmd|truetruefalse|files");
+    expect(seen).toContain("text|cmd|truetruefalse|commands");
+    expect(seen).toContain("image|link|truetruefalse|links");
+    expect(seen).toContain("text|cmdlink|truetruefalse|commands");
+  });
+
+  test("the words a dimmed arrow shows are the four reasons", () => {
+    expect(STEER_REFUSAL).toEqual({
+      files: "Files go with the next turn",
+      commands: "Commands go with the next turn",
+      links: "Links go with the next turn",
+      harness: "This harness can't take a message mid-turn: it waits for the next one",
+    });
   });
 });
