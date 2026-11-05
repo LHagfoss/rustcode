@@ -361,7 +361,10 @@ composer's keys stay outside the table.
   two buttons, *Decline* and *Allow* (prominent). The rarer answers, the
   engine's always-allow and always-reject options and, when a turn waits
   on several, *Allow all N waiting*, sit in *More*. Keys
-  1–9 still pick in the engine's order. The composer is glass
+  1–9 still pick in the engine's order. A child thread's approval or question
+  also appears at the foot of the transcript of the thread above it, under a
+  header naming the child (a click opens it); answering there answers the
+  child through the same card, and it leaves both chats. The composer is glass
   (`--rc-composer-bg`: 80% of the raised surface, 88% on focus; blur 12px,
   16px in dark), solid under Reduce transparency. Queued messages are rows above the composer that can be
   edited in place, moved up, sent now as a steer, or removed. A steer
@@ -552,7 +555,10 @@ composer's keys stay outside the table.
   while the threads it handed work to still run says so instead of looking
   finished: *Waiting on 2 threads* at the foot of the transcript (the titles in
   its tooltip) and *Waiting* in its sidebar row's status slot, one state read in
-  one place (`src/state/waiting.ts`).
+  one place (`src/state/waiting.ts`). A child waiting on an approval or a
+  question shows there too, one card per request, oldest first, with the thread
+  it came from in the header; a grandchild's request reaches the top-level
+  thread once (`src/state/pending.ts`).
 - **Worktree threads.** The new-thread composer's *Worktree* toggle starts
   the thread in its own worktree, with a branch name suggested from the
   message (`<type>/<slug>`) that can be edited. A worktree thread's menu

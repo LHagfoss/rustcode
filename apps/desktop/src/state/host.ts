@@ -73,7 +73,7 @@ import {
   wakeMessage,
   wakesDue,
 } from "./orchestration";
-import { delegationAllowed, modeLabel } from "./permissions";
+import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
 import {
   type AppState,
   cancel,
@@ -88,6 +88,7 @@ import {
   runPrompt,
   searchThreads,
   setConfigOption,
+  setPermissionMode,
   setThreadStatus,
   snoozeThread,
   statusOf,
@@ -987,17 +988,36 @@ async function newThread(
     title?: string;
     task: string;
     worktree?: boolean;
+    /** What the new thread may do without asking (`childMode`), fixed before the user is asked. */
+    access: PermissionMode;
   },
 ): Promise<string> {
   // The orchestrator names it when it gave a title, and the task itself does otherwise: a session
   // made without one takes the message it is sent as its title, and the sidebar then shows
   // "From thread “parent” (agent)…" for good.
   const title = childTitle(options.title, options.task);
-  const id = await createThreadFor(project, harness, { ...options, title });
+  const { access, ...rest } = options;
+  const id = await createThreadFor(project, harness, { ...rest, title });
+  // Before its first turn, so nothing it does runs broader than the thread that started it.
+  setPermissionMode(id, access);
   // The orchestrator named it; without this the first message ("From thread …") would.
   if (hasShell()) await shellCall("thread_rename", { id, title }).catch(() => undefined);
   return id;
 }
+
+/**
+ * What a delegated thread runs at: the lower of its parent's access and Settings ›
+ * General › Default access, which is what a new thread would get anyway. The parent's
+ * own limit is the one that counts, so an Ask or Auto-edit parent never hands out Full
+ * access. Applied at every depth, a grandchild can only be narrower still.
+ */
+function childMode(caller: RuleThread): PermissionMode {
+  const s = useApp.getState();
+  return effectiveMode(permissionModeOf(s, caller.id), s.defaultPermissionMode);
+}
+
+/** What a thread may do without asking, as the orchestration answers report it. */
+const accessOf = (id: string): PermissionMode => permissionModeOf(useApp.getState(), id);
 
 async function createThreadFor(
   project: string,
@@ -1042,6 +1062,9 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   if (isFailure(model)) return failureJson(model);
   const title = call.title ?? titleFrom(call.prompt, 60);
   const other = !sameProject(project, projectOf(caller));
+  // Fixed before the user is asked, so the card says what the thread runs at and the thread gets
+  // exactly that, however long the card waits.
+  const access = childMode(caller);
   const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "start",
     caller: caller.id,
@@ -1050,6 +1073,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     detail: call.prompt,
     project: other ? project : undefined,
     harnesses: [choiceLabel(harness.name, model, call.effort)],
+    access,
     worktree: call.worktree ?? true,
   });
   if (no) return failureJson(no);
@@ -1064,6 +1088,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
       model,
       title,
       task: call.prompt,
+      access,
       account: accountFor(caller, harness.id),
     });
   } catch (error) {
@@ -1086,6 +1111,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     receipt: "started",
     title,
     harness: harness.id,
+    access: accessOf(id),
     ...ranWith(id),
     links_left: linksLeft(book(), caller.id, threadLimit()),
   };
@@ -1104,6 +1130,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
   }
   const project = projectOf(caller);
   const title = call.title ?? titleFrom(call.prompt, 60);
+  const access = childMode(caller);
   const no = await permitted(caller, "start", {
     kind: "fan_out",
     caller: caller.id,
@@ -1111,6 +1138,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     target: title,
     detail: call.prompt,
     harnesses: chosen.map((h) => choiceLabel(h.name, h.model, h.effort)),
+    access,
     worktree: true,
   });
   if (no) return failureJson(no);
@@ -1127,6 +1155,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
         effort: h.effort,
         title: threadTitle,
         task: call.prompt,
+        access,
         account: accountFor(caller, h.id),
       });
       const link = addLink({
@@ -1141,7 +1170,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
         fanOut: fanId,
       });
       linkIds.push(link);
-      out.push({ session_id: id, link_id: link, harness: h.id, ...ranWith(id) });
+      out.push({ session_id: id, link_id: link, harness: h.id, access: accessOf(id), ...ranWith(id) });
       deliver(id, delivered(call.prompt, caller.title), link);
     } catch (error) {
       // The reason, not the name of the error class: the harness says why it could not start.

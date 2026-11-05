@@ -639,6 +639,8 @@ export interface PermissionRequest {
   options: PermissionOption[];
   question?: Question;
   diffs: FileDiff[];
+  /** When the app received it, so several waiting requests can read oldest first. */
+  at?: number;
 }
 
 function parseKind(value: unknown): PermissionKind | undefined {

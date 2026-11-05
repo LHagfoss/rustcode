@@ -28,6 +28,7 @@ import {
   linkGroupStatus,
   stripLinks,
 } from "../state/orchestration";
+import { modeLabel } from "../state/permissions";
 import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
 import { AgentGroupHeader, type AgentState, ThreadAgentRow, useNow } from "./AgentViews";
@@ -221,8 +222,8 @@ export function GrantDialog() {
             {starts && (
               <span>
                 A new thread{grant.harnesses?.length ? ` on ${grant.harnesses.join(", ")}` : ""}
-                {grant.worktree ? ", each in its own worktree," : ""} gets this as its first message. It runs
-                with its own approvals and sandbox.
+                {grant.worktree ? ", each in its own worktree," : ""} gets this as its first message.{" "}
+                {`It runs at ${modeLabel(grant.access ?? "ask")}, never more than this thread, with its own approvals and sandbox.`}
               </span>
             )}
             {grant.kind === "message" && (

@@ -7,6 +7,7 @@
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
+import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
 import { withWakeMark } from "./thread";
 
@@ -1000,7 +1001,11 @@ export function linkResult(
       entry.idle_ms = Math.max(0, extra.now - activity.lastAt);
     }
   }
-  if (state === "needs_user") entry.note = "That thread is waiting for the user to answer it there.";
+  // The user answers it wherever they see the card: in that thread's chat, or in the transcript of
+  // the thread above it (the card is shown in both). The agent still cannot answer it.
+  if (state === "needs_user")
+    entry.note =
+      "That thread is waiting for the user to answer it in the app, in its chat or the one above it.";
   return entry;
 }
 
@@ -1343,6 +1348,8 @@ export interface GrantAsk {
   detail: string;
   project?: string;
   harnesses?: string[];
+  /** The access a new thread starts at (`start`, `fan_out`): never more than the caller's own. */
+  access?: PermissionMode;
   worktree?: boolean;
 }
 
