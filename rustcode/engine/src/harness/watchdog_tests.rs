@@ -64,8 +64,15 @@ async fn fake_agent(
                         }
                     }
                 }
-                // A cancel is answered when the test finishes the turn.
-                Incoming::Notification { .. } => {}
+                // A turn the user stopped stops at once; a turn the test wants
+                // stopped otherwise is answered by `Step::Finish`.
+                Incoming::Notification { method, .. } => {
+                    if method == "session/cancel"
+                        && let Some(id) = prompt.take()
+                    {
+                        peer.respond(id, Ok(json!({"stopReason": "cancelled"})));
+                    }
+                }
                 Incoming::Barrier(done) => {
                     let _ = done.send(());
                 }
@@ -175,6 +182,22 @@ impl Fixture {
         let session = Arc::clone(&self.session);
         let prompt = vec![ContentBlock::Text(TextContent::new(text.to_owned()))];
         tokio::spawn(async move { session.prompt(prompt).await })
+    }
+
+    /// Wait for `count` requests to wait on the user: an answer reaches the
+    /// clock off the sink's own task.
+    async fn waiting_requests(&self, count: usize) {
+        for _ in 0..100 {
+            if self.session.waiting_requests() == count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(
+            self.session.waiting_requests(),
+            count,
+            "expected {count} requests waiting on the user"
+        );
     }
 
     fn step(&self, step: Step) {
@@ -302,13 +325,62 @@ async fn a_permission_waiting_on_the_user_never_times_out() {
         "a turn waiting on the user never times out"
     );
 
-    answer
-        .send(RequestPermissionResponse::new(
-            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("allow")),
-        ))
-        .unwrap();
+    answer.send(allowed()).unwrap();
     fixture.step(Step::Finish);
     assert_eq!(turn.await.unwrap(), Ok(StopReason::EndTurn));
+}
+
+/// A permission left open by a turn that ended is still the user's: answering
+/// it must not be counted as answering the next turn's.
+#[tokio::test(start_paused = true)]
+async fn a_permission_left_open_by_the_last_turn_holds_the_next_ones_deadline() {
+    let mut fixture = Fixture::start(Some(TEN_MINUTES)).await;
+    // Turn 1 asks for an approval and the user stops the turn with it open.
+    let first = fixture.run("first question");
+    fixture.prompted().await;
+    fixture.step(tool_call("t1", "pending"));
+    fixture.update("tool_call").await;
+    fixture.step(Step::AskPermission);
+    let first_ask = fixture.asks.recv().await.expect("the user is asked");
+    fixture.session.cancel();
+    assert_eq!(first.await.unwrap(), Ok(StopReason::Cancelled));
+
+    // Turn 2 asks for its own, so two requests wait on the user.
+    let second = fixture.run("second question");
+    fixture.prompted().await;
+    fixture.step(Step::AskPermission);
+    let second_ask = fixture.asks.recv().await.expect("the user is asked again");
+
+    assert_eq!(
+        fixture.session.waiting_requests(),
+        2,
+        "the card the last turn left and this turn's both wait on the user"
+    );
+
+    // Answering the old card leaves the new one open.
+    first_ask.send(allowed()).unwrap();
+    fixture.waiting_requests(1).await;
+    tokio::time::advance(Duration::from_secs(2 * 60 * 60)).await;
+    assert!(
+        !second.is_finished(),
+        "the second request still waits on the user, so this turn never times out"
+    );
+
+    // Answering the last one lets the deadline run again.
+    second_ask.send(allowed()).unwrap();
+    fixture.waiting_requests(0).await;
+    tokio::time::advance(Duration::from_secs(11 * 60)).await;
+    let error = second.await.unwrap().unwrap_err();
+    assert_eq!(
+        error,
+        "No output from quiet-acp for 10 minutes. Send a message to try again."
+    );
+}
+
+fn allowed() -> RequestPermissionResponse {
+    RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+        SelectedPermissionOutcome::new("allow"),
+    ))
 }
 
 #[tokio::test(start_paused = true)]
@@ -499,6 +571,12 @@ fn a_permission_holds_the_deadline_until_it_is_answered() {
     let progress = Progress::new();
     progress.begin_turn();
     let waiting = progress.waiting();
+    assert!(progress.blocked());
+    // A new turn and a replaced harness do not answer a card the user still has
+    // open: only that request's own guard gives its count back.
+    progress.begin_turn();
+    assert!(progress.blocked());
+    progress.reset();
     assert!(progress.blocked());
     drop(waiting);
     assert!(!progress.blocked());

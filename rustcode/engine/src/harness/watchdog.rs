@@ -72,23 +72,25 @@ impl Progress {
     }
 
     /// A turn is starting: nothing a finished turn left behind still runs.
+    /// Permissions are not cleared: each answered request drops its own guard
+    /// ([`Waiting`]), and zeroing the count here would let a request left open
+    /// by the last turn answer for one the user has not seen.
     pub(crate) fn begin_turn(&self) {
         {
             let mut state = self.lock();
             state.tools.clear();
-            state.waiting = 0;
             Self::touch_at(&mut state);
         }
         self.signal();
     }
 
-    /// The harness was replaced: its tools, permissions and background work
-    /// went with the process.
+    /// The harness was replaced: its tools and background work went with the
+    /// process. A permission the user still has open is not the new process's,
+    /// so it keeps holding the deadline until it is answered.
     pub(crate) fn reset(&self) {
         {
             let mut state = self.lock();
             state.tools.clear();
-            state.waiting = 0;
             state.background = None;
             Self::touch_at(&mut state);
         }
@@ -143,6 +145,12 @@ impl Progress {
     #[cfg(test)]
     pub(crate) fn last_output_at(&self) -> Option<Instant> {
         self.lock().last
+    }
+
+    /// How many permission requests and questions wait on the user (tests).
+    #[cfg(test)]
+    pub(crate) fn waiting_count(&self) -> usize {
+        self.lock().waiting
     }
 
     /// Whether silence is expected right now because something is running.
@@ -224,6 +232,9 @@ impl Drop for Waiting {
     fn drop(&mut self) {
         {
             let mut state = self.progress.lock();
+            // Each guard gives back exactly the count it took, so no guard can
+            // release a request another one is still holding; `saturating_sub`
+            // only keeps the count from underflowing.
             state.waiting = state.waiting.saturating_sub(1);
             Progress::touch_at(&mut state);
         }

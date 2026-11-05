@@ -539,6 +539,12 @@ impl ExternalSession {
         self.out.clone()
     }
 
+    /// How many permission requests and questions wait on the user (tests).
+    #[cfg(test)]
+    pub(crate) fn waiting_requests(&self) -> usize {
+        self.progress.waiting_count()
+    }
+
     /// When the harness last counted as output (tests).
     #[cfg(test)]
     pub(crate) fn last_output_at(&self) -> Option<tokio::time::Instant> {
