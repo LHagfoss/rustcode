@@ -33,7 +33,8 @@ export function UsagePage() {
     setLoading(true);
     try {
       // Showing this page (or Refresh) is the explicit consent that also
-      // reads each account's own sign-in; the background poll never does.
+      // reads each account's own sign-in at once; the background reads one
+      // account at a time, the one the thread on screen runs on.
       const answer = parsePlans(
         await request(Method.usagePlans, { claude: withClaude, claudeAccounts: withClaude }, 20_000),
       );

@@ -123,6 +123,7 @@ import {
   MIN_ACTIVE_LINKS,
 } from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
+import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
 import { nextQueued } from "./queue";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
@@ -1271,6 +1272,10 @@ export function selectThread(id: string | null) {
   clearFinished(id);
   dismissOverlays();
   set({ selectedId: id, switcherOpen: false, settings: null, view: { kind: "chat" } });
+  // The account this thread runs on may never have been read: its meter has no
+  // numbers until it is, and it appears without a visit to Settings › Usage.
+  // The list's summary names the account before the thread itself is opened.
+  void refreshPlanCache();
   if (id) void openThread(id);
 }
 
@@ -2284,6 +2289,9 @@ export async function runPrompt(
   threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
   void refreshSessions();
   void refreshPlanUsage(id);
+  // A window's numbers move with the turn, and so does the account's own row:
+  // the thread on screen asks again as it ends.
+  if (id === get().selectedId) void refreshPlanCache();
   void refreshAgents(id);
   void refreshCheckpoints(id);
   if ((outcome === "completed" || outcome === "failed") && id !== get().selectedId) {
@@ -2521,6 +2529,8 @@ export function pickNewThreadAccount(account: string | null) {
   const harness = newThreadChoice(get())?.harness;
   set({ newThreadAccount: account });
   if (harness) storeAccount(harness, account);
+  // The login picked may never have been read: its own meter numbers come now.
+  void refreshPlanCache();
 }
 
 export const addHarnessAccount = (harness: string, id: string, name: string) =>
@@ -2665,6 +2675,8 @@ export function switchNewThreadHarness(harness: string) {
     newThread: restoreChoice(snapshot, harness, appChoices(snapshot)),
     newThreadAccount: known.some((a) => a.id === remembered) ? remembered : null,
   });
+  // Another harness means another login, whose meter may have no numbers yet.
+  void refreshPlanCache();
 }
 
 /**
@@ -2700,6 +2712,8 @@ export async function switchThreadAccount(id: string, account: string | null): P
       "success",
     );
     void refreshPlanUsage(id);
+    // The account switched to may never have been read: its meter numbers come now.
+    void refreshPlanCache();
     return true;
   } catch (error) {
     toast(`Could not switch account: ${errorText(error)}`, "error");
@@ -2737,6 +2751,7 @@ export async function switchThreadHarness(id: string, harness: string): Promise<
     const opened = get().threads[id];
     if (opened && lacksModels(opened)) void ensureHarnessModels(harness);
     void refreshPlanUsage(id);
+    void refreshPlanCache();
     return true;
   } catch (error) {
     toast(`Could not switch harness: ${errorText(error)}`, "error");
@@ -3166,11 +3181,29 @@ export function planKeyFor(
 ): string | undefined {
   const harness = harnessOf(s, threadId);
   if (!harness) return undefined;
-  const known = s.harnesses?.harnesses.find((h) => h.id === harness);
-  const account = threadId
-    ? s.threads[threadId]?.harness?.account
-    : newThreadAccountOn(known, s.newThreadAccount, s.signedOutLogins);
-  return harnessPlanKey(harness, account ?? null);
+  return harnessPlanKey(harness, accountOn(s, threadId));
+}
+
+/**
+ * The named account a thread runs on, null for its harness's default login: its
+ * own record once opened, else the list's summary of it. With no thread, the
+ * account the next thread will start on.
+ */
+export function accountOn(
+  s: Pick<
+    AppState,
+    "threads" | "sessions" | "newThread" | "newThreadAccount" | "harnesses" | "signedOutLogins"
+  >,
+  threadId?: string,
+): string | null {
+  if (!threadId) {
+    const harness = harnessOf(s);
+    const known = s.harnesses?.harnesses.find((h) => h.id === harness);
+    return newThreadAccountOn(known, s.newThreadAccount, s.signedOutLogins);
+  }
+  const own = s.threads[threadId]?.harness?.account;
+  if (own !== undefined) return own ?? null;
+  return s.sessions.find((x) => x.id === threadId)?.account ?? null;
 }
 
 /** The state `commandsFor` reads. */
@@ -3347,7 +3380,7 @@ export async function refreshPlanUsage(id: string): Promise<void> {
     const harness = harnessOf(get(), id);
     if (usage && harness && harness !== "rustcode") {
       // The account's own row, so it never overwrites another login's numbers.
-      const key = harnessPlanKey(harness, get().threads[id]?.harness?.account);
+      const key = harnessPlanKey(harness, accountOn(get(), id));
       commitPlans({
         [key]: { ...usage, fetchedAt, source: harness, harness },
       });
@@ -3362,9 +3395,15 @@ export async function refreshPlanUsage(id: string): Promise<void> {
   }
 }
 
-let plansInFlight = false;
-/** Claude's answer could not be read: the background poll stops asking for it. */
-let claudePaused = false;
+let plansInFlight: PlansAsk | null = null;
+/** Asks that arrived while one was in flight: run after it, coalesced (state/plans.ts). */
+let plansQueued: PlansAsk[] = [];
+/**
+ * The Claude logins the background read leaves alone: the default login, and
+ * each account whose Keychain read was denied (or which is signed out), so a
+ * Deny never prompts every three minutes. Settings' own look clears them.
+ */
+let planPauses: PlanPauses = NO_PAUSES;
 
 /** The consent Settings › Usage keeps before Claude's sign-in is read from the Keychain. */
 export const CLAUDE_USAGE_KEY = "rustcode.claudeUsage";
@@ -3383,7 +3422,7 @@ export function claudeUsageAllowed(): boolean {
  */
 export function setClaudeUsageAllowed(on: boolean): void {
   store(CLAUDE_USAGE_KEY, on ? "1" : "0");
-  claudePaused = false;
+  planPauses = NO_PAUSES;
   if (on) return;
   // Every Claude login, the default one and each account's own row.
   setPlanCache(
@@ -3400,13 +3439,14 @@ export function setClaudeUsageAllowed(on: boolean): void {
 
 /**
  * Folds a plans answer into the cache: a signed-in harness's windows go in, one
- * that is signed out or gone loses its entry, and a Claude answer that could
- * not be read stops the background poll asking again (a Deny in the Keychain
- * must not prompt every three minutes). `asked` is Settings' own call, which
- * is what unpauses it.
+ * that is signed out or gone loses its entry, and a Claude login that could not
+ * be read stops the background poll asking for it again (a Deny in the Keychain
+ * must not prompt every three minutes). An answer may hold only some rows, so
+ * nothing it did not read is touched. `asked` is Settings' own call, which is
+ * what unpauses them.
  */
 export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
-  if (asked) claudePaused = false;
+  if (asked) planPauses = NO_PAUSES;
   const gone = answers.filter((p) => p.status === "signedOut" || p.status === "notInstalled").map(planKey);
   const kept = forgetPlans(get().planCache, gone);
   const learned = plansToCache(answers);
@@ -3414,42 +3454,62 @@ export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
   // Which logins are signed out, for the places that must not offer one: the
   // picker's "Default login" and a new thread's account (state/logins.ts).
   set({ signedOutLogins: signedOutFrom(answers, get().signedOutLogins) });
-  // Only the default login's failure pauses the poll; an account without a
-  // sign-in is that account's own row and must not stop Claude's meter.
-  if (
-    answers.some(
-      (p) =>
-        planHarness(p.id) === "claude-code" &&
-        !p.account &&
-        (p.status === "signedOut" || p.status === "unavailable"),
-    )
-  ) {
-    claudePaused = true;
-  }
+  // A login whose read was denied, or that is signed out, pauses its own row
+  // only: the default login's failure must not stop a named account's meter,
+  // and an account without a sign-in must not stop the default login's.
+  planPauses = pausesAfter(answers, planPauses);
+}
+
+/**
+ * What a refresh asks the engine for: the default login and the account of the
+ * thread on screen, each only with consent and while it was not paused.
+ */
+function currentPlansAsk(explicit: boolean): PlansAsk {
+  const s = get();
+  const threadId = s.selectedId ?? undefined;
+  return plansAskFor({
+    allowed: claudeUsageAllowed(),
+    harness: harnessOf(s, threadId),
+    account: accountOn(s, threadId),
+    pauses: planPauses,
+    explicit,
+  });
 }
 
 /**
  * Asks for every subscription's plan (`_rustcode/usage/plans`, no thread
- * needed) and folds the answer into the cache. One request at a time; a failed
- * one keeps the last numbers for the next poll. Claude is asked for only with
- * consent and while the last answer could be read.
+ * needed) and folds the answer into the cache. Claude is asked for only with
+ * consent: the default login, and the account of the thread on screen so its
+ * meter has numbers without a visit to Settings › Usage, one Keychain item at a
+ * time. One request at a time: anything asked for while one is in flight runs
+ * after it, coalesced, so a hover during the poll is not dropped. A failed one
+ * keeps the last numbers for the next poll.
  */
 export async function refreshPlanCache(again = false): Promise<void> {
-  if (!connection || plansInFlight || get().status !== "ready") return;
-  // An explicit check asks again even after a signed-out answer paused the poll.
-  if (again) claudePaused = false;
-  plansInFlight = true;
-  try {
-    const result = await connection.request(
-      Method.usagePlans,
-      { claude: claudeUsageAllowed() && !claudePaused },
-      20_000,
-    );
-    commitPlansAnswer(parsePlans(result));
-  } catch {
-    // Cached numbers stay; the next poll tries again.
-  } finally {
-    plansInFlight = false;
+  if (!connection || get().status !== "ready") return;
+  const ask = currentPlansAsk(again);
+  // An explicit check asks again even after an answer paused a login.
+  if (again) planPauses = NO_PAUSES;
+  if (plansInFlight) {
+    plansQueued = queueAsks(plansQueued, ask);
+    return;
+  }
+  let next: PlansAsk | undefined = ask;
+  while (next && connection) {
+    plansInFlight = next;
+    try {
+      const result = await connection.request(
+        Method.usagePlans,
+        next.account ? { claude: next.claude, claudeAccount: next.account } : { claude: next.claude },
+        20_000,
+      );
+      commitPlansAnswer(parsePlans(result));
+    } catch {
+      // Cached numbers stay; the next poll tries again.
+    } finally {
+      plansInFlight = null;
+    }
+    next = plansQueued.shift();
   }
 }
 
@@ -3507,10 +3567,11 @@ function stopPlanPolling() {
   if (planResetTimer) clearTimeout(planResetTimer);
   planResetTimer = null;
   planResetDue = 0;
-  claudePaused = false;
+  planPauses = NO_PAUSES;
   if (plansOnVisible) document.removeEventListener("visibilitychange", plansOnVisible);
   plansOnVisible = null;
-  plansInFlight = false;
+  plansInFlight = null;
+  plansQueued = [];
 }
 
 // ---------------------------------------------------------------- UI

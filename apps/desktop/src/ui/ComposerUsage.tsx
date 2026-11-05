@@ -208,10 +208,12 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
  * when it has them; otherwise the harness's plan as last learnt, from Settings'
  * plans call or another thread on that harness, marked with its age. (Claude
  * Code's limits answer null: only the plans call can read its Keychain.) The
- * numbers refresh on hover, on a turn's end, and from the app's three-minute
- * poll, so a new thread knows the limits before its first message. Clicking the
- * meter opens Settings' Usage page, the app's own page for it now that the
- * sidebar's footer no longer carries a button.
+ * numbers refresh on hover, when the thread is selected, on a turn's end, and
+ * from the app's three-minute poll, so a new thread knows the limits before its
+ * first message and a named account's meter appears without visiting Settings.
+ * Each login keeps its own numbers. Clicking the meter opens Settings' Usage
+ * page, the app's own page for it now that the sidebar's footer no longer
+ * carries a button.
  */
 export function PlanMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));

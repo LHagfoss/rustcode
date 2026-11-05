@@ -496,6 +496,30 @@ function seedThreads(): MockThread[] {
       ],
     },
     {
+      // A thread on a named account: its plan numbers are that account's own,
+      // read when the thread is opened (`_rustcode/usage/plans` with its id).
+      id: "mock-thread-claude",
+      cwd: "/Users/you/code/website",
+      title: "Tidy the pricing page copy",
+      updatedAt: minutes(12),
+      harness: "claude-code",
+      account: "paral-2",
+      model: "sonnet",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-thread-claude", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Tighten the pricing page: three tiers, no jargon."),
+        }),
+        update("mock-thread-claude", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Rewrote the three tier blurbs; each is two lines now."),
+          ...turn(22_000),
+        }),
+      ],
+    },
+    {
       id: "mock-thread-4",
       cwd: "/Users/you/.config/rustcode/worktrees/rustcode/feat-login-form",
       title: "Add the login form",
@@ -1110,7 +1134,22 @@ export class MockEngine {
       }
       case "_rustcode/usage/plans": {
         const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
-        const p = params as { claude?: boolean } | undefined;
+        const p = params as
+          | { claude?: boolean; claudeAccounts?: boolean; claudeAccount?: string }
+          | undefined;
+        // One row per login, as the engine answers it: the default login when
+        // asked for, and each account the client names (all of them on an
+        // explicit look in Settings › Usage, else the one the app asks for).
+        const accounts = [
+          {
+            id: "paral-2",
+            name: "Paral 2",
+            windows: [
+              { label: "5-hour", usedPercent: 4, windowMinutes: 300, resetsAt: at(4) },
+              { label: "Weekly", usedPercent: 12, windowMinutes: 10080, resetsAt: at(90) },
+            ],
+          },
+        ].filter((a) => p?.claude && (p?.claudeAccounts || a.id === p?.claudeAccount));
         return {
           plans: [
             p?.claude
@@ -1127,23 +1166,16 @@ export class MockEngine {
                   ],
                 }
               : { id: "claude", name: "Claude", via: "Claude Code", status: "notAsked", windows: [] },
-            ...(p?.claude
-              ? [
-                  {
-                    id: "claude:paral-2",
-                    name: "Paral 2",
-                    via: "Claude Code",
-                    harness: "claude-code",
-                    account: "paral-2",
-                    status: "ok",
-                    plan: "max",
-                    windows: [
-                      { label: "5-hour", usedPercent: 4, windowMinutes: 300, resetsAt: at(4) },
-                      { label: "Weekly", usedPercent: 12, windowMinutes: 10080, resetsAt: at(90) },
-                    ],
-                  },
-                ]
-              : []),
+            ...accounts.map((a) => ({
+              id: `claude:${a.id}`,
+              name: a.name,
+              via: "Claude Code",
+              harness: "claude-code",
+              account: a.id,
+              status: "ok",
+              plan: "max",
+              windows: a.windows,
+            })),
             {
               id: "codex",
               name: "ChatGPT",
@@ -1157,7 +1189,13 @@ export class MockEngine {
           ],
         };
       }
-      case "_rustcode/usage/limits":
+      case "_rustcode/usage/limits": {
+        // A thread's own windows, as the engine answers them: Claude Code's are
+        // null (only its sign-in's plan read has them), so the composer meter
+        // reads the account's row from `_rustcode/usage/plans`.
+        const sessionId = str(obj(params)?.sessionId);
+        const thread = this.threads.find((t) => t.id === sessionId);
+        if (thread?.harness === "claude-code") return null;
         return {
           source: "codex",
           primary: { usedPercent: 42, windowMinutes: 300, resetsAt: Math.floor(Date.now() / 1000) + 7200 },
@@ -1167,6 +1205,7 @@ export class MockEngine {
             resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400,
           },
         };
+      }
       case "_rustcode/pulls":
         return {
           list: {
