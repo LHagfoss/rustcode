@@ -112,6 +112,7 @@ import {
   threadTurnEnded,
   wakeTick,
 } from "./host";
+import { LIMIT_RESUME_TEXT, type LimitWait, limitReset, nextWait, waitDue, waitHolds } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
 import {
   CAPABILITY_VERSION,
@@ -336,6 +337,10 @@ export interface AppState {
   readAcrossProjects: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
+  /** A thread stopped by its plan's limit continues when the limit resets. */
+  continueAfterLimit: boolean;
+  /** The threads waiting on that, by thread id (state/limitResume.ts). */
+  limitWaits: Record<string, LimitWait>;
   /** The interface in SF Pro Rounded (the default) or the standard system font. */
   roundedFont: boolean;
   /** A streaming reply's new words fade in as the model writes them. */
@@ -410,6 +415,8 @@ const STORAGE = {
   threadLimit: "rustcode.threadLimit",
   readAcrossProjects: "rustcode.readAcrossProjects",
   resumeAfterRestart: "rustcode.resumeAfterRestart",
+  continueAfterLimit: "rustcode.continueAfterLimit",
+  limitWaits: "rustcode.limitWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
   runningThreads: "rustcode.runningThreads",
   roundedFont: "rustcode.roundedFont",
@@ -445,6 +452,7 @@ export const SETTINGS_DEFAULTS = {
   chatWidth: CHAT_WIDTH_DEFAULT,
   headerButtons: DEFAULT_HEADER_BUTTONS,
   resumeAfterRestart: true,
+  continueAfterLimit: true,
   orchestration: true,
   threadLimit: MAX_ACTIVE_LINKS,
   readAcrossProjects: true,
@@ -511,6 +519,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
+  continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
+  limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
   chatWidth: parseChatWidth(stored(STORAGE.chatWidth)),
@@ -883,6 +893,11 @@ async function handshake(): Promise<void> {
     const selected = get().selectedId;
     if (selected) void openThread(selected);
     if (connection === conn) void resumeInterrupted(interrupted);
+    // Waits survive a restart, and one may have come due while the app was closed.
+    if (connection === conn) {
+      syncLimitTimer();
+      void continueDueThreads();
+    }
   } catch (error) {
     set({ status: "closed", statusDetail: errorText(error) });
   }
@@ -2239,7 +2254,14 @@ export async function runPrompt(
   id: string,
   text: string,
   extras: ComposeExtras = emptyExtras,
-  options: { fromView?: boolean; link?: string; wake?: boolean; automatic?: boolean } = {},
+  options: {
+    fromView?: boolean;
+    link?: string;
+    wake?: boolean;
+    automatic?: boolean;
+    /** The turn that continues after a limit: its wait is settled when it ends. */
+    limitResume?: boolean;
+  } = {},
 ): Promise<void> {
   const conn = engine();
   const thread = get().threads[id];
@@ -2247,6 +2269,8 @@ export async function runPrompt(
   // when it was started by an agent (state/topLevel.ts). A resume after a
   // restart is not a message the user sent.
   if (!options.link && !options.wake && !options.automatic) markMessaged(id);
+  // Whoever starts a turn now moots the wait, and if this one hits the limit too it waits again.
+  if (!options.limitResume && !thread?.running) dropLimitWait(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can
   // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
   // message typed meanwhile, and starts when this turn ends.
@@ -2311,6 +2335,7 @@ export async function runPrompt(
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
   if (outcome === "completed") markFinished(id);
   else if (outcome === "failed") markFinished(id, Date.now(), true);
+  const waiting = settleLimitWait(id, outcome, failure, startIndex);
   // A report command that answered in the panel leaves no turn behind: its message and footer go.
   const reported = get().report?.threadId === id;
   if (reported && outcome === "completed" && isReportCommand(id, text, extras)) {
@@ -2331,16 +2356,21 @@ export async function runPrompt(
   if ((outcome === "completed" || outcome === "failed") && id !== get().selectedId) {
     const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
     toast(
-      outcome === "failed" ? `“${name}” failed` : `“${name}” finished`,
-      outcome === "failed" ? "error" : "success",
+      waiting
+        ? `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
+        : outcome === "failed"
+          ? `“${name}” failed`
+          : `“${name}” finished`,
+      waiting ? "info" : outcome === "failed" ? "error" : "success",
       { action: { label: "Open", run: () => selectThread(id) } },
     );
   }
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
   // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
   // Resume starts them.
+  // Nor does one go out into a limit: it waits for the turn that continues.
   const after = get().threads[id];
-  const next = after ? nextQueued(after.queue, after) : undefined;
+  const next = after && !waiting ? nextQueued(after.queue, after) : undefined;
   if (next) {
     removeQueued(id, next.id);
     await runPrompt(id, next.text, next.extras, {
@@ -3642,6 +3672,8 @@ export async function request<T = Json>(
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
   clearTimeout(slowTimer);
+  if (limitTimer) clearInterval(limitTimer);
+  limitTimer = null;
   clearPageCache();
   stopPlanPolling();
   resetWaits();
@@ -3673,6 +3705,8 @@ export function resetForTests() {
     onboardingOpen: false,
     toasts: [],
     toastsPaused: false,
+    limitWaits: {},
+    continueAfterLimit: true,
     agent: undefined,
     pinned: [],
     archived: {},
@@ -3716,6 +3750,121 @@ function isReportCommand(id: string, text: string, extras: ComposeExtras): boole
 
 export function closeReport() {
   set({ report: null });
+}
+
+// ---------------------------------------------------------------- continuing after a limit
+
+function storeLimitWaits(next: Record<string, LimitWait>) {
+  set({ limitWaits: next });
+  store(STORAGE.limitWaits, JSON.stringify(next));
+  syncLimitTimer();
+}
+
+/** The user's call, or something they did that makes the wait moot: no turn goes out for it. */
+export function dropLimitWait(id: string) {
+  const { [id]: gone, ...rest } = get().limitWaits;
+  if (gone) storeLimitWaits(rest);
+}
+
+/** The time a wait ends, as the row and the toast say it. */
+export function limitTime(until: number, now = Date.now()): string {
+  const at = new Date(until);
+  const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (new Date(now).toDateString() === at.toDateString()) return time;
+  return `${at.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
+}
+
+/**
+ * A turn ended: on a limit it waits for the reset, on anything else the wait is
+ * over. The limit is read from the failure or, as Claude Code says it, from the
+ * reply. A stop by the user always ends it. Returns the wait a limit started.
+ */
+function settleLimitWait(
+  id: string,
+  outcome: "completed" | "cancelled" | "failed",
+  failure: string | undefined,
+  startIndex: number,
+): LimitWait | null {
+  const s = get();
+  const previous = s.limitWaits[id];
+  if (!s.continueAfterLimit || outcome === "cancelled") {
+    dropLimitWait(id);
+    return null;
+  }
+  const reply = s.threads[id]?.items.slice(startIndex).findLast((i) => i.kind === "assistant");
+  const said = failure ?? (reply?.kind === "assistant" ? reply.text : undefined);
+  const key = planKeyFor(s, id);
+  const windows = (key ? s.planCache[key]?.windows : undefined) ?? [];
+  const now = Date.now();
+  const until = limitReset(said, now, windows);
+  if (until === null) {
+    dropLimitWait(id);
+    return null;
+  }
+  const wait = nextWait(previous, { until, harness: harnessOf(s, id), account: accountOn(s, id) });
+  if (!wait) {
+    dropLimitWait(id);
+    return null;
+  }
+  storeLimitWaits({ ...get().limitWaits, [id]: wait });
+  return wait;
+}
+
+let limitTimer: ReturnType<typeof setInterval> | null = null;
+
+/** One slow timer while anything waits: a Mac that slept wakes past the reset and still continues. */
+function syncLimitTimer() {
+  const waiting = Object.keys(get().limitWaits).length > 0;
+  if (waiting && !limitTimer) limitTimer = setInterval(() => void continueDueThreads(), 15_000);
+  else if (!waiting && limitTimer) {
+    clearInterval(limitTimer);
+    limitTimer = null;
+  }
+}
+
+let continuing = false;
+
+/** Each thread whose limit has reset carries on, unless it now runs on something else. */
+export async function continueDueThreads(now = Date.now()): Promise<void> {
+  if (continuing || get().status !== "ready") return;
+  continuing = true;
+  try {
+    for (const [id, wait] of Object.entries(get().limitWaits)) {
+      if (!get().sessions.some((x) => x.id === id) || get().archived[id]) {
+        if (get().sessionsLoaded) dropLimitWait(id);
+        continue;
+      }
+      const holds = () => {
+        const s = get();
+        return waitHolds(wait, { harness: harnessOf(s, id), account: accountOn(s, id) });
+      };
+      // Switched already: another harness or login is not this limit, so nothing starts on its own.
+      if (!holds()) {
+        dropLimitWait(id);
+        continue;
+      }
+      if (!waitDue(wait, now)) continue;
+      await openThread(id);
+      for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const thread = get().threads[id];
+      if (!thread?.loaded || thread.running) continue;
+      if (!holds()) {
+        dropLimitWait(id);
+        continue;
+      }
+      void runPrompt(id, LIMIT_RESUME_TEXT, undefined, { automatic: true, limitResume: true });
+    }
+  } finally {
+    continuing = false;
+  }
+}
+
+export function setContinueAfterLimit(on: boolean) {
+  set({ continueAfterLimit: on });
+  store(STORAGE.continueAfterLimit, on ? "1" : "0");
+  if (!on) storeLimitWaits({});
 }
 
 // ---------------------------------------------------------------- resuming after a restart
