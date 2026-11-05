@@ -182,6 +182,23 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "claude account login plan usage windows separate limits",
   },
 
+  // ------------------------------------------------------------ Statistics
+  {
+    section: "statistics",
+    title: "Recorded usage",
+    keywords: "tokens cost turns cached cache write reported usd spend total",
+  },
+  {
+    section: "statistics",
+    title: "By harness and model",
+    keywords: "tokens per harness model cost reported breakdown",
+  },
+  {
+    section: "statistics",
+    title: "Threads",
+    keywords: "per thread totals delegates subagents children cost tokens",
+  },
+
   // ------------------------------------------------------------ Advanced
   {
     section: "advanced",

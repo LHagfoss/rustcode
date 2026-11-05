@@ -104,6 +104,13 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
     CREATE INDEX thread_links_target ON thread_links(target);
     CREATE TABLE orchestration_state (key TEXT PRIMARY KEY, body TEXT NOT NULL);",
     ),
+    (
+        3,
+        "thread_parents",
+        "ALTER TABLE threads ADD COLUMN parent_id TEXT;
+    ALTER TABLE threads ADD COLUMN parent_title TEXT;
+    CREATE INDEX threads_parent ON threads(parent_id);",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -241,6 +248,11 @@ pub struct ThreadRow {
     pub harness: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// The thread that started this one, from its metadata. Kept so a usage
+    /// read can roll a thread's delegates up without the app's session list.
+    pub parent_id: Option<String>,
+    /// The parent's title, when only a title was recovered (older threads).
+    pub parent_title: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -372,7 +384,8 @@ pub fn usage_at(
         GroupBy::Project => ("COALESCE(th.project, th.cwd, '') AS project", "1"),
         GroupBy::Thread => (
             "t.thread_id AS thread, th.title AS title, \
-             COALESCE(th.project, th.cwd, '') AS project, COALESCE(th.harness, t.harness) AS harness",
+             COALESCE(th.project, th.cwd, '') AS project, COALESCE(th.harness, t.harness) AS harness, \
+             th.parent_id AS parent_id, th.parent_title AS parent_title",
             "1",
         ),
     };
@@ -383,7 +396,19 @@ pub fn usage_at(
                 SUM(t.cache_write_tokens) AS cache_write_tokens, SUM(t.cost_usd) AS cost_usd, \
                 COUNT(*) AS turns, \
                 SUM(CASE WHEN t.input_tokens IS NULL AND t.output_tokens IS NULL THEN 1 ELSE 0 END) \
-                    AS turns_without_tokens \
+                    AS turns_without_tokens, \
+                SUM(CASE WHEN t.input_tokens IS NULL OR t.output_tokens IS NULL \
+                    OR t.cached_tokens IS NULL OR t.cache_write_tokens IS NULL THEN 1 ELSE 0 END) \
+                    AS turns_without_any_tokens, \
+                SUM(CASE WHEN t.input_tokens IS NULL THEN 1 ELSE 0 END) \
+                    AS turns_without_input_tokens, \
+                SUM(CASE WHEN t.output_tokens IS NULL THEN 1 ELSE 0 END) \
+                    AS turns_without_output_tokens, \
+                SUM(CASE WHEN t.cached_tokens IS NULL THEN 1 ELSE 0 END) \
+                    AS turns_without_cached_tokens, \
+                SUM(CASE WHEN t.cache_write_tokens IS NULL THEN 1 ELSE 0 END) \
+                    AS turns_without_cache_write_tokens, \
+                SUM(CASE WHEN t.cost_usd IS NULL THEN 1 ELSE 0 END) AS turns_without_cost \
          FROM turns t LEFT JOIN threads th ON th.id = t.thread_id"
     );
     let mut filters: Vec<String> = Vec::new();
@@ -417,17 +442,33 @@ pub fn usage_at(
             .filter_map(|row| number(row, key))
             .sum::<f64>()
     };
-    let any_cost = result
-        .rows
-        .iter()
-        .any(|row| number(row, "cost_usd").is_some());
+    // A column no row reported stays absent, never 0: an all-NULL group has no
+    // total, not a total of nothing. Counts below always have a value.
+    let sum_optional = |key: &str| {
+        let mut total = 0.0;
+        let mut any = false;
+        for row in &result.rows {
+            if let Some(value) = number(row, key) {
+                any = true;
+                total += value;
+            }
+        }
+        any.then_some(total)
+    };
     let totals = json!({
-        "input_tokens": sum("input_tokens"),
-        "output_tokens": sum("output_tokens"),
-        "cached_tokens": sum("cached_tokens"),
-        "cache_write_tokens": sum("cache_write_tokens"),
-        "cost_usd": any_cost.then(|| sum("cost_usd")),
+        "input_tokens": sum_optional("input_tokens"),
+        "output_tokens": sum_optional("output_tokens"),
+        "cached_tokens": sum_optional("cached_tokens"),
+        "cache_write_tokens": sum_optional("cache_write_tokens"),
+        "cost_usd": sum_optional("cost_usd"),
         "turns": sum("turns"),
+        "turns_without_tokens": sum("turns_without_tokens"),
+        "turns_without_any_tokens": sum("turns_without_any_tokens"),
+        "turns_without_input_tokens": sum("turns_without_input_tokens"),
+        "turns_without_output_tokens": sum("turns_without_output_tokens"),
+        "turns_without_cached_tokens": sum("turns_without_cached_tokens"),
+        "turns_without_cache_write_tokens": sum("turns_without_cache_write_tokens"),
+        "turns_without_cost": sum("turns_without_cost"),
     });
     Ok(json!({
         "group_by": group_by.name(),
@@ -913,13 +954,18 @@ fn live_thread(turn: &TurnRow) -> ThreadRow {
             crate::config::load_session_workspace(id)
                 .map(|workspace| workspace.cwd.display().to_string())
         });
+    let metadata = crate::config::load_session_metadata(id);
     let created_at = record
         .as_ref()
         .map(|record| record.created_at.clone())
         .or_else(|| {
-            crate::config::load_session_metadata(id)
+            metadata
+                .as_ref()
                 .map(|metadata| millis_to_rfc3339(metadata.created_at_ms as i64))
         });
+    let parent = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.parent.as_ref());
     ThreadRow {
         id: id.to_owned(),
         title: record
@@ -931,6 +977,8 @@ fn live_thread(turn: &TurnRow) -> ThreadRow {
         harness: turn.harness.clone(),
         model: turn.model.clone(),
         effort: record.as_ref().and_then(|record| record.effort.clone()),
+        parent_id: parent.and_then(|parent| parent.id.clone()),
+        parent_title: parent.and_then(|parent| parent.title.clone()),
         created_at,
         updated_at: turn.finished_at.clone(),
     }
@@ -940,8 +988,8 @@ fn upsert_thread(connection: &Connection, thread: &ThreadRow) -> Result<(), Stri
     connection
         .execute(
             "INSERT INTO threads (id, title, project, cwd, harness, model, effort,
-                    created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                    parent_id, parent_title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                 title = COALESCE(NULLIF(excluded.title, ''), threads.title),
                 project = COALESCE(excluded.project, threads.project),
@@ -949,6 +997,8 @@ fn upsert_thread(connection: &Connection, thread: &ThreadRow) -> Result<(), Stri
                 harness = COALESCE(excluded.harness, threads.harness),
                 model = COALESCE(excluded.model, threads.model),
                 effort = COALESCE(excluded.effort, threads.effort),
+                parent_id = COALESCE(excluded.parent_id, threads.parent_id),
+                parent_title = COALESCE(excluded.parent_title, threads.parent_title),
                 created_at = COALESCE(threads.created_at, excluded.created_at),
                 updated_at = COALESCE(excluded.updated_at, threads.updated_at)",
             params![
@@ -959,6 +1009,8 @@ fn upsert_thread(connection: &Connection, thread: &ThreadRow) -> Result<(), Stri
                 thread.harness,
                 thread.model,
                 thread.effort,
+                thread.parent_id,
+                thread.parent_title,
                 thread.created_at,
                 thread.updated_at,
             ],
@@ -991,6 +1043,8 @@ struct FolderFacts {
     native_session_id: Option<String>,
     /// The named account the thread ran on (`harness.json` `account`).
     account: Option<String>,
+    parent_id: Option<String>,
+    parent_title: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
     /// The thread ran on an external harness, so its usage is a session total.
@@ -1025,6 +1079,8 @@ struct HarnessFile {
 struct CreatedFile {
     #[serde(default)]
     created_at_ms: Option<i64>,
+    #[serde(default)]
+    parent: Option<rustcode_session::SessionParent>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1062,6 +1118,7 @@ fn millis_to_rfc3339(millis: i64) -> String {
 fn facts(dir: &Path) -> FolderFacts {
     let harness_file: Option<HarnessFile> = read_json(&dir.join("harness.json"));
     let created: Option<CreatedFile> = read_json(&dir.join("metadata.json"));
+    let parent = created.as_ref().and_then(|file| file.parent.clone());
     let workspace: Option<CwdFile> = read_json(&dir.join("workspace.json"));
     let cwd = harness_file
         .as_ref()
@@ -1093,6 +1150,8 @@ fn facts(dir: &Path) -> FolderFacts {
             .as_ref()
             .and_then(|file| file.native_session_id.clone()),
         account: harness_file.as_ref().and_then(|file| file.account.clone()),
+        parent_id: parent.as_ref().and_then(|parent| parent.id.clone()),
+        parent_title: parent.as_ref().and_then(|parent| parent.title.clone()),
         external: harness_file.is_some(),
         usage: harness_file.as_ref().and_then(|file| file.usage.clone()),
         created_at,
@@ -1166,6 +1225,8 @@ pub fn backfill(connection: &Connection, config_dir: &Path) -> Result<BackfillRe
             harness: facts.harness.clone(),
             model: facts.model.clone(),
             effort: facts.effort.clone(),
+            parent_id: facts.parent_id.clone(),
+            parent_title: facts.parent_title.clone(),
             created_at: facts.created_at.clone(),
             updated_at: facts.updated_at.clone(),
         };
@@ -1256,9 +1317,10 @@ pub fn backfill(connection: &Connection, config_dir: &Path) -> Result<BackfillRe
 }
 
 /// The backfill's own version. Bumped when a later release can read more than
-/// the previous one (v2: token counts from Claude Code and Pi logs, cost):
-/// the pass runs again and rewrites only rows still marked `backfill`.
-const BACKFILL_VERSION: i64 = 2;
+/// the previous one (v2: token counts from Claude Code and Pi logs, cost;
+/// v3: parent links): the pass runs again and rewrites only rows still marked
+/// `backfill`.
+const BACKFILL_VERSION: i64 = 3;
 
 /// Opens the store and backfills it once, on first use. Called at engine
 /// start (in the background) and by the `usage` / `data` commands.
@@ -1541,6 +1603,8 @@ mod tests {
                     harness: Some("codex".to_owned()),
                     model: Some("gpt-6-luna".to_owned()),
                     effort: None,
+                    parent_id: (id == "b").then(|| "a".to_owned()),
+                    parent_title: (id == "b").then(|| "Thread a".to_owned()),
                     created_at: Some("2026-11-01T10:00:00Z".to_owned()),
                     updated_at: Some("2026-11-01T10:00:00Z".to_owned()),
                 },
@@ -1596,16 +1660,49 @@ mod tests {
         assert_eq!(codex["output_tokens"], 30);
         assert_eq!(codex["turns"], 2);
         assert_eq!(codex["turns_without_tokens"], 0);
+        assert_eq!(codex["turns_without_input_tokens"], 0);
+        assert_eq!(codex["turns_without_output_tokens"], 0);
+        // Cache columns are NULL on both codex turns; no count is invented.
+        assert_eq!(codex["turns_without_cached_tokens"], 2);
+        assert_eq!(codex["turns_without_cache_write_tokens"], 2);
+        assert_eq!(codex["turns_without_any_tokens"], 2);
+        // No turn in this store reported a cost, so both of codex's are missing one.
+        assert_eq!(codex["turns_without_cost"], 2);
         // A harness that reported nothing is NULL, never a made-up zero.
         let claude = &rows(&by_harness)[1];
         assert!(claude["input_tokens"].is_null(), "{claude}");
         assert_eq!(claude["turns_without_tokens"], 1);
+        assert_eq!(claude["turns_without_input_tokens"], 1);
+        assert_eq!(claude["turns_without_output_tokens"], 1);
+        assert_eq!(claude["turns_without_cached_tokens"], 1);
+        assert_eq!(claude["turns_without_cache_write_tokens"], 1);
+        assert_eq!(claude["turns_without_any_tokens"], 1);
+        assert_eq!(claude["turns_without_cost"], 1);
         assert!(
             by_harness["totals"]["cost_usd"].is_null(),
             "nothing was priced"
         );
+        // Every cache count in the store is NULL: the total stays absent, not 0.
+        assert!(
+            by_harness["totals"]["cached_tokens"].is_null(),
+            "{by_harness}"
+        );
+        assert!(
+            by_harness["totals"]["cache_write_tokens"].is_null(),
+            "{by_harness}"
+        );
         assert_eq!(by_harness["totals"]["input_tokens"], 300.0);
         assert_eq!(by_harness["totals"]["turns"], 3.0);
+        assert_eq!(by_harness["totals"]["turns_without_tokens"], 1.0);
+        assert_eq!(by_harness["totals"]["turns_without_any_tokens"], 3.0);
+        assert_eq!(by_harness["totals"]["turns_without_input_tokens"], 1.0);
+        assert_eq!(by_harness["totals"]["turns_without_output_tokens"], 1.0);
+        assert_eq!(by_harness["totals"]["turns_without_cached_tokens"], 3.0);
+        assert_eq!(
+            by_harness["totals"]["turns_without_cache_write_tokens"],
+            3.0
+        );
+        assert_eq!(by_harness["totals"]["turns_without_cost"], 3.0);
         assert!(
             by_harness["note"]
                 .as_str()
@@ -1635,6 +1732,73 @@ mod tests {
         assert_eq!(first["thread"], "b");
         assert_eq!(first["title"], "Thread b");
         assert_eq!(first["project"], "/repo/b");
+        assert_eq!(first["parent_id"], "a");
+        assert_eq!(first["parent_title"], "Thread a");
+    }
+
+    #[test]
+    fn usage_counts_each_missing_token_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        upsert_thread(
+            &connection,
+            &ThreadRow {
+                id: "t".to_owned(),
+                title: Some("Thread t".to_owned()),
+                project: Some("/repo/t".to_owned()),
+                cwd: Some("/repo/t".to_owned()),
+                harness: Some("codex".to_owned()),
+                model: Some("gpt-6-luna".to_owned()),
+                effort: None,
+                parent_id: None,
+                parent_title: None,
+                created_at: None,
+                updated_at: None,
+            },
+        )
+        .unwrap();
+        let spent = |started: &str,
+                     input: Option<i64>,
+                     output: Option<i64>,
+                     cached: Option<i64>,
+                     cache_write: Option<i64>| TurnRow {
+            thread_id: "t".to_owned(),
+            started_at: started.to_owned(),
+            finished_at: Some(started.to_owned()),
+            harness: Some("codex".to_owned()),
+            model: Some("gpt-6-luna".to_owned()),
+            input_tokens: input,
+            output_tokens: output,
+            cached_tokens: cached,
+            cache_write_tokens: cache_write,
+            cost_usd: None,
+            status: "completed".to_owned(),
+            tool_calls: Vec::new(),
+        };
+        for turn in [
+            spent("2026-11-01T10:00:00Z", Some(10), Some(2), Some(3), Some(1)),
+            spent("2026-11-02T10:00:00Z", Some(5), None, None, None),
+            spent("2026-11-03T10:00:00Z", None, Some(4), None, Some(2)),
+            spent("2026-11-04T10:00:00Z", None, None, None, None),
+        ] {
+            write_turn(&connection, &turn).unwrap();
+        }
+
+        let answer = usage_at(&path, None, GroupBy::Harness, None).unwrap();
+        let row = &rows(&answer)[0];
+        assert_eq!(row["turns"], 4);
+        assert_eq!(row["turns_without_tokens"], 1, "only the all-NULL turn");
+        assert_eq!(row["turns_without_any_tokens"], 3);
+        assert_eq!(row["turns_without_input_tokens"], 2);
+        assert_eq!(row["turns_without_output_tokens"], 2);
+        assert_eq!(row["turns_without_cached_tokens"], 3);
+        assert_eq!(row["turns_without_cache_write_tokens"], 2);
+        assert_eq!(answer["totals"]["input_tokens"], 15.0);
+        assert_eq!(answer["totals"]["output_tokens"], 6.0);
+        assert_eq!(answer["totals"]["cached_tokens"], 3.0);
+        assert_eq!(answer["totals"]["cache_write_tokens"], 3.0);
+        assert_eq!(answer["totals"]["turns_without_any_tokens"], 3.0);
     }
 
     #[test]
@@ -1652,6 +1816,8 @@ mod tests {
                 harness: Some("codex".to_owned()),
                 model: None,
                 effort: None,
+                parent_id: None,
+                parent_title: None,
                 created_at: None,
                 updated_at: None,
             },
@@ -2047,7 +2213,8 @@ mod tests {
             if native {
                 std::fs::write(
                     folder.join("metadata.json"),
-                    r#"{"schema_version":1,"id":"x","created_at_ms":1793784000000}"#,
+                    r#"{"schema_version":1,"id":"x","created_at_ms":1793784000000,
+                        "parent":{"id":"01a10000-0000-0000-0000-000000000001","title":"Parent thread"}}"#,
                 )
                 .unwrap();
             }
@@ -2105,17 +2272,36 @@ mod tests {
         assert_eq!(input, 700);
         assert_eq!(title, "harness title 01a10000-0000-0000-0000-000000000001");
 
-        let native: (String, String, Option<String>) = connection
+        let native: (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = connection
             .query_row(
-                "SELECT harness, title, created_at FROM threads
+                "SELECT harness, title, created_at, parent_id, parent_title FROM threads
                  WHERE id = '01a10000-0000-0000-0000-000000000002'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(native.0, "rustcode");
         assert!(native.1.ends_with("02"));
         assert!(native.2.is_some(), "metadata.json supplies created_at");
+        assert_eq!(
+            native.3.as_deref(),
+            Some("01a10000-0000-0000-0000-000000000001")
+        );
+        assert_eq!(native.4.as_deref(), Some("Parent thread"));
     }
 
     #[test]

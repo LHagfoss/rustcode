@@ -593,6 +593,298 @@ function seedThreads(): MockThread[] {
   ];
 }
 
+/** What a mock thread spent, as the data store would record it. */
+interface MockSpend {
+  input: number;
+  output: number;
+  cached: number;
+  cacheWrite: number | null;
+  cost: number | null;
+  turns: number;
+  /** Turns with neither input nor output reported. */
+  withoutTokens: number;
+  /** Turns missing one of the four token counts. */
+  withoutAny: number;
+  withoutInput: number;
+  withoutOutput: number;
+  withoutCached: number;
+  withoutCacheWrite: number;
+  withoutCost: number;
+}
+
+/** Known threads get numbers that make the missing ones visible; the rest get a small canned spend. */
+const MOCK_SPEND: Record<string, MockSpend> = {
+  "mock-thread-1": {
+    input: 1_240_000,
+    output: 32_100,
+    cached: 980_000,
+    cacheWrite: null,
+    cost: null,
+    turns: 8,
+    withoutTokens: 0,
+    withoutAny: 8,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 8,
+    withoutCacheWrite: 8,
+    withoutCost: 8,
+  },
+  "mock-thread-2": {
+    input: 248_000,
+    output: 9_100,
+    cached: 201_000,
+    cacheWrite: null,
+    cost: 3.42,
+    turns: 12,
+    withoutTokens: 0,
+    withoutAny: 12,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 12,
+    withoutCost: 0,
+  },
+  "mock-thread-3": {
+    input: 88_000,
+    output: 4_200,
+    cached: 60_000,
+    cacheWrite: 12_000,
+    cost: null,
+    turns: 4,
+    withoutTokens: 0,
+    withoutAny: 0,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 4,
+  },
+  "mock-thread-4": {
+    input: 512_000,
+    output: 22_000,
+    cached: 400_000,
+    cacheWrite: 0,
+    cost: 5.1,
+    turns: 9,
+    withoutTokens: 0,
+    withoutAny: 0,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 0,
+  },
+  "mock-thread-claude": {
+    input: 112,
+    output: 72_297,
+    cached: 14_757_930,
+    cacheWrite: 633_078,
+    cost: 77.22,
+    turns: 9,
+    withoutTokens: 7,
+    withoutAny: 7,
+    withoutInput: 7,
+    withoutOutput: 7,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 0,
+  },
+  "mock-parent": {
+    input: 820_000,
+    output: 30_000,
+    cached: 700_000,
+    cacheWrite: null,
+    cost: null,
+    turns: 6,
+    withoutTokens: 0,
+    withoutAny: 6,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 6,
+    withoutCost: 6,
+  },
+  "mock-child": {
+    input: 4_500_000,
+    output: 180_000,
+    cached: 3_900_000,
+    cacheWrite: 420_000,
+    cost: 8.4,
+    turns: 14,
+    withoutTokens: 0,
+    withoutAny: 0,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 0,
+  },
+  "mock-orphan": {
+    input: 1_200_000,
+    output: 40_000,
+    cached: 900_000,
+    cacheWrite: null,
+    cost: 4.1,
+    turns: 7,
+    withoutTokens: 0,
+    withoutAny: 7,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 7,
+    withoutCost: 0,
+  },
+  "mock-plain": {
+    input: 310_000,
+    output: 12_000,
+    cached: 250_000,
+    cacheWrite: null,
+    cost: null,
+    turns: 5,
+    withoutTokens: 0,
+    withoutAny: 5,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 5,
+    withoutCost: 5,
+  },
+};
+
+function spendOf(thread: MockThread, index: number): MockSpend {
+  const known = MOCK_SPEND[thread.id];
+  if (known) return known;
+  const input = 40_000 + (index % 7) * 12_000;
+  return {
+    input,
+    output: Math.round(input / 10),
+    cached: Math.round(input / 3),
+    cacheWrite: null,
+    cost: null,
+    turns: 1,
+    withoutTokens: 0,
+    withoutAny: 1,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 1,
+    withoutCost: 1,
+  };
+}
+
+const sumKnown = (values: (number | null)[]): number | null => {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length ? known.reduce((sum, value) => sum + value, 0) : null;
+};
+
+/** `_rustcode/data/usage`, grouped like the engine groups the store (`engine/src/acp/data.rs`). */
+function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
+  const groups = new Map<string, { keys: JsonObject; spends: MockSpend[] }>();
+  for (const [index, thread] of threads.entries()) {
+    const spend = spendOf(thread, index);
+    let key: string;
+    let keys: JsonObject;
+    switch (groupBy) {
+      case "model":
+        key = `${thread.harness}\u0000${thread.model}`;
+        keys = { harness: thread.harness, model: thread.model };
+        break;
+      case "day":
+        key = new Date(thread.updatedAt).toISOString().slice(0, 10);
+        keys = { day: key };
+        break;
+      case "project":
+        key = thread.cwd;
+        keys = { project: thread.cwd };
+        break;
+      case "thread":
+        key = thread.id;
+        keys = {
+          thread: thread.id,
+          title: thread.title ?? "",
+          project: thread.cwd,
+          harness: thread.harness,
+          parent_id: thread.parent?.id ?? null,
+          parent_title: thread.parent?.title ?? null,
+        };
+        break;
+      default:
+        key = thread.harness;
+        keys = { harness: thread.harness };
+    }
+    const group = groups.get(key) ?? { keys, spends: [] };
+    group.spends.push(spend);
+    groups.set(key, group);
+  }
+  const rows = [...groups.values()]
+    .map(({ keys, spends }) => ({
+      ...keys,
+      input_tokens: sumKnown(spends.map((spend) => spend.input)),
+      output_tokens: sumKnown(spends.map((spend) => spend.output)),
+      cached_tokens: sumKnown(spends.map((spend) => spend.cached)),
+      cache_write_tokens: sumKnown(spends.map((spend) => spend.cacheWrite)),
+      cost_usd: sumKnown(spends.map((spend) => spend.cost)),
+      turns: spends.reduce((sum, spend) => sum + spend.turns, 0),
+      turns_without_tokens: spends.reduce((sum, spend) => sum + spend.withoutTokens, 0),
+      turns_without_any_tokens: spends.reduce((sum, spend) => sum + spend.withoutAny, 0),
+      turns_without_input_tokens: spends.reduce((sum, spend) => sum + spend.withoutInput, 0),
+      turns_without_output_tokens: spends.reduce((sum, spend) => sum + spend.withoutOutput, 0),
+      turns_without_cached_tokens: spends.reduce((sum, spend) => sum + spend.withoutCached, 0),
+      turns_without_cache_write_tokens: spends.reduce((sum, spend) => sum + spend.withoutCacheWrite, 0),
+      turns_without_cost: spends.reduce((sum, spend) => sum + spend.withoutCost, 0),
+    }))
+    .sort(
+      (one, other) =>
+        Number(other.input_tokens ?? 0) +
+          Number(other.output_tokens ?? 0) -
+          (Number(one.input_tokens ?? 0) + Number(one.output_tokens ?? 0)) || 0,
+    );
+  const total = (key: string) =>
+    sumKnown(
+      rows.map((row) =>
+        typeof row[key as keyof typeof row] === "number" ? (row[key as keyof typeof row] as number) : null,
+      ),
+    );
+  const turns = rows.reduce((sum, row) => sum + Number(row.turns ?? 0), 0);
+  return {
+    group_by: groupBy,
+    since: null,
+    project: null,
+    scope: "every project",
+    rows,
+    totals: {
+      input_tokens: total("input_tokens"),
+      output_tokens: total("output_tokens"),
+      cached_tokens: total("cached_tokens"),
+      cache_write_tokens: total("cache_write_tokens"),
+      cost_usd: total("cost_usd"),
+      turns,
+      turns_without_tokens: rows.reduce((sum, row) => sum + Number(row.turns_without_tokens ?? 0), 0),
+      turns_without_any_tokens: rows.reduce((sum, row) => sum + Number(row.turns_without_any_tokens ?? 0), 0),
+      turns_without_input_tokens: rows.reduce(
+        (sum, row) => sum + Number(row.turns_without_input_tokens ?? 0),
+        0,
+      ),
+      turns_without_output_tokens: rows.reduce(
+        (sum, row) => sum + Number(row.turns_without_output_tokens ?? 0),
+        0,
+      ),
+      turns_without_cached_tokens: rows.reduce(
+        (sum, row) => sum + Number(row.turns_without_cached_tokens ?? 0),
+        0,
+      ),
+      turns_without_cache_write_tokens: rows.reduce(
+        (sum, row) => sum + Number(row.turns_without_cache_write_tokens ?? 0),
+        0,
+      ),
+      turns_without_cost: rows.reduce((sum, row) => sum + Number(row.turns_without_cost ?? 0), 0),
+    },
+    truncated: false,
+    note: "tokens are what each harness reported; cost is the USD a harness reported, never a price RustCode computed",
+    version: 1,
+  };
+}
+
 /** What the mock's report commands answer, in the chunks they stream in. */
 const MOCK_REPORTS: Record<string, string[]> = {
   "/status": [
@@ -1074,58 +1366,7 @@ export class MockEngine {
       case "_rustcode/data/usage": {
         // The same shape engine/src/acp/data.rs answers with.
         const by = (params as { groupBy?: string } | undefined)?.groupBy ?? "harness";
-        return {
-          group_by: by,
-          since: null,
-          project: null,
-          scope: "every project",
-          rows: [
-            {
-              harness: "codex",
-              model: "gpt-6-luna",
-              input_tokens: 80871339,
-              output_tokens: 710621,
-              cached_tokens: 77779584,
-              cache_write_tokens: null,
-              cost_usd: null,
-              turns: 25,
-              turns_without_tokens: 2,
-            },
-            {
-              harness: "pi",
-              model: "deepseek/deepseek-flash",
-              input_tokens: 1552534,
-              output_tokens: 1113040,
-              cached_tokens: 464657024,
-              cache_write_tokens: 0,
-              cost_usd: 4.59,
-              turns: 12,
-              turns_without_tokens: 0,
-            },
-            {
-              harness: "claude-code",
-              model: "opus",
-              input_tokens: 112,
-              output_tokens: 72297,
-              cached_tokens: 14757930,
-              cache_write_tokens: 633078,
-              cost_usd: 77.22,
-              turns: 9,
-              turns_without_tokens: 7,
-            },
-          ],
-          totals: {
-            input_tokens: 82423985,
-            output_tokens: 1255958,
-            cached_tokens: 557194538,
-            cache_write_tokens: 633078,
-            cost_usd: 81.81,
-            turns: 46,
-          },
-          truncated: false,
-          note: "tokens are what each harness reported; cost is the USD a harness reported, never a price RustCode computed",
-          version: 1,
-        };
+        return mockUsage(this.threads, by);
       }
       case "_rustcode/data/query":
         return {

@@ -27,7 +27,7 @@ holds nothing that `history.json` does not already have.
 
 | object | holds |
 | --- | --- |
-| `threads` | one row per thread: `id`, `title`, `project`, `cwd`, `harness`, `model`, `effort`, `created_at`, `updated_at` |
+| `threads` | one row per thread: `id`, `title`, `project`, `cwd`, `harness`, `model`, `effort`, `parent_id`, `parent_title`, `created_at`, `updated_at` |
 | `turns` | one row per turn: `thread_id`, `started_at`, `finished_at`, `harness`, `model`, `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`, `tool_calls`, `status`, unique on `(thread_id, started_at)` |
 | `tool_calls` | one row per finished tool call: `thread_id`, `turn_id`, `tool_name`, `success`, `exit_code`, `at` |
 | `daily_usage` | a view over `turns`: `day`, `harness`, `model`, summed tokens, `cost_usd` and turn count |
@@ -127,7 +127,10 @@ model; after the first run it reads that one row and returns.
 
 The backfill cannot invent per-turn history for threads that ran before this
 release: an external thread gets one summary turn, a built-in thread gets a
-thread row and no turns.
+thread row and no turns. It also carries each thread's recorded parent
+(`metadata.json`) into `threads.parent_id`/`parent_title`, so a usage read can
+roll delegates up without the app's session list; bumping the backfill version
+refreshes those columns for existing rows.
 
 ## Reading
 
@@ -148,9 +151,16 @@ rustcode data schema
 
 `rustcode usage` reports tokens and the cost the harness reported in USD — a
 blank cost means the harness reported none, and RustCode does not price
-requests itself. A row with no token counts prints `—`, not `0`, and the last
-row totals the table. `rustcode storage usage` is a different command: it
-reports disk space, and lists `data.sqlite` among the stores.
+requests itself. The answer counts missing data per column:
+`turns_without_input_tokens`, `turns_without_output_tokens`,
+`turns_without_cached_tokens`, `turns_without_cache_write_tokens`,
+`turns_without_any_tokens` (any of the four missing), and
+`turns_without_cost`. `turns_without_tokens` is the older, narrower count of
+turns where **both** input and output are missing. A row with no token counts
+prints `—`, not `0`, and the last row totals the table; a total summed from
+only the turns that reported a column is marked partial. `rustcode storage
+usage` is a different command: it reports disk space, and lists `data.sqlite`
+among the stores.
 
 ## For agents
 
@@ -159,7 +169,7 @@ agent in a thread, forwarded through the app like `list_sessions`:
 
 | Tool | Args | Answer |
 | --- | --- | --- |
-| `thread_usage` | `{ since?, group_by?, project? }` — `group_by` is `harness` (default), `model`, `day`, `project` or `thread`; `since` is `YYYY-MM-DD` or `YYYY-MM`; `project` is an absolute path | `{ group_by, since, project, scope, rows, totals, truncated, note }`, each row with input, output, cached and cache-write tokens, `cost_usd`, `turns` and `turns_without_tokens`; a group that reported nothing keeps `NULL`, never a `0` |
+| `thread_usage` | `{ since?, group_by?, project? }` — `group_by` is `harness` (default), `model`, `day`, `project` or `thread`; `since` is `YYYY-MM-DD` or `YYYY-MM`; `project` is an absolute path | `{ group_by, since, project, scope, rows, totals, truncated, note }`, each row with input, output, cached and cache-write tokens, `cost_usd`, `turns`, `turns_without_tokens`, `turns_without_any_tokens`, `turns_without_input_tokens`, `turns_without_output_tokens`, `turns_without_cached_tokens`, `turns_without_cache_write_tokens`, and `turns_without_cost`; a group that reported nothing keeps `NULL`, never a `0`, and a thread row also carries `parent_id` and `parent_title` |
 | `query_data` | `{ sql, limit? }`, one read-only statement, at most 1000 rows | `{ columns, rows, truncated }` through the guards above; its description lists every table and column, including `thread_links`, so an agent needs no extra call |
 
 Both are reads, so neither asks the user. They follow **Let agents read

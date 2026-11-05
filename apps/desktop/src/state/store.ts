@@ -173,6 +173,7 @@ export type SettingsSection =
   | "appearance"
   | "keyboard"
   | "usage"
+  | "statistics"
   | "advanced"
   | "about";
 
@@ -186,6 +187,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "appearance",
   "keyboard",
   "usage",
+  "statistics",
   "advanced",
   "about",
 ];
@@ -234,6 +236,8 @@ export interface AppState {
   agent?: AgentInfo;
   sessions: SessionSummary[];
   sessionsLoaded: boolean;
+  /** The session list stopped at the page cap, so some threads may be absent. */
+  sessionsCapped: boolean;
   threads: Record<string, ThreadState>;
   /** Null shows the new-thread screen. */
   selectedId: string | null;
@@ -563,6 +567,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   engineLog: [],
   sessions: [],
   sessionsLoaded: false,
+  sessionsCapped: false,
   threads: {},
   selectedId: null,
   projectCwd: stored(STORAGE.project) ?? "",
@@ -1212,18 +1217,20 @@ function onSessionUpdate(params: JsonObject) {
 export async function refreshSessions(): Promise<void> {
   const conn = connection;
   if (!conn || !get().agent?.listSessions) {
-    set({ sessionsLoaded: true });
+    set({ sessionsLoaded: true, sessionsCapped: false });
     return;
   }
   try {
     const all: SessionSummary[] = [];
     let cursor: string | undefined;
+    let capped = false;
     for (let page = 0; page < 10; page++) {
       const params: JsonObject = cursor ? { cursor } : {};
       const result = parseSessionList(await conn.request(Method.sessionList, params, 15_000));
       all.push(...result.sessions);
       cursor = result.nextCursor;
       if (!cursor) break;
+      if (page === 9) capped = true;
     }
     set((s) => {
       // Threads started here that the engine does not list yet (it lists a session once it saved history).
@@ -1233,6 +1240,7 @@ export async function refreshSessions(): Promise<void> {
       return {
         sessions,
         sessionsLoaded: true,
+        sessionsCapped: capped,
         projectCwd: s.projectCwd || sessions[0]?.cwd || "",
       };
     });
@@ -3837,6 +3845,7 @@ export function resetForTests() {
     engineLog: [],
     sessions: [],
     sessionsLoaded: false,
+    sessionsCapped: false,
     threads: {},
     selectedId: null,
     projectCwd: "",
