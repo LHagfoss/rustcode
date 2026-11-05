@@ -620,6 +620,32 @@ describe("the threads a run of start_session calls started", () => {
     ]);
   });
 
+  test("a follow-up message to a thread a call started never takes that call's row", () => {
+    // The book keeps the message link too: the row still shows the thread the call started.
+    const start = started("t1", "Map the code");
+    const followUp: Link = {
+      ...start,
+      id: "o/follow",
+      message: "And the tests",
+      state: "working",
+      started: false,
+      createdAt: 2,
+    };
+    const items = [call("c1", { prompt: "Map the code" }, '{"session_id":"t1","link_id":"o/t1"}')];
+    expect(targets(items, [followUp, start])).toEqual([["c1", "t1"]]);
+    expect([...startedLinks(items, [followUp, start]).values()][0]!.id).toBe("o/t1");
+  });
+
+  test("one link is one row: a second call naming the same thread shows none", () => {
+    const links = [started("t1", "Map the code")];
+    const items = [
+      call("c1", { prompt: "Map the code" }, '{"session_id":"t1","link_id":"o/t1"}'),
+      call("c2", { prompt: "Map the code" }, '{"session_id":"t1","link_id":"o/t1"}'),
+    ];
+    // The first call keeps the thread: the card and the strip show that one row, not two.
+    expect(targets(items, links)).toEqual([["c1", "t1"]]);
+  });
+
   test("a call whose link is gone is left out, and another tool never matches one", () => {
     const links = [started("t1", "Map the code")];
     expect(targets([call("c1", { prompt: "Something else" })], links)).toEqual([]);

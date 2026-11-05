@@ -30,10 +30,21 @@ export interface ThreadLineage {
    * than in place of it. Same thread as the parent: folded into it.
    */
   messagedBy?: ParentRelation;
-  /** The threads this one started. */
-  started: Link[];
-  /** The threads this one messaged without starting. */
-  messaged: Link[];
+  /** The threads this one started, one entry each. */
+  started: LinkGroup[];
+  /** The threads this one messaged without starting, one entry each. */
+  messaged: LinkGroup[];
+}
+
+/**
+ * One other thread this one worked with, however many links it took: starting
+ * a thread and then messaging it twice is one relation, not three rows.
+ */
+export interface LinkGroup {
+  /** The link that speaks for the relation now: live first, else the newest. */
+  link: Link;
+  /** Every link to that thread, oldest first: the rest is what `links.length - 1` counts. */
+  links: Link[];
 }
 
 const title = (value: string | undefined) => value?.trim() ?? "";
@@ -117,10 +128,22 @@ export function threadLineage(
         started: false,
       }
     : undefined;
-  return {
-    parent,
-    messagedBy,
-    started: outbound.filter((link) => !!link.started),
-    messaged: outbound.filter((link) => !link.started),
-  };
+  // One row per thread it worked with: a follow-up to a thread it started is not a second row, and
+  // neither is the second message to the same thread. The thread it started keeps the started row.
+  const byTarget = new Map<string, Link[]>();
+  for (const link of outbound) {
+    const list = byTarget.get(link.target);
+    if (list) list.push(link);
+    else byTarget.set(link.target, [link]);
+  }
+  /** Each group, with the link that speaks for it now: a live follow-up keeps the row live. */
+  const groups = (list: Link[][]): LinkGroup[] =>
+    list.map((links) => ({ link: current(links, () => true) ?? links[links.length - 1]!, links }));
+  const startedOf: Link[][] = [];
+  const messagedOf: Link[][] = [];
+  for (const links of byTarget.values()) {
+    if (links.some((link) => !!link.started)) startedOf.push(links);
+    else messagedOf.push(links);
+  }
+  return { parent, messagedBy, started: groups(startedOf), messaged: groups(messagedOf) };
 }

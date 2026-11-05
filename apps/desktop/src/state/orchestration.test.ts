@@ -11,6 +11,7 @@ import {
   activeDescendants,
   activeInTree,
   activityOf,
+  askingIds,
   CAPABILITY_VERSION,
   capped,
   checkManage,
@@ -21,6 +22,7 @@ import {
   emptyBook,
   failureJson,
   fillAnswers,
+  foldWake,
   forget,
   interruptActive,
   isActive,
@@ -37,7 +39,7 @@ import {
   MAX_DATA_ROWS,
   MAX_DEPTH,
   MAX_TREE_LINKS,
-  markWoken,
+  markDelivered,
   mergeBooks,
   nextWakeAt,
   orphanedLinks,
@@ -45,6 +47,7 @@ import {
   parseBook,
   parseCall,
   pendingWakeUnder,
+  queueWake,
   quietTree,
   type RuleThread,
   renderRead,
@@ -57,11 +60,15 @@ import {
   usageScope,
   WAKE_ANSWER_CHARS,
   WAKE_COALESCE_MS,
+  type Wake,
   type WakeContext,
+  wakeFor,
+  wakeIds,
   wakeMessage,
+  wakeSummary,
   wakesDue,
 } from "./orchestration";
-import { isWakeMessage } from "./thread";
+import { isWakeMessage, type QueuedPrompt, wakeLine, withWakeMark } from "./thread";
 
 const thread = (id: string, folder = "/repo", extra: Partial<RuleThread> = {}): RuleThread => ({
   id,
@@ -559,6 +566,19 @@ describe("waking a parent", () => {
     filesChanged: 2,
   });
 
+  /** The wake row a busy parent's queue holds, as `sendWake` queues it. */
+  const wakeRow = (id: string, wake: Wake, now: number): QueuedPrompt => ({
+    id,
+    text: wakeMessage(wake, now),
+    wake: true,
+    wakeLinks: wakeIds(wake),
+    wakeAsking: askingIds(wake),
+  });
+
+  /** The book after a wake message was read: what it named as finished is heard, so is what it named as asking. */
+  const read = (b: LinkBook, wake: Wake, c: WakeContext, now: number): LinkBook =>
+    markDelivered(b, { settled: wake.settled.map((l) => l.id), asking: askingIds(wake) }, c, now);
+
   const ctx = (over: Partial<WakeContext> = {}): WakeContext => ({
     states: {},
     pending: {},
@@ -574,7 +594,7 @@ describe("waking a parent", () => {
     expect(wakes).toHaveLength(1);
     expect(wakes[0]!.settled.map((l) => l.target)).toEqual(["b", "c"]);
     // Delivered: the same links are not reported again, in this run or after a reload.
-    const after = markWoken(two, wakes[0]!, ctx(), 10_000);
+    const after = read(two, wakes[0]!, ctx(), 10_000);
     expect(wakesDue(after, ctx({ now: 20_000 }))).toEqual([]);
     expect(after.links.every((l) => l.notifiedAt === 10_000)).toBe(true);
   });
@@ -633,7 +653,7 @@ describe("waking a parent", () => {
     // a's own link from c is still working, so c has nothing to hear yet.
     expect(wakes.every((w) => w.parent !== "c")).toBe(true);
     // A wake is not a delegation: marking b heard leaves a's own link alone.
-    const heard = markWoken(chain, wakes[0]!, ctx({ threads }), 10_000);
+    const heard = read(chain, wakes[0]!, ctx({ threads }), 10_000);
     expect(heard.links.find((l) => l.id === "c/a")!.state).toBe("working");
     expect(heard.links.find((l) => l.id === "a/b")!.notifiedAt).toBe(10_000);
     // a's own turn ends: its parent hears about a, once.
@@ -641,9 +661,9 @@ describe("waking a parent", () => {
     const up = wakesDue(settledA, ctx({ threads }));
     expect(up.map((w) => w.parent)).toEqual(["c"]);
     expect(up[0]!.settled.map((l) => l.target)).toEqual(["a"]);
-    expect(
-      wakesDue(markWoken(settledA, up[0]!, ctx({ threads }), 20_000), ctx({ threads, now: 30_000 })),
-    ).toEqual([]);
+    expect(wakesDue(read(settledA, up[0]!, ctx({ threads }), 20_000), ctx({ threads, now: 30_000 }))).toEqual(
+      [],
+    );
   });
 
   test("a parent that is gone is dropped, and its links are marked", () => {
@@ -664,7 +684,7 @@ describe("waking a parent", () => {
     // A new request on the same child is.
     const next = wakesDue(asking, waiting("8"));
     expect(next[0]!.asking.map((l) => l.id)).toEqual(["a/b"]);
-    const after = markWoken(asking, next[0]!, waiting("8"), 10_000);
+    const after = read(asking, next[0]!, waiting("8"), 10_000);
     expect(after.links[0]!.askedRequest).toBe("8");
     expect(wakesDue(after, waiting("8"))).toEqual([]);
     // A question the parent is waiting on is not reported either.
@@ -724,7 +744,7 @@ describe("waking a parent", () => {
   test("a wake is a message, not a new link", () => {
     const b = book([done("a", "b")]);
     const wake = wakesDue(b, ctx())[0]!;
-    const after = markWoken(b, wake, ctx(), 10_000);
+    const after = read(b, wake, ctx(), 10_000);
     // No link appears, and no other parent suddenly has something to hear.
     expect(after.links).toHaveLength(1);
     expect(wakesDue(after, ctx({ now: 11_000 }))).toEqual([]);
@@ -759,7 +779,7 @@ describe("waking a parent", () => {
     expect(wakesDue(leafDone, chainCtx({ now: 9_600 })).every((w) => w.parent !== "top")).toBe(true);
 
     // Middle is woken: its own turn runs, and Top still waits.
-    const told = markWoken(leafDone, forMiddle[0]!, chainCtx({ now: 9_600 }), 9_600);
+    const told = read(leafDone, forMiddle[0]!, chainCtx({ now: 9_600 }), 9_600);
     const running = chainCtx({
       now: 9_700,
       threads: { ...chainCtx().threads, middle: { title: "Middle", running: true } },
@@ -783,7 +803,7 @@ describe("waking a parent", () => {
     expect(up.map((w) => w.parent)).toEqual(["top"]);
     expect(wakeMessage(up[0]!, 11_000)).toContain("here is the real answer");
     // Once only.
-    const after = markWoken(answered, up[0]!, chainCtx({ now: 11_000 }), 11_000);
+    const after = read(answered, up[0]!, chainCtx({ now: 11_000 }), 11_000);
     expect(wakesDue(after, chainCtx({ now: 20_000 }))).toEqual([]);
   });
 
@@ -801,7 +821,7 @@ describe("waking a parent", () => {
     // Middle is told about both at once, and then Top hears once.
     const told = wakesDue(leaves, ctx({ threads, now: 9_900 }))[0]!;
     expect(told.settled.map((l) => l.target).sort()).toEqual(["leaf", "other"]);
-    const marked = markWoken(leaves, told, ctx({ threads, now: 9_900 }), 9_900);
+    const marked = read(leaves, told, ctx({ threads, now: 9_900 }), 9_900);
     // Being told starts Middle's own turn (that is how the wake is delivered): Top still waits.
     const waking = ctx({
       threads: { ...threads, middle: { title: "Middle", running: true } },
@@ -838,7 +858,7 @@ describe("waking a parent", () => {
     expect(quietTree(woken, chainCtx({ now: 10_100 }), "middle")).toBe(true);
     const up = wakesDue(woken, chainCtx({ now: 10_200 }));
     expect(up.map((w) => w.parent)).toEqual(["top"]);
-    const after = markWoken(woken, up[0]!, chainCtx({ now: 10_200 }), 10_200);
+    const after = read(woken, up[0]!, chainCtx({ now: 10_200 }), 10_200);
     // Another wake turn changes nothing more: no loop, no third message.
     const again = restateLinks(after, "middle", said("and again"), 11_000, true);
     expect(again.links[0]!.notifiedAt).toBe(10_200);
@@ -906,6 +926,279 @@ describe("waking a parent", () => {
     const working = book([link("top", "middle", "working")]);
     const after = restateLinks(working, "middle", said("still going"), 10_000, false);
     expect(after.links[0]).toEqual(working.links[0]);
+  });
+
+  test("a queued wake takes a newer one in, so one turn reports both", () => {
+    const first = book([done("a", "b")]);
+    const queued = wakesDue(first, ctx())[0]!;
+    const ids = wakeIds(queued);
+    expect(ids).toEqual(["a/b"]);
+    // A second child finishes while the parent's turn still runs: the wake waits in its queue.
+    const both = book([done("a", "b", 1_000), done("a", "c", 9_500)]);
+    const second = wakesDue(both, ctx())[0]!;
+    expect(wakeIds(second)).toEqual(["a/b", "a/c"]);
+    // The older wait still holds only b: the row adds what it names once.
+    const wake = wakeFor("a", "Parent a", [...ids, ...wakeIds(second)], both, ctx())!;
+    expect(wakeIds(wake)).toEqual(["a/b", "a/c"]);
+    const text = wakeMessage(wake, 10_000);
+    // One summary for the two of them, not a line that says "1 child finished" twice.
+    expect(text.split("\n")[0]).toBe("2 children finished");
+    expect(text).toContain("link_id a/b");
+    expect(text).toContain("link_id a/c");
+    expect(text).toContain("b says done");
+    expect(text).toContain("c says done");
+    // The folded wake is still the marked wake message a replayed turn reads as a wake.
+    expect(isWakeMessage(text)).toBe(true);
+  });
+
+  test("the same link reported twice counts once", () => {
+    // A reported link re-armed by its target's wake turn (restateLinks) is the same child, once.
+    const b = book([{ ...done("a", "b"), answerChangedAt: 9_000 }]);
+    const wake = wakeFor("a", "Parent a", ["a/b", "a/b"], b, ctx())!;
+    expect(wake.settled.map((l) => l.id)).toEqual(["a/b"]);
+    expect(wakeSummary(wake)).toBe("1 child finished");
+  });
+
+  test("a child that asked and then finished reads once, as finished", () => {
+    const asked = book([{ ...link("a", "b", "working"), askedRequest: "7" }]);
+    const asking = wakesDue(asked, ctx({ states: { "a/b": "needs_user" }, pending: { "a/b": "7" } }));
+    expect(asking).toEqual([]);
+    const newAsk = ctx({ states: { "a/b": "needs_user" }, pending: { "a/b": "8" } });
+    const queued = wakesDue(asked, newAsk)[0]!;
+    expect(wakeIds(queued)).toEqual(["a/b"]);
+    // It answered the question and finished before the parent's turn ended.
+    const settled = book([{ ...done("a", "b", 9_500), askedRequest: "8" }]);
+    const wake = wakeFor("a", "Parent a", wakeIds(queued), settled, ctx({ now: 10_000 }))!;
+    expect(wake.asking).toEqual([]);
+    expect(wake.settled.map((l) => l.id)).toEqual(["a/b"]);
+    expect(wakeSummary(wake)).toBe("1 child finished");
+  });
+
+  test("a queued wake is one row, not a queue of them", () => {
+    // The parent's turn still runs: b's result waits behind the message the user queued first.
+    const queued = book([done("a", "b")]);
+    const waiting = wakeRow("q-wake", wakesDue(queued, ctx())[0]!, 10_000);
+    const user: QueuedPrompt = { id: "q-user", text: "and then run the checks" };
+    const both = book([done("a", "b"), done("a", "c", 9_500)]);
+    const queue = queueWake([user, waiting], wakesDue(both, ctx())[0]!, both, ctx(), 10_000, "q-new");
+    // Same row, same place in the queue: the parent runs one wake turn, not two.
+    expect(queue.map((q) => q.id)).toEqual(["q-user", "q-wake"]);
+    const folded = queue[1]!;
+    expect(folded.wake).toBe(true);
+    expect(folded.wakeLinks).toEqual(["a/b", "a/c"]);
+    expect(wakeLine(folded.text)).toBe("2 children finished");
+    expect(folded.text).toContain("b says done");
+    expect(folded.text).toContain("c says done");
+    expect(isWakeMessage(folded.text)).toBe(true);
+    // The user's message is untouched, and the queue is not reordered around the wake.
+    expect(queue[0]).toBe(user);
+    // A third result folds into the same row again: the queue never grows a second wake.
+    const three = book([done("a", "b"), done("a", "c", 9_500), done("a", "d", 9_900)]);
+    const again = queueWake(queue, wakesDue(three, ctx())[0]!, three, ctx(), 10_000, "q-newer");
+    expect(again).toHaveLength(2);
+    expect(wakeLine(again[1]!.text)).toBe("3 children finished");
+    // Nothing left to report (both were stopped since): the row it has stands rather than emptying.
+    const stopped = book([link("a", "b", "cancelled"), link("a", "c", "cancelled")]);
+    const nothing = { parent: "a", parentTitle: "Parent a", settled: [], asking: [] };
+    expect(foldWake(folded, nothing, stopped, ctx(), 10_000)).toBe(folded);
+  });
+
+  test("a rebuild keeps what wakesDue gives up on, and never restates it", () => {
+    // A is blocked on b in wait_session: that call returns b's answer, so the wake leaves it out.
+    const b = done("a", "b");
+    expect(wakeFor("a", "Parent a", ["a/b"], book([b]), ctx({ waiting: { a: ["a/b"] } }))).toBeNull();
+    // The parent messaged that thread again: the older answer is out of date, told or not.
+    const newer = { ...link("a", "b", "working"), id: "a/2", createdAt: 9_000 };
+    const first: Link = { ...done("a", "b"), id: "a/1", createdAt: 1_000, notifiedAt: 2_000 };
+    const both = book([first, newer]);
+    expect(wakeFor("a", "Parent a", ["a/1"], both, ctx())).toBeNull();
+    // Its own subtree still works: a link nobody was told about yet is not finished for the parent.
+    const started = book([
+      { ...done("a", "middle", 9_000), notifiedAt: undefined },
+      link("middle", "leaf", "working"),
+    ]);
+    expect(wakeFor("a", "Parent a", ["a/middle"], started, ctx({ now: 9_500 }))).toBeNull();
+    // But a notice this row already promised keeps its line: nothing else would deliver it.
+    const promised = book([
+      { ...done("a", "middle", 9_000), notifiedAt: 9_100 },
+      link("middle", "leaf", "working"),
+    ]);
+    const kept = wakeFor("a", "Parent a", ["a/middle"], promised, ctx({ now: 9_500 }))!;
+    expect(kept.settled.map((l) => l.id)).toEqual(["a/middle"]);
+    expect(wakeSummary(kept)).toBe("1 child finished");
+  });
+
+  test("a report the book has pruned is never overwritten", () => {
+    // The row reports a/old, which `prune` has since dropped from the book.
+    const carried = wakeRow(
+      "q-wake",
+      { parent: "a", parentTitle: "Parent a", settled: [], asking: [] },
+      10_000,
+    );
+    const row: QueuedPrompt = {
+      ...carried,
+      text: withWakeMark("1 child finished\n\nFinished:\n- link_id a/old · done"),
+      wakeLinks: ["a/old"],
+    };
+    const now = book([done("a", "b")]);
+    const wake = wakesDue(now, ctx())[0]!;
+    // It cannot be rebuilt faithfully, so it is left whole: no text may lose the old report.
+    expect(foldWake(row, wake, now, ctx(), 10_000)).toBeNull();
+    // The new wake is queued beside it instead, so that result is not lost either.
+    const queue = queueWake([row], wake, now, ctx(), 10_000, "q-new");
+    expect(queue.map((q) => q.id)).toEqual(["q-wake", "q-new"]);
+    expect(queue[0]).toBe(row);
+    expect(queue[0]!.text).toContain("link_id a/old");
+    expect(queue[1]!.wakeLinks).toEqual(["a/b"]);
+    expect(wakeLine(queue[1]!.text)).toBe("1 child finished");
+    // A row whose links are all known folds again, so the extra row is not permanent.
+    const both = book([done("a", "b"), done("a", "c", 9_500)]);
+    const folded = queueWake(queue, wakesDue(both, ctx())[0]!, both, ctx(), 10_000, "q-newer");
+    expect(folded.map((q) => q.id)).toEqual(["q-wake", "q-new"]);
+    expect(folded[0]).toBe(row);
+    expect(folded[1]!.wakeLinks).toEqual(["a/b", "a/c"]);
+  });
+
+  test("a stopped successor does not retire the answer nobody read", () => {
+    const first: Link = { ...done("a", "b", 1_000), id: "a/1", createdAt: 1_000 };
+    const stopped: Link = { ...link("a", "b", "cancelled"), id: "a/2", createdAt: 4_000 };
+    // The follow-up never answered: the first answer is still the last real one.
+    expect(supersededLinks(book([first, stopped]), ctx())).toEqual([]);
+    expect(wakesDue(book([first, stopped]), ctx())).toHaveLength(1);
+    const promised = book([{ ...first, notifiedAt: 2_000 }, stopped]);
+    expect(wakeFor("a", "Parent a", ["a/1"], promised, ctx())?.settled.map((l) => l.id)).toEqual(["a/1"]);
+    // A successor that works still replaces it: the newer turn's answer is the one needed.
+    const working = book([first, { ...link("a", "b", "working"), id: "a/2", createdAt: 4_000 }]);
+    expect(supersededLinks(working, ctx()).map((l) => l.id)).toEqual(["a/1"]);
+  });
+
+  test("a replaced result is not owed, and is owed again once its successor is stopped", () => {
+    const first: Link = { ...done("a", "middle", 9_000), createdAt: 1_000 };
+    const live: Link = { ...link("a", "middle", "working"), id: "a/2", createdAt: 2_000 };
+    // The newer answer is the one owed, so nothing is pending for the old one — and nothing is
+    // written down for it either, which is what lets it come back:
+    expect(pendingWakeUnder(book([first, live]), ctx(), "a")).toBe(false);
+    // The successor was stopped by the user, or interrupted by a restart, without answering.
+    const stopped = book([first, { ...live, state: "interrupted" }]);
+    expect(pendingWakeUnder(stopped, ctx(), "a")).toBe(true);
+    expect(wakesDue(stopped, ctx({ now: 10_000 }))[0]!.settled.map((l) => l.id)).toEqual(["a/middle"]);
+  });
+
+  test("a wake row that names no links is never rewritten", () => {
+    const b = book([done("a", "b")]);
+    const wake = wakesDue(b, ctx())[0]!;
+    // A row written before it kept its links (or by a preview): what it reports cannot be read back.
+    const old: QueuedPrompt = { id: "q-old", text: withWakeMark("1 child finished"), wake: true };
+    expect(foldWake(old, wake, b, ctx(), 10_000)).toBeNull();
+    const queue = queueWake([old], wake, b, ctx(), 10_000, "q-new");
+    expect(queue.map((q) => q.id)).toEqual(["q-old", "q-new"]);
+    expect(queue[0]).toBe(old);
+    expect(queue[1]!.wakeLinks).toEqual(["a/b"]);
+  });
+
+  test("a queued row reports its links once: its turn marks them, and nothing else is due", () => {
+    const b = book([done("a", "b")]);
+    const wake = wakesDue(b, ctx())[0]!;
+    const queue = queueWake([], wake, b, ctx(), 10_000, "q-new");
+    const carried = { a: queue.flatMap((q) => q.wakeLinks ?? []) };
+    expect(carried.a).toEqual(["a/b"]);
+    // While the row waits, its links are the row's: no second wake, no timer for one.
+    expect(wakesDue(b, ctx({ queued: carried }))).toEqual([]);
+    expect(nextWakeAt(b, ctx({ queued: carried }))).toBeNull();
+    // Its turn starts: the mark is what keeps it quiet afterwards.
+    const marked = read(b, wake, ctx(), 10_000);
+    expect(wakesDue(marked, ctx({ now: 20_000 }))).toEqual([]);
+    // A window that lost its queue (a restart) leaves the book unmarked, so the wake is due again.
+    expect(wakesDue(b, ctx({ now: 20_000 }))).toHaveLength(1);
+  });
+
+  test("delivery marks what the row said, and only that", () => {
+    const b = book([done("a", "b"), { ...link("a", "c", "working") }]);
+    const asking = ctx({ states: { "a/c": "needs_user" }, pending: { "a/c": "9" }, now: 10_000 });
+    const reported = { settled: ["a/b"], asking: ["a/c"] };
+    const marked = markDelivered(b, reported, asking, 10_000);
+    expect(marked.links[0]!.notifiedAt).toBe(10_000);
+    // A question is marked with the request it was about, not as a finished answer.
+    expect(marked.links[1]!.askedRequest).toBe("9");
+    expect(marked.links[1]!.notifiedAt).toBeUndefined();
+    // Delivering the same row again marks nothing new, so nothing is reported twice.
+    expect(markDelivered(marked, reported, asking, 11_000)).toBe(marked);
+    // An id the row never named is not marked at all, whatever its state.
+    expect(markDelivered(b, { settled: [], asking: [] }, asking, 10_000)).toBe(b);
+    // A row that named a finish about a child still running marks nothing: it settles on its own.
+    const running = book([link("a", "d", "working")]);
+    expect(markDelivered(running, { settled: ["a/d"], asking: [] }, ctx(), 10_000)).toBe(running);
+  });
+
+  test("a row that said a child waits keeps its finish owed once the child answers", () => {
+    // The row was queued as "1 needs you": the child asked, and answered before the row ran.
+    const askingCtx = ctx({ states: { "a/c": "needs_user" }, pending: { "a/c": "9" }, now: 10_000 });
+    const asked = book([link("a", "c", "working")]);
+    const notice = wakesDue(asked, askingCtx)[0]!;
+    expect(wakeIds(notice)).toEqual(["a/c"]);
+    expect(wakeSummary(notice)).toBe("1 needs you");
+    const row = wakeRow("q-wake", notice, 10_000);
+    expect(row.wakeLinks).toEqual(["a/c"]);
+    expect(row.wakeAsking).toEqual(["a/c"]);
+    // It finished before the row's turn came: delivery promised a question, so nothing is marked.
+    const finished = book([done("a", "c", 9_500)]);
+    const delivered = markDelivered(finished, { settled: [], asking: ["a/c"] }, ctx(), 11_000);
+    expect(delivered).toBe(finished);
+    // The finish is owed, and comes as its own wake; reading that is what marks it.
+    const finish = wakesDue(delivered, ctx({ now: 12_000 }))[0]!;
+    expect(finish.settled.map((l) => l.id)).toEqual(["a/c"]);
+    expect(wakeMessage(finish, 12_000)).toContain("c says done");
+    const after = read(delivered, finish, ctx(), 12_000);
+    expect(after.links[0]!.notifiedAt).toBe(12_000);
+    expect(wakesDue(after, ctx({ now: 20_000 }))).toEqual([]);
+  });
+
+  test("a row that said a child finished does not silence its question", () => {
+    // The reverse: the row said "1 child finished", and the child asks something since.
+    const asked = book([link("a", "b", "working")]);
+    const shown = ctx({ states: { "a/b": "needs_user" }, pending: { "a/b": "4" }, now: 10_000 });
+    const delivered = markDelivered(asked, { settled: ["a/b"], asking: [] }, shown, 10_000);
+    expect(delivered).toBe(asked);
+    expect(wakesDue(delivered, shown)[0]!.asking.map((l) => l.id)).toEqual(["a/b"]);
+  });
+
+  test("every link a wake reports is on a row by the time it can be marked", () => {
+    // The mark comes after the queue is written (host.ts `sendWake`), so each reported link has a row
+    // that names it: folded into a waiting wake, queued alone, or queued beside a pruned one.
+    const two = book([done("a", "b"), done("a", "c", 9_500)]);
+    const wake = wakesDue(two, ctx())[0]!;
+    const foldable = wakeRow("q-wake", wakesDue(book([done("a", "b")]), ctx())[0]!, 10_000);
+    // A row whose own report was pruned away cannot be rebuilt: it stays and the new wake is added.
+    const pruned: QueuedPrompt = { ...foldable, wakeLinks: ["a/gone"] };
+    for (const queue of [[], [foldable], [pruned]] as QueuedPrompt[][]) {
+      const rows = queueWake(queue, wake, two, ctx(), 10_000, "q-new");
+      const carried = new Set(rows.filter((q) => q.wake).flatMap((q) => q.wakeLinks ?? []));
+      expect(wakeIds(wake).every((id) => carried.has(id))).toBe(true);
+    }
+  });
+
+  test("a wake with no row waiting is queued on its own, after the user's messages", () => {
+    const user: QueuedPrompt = { id: "q-user", text: "next turn, please" };
+    const b = book([done("a", "b")]);
+    const queue = queueWake([user], wakesDue(b, ctx())[0]!, b, ctx(), 10_000, "q-new");
+    expect(queue.map((q) => q.id)).toEqual(["q-user", "q-new"]);
+    expect(queue[1]).toMatchObject({ wake: true, wakeLinks: ["a/b"] });
+    expect(queue[1]!.link).toBeUndefined();
+    expect(isWakeMessage(queue[1]!.text)).toBe(true);
+  });
+
+  test("a link stopped since has nothing left to say, and the rest stays", () => {
+    const b = book([done("a", "b"), link("a", "c", "working")]);
+    const queued = wakesDue(b, ctx())[0]!;
+    const stopped = book([done("a", "b"), link("a", "c", "cancelled")]);
+    const wake = wakeFor("a", "Parent a", [...wakeIds(queued), "a/c"], stopped, ctx())!;
+    expect(wakeIds(wake)).toEqual(["a/b"]);
+    // Nothing left to report at all: no empty wake message.
+    const gone = book([link("a", "b", "cancelled")]);
+    expect(wakeFor("a", "Parent a", ["a/b"], gone, ctx())).toBeNull();
+    // Another parent's link never rides along, whatever ids are handed in.
+    const elsewhere = book([{ ...done("z", "q"), id: "a/b" }]);
+    expect(wakeFor("a", "Parent a", ["a/b"], elsewhere, ctx())).toBeNull();
   });
 });
 

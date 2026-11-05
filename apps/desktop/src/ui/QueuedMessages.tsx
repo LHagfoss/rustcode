@@ -19,7 +19,7 @@ import {
   startQueuedEdit,
   useApp,
 } from "../state/store";
-import type { QueuedPrompt } from "../state/thread";
+import { type QueuedPrompt, wakeLine } from "../state/thread";
 import { openLightbox } from "./Lightbox";
 import { Markdown } from "./Markdown";
 import { cx, Pill, Tooltip } from "./primitives";
@@ -286,7 +286,8 @@ export function QueuedAnnouncer({ threadId }: { threadId: string }) {
   const last = useRef<string | null>(null);
   useEffect(() => {
     const view = queueView({ queue, running: false, queueHeld: held });
-    const sig = `${queue.map((q) => q.id).join(",")}|${held}|${editing}`;
+    // A folded wake keeps its row id while its summary grows: the line is part of what changed.
+    const sig = `${queue.map((q) => (q.wake ? `${q.id}:${wakeLine(q.text)}` : q.id)).join(",")}|${held}|${editing}`;
     if (last.current === sig) return;
     const first = last.current === null;
     last.current = sig;

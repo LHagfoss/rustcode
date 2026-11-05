@@ -211,8 +211,32 @@ describe("a thread's lineage", () => {
       link(2, { id: "me/2", orchestrator: "me", target: "other", started: false, createdAt: 20 }),
       link(3, { id: "a/1", orchestrator: "a", target: "me", started: true, createdAt: 1 }),
     ]);
-    expect(started.map((l) => l.target)).toEqual(["child"]);
-    expect(messaged.map((l) => l.target)).toEqual(["other"]);
+    expect(started.map((g) => g.link.target)).toEqual(["child"]);
+    expect(messaged.map((g) => g.link.target)).toEqual(["other"]);
+  });
+
+  test("a follow-up to a thread it started is one row, kept by the started link", () => {
+    const { started, messaged } = threadLineage("me", [
+      link(1, { id: "me/1", orchestrator: "me", target: "child", started: true, createdAt: 10 }),
+      link(2, { id: "me/2", orchestrator: "me", target: "child", state: "working", createdAt: 20 }),
+    ]);
+    // One thread, one row: the later message is not a second relation of the same thread.
+    expect(started).toHaveLength(1);
+    expect(messaged).toEqual([]);
+    expect(started[0]?.links.map((l) => l.id)).toEqual(["me/1", "me/2"]);
+    // The live follow-up speaks for the row, so it reads as the work it does now.
+    expect(started[0]?.link.id).toBe("me/2");
+  });
+
+  test("two messages to the same thread are one row, not two", () => {
+    const { started, messaged } = threadLineage("me", [
+      link(1, { id: "me/1", orchestrator: "me", target: "other", createdAt: 10 }),
+      link(2, { id: "me/2", orchestrator: "me", target: "other", createdAt: 20 }),
+    ]);
+    expect(started).toEqual([]);
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]?.link.id).toBe("me/2");
+    expect(messaged[0]?.links.map((l) => l.id)).toEqual(["me/1", "me/2"]);
   });
 
   test("a broken record cannot make a thread its own parent", () => {
@@ -239,7 +263,7 @@ describe("a thread's lineage", () => {
     );
     const { started } = threadLineage("me", outbound);
     expect(started).toHaveLength(16);
-    expect(started[0]?.target).toBe("child-5");
-    expect(started.at(-1)?.target).toBe("child-20");
+    expect(started[0]?.link.target).toBe("child-5");
+    expect(started.at(-1)?.link.target).toBe("child-20");
   });
 });
