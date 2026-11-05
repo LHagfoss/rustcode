@@ -5,7 +5,7 @@
 
 import { RotateCw } from "lucide-react";
 import { Component, type ReactNode, useEffect, useState } from "react";
-import { refreshHarnesses, toast } from "../state/store";
+import { refreshHarnesses } from "../state/store";
 import { Pill } from "./primitives";
 
 const listeners = new Set<() => void>();
@@ -54,7 +54,6 @@ export function Recoverable({ children }: { children: ReactNode }) {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
         e.preventDefault();
         softReload();
-        toast("Reloaded the view", "info");
       }
     };
     // Capture, so ⌘R works while the boundary shows and before the webview's own reload.

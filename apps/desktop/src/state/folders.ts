@@ -2,7 +2,6 @@
 // thread in front: a new one starts there, an open one moves there
 // (`moveThread`). ⌘⇧O picks where new threads start by default.
 
-import { projectName } from "../acp/types";
 import { pickFolder } from "../lib/native";
 import { moveThread, setDefaultCwd, setProjectCwd, toast, useApp } from "./store";
 
@@ -12,7 +11,6 @@ export async function chooseFolder(asDefault: boolean): Promise<void> {
     const picked = await pickFolder(s.defaultCwd || s.projectCwd);
     if (picked) {
       setDefaultCwd(picked);
-      toast(`New threads start in ${projectName(picked)}`, "success");
     }
     return;
   }

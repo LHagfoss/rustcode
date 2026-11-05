@@ -241,7 +241,8 @@ that change use `tabular`.
   `transform`, `opacity` and colour; never `filter` or `box-shadow` on
   something that moves every frame.
 - Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
-  in 140ms `ease-in`; a swipe follows the pointer and snaps back in 160ms.
+  in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off
+  in 160ms, and a card shown meanwhile takes the top of the stack.
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
@@ -329,16 +330,21 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   slight shadow), 380px wide, `py-1.5 pl-3.5 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
-  most one action as a secondary pill (`h-6 bg-fill`), "+N" when more wait
-  (it clears them all), and a close button. Progress is a 2px accent bar
-  along its foot. One slot (`Toaster`), centred at the top of the chat
-  column 8px under its header (the window's top over Settings): only the
-  newest shows, four more wait, older ones are dropped. Info and success
-  leave after 3s, errors after 7s; hover pauses; a swipe up or sideways,
-  Escape or × dismisses. Use a
-  toast for what is not tied to a message (copied, engine, worktree,
-  harness and theme events, errors of an action); an error about a
-  thread's turn stays an error card over the composer. No banners.
+  most one action as a secondary pill (`h-6 bg-fill`), and a close button.
+  Progress is a 2px accent bar along its foot. `Toaster` shows at most three
+  (`state/toasts.ts` enforces the queue), newest on top, stacked with 8px
+  between, centred at the top of the chat column 8px under its header (the
+  window's top over Settings). The same message again refreshes its card and
+  restarts its time instead of stacking; past three, the oldest is dropped.
+  Info and success leave after 3s, errors after 7s. The pointer or focus on
+  the stack, a drag, and a window in the background stop every clock, which
+  resumes with what was left. ×, Escape (after a draft or an open overlay has
+  taken it), or a drag past 48px up or sideways dismisses; a drag follows the
+  pointer and snaps back in 160ms, and never selects text. Use a
+  toast for what is not tied to a message (copied, engine events, errors of an
+  action), not to repeat what the screen already shows (no pin, archive,
+  theme, harness-switch or steering notice); an error about a thread's turn
+  stays an error card over the composer. No banners.
 - **Sidebar sections:** one list, with a header only where a group needs one:
   Working (threads running now, on top; off with the filter menu or when
   grouping by project), then pinned and the rest, and at the foot the Snoozed
