@@ -1002,6 +1002,42 @@ describe("plan usage cache", () => {
     expect(cache["claude-code"]?.windows[0]?.usedPercent).toBe(30);
     resetForTests();
   });
+
+  test("the plans answer records which login is signed out, and clears it when it reads again", () => {
+    resetForTests();
+    commitPlansAnswer(
+      parsePlans({
+        plans: [
+          { id: "claude", name: "Claude", harness: "claude-code", status: "signedOut", windows: [] },
+          {
+            id: "claude:work",
+            name: "Work",
+            harness: "claude-code",
+            account: "work",
+            status: "ok",
+            windows: [{ label: "5-hour", usedPercent: 4, windowMinutes: 300 }],
+          },
+        ],
+      }),
+    );
+    expect(useApp.getState().signedOutLogins).toEqual({ "claude-code": true });
+    commitPlansAnswer(
+      parsePlans({
+        plans: [
+          {
+            id: "claude",
+            name: "Claude",
+            harness: "claude-code",
+            status: "ok",
+            windows: [{ label: "5-hour", usedPercent: 4, windowMinutes: 300 }],
+          },
+        ],
+      }),
+    );
+    // Signed back in: nothing is signed out any more.
+    expect(useApp.getState().signedOutLogins).toEqual({});
+    resetForTests();
+  });
 });
 
 describe("an error's words", () => {

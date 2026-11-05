@@ -242,6 +242,15 @@ would hide the macOS Keychain login) and `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are removed from that
 child, so a login-shell variable cannot override the chosen login.
 
+With named accounts, the app picks that account itself where nothing else
+does, so no thread starts on a default login that is signed out: the picker
+leaves out "Default login", a new thread starts on the first named login that
+is signed in, and a thread started by another thread (`start_session`,
+`fan_out`) runs on its parent's account when it uses the same harness, else on
+that same first login (`apps/desktop/src/state/logins.ts`). Claude Code has no
+cheap sign-in command, so its harness `auth` says `unknown` either way; what
+reports a login as signed out is the plan read described below.
+
 Plan usage is read per account, but only when a client asks explicitly:
 `_rustcode/usage/plans` with `claudeAccounts: true` returns one Claude row per
 login (`account` and its name), which Settings › Usage sends when the page is
