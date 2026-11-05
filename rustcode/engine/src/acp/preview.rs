@@ -102,6 +102,18 @@ impl crate::preview::PreviewClient for AcpOrchestrationClient {
                 .map_err(|error| error.to_string())
         })
     }
+
+    /// The call was dropped before its answer arrived: the app ends it there and
+    /// then, instead of holding the links it waited on until they time out.
+    fn call_cancelled(&self, call_id: &str) {
+        let params = crate::orchestration::cancelled_params(&self.session_id, call_id);
+        let Ok(message) = UntypedMessage::new(crate::orchestration::CANCELLED_METHOD, params)
+        else {
+            return;
+        };
+        // Best effort: a client that cannot hear this answers a call nobody reads.
+        let _ = self.connection.send_notification(message);
+    }
 }
 
 /// The host and version for a session whose client advertised orchestration

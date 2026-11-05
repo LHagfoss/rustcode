@@ -5,6 +5,7 @@
 //! `tools/call` goes to the parent engine's [`super::hub`], which checks the
 //! session and token and forwards it to the client like a built-in call.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -126,6 +127,8 @@ where
     });
     let mut lines = BufReader::new(input).lines();
     let mut calls = tokio::task::JoinSet::new();
+    // Each call in flight, by its request id, so `notifications/cancelled` ends it.
+    let mut in_flight: HashMap<String, tokio::task::AbortHandle> = HashMap::new();
     while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
         if line.trim().is_empty() {
             continue;
@@ -140,14 +143,24 @@ where
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        // Notifications (no id) and answers to requests we never send.
-        let Some(id) = id else {
-            continue;
-        };
         if method.is_empty() {
             continue;
         }
         let params = message.get("params").cloned().unwrap_or(Value::Null);
+        // A harness that stopped waiting for a call says so; the call goes with
+        // it, and dropping it closes its socket, which cancels it in the engine.
+        if method == CANCEL_NOTIFICATION {
+            if let Some(call) = params.get("requestId").map(request_key) {
+                if let Some(handle) = in_flight.remove(&call) {
+                    handle.abort();
+                }
+            }
+            continue;
+        }
+        // Answers to requests we never send.
+        let Some(id) = id else {
+            continue;
+        };
         match method.as_str() {
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str);
@@ -181,23 +194,28 @@ where
                 let sender = sender.clone();
                 let forward = Arc::clone(&forward);
                 let identity = identity.clone();
-                calls.spawn(async move {
-                    let answer = call(
-                        forward.as_ref(),
-                        &identity,
-                        &params,
-                        orchestration,
-                        smart_ui,
-                    )
-                    .await;
-                    let _ = sender.send(result(
-                        id,
-                        json!({
-                            "content": [{ "type": "text", "text": answer.content }],
-                            "isError": !answer.success,
-                        }),
-                    ));
-                });
+                let key = request_key(&id);
+                in_flight.retain(|_, handle| !handle.is_finished());
+                in_flight.insert(
+                    key,
+                    calls.spawn(async move {
+                        let answer = call(
+                            forward.as_ref(),
+                            &identity,
+                            &params,
+                            orchestration,
+                            smart_ui,
+                        )
+                        .await;
+                        let _ = sender.send(result(
+                            id,
+                            json!({
+                                "content": [{ "type": "text", "text": answer.content }],
+                                "isError": !answer.success,
+                            }),
+                        ));
+                    }),
+                );
             }
             _ => {
                 let _ = sender.send(error(id, -32601, "method not found"));
@@ -264,6 +282,17 @@ async fn call(
             args,
         })
         .await
+}
+
+/// The MCP notification a harness sends to stop waiting for a call.
+const CANCEL_NOTIFICATION: &str = "notifications/cancelled";
+
+/// A request id as a map key: `1` and `"1"` are the same call to a harness.
+fn request_key(id: &Value) -> String {
+    match id {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn result(id: Value, result: Value) -> Value {
@@ -450,10 +479,15 @@ mod tests {
         assert_eq!(called["isError"], false, "{called}");
         let text = called["content"][0]["text"].as_str().unwrap();
         let echoed: Value = serde_json::from_str(text).unwrap();
-        // The same `_rustcode/orchestration` params a built-in call sends.
-        assert_eq!(
-            echoed["asked"],
-            json!({"tool": "start_session", "args": {"prompt": "fix the login"}})
+        // The same `_rustcode/orchestration` params a built-in call sends, and
+        // the call id that lets a dropped call be ended on the app's side.
+        assert_eq!(echoed["asked"]["tool"], json!(super::super::START_SESSION));
+        assert_eq!(echoed["asked"]["args"], json!({"prompt": "fix the login"}));
+        assert!(
+            echoed["asked"]["callId"]
+                .as_str()
+                .is_some_and(|call| !call.is_empty()),
+            "{echoed}"
         );
 
         assert_eq!(answers[3]["result"]["isError"], true);
@@ -503,6 +537,92 @@ mod tests {
         )
         .await;
         assert_eq!(answers[0]["result"]["isError"], true);
+    }
+
+    /// A call the parent engine never answers: it can only end by being dropped.
+    struct Hanging {
+        started: Arc<std::sync::atomic::AtomicUsize>,
+        dropped: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct CountDrop(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for CountDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl Forward for Hanging {
+        fn call(
+            &self,
+            _request: CallRequest,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CallAnswer> + Send + '_>> {
+            self.started
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let dropped = Arc::clone(&self.dropped);
+            Box::pin(async move {
+                let _guard = CountDrop(dropped);
+                std::future::pending::<CallAnswer>().await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_call_stops_at_once_and_is_never_answered() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let started = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (client, server_side) = tokio::io::duplex(64 * 1024);
+        let (server_read, server_write) = tokio::io::split(server_side);
+        let (client_read, mut client_write) = tokio::io::split(client);
+        let server = tokio::spawn(serve(
+            server_read,
+            server_write,
+            Identity {
+                session_id: "thread-1".into(),
+                token: "t".into(),
+            },
+            Arc::new(Hanging {
+                started: Arc::clone(&started),
+                dropped: Arc::clone(&dropped),
+            }),
+            super::super::VERSION,
+            false,
+        ));
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "list_sessions", "arguments": {}}});
+        client_write
+            .write_all(format!("{call}\n").as_bytes())
+            .await
+            .unwrap();
+        while started.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        // The harness stops waiting for the call, in MCP's own words.
+        let cancel = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                            "params": {"requestId": 1, "reason": "the harness gave up"}});
+        client_write
+            .write_all(format!("{cancel}\n").as_bytes())
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if dropped.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "the call was dropped");
+        // A call nobody waits for is not answered: the harness would read it as a phase late.
+        let mut answers = BufReader::new(client_read).lines();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(150), answers.next_line())
+                .await
+                .is_err(),
+            "no answer for a cancelled call"
+        );
+        client_write.shutdown().await.unwrap();
+        server.await.unwrap().unwrap();
     }
 
     #[tokio::test]

@@ -71,6 +71,10 @@ pub type PreviewFuture = Pin<Box<dyn Future<Output = Result<Value, String>> + Se
 /// server installs one per session when the client advertised the capability.
 pub trait PreviewClient: Send + Sync {
     fn request(&self, params: Value) -> PreviewFuture;
+    /// Tell the client a forwarded call was dropped before it answered, so it can
+    /// end that call and let go of what it held. A client that cannot hear it
+    /// keeps answering a call nobody reads; nothing is lost either way.
+    fn call_cancelled(&self, _call_id: &str) {}
 }
 
 /// Whether initialize `clientCapabilities._meta` advertises the preview

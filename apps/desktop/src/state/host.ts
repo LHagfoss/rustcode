@@ -33,6 +33,7 @@ import {
   type GrantAsk,
   type GrantChoice,
   grant,
+  type HeardMark,
   hasGrant,
   interruptActive,
   isActive,
@@ -66,6 +67,7 @@ import {
   shownState,
   supersededLinks,
   type TurnAnswer,
+  unheard,
   updateLink,
   usageScope,
   type Wake,
@@ -99,6 +101,7 @@ import {
   useApp,
 } from "./store";
 import { appendNotice, attachAutoAllowed, localId, type TranscriptItem, turnCompletion } from "./thread";
+import { orchestrationTool } from "./toolNames";
 
 const BOOK_KEY = "rustcode.threadLinks";
 /** How long a change waits before it is written to the store: a run of tool calls is one save. */
@@ -224,6 +227,34 @@ if (typeof window !== "undefined") {
  */
 const waiting = new Map<string, Set<string>>();
 
+/** How often a wait looks again, unless it is ended early (a dropped call, a newer wait). */
+const WAIT_CHECK_MS = 300;
+
+/** One `wait_session` in flight: the links it holds, and how it ends early. */
+interface Wait {
+  caller: string;
+  links: Set<string>;
+  /** Why it ended without an answer, when it did: its call was dropped, or a newer wait took it over. */
+  ended?: "dropped" | "taken";
+  /** Resolves the pause between checks, so an ended wait stops where it is. */
+  nudge: () => void;
+  /** The marks it set when handing links over, so a dropped call can take them back. */
+  handed: HeardMark[];
+}
+
+/** Which wait holds each `caller/link`, and the waits the engine can name by call id. */
+const holds = new Map<string, Wait>();
+const calls = new Map<string, Wait>();
+/**
+ * What the last few calls handed over. An answer a wait has already sent is
+ * dropped by the engine when the harness stopped waiting at that very moment:
+ * the marks it set go back, and the ordinary wake delivers what nobody read.
+ */
+const handedBy = new Map<string, HeardMark[]>();
+const HANDED_KEPT = 16;
+
+const holdKey = (caller: string, link: string) => `${caller}\n${link}`;
+
 /** The timer that re-checks a coalescing window; one at a time. */
 let wakeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -240,6 +271,9 @@ const wakeWaits = new Map<string, number>();
 export function resetWaits(): void {
   waiting.clear();
   wakeWaits.clear();
+  holds.clear();
+  calls.clear();
+  handedBy.clear();
   clearTimeout(wakeTimer);
   wakeTimer = undefined;
 }
@@ -406,7 +440,7 @@ async function answer(params: JsonObject): Promise<JsonObject> {
     case "message_session":
       return message(caller, call.target, call.text);
     case "wait_session":
-      return wait(caller.id, call.links, call.timeoutMs);
+      return wait(caller.id, call.links, call.timeoutMs, call.callId);
     case "start_session":
       return start(caller, call);
     case "fan_out":
@@ -1202,17 +1236,56 @@ export function stateOf(s: AppState, link: Link) {
  * child (idle time, last tool, turns), so a timeout says whether it is
  * thinking or stuck. While it runs, this parent is registered as waiting, so
  * no wake repeats what the wait itself returns.
+ *
+ * A wait ends without an answer when nobody can read one any more: its call was
+ * dropped by the harness (`callId`, see {@link orchestrationCallDropped}), its
+ * own transcript row finished, or a newer wait took its links over. Its links
+ * are then free at once, and anything that settles comes as the ordinary wake.
  */
-async function wait(callerId: string, ids: string[], timeoutMs: number): Promise<JsonObject> {
+async function wait(
+  callerId: string,
+  ids: string[],
+  timeoutMs: number,
+  callId?: string,
+): Promise<JsonObject> {
   const mine = [...new Set(ids)].filter(
     (id) => book().links.find((l) => l.id === id)?.orchestrator === callerId,
   );
   if (!mine.length) return failureJson(failure("not_found", "no such link from this thread"));
   const deadline = Date.now() + timeoutMs;
-  const set = waiting.get(callerId) ?? new Set<string>();
-  for (const id of mine) set.add(id);
-  waiting.set(callerId, set);
   const until = new Date(deadline).toISOString();
+  const me: Wait = { caller: callerId, links: new Set(mine), nudge: () => {}, handed: [] };
+  // The newest wait on a link takes it over: two waits holding one link could each hand its
+  // answer over, and only one of them is being read.
+  for (const id of mine) {
+    const held = holds.get(holdKey(callerId, id));
+    if (held && held !== me) {
+      held.ended = "taken";
+      held.nudge();
+    }
+    holds.set(holdKey(callerId, id), me);
+    const set = waiting.get(callerId) ?? new Set<string>();
+    set.add(id);
+    waiting.set(callerId, set);
+  }
+  if (callId) calls.set(callId, me);
+  // Some harnesses drop a call without the engine hearing of it (a tool timeout
+  // inside the harness): the caller's own row for the call then ends while the
+  // wait runs. Only a caller with one wait row in flight is certainly looking at
+  // its own, and a wrong guess costs no answer: a released link comes as a wake.
+  const row = waitRowOf(callerId);
+  const endEarly = (why: "dropped" | "taken"): JsonObject => {
+    me.ended = why;
+    return {
+      status: why === "taken" ? "taken_over" : "dropped",
+      waited_until: until,
+      links: [],
+      note:
+        why === "taken"
+          ? "A newer wait_session took these links over, so this one stopped: read that answer. Anything that settles still comes as a wake; do not poll."
+          : "This call was dropped (the harness stopped waiting for it), so the wait stopped and its links are free. Anything that settles comes as a wake; do not poll.",
+    };
+  };
   /**
    * What the parent is told the link is now. A child that settled but whose own subtree still works
    * has not answered yet: it says it works, with how long it has been quiet, rather than hand back
@@ -1237,12 +1310,28 @@ async function wait(callerId: string, ids: string[], timeoutMs: number): Promise
   // does not come back a second time as a wake.
   const hand = (link: Link, shown = shownOf(link)) => {
     if (shown === "done" || shown === "failed" || shown === "needs_user") {
-      markHeard(link, shown, Date.now());
+      me.handed.push(markHeard(link, shown, Date.now()));
     }
     return { links: [result(link, shown)] };
   };
+  /** The pause before looking again, cut short when the wait ends early. */
+  const rest = () => {
+    if (me.ended) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = () => {
+        clearTimeout(timer);
+        me.nudge = () => {};
+        resolve();
+      };
+      timer = setTimeout(done, WAIT_CHECK_MS);
+      me.nudge = done;
+    });
+  };
   try {
     for (;;) {
+      if (me.ended) return endEarly(me.ended);
+      if (row && !waitRowRuns(callerId, row)) return endEarly("dropped");
       const s = useApp.getState();
       // The turn that asked is over (the user stopped it, or the harness dropped the call): nobody
       // will read this answer, and holding the links back would keep their wakes from arriving.
@@ -1285,13 +1374,69 @@ async function wait(callerId: string, ids: string[], timeoutMs: number): Promise
           note: "Still running. You are woken when it finishes or asks; do not poll with sleeps.",
         };
       }
-      await new Promise((r) => setTimeout(r, 300));
+      await rest();
     }
   } finally {
-    for (const id of mine) set.delete(id);
-    if (!set.size) waiting.delete(callerId);
+    if (callId && calls.get(callId) === me) calls.delete(callId);
+    // What this wait handed over, for a call whose answer turns out to be dropped unread.
+    if (callId && me.handed.length) {
+      handedBy.set(callId, me.handed);
+      while (handedBy.size > HANDED_KEPT) handedBy.delete(handedBy.keys().next().value!);
+    }
+    for (const id of mine) {
+      if (holds.get(holdKey(callerId, id)) !== me) continue;
+      holds.delete(holdKey(callerId, id));
+      const set = waiting.get(callerId);
+      set?.delete(id);
+      if (set && !set.size) waiting.delete(callerId);
+    }
     wakeTick();
   }
+}
+
+/**
+ * The caller's own row for a call the app can watch: its `wait_session` row
+ * still in flight. Only a lone one is certainly this wait's, so a second call in
+ * parallel leaves this off rather than watching another call's row.
+ */
+function waitRowOf(callerId: string): string | undefined {
+  const rows = (useApp.getState().threads[callerId]?.items ?? []).filter(
+    (item) =>
+      item.kind === "tool" &&
+      (item.status === "pending" || item.status === "in_progress") &&
+      orchestrationTool(item.title) === "wait_session",
+  );
+  return rows.length === 1 ? rows[0]!.id : undefined;
+}
+
+/** Whether that row still runs: one that ended, or that a reload took away, says the call is gone. */
+function waitRowRuns(callerId: string, row: string): boolean {
+  const item = (useApp.getState().threads[callerId]?.items ?? []).find((i) => i.id === row);
+  return !!item && item.kind === "tool" && (item.status === "pending" || item.status === "in_progress");
+}
+
+/**
+ * The engine says a call was dropped before it answered (a harness's own tool
+ * timeout, a cancel, the MCP server closing): its wait ends where it is, without
+ * marking anything heard, so a child that settles comes as the ordinary wake and
+ * an answer already sent — which the engine drops unread — is handed again.
+ * `_rustcode/orchestration/cancelled`.
+ */
+export function orchestrationCallDropped(params: JsonObject): void {
+  const callId = typeof params.callId === "string" ? params.callId : "";
+  if (!callId) return;
+  const session = typeof params.sessionId === "string" ? params.sessionId : undefined;
+  const live = calls.get(callId);
+  if (live && (session === undefined || live.caller === session)) {
+    live.ended = "dropped";
+    live.nudge();
+    return;
+  }
+  const marks = handedBy.get(callId);
+  if (!marks?.length) return;
+  handedBy.delete(callId);
+  setBook((b) => unheard(b, marks));
+  wakeTick();
 }
 
 // ---------------------------------------------------------------- waking a parent
@@ -1420,18 +1565,16 @@ function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
 
 /**
  * A link the parent was just handed (a `wait_session` answer, or a pending
- * question it was told about): mark it heard, so no wake repeats it.
+ * question it was told about): mark it heard, so no wake repeats it. The mark is
+ * returned so a call whose answer is dropped unread can take it back.
  */
-function markHeard(link: Link, state: LinkState, now: number): void {
+function markHeard(link: Link, state: LinkState, now: number): HeardMark {
   const request = useApp.getState().threads[link.target]?.permissions[0]?.rpcId;
   const asked = request === undefined ? undefined : String(request);
-  setBook((b) =>
-    updateLink(
-      b,
-      link.id,
-      state === "needs_user" && asked !== undefined ? { askedRequest: asked } : { notifiedAt: now },
-    ),
-  );
+  const change =
+    state === "needs_user" && asked !== undefined ? { askedRequest: asked } : { notifiedAt: now };
+  setBook((b) => updateLink(b, link.id, change));
+  return { id: link.id, ...change };
 }
 
 // ---------------------------------------------------------------- link turns
@@ -1477,11 +1620,14 @@ export function linkFinished(
   items: TranscriptItem[],
 ) {
   const now = Date.now();
+  // A stopped link is not an answer: it takes only what its own turn said.
+  const says = answerFor(thread, items, failed, outcome !== "cancelled");
   setBook((b) =>
     updateLink(b, id, {
       state: outcome === "cancelled" ? "cancelled" : outcome === "failed" ? "failed" : "done",
-      // A stopped link is not an answer: it takes only what its own turn said.
-      ...answerFor(thread, items, failed, outcome !== "cancelled"),
+      answer: says.text,
+      truncated: says.truncated,
+      filesChanged: says.filesChanged,
       settledAt: now,
     }),
   );

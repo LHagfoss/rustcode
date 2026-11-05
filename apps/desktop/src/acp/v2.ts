@@ -14,6 +14,8 @@ export const V2Method = {
   checkpointDiff: "_rustcode/checkpoints/diff",
   checkpointRestore: "_rustcode/checkpoints/restore",
   orchestration: "_rustcode/orchestration",
+  /** A call the engine dropped before it answered: the wait it opened ends there and then. */
+  orchestrationCancelled: "_rustcode/orchestration/cancelled",
 } as const;
 
 // ---------------------------------------------------------------- status
