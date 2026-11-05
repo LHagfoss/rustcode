@@ -10,8 +10,10 @@ import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
 import type { Link } from "../state/orchestration";
-import { RESUME_TEXT, shortcutFor, useApp } from "../state/store";
+import { queueView } from "../state/queue";
+import { canSteer, RESUME_TEXT, shortcutFor, useApp } from "../state/store";
 import {
+  type QueuedPrompt,
   splitSubagentSteps,
   startedLinks,
   subagentOf,
@@ -25,6 +27,7 @@ import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow } from "./AttentionCards";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
+import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
 import {
   AssistantRow,
   HandoffRow,
@@ -65,6 +68,19 @@ type Row = {
   approvalNumber?: number;
   /** The plan a paused thread keeps to, at the foot. */
   plan?: { threadId: string; entries: PlanEntry[] };
+  /** A message waiting for the thread, at the end of it. */
+  queued?: {
+    item: QueuedPrompt;
+    index: number;
+    count: number;
+    held: boolean;
+    steerable: boolean;
+    from?: string;
+  };
+  /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
+  queueWake?: { line: string; text: string };
+  /** Resume, under a queue a stopped or failed turn held. */
+  resume?: { threadId: string; count: number };
 };
 
 /** The turns the reader opened, by thread: kept while the app runs, so going back keeps them. */
@@ -286,19 +302,31 @@ export function Transcript({
     // finished plan, or one a running turn is working through, is not repeated here.
     if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
       out.push({ key: "plan", plan: { threadId: thread.id, entries: thread.plan } });
+    // What waits for the thread comes after all of it: its queued messages, the one quiet line a
+    // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
+    // the transcript, and the pinned view follows them like any other row.
+    const queue = queueView(thread);
+    const waking = thread.queue.find((q) => q.wake);
+    if (queue.wake && waking)
+      out.push({ key: "queue-wake", queueWake: { line: queue.wake, text: waking.text } });
+    const steer = canSteer(thread);
+    queue.messages.forEach((q, i) => {
+      out.push({
+        key: `queued-${q.id}`,
+        queued: {
+          item: q,
+          index: i,
+          count: queue.messages.length,
+          held: queue.held,
+          steerable: steer,
+          from: q.link ? links.find((l) => l.id === q.link)?.orchestratorTitle : undefined,
+        },
+      });
+    });
+    if (queue.resumable)
+      out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
     return out;
-  }, [
-    visible,
-    subagentSteps,
-    started,
-    thread.running,
-    thread.waiting,
-    thread.permissions,
-    thread.plan,
-    thread.id,
-    open,
-    searching,
-  ]);
+  }, [visible, subagentSteps, started, links, thread, open, searching]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -357,6 +385,9 @@ export function Transcript({
       if (rows[i]?.approval) return 96;
       if (rows[i]?.plan) return 260;
       if (rows[i]?.fold || rows[i]?.group) return 26;
+      if (rows[i]?.queued) return 96;
+      if (rows[i]?.resume) return 30;
+      if (rows[i]?.queueWake) return 26;
       if (!item) return 24;
       if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
       return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
@@ -759,6 +790,18 @@ export function Transcript({
                       <ToolGroupRow group={row.group} onToggle={toggleFold} />
                     ) : row.waiting ? (
                       <WaitingRow count={row.waiting} />
+                    ) : row.queued ? (
+                      <QueuedMessageRow threadId={thread.id} {...row.queued} />
+                    ) : row.queueWake ? (
+                      // The same quiet line its turn leaves once it runs: the wake's first line, the
+                      // whole message in the title. Never a bubble that reads as the user's own.
+                      <div title={row.queueWake.text}>
+                        <NoticeRow
+                          item={{ kind: "notice", id: "queue-wake", text: row.queueWake.line, tone: "info" }}
+                        />
+                      </div>
+                    ) : row.resume ? (
+                      <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (
                       <WorkingRow startedAt={thread.turnStartedAt} now={now} />
                     ) : row.activity ? (

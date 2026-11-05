@@ -62,6 +62,7 @@ import {
   restateLinks,
   sameProject,
   shownState,
+  supersededLinks,
   type TurnAnswer,
   updateLink,
   usageScope,
@@ -220,6 +221,15 @@ const waiting = new Map<string, Set<string>>();
 
 /** The timer that re-checks a coalescing window; one at a time. */
 let wakeTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * How many times a wake waits for its parent's thread to become visible to the app (a second each),
+ * before leaving it unmarked for the next reason to look. A prompt into a turn the app cannot see can
+ * interrupt the tools that turn is running.
+ */
+const WAKE_WAIT_TRIES = 10;
+/** How often each parent's wake has waited so far, by thread id. */
+const wakeWaits = new Map<string, number>();
 
 function ruleThread(s: AppState, id: string): RuleThread | undefined {
   const summary = s.sessions.find((x) => x.id === id);
@@ -1112,25 +1122,33 @@ async function wait(callerId: string, ids: string[], timeoutMs: number): Promise
   for (const id of mine) set.add(id);
   waiting.set(callerId, set);
   const until = new Date(deadline).toISOString();
-  const result = (link: Link) => {
+  /**
+   * What the parent is told the link is now. A child that settled but whose own subtree still works
+   * has not answered yet: it says it works, with how long it has been quiet, rather than hand back
+   * the answer of a turn that only started the work below it.
+   */
+  const shownOf = (link: Link): LinkState => {
+    const state = stateOf(useApp.getState(), link);
+    return (state === "done" || state === "failed") && !subtreeQuiet(link.target) ? "working" : state;
+  };
+  const result = (link: Link, shown = shownOf(link)) => {
     const s = useApp.getState();
     const now = Date.now();
     const activity = activityOf(s.threads[link.target]?.items ?? []);
-    const state = stateOf(s, link);
-    // A child that settled but whose own subtree still works has not answered yet: say it works,
-    // and say how long it has been quiet, rather than hand back the answer of a turn that only
-    // started the work below it.
-    const shown = (state === "done" || state === "failed") && !subtreeQuiet(link.target) ? "working" : state;
     // A settled link with no answer still has one: the target's last reply, read now.
     const reply = link.answer?.trim()
       ? link
       : filledWith(link, latestReply(s.threads[link.target]?.items ?? []));
     return linkResult(reply, shown, statusOf(s, link.target), { now, activity });
   };
-  // The parent has this answer now: no wake may repeat it.
-  const hand = (link: Link) => {
-    markHeard(link, stateOf(useApp.getState(), link), Date.now());
-    return { links: [result(link)] };
+  // The link's answer is out with this reply: no wake may repeat it. A link whose state goes out
+  // with a timeout is handed over the same way, so a child that settles just as the wait gives up
+  // does not come back a second time as a wake.
+  const hand = (link: Link, shown = shownOf(link)) => {
+    if (shown === "done" || shown === "failed" || shown === "needs_user") {
+      markHeard(link, shown, Date.now());
+    }
+    return { links: [result(link, shown)] };
   };
   try {
     for (;;) {
@@ -1156,7 +1174,7 @@ async function wait(callerId: string, ids: string[], timeoutMs: number): Promise
           waited_until: until,
           links: mine.flatMap((id) => {
             const link = book().links.find((l) => l.id === id);
-            return link ? [result(link)] : [];
+            return link ? [hand(link)] : [];
           }),
           note: "Still running. You are woken when it finishes or asks; do not poll with sleeps.",
         };
@@ -1234,8 +1252,15 @@ export function wakeTick(): void {
   if (orphaned.length) {
     setBook((b) => orphaned.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), b));
   }
-  for (const wake of wakesDue(filled, ctx)) sendWake(wake, ctx, now);
-  const at = nextWakeAt(filled, ctx);
+  // A settled link a newer one to the same thread replaced: the parent messaged that thread since, so
+  // this answer is out of date. Mark it heard instead of waking the parent with it (it would arrive
+  // long after the answer the parent already read).
+  const superseded = supersededLinks(book(), ctx);
+  if (superseded.length) {
+    setBook((b) => superseded.reduce((acc, l) => updateLink(acc, l.id, { notifiedAt: now }), b));
+  }
+  for (const wake of wakesDue(book(), ctx)) sendWake(wake, ctx, now);
+  const at = nextWakeAt(book(), ctx);
   if (at !== null) scheduleWake(Math.max(250, at - now + 50));
 }
 
@@ -1247,22 +1272,32 @@ function scheduleWake(ms: number): void {
 
 /**
  * One message per parent, in a turn of its own: queued behind a running turn
- * (never interrupting its tools), started at once when the thread is idle.
- * Links are marked before it is sent, so a wake turn's own activity cannot
- * deliver the same result twice. The wake turn carries no link, so waking a
- * thread that is itself a child does not settle its own link in its parent's
- * book while that turn runs: a wake is a message, not a delegation.
+ * (never interrupting its tools), started at once when the thread is idle. Links
+ * are marked before it is sent, so a wake turn's own activity cannot deliver the
+ * same result twice. The wake turn carries no link, so waking a thread that is
+ * itself a child does not settle its own link in its parent's book while that
+ * turn runs: a wake is a message, not a delegation.
+ *
+ * A parent the app cannot see running (its history is still replaying, or it is
+ * not open yet) is never sent a prompt: a second prompt into a turn can interrupt
+ * the tools it is running (a parent's own `wait_session`). The wake waits, unmarked,
+ * until the app knows where the turn is.
  */
 function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
-  const parent = useApp.getState().threads[wake.parent];
-  if (parent?.loading) {
-    // Its own history is still replaying: try again once it is there, unmarked.
-    scheduleWake(1_000);
+  const state = useApp.getState();
+  const parent = state.threads[wake.parent];
+  const known = state.sessions.some((s) => s.id === wake.parent);
+  if (!parent || parent.loading) {
+    // Opening it is the app's job; the wake waits rather than landing in a turn it cannot see.
+    if (!parent && known) void openThread(wake.parent);
+    const tries = (wakeWaits.get(wake.parent) ?? 0) + 1;
+    wakeWaits.set(wake.parent, tries);
+    if (tries <= WAKE_WAIT_TRIES) scheduleWake(1_000);
     return;
   }
+  wakeWaits.delete(wake.parent);
   const text = wakeMessage(wake, now);
   setBook((b) => markWoken(b, wake, ctx, now));
-  if (!parent) return;
   if (parent.running) {
     updateThread(wake.parent, (t) => ({
       ...t,

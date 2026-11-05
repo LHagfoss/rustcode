@@ -127,6 +127,22 @@ export interface QueuedPrompt {
   link?: string;
 }
 
+/**
+ * The marker a wake message ends with. The engine keeps the text a turn was started with, not the
+ * app's flag, so a wake turn read back after a reload is still a wake: a quiet line, never a message
+ * that reads as the user's own.
+ */
+export const WAKE_MARK = "<!-- rustcode:wake -->";
+
+/** The message an app-woken turn carries: the wake text, marked so history knows what it is. */
+export const withWakeMark = (text: string) => `${text}\n\n${WAKE_MARK}`;
+
+/** Whether a watched marker is the wake message's. */
+export const isWakeMessage = (text: string) => text.includes(WAKE_MARK);
+
+/** A wake message's first line: its compact summary ("2 children finished · 1 needs you"). */
+export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
+
 export interface ThreadState {
   id: string;
   cwd: string;
@@ -139,6 +155,8 @@ export interface ThreadState {
   configOptions: ConfigOption[];
   permissions: PermissionRequest[];
   queue: QueuedPrompt[];
+  /** A stopped or failed turn left the queue waiting: it keeps its order until Resume starts it. */
+  queueHeld?: boolean;
   running: boolean;
   turnStartedAt?: number;
   /** Background commands the last turn parked on; it resumes when they finish. */
@@ -272,7 +290,14 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       const items = finishThoughts(closed.items, now);
       return {
         ...closed,
-        items: append(items, { kind: "user", id: localId("user"), text: update.text, at: update.at }),
+        items: append(items, {
+          kind: "user",
+          id: localId("user"),
+          text: update.text,
+          at: update.at,
+          // A replay of history has no app flags: the message says itself whether it is a wake.
+          wake: isWakeMessage(update.text) || undefined,
+        }),
       };
     }
     case "agent": {
@@ -466,6 +491,8 @@ export function beginTurn(
   return {
     ...closed,
     running: true,
+    // A turn starts the queue: what a stopped turn held is running again.
+    queueHeld: undefined,
     turnStartedAt: now,
     waiting: undefined,
     woken: undefined,
@@ -479,7 +506,7 @@ export function beginTurn(
         at: now,
         attachments: attachments?.length ? attachments : undefined,
         fromView: fromView || undefined,
-        wake: wake || undefined,
+        wake: wake || isWakeMessage(text) || undefined,
       },
     ],
   };
@@ -524,6 +551,15 @@ function backgroundOf(
 }
 
 /**
+ * Whether a turn that ended this way leaves the queue for the user to resume. Only a turn that
+ * completed runs the queue on: after a stop or a failure the messages keep their order and wait, so
+ * nothing goes out that the user did not ask for.
+ */
+export function holdsQueue(outcome: "completed" | "cancelled" | "failed"): boolean {
+  return outcome !== "completed";
+}
+
+/**
  * A turn ended: thoughts stop, running tools are marked, and a footer row is
  * added. A background command keeps running; the engine ends its call.
  */
@@ -544,6 +580,9 @@ export function finishTurn(
   return {
     ...state,
     running: false,
+    // A turn that completed runs the queue on (store.ts `runPrompt`); one the user stopped, or that
+    // failed, leaves its messages in order for Resume.
+    queueHeld: holdsQueue(outcome) && state.queue.length ? true : undefined,
     turnStartedAt: undefined,
     woken: undefined,
     pendingTurn: undefined,

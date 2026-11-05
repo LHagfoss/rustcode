@@ -1,17 +1,18 @@
 // The composer, after ContentView.swift's Composer: one glass box floating over
-// the transcript, holding the queue, the attachments, the field (with a
-// slash-command token in front of it; pasted links stay inline as text) and its
-// foot: + on the left, send/queue/stop on the right. The tray tucked behind that
-// foot carries the rest (the folder, the worktree, access, the meter, the model
-// pill). Keys follow the SwiftUI app:
-// ⏎ send (or queue while running), ⇧⏎ newline, ⌘⏎ steer, Esc closes
-// suggestions, then clears the draft, then stops the turn.
+// the transcript, holding the attachments, the field (with a slash-command token
+// in front of it; pasted links stay inline as text) and its foot: + on the left,
+// send/queue/stop on the right. The tray tucked behind that foot carries the rest
+// (the folder, the worktree, access, the meter, the model pill). What waits for
+// the thread is not here: queued messages are rows at the end of the transcript
+// (ui/QueuedMessages.tsx), and one of them is edited in this field. Keys follow
+// the SwiftUI app: ⏎ send (or queue while running), ⇧⏎ newline, ⌘⏎ steer, Esc
+// closes suggestions, then leaves a queued edit, then clears the draft, then
+// stops the turn.
 
 import {
   ArrowUp,
   Check,
   ChevronDown,
-  ChevronUp,
   Command,
   Copy,
   FileText,
@@ -65,35 +66,35 @@ import {
   answerPermission,
   cancel,
   cancelEdit,
+  cancelQueuedEdit,
   canSteer,
   commandsFor,
+  endQueuedEdit,
   featureMissing,
-  moveQueued,
   newThreadChoice,
   permissionModeOf,
-  removeQueued,
-  sendQueuedNow,
+  saveQueuedEdit,
   setDraft,
   setExtras,
   setNewWorktree,
   setPermissionMode,
   setProjectCwd,
   startNewThread,
+  startQueuedEdit,
   steerOrSubmit,
   submit,
-  takeQueued,
   threadHarness,
   toast,
-  updateQueued,
   useApp,
 } from "../state/store";
-import { localId, type QueuedPrompt, type ThreadState } from "../state/thread";
+import { localId, type ThreadState } from "../state/thread";
 import { AgentPill } from "./AgentViews";
 import { ContextRing, PlanMeter } from "./ComposerUsage";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
 import { cx, menuItem, menuSeparator, menuSurface, Pill, Tooltip } from "./primitives";
+import { QueuedAnnouncer } from "./QueuedMessages";
 
 function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
   if (!draft.startsWith("/") || /\s/.test(draft)) return [];
@@ -239,6 +240,9 @@ export const Composer = memo(function Composer({
 
   const running = thread?.running ?? false;
   const steerable = thread ? canSteer(thread) : false;
+  // The queued message the composer is editing (its pencil, or ↑): ⏎ saves it where it waits, and
+  // never sends it. What the composer held before comes back when the edit ends.
+  const queuedEdit = useApp((s) => (s.queuedEdit?.threadId === key ? s.queuedEdit : null));
   const list = useMemo(
     () => (dismissed === draft || extras.command ? [] : suggestions(draft, commands)),
     [draft, commands, dismissed, extras.command],
@@ -301,25 +305,14 @@ export const Composer = memo(function Composer({
 
   const update = (text: string) => setDraft(key, text);
   const change = (fn: (e: ComposeExtras) => ComposeExtras) => setExtras(key, fn);
-  /**
-   * Take a queued message back into the composer (↑, or Edit on its row), whole: its text, command,
-   * links and attachments. A composer that already has something in it is left alone.
-   */
-  const takeBack = (q: QueuedPrompt) => {
-    if (draft || hasExtras(extras)) {
-      toast("Clear the message box first: it already has something in it");
-      field.current?.focus();
-      return;
-    }
-    const taken = takeQueued(thread?.id ?? "", q.id);
-    if (!taken) {
-      toast("This message answers another thread, so it stays queued");
-      return;
-    }
-    update(taken.text);
-    if (taken.extras) change(() => taken.extras!);
-    field.current?.focus();
-  };
+
+  // A queued message that leaves the queue while it is open here (it started, or it was removed)
+  // ends its edit; the store keeps what the user typed only when the composer was empty before it.
+  const queue = thread?.queue;
+  useEffect(() => {
+    if (!queuedEdit) return;
+    if (queuedEdit.threadId !== key || !queue?.some((q) => q.id === queuedEdit.queuedId)) endQueuedEdit();
+  }, [key, queue, queuedEdit]);
   const attach = (more: Attachment[]) => {
     if (more.length) change((e) => ({ ...e, attachments: [...e.attachments, ...more] }));
   };
@@ -346,6 +339,12 @@ export const Composer = memo(function Composer({
   const approval = thread?.permissions.find((p) => !p.question);
   const send = (steer: boolean) => {
     haptic("generic");
+    // ⏎ on a queued message being edited saves it in the queue: nothing is sent.
+    if (queuedEdit) {
+      saveQueuedEdit();
+      field.current?.focus();
+      return;
+    }
     const text = draft;
     const sentExtras = extras;
     if (!text.trim() && !hasExtras(sentExtras) && !(steer && running)) return;
@@ -475,20 +474,26 @@ export const Composer = memo(function Composer({
       // itself, and the draft and the running turn stay as they are (issue 2804).
       if (overlayOpen()) return;
       e.preventDefault();
+      // A queued message open here goes back as it was, and the composer gets its own message back.
+      if (queuedEdit) {
+        cancelQueuedEdit();
+        return;
+      }
       if (draft || hasExtras(extras)) {
         update("");
         change(() => emptyExtras);
       } else if (running) void cancel(thread?.id);
       return;
     }
-    if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread) {
-      // The latest queued message comes back first; with nothing queued, the last sent one. One
-      // that answers another thread stays queued, so the one before it comes back instead.
+    if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread && !queuedEdit) {
+      // The latest queued message opens in the composer (where it is edited, never sent); with
+      // nothing queued, the last message sent comes back as text. One another thread sent is not
+      // the user's to edit, and a wake turn is not a message at all.
       const live = useApp.getState().threads[thread.id] ?? thread;
-      const queued = [...live.queue].reverse().find((q) => !q.link);
+      const queued = [...live.queue].reverse().find((q) => !q.link && !q.wake);
       if (queued) {
         e.preventDefault();
-        takeBack(queued);
+        startQueuedEdit(thread.id, queued.id);
         return;
       }
       const items = live.items ?? thread.items;
@@ -507,15 +512,17 @@ export const Composer = memo(function Composer({
     });
   };
 
-  const placeholder = extras.command
-    ? extras.command.description || "Arguments…"
-    : approval
-      ? "Send a message to decline and redirect the agent…"
-      : running
-        ? steerable
-          ? "⏎ queues for the next turn, ⌘⏎ steers this one…"
-          : "Queue a message…"
-        : `Message ${speakingTo}…`;
+  const placeholder = queuedEdit
+    ? "Edit the queued message: ⏎ saves it in the queue, esc leaves it…"
+    : extras.command
+      ? extras.command.description || "Arguments…"
+      : approval
+        ? "Send a message to decline and redirect the agent…"
+        : running
+          ? steerable
+            ? "⏎ queues it for the next turn, ⌘⏎ steers this one…"
+            : "⏎ queues it for the next turn…"
+          : `Message ${speakingTo}…`;
 
   // The drawer over the box: the commands `/` is looking for, or the files `@` is. A slash that
   // matches nothing still opens it and says so, where the field is about to be typed in.
@@ -524,9 +531,7 @@ export const Composer = memo(function Composer({
 
   return (
     <div className="rc-composer-shell relative @container/composer">
-      {thread && thread.queue.length > 0 && (
-        <QueueStack thread={thread} steerable={steerable} onTakeBack={(q) => takeBack(q)} />
-      )}
+      {thread && <QueuedAnnouncer threadId={thread.id} />}
       {/* The box: the field and how it is sent. The drawer tucks under its top, the tray under its
           foot, so the three read as one floating surface over the transcript. */}
       <div className="relative">
@@ -630,6 +635,18 @@ export const Composer = memo(function Composer({
             void attachmentsFromFiles([...e.dataTransfer.files], images, harnessName).then(attach);
           }}
         >
+          {queuedEdit && (
+            // A queued message is edited here, not in an input of its own: its text, command, links
+            // and attachments are the composer's while it is open, and ⏎ saves them where it waits.
+            <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-accent">
+              <Pencil size={11} />
+              <b>Editing a queued message</b>
+              <span className="text-fg-muted">· ⏎ saves it in the queue, esc leaves it</span>
+              <Pill quiet size="sm" className="ml-auto" onClick={() => cancelQueuedEdit()}>
+                Cancel
+              </Pill>
+            </div>
+          )}
           {editing && (
             <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-accent">
               <Pencil size={11} />
@@ -746,17 +763,34 @@ export const Composer = memo(function Composer({
             />
             <span className="flex-1" />
             <div className="flex shrink-0 items-center gap-1">
-              {running && canSend && (
-                <Tooltip label="Queue for when this turn ends (⏎)">
+              {queuedEdit ? (
+                <Tooltip label="Save in the queue (⏎)">
                   <button
                     type="button"
-                    aria-label="Queue message"
-                    onClick={() => send(false)}
+                    aria-label="Save the queued message"
+                    onClick={() => {
+                      saveQueuedEdit();
+                      field.current?.focus();
+                    }}
                     className="flex size-[30px] items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85"
                   >
-                    <ListEnd size={13} strokeWidth={2.5} />
+                    <Check size={14} strokeWidth={2.75} />
                   </button>
                 </Tooltip>
+              ) : (
+                running &&
+                canSend && (
+                  <Tooltip label="Queue for when this turn ends (⏎)">
+                    <button
+                      type="button"
+                      aria-label="Queue message"
+                      onClick={() => send(false)}
+                      className="flex size-[30px] items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85"
+                    >
+                      <ListEnd size={13} strokeWidth={2.5} />
+                    </button>
+                  </Tooltip>
+                )
               )}
               {running ? (
                 <Tooltip label={cancelReason ?? "Stop turn (Esc)"}>
@@ -773,7 +807,7 @@ export const Composer = memo(function Composer({
                     <Square size={10} fill="currentColor" strokeWidth={0} />
                   </button>
                 </Tooltip>
-              ) : (
+              ) : queuedEdit ? null : (
                 <Tooltip label="Send (⏎)">
                   <button
                     type="button"
@@ -817,181 +851,6 @@ export const Composer = memo(function Composer({
     </div>
   );
 }, sameComposer);
-
-/**
- * Messages waiting for the running turn to end, as rows above the composer.
- * Each can be taken back into the composer to change it (↑, or Edit), moved,
- * sent now as a steer when the harness steers live, or removed.
- */
-function QueueStack({
-  thread,
-  steerable,
-  onTakeBack,
-}: {
-  thread: ThreadState;
-  steerable: boolean;
-  onTakeBack: (q: QueuedPrompt) => void;
-}) {
-  // A queued message can be rewritten where it waits: ⏎ saves it, Esc leaves it as it was.
-  const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const startEdit = (q: QueuedPrompt) => {
-    setEditing(q.id);
-    setDraft(q.text);
-  };
-  const stopEdit = () => {
-    setEditing(null);
-    setDraft("");
-  };
-  const save = (q: QueuedPrompt) => {
-    updateQueued(thread.id, q.id, draft);
-    stopEdit();
-  };
-  return (
-    <section className="mb-2 flex flex-col gap-1 px-2" aria-label="Queued messages">
-      <div className="flex items-center gap-1.5 px-1 text-caption text-accent">
-        <ListEnd size={12} />
-        <b>Queued</b>
-        <span className="text-fg-muted">· sent when this turn ends{steerable ? ", or now with ⌘⏎" : ""}</span>
-      </div>
-      {thread.queue.map((q, i) => {
-        if (editing === q.id)
-          return (
-            <div
-              key={q.id}
-              className="elevated flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5"
-            >
-              <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-faint">{i + 1}</span>
-              <input
-                autoFocus
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    save(q);
-                  } else if (e.key === "Escape") {
-                    // The composer's Esc must not also fire under this field.
-                    e.preventDefault();
-                    e.stopPropagation();
-                    stopEdit();
-                  }
-                }}
-                aria-label="Edit the queued message"
-                placeholder="What to send"
-                className="h-7 min-w-0 flex-1 rounded-sm bg-fill-subtle px-2 text-callout text-fg outline-none placeholder:text-fg-faint"
-              />
-              <span className="flex shrink-0 items-center gap-1.5">
-                <Tooltip label="Save (⏎)">
-                  <button
-                    type="button"
-                    aria-label="Save the queued message"
-                    onClick={() => save(q)}
-                    disabled={!draft.trim() && !q.extras?.attachments.length}
-                    className="text-fg-muted hover:text-fg disabled:opacity-40"
-                  >
-                    <Check size={13} />
-                  </button>
-                </Tooltip>
-                <Tooltip label="Cancel (esc)">
-                  <button
-                    type="button"
-                    aria-label="Cancel editing"
-                    onClick={stopEdit}
-                    className="text-fg-faint hover:text-fg"
-                  >
-                    <X size={13} />
-                  </button>
-                </Tooltip>
-              </span>
-            </div>
-          );
-        return (
-          <div
-            key={q.id}
-            className="elevated group flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 rc-in"
-          >
-            <span className="w-3 shrink-0 text-center font-mono text-caption text-fg-faint">{i + 1}</span>
-            <button
-              type="button"
-              onClick={() => onTakeBack(q)}
-              className="flex min-w-0 flex-1 cursor-text items-center gap-1.5 text-left"
-              aria-label="Edit in the composer"
-              title="Edit in the composer (↑)"
-            >
-              {!!q.extras?.attachments.length && (
-                <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-fill px-1 text-caption text-fg-muted">
-                  <Paperclip size={10} />
-                  {q.extras.attachments.length}
-                </span>
-              )}
-              <span className={cx("line-clamp-2 text-callout", !q.text && "text-fg-faint")}>
-                {q.text || "Attachments only"}
-              </span>
-            </button>
-            <span className="flex shrink-0 items-center gap-1.5 opacity-60 group-hover:opacity-100">
-              {i > 0 && (
-                <Tooltip label="Move up">
-                  <button
-                    type="button"
-                    aria-label="Move up"
-                    onClick={() => moveQueued(thread.id, q.id, -1)}
-                    className="text-fg-muted hover:text-fg"
-                  >
-                    <ChevronUp size={13} />
-                  </button>
-                </Tooltip>
-              )}
-              <Tooltip label="Edit here (⏎ saves, esc cancels)">
-                <button
-                  type="button"
-                  aria-label="Edit the queued message"
-                  onClick={() => startEdit(q)}
-                  className="text-fg-muted hover:text-fg"
-                >
-                  <Pencil size={12} />
-                </button>
-              </Tooltip>
-              {steerable &&
-                (q.extras?.attachments.length ? (
-                  <Tooltip label="Attachments go with the next turn: a running turn takes text only">
-                    <span
-                      role="img"
-                      aria-label="Send now is not available with attachments"
-                      className="text-fg-faint"
-                    >
-                      <ArrowUp size={13} />
-                    </span>
-                  </Tooltip>
-                ) : (
-                  <Tooltip label="Send now: the turn reads it after its current step">
-                    <button
-                      type="button"
-                      aria-label="Send now"
-                      onClick={() => void sendQueuedNow(thread.id, q.id)}
-                      className="text-fg-muted hover:text-fg"
-                    >
-                      <ArrowUp size={13} />
-                    </button>
-                  </Tooltip>
-                ))}
-              <Tooltip label="Remove">
-                <button
-                  type="button"
-                  aria-label="Remove queued message"
-                  onClick={() => removeQueued(thread.id, q.id)}
-                  className="text-fg-faint hover:text-fg"
-                >
-                  <X size={13} />
-                </button>
-              </Tooltip>
-            </span>
-          </div>
-        );
-      })}
-    </section>
-  );
-}
 
 function AttachmentStrip({
   attachments,

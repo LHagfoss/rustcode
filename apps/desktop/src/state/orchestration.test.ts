@@ -46,6 +46,7 @@ import {
   restateLinks,
   sameProject,
   stripLinks,
+  supersededLinks,
   updateLink,
   usageScope,
   WAKE_ANSWER_CHARS,
@@ -54,6 +55,7 @@ import {
   wakeMessage,
   wakesDue,
 } from "./orchestration";
+import { isWakeMessage } from "./thread";
 
 const thread = (id: string, folder = "/repo", extra: Partial<RuleThread> = {}): RuleThread => ({
   id,
@@ -571,6 +573,8 @@ describe("waking a parent", () => {
     const wake = wakesDue(b, ctx({ states: { "a/c": "needs_user" }, pending: { "a/c": "3" } }))[0]!;
     const text = wakeMessage(wake, 10_000);
     expect(text.split("\n")[0]).toBe("1 child finished · 1 needs you");
+    // It marks itself, so a wake turn replayed from history is still a wake (state/thread.ts).
+    expect(isWakeMessage(text)).toBe(true);
     expect(text).toContain("link_id a/b");
     expect(text).toContain("done");
     expect(text).toContain("session b");
@@ -584,6 +588,34 @@ describe("waking a parent", () => {
     const cappedText = wakeMessage({ ...wake, settled: [long], asking: [] }, 10_000);
     expect(cappedText).toContain("…");
     expect(cappedText.length).toBeLessThan(WAKE_ANSWER_CHARS + 1_000);
+  });
+
+  test("a follow-up to the same thread retires the earlier answer's wake", () => {
+    // The shape seen live: A messaged B (link a/1), B settled, A messaged B again (a/2) and read that
+    // answer through wait_session. The first answer was still unreported, because B was working again
+    // when it settled, and it must not land as a wake 11 minutes later.
+    const first: Link = { ...done("a", "b", 1_000), id: "a/1", createdAt: 1_000 };
+    const again: Link = { ...link("a", "b", "working"), id: "a/2", createdAt: 4_000 };
+    const both = book([first, again]);
+    expect(supersededLinks(both, ctx())).toEqual([first]);
+    expect(wakesDue(both, ctx())).toEqual([]);
+    expect(nextWakeAt(both, ctx())).toBeNull();
+    // The newer turn's answer is the one the parent hears, once it settles.
+    const newer: Link = { ...done("a", "b", 9_500), id: "a/2", createdAt: 4_000 };
+    const settles = book([first, newer]);
+    const wakes = wakesDue(settles, ctx({ now: 20_000 }));
+    expect(wakes[0]!.settled.map((l) => l.id)).toEqual(["a/2"]);
+    // A link the parent was already told about leaves nothing to supersede.
+    const told = book([{ ...first, notifiedAt: 2_000 }, newer]);
+    expect(supersededLinks(told, ctx())).toEqual([]);
+    // Another parent's link to the same thread is its own answer, not a newer one.
+    const other = book([first, { ...again, id: "z/1", orchestrator: "z" }]);
+    expect(
+      supersededLinks(
+        other,
+        ctx({ threads: { a: { title: "A", running: false }, z: { title: "Z", running: false } } }),
+      ),
+    ).toEqual([]);
   });
 
   test("a wake is a message, not a new link", () => {

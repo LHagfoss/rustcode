@@ -8,6 +8,7 @@
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 import { snoozeAt } from "./snooze";
+import { withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
 export const CAPABILITY_VERSION = 4;
@@ -1055,18 +1056,39 @@ export function restateLinks(
 }
 
 /**
+ * Settled links a newer link to the same target replaced: the parent messaged that thread again
+ * since, so the older answer is out of date and its wake must not land after the newer one. Only
+ * unreported links count: one the parent already heard about leaves nothing to fix.
+ */
+export function supersededLinks(book: LinkBook, ctx: WakeContext): Link[] {
+  const newest = new Map<string, number>();
+  const key = (link: Link) => `${link.orchestrator}\n${link.target}`;
+  for (const link of book.links) {
+    const at = newest.get(key(link)) ?? 0;
+    if (link.createdAt > at) newest.set(key(link), link.createdAt);
+  }
+  return book.links.filter((link) => {
+    const state = stateOfLink(link, ctx);
+    if (state !== "done" && state !== "failed") return false;
+    if (link.notifiedAt !== undefined) return false;
+    return (newest.get(key(link)) ?? 0) > link.createdAt;
+  });
+}
+
+/**
  * What to tell each parent, one message per parent: children that settled and
  * children waiting on the user. A link is reported once — the mark lives in the
  * book (`notifiedAt`, `askedRequest`), so a restart does not tell it again — and
- * a parent blocked on it in `wait_session` already has the answer. A thread
- * that is itself a child is woken the same way its top-level parent is: its
- * children's results are its own to read, and its parent hears from it when
- * its own turn ends. A settled child is reported only once its own subtree is
- * quiet ({@link quietTree}): a middle thread is not finished for its parent
- * while the thread it started still works. Parallel children are coalesced:
- * while any of a parent's links still runs, a settled one waits up to
- * `WAKE_COALESCE_MS` for its siblings; with none active the message goes at
- * once.
+ * a parent blocked on it in `wait_session` already has the answer. A settled link
+ * a newer one replaced is not reported either ({@link supersededLinks}): the
+ * answer the parent needs is the newer turn's. A thread that is itself a child is
+ * woken the same way its top-level parent is: its children's results are its own
+ * to read, and its parent hears from it when its own turn ends. A settled child
+ * is reported only once its own subtree is quiet ({@link quietTree}): a middle
+ * thread is not finished for its parent while the thread it started still works.
+ * Parallel children are coalesced: while any of a parent's links still runs, a
+ * settled one waits up to `WAKE_COALESCE_MS` for its siblings; with none active
+ * the message goes at once.
  */
 export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
   const byParent = new Map<string, Link[]>();
@@ -1075,6 +1097,7 @@ export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
     if (list) list.push(link);
     else byParent.set(link.orchestrator, [link]);
   }
+  const stale = new Set(supersededLinks(book, ctx).map((l) => l.id));
   const out: Wake[] = [];
   for (const [parent, links] of byParent) {
     const here = ctx.threads[parent];
@@ -1085,6 +1108,7 @@ export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
       const state = stateOfLink(link, ctx);
       if (state !== "done" && state !== "failed") return false;
       if (link.notifiedAt !== undefined || waiting.has(link.id)) return false;
+      if (stale.has(link.id)) return false;
       if (!quietTree(book, ctx, link.target)) return false;
       return !active || ctx.now - (link.settledAt ?? 0) >= WAKE_COALESCE_MS;
     });
@@ -1129,10 +1153,11 @@ export function orphanedLinks(book: LinkBook, ctx: WakeContext): Link[] {
  */
 export function nextWakeAt(book: LinkBook, ctx: WakeContext): number | null {
   let next: number | null = null;
+  const stale = new Set(supersededLinks(book, ctx).map((l) => l.id));
   for (const link of book.links) {
     const state = stateOfLink(link, ctx);
     if (state !== "done" && state !== "failed") continue;
-    if (link.notifiedAt !== undefined) continue;
+    if (link.notifiedAt !== undefined || stale.has(link.id)) continue;
     if (!quietTree(book, ctx, link.target)) continue;
     const at = (link.settledAt ?? 0) + WAKE_COALESCE_MS;
     if (at <= ctx.now) continue;
@@ -1187,7 +1212,9 @@ export function wakeMessage(wake: Wake, now: number): string {
   lines.push(
     "The rest is in read_session on a child's session id, or wait_session on a link_id (a settled link answers at once). This message is the notification: do not poll with sleeps.",
   );
-  return lines.join("\n");
+  // The engine keeps the text, not the app's flag: the mark makes a wake turn a wake turn when its
+  // history is replayed (state/thread.ts `isWakeMessage`), so it never reads as the user's message.
+  return withWakeMark(lines.join("\n"));
 }
 
 /** What the user is asked, in words. */
