@@ -1271,7 +1271,6 @@ function PanelHeader({ label }: { label: string }) {
             quiet
             onClick={() => {
               resets.restore();
-              toast("Restored defaults", "success");
             }}
           >
             <RotateCcw size={13} />

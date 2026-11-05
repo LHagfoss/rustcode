@@ -95,7 +95,6 @@ import {
   snoozeThread,
   statusOf,
   switchThreadHarness,
-  toast,
   togglePin,
   updateThread,
   useApp,
@@ -308,7 +307,7 @@ let resolveAsk: ((choice: GrantChoice) => void) | null = null;
 /** Ask once; a second request while one waits is refused, and the agent can try again. */
 function ask(question: GrantAsk): Promise<GrantChoice> | Failure {
   if (useApp.getState().grant) return failure("busy", "another thread's request is waiting for the user");
-  toast(`“${question.callerTitle}” asks to ${verb(question)}`, "info");
+  // The grant dialog names the caller and the request; a toast under it would repeat them.
   return new Promise((resolve) => {
     resolveAsk = resolve;
     useApp.setState({ grant: { ...question, id: localId("grant") } });
@@ -368,8 +367,6 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   transfer: "Moved a thread to another harness",
 };
 
-const toasted = new Set<string>();
-
 async function permitted(caller: RuleThread, key: string, question: GrantAsk): Promise<Failure | null> {
   if (hasGrant(book(), caller.id, key)) return null;
   // The thread's access level answers for the user where it already allows the work: the same
@@ -394,13 +391,7 @@ async function permitted(caller: RuleThread, key: string, question: GrantAsk): P
         appendNotice(t, `${ALLOWED_NOTICE[question.kind]} · allowed by ${why}`, "info"),
       );
     }
-    // The transcript keeps every one; the toast comes once per thread and kind, so an orchestrator
-    // reading threads in a loop does not flood the screen.
-    const once = `${caller.id}:${question.kind}`;
-    if (!toasted.has(once)) {
-      toasted.add(once);
-      toast(`“${caller.title}” ${verb(question)}, allowed by ${why}`, "info");
-    }
+    // The call's row and its notice above are the record; no toast repeats an allowed call.
     return null;
   }
   const asked = ask(question);
@@ -1749,7 +1740,6 @@ export async function keepFanOut(fanId: string, keep: string) {
   }
   await setThreadStatus(keep, "review");
   setBook((b) => ({ ...b, fanOuts: b.fanOuts.map((f) => (f.id === fanId ? { ...f, kept: keep } : f)) }));
-  toast("Kept. The other threads are marked done.", "success");
 }
 
 /** The links of a thread, both ways, for chips, banners and badges. */

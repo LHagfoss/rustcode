@@ -144,6 +144,20 @@ import {
   userIndexOf,
   wakeTurn,
 } from "./thread";
+import {
+  clear as clearQueue,
+  dismiss as dismissInQueue,
+  due as dueInQueue,
+  enqueue,
+  pause as pauseToastQueue,
+  remove as removeFromQueue,
+  resume as resumeToastQueue,
+  TOAST_EXIT_MS,
+  type Toast,
+  type ToastTone,
+} from "./toasts";
+
+export type { Toast, ToastTone } from "./toasts";
 
 export const APP_VERSION = "0.1.0";
 
@@ -187,24 +201,6 @@ export function settingsSection(id: string | null | undefined): SettingsSection 
   if (!id) return null;
   if ((SETTINGS_SECTIONS as readonly string[]).includes(id)) return id as SettingsSection;
   return LEGACY_SECTIONS[id] ?? "general";
-}
-
-export type ToastTone = "info" | "success" | "error";
-
-export interface Toast {
-  id: string;
-  text: string;
-  tone: ToastTone;
-  /** One button at the right (Restart, Undo, Open…). */
-  action?: { label: string; run: () => void };
-  /** Stays until dismissed; errors do by default. */
-  persist: boolean;
-  /** 0–1 draws a progress bar along the foot. */
-  progress?: number;
-  /** Fading out; removed once the exit animation has run. */
-  leaving?: boolean;
-  /** When it was shown or last repeated: a change restarts its timer. */
-  at: number;
 }
 
 export interface NewThreadChoice {
@@ -264,7 +260,10 @@ export interface AppState {
   modelPickerAsk: number;
   onboardingOpen: boolean;
   sidebarHidden: boolean;
+  /** Newest first, at most three (state/toasts.ts). */
   toasts: Toast[];
+  /** The pointer, focus or the window is away: their clocks are stopped. */
+  toastsPaused: boolean;
   /** The light/dark preference; a theme's own mode sets it when the theme is picked. */
   theme: "system" | "light" | "dark";
   /** The engine's themes (`_rustcode/themes`); null until listed, or when the engine has none. */
@@ -564,6 +563,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   onboardingOpen: false,
   sidebarHidden: stored(STORAGE.sidebar) === "1",
   toasts: [],
+  toastsPaused: false,
   theme: (stored(STORAGE.theme) as AppState["theme"] | null) ?? SETTINGS_DEFAULTS.theme,
   themes: null,
   themeActive: stored(STORAGE.themeActive) ?? "rustcode",
@@ -581,45 +581,38 @@ export function updateThread(id: string, fn: (thread: ThreadState) => ThreadStat
   });
 }
 
-/** Exit animation of a toast (docs/design.md, Motion). */
-const TOAST_EXIT_MS = 120;
-
 /**
- * Shows a toast (ui/Toaster.tsx). Info and success leave after 4 s, errors stay
- * until dismissed. Passing an `id` replaces the toast with that id in place
- * (the engine's toast moves from "Starting…" to an error this way); the same
- * text and tone again restarts the shown one instead of stacking a copy.
- * Returns the toast's id.
+ * Shows a toast (ui/Toaster.tsx, state/toasts.ts). Info and success leave after
+ * 3 s, errors after 7 s; the pointer or focus on the stack, a drag, or the
+ * window in the background stops that clock. Passing an `id` replaces the toast
+ * with that id in place (the engine's toast moves from "Starting…" to an error
+ * this way); the same text and tone again restarts the shown one instead of
+ * stacking a copy. At most three show, newest on top. Returns the toast's id.
  */
 export function toast(
   text: string,
   tone: ToastTone = "info",
   options: { id?: string; action?: Toast["action"]; persist?: boolean; progress?: number } = {},
 ): string {
-  const at = Date.now();
+  const now = Date.now();
   let id = options.id ?? localId("toast");
   set((s) => {
-    const same = s.toasts.find(
-      (t) => !t.leaving && (t.id === options.id || (!options.id && t.text === text && t.tone === tone)),
+    const live = s.toasts.filter((t) => !t.leaving);
+    const existing = live.find((t) => t.id === id) ?? live.find((t) => t.text === text && t.tone === tone);
+    if (existing) id = existing.id;
+    const toasts = enqueue(
+      s.toasts,
+      {
+        id,
+        text,
+        tone,
+        action: options.action,
+        persist: options.persist ?? false,
+        progress: options.progress,
+      },
+      { now, paused: s.toastsPaused },
     );
-    if (same) id = same.id;
-    const next: Toast = {
-      id,
-      text,
-      tone,
-      action: options.action,
-      // Errors leave on their own too (after longer): a burst of them must not pile up for good.
-      persist: options.persist ?? false,
-      progress: options.progress,
-      at,
-    };
-    return {
-      toasts: same
-        ? s.toasts.map((t) => (t === same ? next : t))
-        : // The Toaster shows the newest; up to four older wait behind it, the rest are dropped.
-          // A fading toast with the same id goes now, so the new one keeps its key.
-          [...s.toasts.filter((t) => !(t.leaving && t.id === id)).slice(-4), next],
-    };
+    return { toasts };
   });
   return id;
 }
@@ -633,19 +626,43 @@ export function updateToast(id: string, patch: Partial<Pick<Toast, "text" | "pro
   );
 }
 
-/** Fades a toast out, then drops it. */
-/** Every toast at once: the "+N" on the toast in front. */
+/** Drops every toast at once, except the ones that stay until dismissed. */
 export function clearToasts() {
-  set((s) => ({ toasts: s.toasts.filter((t) => t.persist && t.progress !== undefined) }));
+  const toasts = clearQueue(get().toasts);
+  if (toasts !== get().toasts) set({ toasts });
 }
 
+/**
+ * Stops the toasts' clocks while the pointer or focus is on the stack, the
+ * window is in the background, or one is being dragged, and starts them again
+ * with what was left. Idempotent: every pause reason can call it.
+ */
+export function setToastsPaused(paused: boolean) {
+  const now = Date.now();
+  set((s) => {
+    if (s.toastsPaused === paused) return s;
+    return {
+      toastsPaused: paused,
+      toasts: paused ? pauseToastQueue(s.toasts, now) : resumeToastQueue(s.toasts, now),
+    };
+  });
+}
+
+/** Fades out every toast whose time is up; the Toaster runs this on one timer. */
+export function expireToasts() {
+  const now = Date.now();
+  for (const id of dueInQueue(get().toasts, now)) dismissToast(id);
+}
+
+/** Fades a toast out, then drops it. */
 export function dismissToast(id: string) {
-  if (!get().toasts.some((t) => t.id === id && !t.leaving)) return;
-  set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) }));
-  setTimeout(
-    () => set((s) => ({ toasts: s.toasts.filter((t) => !(t.id === id && t.leaving)) })),
-    TOAST_EXIT_MS,
-  );
+  const toasts = dismissInQueue(get().toasts, id);
+  if (toasts === get().toasts) return;
+  set({ toasts });
+  setTimeout(() => {
+    const next = removeFromQueue(get().toasts, id);
+    if (next !== get().toasts) set({ toasts: next });
+  }, TOAST_EXIT_MS);
 }
 
 /**
@@ -950,10 +967,8 @@ function adoptTheme(name: string) {
 
 /** Picks a theme: it applies at once, and the engine saves it when it has themes. */
 export async function setActiveTheme(name: string): Promise<void> {
-  const changed = name !== get().themeActive;
   adoptTheme(name);
-  const picked = (get().themes?.themes ?? BUILTIN_THEMES).find((t) => t.name === name);
-  if (changed && picked) toast(`Theme: ${picked.name}`, "success");
+  // The theme changes under the pointer, and the picker shows the name: no toast to say so.
   if (!get().features.themes || !connection) return;
   try {
     const themes = parseThemes(await connection.request(ThemeMethod.set, { name, ...themeParams() }, 10_000));
@@ -1616,10 +1631,6 @@ async function createThread(firstMessage = ""): Promise<string | null> {
     set({ newThreadPermissionMode: null });
   }
   set({ newWorktree: { on: wt.on, branch: "", edited: false } });
-  if (worktree) {
-    const branch = get().threads[id]?.worktree?.branch ?? worktree.branch;
-    toast(branch ? `Working in a new worktree on ${branch}` : "Working in a new worktree", "success");
-  }
   return id;
 }
 
@@ -1718,7 +1729,6 @@ export function setPinned(ids: string[], on: boolean) {
   set({ pinned: next });
   store(STORAGE.pinned, JSON.stringify(next));
   const many = ids.length > 1;
-  toast(many ? `${on ? "Pinned" : "Unpinned"} ${ids.length} threads` : on ? "Pinned" : "Unpinned", "success");
   if (!get().features.pins || !connection) return;
   const link = connection;
   void Promise.all(
@@ -1764,7 +1774,7 @@ export function setArchived(id: string, on: boolean) {
   } else delete archived[id];
   set({ archived });
   store(STORAGE.archived, JSON.stringify(archived));
-  toast(on ? "Archived. It's under Archived in the sidebar." : "Unarchived", "success");
+
   if (on && get().selectedId === id) startNewThread();
 }
 
@@ -1808,7 +1818,7 @@ export async function trashThread(id: string): Promise<boolean> {
   wakeTick();
   store(STORAGE.archived, JSON.stringify(archived));
   store(STORAGE.pinned, JSON.stringify(pinned));
-  toast("Moved to the Trash", "success");
+
   if (get().selectedId === id) startNewThread();
   return true;
 }
@@ -2072,7 +2082,7 @@ async function steer(id: string, text: string, extras?: ComposeExtras): Promise<
     )) as JsonObject | null;
     if (result?.accepted !== true) return false;
     updateThread(id, (t) => appendSteer(t, text, Date.now(), extras && sentAttachments(extras)));
-    toast("Steering: read after the current step");
+    // The steered row in the transcript says it was read after the current step.
     return true;
   } catch {
     return false;
@@ -2483,10 +2493,8 @@ async function harnessCall(method: string, params: JsonObject): Promise<HarnessS
 }
 
 export async function setHarnessEnabled(id: string, enabled: boolean): Promise<HarnessSnapshot | null> {
-  const snapshot = await harnessCall(Method.harnessSet, { id, enabled });
-  const name = snapshot?.harnesses.find((h) => h.id === id)?.name ?? id;
-  if (snapshot) toast(`${name} ${enabled ? "is on" : "is off"}`, "success");
-  return snapshot;
+  // The switch in Settings shows the new state; only a failure needs a word.
+  return harnessCall(Method.harnessSet, { id, enabled });
 }
 /** The account id a harness was last given for new threads; null is its default login. */
 export function lastAccountFor(harness: string): string | null {
@@ -2984,7 +2992,6 @@ export async function removeWorktree(id: string): Promise<void> {
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, worktree: undefined } : x)),
     }));
     updateThread(id, (t) => ({ ...t, worktree: undefined }));
-    toast(`Removed the worktree of ${wt.branch}`, "success");
   };
   askConfirm({
     title: `Remove the worktree of ${wt.branch}?`,
@@ -3028,12 +3035,7 @@ export async function restoreCheckpoint(id: string, turn: number, rewind: boolea
       60_000,
     )) as JsonObject | null;
     const kept = result?.conversation === "kept";
-    toast(
-      rewind && !kept
-        ? "Restored the files and the conversation"
-        : "Restored the files; the conversation stays",
-      "success",
-    );
+    // The restored files and the reloaded conversation are the feedback.
     if (rewind && !kept) {
       // The conversation changed under the app: load it again.
       updateThread(id, (t) => ({ ...t, loaded: false }));
@@ -3645,6 +3647,7 @@ export function resetForTests() {
     switcherOpen: false,
     onboardingOpen: false,
     toasts: [],
+    toastsPaused: false,
     agent: undefined,
     pinned: [],
     archived: {},

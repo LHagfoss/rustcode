@@ -509,16 +509,23 @@ export const Composer = memo(function Composer({
       // The topmost thing goes first: an open popover, menu or dialog takes this Escape for
       // itself, and the draft and the running turn stay as they are (issue 2804).
       if (overlayOpen()) return;
-      e.preventDefault();
       // A queued message open here goes back as it was, and the composer gets its own message back.
       if (queuedEdit) {
+        e.preventDefault();
         cancelQueuedEdit();
         return;
       }
       if (draft || hasExtras(extras)) {
+        e.preventDefault();
         update("");
         change(() => emptyExtras);
-      } else if (running) void cancel(thread?.id);
+        return;
+      }
+      // Nothing here to take it: no preventDefault, so an open toast can dismiss (ui/Toaster.tsx).
+      if (running) {
+        e.preventDefault();
+        void cancel(thread?.id);
+      }
       return;
     }
     if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread && !queuedEdit) {

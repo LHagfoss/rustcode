@@ -985,28 +985,48 @@ describe("model memory per harness (#2797, #2798)", () => {
 });
 
 describe("toasts", () => {
-  test("errors time out too, a repeat restarts the shown one, an id replaces in place", async () => {
-    const { toast, dismissToast } = await import("./store");
+  test("the newest three show, a repeat refreshes one, an id replaces in place", async () => {
+    const { toast, dismissToast, clearToasts } = await import("./store");
+    clearToasts();
     toast("Copied", "success");
+    const shown = useApp.getState().toasts[0]!;
     toast("Copied", "success");
     expect(useApp.getState().toasts.length).toBe(1);
+    expect(useApp.getState().toasts[0]!.id).toBe(shown.id);
     expect(useApp.getState().toasts[0]!.persist).toBe(false);
+    expect(useApp.getState().toasts[0]!.expiresAt).toBeGreaterThan(Date.now());
     toast("Could not save", "error");
-    expect(useApp.getState().toasts.at(-1)!.persist).toBe(false);
-    // A burst keeps only the newest five.
+    expect(useApp.getState().toasts[0]!.persist).toBe(false);
+    // A burst keeps the newest three, newest first.
     for (let i = 0; i < 50; i++) toast(`Failed ${i}`, "error");
-    expect(useApp.getState().toasts.length).toBe(5);
-    expect(useApp.getState().toasts.at(-1)!.text).toBe("Failed 49");
+    expect(useApp.getState().toasts.length).toBe(3);
+    expect(useApp.getState().toasts.map((t) => t.text)).toEqual(["Failed 49", "Failed 48", "Failed 47"]);
     toast("Starting engine…", "info", { id: "engine", persist: true, progress: 0.2 });
     toast("The engine stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
     const engine = useApp.getState().toasts.filter((t) => t.id === "engine");
     expect(engine.length).toBe(1);
+    expect(engine[0]!.text).toBe("The engine stopped.");
     expect(engine[0]!.action?.label).toBe("Restart");
     // Replacing a toast that is fading out keeps the new one.
     dismissToast("engine");
     toast("The engine restarted", "success", { id: "engine" });
     await new Promise((r) => setTimeout(r, 160));
     expect(useApp.getState().toasts.find((t) => t.id === "engine")?.text).toBe("The engine restarted");
+  });
+
+  test("pause stops every clock and resume keeps what was left", async () => {
+    const { toast, setToastsPaused, clearToasts } = await import("./store");
+    clearToasts();
+    toast("A notice", "info");
+    const before = useApp.getState().toasts[0]!.expiresAt!;
+    setToastsPaused(true);
+    expect(useApp.getState().toasts[0]!.expiresAt).toBeNull();
+    expect(useApp.getState().toasts[0]!.remainingMs).toBeGreaterThan(0);
+    expect(useApp.getState().toasts[0]!.remainingMs).toBeLessThanOrEqual(before - Date.now() + 50);
+    setToastsPaused(false);
+    expect(useApp.getState().toasts[0]!.expiresAt).not.toBeNull();
+    clearToasts();
+    setToastsPaused(false);
   });
 });
 

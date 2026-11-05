@@ -445,15 +445,17 @@ composer's keys stay outside the table.
   when the shell brings it back, "The engine restarted" (`state/store.ts`,
   `onEngineStatus`). The mock takes `?boot=<ms>` (a slow start) and
   `?crash=<ms>` (a crash after the first start) to show these.
-- **Toasts** (`src/ui/Toaster.tsx`, `toast()` in `state/store.ts`): one
-  stack at the bottom right of the chat column, just above the composer
-  stack (the window's corner while Settings is open), frosted like the
-  composer. Info and success leave after 4 s, errors stay until closed;
-  the pointer over the stack pauses them; a swipe right or the close
-  button dismisses; at most three show. A toast may carry one action. The
-  same text again restarts the shown toast, and an `id` replaces one in
-  place (the engine's). Copying, errors not tied to a message, engine,
-  worktree, harness and theme events use them.
+- **Toasts** (`src/ui/Toaster.tsx`, queue in `state/toasts.ts`, `toast()`
+  in `state/store.ts`): up to three, newest on top, centred under the chat
+  column's header (the window's top while Settings is open), frosted like
+  the composer. Info and success leave after 3 s, errors after 7 s; the
+  pointer or focus on the stack, a drag, and a backgrounded window pause
+  every clock. Hover and focus resume with what was left. A drag past 48px
+  up or sideways, Escape, or the close button dismisses, and a drag never
+  selects text. A toast may carry one action. The same text again restarts
+  the shown toast, and an `id` replaces one in place (the engine's). Use
+  them for copying, errors not tied to a message, and engine events, not
+  for what the screen already shows.
 - **Settings › Capabilities.** Skills and MCP servers in one page, through
   `_rustcode/capabilities*`: servers with their state, tool count and
   names, errors and the engine log lines that name them, on/off (servers

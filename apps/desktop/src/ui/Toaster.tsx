@@ -1,77 +1,123 @@
-// The one toast slot (docs/design.md, Toast): frosted like the composer,
-// centred at the top of the chat column under its header (ChatView publishes
-// `--rc-toast-center` and `--rc-toast-top`), or the window's top while
-// Settings is open. One toast shows at a time, the newest; older ones wait
-// behind it as "+N", which clears them all. Info and success leave after 3 s,
-// errors after 7 s; the pointer over it pauses the timer. A swipe up or to
-// either side, a click on ×, or Escape dismisses.
+// Up to three toasts, newest on top (state/toasts.ts keeps the queue), frosted
+// like the composer and centred at the top of the chat column under its header
+// (ChatView publishes `--rc-toast-center` and `--rc-toast-top`), or the window's
+// top while Settings is open. Info and success leave after 3 s, errors after
+// 7 s. The pointer or focus on the stack, a drag, or the window in the
+// background stops the clock. A click on ×, Escape, or a drag past 48px (up or
+// sideways) dismisses; a drag never selects text anywhere.
 
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { clearToasts, dismissToast, type Toast, useApp } from "../state/store";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { dragExit, dragOpacity, dragState, holdSelection, startsDrag, TOAST_DRAG_MS } from "../lib/toastDrag";
+import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
+import { nextExpiry } from "../state/toasts";
 import { cx, Pill, Spinner } from "./primitives";
 
-const DURATION_MS = 3000;
-const ERROR_MS = 7000;
-/** How far a swipe must travel to dismiss. */
-const SWIPE_PX = 48;
+/** A popover, menu or dialog over the toast takes Escape and the click first. */
+function aboveToasts(): boolean {
+  return !!document.querySelector(
+    '[data-radix-popper-content-wrapper]:not(:has([role="tooltip"])), [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+  );
+}
 
-function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; waiting: number }) {
+interface DragSession {
+  pointerId: number;
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+  /** Puts the document back; safe to call twice. */
+  release: () => void;
+}
+
+function ToastCard({ toast, onDrag }: { toast: Toast; onDrag: (dragging: boolean) => void }) {
   const ref = useRef<HTMLDivElement>(null);
-  const duration = toast.tone === "error" ? ERROR_MS : DURATION_MS;
-  const remaining = useRef(duration);
-  const swipe = useRef<{ x: number; y: number; id: number; dx: number; dy: number } | null>(null);
+  const drag = useRef<DragSession | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [flung, setFlung] = useState(false);
 
-  // A repeat (same text, or a replace by id) starts the full time again.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the toast is shown again
-  useEffect(() => {
-    remaining.current = duration;
-  }, [toast.at]);
+  // Whatever ends the drag, the document gets its selection back: pointerup,
+  // pointercancel, a lost capture, the window blurring, or this card leaving.
+  const end = useCallback(
+    (flyOut: boolean) => {
+      const session = drag.current;
+      const el = ref.current;
+      drag.current = null;
+      session?.release();
+      setDragging(false);
+      onDrag(false);
+      if (session && el?.hasPointerCapture(session.pointerId)) {
+        el.releasePointerCapture(session.pointerId);
+      }
+      if (flyOut && session && el) {
+        const { dx, direction } = dragState(session.dx, session.dy);
+        el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
+        el.style.transform = dragExit(direction ?? "up", dx);
+        el.style.opacity = "0";
+        setFlung(true);
+        dismissToast(toast.id);
+        return;
+      }
+      if (el) {
+        el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
+        el.style.transform = "";
+        el.style.opacity = "";
+      }
+    },
+    [onDrag, toast.id],
+  );
+  useEffect(() => () => end(false), [end]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: toast.at restarts the timer
   useEffect(() => {
-    if (toast.persist || toast.leaving || paused) return;
-    const started = Date.now();
-    const timer = setTimeout(() => dismissToast(toast.id), remaining.current);
-    return () => {
-      clearTimeout(timer);
-      remaining.current = Math.max(800, remaining.current - (Date.now() - started));
-    };
-  }, [toast.persist, toast.leaving, paused, toast.at, toast.id]);
+    if (!dragging) return;
+    const blur = () => end(false);
+    window.addEventListener("blur", blur);
+    return () => window.removeEventListener("blur", blur);
+  }, [dragging, end]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
-    swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId, dx: 0, dy: 0 };
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (e.button !== 0 || !startsDrag(e.target as HTMLElement)) return;
+    // No native drag and no text selection, even where the platform would
+    // start one despite the document's `user-select: none`.
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    drag.current = {
+      pointerId: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      dx: 0,
+      dy: 0,
+      release: holdSelection(document),
+    };
+    setDragging(true);
+    onDrag(true);
   };
+
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const s = swipe.current;
+    const session = drag.current;
     const el = ref.current;
-    if (!s || !el || s.id !== e.pointerId) return;
-    // Follows the pointer sideways and up; down it resists.
-    s.dx = e.clientX - s.x;
-    const dy = e.clientY - s.y;
-    s.dy = dy < 0 ? dy : dy / 6;
-    const away = Math.max(Math.abs(s.dx), -s.dy);
+    if (!session || !el || session.pointerId !== e.pointerId) return;
+    session.dx = e.clientX - session.x;
+    session.dy = e.clientY - session.y;
+    const state = dragState(session.dx, session.dy);
     el.style.transition = "none";
-    el.style.transform = `translate(${s.dx}px, ${s.dy}px)`;
-    el.style.opacity = String(Math.max(0.2, 1 - away / 200));
+    el.style.transform = `translate(${state.dx}px, ${state.dy}px)`;
+    el.style.opacity = String(dragOpacity(state.away));
   };
-  const onPointerUp = () => {
-    const s = swipe.current;
-    const el = ref.current;
-    swipe.current = null;
-    if (!s || !el) return;
-    el.style.transition = "transform 160ms var(--ease-snappy), opacity 160ms ease-out";
-    if (Math.abs(s.dx) > SWIPE_PX || s.dy < -SWIPE_PX / 2) {
-      el.style.transform =
-        Math.abs(s.dx) > -s.dy ? `translateX(${Math.sign(s.dx) * 120}%)` : "translateY(-140%)";
-      el.style.opacity = "0";
-      dismissToast(toast.id);
-    } else {
-      el.style.transform = "";
-      el.style.opacity = "";
-    }
+
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const session = drag.current;
+    if (!session || session.pointerId !== e.pointerId) return;
+    session.dx = e.clientX - session.x;
+    session.dy = e.clientY - session.y;
+    end(dragState(session.dx, session.dy).dismiss);
+  };
+
+  const onPointerCancel = () => end(false);
+  const onLostPointerCapture = () => {
+    if (drag.current) end(false);
   };
 
   const error = toast.tone === "error";
@@ -80,13 +126,15 @@ function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; 
     <div
       ref={ref}
       role={error ? "alert" : "status"}
+      data-toast={toast.id}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onLostPointerCapture={onLostPointerCapture}
       className={cx(
-        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-grab touch-none items-start gap-2.5 overflow-hidden rounded-xl py-1.5 pr-1.5 pl-3.5 text-callout active:cursor-grabbing",
-        toast.leaving ? "rc-toast-out" : "rc-toast-in",
+        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-grab touch-none items-start gap-2.5 overflow-hidden rounded-xl py-1.5 pr-1.5 pl-3.5 text-callout select-none active:cursor-grabbing",
+        toast.leaving ? (flung ? "" : "rc-toast-out") : "rc-toast-in",
       )}
     >
       <span className="flex h-6 shrink-0 items-center">
@@ -109,17 +157,6 @@ function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; 
           }}
         >
           {toast.action.label}
-        </Pill>
-      )}
-      {waiting > 0 && (
-        <Pill
-          quiet
-          size="sm"
-          aria-label={`Clear all ${waiting + 1} notifications`}
-          className="tabular"
-          onClick={clearToasts}
-        >
-          +{waiting}
         </Pill>
       )}
       <button
@@ -145,40 +182,83 @@ function ToastCard({ toast, paused, waiting }: { toast: Toast; paused: boolean; 
 export function Toaster() {
   const toasts = useApp((s) => s.toasts);
   const settings = useApp((s) => s.settings !== null);
-  const [paused, setPaused] = useState(false);
-  const live = toasts.filter((t) => !t.leaving);
-  // The newest shows; one leaving keeps its place until it has faded.
-  const front = toasts.at(-1);
-  // Nothing under the pointer any more: the timer must not stay paused.
+  const section = useRef<HTMLElement>(null);
+  const [hovering, setHovering] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  // A window that has never had focus still gets its toasts: only an observed
+  // blur (or a hidden document) stops the clock.
+  const [active, setActive] = useState(true);
+  const paused = hovering || focused || dragging || !active;
+
   useEffect(() => {
-    if (!front) setPaused(false);
-  }, [front]);
-  // Escape dismisses the toast in front, unless something else (a dialog, a field) takes it.
+    const onFocus = () => setActive(true);
+    const onBlur = () => setActive(false);
+    const onVisibility = () => setActive(document.visibilityState === "visible" && !document.hidden);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    setToastsPaused(paused);
+  }, [paused]);
+  useEffect(() => () => setToastsPaused(false), []);
+  // A focused close button goes with its toast; keep the stack from staying paused for a focus
+  // that no longer exists (removing a focused element does not always fire blur).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-check when a toast goes, which takes the focus with it
+  useEffect(() => {
+    if (focused && !section.current?.contains(document.activeElement)) setFocused(false);
+  }, [toasts, focused]);
+
+  // One timer for the whole queue, set to the soonest expiry; a pause clears
+  // every expiry, so this schedules nothing while the stack is held.
+  const expiry = nextExpiry(toasts);
+  useEffect(() => {
+    if (expiry === null) return;
+    const timer = setTimeout(expireToasts, Math.max(0, expiry - Date.now()));
+    return () => clearTimeout(timer);
+  }, [expiry]);
+
+  // Escape dismisses the front toast, after the field's own handler (a draft
+  // clears first) and after an open popover or dialog has taken the key.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || !front || front.leaving) return;
-      if ((e.target as HTMLElement | null)?.closest("input, textarea, [role=dialog]")) return;
+      if (e.key !== "Escape" || e.defaultPrevented || aboveToasts()) return;
+      const front = useApp.getState().toasts.find((t) => !t.leaving);
+      if (!front) return;
+      e.preventDefault();
       dismissToast(front.id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [front]);
+  }, []);
+
   return (
     <section
+      ref={section}
       aria-label="Notifications"
-      aria-live="polite"
-      className="pointer-events-none fixed z-50 flex -translate-x-1/2 flex-col items-center"
+      className="pointer-events-none fixed z-50 flex -translate-x-1/2 flex-col items-center gap-2"
       style={
         settings
           ? { left: "50%", top: 16 }
           : { left: "var(--rc-toast-center, 50%)", top: "var(--rc-toast-top, 56px)" }
       }
-      onPointerEnter={() => setPaused(true)}
-      onPointerLeave={() => setPaused(false)}
+      onPointerEnter={() => setHovering(true)}
+      onPointerLeave={() => setHovering(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
+      }}
     >
-      {front && (
-        <ToastCard key={front.id} toast={front} paused={paused} waiting={Math.max(0, live.length - 1)} />
-      )}
+      {toasts.map((toast) => (
+        <ToastCard key={toast.id} toast={toast} onDrag={setDragging} />
+      ))}
     </section>
   );
 }
