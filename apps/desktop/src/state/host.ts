@@ -10,11 +10,11 @@
 
 import { type Json, type JsonObject, RpcError } from "../acp/jsonrpc";
 import { parsePullError, parsePullList, pullErrorTitle } from "../acp/rustcode";
-import { Method, projectName } from "../acp/types";
+import { type Harness, Method, projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
-import { childAccountOn } from "./logins";
+import { accountLabelOf, accountNameOf, accountSignedOut, childAccountFor } from "./logins";
 import {
   activeDescendants,
   activityOf,
@@ -507,6 +507,7 @@ const LISTED_MODELS = 25;
 async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
   const snapshot = useApp.getState().harnesses;
   const harnesses = snapshot?.harnesses ?? [];
+  const signedOut = useApp.getState().signedOutLogins;
   await Promise.all(harnesses.filter((h) => !unavailableReason(h)).map((h) => ensureHarnessModels(h.id)));
   const fresh = useApp.getState().harnesses?.harnesses ?? harnesses;
   return {
@@ -522,6 +523,18 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
         id: h.id,
         name: h.name,
         available: !reason,
+        // The logins start_session and fan_out may name; the default login has no id.
+        ...(h.accounts?.length
+          ? {
+              accounts: h.accounts.map((a) => ({
+                id: a.id,
+                name: a.name,
+                auth: a.auth,
+                // The plan read saw this login signed out: naming it is refused.
+                ...(accountSignedOut(h.id, a.id, signedOut) ? { signed_out: true } : {}),
+              })),
+            }
+          : {}),
         ...(reason ? { reason } : { models }),
         ...(!reason && h.models.length > LISTED_MODELS
           ? { omitted_models: h.models.length - LISTED_MODELS }
@@ -921,7 +934,7 @@ type FanOutCall = Extract<ReturnType<typeof parseCall>, { tool: "fan_out" }>;
  * signed in (the same rule as the picker), else the error names the ones that
  * can run now, so the agent can pick again (issue 2799).
  */
-function harnessFor(name: string | undefined): { id: string; name: string } | Failure {
+function harnessFor(name: string | undefined): Harness | Failure {
   const snapshot = useApp.getState().harnesses;
   const id = name ?? snapshot?.default.harness ?? "rustcode";
   const h = snapshot?.harnesses.find((x) => x.id === id || x.name.toLowerCase() === id.toLowerCase());
@@ -929,24 +942,47 @@ function harnessFor(name: string | undefined): { id: string; name: string } | Fa
   const reason = unavailableReason(h);
   if (reason)
     return failure("not_allowed", `${h.name} cannot run a thread: ${reason}. Usable now: ${usableIds()}`);
-  return { id: h.id, name: h.name };
+  return h;
 }
 
 /**
- * The account a delegated thread runs on: the parent's own when it runs on the
- * same harness, else the one a new thread would start on (a signed-out default
- * login is not one; `docs/harnesses.md`).
+ * The account a delegated thread runs on: the named login the agent asked for
+ * (`start_session`'s or a `fan_out` entry's `account`), checked against that
+ * harness's accounts, else the parent's own on the same harness, else the one
+ * a new thread would start on (`state/logins.ts`, `docs/harnesses.md`).
  */
-function accountFor(caller: RuleThread, harness: string): string | null {
+function accountFor(caller: RuleThread, harness: Harness, asked?: string): string | null | Failure {
   const s = useApp.getState();
-  return childAccountOn(
-    s.harnesses?.harnesses.find((h) => h.id === harness),
+  const pick = childAccountFor(
+    harness,
+    asked,
     {
       harness: caller.harness,
       account: s.threads[caller.id]?.harness?.account ?? s.sessions.find((x) => x.id === caller.id)?.account,
     },
     s.signedOutLogins,
   );
+  if (!("refused" in pick)) return pick.account;
+  const refusal = pick.refused;
+  switch (refusal.kind) {
+    case "ambiguous":
+      return failure(
+        "invalid",
+        `${harness.name} has more than one account matching “${refusal.asked}” (${refusal.matches.join(", ")}); name one of those ids`,
+      );
+    case "signedOut":
+      return failure(
+        "not_allowed",
+        `${harness.name} account “${refusal.name}” (${refusal.account}) is signed out; sign it in in Settings › Agents or pick another login (${refusal.available.join(", ")})`,
+      );
+    case "unknown":
+      return failure(
+        "invalid",
+        refusal.available.length
+          ? `${harness.name} has no account “${refusal.asked}”; its named accounts are ${refusal.available.join(", ")}`
+          : `${harness.name} has no named accounts; it runs on its default login, so leave account out`,
+      );
+  }
 }
 
 const usableIds = () => {
@@ -992,16 +1028,21 @@ async function modelFor(harness: string, model: string | undefined): Promise<str
   );
 }
 
-/** "Claude Code · opus · high" for the approval card: what will actually run. */
-const choiceLabel = (name: string, model?: string, effort?: string) =>
-  [name, model, effort].filter(Boolean).join(" · ");
+/** "Claude Code · Work · opus · high" for the approval card: what will actually run. */
+const choiceLabel = (name: string, account?: string, model?: string, effort?: string) =>
+  [name, account, model, effort].filter(Boolean).join(" · ");
 
-/** The model and effort the new thread reports it runs on, for the caller's answer. */
+/** The model, effort and account the new thread reports it runs on, for the caller's answer. */
 function ranWith(id: string): JsonObject {
   const options = useApp.getState().threads[id]?.configOptions ?? [];
   const model = selectOption(options, "model")?.current;
   const effort = selectOption(options, "effort")?.current;
-  return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+  const account = useApp.getState().threads[id]?.harness?.account;
+  return {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(account ? { account } : {}),
+  };
 }
 
 /** The project a new thread starts in: the caller's, or one the user has opened before. */
@@ -1107,6 +1148,9 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   if (isFailure(harness)) return failureJson(harness);
   const model = await modelFor(harness.id, call.model);
   if (isFailure(model)) return failureJson(model);
+  // Resolved before the user is asked, so the card names the login and the thread gets exactly it.
+  const account = accountFor(caller, harness, call.account);
+  if (isFailure(account)) return failureJson(account);
   const title = call.title ?? titleFrom(call.prompt, 60);
   const other = !sameProject(project, projectOf(caller));
   // Fixed before the user is asked, so the card says what the thread runs at and the thread gets
@@ -1119,7 +1163,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     target: title,
     detail: call.prompt,
     project: other ? project : undefined,
-    harnesses: [choiceLabel(harness.name, model, call.effort)],
+    harnesses: [choiceLabel(harness.name, accountLabelOf(harness, account), model, call.effort)],
     access,
     worktree: call.worktree ?? true,
   });
@@ -1137,7 +1181,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
       task: call.prompt,
       access,
       parent: caller.id,
-      account: accountFor(caller, harness.id),
+      account,
     });
   } catch (error) {
     return failureJson(failure("failed", `the thread could not start: ${errorText(error)}`));
@@ -1151,6 +1195,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     state: "working",
     started: true,
     harness: harness.id,
+    account: account ?? undefined,
   });
   deliver(id, delivered(call.prompt, caller.title), link);
   return {
@@ -1168,13 +1213,28 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
 async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
   const refused = checkStart(caller, book(), call.harnesses.length, threadLimit());
   if (refused) return failureJson(refused);
-  const chosen: { id: string; name: string; model?: string; effort?: string }[] = [];
+  const chosen: { harness: Harness; model?: string; effort?: string; account: string | null }[] = [];
+  const targets = new Set<string>();
   for (const entry of call.harnesses) {
     const h = harnessFor(entry.harness);
     if (isFailure(h)) return failureJson(h);
     const model = await modelFor(h.id, entry.model);
     if (isFailure(model)) return failureJson(model);
-    chosen.push({ ...h, model, effort: entry.effort });
+    const account = accountFor(caller, h, entry.account);
+    if (isFailure(account)) return failureJson(account);
+    // Two entries that resolve to the same target would run one task twice, and the engine
+    // has only compared the arguments as they came in ('Work' and 'work' are one login).
+    const key = [h.id, model ?? "", entry.effort ?? "", account ?? ""].join("\u0000");
+    if (targets.has(key)) {
+      return failureJson(
+        failure(
+          "invalid",
+          `harnesses resolves to the same target twice: ${choiceLabel(h.name, accountLabelOf(h, account), model, entry.effort)}; give each entry a different harness, model, effort or account`,
+        ),
+      );
+    }
+    targets.add(key);
+    chosen.push({ harness: h, model, effort: entry.effort, account });
   }
   const project = projectOf(caller);
   const title = call.title ?? titleFrom(call.prompt, 60);
@@ -1185,7 +1245,9 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     callerTitle: caller.title,
     target: title,
     detail: call.prompt,
-    harnesses: chosen.map((h) => choiceLabel(h.name, h.model, h.effort)),
+    harnesses: chosen.map((h) =>
+      choiceLabel(h.harness.name, accountLabelOf(h.harness, h.account), h.model, h.effort),
+    ),
     access,
     worktree: true,
   });
@@ -1196,16 +1258,19 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
   const out: JsonObject[] = [];
   const linkIds: string[] = [];
   for (const h of chosen) {
-    const threadTitle = `${title} · ${h.name}`;
+    // The account names the thread too when it has one, so two logins of one harness read apart.
+    const threadTitle = [title, h.harness.name, accountNameOf(h.harness, h.account)]
+      .filter(Boolean)
+      .join(" · ");
     try {
-      const id = await newThread(project, h.id, {
+      const id = await newThread(project, h.harness.id, {
         model: h.model,
         effort: h.effort,
+        account: h.account,
         title: threadTitle,
         task: call.prompt,
         parent: caller.id,
         access,
-        account: accountFor(caller, h.id),
       });
       const link = addLink({
         orchestrator: caller.id,
@@ -1215,15 +1280,22 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
         message: call.prompt,
         state: "working",
         started: true,
-        harness: h.id,
+        harness: h.harness.id,
+        account: h.account ?? undefined,
         fanOut: fanId,
       });
       linkIds.push(link);
-      out.push({ session_id: id, link_id: link, harness: h.id, access: accessOf(id), ...ranWith(id) });
+      out.push({
+        session_id: id,
+        link_id: link,
+        harness: h.harness.id,
+        access: accessOf(id),
+        ...ranWith(id),
+      });
       deliver(id, delivered(call.prompt, caller.title), link);
     } catch (error) {
       // The reason, not the name of the error class: the harness says why it could not start.
-      out.push({ harness: h.id, ...failureJson(failure("failed", errorText(error))) });
+      out.push({ harness: h.harness.id, ...failureJson(failure("failed", errorText(error))) });
     }
   }
   if (linkIds.length) {

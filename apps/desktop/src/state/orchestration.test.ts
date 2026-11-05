@@ -11,6 +11,7 @@ import {
   activeDescendants,
   activeInTree,
   activityOf,
+  CAPABILITY_VERSION,
   capped,
   checkManage,
   checkMessage,
@@ -130,6 +131,11 @@ describe("management tools", () => {
 });
 
 describe("orchestration rules", () => {
+  test("the app advertises the version whose account argument it answers", () => {
+    // The engine strips `account` below this version and refuses a call that carries one.
+    expect(CAPABILITY_VERSION).toBe(5);
+  });
+
   test("parses the v2 calls and refuses bad arguments", () => {
     expect(parseCall({ tool: "read_session", args: { session_id: "b", last_turns: 2 } })).toEqual({
       tool: "read_session",
@@ -149,6 +155,27 @@ describe("orchestration rules", () => {
       args: { prompt: "do it", harnesses: [{ harness: "rustcode" }, { harness: "codex", model: "m" }] },
     });
     expect(!isFailure(fan) && fan.tool === "fan_out" && fan.harnesses.length).toBe(2);
+    // A named login rides on start_session and each fan_out entry.
+    const started = parseCall({
+      tool: "start_session",
+      args: { prompt: "go", harness: "claude-code", account: "work" },
+    });
+    expect(!isFailure(started) && started.tool === "start_session" && started.account).toBe("work");
+    expect(parseCall({ tool: "start_session", args: { prompt: "go", account: "  " } })).toMatchObject({
+      account: undefined,
+    });
+    expect(
+      parseCall({
+        tool: "fan_out",
+        args: {
+          prompt: "go",
+          harnesses: [
+            { harness: "claude-code", account: "work" },
+            { harness: "claude-code", model: "opus" },
+          ],
+        },
+      }),
+    ).toMatchObject({ harnesses: [{ account: "work" }, { account: undefined }] });
     expect(
       isFailure(parseCall({ tool: "fan_out", args: { prompt: "x", harnesses: [{ harness: "a" }] } })),
     ).toBe(true);

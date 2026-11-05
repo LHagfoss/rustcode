@@ -12,7 +12,7 @@ import { snoozeAt } from "./snooze";
 import { withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 4;
+export const CAPABILITY_VERSION = 5;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -110,6 +110,8 @@ export interface Link {
   /** Started the target thread (`start_session`, `fan_out`) rather than messaging an existing one. */
   started?: boolean;
   harness?: string;
+  /** The named login the thread runs on, when it is not the harness's default. */
+  account?: string;
   fanOut?: string;
   answer?: string;
   truncated?: boolean;
@@ -174,6 +176,8 @@ export interface HarnessChoice {
   harness: string;
   model?: string;
   effort?: string;
+  /** Named login of that harness (`HarnessAccount.id`); omitted inherits it. */
+  account?: string;
 }
 
 export type Call =
@@ -189,6 +193,8 @@ export type Call =
       harness?: string;
       model?: string;
       effort?: string;
+      /** Named login of that harness; omitted is the caller's own, else a new thread's default. */
+      account?: string;
       worktree?: boolean;
       project?: string;
     }
@@ -380,6 +386,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         harness: s(args.harness),
         model: s(args.model),
         effort: s(args.effort),
+        account: s(args.account)?.trim() || undefined,
         worktree: typeof args.worktree === "boolean" ? args.worktree : undefined,
         project: s(args.project),
       };
@@ -394,7 +401,12 @@ export function parseCall(params: JsonObject): Call | Failure {
         const o = entry && typeof entry === "object" && !Array.isArray(entry) ? entry : {};
         const harness = s(o.harness);
         if (!harness) return failure("invalid", "each harnesses entry needs a harness");
-        harnesses.push({ harness, model: s(o.model), effort: s(o.effort) });
+        harnesses.push({
+          harness,
+          model: s(o.model),
+          effort: s(o.effort),
+          account: s(o.account)?.trim() || undefined,
+        });
       }
       if (harnesses.length < 2 || harnesses.length > 4)
         return failure("invalid", "harnesses takes 2 to 4 entries");

@@ -169,19 +169,21 @@ the wait is released the same way.
 | `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
 | `read_session` | `{ session_id, last_turns?: 1..10, offset?: bytes }` (default 3 turns, offset 0) | `{ session_id, title, status, project, offset, text, next_offset?, complete }`: the rendered answer as text, one page at a time (16 KiB); when `next_offset` is present, pass it as `offset` for the rest. Pages join with nothing lost or repeated, cut on a UTF-8 character boundary. Any project's thread |
 
-| `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, access, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the access, model and effort the thread actually runs, and the approval card shows harness · model · effort |
+| `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
 | `message_session` | M1 | M1 |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
-| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, access, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
+| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort?, account? (v5) }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, account?, access, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
 Checked in the engine before anything is sent (`validate`): `prompt` and
 `message` are required and at most 32 KiB; `title` at most 200 characters;
-`harness`, `model`, `effort` non-empty strings when given; `worktree` a
-boolean; `project` an absolute path; `offset` a whole number of bytes;
-`fan_out` takes 2 to 4 entries, each with a `harness`, and no entry twice (the
-same harness on two models is fine). The engine waits for the client's answer
-15 min for `start_session` and `fan_out` (approval, worktrees, harness start),
+`harness`, `model`, `effort` non-empty strings when given; `account` is the
+same but only a version 5 client may send it (below); `worktree` a boolean;
+`project` an absolute path; `offset` a whole number of bytes; `fan_out` takes
+2 to 4 entries, each with a `harness`, and no entry twice (the same harness on
+two models, or on two named accounts, is fine). The engine waits for the
+client's answer 15 min for `start_session` and `fan_out` (approval, worktrees,
+harness start),
 `timeout_ms` + 30 s for `wait_session`, and 10 min otherwise. The client bounds
 an answer: `wait_session` at 8 KiB (with `answer_truncated`), `read_session`
 at a 16 KiB page (with `next_offset`).
@@ -203,7 +205,15 @@ refusal says how many slots the tree has left); a message that would close a
 loop — to a thread that already works for the caller, directly or further up —
 is refused; the user can stop any link;
 nothing starts without the user's approval (*Allow for This Thread* / *Allow
-Once* / *Don't Allow*).
+Once* / *Don't Allow*). A delegated thread's login is never chosen silently when
+the agent named one: an `account` that harness does not list is refused with
+the ids it does list, and an ambiguous one is refused with the ids it matches
+instead of picking one. The approval card names the login's display name and
+id. `fan_out` refuses two entries that resolve to the same harness, model,
+effort and login, however they were spelled. `account` and the answers'
+`account` are version 5 only: an older client is not shown the field, and the
+engine refuses one it sends rather than letting that app ignore it (see
+[Orchestration tools v5](#orchestration-tools-v5)).
 
 ### A delegated thread's access
 
@@ -321,7 +331,7 @@ validated like the others; the client carries them out (`state/host.ts`).
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, models?, omitted_models? }] }`, at most 25 models each | None |
+| `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, accounts? (v5), models?, omitted_models? }] }`, at most 25 models each; `accounts` is `[{ id, name, auth, signed_out? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), and `current` names the harness, account, model and effort this thread runs on | None |
 | `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
@@ -340,7 +350,12 @@ threads in other projects** is on (Settings › Agents, on by default;
 `read_session` of another project's thread answer `not_allowed`. An
 `all_projects` answer names each thread's `project` path, so two threads with
 the same title are told apart. A grant is per thread and per kind of change
-(*Allow for This Thread*). `list_projects` spans projects since it only reads
+(*Allow for This Thread*): it is not per harness, model or login, so a thread
+already allowed to start threads may name another harness, model or account
+without another card. The choice is still named on every card it does ask
+(`harness · account name (id) · model · effort`) and in the answer's `account`,
+and the grant goes away with the thread (`forget` in `state/orchestration.ts`).
+`list_projects` spans projects since it only reads
 names and counts. `list_pull_requests` uses the same
 `_rustcode/pulls` request as the panel and answers its failures (`gh_missing`,
 `not_connected`, `not_a_repository`, `timed_out`) as an error with that
@@ -368,6 +383,51 @@ asks the engine `_rustcode/data/usage` / `_rustcode/data/query`
 on first use, and `query` keeps the read-only connection, the single-statement
 rule, no `ATTACH` and the two-second stop.
 
+## Orchestration tools v5
+
+Built. Version 5 adds no tool: it adds named-account targeting to two existing
+ones, and the accounts to discovery. Clients advertising
+`_meta.rustcode.orchestration >= 5` get `account` on `start_session`, on each
+`fan_out` entry, and in `list_harnesses` (plus in `start_session` / `fan_out`
+answers when the thread runs on a named login). The app advertises 5 from
+`CAPABILITY_VERSION` (`state/orchestration.ts`).
+
+An older client must not silently ignore the argument: it would start the
+child on whatever login it inherited. So the engine does both halves:
+
+- **Schema.** The built-in native schema (`ToolSchemaPolicy`,
+  `tools/schema.rs`) and the MCP server's `tools()` (`orchestration/mcp_server.rs`)
+  build through `orchestration::schema_for(name, version, schema)`, which strips
+  `account` from `start_session` and from `fan_out`'s entries below version 5.
+  A v4 client is never offered a field its app cannot answer, and its prompt
+  hint stays `PROMPT_HINT_V4`; v5 gets `PROMPT_HINT_V5`, which names the argument.
+- **Execution.** `orchestration::execute_versioned` refuses a call that carries
+  `account` from a client below 5 with *needs a newer RustCode app. Nothing was
+  sent.* (`UnavailableDependency`) before anything reaches the client. The
+  app's own `CAPABILITY_VERSION` is 5, so a matching app and engine agree; an
+  older app on a newer engine gets the v4 schema and a clear refusal instead of
+  a child on an unexpected login. The MCP server also refuses the argument in
+  its own `call` before forwarding, and the hub registers every external thread
+  with that thread client's version and passes it to `execute_versioned` — not
+  the engine's newest version — so a v4 thread cannot reach the app by calling
+  the socket directly.
+
+On the app side, an explicit login is resolved before the approval card
+(`state/logins.ts`, `state/host.ts`). An exact account id wins, even when
+another login's display name is the same, so an id stays reachable; failing
+that it matches an id or display name case-insensitively, and refuses an
+**unknown** one (with the ids it has), an **ambiguous** one (more than one
+case-insensitive id, or more than one display name matches, with those ids) and
+a **signed-out** one (`harness#account` in the plan read's sign-out record).
+`list_harnesses` reports that `signed_out` flag per account, so an agent can
+choose a login that will run before it asks. The approval card shows both the
+display name and the id, e.g. `Claude Code · Work (work) · opus`; the fan-out
+Compare card shows the same label next to the harness, so two logins of one
+harness read apart. Omitting `account` keeps the inherited behaviour exactly as
+before (the parent's login on the same harness, else what a new thread would
+start on). `fan_out` resolves every entry before asking and refuses two entries
+that land on the same harness, model, effort and login — including `work` and
+`Work`, which the engine cannot see as the same.
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the

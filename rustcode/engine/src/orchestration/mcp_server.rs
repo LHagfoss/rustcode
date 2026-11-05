@@ -75,7 +75,7 @@ pub fn tools(version: u8, smart_ui: bool) -> Vec<Value> {
             json!({
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": (tool.schema)(),
+                "inputSchema": super::schema_for(tool.name, version, (tool.schema)()),
             })
         })
         .collect()
@@ -274,6 +274,16 @@ async fn call(
             content: format!("error: invalid {tool} call: {reason}. Nothing was sent."),
         };
     }
+    // An older server never listed `account`, so a harness that sends it gets
+    // the same clear refusal the engine would give, not a call on another login.
+    if version < super::ACCOUNT_VERSION && super::names_an_account(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: format!(
+                "error: {tool} with account needs a newer RustCode app. Nothing was sent."
+            ),
+        };
+    }
     forward
         .call(CallRequest {
             session_id: identity.session_id.clone(),
@@ -433,7 +443,7 @@ mod tests {
     #[tokio::test]
     async fn tools_list_and_call_round_trip_to_the_app() {
         let (_dir, hub) = hub().await;
-        let token = hub.register("thread-1", Arc::new(EchoApp));
+        let token = hub.register("thread-1", Arc::new(EchoApp), super::super::VERSION);
         let mode = std::fs::metadata(hub.path()).unwrap();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(mode.permissions().mode() & 0o777, 0o600);
@@ -501,9 +511,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_version_four_server_refuses_an_account_before_forwarding_it() {
+        let (_dir, hub) = hub().await;
+        let token = hub.register("thread-1", Arc::new(EchoApp), 4);
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "start_session",
+                                     "arguments": {"prompt": "go", "account": "work"}}});
+        let answers = exchange_versioned(
+            Identity {
+                session_id: "thread-1".into(),
+                token,
+            },
+            hub.path().to_owned(),
+            &[call],
+            4,
+            false,
+        )
+        .await;
+        let result = &answers[0]["result"];
+        assert_eq!(result["isError"], true, "{result}");
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("newer RustCode app")
+        );
+    }
+
+    #[tokio::test]
     async fn a_wrong_token_or_session_is_refused() {
         let (_dir, hub) = hub().await;
-        let token = hub.register("thread-1", Arc::new(EchoApp));
+        let token = hub.register("thread-1", Arc::new(EchoApp), super::super::VERSION);
         let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                           "params": {"name": "list_sessions", "arguments": {}}});
         for identity in [

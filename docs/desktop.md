@@ -570,11 +570,14 @@ composer's keys stay outside the table.
   deeper, and no message that would close a loop), 4 active links per thread,
   8 per delegation tree, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
   waits up to 1 h. Each needs the user's *Allow for This Thread*,
-  *Allow Once* or *Don't Allow*; grants and links are kept in the local data
-  store (`data-store.md`), with local storage as the first paint and for an
-  older engine, and after a restart active links are *interrupted*. Started
-  threads go through `session/new` with `_meta.rustcode.harness` and
-  `.worktree` and get the prompt as their first message, headed
+  *Allow Once* or *Don't Allow*; a grant is per calling thread and kind of
+  change, not per harness, model or named login, so an already-granted start
+  may name another login without another card. Grants and links are kept in the
+  local data store (`data-store.md`), with local storage as the first paint and
+  for an older engine, and after a restart active links are *interrupted*.
+  Started threads go through `session/new` with `_meta.rustcode.harness`,
+  `.account` (orchestration v5) and `.worktree` and get the prompt as their
+  first message, headed
   `From thread "<title>" (agent):`. A child the orchestrator did not name is
   named from the task's first words (`childTitle` in `src/lib/title.ts`), so
   that header never becomes a thread title in the sidebar. The parent is also
