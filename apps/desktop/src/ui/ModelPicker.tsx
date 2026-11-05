@@ -579,19 +579,25 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           type="button"
           aria-label="Model and effort"
           className={cx(
-            "flex h-[30px] max-w-[260px] items-center gap-1.5 rounded-full px-3 text-callout text-fg-muted hover:bg-fill hover:text-fg @max-lg/composer:max-w-[180px]",
+            "flex h-[30px] min-w-0 max-w-[260px] items-center gap-1.5 rounded-full px-3 text-callout text-fg-muted hover:bg-fill hover:text-fg @max-lg/composer:max-w-[180px]",
             open ? "bg-fill-strong text-fg" : "bg-fill-subtle",
           )}
         >
           <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
           {fast?.currentBool && <Zap size={11} className="shrink-0 text-fg" fill="currentColor" />}
-          <span className="truncate">{label.name}</span>
-          {label.effort && <span className="text-fg-faint">{effortLabel(label.effort)}</span>}
-          {accountName && <span className="shrink-0 truncate text-caption text-fg-faint">{accountName}</span>}
+          <span className="min-w-0 truncate">{label.name}</span>
+          {label.effort && <span className="shrink-0 text-fg-faint">{effortLabel(label.effort)}</span>}
+          {accountName && (
+            // The account is a hint, not a second model label: capped and ellipsized so a long
+            // login never takes the width the model's own name needs.
+            <span className="min-w-0 max-w-[72px] truncate text-caption text-fg-faint @max-lg/composer:hidden">
+              {accountName}
+            </span>
+          )}
           <ChevronUp
             size={11}
             strokeWidth={2.5}
-            className={cx("transition-transform duration-200 ease-snappy", open && "rotate-180")}
+            className={cx("shrink-0 transition-transform duration-200 ease-snappy", open && "rotate-180")}
           />
         </button>
       </Popover.Trigger>
@@ -666,15 +672,12 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                     )}
                   >
                     <span className="text-callout text-fg-muted">Account</span>
-                    <span
-                      className={cx(
-                        "flex flex-1 items-center justify-end gap-1.5 truncate font-medium text-callout",
-                        accountRemoved && "text-warning",
-                      )}
-                    >
-                      {accountLabel}
+                    <span className="flex min-w-0 flex-1 items-center justify-end gap-1.5 font-medium text-callout">
+                      <span className={cx("min-w-0 truncate", accountRemoved && "text-warning")}>
+                        {accountLabel}
+                      </span>
                     </span>
-                    <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
+                    <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
                   </button>
                 </Tooltip>
               )}
