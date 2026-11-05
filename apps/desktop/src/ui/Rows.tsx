@@ -60,7 +60,7 @@ import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
 import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
-import { replyActions } from "./replyActions";
+import { replyActions, turnFooterHidden } from "./replyActions";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 
@@ -108,7 +108,7 @@ export const UserRow = memo(function UserRow({
   if (wakeLine) {
     return (
       <div title={item.text}>
-        <NoticeRow item={{ kind: "notice", id: item.id, text: wakeLine, tone: "info" }} />
+        <NoticeRow flat item={{ kind: "notice", id: item.id, text: wakeLine, tone: "info" }} />
       </div>
     );
   }
@@ -674,11 +674,23 @@ export function HandoffRow({ item }: { item: Item<"handoff"> }) {
   );
 }
 
-export function NoticeRow({ item, action }: { item: Item<"notice">; action?: ReactNode }) {
+export function NoticeRow({
+  item,
+  action,
+  flat,
+}: {
+  item: Item<"notice">;
+  action?: ReactNode;
+  /** A wake divider sits in the transcript's own rhythm, without the padding a card needs. */
+  flat?: boolean;
+}) {
   // Something that happened to the thread (it compacted), not a problem: a divider, like a switch.
   if (item.tone === "info")
     return (
-      <div className="flex items-center gap-3 py-1 text-caption text-fg-muted" role="separator">
+      <div
+        className={cx("flex items-center gap-3 text-caption text-fg-muted", flat ? "py-0" : "py-1")}
+        role="separator"
+      >
         <span className="h-px flex-1 bg-border" />
         <span className="flex min-w-0 items-center gap-1.5">
           <Layers size={11} className="shrink-0 text-fg-faint" />
@@ -764,13 +776,18 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
  * A finished turn's work, folded (state/fold.ts):
  * `Worked for 1m 3s ›` over a hairline, and the steps as they streamed under
  * it when opened. The final answer, errors and the footer stay outside it.
+ * A turn that wrote no answer takes the time here (`Worked for 4s · 09:55 PM`)
+ * and keeps no footer: there is nothing under it to copy or fork.
  */
 export const TurnFoldRow = memo(function TurnFoldRow({
   fold,
   onToggle,
+  rule = true,
 }: {
   fold: TurnFold;
   onToggle: (key: string) => void;
+  /** The hairline under it: dropped when the row above is already a divider. */
+  rule?: boolean;
 }) {
   return (
     <button
@@ -780,13 +797,17 @@ export const TurnFoldRow = memo(function TurnFoldRow({
       title={
         fold.open ? "Hide the work" : `Show the work: ${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`
       }
-      className="group flex w-full items-center gap-1.5 border-border/60 border-b pt-1 pb-2 text-left text-body text-fg-muted hover:text-fg"
+      className={cx(
+        "group flex w-full items-center gap-1.5 pt-1 pb-2 text-left text-body text-fg-muted hover:text-fg",
+        rule && "border-border/60 border-b",
+      )}
     >
       {fold.stopped && <SquareStop size={12} className="shrink-0" aria-hidden />}
       <span className="truncate tabular">{foldLabel(fold, formatDuration)}</span>
-      {fold.failed > 0 && (
-        <CircleX size={12} className="shrink-0 text-danger" aria-label={`${fold.failed} failed`} />
+      {!fold.answered && fold.time !== undefined && (
+        <span className="shrink-0 text-caption text-fg-faint tabular">· {messageTime(fold.time)}</span>
       )}
+      {fold.failedTurn && <CircleX size={12} className="shrink-0 text-danger" aria-label="The turn failed" />}
       <ChevronRight
         size={12}
         className={cx("shrink-0 text-fg-faint transition-transform duration-200", fold.open && "rotate-90")}
@@ -850,11 +871,15 @@ export function TurnEndRow({
   completion,
   changes,
   folded,
+  timeInFold,
   threadId,
+  lastTurn,
 }: {
   item: Item<"turnEnd">;
   /** The turn's work is folded into a summary row that already says how long it took. */
   folded?: boolean;
+  /** The summary row above carries the time too: the turn wrote no answer. */
+  timeInFold?: boolean;
   /** The turn's last reply, whose copy and fork show here rather than under the reply. */
   reply?: string;
   completion?: TurnCompletion | null;
@@ -862,27 +887,47 @@ export function TurnEndRow({
   changes?: ReactNode;
   /** The thread, so the footer's fork can copy its conversation. */
   threadId?: string;
+  /** The newest finished turn: its actions stay in view, the older ones wait for a hover. */
+  lastTurn?: boolean;
 }) {
+  // One row for the turn: its outcome and time, then copy and fork, then the changes chip.
+  const row = replyActions({ where: "turnEnd", text: reply, at: item.at, threadId });
+  // An empty turn that folded its work: its header already says the time, and there is no reply
+  // to copy or fork, so a footer row of icons would sit over nothing.
+  if (
+    turnFooterHidden({ folded, reply, completion: !!completion, changes: !!changes, outcome: item.outcome })
+  )
+    return null;
+  // The outcome, in words, and the time. How long the turn took is the fold header's to say.
   const parts = [
-    item.outcome === "cancelled" && !folded
+    item.outcome === "cancelled"
       ? `Stopped by you${item.elapsedMs ? ` · after ${formatDuration(item.elapsedMs)}` : ""}`
       : item.outcome === "failed"
         ? "The turn failed"
-        : item.elapsedMs !== undefined && !folded
-          ? `Worked for ${formatDuration(item.elapsedMs)}`
-          : undefined,
-    messageTime(item.at),
+        : undefined,
+    ...(timeInFold ? [] : [messageTime(item.at)]),
   ].filter(Boolean);
-  // One row for the turn: copy, fork, then its outcome and time, then the changes chip.
-  const row = replyActions({ where: "turnEnd", text: reply, at: item.at, threadId });
+  const actions = (
+    <>
+      {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
+      {row.fork && <ReplyForkButton threadId={threadId!} />}
+    </>
+  );
   return (
     <div className="-mt-2">
       {completion && <CompletionCard completion={completion} />}
-      <div className="flex h-[22px] items-center gap-1.5 text-caption text-fg-faint">
-        {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
-        {row.fork && <ReplyForkButton threadId={threadId!} />}
+      <div className="group/turn flex h-[22px] items-center gap-1.5 text-caption text-fg-faint">
         {item.outcome === "cancelled" && !folded && <SquareStop size={11} />}
-        <span className="tabular">{parts.join(" · ")}</span>
+        {parts.length > 0 && <span className="tabular">{parts.join(" · ")}</span>}
+        {/* Time first, so the actions appearing on a hover never shift it. */}
+        {(row.copy || row.fork) &&
+          (lastTurn ? (
+            actions
+          ) : (
+            <span className="flex items-center gap-1.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/turn:opacity-100 [@media(pointer:coarse)]:opacity-100">
+              {actions}
+            </span>
+          ))}
         {changes}
       </div>
     </div>

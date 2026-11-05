@@ -19,11 +19,18 @@ export interface TurnFold {
   /** Thoughts, tool calls and in-between replies folded away. */
   steps: number;
   tools: number;
+  /** Steps that failed. They keep the mark inside; the header says nothing about them. */
   failed: number;
   /** Distinct files the turn's tool calls changed. */
   files: number;
   /** You stopped the turn. */
   stopped?: boolean;
+  /** The turn itself failed: the one case a red mark belongs on its header. */
+  failedTurn?: boolean;
+  /** When the turn ended, for a turn that wrote no answer: its header carries the time. */
+  time?: number;
+  /** The turn wrote an answer, so the footer under it has something to copy and keeps the time. */
+  answered: boolean;
 }
 
 /** A run of finished steps shown as one row: `Read 4 files and ran 2 commands`. */
@@ -119,6 +126,9 @@ function pushTurn(
     open: open.has(key),
     elapsedMs: end?.kind === "turnEnd" ? end.elapsedMs : undefined,
     stopped: end?.kind === "turnEnd" && end.outcome === "cancelled",
+    failedTurn: end?.kind === "turnEnd" && end.outcome === "failed",
+    time: end?.kind === "turnEnd" ? end.at : undefined,
+    answered: items.slice(answerFrom, to).some((item) => item.kind === "assistant" && !!item.text.trim()),
     steps: work.length,
     tools,
     failed,

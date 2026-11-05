@@ -201,23 +201,44 @@ export function parseTurnDiff(result: Json | undefined): PatchFile[] {
 }
 
 /**
- * Pairs each finished turn of the transcript with its checkpoint. The
- * engine keeps the latest 50, so the transcript's turns and the list are
- * aligned from the end; a checkpoint whose prompt does not start the turn's
- * message is left out rather than shown on the wrong turn.
+ * Pairs each finished turn of the transcript with its checkpoint. The engine takes a checkpoint as
+ * a turn starts, so the list holds one for a turn still running: it is left out (it is written
+ * after the last finished turn ended), never shifted onto the turn above it. What is left is
+ * matched by the message that started each turn, from the end, because the engine keeps only the
+ * latest 50 and the transcript may hold fewer or more than either.
  */
 export function checkpointsByTurn(
-  turns: { id: string; prompt: string }[],
+  turns: { id: string; prompt: string; at?: number }[],
   checkpoints: Checkpoint[],
 ): Record<string, Checkpoint> {
   const out: Record<string, Checkpoint> = {};
-  const offset = checkpoints.length - turns.length;
-  turns.forEach((turn, i) => {
-    const c = checkpoints[i + offset];
-    if (!c) return;
-    const want = c.prompt.trim().slice(0, 40);
-    if (want && !turn.prompt.trim().startsWith(want) && !turn.prompt.includes(want)) return;
-    out[turn.id] = c;
-  });
+  const ended = turns.reduce((last, turn) => Math.max(last, turn.at ?? 0), 0);
+  const finished = checkpoints.filter((c) => !ended || c.createdAt === undefined || c.createdAt <= ended);
+  let at = finished.length - 1;
+  for (let i = turns.length - 1; i >= 0 && at >= 0; i--) {
+    const prompt = promptKey(turns[i]!.prompt);
+    if (!starts(finished[at]!, prompt)) {
+      // A checkpoint that starts no turn of the transcript sits above the turn's own (a turn still
+      // running, one whose timing was not kept): step over it, and never over the turn's own.
+      if (at > 0 && starts(finished[at - 1]!, prompt)) at--;
+      else continue;
+    }
+    out[turns[i]!.id] = finished[at]!;
+    at--;
+  }
   return out;
+}
+
+/** A prompt as the engine stores it in a checkpoint's message: whitespace collapsed. */
+function promptKey(text: string): string {
+  return text.split(/\s+/).join(" ").trim();
+}
+
+/** Whether a checkpoint's message starts the turn's prompt, so the two belong together. */
+function starts(checkpoint: Checkpoint, prompt: string): boolean {
+  const want = checkpoint.prompt.trim();
+  // A turn the engine resumed itself records no prompt: it can be told apart from the others only
+  // by its place, which is what the walk from the end gives it.
+  if (!want) return true;
+  return prompt.startsWith(want) || prompt.includes(want);
 }

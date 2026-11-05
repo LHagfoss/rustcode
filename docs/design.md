@@ -521,13 +521,22 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   what it does now in `rc-shimmer` when no running row does. When it ends,
   its work folds under one divider where the work began, above the final
   answer: `Worked for 1m 3s ›` or `You stopped after 12s`, in the same
-  type over the same hairline, a `CircleX` in `danger` when a step failed.
+  type over the same hairline, which a divider right above it already draws
+  (so it drops its own). The duration lives here and nowhere else; a red
+  `CircleX` marks only a turn that itself failed, and a step that failed
+  keeps its own count inside. A turn that wrote no answer keeps its time in
+  the header (`Worked for 4s · 09:55 PM`) and has no footer, since there is
+  nothing under it to copy or fork. A turn with no steps folds nothing and
+  so has no header, and its duration goes with it: a short direct answer
+  needs no `Worked for 2s`, and its footer says only the time.
   What stays visible: the message sent (a `rounded-2xl bg-message` bubble at
   most 80% wide, `p-3`; consecutive messages soften the corners they share,
   `rounded-tr-md` / `rounded-br-md`; its time and actions on hover, 12px,
   clipped to the bubble), the final answer (the replies after the last
   step), warnings and errors, and the footer (time, copy, Changes), which
-  then leaves out the duration. Opening it shows the steps in order,
+  says only the time: no duration, so a folded turn never states it twice.
+  Copy and fork wait for a hover or keyboard focus on the footer, and stay in
+  view on the newest finished turn. Opening it shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
   under a transition; Reduce motion makes it instant). A `<button
   aria-expanded>`, so ⏎ and Space toggle it. Opened turns are kept per

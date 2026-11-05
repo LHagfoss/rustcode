@@ -205,16 +205,24 @@ export function emptyThread(id: string, cwd: string, title?: string): ThreadStat
   };
 }
 
-function closePendingTurn(state: ThreadState): ThreadState {
+/**
+ * Closes the turn a message cut short. A harness reports the timing on its last chunk, and an
+ * interrupted turn often sends none: the clock the app started the turn with is the fallback, so
+ * the turn still says how long it ran.
+ */
+function closePendingTurn(state: ThreadState, now = Date.now()): ThreadState {
   const turn = state.pendingTurn;
-  if (!turn) return state;
-  const outcome = turn.outcome === "cancelled" || turn.outcome === "failed" ? turn.outcome : "completed";
+  const started = state.turnStartedAt;
+  // Nothing to close: no timing came back and no turn of this app runs.
+  if (!turn && !(state.running && started !== undefined)) return state;
+  const outcome = turn?.outcome === "cancelled" || turn?.outcome === "failed" ? turn.outcome : "completed";
+  const elapsedMs = turn?.elapsedMs ?? (started !== undefined ? Math.max(0, now - started) : undefined);
   return {
     ...state,
     pendingTurn: undefined,
     items: [
       ...state.items,
-      { kind: "turnEnd", id: localId("turn"), elapsedMs: turn.elapsedMs, at: turn.at, outcome },
+      { kind: "turnEnd", id: localId("turn"), elapsedMs, at: turn?.at ?? now, outcome },
     ],
   };
 }
@@ -297,7 +305,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
   const last = state.items[state.items.length - 1];
   switch (update.kind) {
     case "user": {
-      const closed = closePendingTurn(state);
+      const closed = closePendingTurn(state, now);
       const items = finishThoughts(closed.items, now);
       return {
         ...closed,

@@ -167,6 +167,14 @@ describe("thread reducer", () => {
     expect(s.loaded).toBe(true);
   });
 
+  test("a turn cut short by a new message keeps how long it ran", () => {
+    // The harness reports the timing on its last chunk; an interrupted turn may never send one.
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1000);
+    s = applyUpdate(s, { kind: "toolCall", id: "c", title: "bash", status: "in_progress", diffs: [] }, 2000);
+    s = applyUpdate(s, { kind: "user", text: "stop, do this instead" }, 26_000);
+    expect(s.items.at(-2)).toMatchObject({ kind: "turnEnd", elapsedMs: 25_000, outcome: "completed" });
+  });
+
   test("a turn ends: running tools settle, permissions clear, and the footer has the elapsed time", () => {
     let s = beginTurn(emptyThread("s", "/p"), "go", 0);
     s = applyUpdate(s, { kind: "toolCall", id: "c", title: "bash", status: "in_progress", diffs: [] }, 10);
