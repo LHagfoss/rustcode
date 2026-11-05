@@ -10,6 +10,7 @@ import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
 import type { Link } from "../state/orchestration";
+import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView } from "../state/queue";
 import { canSteer, RESUME_TEXT, shortcutFor, useApp } from "../state/store";
 import {
@@ -25,7 +26,7 @@ import {
 } from "../state/thread";
 import { useWaiting, type Waiting, waitingLabel } from "../state/waiting";
 import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
-import { ApprovalRow } from "./AttentionCards";
+import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
 import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
@@ -60,6 +61,10 @@ type Row = {
   activity?: string;
   /** The thread's background work, when no turn of its own runs (state/waiting.ts). */
   waiting?: Waiting;
+  /** A request from a thread below this one, at the foot (state/pending.ts). */
+  childRequest?: ChildRequest;
+  /** Whether this child card is the first on screen, and so takes the keyboard. */
+  childKeys?: boolean;
   fold?: TurnFold;
   group?: ToolGroup;
   inFold?: string;
@@ -209,6 +214,8 @@ export function Transcript({
   const links = useApp((s) => s.links.links);
   // No turn runs, but the threads it started or messaged still work: not finished, not working.
   const wait = useWaiting(thread.id);
+  // What the threads below this one wait on: answered here, in the same cards their own chat shows.
+  const childRequests = useChildRequests(thread.id);
   const started = useMemo(
     () =>
       startedLinks(
@@ -301,6 +308,16 @@ export function Transcript({
       // With an approval waiting, the turn is not working: the row that asks is the foot.
       if (!shows && !waiting) out.push({ key: "activity", activity: workingLabel(visible) });
     } else if (wait) out.push({ key: "waiting", waiting: wait });
+    // What a thread below this one asks sits at the foot with the waiting line, oldest first; the
+    // first one that can take the keyboard does, so a key never answers another thread's card too.
+    const ownKeys = !thread.permissions.length;
+    childRequests.forEach((childRequest, i) => {
+      out.push({
+        key: `child-${childRequest.thread}-${childRequest.request.rpcId}`,
+        childRequest,
+        childKeys: ownKeys && i === 0,
+      });
+    });
     // The plan a paused thread still has work on, at the foot: what is left, and Implement. A
     // finished plan, or one a running turn is working through, is not repeated here.
     if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
@@ -329,7 +346,7 @@ export function Transcript({
     if (queue.resumable)
       out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
     return out;
-  }, [visible, subagentSteps, started, links, thread, open, searching, wait]);
+  }, [visible, subagentSteps, started, links, thread, open, searching, wait, childRequests]);
   // Footers of folded turns: their time is in the summary row, not repeated.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
@@ -391,6 +408,7 @@ export function Transcript({
       if (known !== undefined) return known;
       const item = rows[i]?.item;
       if (rows[i]?.approval) return 96;
+      if (rows[i]?.childRequest) return rows[i].childRequest!.request.question ? 240 : 52;
       if (rows[i]?.plan) return 260;
       if (rows[i]?.fold || rows[i]?.group) return 26;
       if (rows[i]?.queued) return 96;
@@ -448,10 +466,11 @@ export function Transcript({
   // again: ask it to measure the ones on screen.
   const approvalSig = thread.permissions.map((p) => p.rpcId).join(" ");
   const planSig = thread.plan.map((e) => e.status).join("");
+  const childSig = childRequests.map((entry) => `${entry.thread}:${entry.request.rpcId}`).join(" ");
   // biome-ignore lint/correctness/useExhaustiveDependencies: the signature is what changed
   useEffect(() => {
     virtualizer.measure();
-  }, [approvalSig, planSig]);
+  }, [approvalSig, planSig, childSig]);
 
   const toBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -779,6 +798,14 @@ export function Transcript({
                   >
                     {row.approval ? (
                       <ApprovalRow request={row.approval} pending={approvals} number={row.approvalNumber} />
+                    ) : row.childRequest ? (
+                      <ChildRequestCard
+                        request={row.childRequest.request}
+                        from={row.childRequest.title}
+                        pending={row.childRequest.pending}
+                        number={row.childRequest.number}
+                        keys={row.childKeys}
+                      />
                     ) : row.plan ? (
                       <PlanCard threadId={row.plan.threadId} entries={row.plan.entries} />
                     ) : row.agents ? (

@@ -1310,8 +1310,7 @@ async function wait(
   // does not come back a second time as a wake.
   const hand = (link: Link, shown = shownOf(link)) => {
     if (shown === "done" || shown === "failed" || shown === "needs_user") {
-      const mark = markHeard(link, shown, Date.now());
-      if (mark) me.handed.push(mark);
+      me.handed.push(markHeard(link, shown, Date.now()));
     }
     return { links: [result(link, shown)] };
   };

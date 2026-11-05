@@ -1077,8 +1077,17 @@ async function handleInbound(message: Inbound) {
       return;
     case "request":
       if (message.method === Method.requestPermission) {
-        const request = parsePermissionRequest(message.id, message.params);
-        if (!request || !get().threads[request.sessionId]) {
+        const parsed = parsePermissionRequest(message.id, message.params);
+        if (!parsed) {
+          connection?.respond(message.id, permissionCancelled);
+          return;
+        }
+        // A thread this window has not opened (a child started elsewhere, or a thread after a
+        // restart) is loaded first: the request is shown in its own chat and in the thread that
+        // started it, and both answer it through the same card.
+        if (!get().threads[parsed.sessionId]?.loaded) await openThread(parsed.sessionId);
+        const request = { ...parsed, at: Date.now() };
+        if (!get().threads[request.sessionId]) {
           connection?.respond(message.id, permissionCancelled);
           return;
         }
