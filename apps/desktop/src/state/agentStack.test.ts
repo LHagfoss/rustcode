@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { agentStack, liveSubagents, STACK_VISIBLE, type StackAgent, type StackState } from "./agentStack";
+import {
+  agentStack,
+  liveSubagents,
+  STACK_VISIBLE,
+  type StackAgent,
+  type StackState,
+  stackDescription,
+} from "./agentStack";
 import type { TranscriptItem } from "./thread";
 
 const agent = (id: string, state: StackState, harness = "codex"): StackAgent => ({
@@ -63,6 +70,34 @@ describe("the icons a stack draws", () => {
     const mixed = [agent("done", "done"), agent("work", "working")];
     expect(agentStack(mixed, { idle: "show" }).order.map((a) => a.id)).toEqual(["work"]);
   });
+
+  test("threads and subagents are counted apart, so the tip can say which is which", () => {
+    const view = agentStack([
+      { id: "t", state: "working", kind: "thread", label: "Child" },
+      { id: "s", state: "needs", kind: "subagent", label: "Explorer" },
+    ]);
+    expect(view.threads).toBe(1);
+    expect(view.subagents).toBe(1);
+    expect(view.summary).toBe("1 thread and 1 subagent");
+    // The kind does not change what the state label says.
+    expect(view.label).toBe("1 needs you · 1 working");
+    // A caller that leaves the kind out still gets a stack, with no kinds to state.
+    expect(agentStack([agent("a", "working")])).toMatchObject({
+      threads: 0,
+      subagents: 0,
+      summary: "",
+    });
+  });
+
+  test("the accessible description names every mark, its state and its kind", () => {
+    const view = agentStack([
+      { id: "t", state: "working", kind: "thread", label: "Child" },
+      { id: "s", state: "needs", kind: "subagent", label: "Explorer" },
+    ]);
+    expect(stackDescription(view)).toBe(
+      "Delegated work: 1 thread and 1 subagent · 1 needs you · 1 working. needs you Explorer (subagent); working Child (thread)",
+    );
+  });
 });
 
 describe("a thread's own subagents", () => {
@@ -78,7 +113,9 @@ describe("a thread's own subagents", () => {
 
   test("a built-in subagent at work is a mark of the thread's harness", () => {
     const marks = liveSubagents([call("a", "in_progress"), call("b", "completed")], [], true, "claude-code");
-    expect(marks).toEqual([{ id: "a", state: "working", harness: "claude-code", label: "Build the kit" }]);
+    expect(marks).toEqual([
+      { id: "a", state: "working", kind: "subagent", harness: "claude-code", label: "Build the kit" },
+    ]);
   });
 
   test("other tools are not agents, and a turn that ended has none", () => {

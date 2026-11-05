@@ -1589,6 +1589,9 @@ export function Sidebar() {
   // failed delegate adds nothing: the stack is work under way, not the tree's history.
   const stacks = useMemo(() => {
     const out = new Map<string, StackAgent[]>();
+    // A nested thread's start time is its link's: the row says how long it has run, and
+    // the mark's kind says it is a thread to open, not a subagent inside this one.
+    const linkOf = new Map(links.filter((l) => l.started).map((l) => [l.target, l] as const));
     const gather = (parentId: string): StackAgent[] => {
       const found: StackAgent[] = [];
       const walk = (id: string) => {
@@ -1598,8 +1601,10 @@ export function Sidebar() {
             found.push({
               id: child.id,
               state: info.state,
+              kind: "thread",
               harness: child.harness,
               label: child.title || "New thread",
+              since: linkOf.get(child.id)?.createdAt,
             });
           walk(child.id);
         }
@@ -1613,7 +1618,7 @@ export function Sidebar() {
       if (agents.length) out.set(s.id, agents);
     }
     return out;
-  }, [childrenByParent, filtered, infos, parentOf]);
+  }, [childrenByParent, filtered, infos, links, parentOf]);
 
   // The order the list draws its rows in, so ↑ ↓ move through what is on screen: a shut section
   // or project contributes nothing. A delegated thread has no row of its own, so it is not here

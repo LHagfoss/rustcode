@@ -22,8 +22,9 @@ import type { SubagentInfo } from "../acp/rustcode";
 import { displayPath, effortLabel, modelName, projectName } from "../acp/types";
 import { type GitChanges, gitChanges, openTerminalAt, revealPath } from "../lib/native";
 import { contextPercent, planProgress, type SubagentLine, subagentLines } from "../state/details";
-import { linksOf, stateOf } from "../state/host";
-import { LINK_LABEL, type Link } from "../state/orchestration";
+import { stateOf } from "../state/host";
+import { threadLineage } from "../state/lineage";
+import { isActive, LINK_LABEL, type Link } from "../state/orchestration";
 import { selectThread, showPanel, toast, useApp, worktreeOf } from "../state/store";
 import { formatDuration, formatTokens } from "../state/thread";
 import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
@@ -92,38 +93,91 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 const hairline = <div className="mx-2 my-1.5 border-border border-t" />;
 
-function LinkRow({ link, id }: { link: Link; id: string }) {
+function LinkRow({
+  link,
+  id,
+  now,
+  relationship,
+}: {
+  link: Link;
+  /** The thread the row opens: the other end of the link. */
+  id: string;
+  now: number;
+  /** `Thread it started`, `Thread that started this one`. */
+  relationship: string;
+}) {
   const state = useApp((s) => stateOf(s, link));
-  const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
+  const opened = useApp((s) => s.sessions.find((x) => x.id === id));
+  // A deleted parent or target is a fact with a tip, not a dead click.
+  const openable = useApp((s) => s.sessions.some((x) => x.id === id));
+  const harness = id === link.target ? (link.harness ?? opened?.harness) : opened?.harness;
+  const harnessName = useApp((s) =>
+    harness ? (s.harnesses?.harnesses.find((h) => h.id === harness)?.name ?? harness) : undefined,
+  );
+  const active = isActive(state);
   const started = id === link.target;
-  const title = (started && session?.title) || (started ? link.targetTitle : link.orchestratorTitle);
+  const title = (started && opened?.title) || (started ? link.targetTitle : link.orchestratorTitle);
+  // The elapsed time belongs to the row's own thread: on the parent row it would be the child's age.
+  const end = active ? now : link.settledAt;
+  const elapsedMs =
+    started && end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
+  const elapsed = elapsedMs === undefined ? undefined : formatDuration(elapsedMs);
+  const meta = [harnessName, modelName(opened?.model)].filter(Boolean).join(" · ");
+  const status = LINK_LABEL[state];
+  // A row with nowhere to open exposes its relation and prompt in its accessible name instead.
+  const description = openable
+    ? undefined
+    : `${title}. ${relationship}. ${status}${elapsed ? `, ${elapsed}` : ""}. ${link.message.split("\n")[0]?.slice(0, 200) ?? ""}`;
   return (
     <AgentRow
-      harness={link.harness ?? session?.harness}
+      harness={harness}
       state={LINK_AGENT_STATE[state]}
+      status={status}
+      description={description}
       title={title}
+      elapsed={elapsed}
       label={`Open ${title}`}
-      tooltip={<AgentTip title={title} meta={LINK_LABEL[state]} task={link.message} />}
-      onClick={() => selectThread(id)}
+      tooltip={
+        <AgentTip
+          title={title}
+          meta={meta || undefined}
+          relationship={relationship}
+          state={LINK_AGENT_STATE[state]}
+          status={status}
+          elapsed={elapsed}
+          task={link.message}
+        />
+      }
+      onClick={openable ? () => selectThread(id) : undefined}
     />
   );
 }
 
 function SubagentRow({ line, now, harness }: { line: SubagentLine; now: number; harness?: string }) {
   const end = line.state === "working" ? now : line.endedAt;
-  const elapsed = line.startedAt && end ? end - line.startedAt : undefined;
+  const elapsedMs = line.startedAt && end ? end - line.startedAt : undefined;
+  const elapsed =
+    elapsedMs !== undefined && elapsedMs >= 1000
+      ? formatDuration(Math.floor(elapsedMs / 1000) * 1000)
+      : undefined;
+  const description = `${line.name}, subagent, ${line.state}${elapsed ? `, ${elapsed}` : ""}. ${line.task}`;
   return (
     <AgentRow
       harness={harness}
       state={line.state}
       title={line.name}
+      description={description}
       detail={line.task}
-      elapsed={
-        elapsed !== undefined && elapsed >= 1000
-          ? formatDuration(Math.floor(elapsed / 1000) * 1000)
-          : undefined
+      elapsed={elapsed}
+      tooltip={
+        <AgentTip
+          title={line.name}
+          relationship="Subagent"
+          state={line.state}
+          elapsed={elapsed}
+          task={line.task}
+        />
       }
-      tooltip={<AgentTip title={line.name} task={line.task} />}
     />
   );
 }
@@ -156,12 +210,25 @@ export function ThreadDetails() {
   );
   const agents = useApp((s) => (s.selectedId ? (s.agents[s.selectedId] ?? NO_AGENTS) : NO_AGENTS));
   const book = useApp((s) => s.links);
+  const parentMeta = useApp((s) =>
+    s.selectedId ? s.sessions.find((x) => x.id === s.selectedId)?.parent : undefined,
+  );
+  // The metadata can name a parent whose thread is gone: then the row is a fact, not a link.
+  const parentListed = useApp((s) => {
+    const parent = s.selectedId ? s.sessions.find((x) => x.id === s.selectedId)?.parent : undefined;
+    return !!parent?.id && s.sessions.some((x) => x.id === parent.id);
+  });
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const changes = useChanges(thread?.cwd, !!thread?.running);
 
   const subagents = useMemo(() => subagentLines(thread?.items ?? [], agents), [thread?.items, agents]);
   const working = subagents.some((s) => s.state === "working");
-  const now = useNow(working);
+  // A working link's elapsed time ticks too, not only a subagent's.
+  const linkActive = useMemo(
+    () => !!id && book.links.some((l) => (l.orchestrator === id || l.target === id) && isActive(l.state)),
+    [book.links, id],
+  );
+  const now = useNow(working || linkActive);
 
   if (!id || !thread) {
     return (
@@ -169,7 +236,7 @@ export function ThreadDetails() {
     );
   }
 
-  const { driving, drivenBy } = linksOf(book, id);
+  const lineage = threadLineage(id, book.links, parentMeta);
   const choice = (option: string) => {
     const o = thread.configOptions.find((x) => x.id === option);
     const name = o?.choices.find((c) => c.value === o.current)?.name;
@@ -251,23 +318,71 @@ export function ThreadDetails() {
         />
       )}
 
-      {(drivenBy || driving.length > 0) && (
+      {(lineage.parent ||
+        lineage.messagedBy ||
+        lineage.started.length > 0 ||
+        lineage.messaged.length > 0) && (
         <>
           {hairline}
           <Section title="Threads">
-            {drivenBy && (
+            {lineage.parent && (
               <>
                 <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
-                  <CornerDownRight size={11} /> Working for
+                  <CornerDownRight size={11} /> {lineage.parent.live ? "Working for" : "Started from"}
                 </div>
-                <LinkRow link={drivenBy} id={drivenBy.orchestrator} />
+                {lineage.parent.link ? (
+                  <LinkRow
+                    link={lineage.parent.link}
+                    id={lineage.parent.id ?? lineage.parent.link.orchestrator}
+                    now={now}
+                    relationship={
+                      lineage.parent.started
+                        ? "Thread that started this one"
+                        : "Thread that messaged this one"
+                    }
+                  />
+                ) : (
+                  <CardRow
+                    icon={<CornerDownRight size={16} className="shrink-0 text-fg-muted" />}
+                    label={lineage.parent.title}
+                    title="The thread that started this one"
+                    onClick={
+                      parentListed && lineage.parent.id ? () => selectThread(lineage.parent!.id!) : undefined
+                    }
+                  />
+                )}
               </>
             )}
-            {driving.length > 0 && (
+            {lineage.messagedBy?.link && (
               <>
-                <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">Started or messaged</div>
-                {driving.map((l) => (
-                  <LinkRow key={l.id} link={l} id={l.target} />
+                <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
+                  <CornerDownRight size={11} /> Messaged by
+                </div>
+                <LinkRow
+                  link={lineage.messagedBy.link}
+                  id={lineage.messagedBy.id ?? lineage.messagedBy.link.orchestrator}
+                  now={now}
+                  relationship="Thread that messaged this one"
+                />
+              </>
+            )}
+            {lineage.started.length > 0 && (
+              <>
+                <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
+                  Started · {lineage.started.length}
+                </div>
+                {lineage.started.map((l) => (
+                  <LinkRow key={l.id} link={l} id={l.target} now={now} relationship="Thread it started" />
+                ))}
+              </>
+            )}
+            {lineage.messaged.length > 0 && (
+              <>
+                <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
+                  Messaged · {lineage.messaged.length}
+                </div>
+                {lineage.messaged.map((l) => (
+                  <LinkRow key={l.id} link={l} id={l.target} now={now} relationship="Thread it messaged" />
                 ))}
               </>
             )}
