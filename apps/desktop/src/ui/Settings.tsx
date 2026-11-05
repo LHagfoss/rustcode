@@ -453,7 +453,7 @@ function OrchestrationGroup() {
       <Row
         title="Threads can start and message other threads"
         reset={orchestration ? undefined : () => setOrchestration(SETTINGS_DEFAULTS.orchestration)}
-        subtitle="An agent can list and read threads, message one in this project, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow."
+        subtitle="An agent can list and read threads, message one in this project, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow. A thread it starts gets the lower of this thread's access and Default access, so it is never given more than the thread that started it."
       >
         <Switch
           label="Threads can start and message other threads"
