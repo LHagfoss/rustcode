@@ -26,7 +26,6 @@ import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
-import { isActive } from "../state/orchestration";
 import {
   refreshSessions,
   repairThread,
@@ -502,16 +501,7 @@ export function ChatView() {
     doc.setProperty("--rc-toast-top", `${Math.round(r.top + HEADER_HEIGHT + 8)}px`);
   }, [isNew, stackHeight, width, height]);
   const ownRequest = thread?.permissions[0];
-  // Nothing of its own waiting: a thread this one started may be, and can be answered from here.
-  const askingLink = useApp((s) =>
-    thread && !ownRequest
-      ? s.links.links.find(
-          (l) => l.orchestrator === thread.id && isActive(l.state) && s.threads[l.target]?.permissions.length,
-        )
-      : undefined,
-  );
-  const childRequest = useApp((s) => (askingLink ? s.threads[askingLink.target]?.permissions[0] : undefined));
-  const request = ownRequest ?? childRequest;
+  const request = ownRequest;
   const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   // The lane's gutter is `px-3 sm:px-5` on the row itself, the same classes the transcript's rows use,
@@ -586,8 +576,7 @@ export function ChatView() {
         {request && (
           <AttentionCard
             request={request}
-            from={ownRequest ? undefined : askingLink?.targetTitle}
-            pending={ownRequest ? (thread?.permissions.filter((p) => !p.question).length ?? 1) : 1}
+            pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
           />
         )}
         <Composer thread={thread} compact={width < 600} />
