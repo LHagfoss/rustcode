@@ -1,9 +1,9 @@
 // The composer's meters, after UsageCapsule.swift and PlanUsageMeter.swift:
 // a small ring filling as the context window fills, and the plan's
 // shortest window (5-hour) as a short bar with the percentage left. Clicking
-// the ring opens the context inspector; hovering the bar opens every plan
-// window at once. They read the store themselves: the composer does not
-// re-render for usage.
+// the ring opens the context inspector; clicking the bar opens Settings' Usage
+// page; hovering the bar opens every plan window at once. They read the store
+// themselves: the composer does not re-render for usage.
 
 import { HoverCard } from "radix-ui";
 import {
@@ -18,6 +18,7 @@ import type { SessionUsage } from "../acp/types";
 import {
   harnessOf,
   onlyCachedPlan,
+  openSettings,
   refreshPlanCache,
   refreshPlanUsage,
   shownPlan,
@@ -208,11 +209,14 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
  * plans call or another thread on that harness, marked with its age. (Claude
  * Code's limits answer null: only the plans call can read its Keychain.) The
  * numbers refresh on hover, on a turn's end, and from the app's three-minute
- * poll, so a new thread knows the limits before its first message.
+ * poll, so a new thread knows the limits before its first message. Clicking the
+ * meter opens Settings' Usage page, the app's own page for it now that the
+ * sidebar's footer no longer carries a button.
  */
 export function PlanMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
   const harness = useApp((s) => harnessOf(s, threadId));
+  const usageOpen = useApp((s) => s.settings === "usage");
   const cached = useApp((s) => (harness ? s.planCache[harness] : onlyCachedPlan(s.planCache)));
   const { plan, cached: fromCache } = shownPlan(own, cached);
   const shown = plan ? shownWindow(plan) : undefined;
@@ -234,8 +238,10 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
       <HoverCard.Trigger asChild>
         <button
           type="button"
-          aria-label={`Plan usage: ${left}% left of the ${windowTitle(shown)} window`}
-          className="flex h-[30px] cursor-default items-center gap-1.5 rounded-full px-2 hover:bg-fill data-[state=open]:bg-fill"
+          aria-label={`Plan usage: ${left}% left of the ${windowTitle(shown)} window. Opens Usage in Settings`}
+          aria-pressed={usageOpen}
+          onClick={() => openSettings(usageOpen ? null : "usage")}
+          className="flex h-[30px] cursor-pointer items-center gap-1.5 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
         >
           <span className="h-[5px] w-4 overflow-hidden rounded-full bg-fg-faint">
             <span
@@ -287,6 +293,8 @@ function PlanCard({ plan, cached }: { plan: PlanUsage; cached?: boolean }) {
           {cached ? `Numbers from ${age}` : `Updated ${age}`}
         </span>
       )}
+      {/* The meter's tooltip says what a click does; the card is the meter's tooltip. */}
+      <span className="px-0.5 text-caption text-fg-faint">Click to open Usage in Settings</span>
     </div>
   );
 }

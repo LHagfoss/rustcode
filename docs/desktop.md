@@ -303,7 +303,9 @@ composer's keys stay outside the table.
   with the percentage left. Clicking the ring opens the context inspector:
   a stacked bar and each category's tokens from the `usage_update`'s
   `_meta.rustcode.context` (the conversation in accent shades, the fixed
-  overhead in greys), then the thread's in/out/cached totals. Hovering the
+  overhead in greys), then the thread's in/out/cached totals. Clicking the
+  bar opens Settings › Usage (the page's entry in the app now that the
+  sidebar's footer has no Usage button). Hovering the
   bar opens every window at once with a bar, quarter ticks and the time to
   its reset. The plan numbers refresh on hover, every 5 minutes while the
   app is in front and just after a window resets; a failed refresh keeps
@@ -379,9 +381,11 @@ composer's keys stay outside the table.
   `_rustcode/threads/search`) adds threads whose messages match, with the
   matching words under the title.
   Threads another thread started nest under it.
-  Settings is the gear in the top row, after Hide sidebar and New thread
-  (in the header's cluster while the sidebar is hidden); the project is
-  chosen per thread in the composer's footer.
+  The toolbar's row carries Hide sidebar, New thread, Settings and, when
+  the project has them, Pull requests, clear of the traffic lights; the
+  header's cluster holds Show sidebar, New thread and Settings while the
+  sidebar is hidden. Settled alone sits at the foot, above the update row;
+  the project is chosen per thread in the composer's footer.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
   lights' line, 14 px past the zoom button (x 92; the button ends at x 78),
   the gap the SwiftUI app leaves (`src/ui/Titlebar.tsx`); in full screen,
