@@ -159,11 +159,11 @@ mode and subagents never get any of them. Each call is forwarded as today:
 | `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
 | `read_session` | `{ session_id, last_turns?: 1..10, offset?: bytes }` (default 3 turns, offset 0) | `{ session_id, title, status, project, offset, text, next_offset?, complete }`: the rendered answer as text, one page at a time (16 KiB); when `next_offset` is present, pass it as `offset` for the rest. Pages join with nothing lost or repeated, cut on a UTF-8 character boundary. Any project's thread |
 
-| `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the model and effort the thread actually runs, and the approval card shows harness · model · effort |
+| `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, access, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the access, model and effort the thread actually runs, and the approval card shows harness · model · effort |
 | `message_session` | M1 | M1 |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
-| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
+| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, access, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
 Checked in the engine before anything is sent (`validate`): `prompt` and
 `message` are required and at most 32 KiB; `title` at most 200 characters;
@@ -194,6 +194,27 @@ loop — to a thread that already works for the caller, directly or further up �
 is refused; the user can stop any link;
 nothing starts without the user's approval (*Allow for This Thread* / *Allow
 Once* / *Don't Allow*).
+
+### A delegated thread's access
+
+A thread started by an agent runs at `effectiveMode(parentAccess, defaultAccess)`
+(`state/permissions.ts`): the lower of the access of the thread that started it
+and Settings › General › Default access, which is what a new thread would get
+anyway. So a thread at Ask or Auto-edit never hands out Full access, whatever
+the default is, and the cap holds at every depth — a grandchild is capped by its
+own parent, which is already capped by the thread above it. The app sets it
+before the child's first turn (`newThread` in `state/host.ts`), and it is stored
+for that thread like the composer's own choice, so changing the default later
+does not move it.
+
+- The approval card says the access the new thread will run at, and
+  `start_session` / `fan_out` answer with `access`, so an agent is not misled
+  about what it started. `configure_session` reports it and never changes it.
+- A person can still raise a child above its parent in that child's own
+  composer (the shield under its message box): that is the user's explicit
+  choice, not an agent asking for more. Lowering a parent later leaves the
+  children it already started as they were — the grant was made when they
+  started, as with every other grant in the link book.
 
 ## Waking a parent thread
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionRequest } from "../acp/types";
-import { autoAnswer, delegationAllowed, parsePermissionMode } from "./permissions";
+import { autoAnswer, delegationAllowed, effectiveMode, parsePermissionMode } from "./permissions";
 
 const request = (toolKind: string, extra: Partial<PermissionRequest> = {}): PermissionRequest => ({
   rpcId: 1,
@@ -95,5 +95,35 @@ describe("delegationAllowed for managing threads", () => {
     expect(delegationAllowed("full", "interrupt")).toBe(true);
     expect(delegationAllowed("full", "configure")).toBe(true);
     expect(delegationAllowed("full", "transfer")).toBe(true);
+  });
+});
+
+describe("effectiveMode", () => {
+  const modes = ["ask", "edits", "full"] as const;
+
+  test("a delegated thread never runs broader than the thread that started it", () => {
+    const rank = { ask: 0, edits: 1, full: 2 };
+    for (const parent of modes) {
+      for (const requested of modes) {
+        const mode = effectiveMode(parent, requested);
+        // The lower of the two, whichever side it comes from.
+        expect(rank[mode]).toBe(Math.min(rank[parent], rank[requested]));
+        // And never above the parent, which is the rule that matters.
+        expect(rank[mode]).toBeLessThanOrEqual(rank[parent]);
+      }
+    }
+  });
+
+  test("the parent's limit wins when Default access is broader", () => {
+    expect(effectiveMode("ask", "full")).toBe("ask");
+    expect(effectiveMode("ask", "edits")).toBe("ask");
+    expect(effectiveMode("edits", "full")).toBe("edits");
+  });
+
+  test("a broader parent keeps a narrower default, and its own mode at most", () => {
+    expect(effectiveMode("full", "ask")).toBe("ask");
+    expect(effectiveMode("full", "edits")).toBe("edits");
+    expect(effectiveMode("full", "full")).toBe("full");
+    expect(effectiveMode("edits", "edits")).toBe("edits");
   });
 });

@@ -17,6 +17,21 @@ export function parsePermissionMode(value: unknown): PermissionMode {
   return value === "edits" || value === "full" ? value : "ask";
 }
 
+/** How much each mode allows, narrowest first. */
+const RANK: Record<PermissionMode, number> = { ask: 0, edits: 1, full: 2 };
+
+/**
+ * What a delegated thread may do without asking: `requested`, never broader than
+ * the thread that started it. Starting a thread hands work somewhere the agent
+ * cannot see, so it may not hand out more than its own limit (`docs/orchestrator.md`).
+ *
+ * Only the app makes this call. A person raising a child in that child's own
+ * composer (`setPermissionMode`) is the user's own choice and is not capped.
+ */
+export function effectiveMode(parent: PermissionMode, requested: PermissionMode): PermissionMode {
+  return RANK[requested] <= RANK[parent] ? requested : parent;
+}
+
 /** Tool kinds "Auto-edit" lets through: reading and editing files, not running commands. */
 const EDIT_KINDS = new Set(["read", "edit", "move", "search", "think", "fetch"]);
 
