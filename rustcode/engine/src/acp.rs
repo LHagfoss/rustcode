@@ -187,8 +187,8 @@ fn session_info(
         "workspaceUnknown".into(),
         serde_json::json!(workspace_unknown),
     );
-    if let Some(created_at_ms) =
-        crate::config::load_session_metadata(&session_id).map(|metadata| metadata.created_at_ms)
+    let metadata = crate::config::load_session_metadata(&session_id);
+    if let Some(created_at_ms) = metadata.as_ref().map(|metadata| metadata.created_at_ms)
         && let Some(timestamp) = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
             created_at_ms.min(i64::MAX as u64) as i64,
         )
@@ -229,6 +229,20 @@ fn session_info(
     extra = crate::worktrees::merge_rustcode_meta(Some(extra), "pinned", pinned.into());
     if let Some(worktree) = crate::worktrees::list_meta(&session_id) {
         extra = crate::worktrees::merge_rustcode_meta(Some(extra), "worktree", worktree);
+    }
+    // The thread an agent started this one from, kept in its own metadata so a
+    // pruned link cannot turn it into a top-level thread (`thread_parent.rs`).
+    if let Some(parent) = metadata.and_then(|metadata| metadata.parent) {
+        let mut value = serde_json::Map::new();
+        if let Some(id) = parent.id {
+            value.insert("sessionId".into(), serde_json::json!(id));
+        }
+        if let Some(title) = parent.title {
+            value.insert("title".into(), serde_json::json!(title));
+        }
+        if !value.is_empty() {
+            extra = crate::worktrees::merge_rustcode_meta(Some(extra), "parent", value.into());
+        }
     }
     info.meta = Some(extra);
     info
@@ -1237,6 +1251,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
     // Servers start on the session's first turn, not here: the app attaches
     // an engine for chats that may never run one (#2503).
     crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
+    // The thread above each delegated one, recorded once for threads older than
+    // the record, before the first session list is read (`thread_parent.rs`).
+    // After that first run it reads one `store_meta` row and returns.
+    crate::thread_parent::ensure_ready();
     crate::thread_index::warm();
     // Metadata for `rustcode usage` and `rustcode data query`; a background
     // backfill of the existing threads runs once, on first open.
@@ -1346,6 +1364,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         server.client_smart_ui.load(Ordering::Relaxed),
                     );
                     let session_id = state.active_session_id.clone();
+                    // Who started this thread, from the `_meta.rustcode.parent` its
+                    // caller gave: kept in the thread's own metadata, not only in
+                    // the link book the app prunes (`thread_parent.rs`).
+                    if let Some(parent) = crate::thread_parent::requested(request.meta.as_ref()) {
+                        crate::thread_parent::record(&session_id, &parent);
+                    }
                     state.preview_client = preview::preview_client_for(
                         server.client_has_preview.load(Ordering::Relaxed),
                         &_connection,
@@ -3280,6 +3304,34 @@ mod tests {
             ..meta
         };
         assert!(session_info(&untimed, None).updated_at.is_some());
+    }
+
+    #[test]
+    fn session_info_carries_the_parent_recorded_in_the_thread() {
+        let id = crate::config::create_detached_session();
+        let directory = crate::config::get_active_session_dir(&id).expect("session dir");
+        crate::config::save_session_parent(
+            &id,
+            &rustcode_session::SessionParent {
+                id: Some("parent-session".into()),
+                title: Some("Update the sidebar".into()),
+            },
+        );
+        let meta = crate::config::SessionMeta {
+            path: directory.join("history.json"),
+            title: "Research: the sidebar".into(),
+            when: "2026-09-24T00:00:00Z".into(),
+            message_count: 2,
+            workspace_cwd: None,
+        };
+        let info = session_info(&meta, None);
+        let parent = info
+            .meta
+            .and_then(|meta| meta.get("rustcode").cloned())
+            .and_then(|rustcode| rustcode.get("parent").cloned())
+            .expect("parent meta");
+        assert_eq!(parent["sessionId"], "parent-session");
+        assert_eq!(parent["title"], "Update the sidebar");
     }
 
     #[test]

@@ -160,6 +160,13 @@ export interface SessionSummary {
   status?: ThreadStatus;
   /** Pinned in the engine (`_meta.rustcode.pinned`). */
   pinned?: boolean;
+  /**
+   * The thread an agent started this one from (`_meta.rustcode.parent`), kept
+   * in the thread's own metadata: the link book prunes old links, this does
+   * not. `id` is absent for a thread an older release started, where only the
+   * parent's title was recovered from the first message.
+   */
+  parent?: { id?: string; title?: string };
 }
 
 export function parseSessionList(result: Json): { sessions: SessionSummary[]; nextCursor?: string } {
@@ -173,11 +180,15 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
     const meta = obj(e?._meta);
     const rc = rustcodeMeta(e);
     const harness = rc?.harness;
+    const parent = obj(rc?.parent);
+    const parentId = str(parent?.sessionId);
+    const parentTitle = str(parent?.title);
     sessions.push({
       worktree: parseWorktree(rc?.worktree),
       status: parseStatus(rc?.status),
       pinned: bool(rc?.pinned),
       account: str(rc?.account),
+      parent: parentId || parentTitle ? { id: parentId, title: parentTitle } : undefined,
       id,
       cwd: str(e?.cwd) ?? "",
       title: str(e?.title),

@@ -685,6 +685,21 @@ pub struct SessionMetadata {
     /// The session's last compaction; absent until it first compacts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<SessionCompaction>,
+    /// The thread an agent started this one from, kept here so pruning the
+    /// link book never forgets it (`docs/orchestrator.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<SessionParent>,
+}
+
+/// The thread above a delegated one (`start_session`, `fan_out`). `id` is
+/// absent for a thread an older release started, where a one-time pass could
+/// only recover the parent's title from the first message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionParent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// What the session's last compaction did and how many it has run, so the
@@ -726,6 +741,7 @@ impl SessionMetadata {
             yolo: None,
             model: None,
             compaction: None,
+            parent: None,
         }
     }
 }
@@ -1203,7 +1219,7 @@ impl SessionStore {
 
     fn prune_sessions(&self) {
         let mut targets = self
-            .discovered_session_paths()
+            .session_history_paths()
             .into_iter()
             .map(|path| session_storage_root(&path))
             .collect::<Vec<_>>();
@@ -1255,7 +1271,7 @@ impl SessionStore {
     }
 
     pub fn sorted_session_paths(&self) -> Vec<PathBuf> {
-        let mut paths = self.discovered_session_paths();
+        let mut paths = self.session_history_paths();
         paths.sort_by(|left, right| {
             session_sort_key(right)
                 .cmp(&session_sort_key(left))
@@ -1397,6 +1413,26 @@ impl SessionStore {
         })
     }
 
+    /// Record the thread an agent started this one from. Written once, at
+    /// `session/new`, and kept for as long as the thread exists: the link book
+    /// prunes old links, this does not.
+    pub fn save_session_parent(
+        &self,
+        session_id: &str,
+        parent: SessionParent,
+    ) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.parent.as_ref() != Some(&parent);
+            metadata.parent = Some(parent);
+            changed
+        })
+    }
+
+    /// The thread that started this one, if it was ever recorded.
+    pub fn load_session_parent(&self, session_id: &str) -> Option<SessionParent> {
+        self.load_session_metadata(session_id)?.parent
+    }
+
     /// Record the session's last compaction.
     pub fn save_session_compaction(
         &self,
@@ -1486,7 +1522,7 @@ impl SessionStore {
         scope: &SessionScope,
         mut require: impl FnMut(&SessionMeta) -> bool,
     ) -> Result<(Vec<SessionMeta>, Option<String>), ()> {
-        let mut paths = self.discovered_session_paths();
+        let mut paths = self.session_history_paths();
         paths.sort_by(|left, right| {
             stable_session_sort_key(right).cmp(&stable_session_sort_key(left))
         });
@@ -1537,7 +1573,11 @@ impl SessionStore {
         }
     }
 
-    fn discovered_session_paths(&self) -> Vec<PathBuf> {
+    /// Every transcript file the store holds, in a stable order: the canonical
+    /// `threads/YYYY/MM/DD/<id>/history.json` layout, legacy `sessions/<id>/`
+    /// folders and legacy `sessions/<id>.json` files. A cheap listing for a pass
+    /// that reads only some of them, instead of `list_sessions` parsing all.
+    pub fn session_history_paths(&self) -> Vec<PathBuf> {
         let sessions = threads_dir(&self.root);
         #[cfg(test)]
         read_metrics::record_directory_scan();
@@ -2598,6 +2638,35 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn the_starting_thread_is_recorded_in_session_metadata() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "018d6b28-0000-7000-8000-000000000006";
+
+        assert_eq!(store.load_session_parent(id), None);
+        let parent = SessionParent {
+            id: Some("018d6b28-0000-7000-8000-000000000007".into()),
+            title: Some("Research the sidebar".into()),
+        };
+        store
+            .save_session_parent(id, parent.clone())
+            .expect("record parent");
+        store.save_session_yolo(id, true).expect("record yolo");
+        assert_eq!(store.load_session_parent(id), Some(parent));
+        // The rest of the metadata survives the write.
+        assert_eq!(store.load_session_yolo(id), Some(true));
+        // A title-only record is what the one-time pass leaves for an old thread.
+        let unknown = SessionParent {
+            id: None,
+            title: Some("my orchestrator app".into()),
+        };
+        store
+            .save_session_parent(id, unknown.clone())
+            .expect("record parent");
+        assert_eq!(store.load_session_parent(id), Some(unknown));
     }
 
     #[test]

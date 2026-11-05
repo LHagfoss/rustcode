@@ -549,7 +549,12 @@ composer's keys stay outside the table.
   `.worktree` and get the prompt as their first message, headed
   `From thread "<title>" (agent):`. A child the orchestrator did not name is
   named from the task's first words (`childTitle` in `src/lib/title.ts`), so
-  that header never becomes a thread title in the sidebar. Chips above the composer (state, open,
+  that header never becomes a thread title in the sidebar. The parent is also
+  recorded in the child's own metadata (`_meta.rustcode.parent`), so a pruned
+  link cannot turn it into a top-level row: it sits under its parent, or in
+  Settled once finished when the parent is gone, and only a child that works or
+  waits on you, or that you pinned or messaged, is a row of its own
+  (`state/topLevel.ts`, `docs/orchestrator.md`). Chips above the composer (state, open,
   stop), a *Working for* banner, sidebar badges. Stopping a thread stops the
   work it gave others, and theirs, in one cascade. A thread whose turn ended
   while the threads it handed work to still run says so instead of looking

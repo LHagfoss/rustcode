@@ -1022,6 +1022,8 @@ async function newThread(
     title?: string;
     task: string;
     worktree?: boolean;
+    /** The thread starting this one, recorded in the child's metadata. */
+    parent?: string;
     /** What the new thread may do without asking (`childMode`), fixed before the user is asked. */
     access: PermissionMode;
   },
@@ -1056,7 +1058,14 @@ const accessOf = (id: string): PermissionMode => permissionModeOf(useApp.getStat
 async function createThreadFor(
   project: string,
   harness: string,
-  options: { model?: string; effort?: string; account?: string | null; title: string; worktree?: boolean },
+  options: {
+    model?: string;
+    effort?: string;
+    account?: string | null;
+    title: string;
+    worktree?: boolean;
+    parent?: string;
+  },
 ): Promise<string> {
   const wantWorktree = (options.worktree ?? true) && !!useApp.getState().features.worktrees;
   try {
@@ -1067,6 +1076,7 @@ async function createThreadFor(
       model: options.model,
       effort: options.effort,
       title: options.title,
+      parent: options.parent,
       worktree: wantWorktree ? { repo: project, title: options.title } : undefined,
     });
   } catch (error) {
@@ -1079,6 +1089,7 @@ async function createThreadFor(
         model: options.model,
         effort: options.effort,
         title: options.title,
+        parent: options.parent,
       });
     }
     throw error;
@@ -1123,6 +1134,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
       title,
       task: call.prompt,
       access,
+      parent: caller.id,
       account: accountFor(caller, harness.id),
     });
   } catch (error) {
@@ -1189,6 +1201,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
         effort: h.effort,
         title: threadTitle,
         task: call.prompt,
+        parent: caller.id,
         access,
         account: accountFor(caller, h.id),
       });

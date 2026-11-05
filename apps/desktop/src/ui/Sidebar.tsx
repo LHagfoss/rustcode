@@ -123,6 +123,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
+import { type Placement, parentOf as parentOfThread, topLevel } from "../state/topLevel";
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
@@ -1603,17 +1604,42 @@ export function Sidebar() {
   }, [sessions, query, onlyProject, projectCwd, contentHits]);
 
   const links = useApp((s) => s.links.links);
-  // Threads another thread started (start_session, fan_out) sit under it.
-  const parentOf = useMemo(() => {
+  const messaged = useApp((s) => s.messaged);
+  // Where a thread an agent started goes: under the thread that started it, or
+  // in Settled when that parent is gone. Never a stray top-level row
+  // (state/topLevel.ts); the parent survives link pruning in the thread's own
+  // metadata.
+  const { place, parentOf } = useMemo(() => {
     const listed = new Set(filtered.map((s) => s.id));
-    const map: Record<string, string> = {};
-    for (const l of links) if (l.started && listed.has(l.orchestrator)) map[l.target] = l.orchestrator;
-    return map;
-  }, [links, filtered]);
+    const flagged = new Set(flags.split(" "));
+    const place = new Map<string, Placement>();
+    const parentOf = new Map<string, string>();
+    for (const s of filtered) {
+      const placement = topLevel(
+        {
+          id: s.id,
+          live:
+            flagged.has(`${s.id}:n`) ||
+            flagged.has(`${s.id}:w`) ||
+            s.status === "running" ||
+            s.status === "needs_input",
+          pinned: pinned.includes(s.id),
+          messaged: messaged[s.id] !== undefined,
+          parent: s.parent,
+        },
+        links,
+        listed,
+      );
+      place.set(s.id, placement);
+      const parent = parentOfThread(s, links);
+      if (placement === "nested" && parent) parentOf.set(s.id, parent);
+    }
+    return { place, parentOf };
+  }, [filtered, links, flags, pinned, messaged]);
   const childrenOf = useMemo(() => {
     const map: Record<string, SessionSummary[]> = {};
     for (const s of filtered) {
-      const parent = parentOf[s.id];
+      const parent = parentOf.get(s.id);
       if (parent) map[parent] = [...(map[parent] ?? []), s];
     }
     return map;
@@ -1654,12 +1680,16 @@ export function Sidebar() {
         ? pendingSummary(pending)
         : null;
     for (const s of filtered) {
-      if (parentOf[s.id]) continue;
+      if (parentOf.has(s.id)) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads marked Done (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
       const status = marks[s.id] ?? listed;
       const done = status === "done" || (status !== "review" && idleSettled(s.updatedAt, now));
+      // A child whose parent is gone has no row of its own: finished, it goes to
+      // Settled at once, however fresh, as if it left with its parent
+      // (state/topLevel.ts). A review mark keeps it where the user put it.
+      const gone = place.get(s.id) === "settled" && status !== "review";
       // A pinned thread always shows, whatever it is doing.
       // One list, each row saying what it does; only settled threads leave it.
       if (pinned.includes(s.id)) pins.push(s);
@@ -1667,6 +1697,7 @@ export function Sidebar() {
       else if (snoozed[s.id] && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`)) sleeping.push(s);
       // Folders already separate the work, so grouping by project has no Working section.
       else if (showWorking && !byProject && flagged.has(`${s.id}:w`)) working.push(s);
+      else if (gone) settled.push(s);
       else if (done && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`) && !isFresh(s.id))
         settled.push(s);
       else active.push(s);
@@ -1711,6 +1742,7 @@ export function Sidebar() {
     marks,
     finished,
     pinned,
+    place,
     parentOf,
     byProject,
     now,
@@ -1749,7 +1781,7 @@ export function Sidebar() {
     const linked = new Map(s.links.links.filter((l) => l.started).map((l) => [l.target, l.state] as const));
     return filtered
       .map((c) => {
-        if (!parentOf[c.id]) return "";
+        if (!parentOf.has(c.id)) return "";
         const info = childInfo(c.id, {
           status: statusOf(s, c.id),
           link: linked.get(c.id),

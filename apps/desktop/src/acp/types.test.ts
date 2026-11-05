@@ -60,13 +60,31 @@ describe("ACP types", () => {
           cwd: "/x",
           title: "T",
           updatedAt: "2026-11-02T10:23:56.100299+00:00",
-          _meta: { model: "chatgpt/gpt-6-luna", rustcode: { harness: "codex" } },
+          _meta: {
+            model: "chatgpt/gpt-6-luna",
+            rustcode: {
+              harness: "codex",
+              parent: { sessionId: "p", title: "Parent" },
+            },
+          },
+        },
+        {
+          sessionId: "old",
+          cwd: "/x",
+          title: "Older",
+          _meta: { rustcode: { parent: { title: "A parent that is gone" } } },
         },
         { cwd: "/no-id" },
       ],
     });
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]).toMatchObject({ id: "a", model: "chatgpt/gpt-6-luna", harness: "codex" });
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]).toMatchObject({
+      id: "a",
+      model: "chatgpt/gpt-6-luna",
+      harness: "codex",
+      parent: { id: "p", title: "Parent" },
+    });
+    expect(sessions[1]!.parent).toEqual({ id: undefined, title: "A parent that is gone" });
     expect(sessions[0]!.updatedAt).toBeGreaterThan(0);
   });
 
