@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseSessionUpdate, type SessionUpdate } from "../acp/types";
+import type { Link } from "./orchestration";
 import {
   agentStepLabel,
   appendSteer,
@@ -20,9 +21,11 @@ import {
   requeueSteers,
   shortAge,
   splitSubagentSteps,
+  startedLinks,
   stripHarnessMarkup,
   subagentOf,
   subagentTitle,
+  type TranscriptItem,
   thoughtHeadings,
   wakeTurn,
   workingLabel,
@@ -538,6 +541,66 @@ describe("checkCommands", () => {
     expect(checkCommands("git diff --check")).toEqual([]);
     expect(checkCommands("cat build/test.log")).toEqual([]);
     expect(checkCommands("bun --version")).toEqual([]);
+  });
+});
+
+describe("the threads a run of start_session calls started", () => {
+  const started = (target: string, message: string): Link => ({
+    id: `o/${target}`,
+    orchestrator: "o",
+    target,
+    orchestratorTitle: "Orchestrator",
+    targetTitle: target,
+    message,
+    state: "working",
+    started: true,
+    createdAt: 1,
+  });
+  const call = (id: string, input: Record<string, string>, output?: string): TranscriptItem => ({
+    kind: "tool",
+    id,
+    title: "start_session",
+    status: output ? "completed" : "in_progress",
+    input,
+    output,
+    diffs: [],
+  });
+  const targets = (items: TranscriptItem[], links: Link[]) =>
+    [...startedLinks(items, links)].map(([id, link]) => [id, link.target]);
+
+  test("a call that answered names its thread; one still starting matches its prompt", () => {
+    const links = [started("t1", "Map the code"), started("t2", "Write tests")];
+    const items = [
+      call("c1", { prompt: "Map the code" }, '{"session_id":"t1","link_id":"o/t1"}'),
+      call("c2", { prompt: "Write tests" }),
+    ];
+    expect(targets(items, links)).toEqual([
+      ["c1", "t1"],
+      ["c2", "t2"],
+    ]);
+  });
+
+  test("two calls that asked the same thing take one link each, newest first", () => {
+    const links = [started("t1", "Map the code"), started("t2", "Map the code")];
+    const items = [call("c1", { prompt: "Map the code" }), call("c2", { prompt: "Map the code" })];
+    expect(targets(items, links)).toEqual([
+      ["c1", "t2"],
+      ["c2", "t1"],
+    ]);
+  });
+
+  test("a call whose link is gone is left out, and another tool never matches one", () => {
+    const links = [started("t1", "Map the code")];
+    expect(targets([call("c1", { prompt: "Something else" })], links)).toEqual([]);
+    const messaged: TranscriptItem = {
+      kind: "tool",
+      id: "c2",
+      title: "message_session",
+      status: "completed",
+      input: { prompt: "Map the code" },
+      diffs: [],
+    };
+    expect(targets([messaged], links)).toEqual([]);
   });
 });
 

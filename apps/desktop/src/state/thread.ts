@@ -14,7 +14,8 @@ import type {
 } from "../acp/types";
 import { unwrapShell } from "../lib/command";
 import type { ComposeExtras, SentAttachment } from "./compose";
-import { displayTool, orchestrationTool, usefulSummary } from "./toolNames";
+import type { Link } from "./orchestration";
+import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "./toolNames";
 
 export type TranscriptItem =
   | {
@@ -981,6 +982,40 @@ export function agentStepLabel(item: ToolItem): string {
     return query ? `Searching for ${query}` : "Searching the files";
   }
   return stepLabel(item);
+}
+
+/**
+ * The thread each `start_session` call started, by call id. A call that has not
+ * answered yet is matched by the prompt it asked for: the link exists before
+ * the answer does, so its row knows the thread while the thread still starts.
+ */
+export function startedLinks(items: readonly TranscriptItem[], links: readonly Link[]): Map<string, Link> {
+  const out = new Map<string, Link>();
+  const claimed = new Set<string>();
+  const starts = items.filter(
+    (item): item is ToolItem => item.kind === "tool" && orchestrationTool(item.title) === "start_session",
+  );
+  // The calls that answered first, so a prompt match cannot take a link whose call already names it.
+  for (const item of starts) {
+    const target = sessionIdOf(item.output);
+    const link = target === undefined ? undefined : links.find((l) => l.target === target);
+    if (!link) continue;
+    out.set(item.id, link);
+    claimed.add(link.id);
+  }
+  for (const item of starts) {
+    if (out.has(item.id)) continue;
+    const input =
+      item.input && typeof item.input === "object" && !Array.isArray(item.input) ? item.input : {};
+    const prompt = typeof input.prompt === "string" ? input.prompt : "";
+    if (!prompt) continue;
+    // The newest unclaimed one: a prompt repeated later takes the later link.
+    const link = [...links].reverse().find((l) => l.started && l.message === prompt && !claimed.has(l.id));
+    if (!link) continue;
+    out.set(item.id, link);
+    claimed.add(link.id);
+  }
+  return out;
 }
 
 /** A step's one-line label: `Running <command>` for a shell, else its summary or title. */

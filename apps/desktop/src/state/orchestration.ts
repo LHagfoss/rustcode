@@ -46,6 +46,42 @@ export const LINK_LABEL: Record<LinkState, string> = {
 export const isActive = (state: LinkState) =>
   state === "queued" || state === "working" || state === "needs_user";
 
+/** How a group of links is doing, for the card that holds them. */
+export interface LinkCounts {
+  working: number;
+  needs: number;
+  failed: number;
+}
+
+export function linkCounts(states: LinkState[]): LinkCounts {
+  return {
+    // A queued link has not started yet and reads as working, as its own row does.
+    working: states.filter((s) => s === "working" || s === "queued").length,
+    needs: states.filter((s) => s === "needs_user").length,
+    failed: states.filter((s) => s === "failed").length,
+  };
+}
+
+/** What a group of links says after its count: `2 working · 1 needs you`, `2 failed`, `done`. */
+export function linkGroupStatus(counts: LinkCounts): string {
+  const parts = [
+    counts.working ? `${counts.working} working` : "",
+    counts.needs ? `${counts.needs} ${counts.needs === 1 ? "needs" : "need"} you` : "",
+  ].filter(Boolean);
+  if (parts.length) return parts.join(" · ");
+  return counts.failed ? `${counts.failed} failed` : "done";
+}
+
+/**
+ * The links the strip above the composer shows: everything still working,
+ * because that is the live control (Stop lives there), and a settled link with
+ * no row of its own in the transcript — a thread this one started reads there,
+ * a thread it only messaged reads here.
+ */
+export function stripLinks(links: Link[], shown: ReadonlySet<string>): Link[] {
+  return links.filter((link) => isActive(link.state) || !shown.has(link.target));
+}
+
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
   /** `<orchestrator>/<n>`. */

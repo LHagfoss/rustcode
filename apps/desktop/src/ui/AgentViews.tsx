@@ -4,13 +4,23 @@
 // pill over the composer while agents work. RustCode's own agents
 // (`spawn_agent`) take the same row, fed by `_rustcode/agents`.
 
-import { Bot, Check, ChevronRight, CircleCheck, CircleX, Minus, PanelRight, X } from "lucide-react";
+import {
+  Bot,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CircleX,
+  Minus,
+  PanelRight,
+  X,
+} from "lucide-react";
 import { HoverCard } from "radix-ui";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
-import { stateOf } from "../state/host";
-import { isActive, type Link, type LinkState } from "../state/orchestration";
+import { dismissLink, stateOf } from "../state/host";
+import { isActive, type Link, type LinkState, linkCounts, linkGroupStatus } from "../state/orchestration";
 import { agentHistory, peekThread, selectThread, useApp } from "../state/store";
 import {
   agentStepLabel,
@@ -20,6 +30,7 @@ import {
   subagentOf,
   subagentTitle,
   type TranscriptItem,
+  workingLabel,
 } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
 import { Markdown } from "./Markdown";
@@ -284,6 +295,10 @@ export function ThreadAgentRow({
   const state = useApp((s) => stateOf(s, link));
   const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
   const active = isActive(state);
+  // What the thread does now, when this one has it open: its live line is the row's own step.
+  const step = useApp((s) =>
+    active && s.threads[link.target]?.running ? workingLabel(s.threads[link.target]!.items) : undefined,
+  );
   const now = useNow(active);
   const harness = link.harness ?? session?.harness;
   const meta = useAgentMeta(harness, session?.model ?? model);
@@ -295,11 +310,13 @@ export function ThreadAgentRow({
       harness={harness}
       state={LINK_AGENT_STATE[state]}
       title={title}
-      detail={active ? firstLine(link.message) : firstLine(link.answer)}
+      // The prompt is in the tip: its first line is boilerplate, and the title already says the job.
+      detail={active ? (step ?? "Working") : firstLine(stripHarnessMarkup(link.answer ?? ""))}
       elapsed={elapsedMs === undefined ? undefined : formatDuration(Math.floor(elapsedMs / 1000) * 1000)}
       label={`Open ${title}`}
       tooltip={<AgentTip title={title} meta={meta} task={link.message} />}
       onClick={() => selectThread(link.target)}
+      showWord={LINK_AGENT_STATE[state] !== "working"}
       action={
         <>
           <Tooltip label="Show beside this thread">
@@ -417,6 +434,120 @@ export function SubagentRow({
 }
 
 /**
+ * What a group card says: the mark of what runs it, `2 agents · 2 working`,
+ * how long, and a chevron. Shared by the transcript's agent and thread groups
+ * and by the strip above the composer, so a group reads the same wherever it is.
+ */
+export function AgentGroupHeader({
+  harness,
+  state,
+  label,
+  status,
+  elapsedMs,
+  open,
+  chevron = "fold",
+}: {
+  harness?: string;
+  state: AgentState;
+  /** `2 agents`, `3 threads`: the count and what it counts. */
+  label: string;
+  /** What follows the count after its `·`: `2 working · 1 needs you`, `done`. */
+  status: string;
+  elapsedMs?: number;
+  open: boolean;
+  /** A fold turns its chevron as it opens; a popover's points down. */
+  chevron?: "fold" | "down";
+}) {
+  return (
+    <>
+      <AgentAvatar harness={harness} state={state} />
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="shrink-0 font-medium text-fg text-sub">{label}</span>
+        <span
+          className={cx(
+            "min-w-0 truncate text-caption",
+            state === "working"
+              ? "text-accent"
+              : state === "needs"
+                ? "text-warning"
+                : state === "failed"
+                  ? "text-danger"
+                  : "text-fg-muted",
+          )}
+        >
+          · {status}
+        </span>
+      </span>
+      {elapsedMs !== undefined && elapsedMs >= 1000 && (
+        <span className="shrink-0 text-caption text-fg-faint tabular">
+          {formatDuration(Math.floor(elapsedMs / 1000) * 1000)}
+        </span>
+      )}
+      {chevron === "down" ? (
+        <ChevronDown size={14} aria-hidden className="shrink-0 text-fg-faint group-hover:text-fg" />
+      ) : (
+        <ChevronRight
+          size={14}
+          aria-hidden
+          className={cx(
+            "shrink-0 text-fg-faint transition-transform duration-200 group-hover:text-fg",
+            open && "rotate-90",
+          )}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * The soft card a group of agents or threads sits in: one header toggles it,
+ * with the same insets as the rows, so opening it does not move the header.
+ */
+export function AgentGroupCard({
+  harness,
+  state,
+  label,
+  status,
+  elapsedMs,
+  open,
+  onToggle,
+  faint,
+  children,
+}: {
+  harness?: string;
+  state: AgentState;
+  label: string;
+  status: string;
+  elapsedMs?: number;
+  open: boolean;
+  onToggle: () => void;
+  /** Dim it while nothing in it runs and it is folded away. */
+  faint?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cx("rounded-xl border border-border bg-surface p-1", faint && "opacity-80")}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle"
+      >
+        <AgentGroupHeader
+          harness={harness}
+          state={state}
+          label={label}
+          status={status}
+          elapsedMs={elapsedMs}
+          open={open}
+        />
+      </button>
+      {open && <div className="rc-expand flex flex-col gap-0.5">{children}</div>}
+    </div>
+  );
+}
+
+/**
  * Two or more subagents a turn started together, as one soft card: a header of
  * stacked marks, `3 agents · 2 working` and how long; open, each agent's own
  * row inside it.
@@ -454,47 +585,84 @@ export function SubagentGroupRow({
   const elapsedMs = Number.isFinite(started) ? (working ? now : ended || now) - started : undefined;
   const status = working ? `${working} working` : failed ? `${failed} failed` : "done";
   return (
-    <div className={cx("rounded-xl border border-border bg-surface p-1", !working && !open && "opacity-80")}>
+    <AgentGroupCard
+      harness={parentHarness}
+      state={groupState}
+      label={`${items.length} agents`}
+      status={status}
+      elapsedMs={elapsedMs}
+      open={open}
+      onToggle={onToggle}
+      faint={!working && !open}
+    >
+      {items.map((item) => (
+        <SubagentRow key={item.id} item={item} steps={stepsOf(item.id)} threadId={threadId} />
+      ))}
+    </AgentGroupCard>
+  );
+}
+
+/** Take a settled thread's row out of the transcript: it dismisses the link. */
+function RemoveLink({ link }: { link: Link }) {
+  return (
+    <Tooltip label="Remove">
       <button
         type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle"
+        aria-label={`Remove ${link.targetTitle}`}
+        onClick={() => dismissLink(link.id)}
+        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
       >
-        <AgentAvatar harness={parentHarness} state={groupState} />
-        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span className="shrink-0 font-medium text-fg text-sub">{items.length} agents</span>
-          <span
-            className={cx(
-              "min-w-0 truncate text-caption",
-              working ? "text-accent" : failed ? "text-danger" : "text-fg-muted",
-            )}
-          >
-            · {status}
-          </span>
-        </span>
-        {elapsedMs !== undefined && elapsedMs >= 1000 && (
-          <span className="shrink-0 text-caption text-fg-faint tabular">
-            {formatDuration(Math.floor(elapsedMs / 1000) * 1000)}
-          </span>
-        )}
-        <ChevronRight
-          size={14}
-          aria-hidden
-          className={cx(
-            "shrink-0 text-fg-faint transition-transform duration-200 group-hover:text-fg",
-            open && "rotate-90",
-          )}
-        />
+        <X size={12} strokeWidth={2.5} />
       </button>
-      {open && (
-        <div className="rc-expand flex flex-col gap-0.5">
-          {items.map((item) => (
-            <SubagentRow key={item.id} item={item} steps={stepsOf(item.id)} threadId={threadId} />
-          ))}
-        </div>
-      )}
-    </div>
+    </Tooltip>
+  );
+}
+
+/**
+ * The threads a turn started, read in the transcript. While one works the strip
+ * above the composer is the live place for it (Stop lives there), so a row
+ * appears here once its thread settles; two or more read as one card, the same
+ * card subagents use.
+ */
+export function StartedThreadsRow({
+  links,
+  open,
+  onToggle,
+}: {
+  links: Link[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const states = useApp((s) => links.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
+  // Only what the strip no longer shows: a working thread is its row up there.
+  const settled = links.flatMap((link, i) => (isActive(states[i]!) ? [] : [{ link, state: states[i]! }]));
+  if (!settled.length) return null;
+  const row = (link: Link) => (
+    <ThreadAgentRow key={link.id} link={link} action={<RemoveLink link={link} />} />
+  );
+  if (settled.length === 1) return row(settled[0]!.link);
+  const counts = linkCounts(settled.map((s) => s.state));
+  const groupState: AgentState = counts.working
+    ? "working"
+    : counts.needs
+      ? "needs"
+      : counts.failed
+        ? "failed"
+        : "done";
+  const started = Math.min(...settled.map((s) => s.link.createdAt));
+  const ended = Math.max(...settled.map((s) => s.link.settledAt ?? 0));
+  return (
+    <AgentGroupCard
+      state={groupState}
+      label={`${settled.length} threads`}
+      status={linkGroupStatus(counts)}
+      elapsedMs={(ended || started) - started}
+      open={open}
+      onToggle={onToggle}
+      faint={!counts.working && !open}
+    >
+      {settled.map((s) => row(s.link))}
+    </AgentGroupCard>
   );
 }
 
