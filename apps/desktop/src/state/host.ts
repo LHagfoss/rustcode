@@ -14,6 +14,7 @@ import { Method, projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
+import { childAccountOn } from "./logins";
 import {
   activeDescendants,
   activityOf,
@@ -876,6 +877,23 @@ function harnessFor(name: string | undefined): { id: string; name: string } | Fa
   return { id: h.id, name: h.name };
 }
 
+/**
+ * The account a delegated thread runs on: the parent's own when it runs on the
+ * same harness, else the one a new thread would start on (a signed-out default
+ * login is not one; `docs/harnesses.md`).
+ */
+function accountFor(caller: RuleThread, harness: string): string | null {
+  const s = useApp.getState();
+  return childAccountOn(
+    s.harnesses?.harnesses.find((h) => h.id === harness),
+    {
+      harness: caller.harness,
+      account: s.threads[caller.id]?.harness?.account ?? s.sessions.find((x) => x.id === caller.id)?.account,
+    },
+    s.signedOutLogins,
+  );
+}
+
 const usableIds = () => {
   const snapshot = useApp.getState().harnesses;
   return (
@@ -944,7 +962,14 @@ function projectFor(caller: RuleThread, asked: string | undefined): string | Fai
 async function newThread(
   project: string,
   harness: string,
-  options: { model?: string; effort?: string; title?: string; task: string; worktree?: boolean },
+  options: {
+    model?: string;
+    effort?: string;
+    account?: string | null;
+    title?: string;
+    task: string;
+    worktree?: boolean;
+  },
 ): Promise<string> {
   // The orchestrator names it when it gave a title, and the task itself does otherwise: a session
   // made without one takes the message it is sent as its title, and the sidebar then shows
@@ -959,13 +984,14 @@ async function newThread(
 async function createThreadFor(
   project: string,
   harness: string,
-  options: { model?: string; effort?: string; title: string; worktree?: boolean },
+  options: { model?: string; effort?: string; account?: string | null; title: string; worktree?: boolean },
 ): Promise<string> {
   const wantWorktree = (options.worktree ?? true) && !!useApp.getState().features.worktrees;
   try {
     return await createSession({
       cwd: project,
       harness,
+      account: options.account ?? undefined,
       model: options.model,
       effort: options.effort,
       title: options.title,
@@ -977,6 +1003,7 @@ async function createThreadFor(
       return createSession({
         cwd: project,
         harness,
+        account: options.account ?? undefined,
         model: options.model,
         effort: options.effort,
         title: options.title,
@@ -1014,7 +1041,13 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   try {
     // The task is the title's fallback: whatever the prompt starts with, a child never goes
     // unnamed and so never takes the delivered message as its title.
-    id = await newThread(project, harness.id, { ...call, model, title, task: call.prompt });
+    id = await newThread(project, harness.id, {
+      ...call,
+      model,
+      title,
+      task: call.prompt,
+      account: accountFor(caller, harness.id),
+    });
   } catch (error) {
     return failureJson(failure("failed", `the thread could not start: ${errorText(error)}`));
   }
@@ -1076,6 +1109,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
         effort: h.effort,
         title: threadTitle,
         task: call.prompt,
+        account: accountFor(caller, h.id),
       });
       const link = addLink({
         orchestrator: caller.id,

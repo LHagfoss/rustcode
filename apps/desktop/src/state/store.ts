@@ -111,6 +111,7 @@ import {
   threadTurnEnded,
   wakeTick,
 } from "./host";
+import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
 import { CAPABILITY_VERSION, forget, type GrantAsk, type LinkBook } from "./orchestration";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { nextQueued } from "./queue";
@@ -295,6 +296,12 @@ export interface AppState {
    * The composer's meter reads it for a thread with no numbers of its own.
    */
   planCache: Record<string, CachedPlan>;
+  /**
+   * The logins the last plan read found signed out, by cache key
+   * (`claude-code`, `claude-code#work`; see state/logins.ts). The harness
+   * snapshot cannot say: Claude Code has no sign-in probe.
+   */
+  signedOutLogins: SignedOutLogins;
   /** An app-drawn confirmation (the webview has no native dialogs). */
   confirm: {
     title: string;
@@ -496,6 +503,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   agents: {},
   planUsage: {},
   planCache: prunePlans(storedJson<Record<string, CachedPlan>>(STORAGE.planCache, {})),
+  signedOutLogins: {},
   status: "connecting",
   engineLog: [],
   sessions: [],
@@ -1456,6 +1464,7 @@ async function createThread(firstMessage = ""): Promise<string> {
   const cwd = s.projectCwd;
   if (!cwd) throw new Error("Choose a project folder for this thread first.");
   const choice = newThreadChoice(s);
+  const harness = s.harnesses?.harnesses.find((h) => h.id === harnessOf(s));
   const wt = s.newWorktree;
   const worktree =
     wt.on && s.features.worktrees
@@ -1464,7 +1473,8 @@ async function createThread(firstMessage = ""): Promise<string> {
   const id = await createSession({
     cwd,
     harness: choice?.harness,
-    account: s.newThreadAccount,
+    // The account shown for the new thread: a signed-out default login is not one.
+    account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
     model: choice?.model,
     effort: choice?.effort,
     worktree,
@@ -2382,7 +2392,14 @@ export const removeHarnessAccount = (harness: string, id: string) =>
 
 /** Reads each account's own credentials again (nothing is started, no token is read). */
 export async function checkHarnessAccounts(): Promise<HarnessSnapshot | null> {
-  return harnessCall(Method.harnessAccountCheck, {});
+  const snapshot = await harnessCall(Method.harnessAccountCheck, {});
+  // Claude Code signs in with its own credentials, which that snapshot does not
+  // report (`auth_probe: None`), and its plan read pauses once it finds the
+  // default login signed out, so a Keychain denial cannot prompt again and
+  // again. An explicit check is the user asking to look now: read the default
+  // login again, or "Default login" would stay away after signing back in.
+  if (claudeUsageAllowed()) void refreshPlanCache(true);
+  return snapshot;
 }
 
 export const addHarness = (id: string, name: string, command: string[]) =>
@@ -2995,12 +3012,18 @@ export function harnessOf(
  * when it runs on a named one. A new thread uses the account picked for it.
  */
 export function planKeyFor(
-  s: Pick<AppState, "threads" | "sessions" | "newThread" | "newThreadAccount" | "harnesses">,
+  s: Pick<
+    AppState,
+    "threads" | "sessions" | "newThread" | "newThreadAccount" | "harnesses" | "signedOutLogins"
+  >,
   threadId?: string,
 ): string | undefined {
   const harness = harnessOf(s, threadId);
   if (!harness) return undefined;
-  const account = threadId ? s.threads[threadId]?.harness?.account : s.newThreadAccount;
+  const known = s.harnesses?.harnesses.find((h) => h.id === harness);
+  const account = threadId
+    ? s.threads[threadId]?.harness?.account
+    : newThreadAccountOn(known, s.newThreadAccount, s.signedOutLogins);
   return harnessPlanKey(harness, account ?? null);
 }
 
@@ -3215,11 +3238,18 @@ export function claudeUsageAllowed(): boolean {
 export function setClaudeUsageAllowed(on: boolean): void {
   store(CLAUDE_USAGE_KEY, on ? "1" : "0");
   claudePaused = false;
+  if (on) return;
   // Every Claude login, the default one and each account's own row.
-  if (!on)
-    setPlanCache(
-      Object.fromEntries(Object.entries(get().planCache).filter(([key]) => !key.startsWith("claude-code"))),
-    );
+  setPlanCache(
+    Object.fromEntries(Object.entries(get().planCache).filter(([key]) => !key.startsWith("claude-code"))),
+  );
+  // What a read found about a login is only kept while it is read: with the
+  // meter off nothing would clear it after the user signed in again.
+  set({
+    signedOutLogins: Object.fromEntries(
+      Object.entries(get().signedOutLogins).filter(([key]) => !key.startsWith("claude-code")),
+    ),
+  });
 }
 
 /**
@@ -3235,6 +3265,9 @@ export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
   const kept = forgetPlans(get().planCache, gone);
   const learned = plansToCache(answers);
   setPlanCache(mergePlans(kept, learned));
+  // Which logins are signed out, for the places that must not offer one: the
+  // picker's "Default login" and a new thread's account (state/logins.ts).
+  set({ signedOutLogins: signedOutFrom(answers, get().signedOutLogins) });
   // Only the default login's failure pauses the poll; an account without a
   // sign-in is that account's own row and must not stop Claude's meter.
   if (
@@ -3255,8 +3288,10 @@ export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
  * one keeps the last numbers for the next poll. Claude is asked for only with
  * consent and while the last answer could be read.
  */
-export async function refreshPlanCache(): Promise<void> {
+export async function refreshPlanCache(again = false): Promise<void> {
   if (!connection || plansInFlight || get().status !== "ready") return;
+  // An explicit check asks again even after a signed-out answer paused the poll.
+  if (again) claudePaused = false;
   plansInFlight = true;
   try {
     const result = await connection.request(
@@ -3412,6 +3447,7 @@ export function resetForTests() {
     agents: {},
     planUsage: {},
     planCache: {},
+    signedOutLogins: {},
     orchestration: false,
     orchestrationPending: false,
     readAcrossProjects: false,

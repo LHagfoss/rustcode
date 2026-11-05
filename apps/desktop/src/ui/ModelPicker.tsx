@@ -17,6 +17,7 @@ import {
   unavailableReason,
   usableHarnesses,
 } from "../state/harness";
+import { defaultLoginGone, newThreadAccountOn } from "../state/logins";
 import {
   ensureHarnessModels,
   lacksModels,
@@ -465,14 +466,21 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     (h) => h.id === (isNew ? effective.harness : (thread?.harness?.id ?? "rustcode")),
   );
   const caps = isNew ? harness?.capabilities : thread?.harness?.capabilities;
-  const newAccount = useApp((s) => s.newThreadAccount);
   const accounts = harness?.accounts ?? [];
+  // A new thread on a signed-out default login starts on a named account instead (state/logins.ts);
+  // an open thread keeps its own, so it says what it really runs on.
+  const defaultGone = useApp((s) => defaultLoginGone(harness, s.signedOutLogins));
+  const newAccount = useApp((s) => newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins));
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
   const accountName = accounts.find((a) => a.id === account)?.name;
   // A thread keeps its account id when that login is removed from Settings:
   // it stays readable, and the picker says which one is gone.
   const accountRemoved = !isNew && !!account && !accountName;
   const accountLabel = accountRemoved ? "Removed account" : (accountName ?? "Default login");
+  // "Default login" is not offered once it is known to be signed out, unless an
+  // open thread is on it already (hiding it would misstate where that thread runs)
+  // or on an account that was removed, where it is the way back.
+  const defaultOffered = !defaultGone || accountRemoved || (!isNew && !account);
   // A running thread keeps its login, as it keeps its harness.
   const accountBlocked = (accounts.length > 0 || accountRemoved) && !isNew && !!thread?.running;
   // An external harness lists its models only when asked: ask for a new thread on it, or a restored
@@ -705,7 +713,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                 </div>
               )}
               {[
-                { id: null, name: "Default login" },
+                ...(defaultOffered ? [{ id: null, name: "Default login" }] : []),
                 ...accounts.map((a) => ({ id: a.id, name: a.name })),
               ].map((option) => {
                 const current = (option.id ?? null) === (account ?? null);

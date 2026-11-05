@@ -6,8 +6,9 @@
 
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { parsePlans, planOf, resetLabel, type UsagePlan } from "../acp/rustcode";
+import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
+import { usageRows } from "../state/logins";
 import {
   CLAUDE_USAGE_DEFAULT,
   claudeUsageAllowed,
@@ -58,9 +59,12 @@ export function UsagePage() {
   if (!plans) {
     return error ? <p className="text-callout text-warning">{error}</p> : <PlansSkeleton />;
   }
+  // The default login's row is dropped when it is signed out and named accounts are there; the
+  // composer's switch moves to the first Claude group left (state/logins.ts).
+  const rows = usageRows(plans);
   return (
     <>
-      {plans.map((p) => (
+      {rows.plans.map((p) => (
         <Group
           key={p.id}
           title={
@@ -98,7 +102,7 @@ export function UsagePage() {
               }
             />
           )}
-          {planOf(p) === "claude-code" && !p.account && (
+          {p.id === rows.switchIn && (
             <Row
               title="Show Claude usage in the composer"
               reset={
