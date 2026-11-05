@@ -924,11 +924,17 @@ export function Transcript({
         aria-hidden={!showLatest}
         tabIndex={showLatest ? 0 : -1}
         className={cx(
-          // Above the floating composer (its top is `bottomInset - 20` up) and over it in z.
-          "rc-glass rc-glass-strong absolute z-30 flex h-[30px] max-w-[min(360px,calc(100%-32px))] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,translate,left] duration-200 ease-snappy hover:bg-surface-3",
+          // The strip of threads above the composer and this pill are one surface (index.css
+          // `.rc-glass-overlay`), so what floats over the transcript reads as one glass. It sits a
+          // gap above everything the stack holds (`bottomInset`), and above the composer's drawer
+          // when that opens up over the transcript (`--rc-composer-float`, set by ui/Composer.tsx).
+          "rc-glass-overlay absolute z-30 flex h-[30px] max-w-[min(360px,calc(100%-32px))] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg transition-[opacity,translate,left,bottom] duration-200 ease-snappy",
           showLatest ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0",
         )}
-        style={{ bottom: bottomInset - 8, left: "calc(50% - var(--rc-lane-inset-end, 0px))" }}
+        style={{
+          bottom: `max(${bottomInset - 8}px, calc(var(--rc-composer-float, 0px) + 8px))`,
+          left: "calc(50% - var(--rc-lane-inset-end, 0px))",
+        }}
       >
         <ArrowDown size={13} />
         Latest

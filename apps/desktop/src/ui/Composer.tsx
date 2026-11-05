@@ -36,6 +36,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
+import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { haptic } from "../lib/haptics";
 import {
   canOpenTerminal,
@@ -47,6 +48,7 @@ import {
   projectFiles,
   readImage,
 } from "../lib/native";
+import { observeSize } from "../lib/resize";
 import {
   type Attachment,
   type ComposeExtras,
@@ -109,9 +111,13 @@ function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
 
 // The field's line box: 14px at 1.625 (`leading-relaxed`), the same leading replies read at.
 const LINE = 22.75;
-/** It opens at one line above the card's foot, and scrolls past the height of nine. */
-const MIN_LINES = 1;
-const MAX_HEIGHT = 208;
+// Real padding inside the scroller, so it scrolls with the text: the first and last lines keep their
+// room at either end, and the caret on the last line sits above the padding, never on the edge.
+const PAD = 6;
+// It opens at one line above the card's foot and scrolls past the ninth. Both heights are whole
+// lines plus that padding (`MIN_HEIGHT`, `MAX_HEIGHT`), so the field cuts no line in half.
+const MIN_HEIGHT = Math.round(LINE + PAD * 2);
+const MAX_HEIGHT = Math.round(LINE * 9 + PAD * 2);
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -279,7 +285,24 @@ export const Composer = memo(function Composer({
   const cwd = thread?.cwd ?? projectCwd;
   const canSend = !!draft.trim() || hasExtras(extras);
   const mirror = useRef<HTMLDivElement>(null);
+  const shell = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
   const hasUrl = useMemo(() => /\bhttps?:\/\//i.test(draft), [draft]);
+  // Which edges of the scrolled field fade (lib/fade.ts); nothing to fade while the draft fits.
+  const [fade, setFade] = useState<FieldFade>("none");
+  // Carried by the field and the mirror alike: the mask (`.rc-field-fade`) takes its two depths.
+  const fadeStyle = {
+    "--rc-fade-top": fade === "top" || fade === "both" ? `${FIELD_FADE}px` : "0px",
+    "--rc-fade-bottom": fade === "bottom" || fade === "both" ? `${FIELD_FADE}px` : "0px",
+  } as React.CSSProperties;
+  // The field's scroll is read twice: the mirror keeps the highlighted text under the textarea, and
+  // the fade follows which edge the draft is cut at.
+  const syncField = () => {
+    const el = field.current;
+    if (!el) return;
+    if (mirror.current && mirror.current.scrollTop !== el.scrollTop) mirror.current.scrollTop = el.scrollTop;
+    setFade(fieldFade(el.scrollTop, el.scrollHeight, el.clientHeight));
+  };
 
   // Ready to type on entering a thread, and again on coming back to the chat from Settings or
   // another view (the draft is kept either way).
@@ -289,19 +312,32 @@ export const Composer = memo(function Composer({
     if (inChat) field.current?.focus();
   }, [key, inChat]);
 
-  // Grow from two lines to the field's height, then scroll.
+  // Grow from one line to the field's height, then scroll.
   // biome-ignore lint/correctness/useExhaustiveDependencies: measure on every draft change
   useLayoutEffect(() => {
     const el = field.current;
     if (!el) return;
     el.style.height = "0px";
-    // scrollHeight includes the 2px padding above and below, which keeps the descenders of the
-    // last line (g, j, p, y in the rounded font) inside the box instead of clipped at its edge.
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, LINE * MIN_LINES + 4), MAX_HEIGHT)}px`;
+    // `scrollHeight` is the text plus the padding above and below, which is room the descenders of
+    // the last line (g, j, p, y in the rounded font) need inside the box instead of at its edge.
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, MIN_HEIGHT), MAX_HEIGHT)}px`;
+    syncField();
+    // The browser parks the field at the caret a frame after a new value lands, so ask again then:
+    // a pasted draft would otherwise show a hard top edge until the next scroll.
+    const frame = requestAnimationFrame(syncField);
+    return () => cancelAnimationFrame(frame);
   }, [draft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
   useEffect(() => setSelected(0), [list.length, fileList]);
+
+  // A narrower window rewraps the draft, so the field can start or stop scrolling: measure again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the field and the mirror are refs
+  useEffect(() => {
+    const el = field.current;
+    if (!el) return;
+    return observeSize(el, syncField);
+  }, []);
 
   const update = (text: string) => setDraft(key, text);
   const change = (fn: (e: ComposeExtras) => ComposeExtras) => setExtras(key, fn);
@@ -529,14 +565,43 @@ export const Composer = memo(function Composer({
   const slashTyped = !extras.command && dismissed !== draft && /^\/\S*$/.test(draft);
   const drawer = slashTyped ? "commands" : token && files?.cwd === cwdForFiles ? "files" : null;
 
+  // The drawer reaches up over the transcript, under the box's top edge. It tells the chat column how
+  // far it does (`--rc-composer-float`, from the foot of the pane), so the jump-to-latest pill sits
+  // above it instead of over it (ui/Transcript.tsx). Nothing floats above the pane otherwise.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measured when the drawer opens and closes
+  useLayoutEffect(() => {
+    const main = shell.current?.closest<HTMLElement>('main[aria-label="Chat"]');
+    if (!main) return;
+    const publish = () => {
+      const el = drawerRef.current;
+      const parent = el?.offsetParent as HTMLElement | null | undefined;
+      // `offsetTop`, not the drawer's own rect: the drawer rises in with `rc-in`, and a rect read
+      // mid-animation leaves the pill a few px short of the drawer's settled top.
+      const top =
+        el && parent
+          ? main.getBoundingClientRect().bottom - parent.getBoundingClientRect().top - el.offsetTop
+          : 0;
+      main.style.setProperty("--rc-composer-float", `${Math.max(0, Math.round(top))}px`);
+    };
+    publish();
+    const stop = drawerRef.current ? observeSize(drawerRef.current, publish) : undefined;
+    window.addEventListener("resize", publish);
+    return () => {
+      stop?.();
+      window.removeEventListener("resize", publish);
+      main.style.removeProperty("--rc-composer-float");
+    };
+  }, [drawer]);
+
   return (
-    <div className="rc-composer-shell relative @container/composer">
+    <div ref={shell} className="rc-composer-shell relative @container/composer">
       {thread && <QueuedAnnouncer threadId={thread.id} />}
       {/* The box: the field and how it is sent. The drawer tucks under its top, the tray under its
           foot, so the three read as one floating surface over the transcript. */}
       <div className="relative">
         {drawer && (
           <div
+            ref={drawerRef}
             className="rc-composer-drawer rc-in absolute inset-x-6 bottom-[calc(100%-1rem)] z-0 flex max-h-72 flex-col gap-0.5 overflow-y-auto px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
             role="listbox"
             aria-label={drawer === "commands" ? "Commands" : "Files"}
@@ -673,14 +738,14 @@ export const Composer = memo(function Composer({
               }
             />
           )}
-          {/* The field and what reads in front of it. The chip and the links drop their own 2px so
-              they sit on the field's first line box, not above it. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-3 pt-2">
+          {/* The field and what reads in front of it. The chip and the links drop the field's own 6px
+              of padding so they sit on its first line box, not above it. */}
+          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-3">
             {extras.command && (
               // One line of the field's own height (22.75px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
               <Tooltip label={extras.command.description}>
-                <span className="mt-0.5 flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1.5 font-semibold text-accent text-body leading-[22.75px]">
+                <span className="mt-1.5 flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1.5 font-semibold text-accent text-body leading-[22.75px]">
                   {extras.command.name}
                 </span>
               </Tooltip>
@@ -689,19 +754,21 @@ export const Composer = memo(function Composer({
               <LinkChip
                 key={url}
                 url={url}
-                className="mt-0.5"
+                className="mt-1.5"
                 onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
               />
             ))}
             {/* Links in the draft read as links: a mirror under the field draws the same text with
                   each URL on an accent pill, and the field's own text is transparent so the mirror shows
-                  through while the caret, selection and editing stay the field's. */}
+                  through while the caret, selection and editing stay the field's. The two take the same
+                  padding, the same scroll offset and the same mask, so neither drifts from the other. */}
             <div className="relative min-w-[160px] flex-1 basis-[160px]">
               {hasUrl && (
                 <div
                   ref={mirror}
                   aria-hidden
-                  className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-0.5 text-body text-fg leading-relaxed"
+                  className="rc-field-fade pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-1.5 text-body text-fg leading-relaxed"
+                  style={fadeStyle}
                 >
                   {splitUrls(draft).map((part, i) =>
                     part.url ? (
@@ -728,15 +795,14 @@ export const Composer = memo(function Composer({
                 onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
                 onKeyDown={onKeyDown}
                 onPaste={onPaste}
-                onScroll={(e) => {
-                  if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
-                }}
+                onScroll={syncField}
                 rows={1}
                 placeholder={placeholder}
                 aria-label="Message"
                 spellCheck
+                style={fadeStyle}
                 className={cx(
-                  "relative block w-full resize-none bg-transparent py-0.5 text-body leading-relaxed outline-none placeholder:text-fg-faint",
+                  "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-relaxed outline-none placeholder:text-fg-faint",
                   hasUrl && "text-transparent caret-fg selection:bg-accent/30",
                 )}
               />
