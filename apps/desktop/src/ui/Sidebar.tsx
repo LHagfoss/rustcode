@@ -4,9 +4,10 @@
 // runs two lines: where it runs, its branch and what the branch's pull request
 // became, above its title and the mark of the harness that runs it. What it is
 // doing (Working, Approval, Input, Failed, Done until you open it) takes the
-// time's slot on the top line, the threads it started fold under it as slim
-// rows, and Settled (threads marked Done) opens from the foot. The app's own
-// pages (settings, pull requests) are buttons in the toolbar's titlebar row.
+// time's slot on the top line, the threads it started show as a stack of marks
+// on the second line, and Settled (threads marked Done) opens from the foot.
+// The app's own pages (settings, pull requests) are buttons in the toolbar's
+// titlebar row.
 
 import {
   Check,
@@ -61,18 +62,8 @@ import { displayPath, modelName, projectName, type SessionSummary } from "../acp
 import type { ThreadStatus } from "../acp/v2";
 import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
-import {
-  type ChildInfo,
-  childInfo,
-  childrenListed,
-  childSummary,
-  flatChildren,
-  foldFinished,
-  GRANDCHILD_INSET,
-  orderChildren,
-  pruneOpenGroups,
-  unseenChild,
-} from "../state/children";
+import type { StackAgent } from "../state/agentStack";
+import { type ChildInfo, childInfo } from "../state/children";
 import {
   cachedPulls,
   loadPulls,
@@ -84,6 +75,7 @@ import {
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import {
+  contextRow,
   keepListed,
   nextRow,
   type OrderRow,
@@ -125,6 +117,7 @@ import {
 import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { type Placement, parentOf as parentOfThread, topLevel } from "../state/topLevel";
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
+import { AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
@@ -557,14 +550,12 @@ function settleThread(session: SessionSummary, before: ThreadStatus | undefined)
 const ThreadRow = memo(function ThreadRow({
   session,
   selected,
+  context,
   grouped,
   now,
   snippet,
-  slim,
-  state,
-  inset,
   pull,
-  fold,
+  agents,
   navActive,
   picked,
   bulk,
@@ -572,31 +563,17 @@ const ThreadRow = memo(function ThreadRow({
 }: {
   session: SessionSummary;
   selected: boolean;
+  /** The open thread is one this row started: the row is kept lit as its context, not opened. */
+  context?: boolean;
   /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
   grouped: boolean;
   now: number;
   /** While searching: the words around the match in what was said. */
   snippet?: string;
-  /** A child of the thread above it: one line, no meta line, what it is doing and its age. */
-  slim?: boolean;
-  /** A child's state as its parent's group reads it (state/children.ts), for its dot. */
-  state?: ChildInfo["state"];
-  /** A grandchild's extra inset under its own group's rows (state/children.ts). */
-  inset?: string;
   /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
   pull?: PullRequest;
-  /**
-   * Threads this one started, which the sidebar lists under it: the chevron that
-   * folds them into the row, and the dot for what the fold hides.
-   */
-  fold?: {
-    open: boolean;
-    /** How the group reads in one line, for the chevron's tooltip. */
-    summary: string;
-    /** Children waiting to be read, when the fold is closed over them. */
-    dot?: "failed";
-    onToggle: () => void;
-  };
+  /** Threads this one started and still runs: the stack on its second line, in place of child rows. */
+  agents?: StackAgent[];
   /** The row the keyboard is on: it holds the list's one tab stop, ↑ ↓ move it. */
   navActive?: boolean;
   /** In the sidebar's multi-selection (⌘-click), which is not the same as the thread being open. */
@@ -608,7 +585,6 @@ const ThreadRow = memo(function ThreadRow({
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
-  const waiting = useApp((s) => s.threads[session.id]?.waiting ?? 0);
   // No turn runs, but the threads it started or messaged still work (state/waiting.ts).
   const wait = useWaiting(session.id);
   const wake = useApp((s) => s.snoozed[session.id]);
@@ -666,117 +642,12 @@ const ThreadRow = memo(function ThreadRow({
     );
   }
   const done = status === "done";
-  if (slim) {
-    // A child's row: one line and no meta line, a dot (or a spinner) where a harness mark would
-    // be, its title in the secondary label and its age at the end.
-    const mark =
-      state ??
-      (request || status === "needs_input"
-        ? "needs"
-        : running || waiting
-          ? "working"
-          : failedAt
-            ? "failed"
-            : "finished");
-    return (
-      <ContextMenu.Root>
-        <ContextMenu.Trigger asChild>
-          <div className="group relative">
-            <button
-              type="button"
-              data-row-id={session.id}
-              tabIndex={navActive ? 0 : -1}
-              onClick={() => selectThread(session.id)}
-              onDoubleClick={startRename}
-              onKeyDown={(e) => {
-                if (e.key === "F2") {
-                  e.preventDefault();
-                  startRename();
-                }
-              }}
-              aria-current={selected ? "page" : undefined}
-              aria-pressed={picked || undefined}
-              className={cx(
-                "relative flex h-8 w-full items-center gap-1.5 rounded-lg pr-2.5 text-left",
-                // A grandchild sits one inset step further in, in the same group (state/children.ts).
-                inset ?? "pl-8",
-              )}
-            >
-              <RowFill selected={selected} picked={picked} radius="rounded-lg" />
-              <span className="relative flex size-2 shrink-0 items-center justify-center">
-                {mark === "working" ? (
-                  <Spinner size={10} className="text-accent" />
-                ) : (
-                  <span
-                    role="img"
-                    aria-label={mark === "needs" ? "Needs you" : mark === "failed" ? "Failed" : "Finished"}
-                    className={cx(
-                      "rounded-full",
-                      mark === "finished" ? "size-1 bg-fg-faint" : "size-1.5",
-                      mark === "needs" ? "bg-warning" : mark === "failed" ? "bg-danger" : "bg-fg-faint",
-                    )}
-                  />
-                )}
-              </span>
-              <span
-                className={cx(
-                  "relative min-w-0 flex-1 truncate text-body",
-                  selected || picked || mark === "needs" || mark === "working"
-                    ? "font-medium text-fg"
-                    : "text-fg-muted",
-                )}
-              >
-                {session.title || "New thread"}
-              </span>
-              <span className="relative shrink-0 text-fg-faint text-sub tabular">
-                {running && startedAt ? <Elapsed since={startedAt} /> : shortAge(session.updatedAt, now)}
-              </span>
-            </button>
-          </div>
-        </ContextMenu.Trigger>
-        <ContextMenu.Portal>
-          <ContextMenu.Content className={menuSurface}>
-            <ThreadMenuItems
-              session={session}
-              Menu={ContextMenu}
-              Item={ContextMenu.Item}
-              Separator={ContextMenu.Separator}
-              onRename={startRename}
-              bulk={bulk}
-              onClear={onClearSelection}
-            />
-          </ContextMenu.Content>
-        </ContextMenu.Portal>
-      </ContextMenu.Root>
-    );
-  }
+  // The open thread is a delegated one with no row of its own: its parent stands in as the context.
+  const lit = selected || !!context;
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
         <div className="group relative">
-          {fold && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                fold.onToggle();
-              }}
-              aria-expanded={fold.open}
-              aria-label={
-                fold.open ? "Hide the threads this one started" : "Show the threads this one started"
-              }
-              title={fold.summary}
-              tabIndex={-1}
-              className="absolute top-[7px] left-1.5 z-10 flex size-4 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
-            >
-              {/* The mark says which way the group goes; a turned one keeps the transform it had. */}
-              {fold.open ? (
-                <ChevronDown size={12} strokeWidth={2.5} className="shrink-0" />
-              ) : (
-                <ChevronRight size={12} strokeWidth={2.5} className="shrink-0" />
-              )}
-            </button>
-          )}
           <button
             type="button"
             data-row-id={session.id}
@@ -788,23 +659,13 @@ const ThreadRow = memo(function ThreadRow({
                 e.preventDefault();
                 startRename();
               }
-              // → opens what the row holds and ← closes it, the same two keys a file tree takes.
-              if (fold && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-                if ((e.key === "ArrowRight") !== fold.open) {
-                  e.preventDefault();
-                  fold.onToggle();
-                }
-              }
             }}
             aria-current={selected ? "page" : undefined}
             aria-pressed={picked || undefined}
             title={details.join(" · ")}
-            className={cx(
-              "relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2.5 text-left",
-              fold ? "pl-6" : "pl-2.5",
-            )}
+            className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2.5 pl-2.5 text-left"
           >
-            <RowFill selected={selected} picked={picked} radius="rounded-xl" />
+            <RowFill selected={lit} picked={picked} radius="rounded-xl" />
             {/* Where it runs, what its branch carries, and what it is doing. */}
             <span className="relative flex h-[17px] w-full min-w-0 items-center gap-1 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
               {!grouped && (
@@ -890,7 +751,7 @@ const ThreadRow = memo(function ThreadRow({
                 className={cx(
                   "min-w-0 flex-1 truncate text-body",
                   // What wants you reads strong; what works, waits or has been read recedes.
-                  selected || picked || request || fresh || failed
+                  lit || picked || request || fresh || failed
                     ? "font-medium text-fg"
                     : done || running || wait
                       ? "font-normal text-fg/75 group-hover:text-fg"
@@ -899,21 +760,18 @@ const ThreadRow = memo(function ThreadRow({
               >
                 {session.title || "New thread"}
               </span>
-              {fold?.dot && (
-                <span
-                  role="img"
-                  aria-label="A child thread failed"
-                  className="size-1.5 shrink-0 rounded-full bg-danger"
-                />
-              )}
-              <LinkBadge threadId={session.id} childrenListed={!!fold} />
-              {external && (
-                <HarnessIcon
-                  id={session.harness!}
-                  name={harness?.name}
-                  size={13}
-                  className="shrink-0 text-fg-muted"
-                />
+              <LinkBadge threadId={session.id} />
+              {agents?.length ? (
+                <AgentStack agents={agents} />
+              ) : (
+                external && (
+                  <HarnessIcon
+                    id={session.harness!}
+                    name={harness?.name}
+                    size={13}
+                    className="shrink-0 text-fg-muted"
+                  />
+                )
               )}
             </span>
             {/* What it asks of you, or while searching, the words around the match. */}
@@ -1054,90 +912,6 @@ const PendingRow = memo(function PendingRow({
     </div>
   );
 });
-
-/** A parent's children as the list draws them: its rows, the fold and what it hides. */
-interface ChildGroup {
-  /** The children's threads, and the grandchildren drawn flat under them, for their rows. */
-  items: SessionSummary[];
-  /** What the group lists, in draw order: what wants you, what works, what you opened. */
-  rows: ChildInfo[];
-  /** The finished ones behind the group's last line. */
-  folded: ChildInfo[];
-  /** Whether that line is drawn at all. */
-  fold: boolean;
-  /** Whether the reader opened it. */
-  foldOpen: boolean;
-  /** Whether the group lists anything: what its parent row's chevron says. */
-  listed: boolean;
-  /** A child failed (or is about to report that it failed) while you were reading elsewhere. */
-  dot?: "failed";
-  /** How the group reads in one line, for the chevron's tooltip. */
-  summary: string;
-  /** Folds the whole group away, or lists it again. */
-  toggle: () => void;
-  onFold: (open: boolean) => void;
-}
-
-/**
- * Threads this one started (start_session, fan_out), under it, as slim rows: what wants you,
- * then what works, then the one you opened, and the finished ones behind one quiet last line
- * ("Show 3 finished") once folding them saves something. The parent row's chevron folds the lot
- * away (state/children.ts).
- */
-function ChildThreads({
-  group,
-  selectedId,
-  now,
-  activeId,
-  picked,
-  bulk,
-  onClearSelection,
-}: {
-  group: ChildGroup;
-  selectedId: string | null;
-  now: number;
-  /** The row the keyboard is on, the picked threads and how to clear them (ui/Sidebar.tsx). */
-  activeId: string | null;
-  picked: ReadonlySet<string>;
-  bulk: SessionSummary[];
-  onClearSelection: () => void;
-}) {
-  const row = (child: ChildInfo) => {
-    const session = group.items.find((c) => c.id === child.id);
-    return session ? (
-      <ThreadRow
-        key={child.id}
-        session={session}
-        selected={child.id === selectedId}
-        grouped={false}
-        now={now}
-        slim
-        state={child.state}
-        inset={child.level === 1 ? GRANDCHILD_INSET : undefined}
-        navActive={child.id === activeId}
-        picked={picked.has(child.id)}
-        bulk={bulk.length > 1 && picked.has(child.id) ? bulk : undefined}
-        onClearSelection={onClearSelection}
-      />
-    ) : null;
-  };
-  return (
-    <div className="flex flex-col gap-0.5 pb-1">
-      {group.rows.map(row)}
-      {group.fold && (
-        <button
-          type="button"
-          onClick={() => group.onFold(!group.foldOpen)}
-          aria-expanded={group.foldOpen}
-          className="flex h-7 w-full items-center rounded-lg pr-2.5 pl-8 text-left text-fg-faint text-sub hover:bg-fill-subtle hover:text-fg-muted"
-        >
-          {group.foldOpen ? "Hide finished" : `Show ${group.folded.length} finished`}
-        </button>
-      )}
-      {group.fold && group.foldOpen && group.folded.map(row)}
-    </div>
-  );
-}
 
 function useNow() {
   const [now, setNow] = useState(Date.now());
@@ -1545,15 +1319,15 @@ export function Sidebar() {
   const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", []);
   // The shelf at the foot has its own switch: it is a row of the sidebar's, not of the list.
   const [settledOpen, setSettledOpen] = useStored("rustcode.sidebar.settledOpen", false);
-  // Which child groups are open, by parent: one record for the whole sidebar, written in one
-  // place. A copy per group wrote the whole record back, so opening one group erased another.
-  const [openGroups, setOpenGroups] = useStored<Record<string, boolean>>("rustcode.sidebar.childrenOpen", {});
-  const listedIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
-  const setGroupOpen = useCallback(
-    (id: string, open: boolean) =>
-      setOpenGroups((groups) => ({ ...pruneOpenGroups(groups, listedIds), [id]: open })),
-    [listedIds, setOpenGroups],
-  );
+  // The groups of child rows are gone, and with them the folds older releases kept open: drop
+  // the record once, so a stale preference does not sit in localStorage for ever.
+  useEffect(() => {
+    try {
+      localStorage.removeItem("rustcode.sidebar.childrenOpen");
+    } catch {
+      // Nothing stored in a private window.
+    }
+  }, []);
   const [width, setWidth] = useSidebarWidth();
   // The slot takes its new width at once, so the transcript reflows once per toggle, not every
   // frame (docs/design.md › Motion). The column beside it then slides from where it was with a
@@ -1612,6 +1386,9 @@ export function Sidebar() {
   const { place, parentOf } = useMemo(() => {
     const listed = new Set(filtered.map((s) => s.id));
     const flagged = new Set(flags.split(" "));
+    // A search lists every match as a row of its own, delegated or not: the thread you are
+    // looking for is not hidden under a parent that also matched.
+    const searching = !!query.trim();
     const place = new Map<string, Placement>();
     const parentOf = new Map<string, string>();
     for (const s of filtered) {
@@ -1632,16 +1409,18 @@ export function Sidebar() {
       );
       place.set(s.id, placement);
       const parent = parentOfThread(s, links);
-      if (placement === "nested" && parent) parentOf.set(s.id, parent);
+      if (placement === "nested" && parent && !searching) parentOf.set(s.id, parent);
     }
     return { place, parentOf };
-  }, [filtered, links, flags, pinned, messaged]);
-  const childrenOf = useMemo(() => {
+  }, [filtered, links, flags, pinned, messaged, query]);
+  const childrenByParent = useMemo(() => {
     const map: Record<string, SessionSummary[]> = {};
     for (const s of filtered) {
       const parent = parentOf.get(s.id);
       if (parent) map[parent] = [...(map[parent] ?? []), s];
     }
+    // Ids, so a list that reorders on an update does not reorder the stack's icons.
+    for (const list of Object.values(map)) list.sort((a, b) => a.id.localeCompare(b.id));
     return map;
   }, [filtered, parentOf]);
 
@@ -1771,12 +1550,10 @@ export function Sidebar() {
   // nothing outside it reads them, and a thread that leaves the list leaves the selection.
   const [picked, setPicked] = useState<ReadonlySet<string>>(NO_PICKS);
   const [activeId, setActiveId] = useState<string | null>(null);
-  // The finished children a group shows, by parent: here, so the keyboard order can include them.
-  const [finishedOpen, setFinishedOpen] = useState<Record<string, boolean>>({});
   const anchor = useRef<string | null>(null);
   const list = useRef<HTMLElement>(null);
-  // Every child's state, as its group reads it: one string, so a streamed chunk that changes
-  // nothing about them does not redraw the list.
+  // Every delegated thread's state, as its parent's stack reads it: one string, so a streamed
+  // chunk that changes nothing about them does not redraw the list.
   const childStates = useApp((s) => {
     const linked = new Map(s.links.links.filter((l) => l.started).map((l) => [l.target, l.state] as const));
     return filtered
@@ -1800,70 +1577,43 @@ export function Sidebar() {
     return by;
   }, [childStates]);
 
-  // A parent's children as the list draws them: one place, so the parent row's chevron, the rows
-  // under it and the keyboard order all agree on what is on screen.
-  const group = useCallback(
-    (parentId: string): ChildGroup => {
-      const items = childrenOf[parentId] ?? [];
-      // A grandchild's own group would be a second chevron under a row that is already small, so
-      // it is drawn flat in this group, one inset further in (state/children.ts).
-      const under = (id: string) =>
-        orderChildren(
-          (childrenOf[id] ?? []).flatMap((c) => infos.get(c.id) ?? []),
-          selectedId,
-        );
-      // A child whose own child still works stays a row, so that grandchild is not folded away.
-      const children: ChildInfo[] = [];
-      for (const c of items) {
-        const info = infos.get(c.id);
-        if (!info) continue;
-        const below = under(c.id);
-        const urgent = below.some((g) => g.state === "needs")
-          ? "needs"
-          : below.some((g) => g.state === "working")
-            ? "working"
-            : undefined;
-        children.push({ ...info, below: urgent });
-      }
-      const all = flatChildren(children, under);
-      const listed = childrenListed(all, {
-        expanded: openGroups[parentId] === true,
-        collapsed: openGroups[parentId] === false,
-        parentSelected: parentId === selectedId,
-        selectedId,
-      });
-      const closed = openGroups[parentId] === false;
-      const ordered = orderChildren(children, selectedId);
-      const { rows, folded, fold } = foldFinished(ordered, selectedId, closed);
-      return {
-        // A grandchild's thread, so its row can find what it draws.
-        items: [...items, ...items.flatMap((c) => childrenOf[c.id] ?? [])],
-        rows: flatChildren(rows, under),
-        folded: flatChildren(folded, under),
-        fold,
-        foldOpen: !!finishedOpen[parentId],
-        listed,
-        dot: unseenChild(all),
-        summary: childSummary(all),
-        toggle: () => setGroupOpen(parentId, !listed),
-        onFold: (open) => setFinishedOpen((m) => ({ ...m, [parentId]: open })),
+  // A row's stack: every descendant that works or waits on the user, grandchildren flattened,
+  // in a stable order so an update that changes no state does not move the icons. A finished or
+  // failed delegate adds nothing: the stack is work under way, not the tree's history.
+  const stacks = useMemo(() => {
+    const out = new Map<string, StackAgent[]>();
+    const gather = (parentId: string): StackAgent[] => {
+      const found: StackAgent[] = [];
+      const walk = (id: string) => {
+        for (const child of childrenByParent[id] ?? []) {
+          const info = infos.get(child.id);
+          if (info && (info.state === "needs" || info.state === "working"))
+            found.push({
+              id: child.id,
+              state: info.state,
+              harness: child.harness,
+              label: child.title || "New thread",
+            });
+          walk(child.id);
+        }
       };
-    },
-    [childrenOf, finishedOpen, infos, openGroups, selectedId, setGroupOpen],
-  );
+      walk(parentId);
+      return found;
+    };
+    for (const s of filtered) {
+      if (parentOf.has(s.id)) continue;
+      const agents = gather(s.id);
+      if (agents.length) out.set(s.id, agents);
+    }
+    return out;
+  }, [childrenByParent, filtered, infos, parentOf]);
 
   // The order the list draws its rows in, so ↑ ↓ move through what is on screen: a shut section
-  // or group contributes nothing, and a parent's children follow it (state/sidebarRows.ts).
+  // or project contributes nothing. A delegated thread has no row of its own, so it is not here
+  // (state/sidebarRows.ts).
   const order = useMemo<OrderSection[]>(() => {
     const open = (id: string) => !!query.trim() || !folded.includes(id);
-    const kids = (parentId: string): string[] => {
-      const g = group(parentId);
-      if (!g.listed) return [];
-      const under = g.fold && g.foldOpen ? [...g.rows, ...g.folded] : g.rows;
-      return under.map((c) => c.id);
-    };
-    const toOrder = (items: SessionSummary[]): OrderRow[] =>
-      items.map((s) => ({ id: s.id, children: kids(s.id) }));
+    const toOrder = (items: SessionSummary[]): OrderRow[] => items.map((s) => ({ id: s.id }));
     return sections.map((section) =>
       section.projects
         ? {
@@ -1881,16 +1631,15 @@ export function Sidebar() {
             limit: section.id === "settled" && !query.trim() ? settledShown : undefined,
           },
     );
-  }, [folded, group, query, sections, settledShown]);
+  }, [folded, query, sections, settledShown]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
-  // The row the keyboard is on: where it was left, else the open thread, else the first row.
+  // The row the keyboard is on: where it was left, else the open thread, else the first row. A
+  // delegated thread has no row, so the open one lands on its parent, which is the row kept lit
+  // as its context (state/sidebarRows.ts).
+  const contextSelected = contextRow(selectedId, orderIds, parentOf);
   const currentId =
-    activeId && orderIds.includes(activeId)
-      ? activeId
-      : selectedId && orderIds.includes(selectedId)
-        ? selectedId
-        : (orderIds[0] ?? null);
+    activeId && orderIds.includes(activeId) ? activeId : (contextSelected ?? orderIds[0] ?? null);
 
   useEffect(() => {
     setPicked((prev) => (prev.size ? keepListed(prev, orderIds) : prev));
@@ -1996,41 +1745,22 @@ export function Sidebar() {
           return (
             <PendingRow key={s.id} pending={pending} selected={!selectedId} navActive={s.id === currentId} />
           );
-        const kids = childrenOf[s.id]?.length ? group(s.id) : undefined;
         return (
-          <div key={s.id} className="flex flex-col gap-0.5">
-            <ThreadRow
-              session={s}
-              selected={s.id === selectedId}
-              grouped={grouped}
-              pull={pullOf(s)}
-              now={now}
-              snippet={query.trim() ? contentHits[s.id] : undefined}
-              fold={
-                kids && {
-                  open: kids.listed,
-                  summary: kids.summary,
-                  dot: kids.dot,
-                  onToggle: kids.toggle,
-                }
-              }
-              navActive={s.id === currentId}
-              picked={picked.has(s.id)}
-              bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
-              onClearSelection={clearSelection}
-            />
-            {kids?.listed && (
-              <ChildThreads
-                group={kids}
-                selectedId={selectedId}
-                now={now}
-                activeId={currentId}
-                picked={picked}
-                bulk={pickedSessions}
-                onClearSelection={clearSelection}
-              />
-            )}
-          </div>
+          <ThreadRow
+            key={s.id}
+            session={s}
+            selected={s.id === selectedId}
+            context={s.id === contextSelected && s.id !== selectedId}
+            grouped={grouped}
+            pull={pullOf(s)}
+            now={now}
+            snippet={query.trim() ? contentHits[s.id] : undefined}
+            agents={stacks.get(s.id)}
+            navActive={s.id === currentId}
+            picked={picked.has(s.id)}
+            bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
+            onClearSelection={clearSelection}
+          />
         );
       })}
     </div>

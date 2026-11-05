@@ -1,16 +1,17 @@
-// Where a thread the list may draw goes: under the thread that started it, in
-// Settled with no row of its own, or where every other thread goes. A thread
-// an agent started is never a top-level row while its parent is in the list;
-// the rule is one pure function so the sidebar and its tests agree on it
+// Where a thread the list may draw goes: under the thread that started it (with
+// no row of its own, its parent's stack of marks holds it), in Settled by
+// itself when its parent is gone, or where every other thread goes. A thread an
+// agent started is never a top-level row while its parent is in the list; the
+// rule is one pure function so the sidebar and its tests agree on it
 // (ui/Sidebar.tsx, docs/orchestrator.md).
 
 import type { Link } from "./orchestration";
 
 /** Where a thread sits in the sidebar. */
 export type Placement =
-  /** Under the thread that started it. */
+  /** Under the thread that started it, with no row of its own: its parent's stack shows it. */
   | "nested"
-  /** No row of its own: it goes to Settled, with its parent or alone when the parent is gone. */
+  /** Its parent is not in the list: finished, it joins Settled by itself. */
   | "settled"
   /** A row where it would be anyway: it has no parent, or it is the user's, or it is live. */
   | "shown";
@@ -52,10 +53,11 @@ export function parentOf(thread: DelegatedThread, links: readonly Link[]): strin
  * - No parent at all: shown, as any thread.
  * - The user pinned it or messaged it: shown; it is their thread now, and it
  *   stays where they put it.
- * - A parent in the list: nested under it.
+ * - A parent in the list: nested under it, with no row of its own (the parent's
+ *   row shows its live delegates as a stack).
  * - A parent that is gone, filtered out or in another project: a finished
- *   thread goes to Settled, with no row of its own; one that is working or
- *   waits on the user is shown, so nothing that needs them is hidden.
+ *   thread joins Settled by itself; one that is working or waits on the user
+ *   is shown, so nothing that needs them is hidden.
  */
 export function topLevel(
   thread: DelegatedThread,

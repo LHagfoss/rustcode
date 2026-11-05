@@ -21,7 +21,7 @@ const child = (over: Partial<DelegatedThread> = {}): DelegatedThread => ({
 const listed = (...ids: string[]) => new Set(ids);
 
 describe("a delegated thread's place", () => {
-  test("a listed parent keeps it nested under it", () => {
+  test("a listed parent keeps it nested, with no row of its own", () => {
     expect(topLevel(child(), [], listed("parent"))).toBe("nested");
     // The start link says the same, and is preferred while it exists.
     expect(
@@ -29,12 +29,16 @@ describe("a delegated thread's place", () => {
     ).toBe("nested");
   });
 
-  test("a settled parent is still listed, so the child goes with it into Settled", () => {
+  test("a settled parent is still listed, so the child goes with it, with no Settled row", () => {
     // Settled rows are drawn; `listed` is the filtered list, not only Threads.
     expect(topLevel(child(), [], listed("parent", "child"))).toBe("nested");
+    // Nested means no row: only the threads that are not nested are drawn.
+    const threads = [{ id: "parent" }, child()];
+    const drawn = threads.filter((t) => topLevel(t, [], listed("parent", "child")) !== "nested");
+    expect(drawn.map((t) => t.id)).toEqual(["parent"]);
   });
 
-  test("a parent that is gone, deleted or filtered out leaves no row of its own", () => {
+  test("a parent that is gone, deleted or filtered out leaves the Threads list", () => {
     expect(topLevel(child(), [], listed())).toBe("settled");
     expect(topLevel(child(), [], listed("other"))).toBe("settled");
   });

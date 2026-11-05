@@ -348,10 +348,23 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   A row's second line reads the worktree branch, then what the thread's calls
   changed (`font-mono +N −N` in `success`/`danger`), for a thread the app has
   already read; one it has not opened shows neither, rather than a made-up zero.
+- **Delegated threads:** a thread an agent started has no row of its own. Its
+  parent's second line ends with a stack of at most three 18px round marks
+  (`ui/AgentStack.tsx`), overlapping by 6px with a 2px ring in the sidebar's
+  surface, then `+N` past the third and one quiet accent spinner while anything
+  works. What needs you comes first, with a small `warning` dot; finished
+  delegates show nothing, no dot and no count. The slot is a fixed 74px, so a
+  count going from one to three never moves the title's start, the age or the
+  status. Hovering lists the running threads and their state, and the row opens
+  the parent. An open child keeps its parent's row lit as the context. In the
+  chat's group cards the same stack reads at 24px with a `surface` ring; once
+  all are done it shows the finished marks instead, with no spinner. Logic:
+  `state/agentStack.ts`.
 - **Sidebar selection:** one tab stop for the whole list, on the row the
-  keyboard is on (the open thread, else the first): ↑ ↓ move it through the
-  rows on screen, skipping shut sections and project groups, ⏎ opens the
-  thread, Esc lets the selection go. Keys in a field inside the list (the
+  keyboard is on (the open thread, or the parent row kept lit for an open
+  delegated thread, else the first): ↑ ↓ move it through the rows on screen,
+  skipping shut sections and project groups, ⏎ opens the thread, Esc lets the
+  selection go. Keys in a field inside the list (the
   rename box) stay the field's, and ⌘/⌃/⌥ stay the app's. ⌘-click toggles a
   row into the selection and ⇧-click takes the range from the last one clicked;
   picked rows are `bg-accent/12` + `font-medium`, which is not the open row's

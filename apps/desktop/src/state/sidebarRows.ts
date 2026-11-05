@@ -4,11 +4,9 @@
 
 import { diffCounts, type TranscriptItem } from "./thread";
 
-/** A row the list draws, and the children listed under it. */
+/** A row the list draws. A delegated thread has no row of its own: it is in its parent's stack. */
 export interface OrderRow {
   id: string;
-  /** A thread's children, in the order they are drawn under it. */
-  children?: string[];
 }
 
 /** A section as the list draws it: folded shut, or grouped, or only its first rows. */
@@ -20,12 +18,9 @@ export interface OrderSection {
   groups?: { key: string; shut?: boolean; rows: OrderRow[] }[];
   /** Rows when the section is not grouped. */
   rows?: OrderRow[];
-  /** Only the first rows are drawn (the Settled shelf's tail); a row's children come with it. */
+  /** Only the first rows are drawn (the Settled shelf's tail). */
   limit?: number;
 }
-
-const flatten = (rows: readonly OrderRow[]): string[] =>
-  rows.flatMap((row) => [row.id, ...(row.children ?? [])]);
 
 /** Every row the list draws, in the order it draws them: a shut section or group draws none. */
 export function visibleRows(sections: readonly OrderSection[]): string[] {
@@ -33,13 +28,35 @@ export function visibleRows(sections: readonly OrderSection[]): string[] {
   for (const section of sections) {
     if (section.shut) continue;
     if (section.groups) {
-      for (const group of section.groups) if (!group.shut) out.push(...flatten(group.rows));
+      for (const group of section.groups) if (!group.shut) out.push(...group.rows.map((r) => r.id));
       continue;
     }
     const rows = section.rows ?? [];
-    out.push(...flatten(section.limit === undefined ? rows : rows.slice(0, section.limit)));
+    out.push(...(section.limit === undefined ? rows : rows.slice(0, section.limit)).map((r) => r.id));
   }
   return out;
+}
+
+/**
+ * The row that stands for the open thread. A delegated thread has no row, so the
+ * open one answers with its nearest ancestor that is drawn: the parent row stays
+ * lit as the context, and the keyboard lands on something visible.
+ */
+export function contextRow(
+  selectedId: string | null,
+  rows: readonly string[],
+  parentOf: ReadonlyMap<string, string>,
+): string | null {
+  if (!selectedId) return null;
+  const drawn = new Set(rows);
+  const seen = new Set<string>();
+  let at: string | undefined = selectedId;
+  while (at && !seen.has(at)) {
+    if (drawn.has(at)) return at;
+    seen.add(at);
+    at = parentOf.get(at);
+  }
+  return null;
 }
 
 /**

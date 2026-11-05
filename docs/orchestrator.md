@@ -233,9 +233,11 @@ the child's own `metadata.json` (`parent` in `rustcode-session`, written at
 `session/new` from `_meta.rustcode.parent`), so pruning the link book's oldest
 finished links (`prune` in `state/orchestration.ts`) cannot forget it.
 `topLevel` (`apps/desktop/src/state/topLevel.ts`) picks one of three places:
-*nested* under a parent that is in the list; *settled*, with no row of its own,
-when the parent is gone, filtered out or in another project and the child is
-finished; or *shown* where it would be anyway. The user's own actions win: a
+*nested* under a parent that is in the list, with no row of its own (the
+parent's row shows the ones still working or waiting on you as a stack of
+marks, `ui/AgentStack.tsx`); *settled*, joining Settled by itself, when the
+parent is gone, filtered out or in another project and the child is finished;
+or *shown* where it would be anyway. The user's own actions win: a
 pinned child stays in Pinned, and one the user sent a message to is a row of its
 own. A child that is working or waits on the user is never hidden, whatever
 became of its parent. Search still finds all of them, and opening one does not
