@@ -2027,21 +2027,23 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     if (next) return sendQueuedNow(id, next.id);
     return submit(text, extras);
   }
-  const verdict = steerability(extras, steerConditions(thread));
+  // ⌘⏎ reads what the message holds, not what the thread says about steering: a harness learns it
+  // can steer when its first thread starts, so a thread started before that still reads "none"
+  // though the engine can steer it now. The engine's answer decides. Pictures keep the harness
+  // check, because the built-in engine refuses a steer that carries an image block and `images` is
+  // the agent's own capability; a command, a link or a file waits either way.
+  const verdict = steerability(extras, { ...steerConditions(thread), live: true });
   if (verdict.ok && (await steer(id, trimmed, extras))) return true;
   if (hasExtras(extras)) {
     const sent = await submit(text, extras);
-    if (sent)
-      toast(
-        extras.attachments.length
-          ? "Queued: attachments go with the next turn"
-          : "Queued: the turn takes plain text only",
-      );
+    // It waits for the next turn with the reason the row's arrow would give.
+    if (sent) toast(verdict.ok ? "Queued: the turn can't take it now" : STEER_REFUSAL[verdict.reason]);
     return sent;
   }
   updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
+  // The real harness decides the words: a live one refused this time, a non-live one cannot.
   toast(
-    verdict.ok
+    canSteer(thread)
       ? "Queued: the turn is waiting for you"
       : `Queued: ${threadHarness(thread)?.name ?? "this harness"} can’t take a message mid-turn`,
   );

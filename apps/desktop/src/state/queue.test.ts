@@ -142,11 +142,15 @@ describe("the steer rule", () => {
   test("a file, a command or a link waits for the next turn, pictures or not", () => {
     expect(steerability(extras({ attachments: [file] }), harness({}))).toEqual(no("files"));
     expect(steerability(extras({ command }), harness({}))).toEqual(no("commands"));
-    expect(steerability(extras({ links: ["https://example.com"] }), harness({}))).toEqual(no("commands"));
+    expect(steerability(extras({ links: ["https://example.com"] }), harness({}))).toEqual(no("links"));
     expect(steerability(extras({ attachments: [image, file] }), harness({}))).toEqual(no("files"));
     expect(
       steerability(extras({ attachments: [image], links: ["https://example.com"] }), harness({})),
-    ).toEqual(no("commands"));
+    ).toEqual(no("links"));
+    // A command is the headline when both wait: it is what the message runs.
+    expect(steerability(extras({ command, links: ["https://example.com"] }), harness({}))).toEqual(
+      no("commands"),
+    );
     // A file outranks the harness: it would wait for the next turn there too.
     expect(steerability(extras({ attachments: [file] }), harness({ live: false }))).toEqual(no("files"));
   });
@@ -188,13 +192,15 @@ describe("the steer rule", () => {
     expect(seen).toContain("file||truetruefalse|files");
     expect(seen).toContain("image+file|cmd|truetruefalse|files");
     expect(seen).toContain("text|cmd|truetruefalse|commands");
-    expect(seen).toContain("image|link|truetruefalse|commands");
+    expect(seen).toContain("image|link|truetruefalse|links");
+    expect(seen).toContain("text|cmdlink|truetruefalse|commands");
   });
 
-  test("the words a dimmed arrow shows are the three reasons", () => {
+  test("the words a dimmed arrow shows are the four reasons", () => {
     expect(STEER_REFUSAL).toEqual({
       files: "Files go with the next turn",
       commands: "Commands go with the next turn",
+      links: "Links go with the next turn",
       harness: "This harness can't take a message mid-turn: it waits for the next one",
     });
   });

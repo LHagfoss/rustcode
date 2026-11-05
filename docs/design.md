@@ -455,7 +455,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   harness that takes images mid-turn and is not the built-in one; a command, a
   link chip or a file waits for the next turn, and the dimmed arrow's tooltip
   is that reason (`Files go with the next turn`, `Commands go with the next
-  turn`, or the harness cannot take a message mid-turn). It is edited in the composer,
+  turn`, `Links go with the next turn`, or the harness cannot take a message
+  mid-turn). ⌘⏎ reads the message rather than the thread's learned `steer`
+  flag for text and pictures, so a thread started before its harness learned it
+  can steer is still tried against the engine; the row stays dimmed on such a
+  thread. It is edited in the composer,
   never in a field of its own: its pencil, or ↑ at the start of an empty
   composer, loads its text, command, links and attachments there, ⏎ saves it
   back in the queue and Esc leaves it. A held queue ends with Resume, which

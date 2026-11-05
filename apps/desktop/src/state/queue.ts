@@ -62,7 +62,7 @@ export interface SteerConditions {
 }
 
 /** Why a message cannot be steered: it waits for the next turn. */
-export type SteerRefusal = "files" | "commands" | "harness";
+export type SteerRefusal = "files" | "commands" | "links" | "harness";
 
 export type Steerability = { ok: true } | { ok: false; reason: SteerRefusal };
 
@@ -70,6 +70,7 @@ export type Steerability = { ok: true } | { ok: false; reason: SteerRefusal };
 export const STEER_REFUSAL: Record<SteerRefusal, string> = {
   files: "Files go with the next turn",
   commands: "Commands go with the next turn",
+  links: "Links go with the next turn",
   harness: "This harness can't take a message mid-turn: it waits for the next one",
 };
 
@@ -83,7 +84,8 @@ export const STEER_REFUSAL: Record<SteerRefusal, string> = {
 export function steerability(extras: ComposeExtras | undefined, conditions: SteerConditions): Steerability {
   const attachments = extras?.attachments ?? [];
   if (attachments.some((a) => a.kind === "file")) return { ok: false, reason: "files" };
-  if (extras?.command || (extras?.links.length ?? 0) > 0) return { ok: false, reason: "commands" };
+  if (extras?.command) return { ok: false, reason: "commands" };
+  if ((extras?.links.length ?? 0) > 0) return { ok: false, reason: "links" };
   if (!conditions.live) return { ok: false, reason: "harness" };
   if (attachments.length > 0 && !(conditions.images && !conditions.builtin))
     return { ok: false, reason: "harness" };

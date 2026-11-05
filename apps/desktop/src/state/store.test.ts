@@ -15,6 +15,7 @@ import {
   type CachedPlan,
   cancel,
   cancelQueuedEdit,
+  canSteer,
   closeReport,
   commandsFor,
   commitPlansAnswer,
@@ -84,6 +85,15 @@ const until = async (check: () => boolean, ms = 2000) => {
     await new Promise((r) => setTimeout(r, 2));
   }
 };
+
+/** A running thread that still reads `steer: "none"`: the harness learned it can steer after it started. */
+const setStaleSteer = (id: string) =>
+  updateThread(id, (t) => ({
+    ...t,
+    harness: t.harness
+      ? { ...t.harness, capabilities: { ...t.harness.capabilities, steer: "none" as const } }
+      : t.harness,
+  }));
 
 const selected = () => {
   const s = useApp.getState();
@@ -365,24 +375,60 @@ describe("engine controller with the mock engine", () => {
       },
       { why: "a link chip", extras: { links: ["https://example.com"], attachments: [] } },
     ];
-    for (const { why, extras } of cases) {
+    const run = async (threadId: string, why: string, extras: ComposeExtras) => {
       const text = `steer ${why}`;
+      const conditions = steerConditions(selected()!);
+      // ⌘⏎ reads what the message holds and leaves `live` to the engine's answer, so a thread
+      // still reading "none" is tried anyway; Send now follows the row, which can be dimmed.
+      const composer = steerability(extras, { ...conditions, live: true });
+      const row = steerability(extras, conditions);
       const steeredBefore = selected()!.items.filter((i) => i.kind === "user" && i.steered).length;
-      const rule = steerability(extras, steerConditions(selected()!));
-      // ⌘⏎ first: the same rule decides whether the turn reads it now or the queue takes it.
       expect(await steerOrSubmit(text, extras)).toBe(true);
       const steered = selected()!.items.filter((i) => i.kind === "user" && i.steered).length;
       const queued = selected()!.queue.find((q) => q.text === text);
-      expect([why, steered - steeredBefore, !!queued]).toEqual([why, rule.ok ? 1 : 0, !rule.ok]);
-      // Then the row: Send now on that queued message does exactly what the rule said.
-      if (queued) {
-        expect([why, await sendQueuedNow(id, queued.id)]).toEqual([why, rule.ok]);
-        // A refusal leaves it where it was; a steer takes it out of the queue.
-        const still = selected()!.queue.some((q) => q.id === queued.id);
-        expect([why, still]).toEqual([why, !rule.ok]);
-        if (still) removeQueued(id, queued.id);
-      }
-    }
+      expect([why, steered - steeredBefore, !!queued]).toEqual([why, composer.ok ? 1 : 0, !composer.ok]);
+      if (!queued) return;
+      // The row on that same message does exactly what the real harness says.
+      expect([why, await sendQueuedNow(threadId, queued.id)]).toEqual([why, row.ok]);
+      const still = selected()!.queue.some((q) => q.id === queued.id);
+      expect([why, still]).toEqual([why, !row.ok]);
+      if (still) removeQueued(threadId, queued.id);
+    };
+    for (const { why, extras } of cases) await run(id, why, extras);
+    // A thread started before its harness learned it can steer still reads "none", though the
+    // engine can steer it now: ⌘⏎ tries, the row's arrow is dimmed. The one intended difference.
+    setStaleSteer(id);
+    expect(canSteer(selected()!)).toBe(false);
+    for (const { why, extras } of cases) await run(id, `${why} (stale harness)`, extras);
+    await cancel();
+    await done;
+  });
+
+  test("⌘⏎ tries a thread that reads not-live, and its Send now stays dimmed", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    switchNewThreadHarness("codex");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    // The harness learned to steer after this thread started, so the thread still reads "none".
+    setStaleSteer(id);
+    expect(canSteer(selected()!)).toBe(false);
+    expect(steerability(emptyExtras, steerConditions(selected()!))).toEqual({ ok: false, reason: "harness" });
+    // ⌘⏎ hands plain text to the engine anyway, it takes it, and nothing queues.
+    expect(await steerOrSubmit("try it anyway")).toBe(true);
+    expect(selected()!.queue).toEqual([]);
+    expect(selected()!.items.flatMap((i) => (i.kind === "user" && i.steered ? [i.text] : []))).toEqual([
+      "try it anyway",
+    ]);
+    // Send now is the one that does not try: a message that is already queued stays there.
+    updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: "queued-stale", text: "still waiting" }] }));
+    expect(await sendQueuedNow(id, "queued-stale")).toBe(false);
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["still waiting"]);
+    expect(useApp.getState().toasts.at(-1)?.text).toBe(
+      "This harness can't take a message mid-turn: it waits for the next one",
+    );
     await cancel();
     await done;
   });
