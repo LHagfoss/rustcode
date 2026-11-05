@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Dialog, Popover } from "radix-ui";
 import { useEffect, useMemo } from "react";
+import type { StackAgent } from "../state/agentStack";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import {
   isActive,
@@ -31,7 +32,7 @@ import {
 import { modeLabel } from "../state/permissions";
 import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
-import { AgentGroupHeader, type AgentState, ThreadAgentRow, useNow } from "./AgentViews";
+import { AgentGroupHeader, type AgentState, LINK_AGENT_STATE, ThreadAgentRow, useNow } from "./AgentViews";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const ICON: Record<LinkState, typeof Clock> = {
@@ -102,6 +103,17 @@ function ManyLinks({ links }: { links: Link[] }) {
       : counts.failed
         ? "failed"
         : "done";
+  // The same stack as the sidebar: what works or needs you first, and once the work is
+  // done, the marks of what did it.
+  const marks: StackAgent[] = links.map((link, i) => {
+    const agent = LINK_AGENT_STATE[states[i] ?? "done"];
+    return {
+      id: link.target,
+      state: agent === "stopped" ? "done" : agent,
+      harness: link.harness,
+      label: link.targetTitle,
+    };
+  });
   const now = useNow(counts.working + counts.needs > 0);
   const started = Math.min(...links.map((l) => l.createdAt));
   const ended = Math.max(...links.map((l) => l.settledAt ?? 0));
@@ -113,6 +125,7 @@ function ManyLinks({ links }: { links: Link[] }) {
           className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
           <AgentGroupHeader
+            agents={marks}
             state={state}
             label={`${links.length} threads`}
             status={linkGroupStatus(counts)}
@@ -256,15 +269,15 @@ export function GrantDialog() {
 }
 
 /**
- * A sidebar badge: this thread works for another (↳), or has links under way
- * (count). `childrenListed` says the sidebar already lists the threads this one
- * started; only those leave the count, since a message to a thread shown
- * elsewhere and the "working for" marker are still news.
+ * A sidebar badge: this thread works for another (↳), or messaged a thread that
+ * still runs (count). Threads it started are the stack on its row, not a count,
+ * so they are always left out here: a message to a thread shown elsewhere and
+ * the "working for" marker are still news.
  */
-export function LinkBadge({ threadId, childrenListed }: { threadId: string; childrenListed?: boolean }) {
+export function LinkBadge({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
   const { driving, drivenBy } = linksOf(book, threadId);
-  const active = driving.filter((l) => isActive(l.state) && !(childrenListed && l.started)).length;
+  const active = driving.filter((l) => isActive(l.state) && !l.started).length;
   if (drivenBy) {
     return (
       <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>

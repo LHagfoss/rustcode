@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { FileDiff } from "../acp/types";
-import { keepListed, nextRow, rangeRows, rowKeyAction, threadDiff, visibleRows } from "./sidebarRows";
+import {
+  contextRow,
+  keepListed,
+  nextRow,
+  rangeRows,
+  rowKeyAction,
+  threadDiff,
+  visibleRows,
+} from "./sidebarRows";
 import type { TranscriptItem } from "./thread";
 
 const ROWS = ["a", "b", "c", "d", "e"];
@@ -31,14 +39,35 @@ describe("the rows the list draws", () => {
     ).toEqual(["a", "c"]);
   });
 
-  test("a parent's children follow it, and the tail limit counts rows, not children", () => {
-    const rows = [{ id: "p", children: ["c1", "c2"] }, { id: "q" }, { id: "r" }];
-    expect(visibleRows([{ id: "threads", rows }])).toEqual(["p", "c1", "c2", "q", "r"]);
-    expect(visibleRows([{ id: "settled", rows, limit: 2 }])).toEqual(["p", "c1", "c2", "q"]);
+  test("a delegated thread has no row of its own: only what is drawn is drawn", () => {
+    const rows = [{ id: "p" }, { id: "q" }, { id: "r" }];
+    expect(visibleRows([{ id: "threads", rows }])).toEqual(["p", "q", "r"]);
+    // The tail limit counts rows.
+    expect(visibleRows([{ id: "settled", rows, limit: 2 }])).toEqual(["p", "q"]);
   });
 
   test("nothing drawn is nothing to move through", () => {
     expect(visibleRows([{ id: "settled", shut: true, rows: [{ id: "a" }] }])).toEqual([]);
+  });
+});
+
+describe("the open thread's context", () => {
+  const parentOf = new Map([
+    ["child", "parent"],
+    ["grandchild", "child"],
+  ]);
+
+  test("the open thread's own row when it has one", () => {
+    expect(contextRow("a", ROWS, parentOf)).toBe("a");
+    expect(contextRow(null, ROWS, parentOf)).toBeNull();
+  });
+
+  test("a delegated thread answers with the nearest ancestor that is drawn", () => {
+    // Both children have no row; the parent does, and it keeps the highlight.
+    expect(contextRow("child", ["parent", "b"], parentOf)).toBe("parent");
+    expect(contextRow("grandchild", ["parent", "b"], parentOf)).toBe("parent");
+    // A delegation tree with no row at all has no context, so the keyboard starts at the top.
+    expect(contextRow("grandchild", ["b"], parentOf)).toBeNull();
   });
 });
 

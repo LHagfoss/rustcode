@@ -19,6 +19,7 @@ import { HoverCard } from "radix-ui";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
+import type { StackAgent } from "../state/agentStack";
 import { dismissLink, stateOf } from "../state/host";
 import { isActive, type Link, type LinkState, linkCounts, linkGroupStatus } from "../state/orchestration";
 import { agentHistory, peekThread, selectThread, useApp } from "../state/store";
@@ -32,6 +33,7 @@ import {
   type TranscriptItem,
   workingLabel,
 } from "../state/thread";
+import { AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
 import { Markdown } from "./Markdown";
 import { cx, Orb, Skeleton, Spinner, Tooltip } from "./primitives";
@@ -434,12 +436,13 @@ export function SubagentRow({
 }
 
 /**
- * What a group card says: the mark of what runs it, `2 agents · 2 working`,
+ * What a group card says: the stack of its agents' marks, `2 agents · 2 working`,
  * how long, and a chevron. Shared by the transcript's agent and thread groups
  * and by the strip above the composer, so a group reads the same wherever it is.
  */
 export function AgentGroupHeader({
   harness,
+  agents,
   state,
   label,
   status,
@@ -448,6 +451,8 @@ export function AgentGroupHeader({
   chevron = "fold",
 }: {
   harness?: string;
+  /** The group's agents: their marks are stacked in place of the one what-runs-it mark. */
+  agents?: readonly StackAgent[];
   state: AgentState;
   /** `2 agents`, `3 threads`: the count and what it counts. */
   label: string;
@@ -460,7 +465,11 @@ export function AgentGroupHeader({
 }) {
   return (
     <>
-      <AgentAvatar harness={harness} state={state} />
+      {agents?.length ? (
+        <AgentStack agents={agents} size="chat" tone="surface" />
+      ) : (
+        <AgentAvatar harness={harness} state={state} />
+      )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span className="shrink-0 font-medium text-fg text-sub">{label}</span>
         <span
@@ -505,6 +514,7 @@ export function AgentGroupHeader({
  */
 export function AgentGroupCard({
   harness,
+  agents,
   state,
   label,
   status,
@@ -515,6 +525,7 @@ export function AgentGroupCard({
   children,
 }: {
   harness?: string;
+  agents?: readonly StackAgent[];
   state: AgentState;
   label: string;
   status: string;
@@ -535,6 +546,7 @@ export function AgentGroupCard({
       >
         <AgentGroupHeader
           harness={harness}
+          agents={agents}
           state={state}
           label={label}
           status={status}
@@ -567,17 +579,19 @@ export function SubagentGroupRow({
 }) {
   const agents = useApp((s) => s.agents[threadId] ?? EMPTY);
   const parentHarness = useApp((s) => s.threads[threadId]?.harness?.id);
-  const states = items.map((item) => {
+  // Native subagents have no harness of their own: the stack shows the mark of the thread they run
+  // on, the same mark the single avatar showed.
+  const marks: StackAgent[] = items.map((item) => {
     const agentId =
       item.title === "spawn_agent" && item.status !== "failed" ? spawnedAgentId(item.output) : undefined;
     const info = agentId === undefined ? undefined : agents.find((a) => a.id === agentId);
     const running = info ? agentActive(info) : live(item);
     const failed = info ? info.status === "failed" : item.status === "failed";
-    return (running ? "working" : failed ? "failed" : "done") as AgentState;
+    const state = running ? "working" : failed ? "failed" : "done";
+    return { id: item.id, state, harness: parentHarness, label: info?.name ?? item.title };
   });
-  const working = states.filter((x) => x === "working").length;
-  const failed = states.filter((x) => x === "failed").length;
-  // One mark for the lot: they all run on this thread's harness, so a stack of them says nothing.
+  const working = marks.filter((x) => x.state === "working").length;
+  const failed = marks.filter((x) => x.state === "failed").length;
   const groupState: AgentState = working ? "working" : failed ? "failed" : "done";
   const now = useNow(working > 0);
   const started = Math.min(...items.map((i) => i.startedAt ?? Number.POSITIVE_INFINITY));
@@ -587,6 +601,7 @@ export function SubagentGroupRow({
   return (
     <AgentGroupCard
       harness={parentHarness}
+      agents={marks}
       state={groupState}
       label={`${items.length} agents`}
       status={status}
@@ -651,8 +666,18 @@ export function StartedThreadsRow({
         : "done";
   const started = Math.min(...settled.map((s) => s.link.createdAt));
   const ended = Math.max(...settled.map((s) => s.link.settledAt ?? 0));
+  const marks: StackAgent[] = settled.map(({ link, state }) => {
+    const agent = LINK_AGENT_STATE[state];
+    return {
+      id: link.target,
+      state: agent === "stopped" ? "done" : agent,
+      harness: link.harness,
+      label: link.targetTitle,
+    };
+  });
   return (
     <AgentGroupCard
+      agents={marks}
       state={groupState}
       label={`${settled.length} threads`}
       status={linkGroupStatus(counts)}
