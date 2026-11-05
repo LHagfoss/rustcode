@@ -4,7 +4,6 @@
 // asks the user before a thread reaches another one.
 
 import {
-  ChevronDown,
   CircleCheck,
   CircleX,
   Clock,
@@ -18,11 +17,20 @@ import {
   X,
 } from "lucide-react";
 import { Dialog, Popover } from "radix-ui";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
-import { isActive, LINK_LABEL, type Link, type LinkState } from "../state/orchestration";
+import {
+  isActive,
+  LINK_LABEL,
+  type Link,
+  type LinkState,
+  linkCounts,
+  linkGroupStatus,
+  stripLinks,
+} from "../state/orchestration";
 import { selectThread, setView, useApp } from "../state/store";
-import { ThreadAgentRow } from "./AgentViews";
+import { startedLinks } from "../state/thread";
+import { AgentGroupHeader, type AgentState, ThreadAgentRow, useNow } from "./AgentViews";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const ICON: Record<LinkState, typeof Clock> = {
@@ -76,40 +84,41 @@ function LinkRow({ link }: { link: Link }) {
   );
 }
 
-/** The counts the collapsed chip shows, from the links' states. */
-const stateSummary = (states: LinkState[]) => ({
-  working: states.filter((s) => s === "working").length,
-  needs: states.filter((s) => s === "needs_user").length,
-});
-
 /**
- * Three or more threads working for this one fold into one row: the strip above
- * the composer has about 800px, and a third of it spent on a made-up title tells
- * the reader nothing. Two stay as rows of their own; they fit.
+ * Three or more linked threads in the strip fold into one card header, the same
+ * header a group of agents has in the transcript: the strip above the composer
+ * has about 800px, and a third of it spent on a made-up title tells the reader
+ * nothing. Two stay as rows of their own; they fit.
  */
 function ManyLinks({ links }: { links: Link[] }) {
   // Joined into one string so the selector's result is stable between renders.
   const states = useApp((s) => links.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
-  const { working, needs } = stateSummary(states);
+  const counts = linkCounts(states);
+  const state: AgentState = counts.working
+    ? "working"
+    : counts.needs
+      ? "needs"
+      : counts.failed
+        ? "failed"
+        : "done";
+  const now = useNow(counts.working + counts.needs > 0);
+  const started = Math.min(...links.map((l) => l.createdAt));
+  const ended = Math.max(...links.map((l) => l.settledAt ?? 0));
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
+          className="group flex w-full min-w-0 items-center gap-2.5 rounded-xl border border-border bg-surface px-3 py-2 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
-          <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full bg-fill">
-            <Link2 size={13} className="text-fg-muted" />
-          </span>
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="min-w-0 truncate font-medium text-fg text-sub">{links.length} threads</span>
-            <span className="block truncate text-caption text-fg-muted">
-              {[working > 0 ? `${working} working` : undefined, needs > 0 ? `${needs} need you` : undefined]
-                .filter(Boolean)
-                .join(" · ") || "done"}
-            </span>
-          </span>
-          <ChevronDown size={14} aria-hidden className="shrink-0 text-fg-faint group-hover:text-fg" />
+          <AgentGroupHeader
+            state={state}
+            label={`${links.length} threads`}
+            status={linkGroupStatus(counts)}
+            elapsedMs={(counts.working || counts.needs ? now : ended || now) - started}
+            open={false}
+            chevron="down"
+          />
         </button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -132,19 +141,23 @@ function ManyLinks({ links }: { links: Link[] }) {
 /** Above the composer: the threads this one is working with, and the thread it works for. */
 export function LinkedThreads({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
+  const items = useApp((s) => s.threads[threadId]?.items);
   const { driving, drivenBy } = linksOf(book, threadId);
+  // A thread this one started reads in the transcript once it settles; the strip is its live
+  // place until then, so the two never draw the same thread.
+  const shown = useMemo(() => {
+    const mine = book.links.filter((l) => l.orchestrator === threadId);
+    return new Set([...startedLinks(items ?? [], mine).values()].map((l) => l.target));
+  }, [items, book.links, threadId]);
+  const live = stripLinks(driving, shown);
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
-  if (!driving.length && !drivenBy) return null;
+  if (!live.length && !drivenBy && !fanOuts.length) return null;
   return (
     <div className="flex flex-col gap-1 rounded-xl bg-bg py-0.5">
       {drivenBy && <WorkingFor link={drivenBy} />}
-      {driving.length > 0 && (
+      {(live.length > 0 || fanOuts.length > 0) && (
         <div className="flex flex-col gap-0.5">
-          {driving.length > 2 ? (
-            <ManyLinks links={driving} />
-          ) : (
-            driving.map((l) => <LinkRow key={l.id} link={l} />)
-          )}
+          {live.length > 2 ? <ManyLinks links={live} /> : live.map((l) => <LinkRow key={l.id} link={l} />)}
           {fanOuts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-2 pt-0.5">
               {fanOuts.map((f) => (

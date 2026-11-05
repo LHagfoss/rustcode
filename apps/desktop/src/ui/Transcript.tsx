@@ -9,9 +9,11 @@ import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
+import type { Link } from "../state/orchestration";
 import { RESUME_TEXT, shortcutFor, useApp } from "../state/store";
 import {
   splitSubagentSteps,
+  startedLinks,
   subagentOf,
   type ThreadState,
   type TranscriptItem,
@@ -19,7 +21,7 @@ import {
   turnCompletion,
   workingLabel,
 } from "../state/thread";
-import { SubagentGroupRow, SubagentRow } from "./AgentViews";
+import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow } from "./AttentionCards";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
@@ -48,6 +50,8 @@ type Row = {
   working?: true;
   /** Two or more subagents in a row, shown as one. */
   agents?: { items: Extract<TranscriptItem, { kind: "tool" }>[]; open: boolean };
+  /** The threads a run of `start_session` calls started, shown as one row or card. */
+  threads?: { links: Link[]; open: boolean };
   /** The running turn's foot: what it does now, when no row of its own shows it. */
   activity?: string;
   /** The turn parked on this many background commands. */
@@ -184,32 +188,63 @@ export function Transcript({
     () => splitSubagentSteps(thread.items),
     [thread.items],
   );
+  // The threads this one started, by the call that started them (its book of links).
+  const links = useApp((s) => s.links.links);
+  const started = useMemo(
+    () =>
+      startedLinks(
+        visible,
+        links.filter((l) => l.orchestrator === thread.id),
+      ),
+    [visible, links, thread.id],
+  );
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
     const shown = searching ? ALL_OPEN : open;
     const grouped: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown);
-    // Subagents started together read as one row: `3 subagents · 2 working`.
-    const isAgent = (r?: Row) =>
-      r?.item?.kind === "tool" && (!!subagentOf(r.item) || subagentSteps.has(r.item.id));
+    // Subagents started together read as one row (`3 agents · 2 working`), and so do the
+    // threads a run of `start_session` calls started (`2 threads · done`).
+    const kindOf = (r?: Row): "agents" | "threads" | undefined => {
+      const item = r?.item;
+      if (item?.kind !== "tool") return undefined;
+      if (subagentOf(item) || subagentSteps.has(item.id)) return "agents";
+      return started.has(item.id) ? "threads" : undefined;
+    };
     const out: Row[] = [];
     for (let i = 0; i < grouped.length; ) {
+      const kind = kindOf(grouped[i]);
       let j = i;
-      while (j < grouped.length && isAgent(grouped[j]) && grouped[j]!.inFold === grouped[i]!.inFold) j++;
-      if (j - i >= 2) {
-        const key = `agents-${grouped[i]!.key}`;
+      if (kind) {
+        while (j < grouped.length && kindOf(grouped[j]) === kind && grouped[j]!.inFold === grouped[i]!.inFold)
+          j++;
+      }
+      if (kind && j - i >= 2) {
+        const key = `${kind}-${grouped[i]!.key}`;
+        const items = grouped.slice(i, j).map((r) => r.item as Extract<TranscriptItem, { kind: "tool" }>);
         out.push({
           key,
           inFold: grouped[i]!.inFold,
-          agents: {
-            items: grouped.slice(i, j).map((r) => r.item as Extract<TranscriptItem, { kind: "tool" }>),
-            open: shown.has(key),
-          },
+          ...(kind === "agents"
+            ? { agents: { items, open: shown.has(key) } }
+            : {
+                threads: { links: items.flatMap((item) => started.get(item.id) ?? []), open: shown.has(key) },
+              }),
         });
         i = j;
+        continue;
+      }
+      const single = kind === "threads" ? started.get(grouped[i]!.item!.id) : undefined;
+      if (single) {
+        // One started thread is a row of its own, and stays hidden until its thread settles.
+        out.push({
+          key: grouped[i]!.key,
+          inFold: grouped[i]!.inFold,
+          threads: { links: [single], open: false },
+        });
       } else {
         out.push(grouped[i]!);
-        i++;
       }
+      i++;
     }
     // A pending approval sits at the call it is about, so what it wants is read where the work
     // stopped; one whose call is not on screen (yet, or folded away) goes to the foot, where it
@@ -255,6 +290,7 @@ export function Transcript({
   }, [
     visible,
     subagentSteps,
+    started,
     thread.running,
     thread.waiting,
     thread.permissions,
@@ -678,6 +714,7 @@ export function Transcript({
               const workLike = (r?: Row) =>
                 !!r?.group ||
                 !!r?.agents ||
+                !!r?.threads ||
                 !!r?.activity ||
                 !!r?.approval ||
                 r?.item?.kind === "tool" ||
@@ -710,6 +747,12 @@ export function Transcript({
                         stepsOf={(id) => subagentSteps.get(id) ?? NO_STEPS}
                         threadId={thread.id}
                         open={row.agents.open}
+                        onToggle={() => toggleFold(row.key)}
+                      />
+                    ) : row.threads ? (
+                      <StartedThreadsRow
+                        links={row.threads.links}
+                        open={row.threads.open}
                         onToggle={() => toggleFold(row.key)}
                       />
                     ) : row.group ? (

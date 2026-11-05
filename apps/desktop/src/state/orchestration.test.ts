@@ -27,6 +27,8 @@ import {
   type Link,
   type LinkBook,
   latestReply,
+  linkCounts,
+  linkGroupStatus,
   linkResult,
   listSessions,
   MAX_DATA_ROWS,
@@ -43,6 +45,7 @@ import {
   type RuleThread,
   restateLinks,
   sameProject,
+  stripLinks,
   updateLink,
   usageScope,
   WAKE_ANSWER_CHARS,
@@ -768,6 +771,28 @@ describe("waking a parent", () => {
     const working = book([link("top", "middle", "working")]);
     const after = restateLinks(working, "middle", said("still going"), 10_000, false);
     expect(after.links[0]).toEqual(working.links[0]);
+  });
+});
+
+describe("a group of threads", () => {
+  test("its header counts what is working and what needs you", () => {
+    const counts = linkCounts(["working", "queued", "needs_user", "done", "failed"]);
+    expect(counts).toEqual({ working: 2, needs: 1, failed: 1 });
+    expect(linkGroupStatus(counts)).toBe("2 working · 1 needs you");
+    expect(linkGroupStatus(linkCounts(["done", "done"]))).toBe("done");
+    expect(linkGroupStatus(linkCounts(["failed", "failed"]))).toBe("2 failed");
+    expect(linkGroupStatus(linkCounts(["needs_user", "needs_user"]))).toBe("2 need you");
+  });
+
+  test("the strip shows what works now, and what the transcript has no row for", () => {
+    const working = link("a", "b", "working");
+    const started = { ...link("a", "c", "done"), started: true };
+    const messaged = link("a", "d", "done");
+    const links = [working, started, messaged];
+    // `c` has a row in the transcript; `b` works, so the strip is its live place; `d` has none.
+    expect(stripLinks(links, new Set(["c"])).map((l) => l.target)).toEqual(["b", "d"]);
+    expect(stripLinks(links, new Set(["b", "c"])).map((l) => l.target)).toEqual(["b", "d"]);
+    expect(stripLinks(links, new Set(["b", "c", "d"]))).toEqual([working]);
   });
 });
 
