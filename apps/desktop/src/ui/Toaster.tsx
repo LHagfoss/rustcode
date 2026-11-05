@@ -208,6 +208,11 @@ export function Toaster() {
   useEffect(() => {
     setToastsPaused(paused);
   }, [paused]);
+  // The last card went from under the pointer: no pointerleave has to arrive for the next one to
+  // count down (the stack itself takes no pointer events).
+  useEffect(() => {
+    if (!toasts.length) setHovering(false);
+  }, [toasts.length]);
   useEffect(() => () => setToastsPaused(false), []);
   // A focused close button goes with its toast; keep the stack from staying paused for a focus
   // that no longer exists (removing a focused element does not always fire blur).

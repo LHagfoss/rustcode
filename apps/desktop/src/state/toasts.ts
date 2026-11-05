@@ -69,7 +69,7 @@ function timed(toast: Toast, now: number, paused: boolean): Toast {
 /**
  * Adds a toast: the same id (or, without one, the same text and tone) replaces
  * the shown card in place and starts its time again. A new one goes on top;
- * past three, the oldest are dropped.
+ * past three, the oldest passing one is dropped.
  */
 export function enqueue(
   toasts: readonly Toast[],
@@ -93,7 +93,13 @@ export function enqueue(
   if (existing) return toasts.map((t) => (t === existing ? next : t));
   // A card still fading with the same id goes now, so the new one keeps its React key.
   const leaving = toasts.filter((t) => t.leaving && t.id !== next.id);
-  const live = [next, ...toasts.filter((t) => !t.leaving)].slice(0, TOAST_LIMIT);
+  const live = [next, ...toasts.filter((t) => !t.leaving)];
+  // Past the limit the oldest goes, but never one that stays until dismissed (the engine's, with
+  // its Restart) while a passing notice could go instead.
+  while (live.length > TOAST_LIMIT) {
+    const passing = live.findLastIndex((t) => !t.persist);
+    live.splice(passing < 0 ? live.length - 1 : passing, 1);
+  }
   return [...live, ...leaving];
 }
 

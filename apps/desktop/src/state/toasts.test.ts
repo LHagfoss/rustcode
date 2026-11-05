@@ -88,6 +88,14 @@ describe("toast queue", () => {
     expect(new Set(list.map((t) => t.id)).size).toBe(TOAST_LIMIT);
   });
 
+  test("a burst never pushes out a toast that stays until dismissed", () => {
+    let list = add([], "The engine stopped.", 0, { id: "engine", persist: true, tone: "error" });
+    for (let i = 0; i < 20; i++) list = add(list, `Thread ${i} finished`, i + 1);
+    expect(list.length).toBe(TOAST_LIMIT);
+    expect(list.map((t) => t.id)).toContain("engine");
+    expect(list[0]!.text).toBe("Thread 19 finished");
+  });
+
   test("a fading card does not take a live slot", () => {
     let list: Toast[] = [];
     for (let i = 0; i < TOAST_LIMIT; i++) list = add(list, `notice ${i}`, i);
