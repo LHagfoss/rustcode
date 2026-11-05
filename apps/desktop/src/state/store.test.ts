@@ -4,6 +4,7 @@ import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans } from "../acp/rustcode";
 import { emptyExtras } from "./compose";
 import { answerOrchestration, resolveGrant } from "./host";
+import { pendingRequestsOn } from "./pending";
 import {
   agentHistory,
   answerPermission,
@@ -173,6 +174,62 @@ describe("engine controller with the mock engine", () => {
     expect(menu).toContain("/model");
     // The open thread still reads its own session, whatever the new-thread picker shows.
     expect(commandsFor(useApp.getState(), first.id).map((c) => c.name)).toContain("/status");
+  });
+
+  test("a full-access request for an unloaded thread is answered, not shown in the parent", async () => {
+    const transport = new MockTransport({ delayMs: 0 });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: [
+          {
+            id: "mock-thread-1/full",
+            orchestrator: "mock-thread-1",
+            target: "mock-thread-3",
+            orchestratorTitle: "Parent",
+            targetTitle: "Child",
+            message: "do it",
+            state: "working",
+            createdAt: 1,
+          },
+        ],
+      },
+    }));
+    setPermissionMode("mock-thread-3", "full");
+    expect(useApp.getState().threads["mock-thread-3"]).toBeUndefined();
+    const engine = (
+      transport as unknown as {
+        engine: { ask(method: string, params: JsonObject): Promise<JsonObject> };
+      }
+    ).engine;
+    const answer = await engine.ask("session/request_permission", {
+      sessionId: "mock-thread-3",
+      toolCall: {
+        toolCallId: "call-full",
+        title: "bash",
+        kind: "execute",
+        rawInput: { command: "bun test" },
+      },
+      options: [
+        { optionId: "reject", name: "Reject", kind: "reject_once" },
+        { optionId: "allow", name: "Allow once", kind: "allow_once" },
+      ],
+    });
+    // Full access answered it; loading the thread first did not turn it into a card.
+    expect(answer).toMatchObject({ outcome: { outcome: "selected", optionId: "allow" } });
+    const s = useApp.getState();
+    expect(s.threads["mock-thread-3"]?.loaded).toBe(true);
+    expect(s.threads["mock-thread-3"]?.permissions).toEqual([]);
+    expect(
+      pendingRequestsOn({
+        id: "mock-thread-1",
+        links: s.links.links,
+        requests: (id) => s.threads[id]?.permissions,
+        title: (id) => s.threads[id]?.title,
+      }),
+    ).toEqual([]);
   });
 
   test("a message with images queues whole while a turn runs, and stays editable", async () => {

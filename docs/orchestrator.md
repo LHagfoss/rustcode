@@ -246,7 +246,9 @@ they finish or ask, instead of having to poll with sleeps.
 - **Waiting on the user.** A child that goes `needs_user` (an approval or a
   question) is reported the same way, once per pending request (its rpc id):
   the parent is told to use `list_pending_requests` and that the user answers,
-  because an agent cannot answer an approval.
+  because an agent cannot answer an approval. The user sees the same card in
+  the child's chat and at the foot of the parent's transcript, and answers it
+  in either place.
 - **Not twice.** Each link is marked in the link book (`notifiedAt`,
   `askedRequest`), which now lives in the data store (`docs/data-store.md`),
   so a restart does not deliver it again. A parent blocked in `wait_session`

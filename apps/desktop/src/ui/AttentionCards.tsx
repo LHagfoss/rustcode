@@ -2,12 +2,15 @@
 // it wants, answered from one slim bar over the composer (ApprovalNotice), which owns the buttons
 // and the keys (when no text field has focus): 1–9 pick an option in the engine's order reject → always → allow once, and ⏎ approves
 // while esc declines. A question keeps its form in the bar, because the answer is a choice, and
-// leaves a row in the transcript once it is answered (Rows.tsx QuestionRow).
+// leaves a row in the transcript once it is answered (Rows.tsx QuestionRow). A request from a
+// thread below this one (ChildRequestCard) uses the same cards, under a header naming it.
 
 import {
+  ArrowUpRight,
   CheckCheck,
   ChevronDown,
   CircleArrowUp,
+  CornerDownRight,
   Hand,
   MessageCircleQuestion,
   ShieldAlert,
@@ -17,7 +20,13 @@ import { useEffect, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { isAllow, type PermissionOption, type PermissionRequest } from "../acp/types";
 import { displayCommand } from "../lib/command";
-import { answerPermission, answerQuestionOptions, answerQuestionText, approveAll } from "../state/store";
+import {
+  answerPermission,
+  answerQuestionOptions,
+  answerQuestionText,
+  approveAll,
+  selectThread,
+} from "../state/store";
 import { cx, Kbd, menuItem, Pill, Tooltip } from "./primitives";
 import { DiffView } from "./Rows";
 
@@ -244,19 +253,25 @@ export function ApprovalRow({
 export function ApprovalNotice({
   request,
   pending = 1,
+  number = 1,
   from,
+  keys = true,
 }: {
   request: PermissionRequest;
   pending?: number;
+  /** Which of `pending` approvals this is, from 1. */
+  number?: number;
   /** The thread asking, when it is a thread this one started and not this one. */
   from?: string;
+  /** Whether 1–9, ⏎ and esc answer it: only the first card on screen takes them. */
+  keys?: boolean;
 }) {
   const answers = useApproval(request);
   const { options, pick, decline, allow } = answers;
-  useDigitKeys(options.length, pick);
+  useDigitKeys(keys ? options.length : 0, pick);
   useApprovalKeys(
-    decline ? () => pick(options.indexOf(decline)) : undefined,
-    allow ? () => pick(options.indexOf(allow)) : undefined,
+    keys && decline ? () => pick(options.indexOf(decline)) : undefined,
+    keys && allow ? () => pick(options.indexOf(allow)) : undefined,
   );
   return (
     <section
@@ -272,7 +287,11 @@ export function ApprovalNotice({
         </span>
         ?
       </span>
-      {pending > 1 && <span className="shrink-0 text-caption text-fg-muted tabular">1 of {pending}</span>}
+      {pending > 1 && (
+        <span className="shrink-0 text-caption text-fg-muted tabular">
+          {number} of {pending}
+        </span>
+      )}
       <span className="flex shrink-0 items-center gap-1">
         <ApprovalActions request={request} pending={pending} answers={answers} />
       </span>
@@ -280,13 +299,22 @@ export function ApprovalNotice({
   );
 }
 
-export function QuestionCard({ request, from }: { request: PermissionRequest; from?: string }) {
+export function QuestionCard({
+  request,
+  from,
+  keys = true,
+}: {
+  request: PermissionRequest;
+  from?: string;
+  /** Whether 1–9 answer it: only the first card on screen takes them. */
+  keys?: boolean;
+}) {
   const q = request.question!;
   const answers = request.options.filter((o) => isAllow(o.kind) || !o.kind);
   const reject = request.options.find((o) => o.kind === "reject_once" || o.kind === "reject_always");
   const [ticked, setTicked] = useState<string[]>([]);
   const [text, setText] = useState("");
-  useDigitKeys(q.multiple ? 0 : answers.length, (i) => {
+  useDigitKeys(keys && !q.multiple ? answers.length : 0, (i) => {
     const option = answers[i];
     if (option) answerQuestionOptions(request, [option]);
   });
@@ -381,15 +409,72 @@ export function QuestionCard({ request, from }: { request: PermissionRequest; fr
 export function AttentionCard({
   request,
   pending = 1,
+  number = 1,
   from,
+  keys = true,
 }: {
   request: PermissionRequest;
   pending?: number;
+  number?: number;
   from?: string;
+  keys?: boolean;
 }) {
   return request.question ? (
-    <QuestionCard key={`${request.rpcId}`} request={request} from={from} />
+    <QuestionCard key={`${request.rpcId}`} request={request} from={from} keys={keys} />
   ) : (
-    <ApprovalNotice key={`${request.rpcId}`} request={request} pending={pending} from={from} />
+    <ApprovalNotice
+      key={`${request.rpcId}`}
+      request={request}
+      pending={pending}
+      number={number}
+      from={from}
+      keys={keys}
+    />
+  );
+}
+
+/**
+ * A request from a thread this one started, at the transcript's foot: a small
+ * header naming the thread (a click opens it), then the same card that thread's
+ * own chat shows. Its answer goes through that card's own function, so the two
+ * places cannot answer differently.
+ */
+export function ChildRequestCard({
+  request,
+  from,
+  pending = 1,
+  number = 1,
+  keys = false,
+}: {
+  request: PermissionRequest;
+  from: string;
+  pending?: number;
+  number?: number;
+  /** Only the first card on screen takes the digit and ⏎/esc keys. */
+  keys?: boolean;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-1.5"
+      role="group"
+      aria-label={`${request.question ? "Question" : "Approval"} from ${from}`}
+    >
+      <button
+        type="button"
+        onClick={() => selectThread(request.sessionId)}
+        aria-label={`Open ${from}`}
+        className="group flex w-full min-w-0 items-center gap-1.5 rounded-sm px-0.5 py-0.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+      >
+        <CornerDownRight size={12} className="shrink-0 text-fg-faint" />
+        <span className="min-w-0 truncate">
+          From <span className="font-medium text-fg">{from}</span>
+        </span>
+        <ArrowUpRight
+          size={11}
+          className="shrink-0 text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+        />
+      </button>
+      <AttentionCard request={request} pending={pending} number={number} keys={keys} />
+    </div>
   );
 }
