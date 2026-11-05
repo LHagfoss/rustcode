@@ -4,17 +4,74 @@
 // the chat's group cards, at two sizes (state/agentStack.ts).
 
 import { Bot, Check, X } from "lucide-react";
-import { agentStack, type StackAgent } from "../state/agentStack";
+import { useEffect, useState } from "react";
+import {
+  type AgentStackView,
+  agentStack,
+  STACK_STATE_WORD,
+  type StackAgent,
+  stackDescription,
+} from "../state/agentStack";
 import { useApp } from "../state/store";
+import { formatDuration } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
 import { cx, Spinner, Tooltip } from "./primitives";
 
-const STATE_WORD = {
-  needs: "needs you",
-  working: "working",
-  done: "done",
-  failed: "failed",
-} as const;
+/** The tip's clock: it runs only while the tip is open and something is working. */
+function useTipNow(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    // Reopening the tip after the row was idle must not start from an old `now`.
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  return now;
+}
+
+/**
+ * What a stack's hover says: how many threads and subagents it holds, and for
+ * each mark its state, its name, which of the two it is, and how long it has
+ * run. A thread has its own thread to open; a subagent runs inside this one.
+ */
+function StackTip({ view }: { view: AgentStackView }) {
+  const now = useTipNow(view.running);
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="flex items-baseline gap-1.5">
+        <span className="font-medium">{view.label}</span>
+        {view.summary && <span className="text-fg-muted">· {view.summary}</span>}
+      </span>
+      {view.order.map((agent) => {
+        const active = agent.state === "working" || agent.state === "needs";
+        const elapsed =
+          active && agent.since !== undefined
+            ? formatDuration(Math.floor((now - agent.since) / 1000) * 1000)
+            : undefined;
+        return (
+          <span key={agent.id} className="flex min-w-0 items-center gap-1.5">
+            <span
+              className={cx(
+                "shrink-0",
+                agent.state === "needs"
+                  ? "text-warning"
+                  : agent.state === "working"
+                    ? "text-accent"
+                    : "text-fg-muted",
+              )}
+            >
+              {STACK_STATE_WORD[agent.state]}
+            </span>
+            <span className="line-clamp-2 min-w-0 break-words text-fg-muted">{agent.label ?? "Thread"}</span>
+            {agent.kind && <span className="shrink-0 text-fg-faint">{agent.kind}</span>}
+            {elapsed && <span className="ml-auto shrink-0 text-fg-faint tabular">{elapsed}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 /** The icons alone, for a trigger that has its own card: at most three, `+N`, one sign of work. */
 export function AgentMarks({
@@ -100,33 +157,11 @@ export function AgentStack({
   const view = agentStack(agents, { idle: size === "chat" ? "show" : "hide" });
   if (!view.order.length) return null;
   const chat = size === "chat";
-  const tip = (
-    <div className="flex flex-col gap-1">
-      <span className="font-medium">{view.label}</span>
-      {view.order.map((agent) => (
-        <span key={agent.id} className="flex items-center gap-1.5">
-          <span
-            className={cx(
-              "shrink-0",
-              agent.state === "needs"
-                ? "text-warning"
-                : agent.state === "working"
-                  ? "text-accent"
-                  : "text-fg-muted",
-            )}
-          >
-            {STATE_WORD[agent.state]}
-          </span>
-          <span className="min-w-0 truncate text-fg-muted">{agent.label ?? "Thread"}</span>
-        </span>
-      ))}
-    </div>
-  );
   return (
-    <Tooltip label={tip}>
+    <Tooltip label={<StackTip view={view} />}>
       <span
         role="img"
-        aria-label={`Delegated threads: ${view.label}`}
+        aria-label={stackDescription(view)}
         className={cx(
           "flex shrink-0 items-center justify-end",
           // A stable slot: a count going from one to three never moves the title

@@ -110,8 +110,10 @@ function ManyLinks({ links }: { links: Link[] }) {
     return {
       id: link.target,
       state: agent === "stopped" ? "done" : agent,
+      kind: "thread",
       harness: link.harness,
       label: link.targetTitle,
+      since: link.createdAt,
     };
   });
   const now = useNow(counts.working + counts.needs > 0);

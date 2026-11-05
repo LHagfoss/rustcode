@@ -21,7 +21,14 @@ import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "..
 import { modelName } from "../acp/types";
 import type { StackAgent } from "../state/agentStack";
 import { dismissLink, stateOf } from "../state/host";
-import { isActive, type Link, type LinkState, linkCounts, linkGroupStatus } from "../state/orchestration";
+import {
+  isActive,
+  LINK_LABEL,
+  type Link,
+  type LinkState,
+  linkCounts,
+  linkGroupStatus,
+} from "../state/orchestration";
 import { agentHistory, peekThread, selectThread, useApp } from "../state/store";
 import {
   agentStepLabel,
@@ -45,6 +52,8 @@ export function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!active) return;
+    // The first render after work starts must not use a `now` from when the row was idle.
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [active]);
@@ -161,13 +170,56 @@ function firstLine(text: string | null | undefined): string | undefined {
   return plain || undefined;
 }
 
-/** What a hover on an agent row says: what it was asked, in full, and what runs it. */
-export function AgentTip({ title, meta, task }: { title: string; meta?: string; task?: string }) {
+/** What a hover on an agent row says: what it was asked, in full, what it is to
+ * this thread, how it goes and for how long, and what runs it. */
+export function AgentTip({
+  title,
+  meta,
+  task,
+  state,
+  status,
+  elapsed,
+  relationship,
+}: {
+  title: string;
+  meta?: string;
+  task?: string;
+  /** Its state, in words: `Working`, `Needs you`, `Done`, `Failed`, `Stopped`. */
+  state?: AgentState;
+  /** The exact state word, for a link: `Queued`, `Interrupted`, `Cancelled` keep their names. */
+  status?: string;
+  /** How long it has run. */
+  elapsed?: string;
+  /** What it is to the thread: `Subagent`, `Thread it started`, `Thread it messaged`. */
+  relationship?: string;
+}) {
   const asked = task?.trim();
   return (
     <div className="flex flex-col gap-0.5">
       <span className="font-medium">{title}</span>
       {meta && <span className="text-fg-muted">{meta}</span>}
+      {(relationship || state || status || elapsed) && (
+        <span className="flex items-center gap-1.5 text-fg-faint">
+          {relationship && <span>{relationship}</span>}
+          {state && (
+            <span
+              className={cx(
+                "font-medium",
+                state === "needs"
+                  ? "text-warning"
+                  : state === "working"
+                    ? "text-accent"
+                    : state === "failed"
+                      ? "text-danger"
+                      : undefined,
+              )}
+            >
+              {status ?? AGENT_LABEL[state]}
+            </span>
+          )}
+          {elapsed && <span className="ml-auto tabular">{elapsed}</span>}
+        </span>
+      )}
       {asked && asked !== title.trim() && (
         <span className="mt-0.5 line-clamp-6 break-words whitespace-pre-wrap text-fg-muted">{asked}</span>
       )}
@@ -189,6 +241,8 @@ export function AgentRow({
   elapsed,
   tooltip,
   label,
+  status,
+  description,
   onClick,
   expanded,
   showWord = true,
@@ -199,6 +253,10 @@ export function AgentRow({
   title: string;
   /** The line under the name: the step it is on, what it answered, or nothing for the status. */
   detail?: string;
+  /** The exact state word for a link, when `detail` does not replace it. */
+  status?: string;
+  /** What an informational row says in words, for the group it exposes to assistive tech. */
+  description?: string;
   elapsed?: string;
   tooltip?: ReactNode;
   label?: string;
@@ -212,8 +270,9 @@ export function AgentRow({
   /** A control beside the row, after the chevron: stop this work, show it beside this thread. */
   action?: ReactNode;
 }) {
-  const word = showWord && detail !== undefined && state !== "done" ? AGENT_LABEL[state] : undefined;
-  const bottom = detail ?? AGENT_LABEL[state];
+  const word =
+    showWord && detail !== undefined && state !== "done" ? (status ?? AGENT_LABEL[state]) : undefined;
+  const bottom = detail ?? status ?? AGENT_LABEL[state];
   const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left";
   const body = (
     <>
@@ -253,7 +312,11 @@ export function AgentRow({
     <div className="group flex w-full min-w-0 items-center">
       <Tooltip label={tooltip}>
         {onClick === undefined ? (
-          <div className={rowClass}>{body}</div>
+          // A row that only states something is a named, non-focusable group: no roleless tab stop,
+          // and the hover details are in its accessible name for assistive tech.
+          <div role="group" aria-label={description ?? title} className={rowClass}>
+            {body}
+          </div>
         ) : (
           <button
             type="button"
@@ -304,19 +367,38 @@ export function ThreadAgentRow({
   const now = useNow(active);
   const harness = link.harness ?? session?.harness;
   const meta = useAgentMeta(harness, session?.model ?? model);
-  const end = active ? now : session?.updatedAt;
+  const end = active ? now : link.settledAt;
   const elapsedMs = end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
+  const elapsed = elapsedMs === undefined ? undefined : formatDuration(elapsedMs);
+  const status = LINK_LABEL[state];
   const title = session?.title || link.targetTitle;
   return (
     <AgentRow
       harness={harness}
       state={LINK_AGENT_STATE[state]}
+      status={status}
       title={title}
       // The prompt is in the tip: its first line is boilerplate, and the title already says the job.
-      detail={active ? (step ?? "Working") : firstLine(stripHarnessMarkup(link.answer ?? ""))}
-      elapsed={elapsedMs === undefined ? undefined : formatDuration(Math.floor(elapsedMs / 1000) * 1000)}
+      detail={
+        active
+          ? state === "queued"
+            ? undefined
+            : (step ?? "Working")
+          : firstLine(stripHarnessMarkup(link.answer ?? ""))
+      }
+      elapsed={elapsed}
       label={`Open ${title}`}
-      tooltip={<AgentTip title={title} meta={meta} task={link.message} />}
+      tooltip={
+        <AgentTip
+          title={title}
+          meta={meta}
+          relationship={link.started ? "Thread it started" : "Thread it messaged"}
+          state={LINK_AGENT_STATE[state]}
+          status={status}
+          elapsed={elapsed}
+          task={link.message}
+        />
+      }
       onClick={() => selectThread(link.target)}
       showWord={LINK_AGENT_STATE[state] !== "working"}
       action={
@@ -403,7 +485,16 @@ export function SubagentRow({
         label={title === agent.task.trim() ? title : `${title}: ${agent.task}`}
         expanded={open}
         onClick={() => setOpen(!open)}
-        tooltip={<AgentTip title={name} meta={meta} task={agent.task} />}
+        tooltip={
+          <AgentTip
+            title={name}
+            meta={meta}
+            relationship="Subagent"
+            state={state}
+            elapsed={elapsed}
+            task={agent.task}
+          />
+        }
         showWord={state !== "working"}
       />
       {open && (
@@ -588,7 +679,14 @@ export function SubagentGroupRow({
     const running = info ? agentActive(info) : live(item);
     const failed = info ? info.status === "failed" : item.status === "failed";
     const state = running ? "working" : failed ? "failed" : "done";
-    return { id: item.id, state, harness: parentHarness, label: info?.name ?? item.title };
+    return {
+      id: item.id,
+      state,
+      kind: "subagent",
+      harness: parentHarness,
+      label: info?.name ?? item.title,
+      since: item.startedAt,
+    };
   });
   const working = marks.filter((x) => x.state === "working").length;
   const failed = marks.filter((x) => x.state === "failed").length;
@@ -671,8 +769,10 @@ export function StartedThreadsRow({
     return {
       id: link.target,
       state: agent === "stopped" ? "done" : agent,
+      kind: "thread",
       harness: link.harness,
       label: link.targetTitle,
+      since: link.createdAt,
     };
   });
   return (
@@ -745,7 +845,15 @@ export function AgentPill({ threadId }: { threadId?: string }) {
   // The same marks as the sidebar's row and the chat's group cards, whatever runs the agent.
   const harness = thread?.harness?.id;
   const marks = useMemo<StackAgent[]>(
-    () => working.map((w) => ({ id: w.key, state: "working", harness, label: w.name })),
+    () =>
+      working.map((w) => ({
+        id: w.key,
+        state: "working",
+        kind: "subagent",
+        harness,
+        label: w.name,
+        since: w.startedAt,
+      })),
     [working, harness],
   );
   // Agents leaving the list finished: say so for a moment instead of the pill just going away.
@@ -803,6 +911,7 @@ export function AgentPill({ threadId }: { threadId?: string }) {
                 <span className="flex items-baseline gap-1.5">
                   <span className="shrink-0 font-medium text-callout">{w.name}</span>
                   <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">{w.task}</span>
+                  <span className="shrink-0 text-caption text-fg-faint">subagent</span>
                   {w.startedAt !== undefined && now - w.startedAt >= 1000 && (
                     <span className="shrink-0 text-caption text-fg-faint tabular-nums">
                       {formatDuration(Math.floor((now - w.startedAt) / 1000) * 1000)}
