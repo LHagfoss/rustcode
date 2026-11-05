@@ -6,6 +6,7 @@
 
 import type { Json } from "../acp/jsonrpc";
 import type { ToolStatus } from "../acp/types";
+import { clip } from "../lib/clip";
 
 /** The tools RustCode's own MCP server offers to a thread orchestrating others. */
 export const ORCHESTRATION_TOOLS = [
@@ -102,8 +103,8 @@ export function usefulSummary(summary: string | undefined): string | undefined {
   return text ? summary?.trim() : undefined;
 }
 
-const cut = (text: string, max: number) =>
-  text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+/** A summary at most `max` long, its "…" never inside an emoji or an accented letter. */
+const cut = (text: string, max: number) => (text.length > max ? `${clip(text, max - 1).trimEnd()}…` : text);
 
 /** The newest call is still running, so a title may speak in the present tense. */
 const running = (status: ToolStatus | undefined) => status === "pending" || status === "in_progress";

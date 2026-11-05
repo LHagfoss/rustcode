@@ -35,6 +35,7 @@ import {
 import { memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
+import { clip } from "../lib/clip";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
 import { splitReply } from "../smartui/parse";
@@ -487,7 +488,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
   // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
   const reason =
-    failed && item.exitCode === undefined ? (item.output?.trim().split("\n")[0]?.slice(0, 120) ?? "") : "";
+    failed && item.exitCode === undefined ? clip(item.output?.trim().split("\n")[0] ?? "", 120) : "";
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];

@@ -2,6 +2,7 @@
 // read by the shell (`src-tauri/src/links.rs`), never by the webview. Cached
 // here for the session; the shell keeps its own memory and disk cache.
 
+import { clip } from "./clip";
 import { hasShell, shellCall } from "./shell";
 
 export interface LinkMeta {
@@ -51,7 +52,7 @@ export function sanitizeMeta(raw: unknown): LinkMeta | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const text = (v: unknown, max: number) =>
-    typeof v === "string" && v.trim() ? v.trim().replace(/\s+/g, " ").slice(0, max) : undefined;
+    typeof v === "string" && v.trim() ? clip(v.trim().replace(/\s+/g, " "), max) : undefined;
   const icon =
     typeof r.icon === "string" &&
     /^data:image\/(png|jpeg|gif|webp|x-icon|vnd\.microsoft\.icon|svg\+xml);base64,/i.test(r.icon)
