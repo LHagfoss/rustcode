@@ -10,6 +10,7 @@ import {
   answerQuestionOptions,
   type CachedPlan,
   cancel,
+  cancelQueuedEdit,
   closeReport,
   commandsFor,
   commitPlansAnswer,
@@ -38,6 +39,8 @@ import {
   removeQueued,
   renameThread,
   resetForTests,
+  resumeQueue,
+  saveQueuedEdit,
   selectThread,
   sendQueuedNow,
   setActiveTheme,
@@ -45,6 +48,7 @@ import {
   setDefaultCwd,
   setDefaultHarness,
   setDefaultPermissionMode,
+  setDraft,
   setHarnessEnabled,
   setNewThreadChoice,
   setOrchestration,
@@ -53,6 +57,7 @@ import {
   setThreadStatus,
   shownPlan,
   startNewThread,
+  startQueuedEdit,
   statusOf,
   steerOrSubmit,
   submit,
@@ -212,6 +217,94 @@ describe("engine controller with the mock engine", () => {
       "look at these two",
       "then this",
     ]);
+    await cancel();
+    await done;
+  });
+
+  test("a stopped turn holds the queue, and Resume starts its first message", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    // Two messages wait behind the running turn, in order.
+    // (The mock's turns ask for an approval unless the prompt says "yolo": these must run on.)
+    await submit("yolo second");
+    await submit("yolo third");
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["yolo second", "yolo third"]);
+    expect(selected()!.queueHeld).toBeFalsy();
+    // The user stops the turn: what waited stays where it is, and says why.
+    await cancel();
+    await done;
+    await until(() => !selected()!.running);
+    expect(selected()!.queueHeld).toBe(true);
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["yolo second", "yolo third"]);
+    const sent = () =>
+      selected()!
+        .items.filter((i) => i.kind === "user")
+        .map((i) => (i as { text: string }).text);
+    expect(sent()).not.toContain("yolo second");
+    // Resume starts the first one where it waits; the rest follow it as each turn completes.
+    expect(await resumeQueue(id)).toBe(true);
+    expect(selected()!.queueHeld).toBeUndefined();
+    await until(() => !selected()!.running && selected()!.queue.length === 0, 5000);
+    expect(sent().slice(-2)).toEqual(["yolo second", "yolo third"]);
+  });
+
+  test("a message sent while idle goes behind a held queue and resumes it", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    await submit("yolo held message");
+    await cancel();
+    await done;
+    await until(() => !selected()!.running && selected()!.queue.length === 1);
+    expect(selected()!.queueHeld).toBe(true);
+    await submit("yolo a new message");
+    // Nothing the user wrote is skipped: the held message starts, the new one waits behind it.
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["yolo a new message"]);
+    await until(() => selected()!.running);
+    await until(() => selected()!.queue.length === 0 && !selected()!.running, 5000);
+    const sent = selected()!
+      .items.filter((i) => i.kind === "user")
+      .map((i) => (i as { text: string }).text);
+    expect(sent.slice(-2)).toEqual(["yolo held message", "yolo a new message"]);
+  });
+
+  test("a queued message is edited in the composer and saved where it waits", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    await submit("second message");
+    const item = selected()!.queue[0]!;
+    // What the user had typed comes back after the edit, whichever way it ends.
+    setDraft(id, "my own draft");
+    expect(startQueuedEdit(id, item.id)).toBe(true);
+    expect(useApp.getState().drafts[id]).toBe("second message");
+    setDraft(id, "second message, edited");
+    expect(saveQueuedEdit()).toBe(true);
+    expect(selected()!.queue[0]!.text).toBe("second message, edited");
+    expect(useApp.getState().drafts[id]).toBe("my own draft");
+    expect(useApp.getState().queuedEdit).toBeNull();
+    // Esc leaves it as it was, and the item stays in the queue.
+    expect(startQueuedEdit(id, item.id)).toBe(true);
+    setDraft(id, "thrown away");
+    expect(cancelQueuedEdit()).toBe(true);
+    expect(selected()!.queue[0]!.text).toBe("second message, edited");
+    expect(useApp.getState().drafts[id]).toBe("my own draft");
+    // Removed while it is open: the edit ends, and what was typed stays when the composer was empty.
+    setDraft(id, "");
+    expect(startQueuedEdit(id, item.id)).toBe(true);
+    setDraft(id, "kept in the composer");
+    removeQueued(id, item.id);
+    expect(useApp.getState().queuedEdit).toBeNull();
+    expect(useApp.getState().drafts[id]).toBe("kept in the composer");
     await cancel();
     await done;
   });

@@ -27,7 +27,9 @@ import {
   subagentTitle,
   type TranscriptItem,
   thoughtHeadings,
+  wakeLine,
   wakeTurn,
+  withWakeMark,
   workingLabel,
 } from "./thread";
 
@@ -715,5 +717,38 @@ describe("messageTime", () => {
     expect(at(new Date(2026, 9, 20, 9, 30))).toMatch(/Oct/);
     expect(at(new Date(2025, 9, 20, 9, 30))).toMatch(/2025/);
     expect(messageTime(undefined, now)).toBe("");
+  });
+});
+
+describe("wake turns and the queue they hold", () => {
+  test("a wake turn replayed from history is still a wake, never a user message", () => {
+    // The engine keeps the text a turn was started with, not the app's flag, so the message marks
+    // itself (state/thread.ts `WAKE_MARK`).
+    const text = withWakeMark("1 child finished\n\nFinished:\n- link_id a/b · done");
+    const s = apply([{ kind: "user", text }]);
+    const item = s.items[0];
+    expect(item?.kind).toBe("user");
+    expect(item?.kind === "user" && item.wake).toBe(true);
+    // What the transcript shows is its first line, the summary.
+    expect(wakeLine(text)).toBe("1 child finished");
+    // A message the user typed is not one.
+    expect(apply([{ kind: "user", text: "1 child finished" }]).items[0]).toMatchObject({
+      kind: "user",
+      wake: undefined,
+    });
+  });
+
+  test("a turn that completed runs the queue on; a stopped or failed one holds it", () => {
+    const queued = { id: "q1", text: "next" };
+    const running = { ...emptyThread("s", "/p"), running: true, queue: [queued] };
+    expect(finishTurn(running, "completed").queueHeld).toBeUndefined();
+    expect(finishTurn(running, "cancelled").queueHeld).toBe(true);
+    expect(finishTurn(running, "failed").queueHeld).toBe(true);
+    // Nothing queued: nothing to hold.
+    const empty = { ...emptyThread("s", "/p"), running: true };
+    expect(finishTurn(empty, "cancelled").queueHeld).toBeUndefined();
+    // A turn starting clears it: the held queue runs again.
+    const held = { ...emptyThread("s", "/p"), queueHeld: true, queue: [queued] };
+    expect(beginTurn(held, "go").queueHeld).toBeUndefined();
   });
 });
