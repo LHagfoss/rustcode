@@ -6,6 +6,7 @@ import {
   appendSteer,
   applyUpdate,
   attachAutoAllowed,
+  autoAllowedNoticeNeeded,
   beginTurn,
   checkCommands,
   diffCounts,
@@ -104,6 +105,29 @@ describe("thread reducer", () => {
     ]);
     expect(attachAutoAllowed(s, "start_session", "Full access")).toEqual({ state: s, attached: false });
     expect(attachAutoAllowed(s, "message_session", "Full access").attached).toBe(false);
+  });
+
+  test("an auto-allowed start needs no notice beside the card of the thread it started", () => {
+    // The call's row stays as that thread's card, so the notice would say the same thing twice.
+    const started = apply([
+      { kind: "user", text: "go" },
+      { kind: "toolCall", id: "c", title: "mcp__rustcode__start_session", status: "completed", diffs: [] },
+    ]);
+    expect(autoAllowedNoticeNeeded(started, "start_session")).toBe(false);
+    expect(autoAllowedNoticeNeeded(started, "mcp__rustcode__start_session")).toBe(false);
+    // A start the transcript shows no call for is the one case the notice exists for.
+    expect(autoAllowedNoticeNeeded(emptyThread("s", "/p"), "start_session")).toBe(true);
+  });
+
+  test("every other auto-allowed call keeps its notice: its row goes quiet when the call ends", () => {
+    const s = apply([
+      { kind: "user", text: "go" },
+      { kind: "toolCall", id: "c", title: "mcp__rustcode__start_session", status: "completed", diffs: [] },
+    ]);
+    expect(autoAllowedNoticeNeeded(s, "message_session")).toBe(true);
+    expect(autoAllowedNoticeNeeded(s, "read_session")).toBe(true);
+    expect(autoAllowedNoticeNeeded(s, "wait_session")).toBe(true);
+    expect(autoAllowedNoticeNeeded(s, "fan_out")).toBe(true);
   });
 
   test("two calls in flight mark two rows, and only RustCode's own call is marked", () => {

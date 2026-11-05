@@ -724,6 +724,39 @@
 }
 
 /*
+ * What floats over the transcript at the composer's top edge: the strip of threads working for
+ * this one, its group card, and the jump-to-latest pill (ui/Links.tsx, ui/Transcript.tsx). One
+ * surface, the dense glass, so a label reads over whatever it is drawn on; the shadow-1 edge ring
+ * outlines it; only the radius differs (a pill for Latest, `rounded-xl` for the strip). What sits
+ * inside the strip — its rows, the group card — is transparent over it and steps one fill up on
+ * hover. Latest is both the surface and the control, so its hover is drawn as a layer over the
+ * glass: a `.rc-glass-overlay` rule would beat a `hover:bg-…` utility.
+ */
+.rc-glass-overlay {
+  /* Isolation keeps the hover layer under this surface: it is the element's own background, not a
+     sibling's. The element itself is positioned (absolute for Latest, `relative` for the strip), so
+     this class never sets `position`: it would beat the `absolute` the pill needs. */
+  isolation: isolate;
+  background: var(--rc-glass-bg-strong);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
+  box-shadow: var(--rc-shadow-1);
+}
+.rc-glass-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: background-color var(--rc-hover-out) ease-out;
+}
+.rc-glass-overlay:is(button, a):hover::after {
+  background: var(--rc-fill);
+  transition-duration: var(--rc-hover-in);
+}
+
+/*
  * The composer floats over the transcript in glass on the raised surface: 75% at rest,
  * 84% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
  * coloured ring. Its corner is one step rounder than a card's (`--rc-composer-radius`),
@@ -782,6 +815,30 @@
     inset 0 1px 0 0 var(--rc-composer-highlight),
     0 0 0 1px var(--rc-composer-outline);
   clip-path: inset(-1px -1px calc(1rem - 1px) -1px);
+}
+/*
+ * The field, once its text is taller than the box: the edge it is cut at fades over `--rc-fade-top`
+ * / `--rc-fade-bottom` px, so a line never stops on a hard edge (the mask, not a painted gradient,
+ * so nothing shows as a band on the glass). Composer.tsx sets each to 0 for an edge the reader can
+ * scroll no further at, which hides that side of the fade: a draft that fits has none at all.
+ */
+.rc-field-fade {
+  /* design-lint: allow (mask alpha, not a colour) */
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--rc-fade-top, 0px),
+    #000 calc(100% - var(--rc-fade-bottom, 0px)),
+    transparent 100%
+  );
+  /* design-lint: allow (mask alpha, not a colour) */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--rc-fade-top, 0px),
+    #000 calc(100% - var(--rc-fade-bottom, 0px)),
+    transparent 100%
+  );
 }
 /* In dark the lift is invisible; the ring and the inner highlight alone separate it. */
 :root[data-theme="dark"] .rc-composer {

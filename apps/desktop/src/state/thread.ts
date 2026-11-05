@@ -640,6 +640,20 @@ export function attachAutoAllowed(
   return { state, attached: false };
 }
 
+/**
+ * Whether an auto-allowed call still needs a notice of its own. A `start_session` call keeps a row
+ * in the transcript once it ends: it becomes the card of the thread it started
+ * (`startedLinks` → `StartedThreadsRow`), and with its thread working, that thread's row in the strip
+ * above the composer. Either way the reader is looking at what the call did, so a notice beside it
+ * only says it twice. Every other orchestration call's row goes quiet when it ends (it keeps no
+ * `autoAllowed` mark once the call is done), so the notice is the only record of what the app did.
+ */
+export function autoAllowedNoticeNeeded(state: ThreadState, tool: string): boolean {
+  const want = orchestrationTool(tool);
+  if (want !== "start_session") return true;
+  return !state.items.some((item) => item.kind === "tool" && orchestrationTool(item.title) === want);
+}
+
 /** Add a steered message where the running turn will read it. */
 export function appendSteer(
   state: ThreadState,

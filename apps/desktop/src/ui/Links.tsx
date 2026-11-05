@@ -110,7 +110,7 @@ function ManyLinks({ links }: { links: Link[] }) {
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="group flex w-full min-w-0 items-center gap-2.5 rounded-xl border border-border bg-surface px-3 py-2 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
+          className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
           <AgentGroupHeader
             state={state}
@@ -154,7 +154,10 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
   if (!live.length && !drivenBy && !fanOuts.length) return null;
   return (
-    <div className="flex flex-col gap-1 rounded-xl bg-bg py-0.5">
+    // The one surface this strip shares with the jump-to-latest pill above it and its own group card
+    // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
+    // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
+    <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1">
       {drivenBy && <WorkingFor link={drivenBy} />}
       {(live.length > 0 || fanOuts.length > 0) && (
         <div className="flex flex-col gap-0.5">
@@ -181,7 +184,8 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
 function WorkingFor({ link }: { link: Link }) {
   const state = useApp((s) => stateOf(s, link));
   return (
-    <div className="elevated flex h-[32px] items-center gap-2 rounded-full pr-1.5 pl-3 text-callout rc-in">
+    // A chip on the strip's surface, not a second glass on top of it.
+    <div className="flex h-[32px] items-center gap-2 rounded-full bg-fill-subtle pr-1.5 pl-3 text-callout rc-in">
       <CornerDownRight size={13} className="shrink-0 text-accent" />
       <span className="min-w-0 truncate">Working for “{link.orchestratorTitle}”</span>
       <span className="shrink-0 text-fg-muted">· {LINK_LABEL[state]}</span>

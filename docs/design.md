@@ -160,6 +160,14 @@ the same filter tinted with the pane instead of a surface
 banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar
 stay opaque.
 
+What floats just above the composer is that same dense glass as one class,
+`.rc-glass-overlay` (strong glass + `shadow-1`'s edge ring): the strip of
+threads working for this one, its group card — a row on the strip's
+surface, not a second glass — and the jump-to-latest pill, so the three
+read as one surface. Only their radius differs. Latest is both the
+surface and the control, so its hover is a fill layer over the glass
+rather than a `hover:bg-…` utility a class rule would beat.
+
 The composer floats over the transcript in two parts: the main box (field and send), and a tray
 tucked behind its foot with every other control. Its slash and `@` menus are an opaque drawer
 attached to the box's top edge.
@@ -402,12 +410,19 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   (see Tooltips).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
   24px, one step above 2xl), with no padding of its own: the field is
-  padded `px-3 pt-2` and the foot `px-3 pb-2`. Glass at
+  padded `px-3` and the foot `px-3 pb-2`. Glass at
   `--rc-composer-bg` (75%, 84% focused) with `--rc-composer-filter` and a
   1px `--rc-composer-outline`; no ring or colour on focus, the glass step
   is the focus. The card clips to its own corner. The editor reads at
   `text-body leading-relaxed` (22.75px), one line at rest above the foot
-  and 208px at most, then it scrolls; a slash-command chip in front of it
+  and 217px (nine lines) at most, then it scrolls; its text carries 6px
+  above and below inside the scroller, so the padding scrolls with it and
+  the first and last lines keep their room (the box is sized to whole
+  lines plus that padding). The edge it is cut at fades over 20px
+  (`mask-image`, `.rc-field-fade`, whose two edges `lib/fade.ts` decides):
+  the top once it is scrolled down, the bottom while there is text below,
+  and neither when the draft fits, so a short message never dims. A
+  slash-command chip in front of it
   is that same line box, so it keeps the field's baseline. The foot is one
   row **inside** the card: attach (**+**) on the left, send/queue/stop on
   the right. The tray tucked behind the foot carries the rest: the folder,
@@ -440,7 +455,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   divider's style), never a bubble; a message another thread sent says
   `From “…”` and is not the user's to edit.
 - **Jump to latest:** the pill over the composer's foot (`shadow-1`,
-  `.rc-glass-strong`, 30px) says `Latest` and, while a turn runs, what
+  `.rc-glass-overlay` — the strip below it shares that surface — 30px)
+  says `Latest` and, while a turn runs, what
   that turn is doing now after a `·` (`Reading files`, `Thinking · …`), so
   a reader scrolled up knows what waits. One line, truncated.
 - **Tool group:** two or more finished tool calls in a row (with the
@@ -545,8 +561,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   offers `Collapse`. It is drawn only while the thread is not running and
   something is unfinished, so a finished plan leaves no card; the header's
   popover and the composer's meter are unchanged.
-- **Jump to latest:** `.rc-glass rounded-full shadow-1`, centred 12px
-  above the composer stack, above it in z.
+- **Jump to latest:** `.rc-glass-overlay rounded-full`, centred 8px
+  above the composer stack and above its drawer when one is open, over it
+  in z.
 - **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`
   (or `warning` for notices), text `text-fg-muted`, actions at the right
   as secondary pills. No coloured border or tinted background.

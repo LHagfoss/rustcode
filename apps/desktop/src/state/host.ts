@@ -100,7 +100,14 @@ import {
   updateThread,
   useApp,
 } from "./store";
-import { appendNotice, attachAutoAllowed, localId, type TranscriptItem, turnCompletion } from "./thread";
+import {
+  appendNotice,
+  attachAutoAllowed,
+  autoAllowedNoticeNeeded,
+  localId,
+  type TranscriptItem,
+  turnCompletion,
+} from "./thread";
 import { orchestrationTool } from "./toolNames";
 
 const BOOK_KEY = "rustcode.threadLinks";
@@ -372,13 +379,17 @@ async function permitted(caller: RuleThread, key: string, question: GrantAsk): P
     // Not silent: the call's own row says the thread did it on its own, and why. A notice would
     // both name the caller (the reader is already in that thread) and split the run of calls.
     const why = modeLabel(mode);
+    const tool = TOOL_OF_KIND[question.kind];
     let attached = false;
+    let needed = true;
     updateThread(caller.id, (t) => {
-      const marked = attachAutoAllowed(t, TOOL_OF_KIND[question.kind], why);
+      const marked = attachAutoAllowed(t, tool, why);
       attached = marked.attached;
+      // A start is shown by the card of the thread it started, so it needs no notice of its own.
+      needed = autoAllowedNoticeNeeded(marked.state, tool);
       return marked.attached ? marked.state : t;
     });
-    if (!attached) {
+    if (!attached && needed) {
       updateThread(caller.id, (t) =>
         appendNotice(t, `${ALLOWED_NOTICE[question.kind]} · allowed by ${why}`, "info"),
       );
