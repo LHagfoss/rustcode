@@ -12,17 +12,19 @@ import {
   GitBranch,
   GitPullRequest,
   ListChecks,
+  type LucideIcon,
   PanelRight,
   SquareTerminal,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { chooseFolder } from "../state/folders";
+import type { HeaderButtonId } from "../state/headerButtons";
 import { isActive } from "../state/orchestration";
 import {
   refreshSessions,
@@ -155,17 +157,128 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
   );
 }
 
+// The header's buttons, one entry per id in state/headerButtons.ts: the label
+// and icon Settings shows, and the button itself, which decides on its own
+// whether this thread has anything to show (a plan, a pull requests view). The
+// record is typed by id, so a new button in that list does not compile without
+// its entry here, and a user's order only ever names an id.
+
+/** Stands alone as a pill, or joins the header's cluster of icon buttons. */
+type HeaderButtonKind = "pill" | "cluster";
+
+interface HeaderButtonEntry {
+  label: string;
+  icon: LucideIcon;
+  kind: HeaderButtonKind;
+  Button: (props: { thread?: ThreadState }) => ReactNode;
+}
+
+/** The thread's status menu; a thread of its own, no chip on a new one. */
+function StatusHeaderButton({ thread }: { thread?: ThreadState }) {
+  return thread ? <ThreadStatusMenu threadId={thread.id} /> : null;
+}
+
+/** The plan's progress, while there is a plan. */
+function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
+  return thread ? <PlanButton thread={thread} /> : null;
+}
+
+/** The pull requests panel, where the harness reports pull requests. */
+function PullsHeaderButton() {
+  const on = useApp((s) => s.panel === "pulls");
+  const available = useApp((s) => !!s.agent?.pullRequests);
+  if (!available) return null;
+  return (
+    <ClusterButton
+      label="Pull requests"
+      tooltip="Pull requests of this project"
+      on={on}
+      onClick={() => setPanel("pulls")}
+    >
+      <GitPullRequest size={14} />
+    </ClusterButton>
+  );
+}
+
+function TerminalHeaderButton() {
+  const open = useApp((s) => s.terminalOpen);
+  const key = useShortcutHint("toggle-terminal");
+  return (
+    <ClusterButton
+      label="Terminal"
+      tooltip={`Terminal (${key})`}
+      on={open}
+      onClick={() => setTerminalOpen(!open)}
+    >
+      <SquareTerminal size={14} />
+    </ClusterButton>
+  );
+}
+
+function DetailsHeaderButton() {
+  const on = useApp((s) => s.panel === "details");
+  return (
+    <ClusterButton
+      label="Thread details"
+      tooltip="Thread details"
+      on={on}
+      onClick={() => setPanel("details")}
+    >
+      <PanelRight size={14} />
+    </ClusterButton>
+  );
+}
+
+function ChangesHeaderButton() {
+  const on = useApp((s) => s.panel === "changes");
+  const key = useShortcutHint("toggle-panel");
+  return (
+    <ClusterButton
+      label="Changes"
+      tooltip={`Changes in the working tree (${key} toggles the panel)`}
+      on={on}
+      onClick={() => setPanel("changes")}
+    >
+      <FileDiff size={14} />
+    </ClusterButton>
+  );
+}
+
+export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
+  status: { label: "Status", icon: CircleDashed, kind: "pill", Button: StatusHeaderButton },
+  plan: { label: "Plan", icon: ListChecks, kind: "pill", Button: PlanHeaderButton },
+  pulls: { label: "Pull requests", icon: GitPullRequest, kind: "cluster", Button: PullsHeaderButton },
+  terminal: { label: "Terminal", icon: SquareTerminal, kind: "cluster", Button: TerminalHeaderButton },
+  details: { label: "Thread details", icon: PanelRight, kind: "cluster", Button: DetailsHeaderButton },
+  changes: { label: "Changes", icon: FileDiff, kind: "cluster", Button: ChangesHeaderButton },
+};
+
 function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boolean }) {
-  const panel = useApp((s) => s.panel);
-  const terminalOpen = useApp((s) => s.terminalOpen);
-  const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const projectCwd = useApp((s) => s.projectCwd);
+  const shown = useApp((s) => s.headerButtons);
   const folderKey = useShortcutHint("thread-folder");
-  const terminalKey = useShortcutHint("toggle-terminal");
-  const panelKey = useShortcutHint("toggle-panel");
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
   const title = thread ? (thread.title ?? listed ?? "New thread") : "New thread";
   const cwd = thread?.cwd ?? projectCwd;
+  // The buttons the user keeps, in their order. Each one decides whether this
+  // thread shows it, and the icon buttons share one cluster wherever they land.
+  const right: ReactNode[] = [];
+  let cluster: ReactNode[] = [];
+  const closeCluster = () => {
+    if (!cluster.length) return;
+    right.push(<Cluster key={`cluster-${right.length}`}>{cluster}</Cluster>);
+    cluster = [];
+  };
+  for (const id of shown) {
+    const entry = HEADER_BUTTONS[id];
+    const node = <entry.Button key={id} thread={thread} />;
+    if (entry.kind === "cluster") cluster.push(node);
+    else {
+      closeCluster();
+      right.push(node);
+    }
+  }
+  closeCluster();
   return (
     <MainHeader
       // Glass like every header; over a new thread's banner a lighter tint, so the picture shows.
@@ -202,48 +315,7 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
         </>
       }
-      right={
-        <>
-          {thread && <ThreadStatusMenu threadId={thread.id} />}
-          {thread && <PlanButton thread={thread} />}
-          <Cluster>
-            {pullsOn && (
-              <ClusterButton
-                label="Pull requests"
-                tooltip="Pull requests of this project"
-                on={panel === "pulls"}
-                onClick={() => setPanel("pulls")}
-              >
-                <GitPullRequest size={14} />
-              </ClusterButton>
-            )}
-            <ClusterButton
-              label="Terminal"
-              tooltip={`Terminal (${terminalKey})`}
-              on={terminalOpen}
-              onClick={() => setTerminalOpen(!terminalOpen)}
-            >
-              <SquareTerminal size={14} />
-            </ClusterButton>
-            <ClusterButton
-              label="Thread details"
-              tooltip="Thread details"
-              on={panel === "details"}
-              onClick={() => setPanel("details")}
-            >
-              <PanelRight size={14} />
-            </ClusterButton>
-            <ClusterButton
-              label="Changes"
-              tooltip={`Changes in the working tree (${panelKey} toggles the panel)`}
-              on={panel === "changes"}
-              onClick={() => setPanel("changes")}
-            >
-              <FileDiff size={14} />
-            </ClusterButton>
-          </Cluster>
-        </>
-      }
+      right={right.length ? right : undefined}
     />
   );
 }

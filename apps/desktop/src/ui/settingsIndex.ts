@@ -52,6 +52,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "interactive view chart table sandbox html agent answer",
   },
   { section: "chat", title: "Link previews", keywords: "links chips title icon page" },
+  {
+    section: "chat",
+    title: "Thread header buttons",
+    keywords:
+      "header buttons show hide reorder drag arrange customize toolbar status plan pull requests terminal details changes",
+  },
 
   // ------------------------------------------------------------ Agents
   {
