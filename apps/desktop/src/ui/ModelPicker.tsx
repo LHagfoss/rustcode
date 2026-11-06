@@ -247,7 +247,7 @@ function ModelPanel({
                 )}
               </div>
             )}
-            {section.rows.map(({ group, model: choice }, i) => {
+            {section.rows.map(({ group, model: choice }) => {
               const at = rows.findIndex(
                 (r) => r.group.harness.id === group.harness.id && r.model.value === choice.value,
               );
@@ -269,7 +269,6 @@ function ModelPanel({
                     "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left",
                     at === active && "bg-fill",
                     group.blocked && "cursor-default opacity-45",
-                    i > 0 || searching ? "" : "",
                   )}
                 >
                   <span className="min-w-0 flex-1">
@@ -554,7 +553,6 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     <CardPopover
       open={open}
       onOpenChange={setOpen}
-      align="end"
       role="dialog"
       label="Model and effort"
       // One size either way: the rows keep their height, so choosing a model never resizes it, and
