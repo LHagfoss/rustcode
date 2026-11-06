@@ -805,6 +805,8 @@ Settings › Chat › Smart UI is on (default), else 0; the engine reads it at
 In dev builds `window.__rustcode` exposes the store and its actions, so an
 agent can drive and inspect the UI (as `DebugDriver` does for the SwiftUI
 app), for example from a headless browser over the Chrome DevTools Protocol.
+In `apps/desktop`, `bun run mock-window open` is the shared, visible window for
+that; see AGENTS.md › Checking desktop app behavior.
 
 ## Checks
 
