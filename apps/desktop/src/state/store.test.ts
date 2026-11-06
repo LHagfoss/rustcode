@@ -592,6 +592,28 @@ describe("engine controller with the mock engine", () => {
     expect(listed.find((h) => h.id === "rustcode")?.accounts).toBeUndefined();
   });
 
+  test("read_session says why a thread could not be opened instead of reporting no turns", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const s = useApp.getState();
+    const caller = s.sessions[0]!;
+    // A listed thread the engine cannot load, as one whose folder is gone is.
+    const gone = { ...caller, id: "mock-gone-folder", title: "Gone folder" };
+    useApp.setState({
+      sessions: [...s.sessions, gone],
+      permissionModes: { ...s.permissionModes, [caller.id]: "full" },
+    });
+    const answer = await answerOrchestration({
+      sessionId: caller.id,
+      tool: "read_session",
+      args: { session_id: gone.id },
+    });
+    const message = (answer.error as { message: string } | undefined)?.message ?? "";
+    expect(message).toContain("Could not open this thread");
+    expect(message).toContain("Unknown session");
+    expect(answer.text).toBeUndefined();
+  });
+
   test("a thread moves to another folder, and the default folder is separate", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);

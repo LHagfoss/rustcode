@@ -14,7 +14,7 @@ pub(crate) mod questions;
 mod remote;
 mod rewind;
 mod session;
-mod session_move;
+pub(crate) mod session_move;
 mod session_repair;
 mod steer;
 mod streaming;
@@ -539,12 +539,17 @@ fn session_workspace(
 
 async fn acp_load_session(
     server: &AcpServer,
-    request: LoadSessionRequest,
+    mut request: LoadSessionRequest,
     connection: &agent_client_protocol::ConnectionTo<Client>,
 ) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
     let session_id = request.session_id.to_string();
     if !valid_acp_session_id(&session_id) {
         return Err(agent_client_protocol::Error::invalid_params().data("invalid session id"));
+    }
+    // A thread whose worktree is gone opens in the repository it came from,
+    // instead of failing on a folder that no longer exists.
+    if let Some(cwd) = crate::worktrees::recover_missing_worktree(&session_id, &request.cwd) {
+        request.cwd = cwd;
     }
     if let Some(record) = crate::harness::store::load(&session_id) {
         if session_id_is_active(&*server.sessions.lock().await, &session_id) {
