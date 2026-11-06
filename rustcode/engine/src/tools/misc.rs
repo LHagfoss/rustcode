@@ -715,6 +715,31 @@ pub const READ_ACTIVITY: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Orchestration version 7 (`docs/orchestrator.md`): the messages this
+/// thread queued on another one, and what it may still do to them.
+pub const MANAGE_QUEUE: Tool = Tool {
+    name: crate::orchestration::MANAGE_QUEUE,
+    description: "List, edit, cancel or steer the messages this thread queued on another one with message_session while it was busy: each one's queue_id, its first 200 characters and when it was queued, in send order. Only this thread's own queued messages can be changed, never one that has started. edit replaces the text, cancel drops it, steer delivers it into the running turn where that harness takes a message mid-turn. The user is asked once.",
+    arguments: r#"{"session_id": "the busy thread", "action": "list|edit|cancel|steer", "queue_id": "from list", "text": "the new text, for edit"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "action": {"type": "string", "enum": crate::orchestration::QUEUE_ACTIONS},
+                "queue_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_QUEUE_ID_CHARS, "description": "A queued message's id, from list"},
+                "text": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES, "description": "What the message says instead, for edit"}
+            },
+            "required": ["session_id", "action"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn smart_ui_preview_schema() -> Value {
     crate::smart_ui::schema()
 }

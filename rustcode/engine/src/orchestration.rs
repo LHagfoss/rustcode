@@ -49,6 +49,7 @@ pub const LIST_PENDING_REQUESTS: &str = "list_pending_requests";
 pub const THREAD_USAGE: &str = "thread_usage";
 pub const QUERY_DATA: &str = "query_data";
 pub const READ_ACTIVITY: &str = "read_activity";
+pub const MANAGE_QUEUE: &str = "manage_queue";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
@@ -70,8 +71,10 @@ pub const V3_TOOL_NAMES: [&str; 10] = [
 pub const V4_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
 /// Added by version 6: one thread's recorded activity, paged.
 pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
+/// Added by version 7: the messages this thread queued on another one.
+pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 6;
+pub const VERSION: u8 = 7;
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -81,6 +84,10 @@ pub const ACCOUNT_VERSION: u8 = 5;
 pub const SESSION_STATUSES: [&str; 3] = ["active", "review", "settled"];
 /// What `list_pull_requests` may ask for.
 pub const PR_STATES: [&str; 4] = ["open", "closed", "merged", "all"];
+/// What `manage_queue` may do to a message this thread queued on another one.
+pub const QUEUE_ACTIONS: [&str; 4] = ["list", "edit", "cancel", "steer"];
+/// The longest `queue_id` `manage_queue` accepts: one a list returned.
+pub const MAX_QUEUE_ID_CHARS: usize = 128;
 
 /// Turns `read_session` returns by default, and at most.
 pub const DEFAULT_LAST_TURNS: u64 = 3;
@@ -138,6 +145,9 @@ pub const PROMPT_HINT_V5: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V5`] for version 6 clients, which can page a thread's activity.
 pub const PROMPT_HINT_V6: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
+/// [`PROMPT_HINT_V6`] for version 7 clients, which can correct what they queued.
+pub const PROMPT_HINT_V7: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -147,7 +157,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         3 => PROMPT_HINT_V3,
         4 => PROMPT_HINT_V4,
         5 => PROMPT_HINT_V5,
-        _ => PROMPT_HINT_V6,
+        6 => PROMPT_HINT_V6,
+        _ => PROMPT_HINT_V7,
     }
 }
 
@@ -158,6 +169,7 @@ pub fn is_tool(name: &str) -> bool {
         || V3_TOOL_NAMES.contains(&name)
         || V4_TOOL_NAMES.contains(&name)
         || V6_TOOL_NAMES.contains(&name)
+        || V7_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -178,6 +190,11 @@ pub fn is_v4_tool(name: &str) -> bool {
 /// Whether `name` needs a version 6 client (the activity read).
 pub fn is_v6_tool(name: &str) -> bool {
     V6_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 7 client (its own queued messages).
+pub fn is_v7_tool(name: &str) -> bool {
+    V7_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -206,9 +223,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
         }
         // Version 5 adds account targeting to existing tools, not another tool.
         5 => tool_names(4),
-        _ => {
+        6 => {
             let mut names = tool_names(5);
             names.extend(V6_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(6);
+            names.extend(V7_TOOL_NAMES);
             names
         }
     }
@@ -552,6 +574,28 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 Some(_) => Err("limit must be a whole number of items".to_owned()),
             }
         }
+        MANAGE_QUEUE => {
+            required_name(args, "session_id")?;
+            let action = args.get("action").and_then(Value::as_str).unwrap_or("");
+            if !QUEUE_ACTIONS.contains(&action) {
+                return Err(format!("action must be one of {QUEUE_ACTIONS:?}"));
+            }
+            // A list names no message; the other three act on one of this thread's own.
+            if action == "list" {
+                return Ok(());
+            }
+            let queue_id = text(args, "queue_id").unwrap_or("");
+            if queue_id.trim().is_empty() {
+                return Err(format!("queue_id is required to {action}"));
+            }
+            if queue_id.len() > MAX_QUEUE_ID_CHARS {
+                return Err("queue_id is not one a list returned".to_owned());
+            }
+            if action == "edit" {
+                bounded_text(args, "text")?;
+            }
+            Ok(())
+        }
         START_SESSION => {
             bounded_text(args, "prompt")?;
             optional_title(args)?;
@@ -782,7 +826,9 @@ fn output(name: &str, value: Value) -> ToolExecutionOutput {
         let message = error.get("message").and_then(Value::as_str).unwrap_or("");
         let kind = match code {
             "denied" => ToolErrorKind::PermissionDenied,
-            "not_found" | "target_unavailable" | "not_allowed" => ToolErrorKind::Validation,
+            "not_found" | "target_unavailable" | "not_allowed" | "conflict" => {
+                ToolErrorKind::Validation
+            }
             _ => ToolErrorKind::Unknown,
         };
         // The slots a busy refusal leaves are part of its answer, not only of
@@ -838,7 +884,7 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 1}})), 1);
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 7}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 8}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -875,7 +921,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 6);
+        assert_eq!(VERSION, 7);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -883,11 +929,15 @@ mod tests {
         assert!(v4.contains(&THREAD_USAGE) && v4.contains(&QUERY_DATA));
         // Version 5 adds account targeting to existing tools, not another tool.
         assert_eq!(tool_names(5), v4);
-        // Version 6 adds the activity read.
+        // Version 6 adds the activity read, version 7 the queue control.
         assert_eq!(tool_names(6), [v4.clone(), V6_TOOL_NAMES.to_vec()].concat());
         assert_eq!(
+            tool_names(7),
+            [tool_names(6), V7_TOOL_NAMES.to_vec()].concat()
+        );
+        assert_eq!(
             tool_names(9),
-            tool_names(6),
+            tool_names(7),
             "a newer client gets what this engine speaks"
         );
         for name in [THREAD_USAGE, QUERY_DATA] {
@@ -904,6 +954,15 @@ mod tests {
             assert!(PROMPT_HINT_V6.contains(name), "{name}");
             assert!(!PROMPT_HINT_V5.contains(name), "{name} is v6 only");
         }
+        for name in V7_TOOL_NAMES {
+            assert!(is_tool(name) && is_v7_tool(name));
+            assert!(
+                !is_v6_tool(name) && !tool_names(6).contains(&name),
+                "{name} is v7 only"
+            );
+            assert!(PROMPT_HINT_V7.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V6.contains(name), "{name} is v7 only");
+        }
         // The hint a client is told follows the version it advertised.
         assert_eq!(prompt_hint(1), PROMPT_HINT);
         assert_eq!(prompt_hint(2), PROMPT_HINT_V2);
@@ -911,7 +970,8 @@ mod tests {
         assert_eq!(prompt_hint(4), PROMPT_HINT_V4);
         assert_eq!(prompt_hint(5), PROMPT_HINT_V5);
         assert_eq!(prompt_hint(6), PROMPT_HINT_V6);
-        assert_eq!(prompt_hint(9), PROMPT_HINT_V6);
+        assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
+        assert_eq!(prompt_hint(9), PROMPT_HINT_V7);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -923,7 +983,7 @@ mod tests {
                     .cloned()
                     .unwrap()
             )),
-            6
+            7
         );
         assert_eq!(
             client_meta_version(Some(
@@ -937,15 +997,16 @@ mod tests {
         // It rides in the root prompt and in the MCP server's instructions, so
         // it is bounded: v4 adds the two data tools, v5 the account line and
         // the line that says a thread an agent starts is its delegate, v6 the
-        // activity read.
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V6);
+        // activity read, v7 the queue control.
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V7);
         println!(
-            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {tokens} tokens",
+            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v7 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V4),
-            crate::network::compaction::estimate_tokens(PROMPT_HINT_V5)
+            crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
+            crate::network::compaction::estimate_tokens(PROMPT_HINT_V6)
         );
-        assert!(tokens < 330, "{tokens}");
+        assert!(tokens < 350, "{tokens}");
     }
 
     #[test]
@@ -987,6 +1048,119 @@ mod tests {
         }
         assert!(tool(QUERY_DATA).description.contains("read-only"));
         assert!((tool(QUERY_DATA).schema)()["properties"]["limit"]["maximum"] == 1000);
+    }
+
+    /// One tool of the table, by name.
+    fn tool(name: &str) -> &'static crate::tools::Tool {
+        crate::tools::TOOLS
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    }
+
+    #[test]
+    fn version_seven_offers_the_queue_control_to_its_clients_only() {
+        let names = tool_names(7);
+        assert!(names.contains(&MANAGE_QUEUE));
+        assert!(!tool_names(6).contains(&MANAGE_QUEUE));
+        assert!(is_tool(MANAGE_QUEUE) && is_v7_tool(MANAGE_QUEUE));
+        // It says what it may touch, and that a change asks the user.
+        let description = tool(MANAGE_QUEUE).description;
+        for said in [
+            "queue_id",
+            "200 characters",
+            "Only this thread's own queued messages",
+            "started",
+            "steer",
+            "asked once",
+        ] {
+            assert!(description.contains(said), "{said}: {description}");
+        }
+        let schema = (tool(MANAGE_QUEUE).schema)();
+        assert_eq!(schema["properties"]["action"]["enum"], json!(QUEUE_ACTIONS));
+        assert_eq!(
+            schema["properties"]["text"]["maxLength"],
+            json!(MAX_MESSAGE_BYTES),
+            "an edit is as long as the message it replaces"
+        );
+        assert_eq!(schema["required"], json!(["session_id", "action"]));
+    }
+
+    #[test]
+    fn queue_control_arguments_are_checked() {
+        let ok = |args: Value| validate(MANAGE_QUEUE, &args).is_ok();
+        assert!(ok(json!({"session_id": "b", "action": "list"})));
+        // A list names no message.
+        assert!(ok(
+            json!({"session_id": "b", "action": "list", "queue_id": "ignored"})
+        ));
+        // A cancel or a steer names one message and nothing else; an edit says what instead.
+        for action in ["cancel", "steer"] {
+            assert!(
+                ok(json!({"session_id": "b", "action": action, "queue_id": "q1"})),
+                "{action}"
+            );
+            assert!(
+                !ok(json!({"session_id": "b", "action": action})),
+                "{action}"
+            );
+            assert!(
+                !ok(json!({"session_id": "b", "action": action, "queue_id": " "})),
+                "{action}"
+            );
+        }
+        assert!(ok(
+            json!({"session_id": "b", "action": "edit", "queue_id": "q1", "text": "hi"})
+        ));
+        assert!(!ok(
+            json!({"session_id": "b", "action": "edit", "queue_id": "q1"})
+        ));
+        assert!(!ok(
+            json!({"session_id": "b", "action": "edit", "queue_id": "q1", "text": " "})
+        ));
+        let long = "x".repeat(MAX_MESSAGE_BYTES + 1);
+        assert!(!ok(
+            json!({"session_id": "b", "action": "edit", "queue_id": "q1", "text": long})
+        ));
+        assert!(!ok(
+            json!({"session_id": "b", "action": "reorder", "queue_id": "q1"})
+        ));
+        assert!(!ok(json!({"session_id": "b"})));
+        // A list ignores a queue_id; one that acts on a message takes only a real id.
+        let enormous = "x".repeat(MAX_QUEUE_ID_CHARS + 1);
+        assert!(ok(
+            json!({"session_id": "b", "action": "list", "queue_id": enormous.clone()})
+        ));
+        assert!(!ok(
+            json!({"session_id": "b", "action": "cancel", "queue_id": enormous})
+        ));
+        assert!(!ok(json!({"action": "list"})));
+        assert_eq!(timeout(MANAGE_QUEUE, &json!({})), REQUEST_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn a_client_below_seven_never_gets_the_queue_control() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let args = json!({"session_id": "b", "action": "list"});
+        let refused = execute_versioned(
+            client(json!({"queued": []})),
+            6,
+            &cancel,
+            MANAGE_QUEUE,
+            &args,
+        )
+        .await;
+        assert!(!refused.success);
+        assert!(refused.content.contains("newer RustCode app"));
+        let answered = execute_versioned(
+            client(json!({"queued": []})),
+            7,
+            &cancel,
+            MANAGE_QUEUE,
+            &args,
+        )
+        .await;
+        assert!(answered.success, "{}", answered.content);
     }
 
     #[test]

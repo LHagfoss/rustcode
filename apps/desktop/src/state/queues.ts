@@ -37,6 +37,8 @@ export interface QueueRow {
   fromView?: boolean;
   /** Delivered for another thread (orchestration link id). */
   link?: string;
+  /** The thread that queued it for this one; absent is the user's own (or an older build's). */
+  from?: string;
   /** The links a wake reports, and of those the ones that wait on the user. */
   wakeLinks?: string[];
   wakeAsking?: string[];
@@ -87,6 +89,8 @@ export function parseQueueBook(raw: string | null): QueueBook {
       const kept = list.filter(isRow).map((row) => ({
         ...row,
         created_at: typeof row.created_at === "number" ? row.created_at : 0,
+        // A row an older build wrote has no owner, so no caller may touch it.
+        from: typeof row.from === "string" && row.from ? row.from : undefined,
         wakeLinks: strings(row.wakeLinks),
         wakeAsking: strings(row.wakeAsking),
       }));
@@ -104,11 +108,12 @@ export function rowOf(item: QueuedPrompt, now: number, created?: number): QueueR
     id: item.id,
     text,
     kind: item.wake ? "wake" : "user",
-    created_at: created ?? now,
+    created_at: created ?? item.queuedAt ?? now,
   };
   if (item.extras && JSON.stringify(item.extras).length <= MAX_ROW_EXTRAS) row.extras = item.extras;
   if (item.fromView) row.fromView = true;
   if (item.link) row.link = item.link;
+  if (item.from) row.from = item.from;
   if (item.wakeLinks?.length) row.wakeLinks = [...item.wakeLinks];
   if (item.wakeAsking?.length) row.wakeAsking = [...item.wakeAsking];
   if (item.restart) row.restart = true;
@@ -140,6 +145,10 @@ export function queueOf(rows: readonly QueueRow[], acked: readonly string[] = []
     if (row.extras) item.extras = row.extras;
     if (row.fromView) item.fromView = true;
     if (row.link) item.link = row.link;
+    if (row.from) {
+      item.from = row.from;
+      item.queuedAt = row.created_at;
+    }
     if (row.kind === "wake") item.wake = true;
     if (row.wakeLinks?.length) item.wakeLinks = row.wakeLinks;
     if (row.wakeAsking?.length) item.wakeAsking = row.wakeAsking;

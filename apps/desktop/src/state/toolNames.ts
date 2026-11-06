@@ -26,6 +26,7 @@ export const ORCHESTRATION_TOOLS = [
   "list_pending_requests",
   "list_projects",
   "list_pull_requests",
+  "manage_queue",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -159,6 +160,20 @@ function orchestrationLabel(
     }
     case "message_session":
       return { title: "Messaged thread" };
+    case "manage_queue": {
+      const what = text(args.action);
+      const title =
+        what === "list"
+          ? "Listed queued messages"
+          : what === "edit"
+            ? "Changed a queued message"
+            : what === "cancel"
+              ? "Dropped a queued message"
+              : what === "steer"
+                ? "Sent a queued message now"
+                : "Queued messages";
+      return { title };
+    }
     case "wait_session": {
       const n = links || 1;
       return { title: `${running(status) ? "Waiting" : "Waited"} for ${n} thread${n === 1 ? "" : "s"}` };

@@ -40,6 +40,7 @@ import {
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
   MAX_DEPTH,
+  MAX_MESSAGE_BYTES,
   MAX_TREE_LINKS,
   markDelivered,
   mergeBooks,
@@ -143,7 +144,7 @@ describe("management tools", () => {
 describe("orchestration rules", () => {
   test("the app advertises the version whose account argument it answers", () => {
     // The engine strips `account` below this version and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(6);
+    expect(CAPABILITY_VERSION).toBe(7);
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {
@@ -482,6 +483,70 @@ describe("the data store", () => {
       limit: 1,
     });
     expect(isFailure(parseCall({ tool: "read_activity", args: {} }))).toBe(true);
+  });
+
+  test("parses manage_queue, which needs an action and, but for a list, a message", () => {
+    expect(parseCall({ tool: "manage_queue", args: { session_id: "b", action: "list" } })).toEqual({
+      tool: "manage_queue",
+      target: "b",
+      action: "list",
+    });
+    // A list names no message, so a queue_id beside it changes nothing.
+    expect(
+      parseCall({ tool: "manage_queue", args: { session_id: "b", action: "list", queue_id: "q1" } }),
+    ).toEqual({
+      tool: "manage_queue",
+      target: "b",
+      action: "list",
+    });
+    expect(
+      parseCall({ tool: "manage_queue", args: { session_id: "b", action: "cancel", queue_id: " q1 " } }),
+    ).toEqual({ tool: "manage_queue", target: "b", action: "cancel", queueId: "q1" });
+    expect(
+      parseCall({ tool: "manage_queue", args: { session_id: "b", action: "steer", queue_id: "q1" } }),
+    ).toEqual({
+      tool: "manage_queue",
+      target: "b",
+      action: "steer",
+      queueId: "q1",
+    });
+    expect(
+      parseCall({
+        tool: "manage_queue",
+        args: { session_id: "b", action: "edit", queue_id: "q1", text: " instead " },
+      }),
+    ).toEqual({ tool: "manage_queue", target: "b", action: "edit", queueId: "q1", text: " instead " });
+    // An edit says what it says instead, as long as a message may be.
+    expect(
+      isFailure(
+        parseCall({ tool: "manage_queue", args: { session_id: "b", action: "edit", queue_id: "q1" } }),
+      ),
+    ).toBe(true);
+    expect(
+      isFailure(
+        parseCall({
+          tool: "manage_queue",
+          args: { session_id: "b", action: "edit", queue_id: "q1", text: "   " },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isFailure(
+        parseCall({
+          tool: "manage_queue",
+          args: { session_id: "b", action: "edit", queue_id: "q1", text: "x".repeat(MAX_MESSAGE_BYTES + 1) },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isFailure(
+        parseCall({ tool: "manage_queue", args: { session_id: "b", action: "reorder", queue_id: "q1" } }),
+      ),
+    ).toBe(true);
+    expect(isFailure(parseCall({ tool: "manage_queue", args: { session_id: "b", action: "cancel" } }))).toBe(
+      true,
+    );
+    expect(isFailure(parseCall({ tool: "manage_queue", args: { action: "list" } }))).toBe(true);
   });
 
   test("read_activity refuses an unknown thread and the caller's own", () => {
