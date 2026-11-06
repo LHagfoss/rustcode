@@ -1431,6 +1431,22 @@ pub fn query(sql: &str, limit: usize) -> Result<QueryResult, String> {
     query_path(&path, sql, limit)
 }
 
+/// All-time input and output tokens the local store recorded, without adding
+/// cached-token columns that may already be included in input totals.
+pub(crate) fn total_reported_tokens() -> Result<Option<u64>, String> {
+    let result = query(
+        "SELECT CASE WHEN SUM(input_tokens) IS NULL AND SUM(output_tokens) IS NULL THEN NULL \
+         ELSE COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) END \
+         AS total_tokens FROM turns",
+        1,
+    )?;
+    Ok(result
+        .rows
+        .first()
+        .and_then(|row| row.get("total_tokens"))
+        .and_then(serde_json::Value::as_u64))
+}
+
 fn query_path(path: &Path, sql: &str, limit: usize) -> Result<QueryResult, String> {
     if sql.trim().is_empty() {
         return Err("no SQL given".to_owned());

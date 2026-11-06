@@ -21,6 +21,13 @@ provider usage may be shown as compact "out" and "total" token checkpoints.
 These values are rounded and deduplicated so streaming deltas do not create a
 Discord update for every token.
 
+The state line shows the RustCode version and the all-time input-plus-output
+tokens recorded in this device's local data store. Cached-token columns are
+not added again, and the total can be partial when a harness did not report
+usage. RustCode refreshes the count at startup, after a turn finishes, and
+every minute while the presence is active. When idle, the version and token
+count replace the generic "Idle" state.
+
 ## Setup and control
 
 With the Discord desktop application installed and running:
@@ -42,9 +49,9 @@ connect to or modify a Discord account. The setting is stored as
 The macOS app publishes presence through the engine it runs (`rustcode
 --acp`), using the same worker as the TUI. It asks for it in `initialize`
 (`_meta.rustcode.presence`); other ACP clients such as editors never publish
-presence. The app shares less than the TUI: the project's folder name as the
-details and `Working` or `Idle` as the state. It never shares prompts, chat
-titles, token counts or paths.
+presence. The app shares the project's folder name as the details and whether
+a turn is working; while idle, the version and recorded token total replace
+the generic state. It never shares prompts, chat titles or paths.
 
 Settings → General → Discord turns it on or off through
 `_rustcode/presence/set`, which saves `discord_rpc_enabled` where the
