@@ -1,12 +1,20 @@
 // Small building blocks shared by every view, matching the SwiftUI app's
 // ChromeButton, ToolbarCluster, PillButtonStyle and mini spinner.
 
-import { Check, ChevronDown, CircleAlert, TriangleAlert } from "lucide-react";
-import { Select as RadixSelect, Tooltip as RadixTooltip } from "radix-ui";
+import { Check, ChevronDown, CircleAlert, Search, TriangleAlert, X } from "lucide-react";
+import {
+  ContextMenu as RadixContextMenu,
+  DropdownMenu as RadixDropdownMenu,
+  Select as RadixSelect,
+  Tooltip as RadixTooltip,
+} from "radix-ui";
 import {
   type ButtonHTMLAttributes,
+  type ComponentProps,
   forwardRef,
+  type KeyboardEvent,
   type ReactNode,
+  type Ref,
   useLayoutEffect,
   useRef,
   useState,
@@ -198,16 +206,157 @@ export const Pill = forwardRef<
   );
 });
 
-/** A menu's surface and rows, for `DropdownMenu` and `ContextMenu` alike. */
-export const menuSurface = "elevated z-50 min-w-[200px] p-1.5 rc-in";
+/**
+ * A menu's surface and rows, for `DropdownMenu` and `ContextMenu` alike. The surface never runs
+ * past the window (16px at every edge) and takes at most the room it has, scrolling instead of
+ * landing half off-screen: Radix publishes that room as `--radix-popper-available-height`.
+ * Opening and closing motion comes from the one rule for portal surfaces in `index.css`
+ * (`rc-pop` from the transform origin), so the surface itself carries no animation class.
+ */
+export const menuSurface =
+  "elevated z-50 max-h-[var(--radix-popper-available-height,80vh)] min-w-[200px] max-w-[calc(100vw-16px)] overflow-y-auto p-1.5";
 export const menuItem =
-  "flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-[7px] text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
+  "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-[5px] text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
 export const menuItemDanger = "text-danger data-[highlighted]:bg-danger/12";
 export const menuSeparator = "mx-1.5 my-1 h-px shrink-0 bg-border";
 export const menuLabel = "px-3 pt-1.5 pb-1 text-caption text-fg-faint";
 
 /** A popover's surface: width and anything else its content needs goes after it. */
-export const popoverSurface = "elevated z-50 p-3 rc-in";
+export const popoverSurface =
+  "elevated z-50 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-y-auto p-3";
+
+/**
+ * A row's trailing shortcut (⌘K, ⏎), pushed to the far edge of its menu row. One spelling of it
+ * everywhere, so the alignment matches from menu to menu.
+ */
+export function MenuShortcut({ children }: { children: ReactNode }) {
+  return <kbd className="ms-auto shrink-0 pl-3 font-sans text-caption text-fg-faint">{children}</kbd>;
+}
+
+/** The `collisionPadding` every floating surface shares: 8px clear of the window's edges. */
+export const surfaceCollisionPadding = 8;
+
+/**
+ * A menu's content with the shared defaults: 8px from the window's edges, one surface, and its own
+ * portal. Call sites pass alignment and anything the content needs on top.
+ */
+export function MenuContent({
+  align = "start",
+  sideOffset = 6,
+  className,
+  children,
+  ...rest
+}: ComponentProps<typeof RadixDropdownMenu.Content>) {
+  return (
+    <RadixDropdownMenu.Portal>
+      <RadixDropdownMenu.Content
+        align={align}
+        sideOffset={sideOffset}
+        collisionPadding={surfaceCollisionPadding}
+        className={cx(menuSurface, className)}
+        {...rest}
+      >
+        {children}
+      </RadixDropdownMenu.Content>
+    </RadixDropdownMenu.Portal>
+  );
+}
+
+/** `MenuContent` for a right-click menu, with the same margin from the window's edges. */
+export function ContextMenuSurface({
+  className,
+  children,
+  ...rest
+}: ComponentProps<typeof RadixContextMenu.Content>) {
+  return (
+    <RadixContextMenu.Portal>
+      <RadixContextMenu.Content
+        collisionPadding={surfaceCollisionPadding}
+        className={cx(menuSurface, className)}
+        {...rest}
+      >
+        {children}
+      </RadixContextMenu.Content>
+    </RadixContextMenu.Portal>
+  );
+}
+
+/**
+ * The search field every searchable popup opens with (the model browser, the project menu, the
+ * sidebar's filter): one height, one icon slot, one placeholder colour.
+ */
+export function MenuSearchField({
+  value,
+  onChange,
+  placeholder,
+  label,
+  inputRef,
+  onKeyDown,
+  onBlur,
+  busy,
+  controls,
+  activeDescendant,
+  onClear,
+  size = "md",
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  label: string;
+  inputRef?: Ref<HTMLInputElement>;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onBlur?: () => void;
+  busy?: boolean;
+  controls?: string;
+  activeDescendant?: string;
+  /** A trailing clear button, for a field that stays on screen after it is filled. */
+  onClear?: () => void;
+  /** `sm` for a field in a toolbar row (the sidebar), `md` in a panel. */
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  return (
+    <div
+      className={cx(
+        "flex min-w-0 items-center gap-1.5 rounded-md bg-fill-subtle px-2.5 focus-within:bg-fill",
+        size === "sm" ? "h-7" : "h-8",
+        className,
+      )}
+    >
+      {busy ? (
+        <Spinner size={13} className="shrink-0" />
+      ) : (
+        <Search size={size === "sm" ? 12 : 13} className="shrink-0 text-fg-faint" />
+      )}
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        aria-label={label}
+        aria-controls={controls}
+        aria-activedescendant={activeDescendant}
+        className={cx(
+          "min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-faint",
+          size === "sm" ? "text-callout" : "text-body",
+        )}
+      />
+      {onClear && value && (
+        <button
+          type="button"
+          aria-label={`Clear ${label.toLowerCase()}`}
+          onClick={onClear}
+          className="shrink-0 text-fg-faint hover:text-fg-muted"
+        >
+          <X size={12} />
+        </button>
+      )}
+    </div>
+  );
+}
 
 /** A small text field, per the Input recipe. */
 export const inputClass =

@@ -1,9 +1,7 @@
-// The composer's meters, after UsageCapsule.swift and PlanUsageMeter.swift:
-// a small ring filling as the context window fills, and the plan's
-// shortest window (5-hour) as a short bar with the percentage left. Clicking
-// the ring opens the context inspector; clicking the bar opens Settings' Usage
-// page; hovering the bar opens every plan window at once. They read the store
-// themselves: the composer does not re-render for usage.
+// The composer's one usage meter, after UsageCapsule.swift: the plan's shortest window (5-hour) as
+// a short bar with the percentage left, and the context window as a small ring beside it. One
+// glance, one hover card (both, with each plan window's reset), one click (Settings' Usage page).
+// It reads the store itself, so the composer never re-renders for usage.
 
 import { HoverCard } from "radix-ui";
 import {
@@ -57,39 +55,95 @@ const categoryColor = (name: string) => CATEGORY_COLOR[name] ?? "var(--rc-text-f
 const percentOf = (part: number, whole: number) =>
   whole > 0 ? `${part / whole < 0.01 && part > 0 ? "<1" : Math.round((part / whole) * 100)}%` : "";
 
-export function ContextRing({ threadId }: { threadId: string }) {
-  const usage = useApp((s) => s.threads[threadId]?.usage);
-  const running = useApp((s) => s.threads[threadId]?.running ?? false);
-  if (!usage?.size) return null;
-  const fraction = Math.min(1, usage.used / usage.size);
+/** The context window as a small ring: brand while there is room, amber, then red near the cap. */
+function ContextGauge({ fraction }: { fraction: number }) {
   const r = 6.5;
   const c = 2 * Math.PI * r;
-  // Opens on hover like the plan meter: a glance, not a click. A click target
-  // inside a tooltip trigger stopped receiving the click.
   return (
-    <HoverCard.Root openDelay={60} closeDelay={120}>
+    <svg width="16" height="16" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
+      <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-fill-strong)" strokeWidth="2" />
+      <circle
+        cx="8.5"
+        cy="8.5"
+        r={r}
+        fill="none"
+        stroke={contextTint(fraction)}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - fraction)}
+        className="transition-[stroke-dashoffset] duration-300 ease-snappy"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Everything the composer says about usage, as one meter: the plan's shortest window and the
+ * context ring side by side, one hover card that carries the plan's windows with their resets and
+ * what fills the context, and one click to Settings' Usage page. Two separate meters (and two
+ * cards) said the same thing twice.
+ */
+export function UsageMeter({ threadId }: { threadId?: string }) {
+  const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
+  const usageOpen = useApp((s) => s.settings === "usage");
+  // The thread's own account has its own numbers: the meter never shows
+  // another login's plan, not even the same harness's default one.
+  const cached = useApp((s) => {
+    const key = planKeyFor(s, threadId);
+    if (!key) return onlyCachedPlan(s.planCache);
+    if (key.includes("#")) return s.planCache[key];
+    return s.planCache[key] ?? (threadId ? undefined : onlyCachedPlan(s.planCache));
+  });
+  const usage = useApp((s) => (threadId ? s.threads[threadId]?.usage : undefined));
+  const running = useApp((s) => (threadId ? (s.threads[threadId]?.running ?? false) : false));
+  const { plan, cached: fromCache } = shownPlan(own, cached);
+  const shown = plan ? shownWindow(plan) : undefined;
+  const left = shown ? leftPercent(shown) : null;
+  const low = plan?.windows.find((w) => w !== shown && leftPercent(w) < 20);
+  const fraction = usage?.size ? Math.min(1, usage.used / usage.size) : null;
+  if (left === null && fraction === null) return null;
+  const said = [
+    left === null ? null : `${left}% of the ${windowTitle(shown!)} window left`,
+    fraction === null ? null : `context ${percentOf(usage!.used, usage!.size)} full`,
+  ].filter(Boolean);
+  return (
+    <HoverCard.Root
+      openDelay={60}
+      closeDelay={120}
+      onOpenChange={(open) => {
+        if (!open) return;
+        // The thread's own numbers, when it has any; for a harness that answers
+        // none (Claude Code) the plans call is the only way to refresh the cache.
+        if (threadId) void refreshPlanUsage(threadId);
+        if (fromCache) void refreshPlanCache();
+      }}
+    >
       <HoverCard.Trigger asChild>
-        <span
-          role="img"
-          aria-label={`Context: ${percentOf(usage.used, usage.size)} used, ${formatTokens(usage.used)} of ${formatTokens(usage.size)} tokens`}
-          className="flex size-[30px] cursor-default items-center justify-center rounded-full hover:bg-fill data-[state=open]:bg-fill"
+        <button
+          type="button"
+          aria-label={`${said.join(", ")}. Opens Usage in Settings`}
+          aria-pressed={usageOpen}
+          onClick={() => openSettings(usageOpen ? null : "usage")}
+          className="flex h-[30px] cursor-pointer items-center gap-2 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
         >
-          <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
-            <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-fill-strong)" strokeWidth="2" />
-            <circle
-              cx="8.5"
-              cy="8.5"
-              r={r}
-              fill="none"
-              stroke={contextTint(fraction)}
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeDasharray={c}
-              strokeDashoffset={c * (1 - fraction)}
-              className="transition-[stroke-dashoffset] duration-300 ease-snappy"
-            />
-          </svg>
-        </span>
+          {left !== null && (
+            <span className="flex items-center gap-1.5">
+              <span className="h-[5px] w-4 overflow-hidden rounded-full bg-fg-faint">
+                <span
+                  className={cx(
+                    "block h-full rounded-full transition-[width] duration-300 ease-snappy",
+                    planTint(left),
+                  )}
+                  style={{ width: `max(3px, ${left}%)` }}
+                />
+              </span>
+              <span className="font-medium text-caption text-fg-muted tabular">{left}%</span>
+            </span>
+          )}
+          {fraction !== null && <ContextGauge fraction={fraction} />}
+          {low && <span className="size-1.5 rounded-full bg-warning" />}
+        </button>
       </HoverCard.Trigger>
       <HoverCard.Portal>
         <HoverCard.Content
@@ -97,9 +151,14 @@ export function ContextRing({ threadId }: { threadId: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 w-[320px] p-3 rc-in"
+          className="elevated z-40 max-h-[var(--radix-popper-available-height,80vh)] w-[320px] overflow-y-auto p-3 rc-in"
         >
-          <ContextInspector usage={usage} onCompact={running ? undefined : () => void submit("/compact")} />
+          <UsageCard
+            plan={plan}
+            cached={fromCache}
+            usage={usage}
+            onCompact={running ? undefined : () => void submit("/compact")}
+          />
         </HoverCard.Content>
       </HoverCard.Portal>
     </HoverCard.Root>
@@ -204,84 +263,24 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
 }
 
 /**
- * The plan's usage. A thread shows its own limits (`_rustcode/usage/limits`)
- * when it has them; otherwise the harness's plan as last learnt, from Settings'
- * plans call or another thread on that harness, marked with its age. (Claude
- * Code's limits answer null: only the plans call can read its Keychain.) The
- * numbers refresh on hover, when the thread is selected, on a turn's end, and
- * from the app's three-minute poll, so a new thread knows the limits before its
- * first message and a named account's meter appears without visiting Settings.
- * Each login keeps its own numbers. Clicking the meter opens Settings' Usage
- * page, the app's own page for it now that the sidebar's footer no longer
- * carries a button.
+ * The meter's card: every plan window with its reset, then the context window, so one hover answers
+ * both questions. A click (anywhere on the meter) opens the full Usage page.
  */
-export function PlanMeter({ threadId }: { threadId?: string }) {
-  const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
-  const usageOpen = useApp((s) => s.settings === "usage");
-  // The thread's own account has its own numbers: the meter never shows
-  // another login's plan, not even the same harness's default one.
-  const cached = useApp((s) => {
-    const key = planKeyFor(s, threadId);
-    if (!key) return onlyCachedPlan(s.planCache);
-    if (key.includes("#")) return s.planCache[key];
-    return s.planCache[key] ?? (threadId ? undefined : onlyCachedPlan(s.planCache));
-  });
-  const { plan, cached: fromCache } = shownPlan(own, cached);
-  const shown = plan ? shownWindow(plan) : undefined;
-  if (!plan || !shown) return null;
-  const left = leftPercent(shown);
-  const low = plan.windows.find((w) => w !== shown && leftPercent(w) < 20);
-  return (
-    <HoverCard.Root
-      openDelay={60}
-      closeDelay={120}
-      onOpenChange={(open) => {
-        if (!open) return;
-        // The thread's own numbers, when it has any; for a harness that answers
-        // none (Claude Code) the plans call is the only way to refresh the cache.
-        if (threadId) void refreshPlanUsage(threadId);
-        if (fromCache) void refreshPlanCache();
-      }}
-    >
-      <HoverCard.Trigger asChild>
-        <button
-          type="button"
-          aria-label={`Plan usage: ${left}% left of the ${windowTitle(shown)} window. Opens Usage in Settings`}
-          aria-pressed={usageOpen}
-          onClick={() => openSettings(usageOpen ? null : "usage")}
-          className="flex h-[30px] cursor-pointer items-center gap-1.5 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
-        >
-          <span className="h-[5px] w-4 overflow-hidden rounded-full bg-fg-faint">
-            <span
-              className={cx(
-                "block h-full rounded-full transition-[width] duration-300 ease-snappy",
-                planTint(left),
-              )}
-              style={{ width: `max(3px, ${left}%)` }}
-            />
-          </span>
-          <span className="font-medium text-caption text-fg-muted tabular">{left}%</span>
-          {low && <span className="size-1.5 rounded-full bg-warning" />}
-        </button>
-      </HoverCard.Trigger>
-      <HoverCard.Portal>
-        <HoverCard.Content
-          side="top"
-          align="end"
-          sideOffset={8}
-          collisionPadding={10}
-          className="elevated z-40 w-[300px] p-3 rc-in"
-        >
-          <PlanCard plan={plan} cached={fromCache} />
-        </HoverCard.Content>
-      </HoverCard.Portal>
-    </HoverCard.Root>
-  );
-}
-
-function PlanCard({ plan, cached }: { plan: PlanUsage; cached?: boolean }) {
-  const windows = [...plan.windows].sort((a, b) => (a.minutes ?? Infinity) - (b.minutes ?? Infinity));
-  const age = plan.fetchedAt
+function UsageCard({
+  plan,
+  cached,
+  usage,
+  onCompact,
+}: {
+  plan?: PlanUsage;
+  cached?: boolean;
+  usage?: SessionUsage;
+  onCompact?: () => void;
+}) {
+  const windows = plan
+    ? [...plan.windows].sort((a, b) => (a.minutes ?? Infinity) - (b.minutes ?? Infinity))
+    : [];
+  const age = plan?.fetchedAt
     ? Date.now() - plan.fetchedAt < 60_000
       ? "just now"
       : relativeAge(plan.fetchedAt)
@@ -289,20 +288,24 @@ function PlanCard({ plan, cached }: { plan: PlanUsage; cached?: boolean }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between gap-3 px-0.5">
-        <span className="font-semibold text-body">Plan usage</span>
-        {plan.source === "codex" && <span className="text-caption text-fg-faint">from the Codex CLI</span>}
+        <span className="font-semibold text-body">Usage</span>
+        {plan?.source === "codex" && <span className="text-caption text-fg-faint">from the Codex CLI</span>}
       </div>
       {windows.map((w) => (
         <PlanWindow key={windowTitle(w)} window={w} />
       ))}
-      {plan.fetchedAt && (
+      {plan?.fetchedAt && (
         <span className={cx("px-0.5 text-caption", plan.stale ? "text-warning" : "text-fg-faint")}>
           {plan.stale ? "Could not refresh · " : ""}
           {cached ? `Numbers from ${age}` : `Updated ${age}`}
         </span>
       )}
-      {/* The meter's tooltip says what a click does; the card is the meter's tooltip. */}
-      <span className="px-0.5 text-caption text-fg-faint">Click to open Usage in Settings</span>
+      {usage?.size ? (
+        <div className="border-border border-t pt-3">
+          <ContextInspector usage={usage} onCompact={onCompact} />
+        </div>
+      ) : null}
+      <span className="px-0.5 text-caption text-fg-faint">Click the meter to open Usage in Settings</span>
     </div>
   );
 }

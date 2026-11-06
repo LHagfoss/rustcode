@@ -128,8 +128,11 @@ import { ProjectMark } from "./ProjectMark";
 import {
   Cluster,
   ClusterButton,
+  ContextMenuSurface,
   cx,
   inputClass,
+  MenuContent,
+  MenuSearchField,
   menuItem,
   menuItemDanger,
   menuLabel,
@@ -138,6 +141,7 @@ import {
   Pill,
   Skeleton,
   Spinner,
+  surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
 import { StatusChip } from "./Status";
@@ -308,7 +312,12 @@ function ThreadMenuItems({
             <ChevronRight size={11} strokeWidth={2.5} className="ml-auto text-fg-faint" />
           </Menu.SubTrigger>
           <Menu.Portal>
-            <Menu.SubContent sideOffset={4} className={menuSurface}>
+            <Menu.SubContent
+              sideOffset={4}
+              alignOffset={-5}
+              collisionPadding={surfaceCollisionPadding}
+              className={menuSurface}
+            >
               {snoozePresets(Date.now()).map((p) => (
                 <Item key={p.label} className={menuItem} onSelect={() => snoozeThread(session.id, p.at)}>
                   <span className="flex-1">{p.label}</span>
@@ -348,7 +357,12 @@ function ThreadMenuItems({
           <ChevronRight size={11} strokeWidth={2.5} className="ml-auto text-fg-faint" />
         </Menu.SubTrigger>
         <Menu.Portal>
-          <Menu.SubContent sideOffset={4} className={menuSurface}>
+          <Menu.SubContent
+            sideOffset={4}
+            alignOffset={-5}
+            collisionPadding={surfaceCollisionPadding}
+            className={menuSurface}
+          >
             {session.cwd && (
               <Item
                 className={menuItem}
@@ -795,36 +809,32 @@ const ThreadRow = memo(function ThreadRow({
                   <Ellipsis size={13} />
                 </button>
               </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content align="start" sideOffset={4} className={menuSurface}>
-                  <ThreadMenuItems
-                    session={session}
-                    Menu={DropdownMenu}
-                    Item={DropdownMenu.Item}
-                    Separator={DropdownMenu.Separator}
-                    onRename={startRename}
-                    bulk={bulk}
-                    onClear={onClearSelection}
-                  />
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
+              <MenuContent align="start" sideOffset={4}>
+                <ThreadMenuItems
+                  session={session}
+                  Menu={DropdownMenu}
+                  Item={DropdownMenu.Item}
+                  Separator={DropdownMenu.Separator}
+                  onRename={startRename}
+                  bulk={bulk}
+                  onClear={onClearSelection}
+                />
+              </MenuContent>
             </DropdownMenu.Root>
           </div>
         </div>
       </ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Content className={menuSurface}>
-          <ThreadMenuItems
-            session={session}
-            Menu={ContextMenu}
-            Item={ContextMenu.Item}
-            Separator={ContextMenu.Separator}
-            onRename={startRename}
-            bulk={bulk}
-            onClear={onClearSelection}
-          />
-        </ContextMenu.Content>
-      </ContextMenu.Portal>
+      <ContextMenuSurface>
+        <ThreadMenuItems
+          session={session}
+          Menu={ContextMenu}
+          Item={ContextMenu.Item}
+          Separator={ContextMenu.Separator}
+          onRename={startRename}
+          bulk={bulk}
+          onClear={onClearSelection}
+        />
+      </ContextMenuSurface>
     </ContextMenu.Root>
   );
 });
@@ -1161,35 +1171,33 @@ function FilterMenu({
           <ListFilter size={14} />
         </ClusterButton>
       </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" sideOffset={6} className={menuSurface}>
-          <DropdownMenu.Item className={menuItem} onSelect={() => setByProject(!byProject)}>
-            {check(byProject)} Group by project
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
-            className={menuItem}
-            disabled={byProject}
-            onSelect={() => setShowWorking(!showWorking)}
-          >
-            {check(showWorking)} Working section
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
-            className={menuItem}
-            disabled={!projectCwd}
-            onSelect={() => setOnlyProject(!onlyProject)}
-          >
-            {check(onlyProject)}
-            <span className="truncate">Only {projectCwd ? projectName(projectCwd) : "this project"}</span>
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator className={menuSeparator} />
-          <DropdownMenu.Item
-            className={menuItem}
-            onSelect={() => setView(view === "board" ? { kind: "chat" } : { kind: "board" })}
-          >
-            <KanbanSquare size={13} /> {view === "board" ? "Show the Chat" : "Show the Board"}
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
+      <MenuContent align="end">
+        <DropdownMenu.Item className={menuItem} onSelect={() => setByProject(!byProject)}>
+          {check(byProject)} Group by project
+        </DropdownMenu.Item>
+        <DropdownMenu.Item
+          className={menuItem}
+          disabled={byProject}
+          onSelect={() => setShowWorking(!showWorking)}
+        >
+          {check(showWorking)} Working section
+        </DropdownMenu.Item>
+        <DropdownMenu.Item
+          className={menuItem}
+          disabled={!projectCwd}
+          onSelect={() => setOnlyProject(!onlyProject)}
+        >
+          {check(onlyProject)}
+          <span className="truncate">Only {projectCwd ? projectName(projectCwd) : "this project"}</span>
+        </DropdownMenu.Item>
+        <DropdownMenu.Separator className={menuSeparator} />
+        <DropdownMenu.Item
+          className={menuItem}
+          onSelect={() => setView(view === "board" ? { kind: "chat" } : { kind: "board" })}
+        >
+          <KanbanSquare size={13} /> {view === "board" ? "Show the Chat" : "Show the Board"}
+        </DropdownMenu.Item>
+      </MenuContent>
     </DropdownMenu.Root>
   );
 }
@@ -1233,34 +1241,27 @@ function SidebarSearch({
       </button>
     );
   }
-  const clear = () => (query ? setQuery("") : setOpen(false));
   return (
-    <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-fill px-2">
-      <Search size={14} className="shrink-0 text-fg-muted" />
-      <input
-        ref={input}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") clear();
-        }}
-        // An empty search closes with the keyboard: a field with nothing in it is a label.
-        onBlur={() => {
-          if (!query) setOpen(false);
-        }}
-        placeholder="Search"
-        aria-label="Search threads"
-        className="min-w-0 flex-1 bg-transparent text-callout outline-none placeholder:text-fg-faint"
-      />
-      <button
-        type="button"
-        aria-label={query ? "Clear search" : "Close search"}
-        onClick={clear}
-        className="shrink-0 text-fg-faint hover:text-fg-muted"
-      >
-        <X size={12} />
-      </button>
-    </div>
+    <MenuSearchField
+      value={query}
+      onChange={setQuery}
+      placeholder="Search"
+      label="Search threads"
+      inputRef={input}
+      size="sm"
+      className="flex-1"
+      onClear={() => setQuery("")}
+      onKeyDown={(e) => {
+        // Escape clears a search; with nothing in it, it closes the field.
+        if (e.key !== "Escape") return;
+        if (query) setQuery("");
+        else setOpen(false);
+      }}
+      // An empty search closes with the keyboard: a field with nothing in it is a label.
+      onBlur={() => {
+        if (!query) setOpen(false);
+      }}
+    />
   );
 }
 
