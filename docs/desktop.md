@@ -449,12 +449,15 @@ composer's keys stay outside the table.
   also what was said: the engine's SQLite index (`index.sqlite`,
   `_rustcode/threads/search`) adds threads whose messages match, with the
   matching words under the title.
-  Threads another thread started have no rows of their own: their parent's row
+  Threads another thread started have no rows of their own while the parent
+  exists, whatever the filter or search shows: their parent's row
   ends with a stack of up to three marks for the ones still working or waiting
   on you, then `+N`, a warning dot on one that needs you, and the tooltip lists
   them (`ui/AgentStack.tsx`, `state/agentStack.ts`). Finished delegates show
-  nothing there, and an open child keeps its parent's row lit as the context.
-  The chat's agent and thread group cards show the same stack.
+  nothing there. The open delegate is drawn as an indented row under its
+  parent's, folded away when the user moves on, and a search result that is a
+  delegate says `in <parent title>`. The chat's agent and thread group cards
+  show the same stack.
   The toolbar's row carries Hide sidebar, New thread, Settings and, when
   the project has them, Pull requests, clear of the traffic lights; the
   header's cluster holds Show sidebar, New thread and Settings while the
@@ -914,6 +917,14 @@ What held the app below 120 fps, and what changed:
   narrower than its 1,036 px maximum, so each frame rewrapped the
   transcript. It now slides out on `translate` and its slot collapses
   after 200 ms (and opens before it slides in).
+
+  The panel was later docked beside the chat rather than floating over it, and
+  that one open and close animates the dock's width again (200 ms, a product
+  decision: the panel is a column now, so it takes a column's room). What keeps
+  it cheap is that nothing else moves: its content is pinned to the card's right
+  edge and clipped, a drag writes one custom property per frame with React state
+  committed on release, and every other width change (a tab, a window resize, the
+  end of a drag) is committed with the transition off in the same frame.
 - **Glass costs nothing measurable.** With `--rc-glass-filter: none` and
   the header glass off, frames, WebContent, GPU-process and WindowServer
   CPU stayed within run-to-run noise in every phase, so the blur stays.

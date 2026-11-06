@@ -1,32 +1,34 @@
-// The right panel (docs/design.md, Right panel): one floating card at the
-// window's right edge for the side views that take a pane (Changes, Pull
-// requests, Thread). It is the details card, in the same surface: inset from
-// the window's edges by the same gap, the same radius, glass and elevation,
-// with tabs between the views, a close button and a draggable left edge. It
-// takes no slot in the layout, so the chat keeps its full width and the
-// transcript scrolls under the card; the lane centres in the room the card
-// leaves (ui/ChatView.tsx `laneLayout`). The card never draws past the column's
-// edges. A list view sizes the card to what it holds (a file or two, a short
-// list of pull requests, an empty state), capped at the room above the composer
-// (`--rc-composer-top`) so nothing it draws reaches the field and a long list
-// scrolls inside it; the Thread view is a transcript, which has no height of
-// its own, so that card keeps the whole room. It slides and fades in and out
-// on the compositor, and its content stays mounted while it closes
-// (docs/desktop.md › Native frame rate).
+// The right panel (docs/design.md, Right panel): one card docked at the window's
+// right edge for the thread's side views (Details, Changes, Pull requests,
+// Thread). It is a sibling of the chat column inside the chat view's row, so the
+// chat keeps its place on the left and narrows by the card's width; the lane
+// re-centres in the room that is left (ui/ChatView.tsx). The card runs from the
+// header's foot to the window's bottom edge, inset by the same 12px gap on the
+// edges it meets, on the surface it always had. Its left edge drags and answers
+// the keyboard, its width is kept per thread, and it grows from and shrinks to
+// nothing over 200ms when it opens or closes. While it is closed its content
+// stays mounted, inert and unclickable, so nothing it draws can be reached. A
+// window narrower than 980px has no room for both columns: there the panel opens
+// as a sheet over a scrim instead, which Escape or a press on the scrim closes.
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
-// default), Escape inside the panel closes it — the pane or the details card —
-// focus moves in when a shortcut opens it with nothing focused, and closing
-// gives the focus back to whatever had it. The composer is never covered: the
-// card ends above it, and the composer's drawer and approvals paint over one
-// (ui/ChatView.tsx), so a field being typed in keeps the keyboard.
-//
-// Thread details is the same card, small: it floats at the top right and lists
-// what a thread is, so reading it never moves the lane.
+// default), Escape inside the panel closes it, focus moves in when a shortcut
+// opens it with nothing focused, and closing hands the focus back to the
+// header's toggle. The card is beside the composer rather than over it, so a
+// field being typed in always keeps the keyboard.
 
 import { X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { observeSize } from "../lib/resize";
 import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
 import { HEADER_HEIGHT } from "./MainHeader";
@@ -37,81 +39,65 @@ const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default:
 const ThreadDetails = lazy(() => import("./ThreadDetails").then((m) => ({ default: m.ThreadDetails })));
 const PullsPanel = lazy(() => import("./PullRequests").then((m) => ({ default: m.PullsPanel })));
 
+/** The views the panel shows. */
 type Kind = NonNullable<AppState["panel"]>;
-/** The kinds that take a pane of the chat's width. */
-type Pane = Exclude<Kind, "details">;
 
-/** The pane's own bounds, in px, and the width it starts with. */
-export const MIN = 320;
+/** The card's own bounds, in px, and the width it starts with. */
+export const MIN = 360;
 export const MAX = 760;
-export const DEFAULT_WIDTH = 460;
+export const DEFAULT_WIDTH = 520;
+/** The room the chat column always keeps of the row, however wide the card asks to be. */
+export const CHAT_MIN = 360;
 /** One press of an arrow key, and with Shift. */
 const STEP = 24;
 const STEP_LARGE = 96;
+/** A window no wider than this has no room for both columns: the panel opens as a sheet. */
+export const SHEET_AT = 980;
+/** The width the card is kept under, per thread; the shared key is what a thread with none starts at. */
 const KEY = "rustcode.rightPanelWidth";
-/** The gap every floating card keeps from the window's edges, and from the chat lane. */
+/** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
 const CARD_GAP = 12;
-/** The details card's width, and its gap from the window's edges; the chat lane clears it. */
-export const DETAILS_CARD = { width: 280, gap: CARD_GAP } as const;
+/** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
+const HANDLE = 8;
 /** The surface a card of the right panel is drawn on: the details card and a pane alike. */
 const CARD_SURFACE = "rc-glass rc-glass-strong rounded-2xl shadow-2";
+/** A sheet is opaque: it opens over a scrim that is already blurred, and one filter never stacks on another. */
+const SHEET_SURFACE = "bg-surface shadow-2";
 
 const PANE_ID = "rc-side-panel";
 
 /**
- * How tall a pane's card draws. A list view (`changes`, `pulls`) is as tall as
- * what it holds, and never taller than the room between its own top and the
- * composer: over that, the view scrolls inside it. A transcript (`peek`) has no
- * height to be as tall as, so that card takes the room it has.
+ * The widest the card may draw in this window: its own cap, 70% of the window,
+ * and the row it shares with the chat less the room the chat always keeps. Never
+ * under its own minimum, so a window too narrow for even that still gets a card
+ * (`MIN`) rather than an inverted clamp.
  */
-export function paneSizing(kind: Pane): { bottom?: string; maxHeight?: string } {
-  const foot = `calc(var(--rc-composer-top, 0px) + ${CARD_GAP}px)`;
-  if (kind === "peek") return { bottom: foot };
-  return { maxHeight: `calc(100% - ${HEADER_HEIGHT + CARD_GAP}px - ${foot})` };
-}
-
-function clampWidth(width: number): number {
-  return Math.min(MAX, Math.max(MIN, Math.round(width)));
-}
-
-function storedWidth(): number {
-  try {
-    const v = Number(localStorage.getItem(KEY));
-    return v >= MIN && v <= MAX ? v : DEFAULT_WIDTH;
-  } catch {
-    return DEFAULT_WIDTH;
-  }
-}
-
-/** Kept when it settles: the end of a drag, a key, a reset. Never per frame. */
-function persist(width: number) {
-  try {
-    localStorage.setItem(KEY, String(width));
-  } catch {
-    // Not kept in a private window.
-  }
+export function panelMax(viewport: number, row: number): number {
+  const fraction = Math.floor(viewport * 0.7);
+  const shared = row > 0 ? Math.floor(row) - CHAT_MIN : Number.POSITIVE_INFINITY;
+  return Math.max(MIN, Math.min(MAX, fraction, shared));
 }
 
 /**
- * The width a pane's card draws: the one asked for (kept, so it comes back when
- * the window widens), no wider than the column leaves it between its two gaps.
- * 0 is before the first measurement, when the stored width stands as it is.
+ * The width the card draws: the one asked for, kept within what the window and
+ * the row allow. 0 is before the row is measured, when the window's own caps
+ * stand until it is.
  */
-export function panelWidth(wanted: number, available: number): number {
-  const room = available > 0 ? Math.max(MIN, available - CARD_GAP * 2) : MAX;
-  return Math.min(clampWidth(wanted), room);
+export function panelWidth(wanted: number, viewport: number, row: number): number {
+  return Math.min(Math.min(MAX, Math.max(MIN, Math.round(wanted))), panelMax(viewport, row));
 }
 
 /**
  * The width after a resize key moves the edge; null for a key that does not.
  * `current` is the width on screen and `max` the widest it may draw, so a key
- * never promises a width the pane cannot show (a narrow window fits it down).
+ * never promises a width the card cannot show (a narrow window fits it down).
  */
 export function resizedWidth(current: number, key: string, large: boolean, max: number = MAX): number | null {
   const step = large ? STEP_LARGE : STEP;
-  const fit = (width: number) => Math.min(Math.max(MIN, max), clampWidth(width));
+  const fit = (width: number) =>
+    Math.min(Math.max(MIN, max), Math.min(MAX, Math.max(MIN, Math.round(width))));
   switch (key) {
-    // The edge is on the left, so left grows the pane and right shrinks it.
+    // The edge is on the left, so left grows the card and right shrinks it.
     case "ArrowLeft":
       return fit(current + step);
     case "ArrowRight":
@@ -125,54 +111,127 @@ export function resizedWidth(current: number, key: string, large: boolean, max: 
   }
 }
 
-/** Focus inside the pane that a key should not take for closing it. */
+/** Whether this window is too narrow to hold the chat and the card side by side. */
+export function panelIsSheet(viewport: number): boolean {
+  return viewport <= SHEET_AT;
+}
+
+/** The width kept for a thread, else the one last kept for any thread. */
+function storedWidth(threadId: string | null): number {
+  try {
+    const own = Number(threadId ? localStorage.getItem(`${KEY}:${threadId}`) : null);
+    if (own >= MIN && own <= MAX) return own;
+    const shared = Number(localStorage.getItem(KEY));
+    if (shared >= MIN && shared <= MAX) return shared;
+  } catch {
+    // Not kept in a private window.
+  }
+  return DEFAULT_WIDTH;
+}
+
+/**
+ * Kept when it settles: the end of a drag, a key, a reset. Never per frame. It
+ * is kept for this thread, and as the width a thread that has none starts at.
+ */
+function persist(threadId: string | null, width: number) {
+  try {
+    if (threadId) localStorage.setItem(`${KEY}:${threadId}`, String(width));
+    localStorage.setItem(KEY, String(width));
+  } catch {
+    // Not kept in a private window.
+  }
+}
+
+/** Focus inside the panel that a key should not take for closing it. */
 function inField(target: EventTarget | null): boolean {
   const el = target instanceof HTMLElement ? target : null;
   return !!el?.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]');
 }
 
+/** The header's button that opens the panel: where a close hands focus when nothing else had it. */
+function headerToggle(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-panel-toggle]");
+}
+
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
+  const threadId = useApp((s) => s.selectedId);
   const panelKey = useShortcutHint("toggle-panel");
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const peekOn = useApp((s) => !!s.peekId);
   // What the panel shows: the open one, or while closing the one that was.
   const [shown, setShown] = useState<Kind | null>(panel);
-  const [width, setWidth] = useState(storedWidth);
-  // The room the card is drawn in, measured on the column that holds the chat
-  // (the card takes no slot, so this is the chat's own width); 0 until the first
-  // measurement, when the stored width stands as it is.
-  const [available, setAvailable] = useState(0);
-  const slot = useRef<HTMLDivElement>(null);
-  // The surface that is showing: the pane, or the details card.
+  const [width, setWidth] = useState(() => storedWidth(threadId));
+  const [viewport, setViewport] = useState(() => window.innerWidth);
+  // The row the card shares with the chat, measured on the column that holds it; 0
+  // until the first measurement, when the stored width stands as it is.
+  const [row, setRow] = useState(0);
+  const dock = useRef<HTMLDivElement>(null);
+  const stopRow = useRef<(() => void) | null>(null);
+  // The surface that is showing, and the element that had the focus before it opened.
   const surface = useRef<HTMLElement>(null);
   const restoreTo = useRef<HTMLElement | null>(null);
+  // A drag in progress: the width it has reached, where the pointer started, and whether it moved.
+  const drag = useRef<{ live: number; startX: number; moved: boolean } | null>(null);
 
   useEffect(() => {
     if (panel) setShown(panel);
   }, [panel]);
 
+  // A thread keeps its own width; one that has none starts where the last one left off.
   useEffect(() => {
-    // offsetParent is the column that holds the chat and this slot: the card
-    // floats over it, so its width is the whole room a card may draw in.
-    const host = slot.current?.offsetParent;
-    if (!(host instanceof HTMLElement)) return;
-    const measure = () => setAvailable(host.clientWidth);
-    measure();
-    return observeSize(host, measure);
+    setWidth(storedWidth(threadId));
+  }, [threadId]);
+
+  useEffect(() => {
+    const onResize = () => setViewport(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   const open = !!panel;
   const kind = panel ?? shown;
-  const card = kind === "details";
-  const pane = kind && !card ? kind : null;
-  const fitted = panelWidth(width, available);
-  const widest = panelWidth(MAX, available);
-  // Keyboard focus follows the panel, and never sits where it cannot be seen:
-  // a shortcut opens it with nothing focused, a surface closing takes the focus
-  // with it. The composer is never covered, so a field being typed in keeps the
-  // keyboard; closing hands the focus back to whatever had it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `kind` swaps the surface (pane for the details card) while the panel stays open, and the focus must move with it
+  const sheet = panelIsSheet(viewport);
+  const card = panelWidth(width, viewport, row);
+  const widest = panelMax(viewport, row);
+
+  // Width animates only for an open or a close: any other change (a tab, a
+  // window resize, the end of a drag) turns the transition off in the same
+  // commit that changes the width, so the browser never starts one. The next
+  // open or close turns it back on.
+  const [motion, setMotion] = useState({ open, width: card, enabled: true });
+  if (motion.open !== open || motion.width !== card) {
+    setMotion({ open, width: card, enabled: motion.open !== open });
+  }
+
+  // The card's width lives in a custom property, so a drag writes one style per
+  // frame and re-renders nothing; a commit republishes it from state. It is also
+  // re-applied after any other render, so a streaming thread mid-drag does not
+  // snap the card back to the width it started from.
+  useLayoutEffect(() => {
+    dock.current?.style.setProperty("--rc-panel-width", `${drag.current?.live ?? card}px`);
+  });
+
+  // The card and the chat share the row: the panel draws no wider than the room
+  // the chat leaves it. The observer watches the row, which the card's own width
+  // never changes, so measuring and drawing cannot chase each other.
+  const attachDock = useCallback((el: HTMLDivElement | null) => {
+    dock.current = el;
+    stopRow.current?.();
+    stopRow.current = null;
+    const parent = el?.parentElement;
+    if (!parent) return;
+    const measure = () => setRow(parent.clientWidth);
+    measure();
+    stopRow.current = observeSize(parent, measure);
+  }, []);
+  useEffect(() => () => stopRow.current?.(), []);
+
+  // Keyboard focus follows the panel, and never sits where it cannot be seen: a
+  // shortcut opens it with nothing focused, a card closing takes the focus with
+  // it. Closing hands the focus back to the header's toggle when nothing else
+  // was there before.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `kind` swaps the view inside the surface while the panel stays open, and the card's own focusable content comes and goes with it
   useEffect(() => {
     const el = surface.current;
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -183,46 +242,57 @@ export function RightPanel() {
       return;
     }
     const inside = !!el && !!active && el.contains(active);
-    if ((inside || lost) && restoreTo.current?.isConnected) restoreTo.current.focus();
+    const back = restoreTo.current?.isConnected ? restoreTo.current : headerToggle();
+    if (inside || lost) back?.focus();
     restoreTo.current = null;
   }, [open, kind]);
 
-  const onResize = (e: React.PointerEvent) => {
+  const commit = (next: number) => {
+    setWidth(next);
+    persist(threadId, next);
+  };
+
+  // A drag writes the width on the frame it is dragged on and keeps it once the
+  // pointer is up, never before: a click that does not drag leaves the width that
+  // was asked for alone. The pointer is captured, so the edge keeps the pointer
+  // until it is released, cancelled or lost.
+  const onResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const startX = e.clientX;
-    // From the width on screen, not the one asked for: a drag means what it shows.
-    const start = fitted;
-    let latest = fitted;
-    let moved = false;
-    const move = (ev: PointerEvent) => {
-      latest = clampWidth(start - (ev.clientX - startX));
-      moved = true;
-      setWidth(latest);
-    };
-    const up = () => {
-      // Kept once a drag ends, not on every frame of it, and not for a click
-      // that never dragged: a click must not overwrite the width that was asked
-      // for with the one this window happened to fit.
-      if (moved) persist(latest);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { live: card, startX: e.clientX, moved: false };
+  };
+
+  const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    d.moved = d.moved || e.clientX !== d.startX;
+    d.live = Math.min(Math.max(MIN, Math.round(card - (e.clientX - d.startX))), widest);
+    dock.current?.style.setProperty("--rc-panel-width", `${d.live}px`);
+  };
+
+  const onResizeEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (d.moved) commit(d.live);
+    else dock.current?.style.setProperty("--rc-panel-width", `${card}px`);
   };
 
   const onResizeKey = (e: React.KeyboardEvent) => {
-    const next = e.key === "Enter" ? DEFAULT_WIDTH : resizedWidth(fitted, e.key, e.shiftKey, widest);
+    const next =
+      e.key === "Enter"
+        ? panelWidth(DEFAULT_WIDTH, viewport, row)
+        : resizedWidth(card, e.key, e.shiftKey, widest);
     if (next === null) return;
     e.preventDefault();
-    setWidth(next);
-    persist(next);
+    commit(next);
   };
 
-  // Escape closes whatever the panel shows, unless a field in it is being
-  // edited (then Escape belongs to that field). It stops there: the app's own
-  // window handler reads Escape as "back to the chat" off the chat views, and a
-  // consumed one must not also leave the board or the review.
+  // Escape closes the panel, unless a field in it is being edited (then Escape
+  // belongs to that field). It stops there: the app's own window handler reads
+  // Escape as "back to the chat" off the chat views, and a consumed one must not
+  // also leave the board or the review.
   const onSurfaceKey = (e: React.KeyboardEvent) => {
     if (e.key !== "Escape" || e.defaultPrevented || inField(e.target)) return;
     e.preventDefault();
@@ -230,123 +300,174 @@ export function RightPanel() {
     setPanel(null);
   };
 
-  const resetWidth = () => {
-    setWidth(DEFAULT_WIDTH);
-    persist(DEFAULT_WIDTH);
-  };
+  // A sheet is modal: Escape closes it wherever the keyboard is, since the scrim
+  // already keeps the chat behind it out of reach. A field inside it still owns
+  // the key, the way it does in the docked card.
+  useEffect(() => {
+    if (!open || !sheet) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const target = e.target instanceof Node ? e.target : null;
+      const inside = !!target && !!surface.current?.contains(target);
+      if (inside && inField(target)) return;
+      e.preventDefault();
+      setPanel(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, sheet]);
 
-  const tabs: { value: Pane; label: string }[] = [
+  const tabs: { value: Kind; label: string }[] = [
+    { value: "details", label: "Details" },
     { value: "changes", label: "Changes" },
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
     ...(peekOn ? [{ value: "peek" as const, label: "Thread" }] : []),
   ];
 
-  return (
-    <div ref={slot} className="relative shrink-0" style={{ width: 0 }} aria-hidden={!open}>
-      {card && (
-        <aside
-          ref={surface}
-          tabIndex={-1}
-          aria-label="Thread details"
-          onKeyDown={onSurfaceKey}
-          onTransitionEnd={(e) => {
-            if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
-          }}
+  const contents = kind && (
+    <>
+      <div
+        data-tauri-drag-region
+        style={{ height: HEADER_HEIGHT }}
+        className="flex shrink-0 items-center gap-2 border-border border-b pr-2 pl-2.5"
+      >
+        {/* The views keep their labels and scroll before the close button leaves the row. */}
+        <div className="flex min-w-0 items-center overflow-x-auto">
+          <div className="flex shrink-0 items-center">
+            {tabs.length > 1 ? (
+              <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
+            ) : (
+              <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
+            )}
+          </div>
+        </div>
+        <span className="flex-1" data-tauri-drag-region />
+        <Tooltip label={`Close (${panelKey})`}>
+          <button
+            type="button"
+            aria-label="Close panel"
+            onClick={() => setPanel(null)}
+            className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+          >
+            <X size={14} />
+          </button>
+        </Tooltip>
+      </div>
+      <Suspense fallback={<div className="flex-1" />}>
+        {kind === "details" && <ThreadDetails />}
+        {kind === "changes" && <ChangesPanel />}
+        {kind === "pulls" && <PullsPanel />}
+        {kind === "peek" && <ThreadPeek />}
+      </Suspense>
+    </>
+  );
+
+  // A narrow window cannot hold both columns: the panel opens over the chat
+  // instead, on the same card surface, with a scrim that a press or Escape closes.
+  if (sheet) {
+    return (
+      <div
+        className={cx("fixed inset-0 z-40", !open && "pointer-events-none")}
+        aria-hidden={!open}
+        inert={!open}
+      >
+        <div
           className={cx(
-            CARD_SURFACE,
-            "absolute z-30 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
-            open ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0",
+            "rc-scrim absolute inset-0 transition-opacity duration-200",
+            open ? "opacity-100" : "opacity-0",
           )}
-          style={{
-            top: HEADER_HEIGHT + DETAILS_CARD.gap,
-            right: DETAILS_CARD.gap,
-            width: DETAILS_CARD.width,
-            // It floats over the chat, so it ends above the composer: the field keeps its room
-            // and its own glass never sits under a card.
-            bottom: `calc(var(--rc-composer-top, 0px) + ${DETAILS_CARD.gap}px)`,
-          }}
-        >
-          <Suspense fallback={<div className="h-24" />}>
-            <ThreadDetails />
-          </Suspense>
-        </aside>
-      )}
-      {pane && (
+          onMouseDown={() => setPanel(null)}
+        />
         <aside
           ref={surface}
           id={PANE_ID}
+          role="dialog"
+          aria-modal="true"
           aria-label="Side panel"
           tabIndex={-1}
           onKeyDown={onSurfaceKey}
-          className={cx(
-            CARD_SURFACE,
-            "rc-drill absolute z-20 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
-            open ? "translate-x-0 opacity-100" : "translate-x-3 opacity-0",
-          )}
-          style={{
-            top: HEADER_HEIGHT + CARD_GAP,
-            right: CARD_GAP,
-            // Content high, capped above the composer so the foot of the chat keeps its field.
-            ...paneSizing(pane),
-            width: fitted,
-          }}
           onTransitionEnd={(e) => {
             if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
           }}
-        >
-          <div
-            data-tauri-drag-region
-            style={{ height: HEADER_HEIGHT }}
-            className="flex shrink-0 items-center gap-2 border-border border-b pr-2 pl-2.5"
-          >
-            {/* The views keep their labels and scroll before the close button leaves the row. */}
-            <div className="flex min-w-0 items-center overflow-x-auto">
-              <div className="flex shrink-0 items-center">
-                {tabs.length > 1 ? (
-                  <Segments label="Panel" value={pane} options={tabs} onChange={(v) => showPanel(v)} />
-                ) : (
-                  <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
-                )}
-              </div>
-            </div>
-            <span className="flex-1" data-tauri-drag-region />
-            <Tooltip label={`Close (${panelKey})`}>
-              <button
-                type="button"
-                aria-label="Close panel"
-                onClick={() => setPanel(null)}
-                className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-              >
-                <X size={14} />
-              </button>
-            </Tooltip>
-          </div>
-          <Suspense fallback={<div className="flex-1" />}>
-            {pane === "changes" && <ChangesPanel />}
-            {pane === "pulls" && <PullsPanel />}
-            {pane === "peek" && <ThreadPeek />}
-          </Suspense>
-          {open && (
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize panel"
-              aria-controls={PANE_ID}
-              aria-valuemin={MIN}
-              aria-valuemax={widest}
-              aria-valuenow={Math.round(fitted)}
-              aria-valuetext={`${Math.round(fitted)} pixels wide`}
-              tabIndex={0}
-              onPointerDown={onResize}
-              onDoubleClick={resetWidth}
-              onKeyDown={onResizeKey}
-              className="group absolute inset-y-0 left-0 z-10 w-[7px] cursor-col-resize outline-none focus-visible:bg-focus/20"
-            >
-              <div className="mx-auto h-full w-0.5 rounded-full bg-transparent group-hover:bg-fill-strong group-focus-visible:bg-focus" />
-            </div>
+          className={cx(
+            SHEET_SURFACE,
+            "absolute inset-y-0 right-0 flex w-[min(88vw,380px)] flex-col overflow-hidden rounded-l-2xl outline-none transition-[opacity,translate] duration-200 ease-snappy",
+            open ? "translate-x-0 opacity-100" : "translate-x-4 opacity-0",
           )}
+        >
+          {contents}
         </aside>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={attachDock}
+      aria-hidden={!open}
+      inert={!open}
+      className={cx(
+        "relative flex min-h-0 shrink-0 justify-end overflow-clip",
+        !open && "pointer-events-none",
       )}
+      style={
+        {
+          // The card's width and the 12px gap and the strip its resize edge straddles.
+          width: open ? `calc(var(--rc-panel-width) + ${HANDLE + CARD_GAP}px)` : 0,
+          "--rc-panel-width": `${card}px`,
+          ...(motion.enabled ? { transition: "width 200ms var(--ease-snappy)" } : null),
+        } as CSSProperties
+      }
+    >
+      <aside
+        ref={surface}
+        id={PANE_ID}
+        aria-label="Side panel"
+        tabIndex={-1}
+        onKeyDown={onSurfaceKey}
+        onTransitionEnd={(e) => {
+          if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
+        }}
+        className={cx(
+          CARD_SURFACE,
+          "relative flex flex-col overflow-hidden outline-none transition-opacity duration-200",
+          open ? "opacity-100" : "opacity-0",
+        )}
+        style={{
+          width: "var(--rc-panel-width)",
+          marginTop: HEADER_HEIGHT + CARD_GAP,
+          marginRight: CARD_GAP,
+          marginBottom: CARD_GAP,
+        }}
+      >
+        {contents}
+        {open && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize panel"
+            aria-controls={PANE_ID}
+            aria-valuemin={MIN}
+            aria-valuemax={widest}
+            aria-valuenow={Math.round(card)}
+            aria-valuetext={`${Math.round(card)} pixels wide`}
+            tabIndex={0}
+            onPointerDown={onResize}
+            onPointerMove={onResizeMove}
+            onPointerUp={onResizeEnd}
+            onPointerCancel={onResizeEnd}
+            onLostPointerCapture={onResizeEnd}
+            onDoubleClick={() => commit(panelWidth(DEFAULT_WIDTH, viewport, row))}
+            onKeyDown={onResizeKey}
+            className="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none select-none outline-none focus-visible:bg-focus/20"
+          >
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover:bg-fill-strong group-focus-visible:bg-focus"
+            />
+          </div>
+        )}
+      </aside>
     </div>
   );
 }

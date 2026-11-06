@@ -1,6 +1,6 @@
-// The thread details card: what this thread is and where it works, as a
-// floating card at the top right of the chat (ui/RightPanel.tsx places it)
-// rather than a pane that narrows the transcript. The rows that do something
+// The thread details view: what this thread is and where it works, as the right
+// panel's first view (ui/RightPanel.tsx docks the panel beside the chat), the one
+// a thread opens on. The rows that do something
 // come first — the folder, a terminal on it, the branch, the changes — then
 // the rest as facts: the threads it runs for or started, its subagents, its
 // plan, the harness and the usage. A section with nothing to say is left out,
@@ -97,7 +97,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
  * What a group of the card's threads holds, in the words the app settles on
  * (docs/terminology.md): a thread this one *started* had a task handed to it, a
  * thread it *messaged* was already running. The hint says which, once per group,
- * so the heading stays short at 280px.
+ * so the heading stays short at a narrow pane.
  */
 function GroupHeading({ label, count, hint }: { label: string; count: number; hint: string }) {
   return (

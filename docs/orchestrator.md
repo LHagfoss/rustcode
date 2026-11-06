@@ -243,17 +243,28 @@ the child's own `metadata.json` (`parent` in `rustcode-session`, written at
 `session/new` from `_meta.rustcode.parent`), so pruning the link book's oldest
 finished links (`prune` in `state/orchestration.ts`) cannot forget it.
 `topLevel` (`apps/desktop/src/state/topLevel.ts`) picks one of two places:
-*nested* under a parent that is in the list, with no row of its own (the
-parent's row shows the ones still working or waiting on you as a stack of
-marks, `ui/AgentStack.tsx`); or *shown* where it would be anyway, which is what
-a child whose parent is gone, filtered out or in another project gets — with no
-parent row to sit under, hiding it would take it out of the app. The same
+*nested* under a parent that exists, with no row of its own (the parent's row
+shows the ones still working or waiting on you as a stack of marks,
+`ui/AgentStack.tsx`); or *shown* where it would be anyway, which is what a
+child whose parent is gone from the app entirely gets — with no parent row to
+sit under anywhere, hiding it would take it out of the app. Nesting is resolved
+against every session, not the filtered list: a project filter or a search
+changes what is drawn, never who a thread belongs to, so neither can turn a
+delegate into a top-level row. While the user has a delegated thread open it is
+drawn as an indented row, with a subtle tree line, directly under its parent's
+row (and the threads between it and its nearest row of its own); navigating away
+folds that row out again and leaves the child in the parent's stack of marks.
+If the parent sits in the Settled shelf, the shelf opens and its slice grows far
+enough to show the row the child hangs under. A search still lists every match,
+including delegates, and each such row says `in <parent title>` instead of
+un-nesting the tree. The same
 record is on the row `session/new` adds to the list, so a thread being spawned
 is nested from its first frame instead of showing as a row of its own until the
 engine lists it. The user's own actions win: a
 pinned child stays in Pinned, and one the user sent a message to is a row of its
-own. Search still finds all of them, and opening one does not
-move it. Threads started before the record existed are classified once, before
+own — a message a person typed, not a wake, a restart resume, a link or the turn
+that continues after a usage limit (`userTypedPrompt`).
+Threads started before the record existed are classified once, before
 the first session list, from the first message's `From thread “…” (agent):`
 heading, with a surviving `thread_links` row for the parent's id when there is
 one (`rustcode/engine/src/thread_parent.rs`).

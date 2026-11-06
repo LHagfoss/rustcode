@@ -159,6 +159,7 @@ import {
   type Toast,
   type ToastTone,
 } from "./toasts";
+import { userTypedPrompt } from "./topLevel";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -1406,11 +1407,15 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
   return true;
 }
 
-/** Loads a thread's history (the replay) if it is not loaded yet. */
-export async function openThread(id: string) {
+/**
+ * Loads a thread's history (the replay) if it is not loaded yet. Answers the
+ * open error when it could not be opened, so a caller can say why instead of
+ * reporting an empty thread.
+ */
+export async function openThread(id: string): Promise<string | null> {
   const conn = connection;
   const existing = get().threads[id];
-  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return;
+  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return null;
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
   loading.add(id);
@@ -1428,8 +1433,11 @@ export async function openThread(id: string) {
     if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
     void refreshPlanUsage(id);
     void refreshCheckpoints(id);
+    return null;
   } catch (error) {
-    updateThread(id, (t) => ({ ...finishLoad(t), error: `Could not open this thread: ${errorText(error)}` }));
+    const message = `Could not open this thread: ${errorText(error)}`;
+    updateThread(id, (t) => ({ ...finishLoad(t), error: message }));
+    return message;
   } finally {
     loading.delete(id);
   }
@@ -2313,8 +2321,9 @@ export async function runPrompt(
   const thread = get().threads[id];
   // A prompt no agent asked for is the user's: the thread is theirs now, even
   // when it was started by an agent (state/topLevel.ts). A resume after a
-  // restart is not a message the user sent.
-  if (!options.link && !options.wake && !options.automatic) markMessaged(id);
+  // restart, a wake or a message from another thread is not a message the user
+  // sent, and neither is the turn that continues after a usage limit.
+  if (userTypedPrompt(options)) markMessaged(id);
   // Whoever starts a turn now moots the wait, and if this one hits the limit too it waits again.
   if (!options.limitResume && !thread?.running) dropLimitWait(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can

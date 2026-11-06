@@ -161,6 +161,11 @@ the same filter tinted with the pane instead of a surface
 banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar
 stay opaque.
 
+The one other use of that filter is the scrim a narrow window's side sheet opens
+over, `.rc-scrim`: `bg` at 60%, blurred, with what it covers opaque behind it
+(ui/RightPanel.tsx). No second filter is stacked on it: the sheet over a scrim is
+a pane, not glass.
+
 What floats just above the composer is that same dense glass as one class,
 `.rc-glass-overlay` (strong glass + `shadow-1`'s edge ring): the strip of
 threads working for this one, its group card — a row on the strip's
@@ -199,9 +204,9 @@ gutter sits outside the cap, on the transcript's scroller (with
 lane) and on the composer's wrapper, so a row's edge and the card's edge are
 the same line at every width.
 Settings › Chat › Chat width moves that one cap and nothing else: Wide is
-72rem, Full is the pane's own width. A right-hand card does not move the lane:
-it floats over the chat, which keeps its place and its width while the
-transcript scrolls under the card (Right panel below).
+72rem, Full is the pane's own width. The right panel is the one thing that
+narrows the column: it is docked beside it in the same row, so the chat keeps
+its lane and re-centres in the room that is left (Right panel below).
 
 ## Type
 
@@ -239,18 +244,22 @@ that change use `tabular`.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
-  sections and the composer's field, which grows and shrinks with its lines
-  over 150ms `--ease-snappy` instead of jumping between them; the transcript
-  stays pinned to its end as the card rises, so the last line never goes under
-  it mid-animation.
-- Panels and sheets never animate a slot's `width`, `height`, `top` or
-  grid rows across the chat: every frame would reflow the transcript (40 ms
-  of work a frame for the right panel, so well under 120 fps). A card takes
-  no slot at all — it floats over the chat — so opening one refits the lane
-  once and the card moves with `transform` and `opacity` (`rc-drill` in,
-  `translate`/`opacity` out); only its left edge, dragged by hand, widens it
-  frame by frame. Animate only
-  `transform`, `opacity` and colour; never `filter` or `box-shadow` on
+  sections, and for the composer's field, which grows and shrinks with its
+  lines over 150ms `--ease-snappy` instead of jumping between them; the
+  transcript stays pinned to its end as the card rises, so the last line never
+  goes under it mid-animation.
+- Panels and sheets never animate the room they take across the chat as a
+  matter of course: every frame of it reflows the transcript, so a slot's
+  `width`, `height`, `top` or grid rows only change on the one animation that
+  is about the slot opening or closing — the right panel docking in and out,
+  which runs 200ms `--ease-snappy` (`ui/RightPanel.tsx`), and the composer's
+  field gaining or losing a line, which the pinned transcript follows. Every
+  other width a panel takes — a tab switching it, the window resizing it down,
+  the end of a drag — is committed with the transition off in the same frame,
+  so nothing glides. A panel's left edge also widens it frame by frame while it
+  is dragged: that width is written to one custom property on the dock, never
+  to React state, which is committed once the pointer is up. Animate only
+  `transform`, `opacity` and those two; never `filter` or `box-shadow` on
   something that moves every frame.
 - Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
   in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off
@@ -366,10 +375,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   changed (`font-mono +N −N` in `success`/`danger`), for a thread the app has
   already read; one it has not opened shows neither, rather than a made-up zero.
 - **Delegated threads:** a thread an agent started has no row of its own while
-  its parent is in the list, and it is nested from its first frame: the parent
+  its parent exists, and it is nested from its first frame: the parent
   is recorded on the thread when it is created (`_meta.rustcode.parent`, carried
   by the row `session/new` adds), so a thread being spawned never shows as a
-  row of its own in between. Its
+  row of its own in between. The tree is resolved against every session, so a
+  project filter or a search never turns a delegate into a top-level row. Its
   parent's second line ends with a stack of at most three 18px round marks
   (`ui/AgentStack.tsx`), overlapping by 6px with a 2px ring in the sidebar's
   surface, then `+N` past the third and one quiet accent spinner while anything
@@ -377,15 +387,20 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   delegates show nothing, no dot and no count. The slot is a fixed 74px, so a
   count going from one to three never moves the title's start, the age or the
   status. Hovering lists the running threads and their state, and the row opens
-  the parent. An open child keeps its parent's row lit as the context. A
-  delegated thread whose parent is not in the current list (deleted, filtered
-  out, or in another project) keeps a row of its own: with no parent row to sit
-  under, nesting it would take it out of the app altogether. In the
+  the parent. The open delegate itself is drawn as an indented row, with a
+  subtle tree line, directly under its parent's row, unfolding in with the
+  list's fold motion and folding away when the user opens another thread or goes
+  back; the threads between it and its nearest row of its own come with it, and
+  a parent in the Settled shelf opens the shelf and its slice far enough to be
+  reached. A delegated thread whose parent is gone from the app entirely keeps a
+  row of its own: with no parent row to sit under, nesting it would take it out
+  of the app altogether. A search lists every match, delegates included, each
+  row saying `in <parent title>` rather than un-nesting the tree. In the
   chat's group cards the same stack reads at 24px with a `surface` ring; once
   all are done it shows the finished marks instead, with no spinner. Logic:
   `state/agentStack.ts`, `state/topLevel.ts`.
-- **Thread details card:** floats at the top right of the chat, 280px wide
-  (`ui/ThreadDetails.tsx`): what the thread is and where it works first (folder,
+- **Thread details:** the right panel's first view (`ui/ThreadDetails.tsx`), the
+  one a thread opens on: what the thread is and where it works first (folder,
   terminal, branch, changes, pull requests), then what it is as facts. The
   threads it worked with are one `Threads` section, grouped by what the
   relationship is in the words of `docs/terminology.md`: `Started` (a task
@@ -398,9 +413,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   subagents are
   their own section, said to be helpers inside this thread and not threads.
 - **Sidebar selection:** one tab stop for the whole list, on the row the
-  keyboard is on (the open thread, or the parent row kept lit for an open
-  delegated thread, else the first): ↑ ↓ move it through the rows on screen,
-  skipping shut sections and project groups, ⏎ opens the thread, Esc lets the
+  keyboard is on (the open thread — an open delegate is a row of its own while
+  it is open — else the first): ↑ ↓ move it through the rows on screen,
+  including an open delegate's indented row, skipping shut sections and project
+  groups, ⏎ opens the thread, Esc lets the
   selection go. Keys in a field inside the list (the
   rename box) stay the field's, and ⌘/⌃/⌥ stay the app's. ⌘-click toggles a
   row into the selection and ⇧-click takes the range from the last one clicked;
@@ -605,43 +621,38 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).
   When the control stacks under the text, the icon leaves the flow for the
   row's top right, so stacked controls share one left edge.
-- **Right panel:** one `RightPanel` for every side view (Details, Changes,
-  Pull requests): a floating card at the window's right edge, inset 12px from
-  its top and right, `rounded-2xl` in the same glass and elevation as
-  every other floating surface (`.rc-glass` + `-strong` + `shadow-2`, the
-  details card's own surface), so the transcript scrolls under it and the chat
-  keeps its full width. The details card is that surface, small (280px) and at
-  the top right. A pane's header row is a `HEADER_HEIGHT` band inside the card
+- **Right panel:** one `RightPanel` for every side view (Details, Changes, Pull
+  requests, Thread): a card **docked** at the window's right edge, beside the chat
+  column and inside the chat view's row (`ui/ChatView.tsx`), so it is never drawn
+  over the board, the review or the compare view. It is the card it always was —
+  `rounded-2xl` in the same glass and elevation as every other card (`.rc-glass` +
+  `-strong` + `shadow-2`), inset 12px from the header's foot and from the window's
+  right and bottom edges — and now it runs the full height between them, so
+  nothing about its size depends on the composer. The chat column is `flex-1` and
+  narrows by the card: the lane re-centres in the room that is left and the
+  transcript stops at the card's edge rather than scrolling under it. The header
+  floats above both. A pane's header row is a `HEADER_HEIGHT` band inside the card
   with a segmented switch between the views and a close button, divided from the
-  view by a hairline; views add a slim toolbar (`h-9`) under it. It never draws
-  past the column's edges (320–760px, kept as asked, fitted when drawn). A list
-  view sizes the card to what it holds — one file makes a short card, whose
-  foot sits just under its last row — and caps it above the composer (its top
-  measured into `--rc-composer-top` by `ui/ChatView.tsx`), where the view
-  scrolls inside it, so the composer stays usable; the Thread view is a
-  transcript, which has no height of its own, and takes the room it has. A new
-  thread's centred hero and composer leave the card the pane's full height. The
-  left edge drags and answers the keyboard too: ←/→ 24px from the
-  width on screen (Shift 96px), Home/End to the ends, ⏎ the default. Escape
-  inside either surface closes the panel (unless a field in it is being edited),
-  focus goes into it when a shortcut opens it with nothing focused, and closing
-  hands focus back. The card floats **over** the chat: the lane keeps its place
-  and its width, the transcript scrolls under the card, and every card ends
-  above the composer so a field being typed in is never covered. A thread opens
+  view by a hairline; views add a slim toolbar (`h-9`) under it. The card draws
+  520px wide by default and never wider than 760, 70% of the window, or the row
+  less the 360px the chat column always keeps, nor narrower than 360; it is
+  fitted down when the window or the row cannot hold what was asked and comes back
+  when it can. The width is kept per thread, with the last one used as what a
+  thread that has none starts at. A view scrolls inside the card and takes the
+  height it has, so no view sizes the card. Opening and closing animate the
+  dock's width over 200ms (see Motion) with the content pinned to the card's right
+  edge, so the chat uncovers it instead of the card sliding. The left edge drags
+  and answers the keyboard too: ←/→ 24px from the width on screen (Shift 96px),
+  Home/End to the ends, ⏎ the default; the 8px strip straddles the edge,
+  captures the pointer, and writes the width for the frame it moves on, committing
+  state once on release. Escape inside the card closes the panel (unless a field
+  in it is being edited), focus goes into it when a shortcut opens it with
+  nothing focused, and closing hands focus back to whatever had it, else to the
+  header's toggle. While it is closed or closing it is `inert` and takes no
+  pointer, so nothing it draws can be reached. A thread opens
   the panel on its own overview (Details), and a view that has nothing to show
   in this project — a Pull requests tab without pull requests, a Thread tab
-  with nothing peeked — falls back to it. Every control under the
-  transcript — composer, its slash drawer, approvals, linked threads, a report —
-  paints above the card, so none of it is ever out of reach; a new thread's hero
-  is not a control, and on a narrow column the card floats over it. Each stack
-  child rides the lane's shift on its own
-  (`LaneItem`, `empty:hidden` so one that renders nothing leaves no gap), not the
-  stack, so the hero and those
-  controls are separate stacking contexts, and the whole stack sits on a scrim
-  as tall as itself, so a queued message or the strip of linked threads never
-  reads through the composer's glass. The card slides and fades in 200ms (see
-  Motion), its width published for the lane (`usePanelCardWidth`). ⌘⌥B toggles it
-  with the last
+  with nothing peeked — falls back to it. ⌘⌥B toggles it with the last
   view. A thread opens with the panel on the view it last showed (Changes
   when that view has nothing to show here; `state/store.ts`
   `panelForThread`); closing it by hand is kept for the thread on screen, so
@@ -654,6 +665,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   the same Undo the sidebar offers; settling from the board, review or compare
   stays on that view, and a status set by an agent or the engine never moves
   the screen.
+  Below 980px of window there is no room for both columns: the panel opens as a
+  **sheet** over the chat instead — `w-[min(88vw,380px)]`, full height at the
+  window's right edge, `bg-surface` and `shadow-2` (opaque, because it opens over
+  a scrim that is already blurred) with the same header row — over a `.rc-scrim`
+  (`bg` at 60% with the shared glass filter). Escape, a press on the scrim or the
+  close button puts it away; there it is a dialog and takes `aria-modal`. The
+  whole stack of controls under the transcript — composer, its slash drawer,
+  approvals, linked threads, a report — keeps its own z-order; the docked card
+  shares no space with any of it, so opening the panel can never cover a field
+  being typed in.
   Details lists what a thread is, in titled sections that drop out when
   they have nothing to say: harness, workspace, linked threads, subagents with
   status and elapsed time, plan and usage.

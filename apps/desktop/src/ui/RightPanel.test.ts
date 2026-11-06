@@ -1,64 +1,69 @@
-// The right panel's card is fitted, not fixed (ui/RightPanel.tsx): its width
-// keeps what it was given but never draws past the column's edges (and the edge
-// it drags or arrows also answer on the keyboard), and a list view sizes its
-// height to what it holds instead of the room it has.
+// The right panel's card is docked beside the chat (ui/RightPanel.tsx): the width
+// it draws keeps what it was given but never takes the room the chat column needs,
+// nor more than 70% of the window (the edge it drags also answers on the
+// keyboard), and a narrow enough window gives up on both columns and opens it as
+// a sheet instead.
 
 import { describe, expect, test } from "bun:test";
-import { HEADER_HEIGHT } from "./MainHeader";
-import { DEFAULT_WIDTH, MAX, MIN, panelWidth, paneSizing, resizedWidth } from "./RightPanel";
+import {
+  CHAT_MIN,
+  DEFAULT_WIDTH,
+  MAX,
+  MIN,
+  panelIsSheet,
+  panelMax,
+  panelWidth,
+  resizedWidth,
+  SHEET_AT,
+} from "./RightPanel";
 
-/** The gap a card keeps from the window's edges, on one side and on two (see RightPanel.tsx). */
-const GAP = 12;
-const GAPS = GAP * 2;
-
-describe("panel width", () => {
-  test("keeps the width it was given when the column has room", () => {
-    expect(panelWidth(520, 1512)).toBe(520);
-    expect(panelWidth(MIN, 1512)).toBe(MIN);
-    expect(panelWidth(DEFAULT_WIDTH, 1512)).toBe(DEFAULT_WIDTH);
+describe("the width the card may draw", () => {
+  test("no wider than its own cap, 70% of the window, or the room the chat leaves", () => {
+    // A 1512px window has room for the card's own cap.
+    expect(panelMax(1512, 1512)).toBe(MAX);
+    // The fraction is what binds in a window of 700px: 490, under the card's own cap.
+    expect(panelMax(700, 2000)).toBe(Math.floor(700 * 0.7));
+    // The row is what binds when the chat needs its 360px back.
+    expect(panelMax(1512, 900)).toBe(900 - CHAT_MIN);
   });
 
-  test("never draws past the column's edges", () => {
-    expect(panelWidth(MAX, 700)).toBe(700 - GAPS);
-    expect(panelWidth(460, 400)).toBe(400 - GAPS);
-    // A column too narrow for even the smallest card still gets one: it is
-    // drawn at its minimum and its content scrolls.
-    expect(panelWidth(MAX, 300)).toBe(MIN);
+  test("never under its own minimum, even in a row that cannot hold it", () => {
+    expect(panelMax(1512, 500)).toBe(MIN);
+    // 70% of a 400px window is 280, under the card's own floor.
+    expect(panelMax(400, 1512)).toBe(MIN);
   });
 
-  test("stays between its own bounds", () => {
-    expect(panelWidth(120, 1512)).toBe(MIN);
-    expect(panelWidth(4000, 3000)).toBe(MAX);
+  test("keeps the width it was given when the window has room", () => {
+    expect(panelWidth(520, 1512, 1512)).toBe(520);
+    expect(panelWidth(MIN, 1512, 1512)).toBe(MIN);
+    expect(panelWidth(DEFAULT_WIDTH, 1512, 1512)).toBe(DEFAULT_WIDTH);
   });
 
-  test("stands as stored before the first measurement", () => {
-    expect(panelWidth(520, 0)).toBe(520);
-    expect(panelWidth(4000, 0)).toBe(MAX);
+  test("is fitted down to what the row and the window allow", () => {
+    expect(panelWidth(MAX, 1512, 900)).toBe(900 - CHAT_MIN);
+    expect(panelWidth(4000, 1512, 1512)).toBe(MAX);
+    expect(panelWidth(120, 1512, 1512)).toBe(MIN);
+    // 70% of a 900px window is 630.
+    expect(panelWidth(MAX, 900, 2000)).toBe(630);
+  });
+
+  test("stands as stored before the row is measured", () => {
+    expect(panelWidth(520, 1512, 0)).toBe(520);
+    expect(panelWidth(4000, 1512, 0)).toBe(MAX);
   });
 
   test("a narrow window does not overwrite the width it was given", () => {
-    expect(panelWidth(620, 600)).toBe(600 - GAPS);
-    expect(panelWidth(620, 1600)).toBe(620);
+    expect(panelWidth(620, 1000, 900)).toBe(Math.min(620, 700, 900 - CHAT_MIN));
+    expect(panelWidth(620, 1600, 1600)).toBe(620);
   });
 });
 
-describe("the card's height", () => {
-  test("a list view sizes to its content, capped above the composer", () => {
-    for (const kind of ["changes", "pulls"] as const) {
-      const style = paneSizing(kind);
-      // No foot, so the card takes the height of what it draws.
-      expect(style.bottom).toBeUndefined();
-      // And no more room than it has once the composer is measured in.
-      expect(style.maxHeight).toBe(
-        `calc(100% - ${HEADER_HEIGHT + GAP}px - calc(var(--rc-composer-top, 0px) + ${GAP}px))`,
-      );
-    }
-  });
-
-  test("a transcript keeps the room it has, since it has no height of its own", () => {
-    const style = paneSizing("peek");
-    expect(style.maxHeight).toBeUndefined();
-    expect(style.bottom).toBe(`calc(var(--rc-composer-top, 0px) + ${GAP}px)`);
+describe("the sheet a narrow window opens", () => {
+  test("the panel is a sheet at 980px and under, and docked above it", () => {
+    expect(panelIsSheet(SHEET_AT)).toBe(true);
+    expect(panelIsSheet(900)).toBe(true);
+    expect(panelIsSheet(SHEET_AT + 1)).toBe(false);
+    expect(panelIsSheet(1512)).toBe(false);
   });
 });
 
@@ -84,13 +89,15 @@ describe("keyboard resizing", () => {
   });
 
   test("a key starts from the width on screen and stops at what it may draw", () => {
-    // 620 asked for, 400 drawn in a 424px column.
-    const shown = panelWidth(620, 424);
-    expect(shown).toBe(400);
-    expect(resizedWidth(shown, "ArrowRight", false, panelWidth(MAX, 424))).toBe(376);
-    expect(resizedWidth(shown, "ArrowLeft", false, panelWidth(MAX, 424))).toBe(400);
-    expect(resizedWidth(shown, "End", false, panelWidth(MAX, 424))).toBe(400);
-    // Never below the pane's own minimum, even under a column that cannot hold it.
+    // 620 asked for, 420 drawn in a 780px row.
+    const shown = panelWidth(620, 1512, 780);
+    expect(shown).toBe(780 - CHAT_MIN);
+    const widest = panelMax(1512, 780);
+    expect(widest).toBe(780 - CHAT_MIN);
+    expect(resizedWidth(shown, "ArrowRight", false, widest)).toBe(396);
+    expect(resizedWidth(shown, "ArrowLeft", false, widest)).toBe(420);
+    expect(resizedWidth(shown, "End", false, widest)).toBe(420);
+    // Never below the card's own minimum, even under a row that cannot hold it.
     expect(resizedWidth(MIN, "ArrowRight", true, MIN - 40)).toBe(MIN);
     expect(resizedWidth(MIN + 96, "Home", false, MIN - 40)).toBe(MIN);
   });
