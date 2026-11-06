@@ -396,8 +396,13 @@ What each part does for an external thread:
   are relayed under the thread's id. RustCode advertises no `fs` or `terminal` client capability,
   and refuses those requests, so the agent uses its own tools.
 - **Steer.** `_rustcode/steer` on a Codex thread sends `turn/steer` while a
-  turn runs (`steer: "live"`). ACP has no equivalent (`steer: "none"`): the
-  client sends the message as the next prompt.
+  turn runs (`steer: "live"`). On an ACP thread it uses the agent's
+  `_session/steering` extension when the agent advertised it at `initialize`
+  (`_meta.steering.supported`; `steer: "live"` then), and the client sends the
+  message as the next prompt otherwise (`steer: "next_turn"`, or `"none"` when
+  the agent takes no prompt at all). `pi-acp` 0.0.34 advertises no steering and
+  queues a prompt sent mid-turn behind the running one, so a Pi thread is
+  `next_turn` even though Pi itself has steering modes.
 - **Load.** `session/load` replays the recorded transcript (messages,
   thoughts, each tool call as one finished card with its title, kind,
   status, locations and output summary, each turn's last plan) and then the
