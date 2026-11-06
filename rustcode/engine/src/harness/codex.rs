@@ -15,6 +15,7 @@
 //! | `item/*/requestApproval` | `session/request_permission` |
 //! | `item/tool/requestUserInput` | a RustCode question (`acp/questions.rs`) |
 //! | `thread/tokenUsage/updated` | `usage_update` |
+//! | `collabAgentToolCall` | one subagent row per agent it starts (`collab_updates`) |
 //! | `mcpServer/elicitation/request` | MCP tool approval: accepted for `rustcode`, else `session/request_permission`; forms with fields declined |
 
 use super::rpc::{Incoming, RpcError, RpcPeer};
@@ -27,8 +28,8 @@ use agent_client_protocol::schema::v1::{
     StopReason, TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus,
     ToolCallUpdate, ToolCallUpdateFields, ToolKind, UsageUpdate,
 };
-use serde_json::{Value, json};
-use std::collections::HashSet;
+use serde_json::{Map, Value, json};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -72,6 +73,25 @@ struct State {
     /// A `/compact` is running: its completed `contextCompaction` item ends the
     /// wait. Codex's own auto-compaction inside a turn does not.
     compacting: bool,
+    /// Codex's own subagents, by the Codex thread each runs in, which is how
+    /// every notification about it names it.
+    collab: HashMap<String, CollabAgent>,
+}
+
+/// One of Codex's own subagents (`collabAgentToolCall`) as the transcript's
+/// child row shows it: what it was asked, and the state it last reported, so a
+/// state repeated by a later call is not sent again.
+#[derive(Debug)]
+struct CollabAgent {
+    /// The row's tool call id: the call that started the agent, its thread id.
+    call_id: String,
+    /// The first line of its task, for the row and for the titles of `wait` and
+    /// `closeAgent` steps.
+    task: String,
+    /// Codex's own name for its state (`running`, `completed`, …).
+    status: Option<String>,
+    /// The message that came with that state: usually how the agent finished.
+    message: Option<String>,
 }
 
 fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
@@ -610,29 +630,361 @@ fn file_paths(item: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// A Codex subagent call as a step title: "Start subagent: <first line of its task>".
-fn collab_title(item: &Value) -> String {
-    let action = match str_field(item, "tool").unwrap_or_default() {
-        "spawnAgent" => "Start subagent",
-        "sendInput" | "sendMessage" | "followupTask" => "Message subagent",
-        "resumeAgent" => "Resume subagent",
-        "wait" => "Wait for subagents",
-        "closeAgent" => "Close subagent",
-        "interruptAgent" => "Interrupt subagent",
-        "listAgents" => "List subagents",
-        _ => "Subagent",
-    };
-    match str_field(item, "prompt")
-        .and_then(|prompt| prompt.lines().find(|line| !line.trim().is_empty()))
-    {
-        Some(task) => {
-            let task = task.trim();
-            let short: String = task.chars().take(80).collect();
-            let more = if short.len() < task.len() { "…" } else { "" };
-            format!("{action}: {short}{more}")
-        }
-        None => action.to_owned(),
+/// The first line of a subagent's task, short enough for a row title.
+fn task_line(prompt: &str) -> String {
+    let line = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let short: String = line.chars().take(80).collect();
+    if short.len() < line.len() {
+        format!("{short}…")
+    } else {
+        short
     }
+}
+
+/// The agents a collab call names, by the Codex thread each runs in.
+fn receivers(item: &Value) -> Vec<String> {
+    item.get("receiverThreadIds")
+        .and_then(Value::as_array)
+        .map(|threads| {
+            threads
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The state Codex reports for the agent in `thread`, as it names it, with the
+/// message it gave for it.
+fn agent_state(item: &Value, thread: &str) -> Option<(String, Option<String>)> {
+    let state = item.get("agentsStates")?.get(thread)?;
+    let status = str_field(state, "status")?.to_owned();
+    let message = str_field(state, "message")
+        .filter(|message| !message.trim().is_empty())
+        .map(str::to_owned);
+    Some((status, message))
+}
+
+/// Codex's state for an agent as the tool status a client draws, and the word
+/// its row's title adds. `pendingInit` and `running` are the only live states.
+fn agent_status(status: &str) -> (ToolCallStatus, &'static str) {
+    match status {
+        "pendingInit" => (ToolCallStatus::InProgress, "starting"),
+        "running" => (ToolCallStatus::InProgress, "running"),
+        "completed" => (ToolCallStatus::Completed, "finished"),
+        "interrupted" => (ToolCallStatus::Completed, "interrupted"),
+        "shutdown" => (ToolCallStatus::Completed, "closed"),
+        "errored" | "notFound" => (ToolCallStatus::Failed, "failed"),
+        _ => (ToolCallStatus::InProgress, "running"),
+    }
+}
+
+/// Whether an agent's state is one it does not leave on its own.
+fn agent_finished(agent: &CollabAgent) -> bool {
+    agent
+        .status
+        .as_deref()
+        .is_some_and(|status| status != "running" && status != "pendingInit")
+}
+
+/// The `_meta` a client reads to draw a call as a subagent row: the adapter's
+/// tool name for one (`Agent`), and the row of the agent a call was made from.
+/// Claude Code's adapter sends both fields, so a client that draws its
+/// subagents draws these too; Codex has no adapter of its own, so the fields
+/// are filled here.
+fn agent_meta(parent: Option<&str>) -> Map<String, Value> {
+    let mut fields = Map::new();
+    fields.insert("toolName".to_owned(), json!("Agent"));
+    if let Some(parent) = parent {
+        fields.insert("parentToolUseId".to_owned(), json!(parent));
+    }
+    let mut meta = Map::new();
+    meta.insert("claudeCode".to_owned(), Value::Object(fields));
+    meta
+}
+
+/// The `_meta` that folds a call under the row of the agent that made it.
+fn step_meta(parent: &str) -> Map<String, Value> {
+    let mut meta = Map::new();
+    meta.insert("claudeCode".to_owned(), json!({"parentToolUseId": parent}));
+    meta
+}
+
+/// The transcript row of one of Codex's subagents: a tool call the client
+/// draws as a subagent, named for its task, with the task and the model it
+/// runs on as its input.
+fn agent_row(
+    agent: &CollabAgent,
+    prompt: &str,
+    model: Option<&str>,
+    parent: Option<&str>,
+) -> ToolCall {
+    let (status, _) = agent
+        .status
+        .as_deref()
+        .map(agent_status)
+        .unwrap_or((ToolCallStatus::InProgress, "starting"));
+    let title = if agent.task.is_empty() {
+        "Started agent".to_owned()
+    } else {
+        format!("Started agent: {}", agent.task)
+    };
+    ToolCall::new(agent.call_id.clone(), title)
+        .kind(ToolKind::Other)
+        .status(status)
+        .raw_input(json!({
+            "subagent_type": "Agent",
+            "description": agent.task,
+            "prompt": prompt,
+            "model": model,
+        }))
+        .meta(agent_meta(parent))
+}
+
+/// The update an agent's row takes from the state Codex reports for it.
+fn agent_update(agent: &CollabAgent, status: &str, message: Option<&str>) -> ToolCallUpdate {
+    let (tool_status, word) = agent_status(status);
+    let mut fields = ToolCallUpdateFields::new().status(tool_status);
+    // A finished agent says how it ended; a running one keeps its title.
+    if tool_status != ToolCallStatus::InProgress {
+        fields = fields.title(format!("Agent {word}: {}", agent.task));
+    }
+    // Its last message is what it has to show for the turn.
+    if let Some(message) = message {
+        fields = fields.content(vec![ToolCallContent::from(ContentBlock::Text(
+            TextContent::new(truncate(message)),
+        ))]);
+    }
+    ToolCallUpdate::new(agent.call_id.clone(), fields)
+}
+
+/// The call's own step in the transcript, for the calls that are not an
+/// agent's own row: `Waiting for 2 agents`, `Closed agent: <task>`.
+fn step_call(item: &Value, id: &str, title: String) -> ToolCall {
+    ToolCall::new(id.to_owned(), title)
+        .kind(ToolKind::Other)
+        .status(ToolCallStatus::InProgress)
+        .raw_input(json!({
+            "tool": item.get("tool"),
+            "prompt": item.get("prompt"),
+            "model": item.get("model"),
+            "agents": item.get("receiverThreadIds"),
+        }))
+}
+
+/// One agent's title (`Closed agent: <task>`) or a count (`Closed 2 agents`).
+fn one_or_many(one: &str, many: &str, count: usize, task: &str) -> String {
+    if count > 1 {
+        format!("{many} {count} agents")
+    } else if task.is_empty() {
+        one.to_owned()
+    } else {
+        format!("{one}: {task}")
+    }
+}
+
+/// What a collab call did, as its step's title.
+fn collab_step_title(
+    tool: &str,
+    receivers: &[String],
+    agents: &HashMap<String, CollabAgent>,
+    completed: bool,
+) -> String {
+    // A wait or a close that returns says who it finished, not what it asked.
+    if completed && matches!(tool, "wait" | "closeAgent" | "interruptAgent") {
+        let ended = receivers
+            .iter()
+            .filter_map(|thread| agents.get(thread))
+            .filter(|agent| agent_finished(agent))
+            .collect::<Vec<_>>();
+        match ended.len() {
+            1 => {
+                let agent = ended[0];
+                let (_, word) = agent_status(agent.status.as_deref().unwrap_or_default());
+                return format!("Agent {word}: {}", agent.task);
+            }
+            count if count > 1 => return format!("{count} agents finished"),
+            _ => {}
+        }
+    }
+    let count = receivers.len();
+    let task = receivers
+        .iter()
+        .find_map(|thread| agents.get(thread))
+        .map(|agent| agent.task.as_str())
+        .unwrap_or_default();
+    match tool {
+        "spawnAgent" => one_or_many("Started agent", "Started", count, task),
+        "sendInput" | "sendMessage" | "followupTask" => {
+            one_or_many("Messaged agent", "Messaged", count, task)
+        }
+        "resumeAgent" => one_or_many("Resumed agent", "Resumed", count, task),
+        "wait" if count == 0 => "Waiting for agents".to_owned(),
+        "wait" => one_or_many("Waiting for agent", "Waiting for", count, task),
+        "closeAgent" => one_or_many("Closed agent", "Closed", count, task),
+        "interruptAgent" => one_or_many("Interrupted agent", "Interrupted", count, task),
+        "listAgents" => "Listed agents".to_owned(),
+        _ => "Subagent".to_owned(),
+    }
+}
+
+/// The row of the Codex subagent whose thread a notification names, when the
+/// notification is one of its own.
+fn agent_row_of_call(state: &Mutex<State>, params: &Value) -> Option<String> {
+    let thread = str_field(params, "threadId")?;
+    lock(state)
+        .collab
+        .get(thread)
+        .map(|agent| agent.call_id.clone())
+}
+
+/// Whether a notification belongs to one of Codex's own subagents rather than
+/// the thread: its turn ending is not the thread's turn ending.
+fn is_agent_thread(state: &Mutex<State>, params: &Value) -> bool {
+    str_field(params, "threadId").is_some_and(|thread| lock(state).collab.contains_key(thread))
+}
+
+/// A tool call an agent made, marked with that agent's row so the client folds
+/// its steps under it. Any other call is left as it is.
+fn fold_under_agent(state: &Mutex<State>, params: &Value, call: ToolCall) -> ToolCall {
+    match agent_row_of_call(state, params) {
+        Some(parent) => call.meta(step_meta(&parent)),
+        None => call,
+    }
+}
+
+fn fold_under_agent_update(
+    state: &Mutex<State>,
+    params: &Value,
+    update: ToolCallUpdate,
+) -> ToolCallUpdate {
+    match agent_row_of_call(state, params) {
+        Some(parent) => update.meta(step_meta(&parent)),
+        None => update,
+    }
+}
+
+/// The updates one `collabAgentToolCall` item makes: a row for each agent a
+/// `spawnAgent` started, the state every call reports for the agents it names,
+/// and the call's own step.
+fn collab_updates(
+    state: &Mutex<State>,
+    params: &Value,
+    item: &Value,
+    completed: bool,
+) -> Vec<SessionUpdate> {
+    let tool = str_field(item, "tool").unwrap_or_default();
+    let item_id = str_field(item, "id").unwrap_or_default().to_owned();
+    let receivers = receivers(item);
+    let mut guard = lock(state);
+    // An agent that starts its own subagents: their rows fold under its row.
+    let parent = str_field(params, "threadId")
+        .and_then(|thread| guard.collab.get(thread))
+        .map(|agent| agent.call_id.clone());
+    let mut updates = Vec::new();
+    if tool == "spawnAgent" {
+        let prompt = str_field(item, "prompt").unwrap_or_default().to_owned();
+        let task = task_line(&prompt);
+        let model = str_field(item, "model").map(str::to_owned);
+        for thread in &receivers {
+            if guard.collab.contains_key(thread) {
+                continue;
+            }
+            let (status, message) = match agent_state(item, thread) {
+                Some((status, message)) => (Some(status), message),
+                None => (None, None),
+            };
+            let agent = CollabAgent {
+                call_id: format!("{item_id}:{thread}"),
+                task: task.clone(),
+                status,
+                message,
+            };
+            updates.push(SessionUpdate::ToolCall(agent_row(
+                &agent,
+                &prompt,
+                model.as_deref(),
+                parent.as_deref(),
+            )));
+            guard.collab.insert(thread.clone(), agent);
+        }
+    }
+    // Every call reports the state of the agents it names, so their rows move
+    // on a wait, a message or a close as well as on the agent's own events.
+    for thread in &receivers {
+        let Some(agent) = guard.collab.get_mut(thread) else {
+            continue;
+        };
+        let Some((status, message)) = agent_state(item, thread) else {
+            continue;
+        };
+        if agent.status.as_deref() == Some(status.as_str()) && agent.message == message {
+            continue;
+        }
+        agent.status = Some(status.clone());
+        agent.message = message.clone();
+        updates.push(SessionUpdate::ToolCallUpdate(agent_update(
+            agent,
+            &status,
+            message.as_deref(),
+        )));
+    }
+    // The call's own step. A spawn that started agents draws their rows instead,
+    // so its step would say the same thing twice.
+    if !(tool == "spawnAgent" && !receivers.is_empty()) {
+        let title = collab_step_title(tool, &receivers, &guard.collab, completed);
+        updates.push(if completed {
+            let status = match str_field(item, "status").unwrap_or("completed") {
+                "failed" => ToolCallStatus::Failed,
+                _ => ToolCallStatus::Completed,
+            };
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                item_id,
+                ToolCallUpdateFields::new().status(status).title(title),
+            ))
+        } else {
+            SessionUpdate::ToolCall(step_call(item, &item_id, title))
+        });
+    }
+    updates
+}
+
+/// One of Codex's own subagents finishing its turn: its row ends with it. The
+/// thread's own turn is not over, so the turn does not settle (`settle`).
+fn agent_turn_end(state: &Mutex<State>, params: &Value) -> Vec<SessionUpdate> {
+    let Some(thread) = str_field(params, "threadId") else {
+        return Vec::new();
+    };
+    let (status, message) = match params.pointer("/turn/status").and_then(Value::as_str) {
+        Some("failed") => (
+            "errored",
+            params
+                .pointer("/turn/error/message")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ),
+        Some("interrupted") => ("interrupted", None),
+        _ => ("completed", None),
+    };
+    let mut guard = lock(state);
+    let Some(agent) = guard.collab.get_mut(thread) else {
+        return Vec::new();
+    };
+    if agent.status.as_deref() == Some(status) && agent.message == message {
+        return Vec::new();
+    }
+    agent.status = Some(status.to_owned());
+    agent.message = message.clone();
+    vec![SessionUpdate::ToolCallUpdate(agent_update(
+        agent,
+        status,
+        message.as_deref(),
+    ))]
 }
 
 /// The tool card a Codex item starts, if it is a tool.
@@ -681,15 +1033,6 @@ fn tool_call_for(item: &Value) -> Option<ToolCall> {
             format!("View {}", str_field(item, "path").unwrap_or("image")),
         )
         .kind(ToolKind::Read),
-        // Codex's own subagents: shown as a step, so the work they do is not invisible.
-        "collabAgentToolCall" => ToolCall::new(id, collab_title(item))
-            .kind(ToolKind::Other)
-            .raw_input(json!({
-                "tool": item.get("tool"),
-                "prompt": item.get("prompt"),
-                "model": item.get("model"),
-                "agents": item.get("receiverThreadIds"),
-            })),
         _ => return None,
     };
     Some(call.status(ToolCallStatus::InProgress))
@@ -762,7 +1105,7 @@ fn tool_update_for(item: &Value) -> Option<ToolCallUpdate> {
                 })
                 .raw_output(result);
         }
-        "webSearch" | "imageView" | "collabAgentToolCall" => {
+        "webSearch" | "imageView" => {
             fields = fields.status(if failed {
                 ToolCallStatus::Failed
             } else {
@@ -825,6 +1168,20 @@ fn usage_for(params: &Value) -> Option<UsageUpdate> {
 /// Translate one Codex notification into ACP updates.
 fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionUpdate> {
     let item_id = str_field(params, "itemId").unwrap_or_default().to_owned();
+    // What a subagent says, plans and spends is its own, not the thread's: only
+    // its tool calls stay, folded under its row.
+    let subagent_only = matches!(
+        method,
+        "item/agentMessage/delta"
+            | "item/reasoning/summaryTextDelta"
+            | "item/reasoning/summaryPartAdded"
+            | "item/reasoning/textDelta"
+            | "turn/plan/updated"
+            | "thread/tokenUsage/updated"
+    );
+    if subagent_only && is_agent_thread(state, params) {
+        return Vec::new();
+    }
     match method {
         "item/agentMessage/delta" => {
             let delta = str_field(params, "delta").unwrap_or_default();
@@ -869,17 +1226,30 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
             lock(state).streamed.insert(item_id);
             vec![SessionUpdate::AgentThoughtChunk(text_chunk(delta))]
         }
-        "item/started" => params
-            .get("item")
-            .and_then(tool_call_for)
-            .map(SessionUpdate::ToolCall)
-            .into_iter()
-            .collect(),
+        "item/started" => {
+            let Some(item) = params.get("item") else {
+                return Vec::new();
+            };
+            if str_field(item, "type") == Some("collabAgentToolCall") {
+                return collab_updates(state, params, item, false);
+            }
+            tool_call_for(item)
+                .map(|call| SessionUpdate::ToolCall(fold_under_agent(state, params, call)))
+                .into_iter()
+                .collect()
+        }
         "item/completed" => {
             let Some(item) = params.get("item") else {
                 return Vec::new();
             };
             let id = str_field(item, "id").unwrap_or_default().to_owned();
+            let own_text = matches!(
+                str_field(item, "type"),
+                Some("agentMessage" | "reasoning" | "contextCompaction")
+            );
+            if own_text && is_agent_thread(state, params) {
+                return Vec::new();
+            }
             match str_field(item, "type") {
                 Some("contextCompaction") => {
                     // A compaction asked for with `/compact` runs no turn of its own
@@ -938,12 +1308,18 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
                         vec![SessionUpdate::AgentThoughtChunk(text_chunk(summary))]
                     }
                 }
+                Some("collabAgentToolCall") => collab_updates(state, params, item, true),
                 _ => tool_update_for(item)
-                    .map(SessionUpdate::ToolCallUpdate)
+                    .map(|update| {
+                        SessionUpdate::ToolCallUpdate(fold_under_agent_update(
+                            state, params, update,
+                        ))
+                    })
                     .into_iter()
                     .collect(),
             }
         }
+        "turn/completed" => agent_turn_end(state, params),
         "turn/plan/updated" => plan_for(params)
             .map(SessionUpdate::Plan)
             .into_iter()
@@ -958,6 +1334,10 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
 
 /// Note the end of a turn or a failure that will not be retried.
 fn settle(state: &Mutex<State>, method: &str, params: &Value) {
+    // A subagent's own turn, and a failure it reports, are not the thread's.
+    if matches!(method, "error" | "turn/completed") && is_agent_thread(state, params) {
+        return;
+    }
     match method {
         "error" => {
             if !params

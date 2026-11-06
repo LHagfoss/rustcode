@@ -22,6 +22,8 @@ enum Script {
     AskUser,
     /// Codex compacts on its own mid-turn, then answers.
     AutoCompact,
+    /// Start two of Codex's own subagents, let one end its turn, then wait.
+    Subagents,
 }
 
 /// A fake app-server. Every request it gets is reported on `seen`.
@@ -130,6 +132,42 @@ async fn fake_codex(
                         let mut message = base.clone();
                         message["item"] = json!({"type": "agentMessage", "id": "m1", "text": "Answer"});
                         note("item/completed", message);
+                        note("turn/completed", json!({"threadId": "thr_1", "turn": {"id": turn_id, "status": "completed", "items": []}}));
+                    }
+                    Script::Subagents => {
+                        let base = json!({"threadId": "thr_1", "turnId": turn_id});
+                        let with = |extra: Value| {
+                            let mut params = base.clone();
+                            for (key, value) in extra.as_object().unwrap() {
+                                params[key] = value.clone();
+                            }
+                            params
+                        };
+                        let spawn = |status: &str, states: Value| {
+                            json!({"item": {"type": "collabAgentToolCall", "id": "c1", "tool": "spawnAgent",
+                                "prompt": "Write pytest coverage for calc.py", "receiverThreadIds": ["child1", "child2"],
+                                "senderThreadId": "thr_1", "model": "gpt-6.1-sol", "status": status,
+                                "agentsStates": states}})
+                        };
+                        note("item/started", with(spawn("inProgress", json!({}))));
+                        let running = json!({"child1": {"status": "running"}, "child2": {"status": "running"}});
+                        note("item/completed", with(spawn("completed", running)));
+                        // A subagent's own command and turn: neither ends the thread's turn.
+                        note("item/started", json!({"threadId": "child1", "turnId": "turn_c1",
+                            "item": {"type": "commandExecution", "id": "cmd7", "command": "pytest", "status": "inProgress"}}));
+                        note("item/completed", json!({"threadId": "child1", "turnId": "turn_c1",
+                            "item": {"type": "commandExecution", "id": "cmd7", "command": "pytest", "status": "completed", "exitCode": 0, "aggregatedOutput": "2 passed"}}));
+                        note("turn/completed", json!({"threadId": "child1", "turn": {"id": "turn_c1", "status": "completed", "items": []}}));
+                        let wait = |status: &str, states: Value| {
+                            json!({"item": {"type": "collabAgentToolCall", "id": "c2", "tool": "wait",
+                                "receiverThreadIds": ["child1", "child2"], "senderThreadId": "thr_1",
+                                "status": status, "agentsStates": states}})
+                        };
+                        note("item/started", with(wait("inProgress", json!({}))));
+                        let done = json!({
+                            "child1": {"status": "completed", "message": "Added 4 tests"},
+                            "child2": {"status": "errored", "message": "calc.py has no parser"}});
+                        note("item/completed", with(wait("completed", done)));
                         note("turn/completed", json!({"threadId": "thr_1", "turn": {"id": turn_id, "status": "completed", "items": []}}));
                     }
                     Script::UntilInterrupted | Script::Stubborn => {}
@@ -754,28 +792,377 @@ fn forms_with_fields_and_urls_are_declined() {
     assert!(matches!(elicitation(&url), Elicitation::Decline));
 }
 
-#[test]
-fn codex_subagent_calls_are_steps() {
-    let spawn = json!({
+/// A `spawnAgent` item as the app-server records it (protocol v2: one item per
+/// collab call, `agentsStates` keyed by the receiver's thread).
+fn spawn_item() -> Value {
+    json!({
         "type": "collabAgentToolCall",
         "id": "c1",
         "tool": "spawnAgent",
         "prompt": "\nWrite pytest coverage for calc.py\nThen stop.",
+        "receiverThreadIds": ["t2", "t3"],
+        "senderThreadId": "t1",
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "low",
+        "status": "inProgress",
+        "agentsStates": {},
+    })
+}
+
+/// A `wait` on two agents that then finished, one of them with an error.
+fn wait_item(status: &str) -> Value {
+    let states = if status == "completed" {
+        json!({
+            "t2": {"status": "completed", "message": "Added 4 tests; all pass."},
+            "t3": {"status": "errored", "message": "calc.py has no parser to test."},
+        })
+    } else {
+        json!({"t2": {"status": "running"}, "t3": {"status": "pendingInit"}})
+    };
+    json!({
+        "type": "collabAgentToolCall",
+        "id": "c2",
+        "tool": "wait",
+        "receiverThreadIds": ["t2", "t3"],
+        "senderThreadId": "t1",
+        "status": status,
+        "agentsStates": states,
+    })
+}
+
+/// The updates one notification makes, as the JSON a client receives.
+fn notified(state: &Mutex<State>, method: &str, params: Value) -> Vec<Value> {
+    translate(state, method, &params)
+        .into_iter()
+        .map(|update| serde_json::to_value(update).expect("an update"))
+        .collect()
+}
+
+fn item_event(thread: &str, item: Value) -> Value {
+    json!({"threadId": thread, "turnId": "u1", "item": item})
+}
+
+/// The updates on the row of the agent in `thread`.
+fn agent_rows<'a>(updates: &'a [Value], thread: &str) -> Vec<&'a Value> {
+    let id = format!("c1:{thread}");
+    updates
+        .iter()
+        .filter(|update| update["toolCallId"] == id.as_str())
+        .collect()
+}
+
+#[test]
+fn a_spawned_agent_is_a_row_of_its_own() {
+    let state = Mutex::new(State::default());
+    let updates = notified(&state, "item/started", item_event("t1", spawn_item()));
+    // One row per agent, and no step saying the same thing again.
+    assert_eq!(updates.len(), 2);
+    for (update, thread) in updates.iter().zip(["t2", "t3"]) {
+        assert_eq!(update["sessionUpdate"], "tool_call");
+        assert_eq!(update["toolCallId"], format!("c1:{thread}").as_str());
+        assert_eq!(update["status"], "in_progress");
+        assert_eq!(
+            update["title"],
+            "Started agent: Write pytest coverage for calc.py"
+        );
+        // The fields the client's subagent row and its stack read.
+        assert_eq!(update["_meta"]["claudeCode"]["toolName"], "Agent");
+        assert_eq!(
+            update["rawInput"]["description"],
+            "Write pytest coverage for calc.py"
+        );
+        assert_eq!(update["rawInput"]["prompt"], spawn_item()["prompt"]);
+        assert_eq!(update["rawInput"]["model"], "gpt-6.1-sol");
+    }
+}
+
+#[test]
+fn a_spawn_that_is_reported_twice_makes_one_row() {
+    let state = Mutex::new(State::default());
+    let spawn = spawn_item();
+    let started = item_event("t1", spawn.clone());
+    notified(&state, "item/started", started);
+    let mut done = spawn.clone();
+    done["status"] = json!("completed");
+    done["agentsStates"] = json!({
+        "t2": {"status": "running"},
+        "t3": {"status": "running"},
+    });
+    let updates = notified(&state, "item/completed", item_event("t1", done));
+    // Its agents are running; their rows move, and no new row or step appears.
+    assert!(
+        updates
+            .iter()
+            .all(|u| u["sessionUpdate"] == "tool_call_update")
+    );
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0]["status"], "in_progress");
+    assert_eq!(updates[0]["title"], Value::Null);
+}
+
+#[test]
+fn waiting_for_agents_is_a_step_and_finishes_their_rows() {
+    let state = Mutex::new(State::default());
+    notified(&state, "item/started", item_event("t1", spawn_item()));
+    let waiting = notified(
+        &state,
+        "item/started",
+        item_event("t1", wait_item("inProgress")),
+    );
+    // Its agents are running, so only the step is new; their rows move too.
+    let step = waiting
+        .iter()
+        .find(|update| update["toolCallId"] == "c2")
+        .expect("a step");
+    assert_eq!(step["sessionUpdate"], "tool_call");
+    assert_eq!(step["title"], "Waiting for 2 agents");
+    assert_eq!(agent_rows(&waiting, "t2")[0]["status"], "in_progress");
+
+    let done = notified(
+        &state,
+        "item/completed",
+        item_event("t1", wait_item("completed")),
+    );
+    // Both rows end, the finished one says how, and the step counts them.
+    let rows = agent_rows(&done, "t2");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["status"], "completed");
+    assert_eq!(
+        rows[0]["title"],
+        "Agent finished: Write pytest coverage for calc.py"
+    );
+    assert_eq!(
+        rows[0]["content"][0]["content"]["text"],
+        "Added 4 tests; all pass."
+    );
+    let failed = agent_rows(&done, "t3");
+    assert_eq!(failed[0]["status"], "failed");
+    assert_eq!(
+        failed[0]["title"],
+        "Agent failed: Write pytest coverage for calc.py"
+    );
+    let step = done
+        .iter()
+        .find(|u| u["toolCallId"] == "c2")
+        .expect("a step");
+    assert_eq!(step["status"], "completed");
+    assert_eq!(step["title"], "2 agents finished");
+}
+
+#[test]
+fn closing_an_agent_finishes_its_row() {
+    let state = Mutex::new(State::default());
+    let mut spawn = spawn_item();
+    spawn["receiverThreadIds"] = json!(["t2"]);
+    notified(&state, "item/started", item_event("t1", spawn));
+    let close = json!({
+        "type": "collabAgentToolCall",
+        "id": "c3",
+        "tool": "closeAgent",
+        "receiverThreadIds": ["t2"],
+        "senderThreadId": "t1",
+        "status": "completed",
+        "agentsStates": {"t2": {"status": "shutdown"}},
+    });
+    let updates = notified(&state, "item/completed", item_event("t1", close));
+    let rows = agent_rows(&updates, "t2");
+    assert_eq!(rows[0]["status"], "completed");
+    assert_eq!(
+        rows[0]["title"],
+        "Agent closed: Write pytest coverage for calc.py"
+    );
+    let step = updates
+        .iter()
+        .find(|update| update["toolCallId"] == "c3")
+        .expect("a step");
+    assert_eq!(
+        step["title"],
+        "Agent closed: Write pytest coverage for calc.py"
+    );
+}
+
+#[test]
+fn a_messaged_agent_row_runs_again() {
+    let state = Mutex::new(State::default());
+    let mut spawn = spawn_item();
+    spawn["receiverThreadIds"] = json!(["t2"]);
+    notified(&state, "item/started", item_event("t1", spawn));
+    let mut finished = wait_item("completed");
+    finished["receiverThreadIds"] = json!(["t2"]);
+    finished["agentsStates"] = json!({"t2": {"status": "completed"}});
+    notified(&state, "item/completed", item_event("t1", finished));
+    let message = json!({
+        "type": "collabAgentToolCall",
+        "id": "c4",
+        "tool": "sendInput",
+        "prompt": "Also cover the parser.",
         "receiverThreadIds": ["t2"],
         "senderThreadId": "t1",
         "status": "inProgress",
-        "agentsStates": {},
+        "agentsStates": {"t2": {"status": "running"}},
     });
-    let call = tool_call_for(&spawn).expect("a step");
+    let updates = notified(&state, "item/started", item_event("t1", message));
+    let rows = agent_rows(&updates, "t2");
+    assert_eq!(rows[0]["status"], "in_progress");
+    let step = updates
+        .iter()
+        .find(|update| update["toolCallId"] == "c4")
+        .expect("a step");
     assert_eq!(
-        call.title,
-        "Start subagent: Write pytest coverage for calc.py"
+        step["title"],
+        "Messaged agent: Write pytest coverage for calc.py"
     );
-    let wait =
-        json!({"type": "collabAgentToolCall", "id": "c2", "tool": "wait", "status": "completed"});
-    assert_eq!(tool_call_for(&wait).unwrap().title, "Wait for subagents");
-    let done =
-        tool_update_for(&json!({"type": "collabAgentToolCall", "id": "c2", "status": "failed"}))
-            .expect("an update");
-    assert_eq!(done.fields.status, Some(ToolCallStatus::Failed));
+}
+
+#[test]
+fn an_agents_own_steps_fold_under_its_row() {
+    let state = Mutex::new(State::default());
+    notified(&state, "item/started", item_event("t1", spawn_item()));
+    let command = json!({"type": "commandExecution", "id": "cmd9", "status": "inProgress",
+        "command": "pytest tests/"});
+    let updates = notified(&state, "item/started", item_event("t3", command.clone()));
+    assert_eq!(updates[0]["toolCallId"], "cmd9");
+    assert_eq!(
+        updates[0]["_meta"]["claudeCode"]["parentToolUseId"],
+        "c1:t3"
+    );
+    let done = notified(
+        &state,
+        "item/completed",
+        item_event("t3", {
+            let mut item = command;
+            item["status"] = json!("completed");
+            item["aggregatedOutput"] = json!("4 passed");
+            item
+        }),
+    );
+    assert_eq!(done[0]["_meta"]["claudeCode"]["parentToolUseId"], "c1:t3");
+    // A call the thread itself made stays where it is.
+    let own = notified(
+        &state,
+        "item/started",
+        item_event(
+            "t1",
+            json!({"type": "commandExecution", "id": "cmd10", "command": "ls"}),
+        ),
+    );
+    assert_eq!(own[0]["_meta"], Value::Null);
+    // What the agent says, plans and spends stays out of the thread itself.
+    for (method, params) in [
+        (
+            "item/agentMessage/delta",
+            json!({"threadId": "t3", "itemId": "m9", "delta": "Done."}),
+        ),
+        (
+            "item/reasoning/textDelta",
+            json!({"threadId": "t3", "itemId": "r9", "delta": "Thinking"}),
+        ),
+        (
+            "turn/plan/updated",
+            json!({"threadId": "t3", "plan": [{"step": "Read", "status": "inProgress"}]}),
+        ),
+        (
+            "thread/tokenUsage/updated",
+            json!({"threadId": "t3", "tokenUsage": {"last": {"inputTokens": 10}}}),
+        ),
+        (
+            "item/completed",
+            json!({"threadId": "t3", "item": {"type": "agentMessage", "id": "m9", "text": "Done."}}),
+        ),
+        (
+            "item/completed",
+            json!({"threadId": "t3", "item": {"type": "contextCompaction", "id": "k9"}}),
+        ),
+    ] {
+        assert!(
+            notified(&state, method, params).is_empty(),
+            "{method} of a subagent reached the thread"
+        );
+    }
+}
+
+#[test]
+fn a_subagents_turn_ending_finishes_its_row_and_not_the_thread_turn() {
+    let state = Mutex::new(State::default());
+    notified(&state, "item/started", item_event("t1", spawn_item()));
+    let (waiter, mut answer) = oneshot::channel();
+    lock(&state).waiter = Some(waiter);
+    let end = json!({"threadId": "t2", "turn": {"id": "u2", "status": "completed"}});
+    let updates = notified(&state, "turn/completed", end.clone());
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0]["toolCallId"], "c1:t2");
+    assert_eq!(updates[0]["status"], "completed");
+    assert_eq!(
+        updates[0]["title"],
+        "Agent finished: Write pytest coverage for calc.py"
+    );
+    settle(&state, "turn/completed", &end);
+    assert!(answer.try_recv().is_err(), "the thread's turn is not over");
+
+    let failed = json!({"threadId": "t3",
+        "turn": {"id": "u3", "status": "failed", "error": {"message": "out of context"}}});
+    let updates = notified(&state, "turn/completed", failed.clone());
+    assert_eq!(updates[0]["status"], "failed");
+    assert_eq!(
+        updates[0]["content"][0]["content"]["text"],
+        "out of context"
+    );
+    settle(
+        &state,
+        "error",
+        &json!({"threadId": "t3", "error": {"message": "no"}}),
+    );
+    assert!(answer.try_recv().is_err());
+
+    let own = json!({"threadId": "t1", "turn": {"id": "u1", "status": "completed"}});
+    settle(&state, "turn/completed", &own);
+    assert!(matches!(answer.try_recv(), Ok(TurnEnd::Completed)));
+}
+
+#[test]
+fn a_collab_call_without_agents_keeps_its_step() {
+    let state = Mutex::new(State::default());
+    let list = json!({"type": "collabAgentToolCall", "id": "c5", "tool": "listAgents",
+        "receiverThreadIds": [], "senderThreadId": "t1", "status": "inProgress", "agentsStates": {}});
+    let updates = notified(&state, "item/started", item_event("t1", list));
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0]["title"], "Listed agents");
+}
+
+#[tokio::test]
+async fn codex_subagents_reach_the_client_as_child_rows() {
+    let (mut thread, _seen) = start(Script::Subagents, None, StartOptions::default()).await;
+    let stop = thread.session.prompt(text("cover this")).await.unwrap();
+    // The subagents' own events did not end the thread's turn.
+    assert_eq!(stop, StopReason::EndTurn);
+    let updates = drain(&mut thread.updates);
+    let find = |id: &str| {
+        updates
+            .iter()
+            .filter(|update| update["toolCallId"] == id)
+            .collect::<Vec<_>>()
+    };
+    let row = find("c1:child1");
+    assert_eq!(row[0]["sessionUpdate"], "tool_call");
+    assert_eq!(row[0]["_meta"]["claudeCode"]["toolName"], "Agent");
+    assert_eq!(
+        row[0]["rawInput"]["description"],
+        "Write pytest coverage for calc.py"
+    );
+    // The command the subagent ran folds under its row.
+    assert_eq!(
+        find("cmd7")[0]["_meta"]["claudeCode"]["parentToolUseId"],
+        "c1:child1"
+    );
+    // Its turn ending finished the row, before the wait reported the same.
+    assert_eq!(row.last().unwrap()["status"], "completed");
+    // The wait is a step of its own, and it says who finished.
+    assert_eq!(find("c2")[0]["title"], "Waiting for 2 agents");
+    assert_eq!(find("c2")[1]["title"], "2 agents finished");
+    let failed = find("c1:child2").last().copied().unwrap();
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(
+        failed["content"][0]["content"]["text"],
+        "calc.py has no parser"
+    );
 }
