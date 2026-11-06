@@ -14,7 +14,7 @@ export const CHAT_WIDTH_LABEL: Record<ChatWidth, string> = {
 
 /** The cap in rem, or null for the pane's own width. */
 export const CHAT_WIDTH_REM: Record<ChatWidth, number | null> = {
-  comfortable: 52,
+  comfortable: 46,
   wide: 72,
   full: null,
 };

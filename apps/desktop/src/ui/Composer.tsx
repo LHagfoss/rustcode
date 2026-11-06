@@ -61,6 +61,7 @@ import {
   imageMime,
   MAX_IMAGE_BYTES,
   MAX_INLINE_FILE_BYTES,
+  sentMessages,
   splitTokens,
 } from "../state/compose";
 import { atToken, insertRef, rankFiles } from "../state/fileRefs";
@@ -120,10 +121,11 @@ const LINE = 22.75;
 // Real padding inside the scroller, so it scrolls with the text: the first and last lines keep their
 // room at either end, and the caret on the last line sits above the padding, never on the edge.
 const PAD = 6;
-// It opens at two lines above the card's foot and scrolls past the ninth. Both heights are whole
-// lines plus that padding (`MIN_HEIGHT`, `MAX_HEIGHT`), so the field cuts no line in half.
+// It opens at two lines above the card's foot and scrolls past the eighth. The minimum is whole
+// lines plus that padding (`MIN_HEIGHT`), so the field cuts no line in half as it grows; past the
+// maximum the fade (`.rc-field-fade`) hides the cut, as it does in any scroller.
 const MIN_HEIGHT = Math.round(LINE * 2 + PAD * 2);
-const MAX_HEIGHT = Math.round(LINE * 9 + PAD * 2);
+const MAX_HEIGHT = 208;
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -300,6 +302,8 @@ export const Composer = memo(function Composer({
   const [tight, setTight] = useState(false);
   const shell = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
+  // Where the field is in what ↑/↓ walks (`sentMessages`), and the draft the walk started from.
+  const history = useRef<{ draft: string; index: number } | null>(null);
   // Anything the mirror has to draw: a URL, or a `@file` reference (state/compose.ts `splitTokens`).
   const tokenized = useMemo(() => hasTokens(draft), [draft]);
   // Which edges of the scrolled field fade (lib/fade.ts); nothing to fade while the draft fits.
@@ -360,6 +364,7 @@ export const Composer = memo(function Composer({
   const inChat = useApp((s) => !s.settings && s.view.kind === "chat" && !s.switcherOpen);
   // biome-ignore lint/correctness/useExhaustiveDependencies: refocus on thread change
   useEffect(() => {
+    history.current = null;
     if (inChat) field.current?.focus();
   }, [key, inChat]);
 
@@ -396,6 +401,14 @@ export const Composer = memo(function Composer({
   }, []);
 
   const update = (text: string) => setDraft(key, text);
+  // A message walked back into the field puts the caret at its end, so ↓ comes forward again at once.
+  const recall = (text: string) => {
+    update(text);
+    requestAnimationFrame(() => {
+      const el = field.current;
+      if (el) el.selectionStart = el.selectionEnd = el.value.length;
+    });
+  };
   const change = (fn: (e: ComposeExtras) => ComposeExtras) => setExtras(key, fn);
 
   // A queued message that leaves the queue while it is open here (it started, or it was removed)
@@ -503,7 +516,9 @@ export const Composer = memo(function Composer({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.nativeEvent.isComposing) return;
+    // An IME's Enter (keyCode 229) belongs to the field: it commits a candidate. Taking it would
+    // complete a command or send a draft that was still being written.
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     if (fileList.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -557,6 +572,8 @@ export const Composer = memo(function Composer({
       }
     }
     if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      // A held Enter sends one message, not one a frame.
+      if (e.repeat) return;
       e.preventDefault();
       send(e.metaKey || e.ctrlKey);
       return;
@@ -584,23 +601,47 @@ export const Composer = memo(function Composer({
       }
       return;
     }
-    if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread && !queuedEdit) {
-      // The latest queued message opens in the composer (where it is edited, never sent); with
-      // nothing queued, the last message sent comes back as text. One another thread sent is not
-      // the user's to edit, and a wake turn is not a message at all.
+    // ↑ and ↓ walk what this thread was sent, newest first, a line at a time: ↑ at the first line
+    // goes back, ↓ at the last line comes forward, and past the newest the draft returns. What is
+    // queued here opens before the history does (it is edited, never sent again).
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !hasExtras(extras) && thread && !queuedEdit) {
+      if (el.selectionStart !== el.selectionEnd) return;
+      // The first and last line, not the first and last character: a recalled message keeps ↑ and ↓
+      // walking from its own ends, and a draft of several lines still moves its caret line by line.
+      const atFirst = !el.value.slice(0, el.selectionStart).includes("\n");
+      const atLast = !el.value.slice(el.selectionStart).includes("\n");
       const live = useApp.getState().threads[thread.id] ?? thread;
-      const queued = [...live.queue].reverse().find((q) => !q.link && !q.wake);
-      if (queued) {
+      const walking = history.current;
+      if (e.key === "ArrowUp") {
+        if (!atFirst) return;
+        if (!walking) {
+          if (draft) return;
+          const queued = [...live.queue].reverse().find((q) => !q.link && !q.wake);
+          if (queued) {
+            e.preventDefault();
+            startQueuedEdit(thread.id, queued.id);
+            return;
+          }
+        }
+        const sent = sentMessages(live.items ?? thread.items);
+        if (!sent.length) return;
         e.preventDefault();
-        startQueuedEdit(thread.id, queued.id);
+        const index = walking ? Math.min(walking.index + 1, sent.length - 1) : 0;
+        history.current = { draft: walking?.draft ?? draft, index };
+        recall(sent[sent.length - 1 - index]!);
         return;
       }
-      const items = live.items ?? thread.items;
-      const last = [...items].reverse().find((i) => i.kind === "user");
-      if (last && last.kind === "user") {
-        e.preventDefault();
-        update(last.text);
+      if (!walking || !atLast) return;
+      e.preventDefault();
+      if (walking.index === 0) {
+        history.current = null;
+        recall(walking.draft);
+        return;
       }
+      const sent = sentMessages(live.items ?? thread.items);
+      const index = walking.index - 1;
+      history.current = { draft: walking.draft, index };
+      recall(sent[sent.length - 1 - index] ?? walking.draft);
     }
   };
 
@@ -739,7 +780,9 @@ export const Composer = memo(function Composer({
         <div
           className={cx(
             // The field's own card: glass, floating over the transcript. Focus steps the glass;
-            // there is no ring or colour. Its radius is its own, larger step (index.css).
+            // there is no ring or colour. Its radius is its own, larger step (index.css). A draft
+            // that gains or loses a line grows the card over 150ms instead of jumping; the
+            // transcript, pinned to its end, follows it up.
             "rc-composer relative z-10 flex flex-col gap-1",
             dropping && "outline-2 outline-accent outline-dashed",
           )}
@@ -767,7 +810,7 @@ export const Composer = memo(function Composer({
           {queuedEdit && (
             // A queued message is edited here, not in an input of its own: its text, command, links
             // and attachments are the composer's while it is open, and ⏎ saves them where it waits.
-            <div className="flex items-center gap-1.5 px-3.5 pt-2 text-caption text-accent">
+            <div className="flex items-center gap-1.5 px-4 pt-2 text-caption text-accent">
               <Pencil size={11} />
               <b>Editing a queued message</b>
               <span className="text-fg-muted">· ⏎ saves it in the queue, esc leaves it</span>
@@ -777,7 +820,7 @@ export const Composer = memo(function Composer({
             </div>
           )}
           {editing && (
-            <div className="flex items-center gap-1.5 px-3.5 pt-2 text-caption text-accent">
+            <div className="flex items-center gap-1.5 px-4 pt-2 text-caption text-accent">
               <Pencil size={11} />
               <b>Editing a sent message</b>
               <span className="text-fg-muted">· sending takes the thread back to it</span>
@@ -803,13 +846,15 @@ export const Composer = memo(function Composer({
             />
           )}
           {/* The field and what reads in front of it. The chip and the links drop the field's own 6px
-              of padding so they sit on its first line box, not above it. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-4 pt-1">
+              of padding so they sit on its first line box, not above it. Every text row in the card
+              starts at the same 16px (`px-4`); the tray is inset 8px because its round controls carry
+              8px of their own, which puts their icons on that same edge. */}
+          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-4 pt-3.5 sm:pt-4">
             {extras.command && (
               // One line of the field's own height (22.75px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
               <Tooltip label={extras.command.description}>
-                <span className="mt-1.5 flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1.5 font-semibold text-accent text-body leading-[22.75px]">
+                <span className="mt-1.5 flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1.5 font-semibold text-accent text-body leading-[22.75px] rc-in">
                   {extras.command.name}
                 </span>
               </Tooltip>
@@ -818,7 +863,7 @@ export const Composer = memo(function Composer({
               <LinkChip
                 key={url}
                 url={url}
-                className="mt-1.5"
+                className="mt-1.5 rc-in"
                 onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
               />
             ))}
@@ -862,6 +907,7 @@ export const Composer = memo(function Composer({
                 ref={field}
                 value={draft}
                 onChange={(e) => {
+                  history.current = null;
                   setCaret(e.target.selectionStart);
                   onChange(e.target.value);
                 }}
@@ -879,7 +925,7 @@ export const Composer = memo(function Composer({
                 spellCheck
                 style={fadeStyle}
                 className={cx(
-                  "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-relaxed outline-none placeholder:text-fg-faint",
+                  "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-relaxed outline-none transition-[height] duration-150 ease-snappy placeholder:text-fg-faint",
                   tokenized && "text-transparent caret-fg selection:bg-accent/30",
                 )}
               />
@@ -892,7 +938,7 @@ export const Composer = memo(function Composer({
               pill and the agent pill. Labels drop out with the card's width (the folder falls back
               to its icon); the controls do not, and the two that can still be long (the folder and
               the model) shrink and ellipsize before the row overflows. */}
-          <div ref={row} className="rc-composer-tray flex items-center gap-2 px-4 pt-1 pb-3.5">
+          <div ref={row} className="rc-composer-tray flex items-center gap-2 px-2 pt-1 pb-2">
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
@@ -914,7 +960,7 @@ export const Composer = memo(function Composer({
               {!thread && <WorktreeToggle draft={draft} compact={compact} />}
               {thread?.worktree && (
                 <Tooltip side="bottom" label={thread.worktree.path}>
-                  <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
+                  <span className="flex h-7 max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden sm:h-6">
                     <GitBranch size={12} className="shrink-0" />
                     <span className="truncate">{thread.worktree.branch}</span>
                   </span>
@@ -923,7 +969,7 @@ export const Composer = memo(function Composer({
               <PermissionMenu threadId={thread?.id} compact={compact} />
             </div>
             <span className="flex-1" />
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex shrink-0 items-center gap-2">
               {/* The meters keep their size: a ring squeezed under 30px is unreadable. A row too
                   narrow for them draws them in one menu instead, measured rather than stepped. */}
               {!tight ? (
@@ -953,7 +999,7 @@ export const Composer = memo(function Composer({
                       saveQueuedEdit();
                       field.current?.focus();
                     }}
-                    className="flex size-[30px] items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85"
+                    className="flex size-9 items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85 sm:size-8"
                   >
                     <Check size={14} strokeWidth={2.75} />
                   </button>
@@ -966,7 +1012,7 @@ export const Composer = memo(function Composer({
                       type="button"
                       aria-label="Queue message"
                       onClick={() => send(false)}
-                      className="flex size-[30px] items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85"
+                      className="flex size-9 items-center justify-center rounded-full bg-fg text-bg hover:bg-fg/85 sm:size-8"
                     >
                       <ListEnd size={13} strokeWidth={2.5} />
                     </button>
@@ -983,7 +1029,7 @@ export const Composer = memo(function Composer({
                       haptic("level");
                       void cancel(thread?.id);
                     }}
-                    className="flex size-[30px] items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85 disabled:opacity-40"
+                    className="flex size-9 items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85 disabled:opacity-40 sm:size-8"
                   >
                     <Square size={10} fill="currentColor" strokeWidth={0} />
                   </button>
@@ -996,7 +1042,7 @@ export const Composer = memo(function Composer({
                     disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
                     onPointerEnter={(e) => !e.currentTarget.disabled && haptic("alignment")}
                     onClick={() => send(false)}
-                    className="flex size-[30px] items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fill-strong disabled:text-fg-muted"
+                    className="flex size-9 items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fill-strong disabled:text-fg-muted sm:size-8"
                   >
                     <ArrowUp size={14} strokeWidth={2.75} />
                   </button>
@@ -1073,7 +1119,7 @@ function LimitWaitRow({ threadId }: { threadId: string }) {
   const running = useApp((s) => s.threads[threadId]?.running);
   if (!wait || running) return null;
   return (
-    <div className="flex items-center gap-1.5 px-3.5 pt-2 text-caption text-fg-muted">
+    <div className="flex items-center gap-1.5 px-4 pt-2 text-caption text-fg-muted">
       <Clock size={11} className="shrink-0" />
       <span className="min-w-0 truncate">Continues when the limit resets, at {limitTime(wait.until)}</span>
       <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => dropLimitWait(threadId)}>
@@ -1108,10 +1154,10 @@ function AttachmentStrip({
   return (
     // Its own band above the field, inset from the box's rounder corner and never shrinking, so the
     // thumbnails clear the curve and only the field below scrolls.
-    <div className="flex shrink-0 gap-1.5 overflow-x-auto px-3.5 pt-2.5 pb-1">
+    <div className="flex shrink-0 gap-2 overflow-x-auto px-4 pt-2.5 pb-1">
       {shown.map((a) =>
         a.kind === "image" ? (
-          <div key={a.id} className="group relative shrink-0">
+          <div key={a.id} className="group relative shrink-0 rc-in">
             <button
               type="button"
               aria-label={`Open ${a.name}`}
@@ -1121,13 +1167,13 @@ function AttachmentStrip({
                   pictures.findIndex((p) => p.alt === a.name),
                 )
               }
-              className="block rounded-xl"
+              className="block rounded-lg"
             >
               <img
                 src={`data:${a.mimeType};base64,${a.data}`}
                 alt={a.name}
                 title={a.name}
-                className="size-[76px] rounded-xl object-cover shadow-1"
+                className="size-16 rounded-lg object-cover shadow-1"
               />
             </button>
             {/* Inside the corner, so the strip's scroll never crops it. */}
@@ -1149,7 +1195,7 @@ function AttachmentStrip({
           type="button"
           aria-label={`Show all ${images.length} images`}
           onClick={() => openLightbox(pictures, IMAGE_PREVIEW_LIMIT)}
-          className="group relative size-[76px] shrink-0 rounded-xl bg-fill-strong text-callout text-fg-muted shadow-1 hover:text-fg"
+          className="group relative size-16 shrink-0 rounded-lg bg-fill-strong text-callout text-fg-muted shadow-1 rc-in hover:text-fg"
         >
           +{more.length}
         </button>
@@ -1158,7 +1204,7 @@ function AttachmentStrip({
         .filter((a) => a.kind !== "image")
         .map((a) => (
           <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
-            <span className="flex h-[28px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2.5 text-callout">
+            <span className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2.5 text-callout rc-in">
               <FileText size={12} className="text-fg-muted" />
               <span className="max-w-[200px] truncate">{a.name}</span>
               <button
@@ -1207,7 +1253,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           disabled={!!missing}
           onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
           className={cx(
-            "flex h-[28px] shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40",
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40 sm:h-6",
             wt.on
               ? "bg-fill-strong text-fg"
               : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong",
@@ -1353,7 +1399,7 @@ function FolderActions({ cwd }: { cwd: string }) {
 // A button in the composer's footer: quiet until hovered, and its fill is its open state. It is
 // not `shrink-0`: a long folder name gives way to the controls to its right (see FolderMenu).
 const footerButton =
-  "flex h-[28px] items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
+  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong sm:h-6";
 
 const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
   ask: Shield,
@@ -1444,9 +1490,9 @@ function PlusMenu({
             ref={triggerRef}
             type="button"
             aria-label="Attach and more"
-            className="flex size-[30px] items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong"
+            className="flex size-7 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-6"
           >
-            <Plus size={16} strokeWidth={2} />
+            <Plus size={14} strokeWidth={2.25} />
           </button>
         </DropdownMenu.Trigger>
       </Tooltip>

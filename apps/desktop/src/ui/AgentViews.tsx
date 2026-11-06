@@ -274,7 +274,9 @@ export function AgentRow({
   const word =
     showWord && detail !== undefined && state !== "done" ? (status ?? AGENT_LABEL[state]) : undefined;
   const bottom = detail ?? status ?? AGENT_LABEL[state];
-  const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left";
+  // The row's own text starts where the composer's does: the card's 4px and the row's 12px.
+  const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg py-1.5 pr-2 pl-3 text-left";
+  const chevron = onClick !== undefined || expanded !== undefined;
   const body = (
     <>
       <AgentAvatar harness={harness} state={state} />
@@ -295,17 +297,6 @@ export function AgentRow({
         >
           {word}
         </span>
-      )}
-      {elapsed && <span className="shrink-0 text-caption text-fg-faint tabular">{elapsed}</span>}
-      {(onClick !== undefined || expanded !== undefined) && (
-        <ChevronRight
-          size={14}
-          aria-hidden
-          className={cx(
-            "shrink-0 text-fg-faint transition-transform duration-200 group-hover:text-fg",
-            expanded && "rotate-90",
-          )}
-        />
       )}
     </>
   );
@@ -330,7 +321,24 @@ export function AgentRow({
           </button>
         )}
       </Tooltip>
-      {action}
+      {/* How long, the way in, and the control beside it, in one cluster: at 4px apart they read as
+          the row's own tail instead of two islands at the card's edge. */}
+      {(elapsed || chevron || action) && (
+        <span className="flex shrink-0 items-center gap-1 pr-0.5 pl-1">
+          {elapsed && <span className="shrink-0 text-caption text-fg-faint tabular">{elapsed}</span>}
+          {chevron && (
+            <ChevronRight
+              size={14}
+              aria-hidden
+              className={cx(
+                "shrink-0 text-fg-faint transition-transform duration-200 group-hover:text-fg",
+                expanded && "rotate-90",
+              )}
+            />
+          )}
+          {action}
+        </span>
+      )}
     </div>
   );
 }
@@ -352,11 +360,18 @@ export function ThreadAgentRow({
   link,
   model,
   action,
+  peek = true,
 }: {
   link: Link;
   model?: string;
   /** A control of the caller's, after the row's own: stop this work, or dismiss it. */
   action?: ReactNode;
+  /**
+   * The "show beside this thread" control. Off in the strip above the composer, where the row is
+   * already that thread's one way in and a control that only shows on hover would leave a gap
+   * between the way in and stop.
+   */
+  peek?: boolean;
 }) {
   const state = useApp((s) => stateOf(s, link));
   const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
@@ -404,16 +419,18 @@ export function ThreadAgentRow({
       showWord={LINK_AGENT_STATE[state] !== "working"}
       action={
         <>
-          <Tooltip label="Show beside this thread">
-            <button
-              type="button"
-              aria-label={`Show ${title} beside this thread`}
-              onClick={() => peekThread(link.target)}
-              className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              <PanelRight size={12} />
-            </button>
-          </Tooltip>
+          {peek && (
+            <Tooltip label="Show beside this thread">
+              <button
+                type="button"
+                aria-label={`Show ${title} beside this thread`}
+                onClick={() => peekThread(link.target)}
+                className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+              >
+                <PanelRight size={12} />
+              </button>
+            </Tooltip>
+          )}
           {action}
         </>
       }
@@ -724,7 +741,7 @@ function RemoveLink({ link }: { link: Link }) {
         type="button"
         aria-label={`Remove ${link.targetTitle}`}
         onClick={() => dismissLink(link.id)}
-        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+        className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
       >
         <X size={12} strokeWidth={2.5} />
       </button>
@@ -890,7 +907,7 @@ export function AgentPill({ threadId }: { threadId?: string }) {
         <button
           type="button"
           aria-label={working.length === 1 ? "1 agent working" : `${working.length} agents working`}
-          className="flex h-[28px] shrink-0 cursor-default items-center rounded-full px-2 hover:bg-fill data-[state=open]:bg-fill rc-in"
+          className="flex h-7 shrink-0 cursor-default items-center rounded-full px-2 hover:bg-fill data-[state=open]:bg-fill rc-in sm:h-6"
         >
           <AgentMarks agents={marks} tone="surface" />
         </button>

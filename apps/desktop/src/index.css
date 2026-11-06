@@ -197,14 +197,14 @@
   --rc-radius-2xl: 20px;
   --rc-radius-3xl: 26px;
   /* The composer's box and tray take a step of their own: it is the one surface the chat floats
-     in, and a tighter corner reads as one floating card. */
-  --rc-composer-radius: var(--rc-radius-xl);
+     in, and the rounder corner reads as one floating card over the transcript. */
+  --rc-composer-radius: var(--rc-radius-2xl);
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md).
    Wider settings move the cap only (Settings › Chat); "full" lets the pane decide. */
 :root {
-  --rc-chat-content-max-width: 52rem;
+  --rc-chat-content-max-width: 46rem;
 }
 
 :root[data-chat-width="wide"] {
@@ -827,15 +827,9 @@
   border-radius: var(--rc-composer-radius);
   overflow: hidden;
 }
-/* The tray is the card's last row, not a slab of its own: the card's one glass carries it, and a
-   hairline (Tailwind `border-t border-border`) divides it from the foot. Its controls come from
-   four files, so the row sets their height and the box keeps the menus unclipped. */
-.rc-composer-tray button,
-.rc-composer-tray input,
-.rc-composer-tray [role="img"],
-.rc-composer-tray [role="status"] {
-  height: 28px;
-}
+/* The tray is the card's last row, not a slab of its own: the card's one glass carries it. Its
+   controls come from four files and each sets its own height (`h-7 sm:h-6` on the pills, the
+   send's circle a size up), so no rule here reaches into another file's control. */
 /* A drawer is read, not looked through: opaque, its foot cut where the box begins. Its top
    corners are the box's own radius, one inset inside them. */
 .rc-composer-drawer {

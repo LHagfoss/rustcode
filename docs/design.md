@@ -98,7 +98,7 @@ the accent marks state (on, selected, linked), it does not shout.
 | lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, tooltips, pictures in replies |
 | xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels |
 | 2xl | 20 | `rounded-2xl` | The settings panel, toasts |
-| composer | 16 | `--rc-composer-radius` | The composer's box: one floating card at the `xl` step, like menus and popovers |
+| composer | 20 | `--rc-composer-radius` | The composer's box: one floating card a step rounder than menus and popovers, so its corners read soft over the text sliding under it |
 | 3xl | 26 | `rounded-3xl` | The largest floating surface (nothing uses it yet) |
 | full | — | `rounded-full` | Switches, avatars, dots, trackbars; never a labelled button |
 
@@ -176,14 +176,16 @@ rather than a `hover:bg-…` utility a class rule would beat.
 
 The composer floats over the transcript as one card: the field, and under it one control row with
 every control the send needs. Its slash and `@` menus are an opaque drawer attached to the box's top
-edge.
+edge. Everything in the card starts on one left edge: the field, the chips, the thumbnails and the
+hint rows at 16px (`px-4`); the tray at 8px, because its round controls carry 8px of their own, which
+puts their icons on that same edge.
 
 The composer is its own, lighter pair, because it is the one surface text
 scrolls under all day: `surface-2` at **75%** (84% focused), its own
 `--rc-composer-filter` (`saturate(1.14) blur(16px)`; `saturate(1.08)
 blur(20px)` in dark), and a 1px `--rc-composer-outline` (`black` at 8% in
 light, `white` at 5% in dark) with a 3% `white` inner highlight in dark.
-It keeps a radius token of its own, at the `xl` step.
+It keeps a radius token of its own, at the `2xl` step.
 
 Near-solid and lightly blurred on purpose: text scrolling under a panel
 should be a hint, not a smear. One filter per surface, two recipes in all
@@ -194,9 +196,13 @@ stacked on the first, no blur on a pane or a scrolling row.
 
 Tailwind's 4px grid. Common steps: 4 (icon to label), 8 (between controls
 in a row), 12 (card padding block), 14 (card padding inline), 16 (between
-groups), 24 (between sections). The chat lane is **832px**
-(`--rc-chat-content-max-width`, 52rem) for the transcript's rows and the
-composer alike, inset by a 12px gutter, 20px from the `sm` breakpoint.
+groups), 24 (between sections). The chat lane is **736px**
+(`--rc-chat-content-max-width`, 46rem) for the transcript's rows and the
+composer alike, inset by a 12px gutter, 48px from the `sm` breakpoint. The
+gutter sits outside the cap, on the transcript's scroller (with
+`scrollbar-gutter: stable both-edges`, so a classic scrollbar does not move the
+lane) and on the composer's wrapper, so a row's edge and the card's edge are
+the same line at every width.
 Settings › Chat › Chat width moves that one cap and nothing else: Wide is
 72rem, Full is the pane's own width. The right panel is the one thing that
 narrows the column: it is docked beside it in the same row, so the chat keeps
@@ -238,18 +244,22 @@ that change use `tabular`.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
-  sections.
+  sections, and for the composer's field, which grows and shrinks with its
+  lines over 150ms `--ease-snappy` instead of jumping between them; the
+  transcript stays pinned to its end as the card rises, so the last line never
+  goes under it mid-animation.
 - Panels and sheets never animate the room they take across the chat as a
   matter of course: every frame of it reflows the transcript, so a slot's
   `width`, `height`, `top` or grid rows only change on the one animation that
   is about the slot opening or closing — the right panel docking in and out,
-  which runs 200ms `--ease-snappy` (`ui/RightPanel.tsx`). Every other width a
-  panel takes — a tab switching it, the window resizing it down, the end of a
-  drag — is committed with the transition off in the same frame, so nothing
-  glides. A panel's left edge also widens it frame by frame while it is dragged:
-  that width is written to one custom property on the dock, never to React
-  state, which is committed once the pointer is up. Animate only
-  `transform`, `opacity` and that one width; never `filter` or `box-shadow` on
+  which runs 200ms `--ease-snappy` (`ui/RightPanel.tsx`), and the composer's
+  field gaining or losing a line, which the pinned transcript follows. Every
+  other width a panel takes — a tab switching it, the window resizing it down,
+  the end of a drag — is committed with the transition off in the same frame,
+  so nothing glides. A panel's left edge also widens it frame by frame while it
+  is dragged: that width is written to one custom property on the dock, never
+  to React state, which is committed once the pointer is up. Animate only
+  `transform`, `opacity` and those two; never `filter` or `box-shadow` on
   something that moves every frame.
 - Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
   in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off

@@ -854,7 +854,7 @@ export function Transcript({
         ref={attachScroll}
         onScroll={onScroll}
         onWheel={onWheel}
-        className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
+        className="h-full overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges] sm:px-12"
         role="log"
         aria-label="Transcript"
         aria-busy={thread.running}
@@ -877,15 +877,12 @@ export function Transcript({
                 (prev?.item?.kind === "user" && !!prev.item.wake);
               // A wake divider is the turn's own first line: the work under it sits on it, and the
               // next turn starts a full gap below, the same one a message gets.
-              const dividerGap = afterDivider ? 10 : 16;
+              const dividerGap = afterDivider ? 6 : 16;
               if (row.fold) {
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                     <div
-                      className={cx(
-                        "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
-                        LANE_MOTION,
-                      )}
+                      className={cx("mx-auto w-full max-w-[var(--rc-chat-content-max-width)]", LANE_MOTION)}
                       style={{ paddingTop: v.index === 0 ? 0 : dividerGap }}
                     >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} rule={!afterDivider} />
@@ -893,7 +890,7 @@ export function Transcript({
                   </div>
                 );
               }
-              // 16 between messages, 8 around work, steps of one run tight.
+              // 16 between messages, 6 around work, one run of work tight.
               const workLike = (r?: Row) =>
                 !!r?.group ||
                 !!r?.agents ||
@@ -906,20 +903,20 @@ export function Transcript({
                 v.index === 0
                   ? 0
                   : workLike(row) && workLike(prev)
-                    ? 2
+                    ? 0
                     : prev?.working || prev?.fold || workLike(row) || workLike(prev)
-                      ? 10
+                      ? 6
                       : 16;
               // A wake divider is the turn's own first line: the work under it sits on it, and the
               // next turn starts a full gap below, the same one a message gets.
-              const turnGap = afterDivider ? 10 : gap;
+              const turnGap = afterDivider ? 6 : gap;
               // A turn whose footer has nothing to add leaves no row, and no gap for one.
               if (item?.kind === "turnEnd" && footerless.has(item.id)) return null;
               return (
                 <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                   <div
                     className={cx(
-                      "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
+                      "mx-auto w-full max-w-[var(--rc-chat-content-max-width)]",
                       LANE_MOTION,
                       row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
                     )}
@@ -1031,7 +1028,7 @@ export function Transcript({
                   {foldChanges.has(v.index) && (
                     <div
                       className={cx(
-                        "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
+                        "mx-auto w-full max-w-[var(--rc-chat-content-max-width)]",
                         LANE_MOTION,
                         "rc-expand",
                       )}
