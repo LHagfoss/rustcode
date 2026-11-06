@@ -26,6 +26,7 @@ const DISCORD_REPOSITORY_URL: &str = "https://github.com/LHagfoss/rustcode";
 const MAX_ACTIVITY_CHARS: usize = 128;
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+const TOKEN_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscordPresence {
@@ -77,6 +78,25 @@ impl DiscordPresence {
             } else {
                 &detail
             }),
+        }
+    }
+
+    fn with_release_metadata(&self, total_tokens: Option<u64>) -> Self {
+        let activity = if self.state == "Idle" {
+            String::new()
+        } else {
+            format!("{} · ", self.state)
+        };
+        let mut state = format!("{activity}v{}", env!("CARGO_PKG_VERSION"));
+        if let Some(total_tokens) = total_tokens {
+            state.push_str(&format!(
+                " · {} tokens recorded",
+                compact_total_token_count(total_tokens)
+            ));
+        }
+        Self {
+            state: sanitize(&state),
+            details: self.details.clone(),
         }
     }
 }
@@ -149,6 +169,31 @@ fn compact_token_count(tokens: u32) -> String {
 }
 
 fn format_one_decimal(value: u32, unit: u32, suffix: char) -> String {
+    let whole = value / unit;
+    let tenth = value % unit / (unit / 10);
+    if tenth == 0 {
+        format!("{whole}{suffix}")
+    } else {
+        format!("{whole}.{tenth}{suffix}")
+    }
+}
+
+fn compact_total_token_count(tokens: u64) -> String {
+    let (unit, suffix) = if tokens >= 1_000_000_000_000 {
+        (1_000_000_000_000, 't')
+    } else if tokens >= 1_000_000_000 {
+        (1_000_000_000, 'b')
+    } else if tokens >= 1_000_000 {
+        (1_000_000, 'm')
+    } else if tokens >= 1_000 {
+        (1_000, 'k')
+    } else {
+        return tokens.to_string();
+    };
+    format_one_decimal_u64(tokens, unit, suffix)
+}
+
+fn format_one_decimal_u64(value: u64, unit: u64, suffix: char) -> String {
     let whole = value / unit;
     let tenth = value % unit / (unit / 10);
     if tenth == 0 {
@@ -390,10 +435,21 @@ fn run_worker(receiver: mpsc::Receiver<Command>, initially_enabled: bool) {
     let mut desired = None;
     let mut retry_at = Instant::now();
     let mut retry_delay = INITIAL_RETRY_DELAY;
+    let mut total_tokens = None;
+    let mut total_loaded = false;
+    let mut total_updated_at = Instant::now();
+    let mut refresh_total = true;
 
     loop {
         match receiver.recv_timeout(Duration::from_secs(1)) {
-            Ok(Command::Update(presence)) => desired = Some(presence),
+            Ok(Command::Update(presence)) => {
+                if desired.as_ref().is_some_and(|previous: &DiscordPresence| {
+                    previous.state != "Idle" && presence.state == "Idle"
+                }) {
+                    refresh_total = true;
+                }
+                desired = Some(presence);
+            }
             Ok(Command::SetEnabled(enabled)) => {
                 apply_enablement(&mut handler, enabled, &mut retry_at, &mut retry_delay);
             }
@@ -407,10 +463,19 @@ fn run_worker(receiver: mpsc::Receiver<Command>, initially_enabled: bool) {
         let Some(presence) = desired.as_ref() else {
             continue;
         };
+        if refresh_total
+            || !total_loaded
+            || total_updated_at.elapsed() >= TOKEN_TOTAL_REFRESH_INTERVAL
+        {
+            total_tokens = crate::data_store::total_reported_tokens().ok().flatten();
+            total_loaded = true;
+            total_updated_at = Instant::now();
+            refresh_total = false;
+        }
         if Instant::now() < retry_at {
             continue;
         }
-        if handler.set_activity(presence) {
+        if handler.set_activity(&presence.with_release_metadata(total_tokens)) {
             retry_delay = INITIAL_RETRY_DELAY;
         } else {
             retry_at = Instant::now() + retry_delay;
