@@ -491,8 +491,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
-  16px, the `xl` step), with no padding of its own: the field row is
-  padded `px-4 pt-1` and its control row `px-4 pt-1 pb-3.5`. Glass at
+  16px, the `xl` step), with no padding of its own: every text row in it
+  is inset `px-5` (20px) and each keeps its own air. The message row is
+  `px-5 pt-4`, and `px-5 pt-1.5` while pictures sit above it: their band
+  carries `px-5 pt-3 pb-1`, so the field stays close under the thumbnails
+  instead of doubling the gap, and a field with nothing above it keeps the
+  card's own 16px. The field itself carries 6px (`py-1.5`) above and below
+  its text inside the scroller. The control row at the bottom of the card
+  is `px-3 pt-1 pb-3`, its round controls carrying a few px of their own,
+  which puts their icons on the same 20px edge. Glass at
   `--rc-composer-bg` (75%, 84% focused) with `--rc-composer-filter` and a
   1px `--rc-composer-outline`; no ring or colour on focus, the glass step
   is the focus. The card clips to its own corner. The editor reads at
@@ -535,7 +542,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   translucency; `text-callout` in `fg-muted`, 14px icons, `gap-4` between the
   groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
-  them is a pill whose panel opens off the pill itself, 8px above it. The card
+  them is a pill whose panel opens off the pill itself, 8px away from it,
+  `top` by default. The project picker is pinned above its pill whatever the
+  room below, the list belonging to the card above it; the other strip menus
+  open downward when the window has room under the strip and upward when it
+  does not, and shrink to the room they have (at least 280px below, else
+  above) rather than flipping to a side the user did not point at. The card
   is a container (`@container`), so a narrow window drops labels (the folder
   name shortens, then the worktree label and the branch chip, then the
   permission label, the folder name and the agents pill) rather than dropping

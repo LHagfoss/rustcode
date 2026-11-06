@@ -1,16 +1,20 @@
 // The composer's folder picker: one line per folder a thread can start in.
 //
 // A project is a folder a thread ran in. A folder that only holds other projects is not one
-// (the root, the home folder, `~/code`), so it is not offered; a worktree is not a project either:
-// it nests under the repo it was cut from. Paths are drawn middle-ellipsised, because their ends
-// (the folder's own name, and how deep it sits) say more than their middle.
+// (the root, a home folder, `~/code`), so it is not offered; a worktree is not a project either:
+// it nests under the repo it was cut from. Projects are ranked by how much they are used — the
+// newest thread in it and how many it has — and the list is drawn with the most used first. Paths
+// are drawn middle-ellipsised, because their ends (the folder's own name, and how deep it sits)
+// say more than their middle.
 
 import { clip } from "./clip";
 
-/** Where a folder was seen: a thread's folder, and the worktree it belongs to when it is one. */
+/** Where a folder was seen: a thread's folder, its worktree, and when that thread last ran. */
 export interface FolderSource {
   cwd: string;
   worktree?: { path: string; repo?: string; branch?: string };
+  /** When the thread last ran, in ms: the newest one in a project is how recent it is. */
+  updatedAt?: number;
 }
 
 /** A row of the picker: a project, or a worktree under the project it was cut from. */
@@ -29,6 +33,33 @@ export interface FolderRow {
  */
 const WORKTREE_ROOT = /\/\.config\/rustcode\/worktrees\/([^/]+)\/([^/]+)$/;
 
+/** A home folder: a place projects live, never a project, whatever is inside it. */
+const HOME_FOLDER = /^(?:\/(?:Users|home)\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)$/;
+
+/**
+ * The folder names that are places projects live rather than projects: a folder with one of these
+ * names, holding another folder a thread ran in, is a container and not a row of its own.
+ */
+const CONTAINER_NAMES = new Set([
+  "code",
+  "dev",
+  "src",
+  "projects",
+  "repos",
+  "repositories",
+  "workspace",
+  "workspaces",
+  "work",
+  "git",
+  "github",
+  "developer",
+  "documents",
+  "desktop",
+  "downloads",
+]);
+
+const DAY_MS = 86_400_000;
+
 /** The last segment, which is what a folder is called. */
 function nameOf(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -42,6 +73,18 @@ function holds(parent: string, child: string): boolean {
   return child.startsWith(`${parent}/`);
 }
 
+/**
+ * Whether `path` is a place projects live rather than a project: the root, a home folder, or a
+ * folder named like a container that holds another candidate. A real project that happens to hold
+ * a nested project's threads (`rustcode` and `rustcode/apps/desktop/src-tauri`) keeps its row.
+ */
+function isPlace(path: string, projects: readonly string[]): boolean {
+  if (path === "/") return true;
+  if (HOME_FOLDER.test(path)) return true;
+  const name = nameOf(path).toLowerCase();
+  return CONTAINER_NAMES.has(name) && projects.some((other) => holds(path, other));
+}
+
 /** The repo a worktree path names, when the app cut it (`<root>/<repo>/<branch>`). */
 function cutFrom(path: string): { repo: string; branch: string } | undefined {
   const at = WORKTREE_ROOT.exec(path);
@@ -49,24 +92,51 @@ function cutFrom(path: string): { repo: string; branch: string } | undefined {
 }
 
 /**
- * The picker's rows, newest folder first, each project followed by the worktrees cut from it.
+ * How much a project is used, from 0 to 1: 70% how recently it was used, 30% how many threads it
+ * holds. Recency halves every two weeks, so a project used today beats one used last week however
+ * many threads it has, and volume only separates projects of the same age (51 threads is full).
+ * `updatedAt` is the project's newest thread; a project with no date known has no recency.
+ */
+export function folderScore(
+  project: { updatedAt?: number; threads: number },
+  now: number = Date.now(),
+): number {
+  const ageDays = project.updatedAt === undefined ? Infinity : Math.max(0, now - project.updatedAt) / DAY_MS;
+  const recency = Number.isFinite(ageDays) ? 2 ** (-ageDays / 14) : 0;
+  const volume = Math.min(1, Math.log(1 + project.threads) / Math.log(51));
+  return 0.7 * recency + 0.3 * volume;
+}
+
+/**
+ * The picker's rows, most used project first, each followed by the worktrees cut from it.
  *
- * A folder that holds another folder a thread ran in is left out (the root, the home folder,
- * `~/code`): those are places projects live, not projects. A worktree whose repo is not in the list
- * stays a row of its own, so a thread that only ever ran in a worktree can still be started again.
- * With a `filter`, rows match on their name or their path; a worktree also stays under a repo whose
- * name matches, so searching for the repo still shows its branches.
+ * A folder that is only a place projects live is left out: the root, a home folder, and a folder
+ * named like a container (`~/code`, `~/dev`) that holds another project. A worktree's repo is a
+ * project even when no thread ran in the repo itself, so a repo only used through worktrees appears
+ * with them nested beneath it. A worktree whose repo is unknown stays a row of its own, after the
+ * projects, so a thread that only ever ran in a worktree can still be started again. With a
+ * `filter`, rows match on their name or their path; a worktree also stays under a repo whose name
+ * matches, so searching for the repo still shows its branches.
  */
 export function folderRows(
   sources: readonly FolderSource[],
-  { filter = "", limit = 30 }: { filter?: string; limit?: number } = {},
+  { filter = "", limit = 30, now = Date.now() }: { filter?: string; limit?: number; now?: number } = {},
 ): FolderRow[] {
   const seen = new Set<string>();
+  // Every thread, once per thread: how many ran in a folder, and its newest one. A project's use is
+  // its own threads plus those of the worktrees cut from it.
+  const threads = new Map<string, number>();
+  const newest = new Map<string, number>();
   const projects: string[] = [];
   const worktrees: { path: string; repo: string; branch: string }[] = [];
   for (const source of sources) {
     const path = source.cwd;
-    if (!path || seen.has(path)) continue;
+    if (!path) continue;
+    threads.set(path, (threads.get(path) ?? 0) + 1);
+    if (source.updatedAt !== undefined) {
+      newest.set(path, Math.max(newest.get(path) ?? 0, source.updatedAt));
+    }
+    if (seen.has(path)) continue;
     seen.add(path);
     const cut = cutFrom(path);
     const worktree = source.worktree;
@@ -83,8 +153,13 @@ export function folderRows(
       projects.push(path);
     }
   }
-  // What is left of the projects: no root, and nothing that only holds another of them.
-  const real = projects.filter((path) => path !== "/" && !projects.some((other) => holds(path, other)));
+  // A repo used only through its worktrees is a project too: its worktrees belong under it.
+  for (const worktree of worktrees) {
+    const repo = worktree.repo;
+    if (repo && !projects.includes(repo)) projects.push(repo);
+  }
+  // What is left of the projects: no root, no home folder, nothing that only holds other projects.
+  const real = projects.filter((path) => !isPlace(path, projects));
   // A worktree nests under its repo: the one the engine named, or else the one named like the
   // folder it was cut from.
   const repoOf = (worktree: { repo: string; branch: string }, path: string) => {
@@ -105,8 +180,25 @@ export function folderRows(
     rows.push(row);
     nested.set(repo, rows);
   }
-  const rows: FolderRow[] = [];
+  // How much each project is used: its own threads, then those of the worktrees cut from it.
+  const use = new Map<string, { threads: number; updatedAt?: number }>();
   for (const path of real) {
+    const children = nested.get(path) ?? [];
+    let count = 0;
+    let at: number | undefined;
+    for (const folder of [path, ...children.map((child) => child.path)]) {
+      count += threads.get(folder) ?? 0;
+      const stamp = newest.get(folder);
+      if (stamp !== undefined) at = at === undefined ? stamp : Math.max(at, stamp);
+    }
+    use.set(path, { threads: count, updatedAt: at });
+  }
+  const ranked = [...real].sort((a, b) => {
+    const byUse = folderScore(use.get(b)!, now) - folderScore(use.get(a)!, now);
+    return byUse || nameOf(a).localeCompare(nameOf(b));
+  });
+  const rows: FolderRow[] = [];
+  for (const path of ranked) {
     const row: FolderRow = { path, name: nameOf(path) };
     rows.push(row);
     for (const child of nested.get(path) ?? []) rows.push(child);
