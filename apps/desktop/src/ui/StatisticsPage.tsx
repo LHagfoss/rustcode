@@ -2,13 +2,24 @@
 // harness and model and by thread (`_rustcode/data/usage`, docs/data-store.md).
 // A thread's total includes the threads it started, so a parent shows the work
 // it delegated without the same tokens being counted twice. A count a harness
-// never reported stays blank, and cost is only ever the USD a harness reported;
-// this page never prices a request.
+// never reported stays blank, and **Reported** cost is only ever the USD a
+// harness reported. **Estimated** is the same tokens at public list prices
+// (`state/pricing.ts`), kept in its own column: it never merges into Reported,
+// and a harness whose token semantics or a model whose price is unknown shows
+// `—` rather than a guessed number.
 
 import { RefreshCw } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { parseUsageReport, type UsageTotals } from "../acp/rustcode";
 import { type Harness, Method } from "../acp/types";
+import {
+  estimateAll,
+  estimateUsd,
+  type GroupEstimate,
+  PRICE_DATE,
+  priceOf,
+  type ReportEstimate,
+} from "../state/pricing";
 import {
   type HarnessTotal,
   harnessTotals,
@@ -37,6 +48,7 @@ export function StatisticsPage() {
   const [all, setAll] = useState(false);
 
   const groups = useMemo(() => harnessTotals(models.data?.rows ?? []), [models.data?.rows]);
+  const estimates = useMemo(() => estimateAll(groups), [groups]);
   const rolled = useMemo(
     () => (threads.data ? threadReport(threads.data, sessions, links, sessionsCapped) : null),
     [threads.data, sessions, links, sessionsCapped],
@@ -81,6 +93,22 @@ export function StatisticsPage() {
             note={totals.cost === undefined ? "none reported" : "USD, as reported"}
           />
           <Stat
+            label="Estimated cost"
+            value={formatCost(estimates.usd)}
+            exact={
+              estimates.usd === undefined
+                ? "No row could be priced"
+                : `${estimates.usd} USD at list prices on ${PRICE_DATE}`
+            }
+            note={
+              estimates.usd === undefined
+                ? "no list price"
+                : estimates.turnsNotEstimated > 0
+                  ? `${estimates.turnsNotEstimated} turns not estimated`
+                  : "USD, list prices"
+            }
+          />
+          <Stat
             label="Turns"
             value={String(totals.turns)}
             note={
@@ -93,11 +121,8 @@ export function StatisticsPage() {
       </Group>
 
       {groups.length > 0 && (
-        <Group
-          title="By harness and model"
-          footer="A harness row totals its models. A token or cost no turn in a row reported is blank, never a made-up zero."
-        >
-          <UsageTable groups={groups} names={names} />
+        <Group title="By harness and model" footer={<UsageTableFootnote estimates={estimates} />}>
+          <UsageTable groups={groups} names={names} estimates={estimates} />
         </Group>
       )}
 
@@ -173,10 +198,18 @@ function used(totals: UsageTotals): number | undefined {
   return totals.input === undefined && totals.output === undefined ? undefined : usedTokens(totals);
 }
 
-function UsageTable({ groups, names }: { groups: HarnessTotal[]; names: Map<string, string> }) {
+function UsageTable({
+  groups,
+  names,
+  estimates,
+}: {
+  groups: HarnessTotal[];
+  names: Map<string, string>;
+  estimates: ReportEstimate;
+}) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[600px] border-collapse text-callout">
+      <table className="w-full min-w-[680px] border-collapse text-callout">
         <thead>
           <tr className="border-border border-b text-caption text-fg-faint">
             <th scope="col" className="px-4 py-2 text-left font-normal">
@@ -197,77 +230,96 @@ function UsageTable({ groups, names }: { groups: HarnessTotal[]; names: Map<stri
             <th scope="col" className="px-2 py-2 text-right font-normal">
               Reported
             </th>
+            <th scope="col" className="px-2 py-2 text-right font-normal">
+              Estimated
+            </th>
             <th scope="col" className="px-4 py-2 text-right font-normal">
               Turns
             </th>
           </tr>
         </thead>
         <tbody>
-          {groups.map((group) => (
-            <Fragment key={group.harness}>
-              <tr className="border-border border-b bg-surface-2/50">
-                <th scope="row" className="min-w-0 px-4 py-2 text-left font-medium">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <HarnessIcon id={group.harness} name={names.get(group.harness)} size={13} />
-                    <span className="truncate">{names.get(group.harness) ?? group.harness}</span>
-                  </span>
-                </th>
-                <NumberCell
-                  count={group.totals.input}
-                  missing={group.totals.turnsWithoutInputTokens}
-                  label="input"
-                />
-                <NumberCell
-                  count={group.totals.output}
-                  missing={group.totals.turnsWithoutOutputTokens}
-                  label="output"
-                />
-                <NumberCell
-                  count={group.totals.cached}
-                  missing={group.totals.turnsWithoutCachedTokens}
-                  label="cached"
-                />
-                <NumberCell
-                  count={group.totals.cacheWrite}
-                  missing={group.totals.turnsWithoutCacheWriteTokens}
-                  label="cache write"
-                />
-                <CostCell totals={group.totals} />
-                <td className="px-4 py-2 text-right text-fg-muted tabular">{group.totals.turns}</td>
-              </tr>
-              {group.models.map((model) => (
-                <tr key={model.model || "unknown"} className="border-border border-b last:border-b-0">
-                  <td className="min-w-0 px-4 py-2 pl-9 text-fg-muted">
+          {groups.map((group) => {
+            const estimate = estimates.byHarness.get(group.harness);
+            return (
+              <Fragment key={group.harness}>
+                <tr className="border-border border-b bg-surface-2/50">
+                  <th scope="row" className="min-w-0 px-4 py-2 text-left font-medium">
                     <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate">{model.model || "Unknown model"}</span>
+                      <HarnessIcon id={group.harness} name={names.get(group.harness)} size={13} />
+                      <span className="truncate">{names.get(group.harness) ?? group.harness}</span>
                     </span>
-                  </td>
+                  </th>
                   <NumberCell
-                    count={model.totals.input}
-                    missing={model.totals.turnsWithoutInputTokens}
+                    count={group.totals.input}
+                    missing={group.totals.turnsWithoutInputTokens}
                     label="input"
                   />
                   <NumberCell
-                    count={model.totals.output}
-                    missing={model.totals.turnsWithoutOutputTokens}
+                    count={group.totals.output}
+                    missing={group.totals.turnsWithoutOutputTokens}
                     label="output"
                   />
                   <NumberCell
-                    count={model.totals.cached}
-                    missing={model.totals.turnsWithoutCachedTokens}
+                    count={group.totals.cached}
+                    missing={group.totals.turnsWithoutCachedTokens}
                     label="cached"
                   />
                   <NumberCell
-                    count={model.totals.cacheWrite}
-                    missing={model.totals.turnsWithoutCacheWriteTokens}
+                    count={group.totals.cacheWrite}
+                    missing={group.totals.turnsWithoutCacheWriteTokens}
                     label="cache write"
                   />
-                  <CostCell totals={model.totals} />
-                  <td className="px-4 py-2 text-right text-fg-muted tabular">{model.totals.turns}</td>
+                  <CostCell totals={group.totals} />
+                  <EstimateCell
+                    usd={estimate?.usd}
+                    turnsNotEstimated={estimate?.turnsNotEstimated ?? group.totals.turns}
+                    title={harnessEstimateTitle(group, estimate)}
+                  />
+                  <td className="px-4 py-2 text-right text-fg-muted tabular">{group.totals.turns}</td>
                 </tr>
-              ))}
-            </Fragment>
-          ))}
+                {group.models.map((model) => {
+                  const row = estimateUsd(group.harness, model.model, model.totals);
+                  return (
+                    <tr key={model.model || "unknown"} className="border-border border-b last:border-b-0">
+                      <td className="min-w-0 px-4 py-2 pl-9 text-fg-muted">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate">{model.model || "Unknown model"}</span>
+                        </span>
+                      </td>
+                      <NumberCell
+                        count={model.totals.input}
+                        missing={model.totals.turnsWithoutInputTokens}
+                        label="input"
+                      />
+                      <NumberCell
+                        count={model.totals.output}
+                        missing={model.totals.turnsWithoutOutputTokens}
+                        label="output"
+                      />
+                      <NumberCell
+                        count={model.totals.cached}
+                        missing={model.totals.turnsWithoutCachedTokens}
+                        label="cached"
+                      />
+                      <NumberCell
+                        count={model.totals.cacheWrite}
+                        missing={model.totals.turnsWithoutCacheWriteTokens}
+                        label="cache write"
+                      />
+                      <CostCell totals={model.totals} />
+                      <EstimateCell
+                        usd={row}
+                        turnsNotEstimated={row === undefined ? model.totals.turns : 0}
+                        title={modelEstimateTitle(group.harness, model.model, model.totals)}
+                      />
+                      <td className="px-4 py-2 text-right text-fg-muted tabular">{model.totals.turns}</td>
+                    </tr>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -313,6 +365,80 @@ const costTitle = (totals: UsageTotals) =>
     : `${totals.cost} USD reported${
         totals.turnsWithoutCost ? `; ${totals.turnsWithoutCost} turns reported none` : ""
       }`;
+
+/**
+ * What a row's tokens would cost at public list prices: its own column, never
+ * merged into Reported, and blank (with a * for the turns left out) when the
+ * row has no price or its harness's counts cannot be normalized.
+ */
+function EstimateCell({
+  usd,
+  turnsNotEstimated,
+  title,
+}: {
+  usd: number | undefined;
+  turnsNotEstimated: number;
+  title: string;
+}) {
+  return (
+    <td className="px-2 py-2 text-right text-fg-muted tabular" title={title}>
+      {formatCost(usd)}
+      {usd !== undefined && turnsNotEstimated > 0 && (
+        <MissingMark label={`${turnsNotEstimated} turns left out of the estimate`} />
+      )}
+    </td>
+  );
+}
+
+/** A model row's estimate in words: why it is blank, or the rates it used. */
+function modelEstimateTitle(harness: string, model: string | undefined, totals: UsageTotals): string {
+  const usd = estimateUsd(harness, model, totals);
+  const price = priceOf(model);
+  if (usd === undefined || !price) {
+    if (!price) {
+      return `No list price for ${model || "a model the store did not record"}; this row is not estimated`;
+    }
+    return `${harness} records token counts this page cannot split into input, cache read and cache write; not estimated`;
+  }
+  const perMillion = `$${price.input} input, $${price.cacheRead} cache read, $${price.cacheWrite} cache write, $${price.output} output per million tokens`;
+  return `${usd.toFixed(4)} USD at list prices on ${PRICE_DATE}: ${perMillion}`;
+}
+
+/** A harness row's estimate in words: the sum of its priced model rows, and what it leaves out. */
+function harnessEstimateTitle(group: HarnessTotal, estimate: GroupEstimate | undefined): string {
+  if (estimate?.usd === undefined) {
+    return `No model ${group.harness} ran has both a list price and token counts this page can split; not estimated`;
+  }
+  const left =
+    estimate.turnsNotEstimated > 0
+      ? `; ${estimate.turnsNotEstimated} turns in rows without a price are left out`
+      : "";
+  return `${estimate.usd.toFixed(4)} USD at list prices on ${PRICE_DATE}${left}`;
+}
+
+/** The table's foot: how much of it could be priced, and what the * means. */
+function UsageTableFootnote({ estimates }: { estimates: ReportEstimate }) {
+  const priced = estimates.usd !== undefined;
+  return (
+    <>
+      <span className="block">
+        A harness row totals its models. A token or cost no turn in a row reported is blank, never a made-up
+        zero; a * after one means not every turn in that row reported it. Estimated is what the same tokens
+        would cost at public list prices on {PRICE_DATE}, in a column of its own: it is never merged into
+        Reported, and each harness's counts are normalized first, since some count cached input inside input
+        tokens and others report it separately.
+      </span>
+      {priced && estimates.turnsNotEstimated > 0 && (
+        <span className="block">
+          {estimates.turnsNotEstimated} of these turns are not estimated: their model has no list price here,
+          or their harness's token counts cannot be split. A * after an estimate marks a row it leaves turns
+          out of.
+        </span>
+      )}
+      {!priced && <span className="block">No row here could be priced; the column stays blank.</span>}
+    </>
+  );
+}
 
 /** A small mark after a number that covers only the turns that reported it. */
 function MissingMark({ label }: { label: string }) {
@@ -396,7 +522,9 @@ function UsageFootnote({
         no turn in that row reported one. Each column sums only the counts that were reported, so a turn that
         reported one count and not another is included as it was reported. A * after a number means not every
         turn in that row reported that count; a † after a cost means not every turn reported one. Reported
-        cost is the USD a harness reported; RustCode never estimates a price.
+        cost is the USD a harness reported; Estimated is what the same tokens would cost at public list prices
+        on {PRICE_DATE}, from the app's own table and never a network read. The two are kept apart and are
+        never added together. The CLI's `rustcode usage` has no estimated column yet.
       </span>
       {totals.turnsWithoutAnyTokens > 0 && (
         <span className="block">
