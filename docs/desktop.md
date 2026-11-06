@@ -344,7 +344,17 @@ composer's keys stay outside the table.
   reported none, and
   each token column marks the turns that reported no value for it rather than
   treating them as zero. A read that was truncated at the store's 1,000-group
-  cap says so.
+  cap says so. **Reported** is only ever the USD a harness reported. Beside it,
+  **Estimated** prices the same tokens at public list prices
+  (`apps/desktop/src/state/pricing.ts`, dated in `PRICE_DATE`; no network read
+  at runtime): each harness's counts are normalized to
+  `{uncached_input, cache_read, cache_write, output}` first, because the
+  built-in harness and Codex count cached input inside `input_tokens` while
+  Claude Code's and Pi's logs report it separately. The two columns are never
+  merged or added together, and an unknown model price, an unknown harness or
+  a missing count the split needs shows `—` (never `0`) and is counted as a
+  turn not estimated in the table's foot. The CLI's `rustcode usage` has no
+  Estimated column yet; it comes in a later change, from the same table.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
   and `PlanUsageMeter`: a ring filling with the context window in use, and
   the plan's shortest window from `_rustcode/usage/limits` as a short bar
