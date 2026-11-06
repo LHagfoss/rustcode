@@ -65,12 +65,14 @@ import {
   setDefaultCwd,
   setDefaultHarness,
   setDefaultPermissionMode,
+  setNotificationsBackgroundOnly,
   setOnboarding,
   setOrchestration,
   setReadAcrossProjects,
   setResumeAfterRestart,
   setRoundedFont,
   setSmartUi,
+  setSystemNotifications,
   setTheme,
   setThreadLimit,
   toast,
@@ -222,6 +224,8 @@ function GeneralPage() {
   const resume = useApp((s) => s.resumeAfterRestart);
   const afterLimit = useApp((s) => s.continueAfterLimit);
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
+  const notifications = useApp((s) => s.systemNotifications);
+  const backgroundOnly = useApp((s) => s.notificationsBackgroundOnly);
   const [haptics, setHapticsState] = useState(hapticsEnabled);
   return (
     <>
@@ -276,6 +280,32 @@ function GeneralPage() {
             label="Continue threads when a usage limit resets"
             checked={afterLimit}
             onChange={setContinueAfterLimit}
+          />
+        </Row>
+      </Group>
+      <Group title="Notifications">
+        <Row
+          title="System notifications"
+          reset={
+            notifications ? undefined : () => setSystemNotifications(SETTINGS_DEFAULTS.systemNotifications)
+          }
+          subtitle="A notification when a thread needs your approval, asks you a question, hits a usage limit or finishes. The app asks macOS for permission the first time one is due."
+        >
+          <Switch label="System notifications" checked={notifications} onChange={setSystemNotifications} />
+        </Row>
+        <Row
+          title="Only when RustCode is in the background"
+          reset={
+            backgroundOnly
+              ? undefined
+              : () => setNotificationsBackgroundOnly(SETTINGS_DEFAULTS.notificationsBackgroundOnly)
+          }
+          subtitle="While the window is in front, a toast says it instead, and the thread's row keeps it. A thread on screen is never announced either way."
+        >
+          <Switch
+            label="Only when RustCode is in the background"
+            checked={backgroundOnly}
+            onChange={setNotificationsBackgroundOnly}
           />
         </Row>
       </Group>
