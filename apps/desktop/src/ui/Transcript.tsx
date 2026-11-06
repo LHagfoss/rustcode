@@ -212,13 +212,13 @@ function paintMatches(root: HTMLElement | null, query: string, current: HTMLElem
 const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
 
 /**
- * The transcript's vertical rhythm, in two values: one between the items of a
- * turn (narration, a tool row, a group, the answer) and one between turns, which
+ * The transcript's vertical rhythm, in two values: 14px between the items of a
+ * turn (narration, a tool row, a group, the answer) and 28px between turns, which
  * is where a message starts and a footer ends. A row draws no air of its own, so
  * these two decide every gap in the lane and nothing reserves room for a hover.
  */
-const ITEM_GAP = 8;
-const TURN_GAP = 16;
+const ITEM_GAP = 14;
+const TURN_GAP = 28;
 
 /** A turn's change line, wherever it draws: the completion card, else the checkpoint chip. */
 function ChangeLine({ threadId, line }: { threadId: string; line: TurnChangeLine }) {
