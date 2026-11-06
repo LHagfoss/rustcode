@@ -1,16 +1,19 @@
-// One rule for the action row under a reply, and for the one a finished turn's
-// footer takes over. Both rows hold the same things (copy, fork, the time), so
-// a turn shows exactly one of them and they cannot disagree about what is there.
+// The one action row a turn has: copy, fork and the time, at the foot of the
+// turn's final reply, always in view.
+//
+// No other row draws actions. An intermediate message, a thought or a tool row
+// only narrates what the turn is doing, and while a turn runs its reply has no
+// row yet (the footer arrives with the turn's end). Nothing here holds a
+// hover's room either: a row that only fills in under the pointer leaves a gap
+// in the transcript that reads as a mistake.
 //
 // Copy puts the reply's own Markdown on the clipboard (`CopyButton` takes the
 // text as it is), and only when it has something past whitespace.
 
-export type ActionRowWhere = "reply" | "turnEnd";
-
 export type TurnOutcome = "completed" | "cancelled" | "failed";
 
-export interface ReplyActions {
-  /** Whether the row draws at all. A turn footer always has an outcome and a time. */
+export interface TurnActions {
+  /** Whether the row has anything to draw: a copy, a fork, or a time. */
   row: boolean;
   /** The reply's raw Markdown, or null when the row has no copy button. */
   copy: string | null;
@@ -18,40 +21,25 @@ export interface ReplyActions {
   time: boolean;
 }
 
-const NONE: ReplyActions = { row: false, copy: null, fork: false, time: false };
-
-export function replyActions({
-  where,
+/**
+ * What a finished turn's action row holds. The reply is the turn's last one, which
+ * is the only reply the row copies or forks; a turn that wrote no answer has
+ * nothing to copy, so nothing to fork either, and the row is its time alone.
+ */
+export function turnActions({
   text,
   at,
   threadId,
-  streaming = false,
-  lastInTurn = false,
 }: {
-  /** The row under a reply, or a finished turn's footer. */
-  where: ActionRowWhere;
-  /** The reply's raw Markdown. */
+  /** The turn's final reply, as its raw Markdown. */
   text?: string | null;
-  /** When it was written, in ms since the epoch. */
+  /** When the turn ended, in ms since the epoch. */
   at?: number;
   /** The thread a fork copies; without it the row cannot fork. */
   threadId?: string;
-  /** A reply still being written never forks, and shows no copy until it ends. */
-  streaming?: boolean;
-  /** The last reply of a finished turn: the turn footer shows copy and fork instead. */
-  lastInTurn?: boolean;
-}): ReplyActions {
+}): TurnActions {
   const copy = text?.trim() ? text : null;
-  // A turn footer with no reply under it has nothing to copy, and nothing to fork either.
-  if (where === "turnEnd") return { row: true, copy, fork: !!threadId && !!copy, time: !!at };
-  if (lastInTurn) return NONE;
-  return {
-    // A reply with nothing to copy and no time has no row (and no hover target).
-    row: !!copy || !!at,
-    copy,
-    fork: !!threadId && !streaming,
-    time: !!at,
-  };
+  return { row: !!copy || !!at, copy, fork: !!threadId && !!copy, time: !!at };
 }
 
 /**

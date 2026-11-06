@@ -5072,10 +5072,12 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     let on = instructions(SmartUi::On);
     for part in [
         "```rustcode-ui v1",
-        "inline <style> and <script>",
+        "inline <style> or <script> only if needed",
         "rustcode-lib:chart.js",
         "--rc-series-1…8",
         ".rc-num",
+        ".rc-stat-note",
+        "--rc-separator",
         "Default to a view for anything structured",
         "A report to another thread stays plain Markdown",
         "set no colours",
@@ -5091,6 +5093,7 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         ".rc-tip",
         ".rc-tabs",
         "data-rc-send",
+        "on a <form>, with its fields",
         "data-rc-copy",
         "data-rc-tab",
         "data-rc-panel",
