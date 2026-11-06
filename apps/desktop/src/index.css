@@ -196,9 +196,9 @@
   --rc-radius-xl: 16px;
   --rc-radius-2xl: 20px;
   --rc-radius-3xl: 26px;
-  /* The composer's box and tray take a step of their own, two sizes above the largest cards:
-     they are the one surface the chat floats in, and the rounder corner reads as one piece. */
-  --rc-composer-radius: calc(var(--rc-radius-2xl) + 8px);
+  /* The composer's box and tray take a step of their own: it is the one surface the chat floats
+     in, and a tighter corner reads as one floating card. */
+  --rc-composer-radius: var(--rc-radius-xl);
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md).
@@ -783,9 +783,9 @@
 /*
  * The composer floats over the transcript in glass on the raised surface: 75% at rest,
  * 84% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
- * coloured ring. Its corner is one step rounder than a card's (`--rc-composer-radius`),
- * and its drawer is the same glass, tucked behind that edge, so the two read as one
- * surface. The foot and the tray are rows inside the one card, not slabs beside it.
+ * coloured ring. Its corner is its own step (`--rc-composer-radius`), and its drawer is the
+ * same glass, tucked behind that edge, so the two read as one surface. The foot and the tray
+ * are rows inside the one card, not slabs beside it.
  */
 .rc-composer,
 .rc-toast {
@@ -806,7 +806,7 @@
   backdrop-filter: var(--rc-composer-filter);
   -webkit-backdrop-filter: var(--rc-composer-filter);
   box-shadow:
-    0 2px 8px -4px var(--rc-shadow-soft),
+    0 3px 12px -4px var(--rc-shadow-soft),
     inset 0 0 0 1px var(--rc-composer-highlight),
     0 0 0 1px var(--rc-composer-outline);
 }
@@ -874,6 +874,13 @@
 }
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
+}
+/* The chat's bottom edge: a short fade to the pane, pinned behind the composer (ui/ChatView.tsx).
+   The card floats over it, so text shows through its glass higher up and fades at the very bottom
+   rather than stopping on a hard edge. */
+.rc-composer-fade {
+  height: 56px;
+  background: linear-gradient(to bottom, transparent 0, var(--rc-bg) 56px);
 }
 /* A toast drops in from under the header and lifts away. */
 @keyframes rc-toast-in {
