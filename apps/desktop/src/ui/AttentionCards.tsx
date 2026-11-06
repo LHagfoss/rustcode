@@ -27,7 +27,7 @@ import {
   approveAll,
   selectThread,
 } from "../state/store";
-import { cx, Kbd, menuItem, Pill, Tooltip } from "./primitives";
+import { cx, Kbd, MenuContent, MenuShortcut, menuItem, Pill, Tooltip } from "./primitives";
 import { DiffView } from "./Rows";
 
 function orderedOptions(options: PermissionOption[]): PermissionOption[] {
@@ -121,26 +121,19 @@ function ApprovalActions({
               More <ChevronDown size={11} />
             </Pill>
           </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="top"
-              align="end"
-              sideOffset={6}
-              className="elevated z-50 max-w-[360px] min-w-[220px] p-1.5 rc-in"
-            >
-              {always.map((o) => (
-                <DropdownMenu.Item key={o.id} onSelect={() => pick(options.indexOf(o))} className={menuItem}>
-                  <span className="min-w-0 flex-1 break-words">{o.name}</span>
-                  <Kbd>{options.indexOf(o) + 1}</Kbd>
-                </DropdownMenu.Item>
-              ))}
-              {pending > 1 && (
-                <DropdownMenu.Item onSelect={() => approveAll(request.sessionId)} className={menuItem}>
-                  <CheckCheck size={13} /> Allow all {pending} waiting
-                </DropdownMenu.Item>
-              )}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
+          <MenuContent side="top" align="end" className="max-w-[360px] min-w-[220px]">
+            {always.map((o) => (
+              <DropdownMenu.Item key={o.id} onSelect={() => pick(options.indexOf(o))} className={menuItem}>
+                <span className="min-w-0 flex-1 break-words">{o.name}</span>
+                <MenuShortcut>{options.indexOf(o) + 1}</MenuShortcut>
+              </DropdownMenu.Item>
+            ))}
+            {pending > 1 && (
+              <DropdownMenu.Item onSelect={() => approveAll(request.sessionId)} className={menuItem}>
+                <CheckCheck size={13} /> Allow all {pending} waiting
+              </DropdownMenu.Item>
+            )}
+          </MenuContent>
         </DropdownMenu.Root>
       )}
       {alwaysAllow && (

@@ -20,6 +20,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   GitBranch,
   ListEnd,
   Paperclip,
@@ -33,7 +34,6 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { DropdownMenu, Popover } from "radix-ui";
 import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SlashCommand } from "../acp/types";
@@ -97,12 +97,12 @@ import {
 } from "../state/store";
 import { localId, type ThreadState } from "../state/thread";
 import { AgentPill } from "./AgentViews";
-import { ContextRing, PlanMeter } from "./ComposerUsage";
-import { composerPopoverCollisionPadding, useComposerPopoverOffset } from "./composerPopover";
+import { UsageMeter } from "./ComposerUsage";
+import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
-import { cx, menuItem, menuSeparator, menuSurface, Pill, Tooltip } from "./primitives";
+import { cx, MenuSearchField, MenuShortcut, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 
 function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
@@ -974,14 +974,9 @@ export const Composer = memo(function Composer({
                   narrow for them draws them in one menu instead, measured rather than stepped. */}
               {!tight ? (
                 <div ref={meters} className="flex items-center gap-1.5">
-                  <span className="flex h-7 shrink-0 items-center">
-                    <PlanMeter threadId={thread?.id} />
+                  <span className="flex h-7 shrink-0 items-center empty:hidden">
+                    <UsageMeter threadId={thread?.id} />
                   </span>
-                  {thread && (
-                    <span className="flex h-7 shrink-0 items-center empty:hidden">
-                      <ContextRing threadId={thread.id} />
-                    </span>
-                  )}
                   <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
                     <AgentPill threadId={thread?.id} />
                   </span>
@@ -1057,47 +1052,33 @@ export const Composer = memo(function Composer({
 }, sameComposer);
 
 /**
- * The meters a control row too narrow to hold them: one button, and the same three inside it, in
- * the order they would have stood. Borrowed in kind from T3 Code's composer footer, which moves
- * controls into a menu by measured width rather than by a breakpoint
- * (`apps/web/src/components/composerFooterLayout.ts`).
+ * The meters a control row too narrow to hold them: one button, and the same meters inside it, in
+ * the order they would have stood. The row is measured, not stepped by a breakpoint.
  */
 function MetersMenu({ thread }: { thread?: ThreadState }) {
-  const { triggerRef, sideOffset } = useComposerPopoverOffset();
   return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
+    <CardPopover
+      align="end"
+      role="dialog"
+      label="Usage and agents"
+      className="w-[min(300px,calc(100vw-40px))]"
+      trigger={
         <button
-          ref={triggerRef}
           type="button"
-          aria-label="Plan, context and agents"
+          aria-label="Usage and agents"
           className="flex size-[28px] shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
         >
           <Ellipsis size={14} />
         </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          side="top"
-          align="end"
-          sideOffset={sideOffset}
-          collisionPadding={composerPopoverCollisionPadding}
-          className="elevated z-40 w-[min(260px,calc(100vw-40px))] p-1.5"
-        >
-          <MeterRow label="Plan">
-            <PlanMeter threadId={thread?.id} />
-          </MeterRow>
-          {thread && (
-            <MeterRow label="Context">
-              <ContextRing threadId={thread.id} />
-            </MeterRow>
-          )}
-          <MeterRow label="Agents">
-            <AgentPill threadId={thread?.id} />
-          </MeterRow>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+      }
+    >
+      <MeterRow label="Usage">
+        <UsageMeter threadId={thread?.id} />
+      </MeterRow>
+      <MeterRow label="Agents">
+        <AgentPill threadId={thread?.id} />
+      </MeterRow>
+    </CardPopover>
   );
 }
 
@@ -1105,7 +1086,7 @@ function MetersMenu({ thread }: { thread?: ThreadState }) {
  * nothing to say hides its row rather than drawing a label over an empty slot. */
 function MeterRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex min-h-8 items-center justify-between gap-3 rounded-sm px-1.5 py-1 empty:hidden has-[>div:empty]:hidden">
+    <div className="flex min-h-8 items-center justify-between gap-3 rounded-sm px-1.5 py-1 empty:hidden has-[>span:empty]:hidden">
       <span className="text-callout text-fg-muted">{label}</span>
       <span className="flex h-7 shrink-0 items-center">{children}</span>
     </div>
@@ -1295,72 +1276,77 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
     () => [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 30),
     [sessions],
   );
-  const { triggerRef, sideOffset } = useComposerPopoverOffset();
+  const [filter, setFilter] = useState("");
+  const shown = projects.filter(
+    (p) =>
+      !filter.trim() ||
+      projectName(p).toLowerCase().includes(filter.trim().toLowerCase()) ||
+      p.toLowerCase().includes(filter.trim().toLowerCase()),
+  );
   return (
-    <DropdownMenu.Root>
-      <Tooltip side="bottom" label={cwd || "Choose a folder"}>
-        <DropdownMenu.Trigger asChild>
-          <button
-            ref={triggerRef}
-            type="button"
-            // The name is the trigger's own text at full width and its icon's label when it drops
-            // out under a container width, so the button keeps a name either way.
-            aria-label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
-            disabled={!!thread && !cwd}
-            className={cx(
-              footerButton,
-              "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
-            )}
-          >
-            <Folder size={12} className="shrink-0" />
-            <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
-              {cwd ? projectName(cwd) : "Choose a folder"}
-            </span>
-            <ChevronDown size={11} className="shrink-0 text-fg-faint" />
-          </button>
-        </DropdownMenu.Trigger>
-      </Tooltip>
-      <DropdownMenu.Portal>
-        {/* At most 360px and never over the header: Radix measures the room left above the card. */}
-        <DropdownMenu.Content
-          side="top"
-          align="start"
-          sideOffset={sideOffset}
-          collisionPadding={composerPopoverCollisionPadding}
-          className="elevated z-50 flex w-[300px] flex-col p-1.5"
-          style={{ maxHeight: "min(360px, var(--radix-dropdown-menu-content-available-height))" }}
-        >
-          {thread ? (
-            <FolderActions cwd={cwd} />
-          ) : (
-            <>
-              {/* The projects scroll; "Choose Folder…" stays pinned under them. */}
-              <div className="scroll-stable -mr-1.5 min-h-0 flex-1 pr-1.5">
-                {projects.map((p) => (
-                  <DropdownMenu.Item
-                    key={p}
-                    onSelect={() => setProjectCwd(p)}
-                    className={cx(menuItem, "flex-col items-start gap-0", p === cwd && "bg-fill")}
-                  >
-                    <span className="text-body text-fg">{projectName(p)}</span>
-                    <span className="w-full truncate text-caption text-fg-muted" dir="rtl">
-                      <bdi>{p}</bdi>
-                    </span>
-                  </DropdownMenu.Item>
-                ))}
-              </div>
-              {projects.length > 0 && <DropdownMenu.Separator className={menuSeparator} />}
-              <DropdownMenu.Item
-                onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}
-                className={cx(menuItem, "shrink-0")}
-              >
-                Choose Folder…
-              </DropdownMenu.Item>
-            </>
+    <CardPopover
+      align="start"
+      label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
+      onKeyDown={menuKeys}
+      tooltip={cwd || "Choose a folder"}
+      className="flex w-[300px] flex-col gap-1"
+      trigger={
+        <button
+          type="button"
+          // The name is the trigger's own text at full width and its icon's label when it drops
+          // out under a container width, so the button keeps a name either way.
+          aria-label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
+          disabled={!!thread && !cwd}
+          className={cx(
+            footerButton,
+            "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
           )}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+        >
+          <Folder size={12} className="shrink-0" />
+          <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
+            {cwd ? projectName(cwd) : "Choose a folder"}
+          </span>
+          <ChevronDown size={11} className="shrink-0 text-fg-faint" />
+        </button>
+      }
+    >
+      {thread ? (
+        <FolderActions cwd={cwd} />
+      ) : (
+        <>
+          {/* The projects scroll under a search that filters them; "Choose Folder…" stays pinned. */}
+          {projects.length > 4 && (
+            <div data-menu-static className="px-0.5 pb-0.5">
+              <MenuSearchField
+                value={filter}
+                onChange={setFilter}
+                placeholder="Search folders"
+                label="Search folders"
+              />
+            </div>
+          )}
+          <div className="scroll-stable min-h-0 flex-1">
+            {shown.map((p) => (
+              <CardMenuItem
+                key={p}
+                onSelect={() => setProjectCwd(p)}
+                className={cx("flex-col items-start gap-0", p === cwd && "bg-fill")}
+              >
+                <span className="text-body text-fg">{projectName(p)}</span>
+                <span className="w-full truncate text-caption text-fg-muted" dir="rtl">
+                  <bdi>{p}</bdi>
+                </span>
+              </CardMenuItem>
+            ))}
+            {!shown.length && <p className="px-3 py-2 text-callout text-fg-muted">No folder matches</p>}
+          </div>
+          {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
+          <CardMenuItem onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}>
+            <FolderPlus size={13} className="text-fg-muted" /> Choose Folder…
+          </CardMenuItem>
+        </>
+      )}
+    </CardPopover>
   );
 }
 
@@ -1368,30 +1354,26 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
 function FolderActions({ cwd }: { cwd: string }) {
   return (
     <>
-      <div className="truncate px-2.5 pt-1 pb-1.5 text-caption text-fg-muted" dir="rtl">
+      <div className="truncate px-3 pt-1 pb-1.5 text-caption text-fg-muted" dir="rtl">
         <bdi>{cwd}</bdi>
       </div>
-      <DropdownMenu.Item className={menuItem} onSelect={() => openPath(cwd)}>
+      <CardMenuItem onSelect={() => openPath(cwd)}>
         <FolderOpen size={13} className="text-fg-muted" /> Open in Finder
-      </DropdownMenu.Item>
+      </CardMenuItem>
       {canOpenTerminal() && (
-        <DropdownMenu.Item
-          className={menuItem}
-          onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}
-        >
+        <CardMenuItem onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}>
           <SquareTerminal size={13} className="text-fg-muted" /> Open in Terminal
-        </DropdownMenu.Item>
+        </CardMenuItem>
       )}
-      <DropdownMenu.Item
-        className={menuItem}
+      <CardMenuItem
         onSelect={() => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info"))}
       >
         <Copy size={13} className="text-fg-muted" /> Copy Path
-      </DropdownMenu.Item>
-      <DropdownMenu.Separator className={menuSeparator} />
-      <DropdownMenu.Item className={menuItem} onSelect={() => startNewThread(cwd)}>
+      </CardMenuItem>
+      <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
+      <CardMenuItem onSelect={() => startNewThread(cwd)}>
         <SquarePen size={13} className="text-fg-muted" /> New Thread Here
-      </DropdownMenu.Item>
+      </CardMenuItem>
     </>
   );
 }
@@ -1412,62 +1394,56 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
   const mode = useApp((s) => permissionModeOf(s, threadId));
   const current = PERMISSION_MODES.find((m) => m.id === mode)!;
   const Icon = PERMISSION_ICON[mode];
-  const { triggerRef, sideOffset } = useComposerPopoverOffset();
   return (
-    <DropdownMenu.Root>
-      <Tooltip side="bottom" label={current.detail}>
-        <DropdownMenu.Trigger asChild>
-          <button
-            ref={triggerRef}
-            type="button"
-            aria-label={`Permissions: ${current.label}`}
-            className={cx(
-              footerButton,
-              "shrink-0 data-[state=open]:bg-fill",
-              mode === "full" && "text-warning hover:text-warning",
-            )}
-          >
-            <Icon size={12} />
-            {!compact && <span className="@max-md/composer:hidden">{current.label}</span>}
-            <ChevronDown size={11} className="text-fg-faint" />
-          </button>
-        </DropdownMenu.Trigger>
-      </Tooltip>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          side="top"
-          align="start"
-          sideOffset={sideOffset}
-          collisionPadding={composerPopoverCollisionPadding}
-          className={cx(menuSurface, "w-[280px]")}
+    <CardPopover
+      align="start"
+      role="menu"
+      label="Permissions"
+      tooltip={current.detail}
+      onKeyDown={menuKeys}
+      className="w-[280px]"
+      trigger={
+        <button
+          type="button"
+          aria-label={`Permissions: ${current.label}`}
+          className={cx(
+            footerButton,
+            "shrink-0 data-[state=open]:bg-fill",
+            mode === "full" && "text-warning hover:text-warning",
+          )}
         >
-          <DropdownMenu.RadioGroup
-            value={mode}
-            onValueChange={(value) => setPermissionMode(threadId, value as PermissionMode)}
-          >
-            {PERMISSION_MODES.map((m) => {
-              const ItemIcon = PERMISSION_ICON[m.id];
-              return (
-                <DropdownMenu.RadioItem
-                  key={m.id}
-                  value={m.id}
-                  className={cx(menuItem, "items-start gap-2.5 py-2 data-[state=checked]:bg-fill-subtle")}
-                >
-                  <ItemIcon
-                    size={13}
-                    className={cx("mt-[3px] shrink-0", m.id === "full" && "text-warning")}
-                  />
-                  <span className="flex min-w-0 flex-col">
-                    <span className="text-body text-fg">{m.label}</span>
-                    <span className="text-caption text-fg-muted">{m.detail}</span>
-                  </span>
-                </DropdownMenu.RadioItem>
-              );
-            })}
-          </DropdownMenu.RadioGroup>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+          <Icon size={12} />
+          {!compact && <span className="@max-md/composer:hidden">{current.label}</span>}
+          <ChevronDown size={11} className="text-fg-faint" />
+        </button>
+      }
+    >
+      <div role="menu" aria-label="Permissions">
+        {PERMISSION_MODES.map((m) => {
+          const ItemIcon = PERMISSION_ICON[m.id];
+          const checked = m.id === mode;
+          return (
+            <CardMenuItem
+              key={m.id}
+              role="menuitemradio"
+              aria-checked={checked}
+              onSelect={() => setPermissionMode(threadId, m.id)}
+              className={cx("items-start gap-2.5 py-1.5", checked && "bg-fill-subtle")}
+            >
+              <ItemIcon
+                size={13}
+                className={cx("mt-[3px] shrink-0", m.id === "full" ? "text-warning" : "text-fg-muted")}
+              />
+              <span className="flex min-w-0 flex-col">
+                <span className="text-body text-fg">{m.label}</span>
+                <span className="text-caption text-fg-muted">{m.detail}</span>
+              </span>
+              {checked && <Check size={13} className="ms-auto mt-[3px] shrink-0 text-fg-muted" />}
+            </CardMenuItem>
+          );
+        })}
+      </div>
+    </CardPopover>
   );
 }
 
@@ -1481,50 +1457,43 @@ function PlusMenu({
   attachLabel: string;
   cwd: string;
 }) {
-  const { triggerRef, sideOffset } = useComposerPopoverOffset();
   return (
-    <DropdownMenu.Root>
-      <Tooltip label="Attach and more">
-        <DropdownMenu.Trigger asChild>
-          <button
-            ref={triggerRef}
-            type="button"
-            aria-label="Attach and more"
-            className="flex size-7 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-6"
-          >
-            <Plus size={14} strokeWidth={2.25} />
-          </button>
-        </DropdownMenu.Trigger>
-      </Tooltip>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          side="top"
-          align="start"
-          sideOffset={sideOffset}
-          collisionPadding={composerPopoverCollisionPadding}
-          className={cx(menuSurface, "min-w-[220px]")}
+    <CardPopover
+      align="start"
+      role="menu"
+      label="Attach and more"
+      tooltip="Attach and more"
+      onKeyDown={menuKeys}
+      className="min-w-[220px]"
+      trigger={
+        <button
+          type="button"
+          aria-label="Attach and more"
+          className="flex size-7 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-6"
         >
-          <DropdownMenu.Item className={menuItem} onSelect={onAttach}>
-            <Paperclip size={13} /> {attachLabel}
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator className={menuSeparator} />
-          <DropdownMenu.Item className={menuItem} onSelect={() => startNewThread()}>
-            <SquarePen size={13} /> New Thread
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
-            className={menuItem}
-            onSelect={() =>
-              void pickFolder(cwd).then((p) => {
-                if (!p) return;
-                setProjectCwd(p);
-                startNewThread(p);
-              })
-            }
-          >
-            <Folder size={13} /> New Thread in Folder…
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+          <Plus size={14} strokeWidth={2.25} />
+        </button>
+      }
+    >
+      <CardMenuItem onSelect={onAttach}>
+        <Paperclip size={13} className="text-fg-muted" /> {attachLabel}
+      </CardMenuItem>
+      <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
+      <CardMenuItem onSelect={() => startNewThread()}>
+        <SquarePen size={13} className="text-fg-muted" /> New Thread
+        <MenuShortcut>⌘N</MenuShortcut>
+      </CardMenuItem>
+      <CardMenuItem
+        onSelect={() =>
+          void pickFolder(cwd).then((p) => {
+            if (!p) return;
+            setProjectCwd(p);
+            startNewThread(p);
+          })
+        }
+      >
+        <Folder size={13} className="text-fg-muted" /> New Thread in Folder…
+      </CardMenuItem>
+    </CardPopover>
   );
 }

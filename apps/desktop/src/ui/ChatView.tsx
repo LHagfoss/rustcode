@@ -31,6 +31,7 @@ import {
   dismissPendingSetup,
   refreshSessions,
   repairThread,
+  setDraft,
   setPanel,
   setProjectCwd,
   setTerminalOpen,
@@ -55,11 +56,13 @@ import {
   Cluster,
   ClusterButton,
   cx,
+  MenuContent,
   menuItem,
   menuSeparator,
   Pill,
   Skeleton,
   Spinner,
+  surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
@@ -85,7 +88,12 @@ function PlanButton({ thread }: { thread: ThreadState }) {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" sideOffset={6} className="elevated z-40 w-[380px] p-3 rc-in">
+        <Popover.Content
+          align="end"
+          sideOffset={6}
+          collisionPadding={surfaceCollisionPadding}
+          className="elevated z-40 max-h-[var(--radix-popover-content-available-height,80vh)] w-[min(380px,var(--radix-popover-content-available-width,calc(100vw-16px)))] overflow-y-auto p-3 rc-in"
+        >
           <div className="mb-1 flex items-baseline justify-between px-1">
             <span className="font-semibold text-body">Plan</span>
             <span className="text-callout text-fg-muted">
@@ -141,23 +149,21 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
           )}
         </button>
       </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" sideOffset={6} className="elevated z-50 min-w-[200px] p-1.5">
-          <DropdownMenu.Item className={menuItem} onSelect={() => setView({ kind: "review", threadId })}>
-            <FileDiff size={13} /> Review Changes
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator className={menuSeparator} />
-          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
-            <Eye size={13} /> Mark for Review
-          </DropdownMenu.Item>
-          <DropdownMenu.Item className={menuItem} onSelect={() => settleThread(threadId)}>
-            <CircleCheck size={13} /> Mark Done
-          </DropdownMenu.Item>
-          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
-            <CircleDashed size={13} /> Clear Status
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
+      <MenuContent align="end">
+        <DropdownMenu.Item className={menuItem} onSelect={() => setView({ kind: "review", threadId })}>
+          <FileDiff size={13} /> Review Changes
+        </DropdownMenu.Item>
+        <DropdownMenu.Separator className={menuSeparator} />
+        <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
+          <Eye size={13} /> Mark for Review
+        </DropdownMenu.Item>
+        <DropdownMenu.Item className={menuItem} onSelect={() => settleThread(threadId)}>
+          <CircleCheck size={13} /> Mark Done
+        </DropdownMenu.Item>
+        <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
+          <CircleDashed size={13} /> Clear Status
+        </DropdownMenu.Item>
+      </MenuContent>
     </DropdownMenu.Root>
   );
 }
@@ -338,8 +344,13 @@ function Header({
   );
 }
 
+/** Ways into a first message: one click fills the box, and ⏎ sends it. */
+const STARTS = ["Explain this codebase", "Review my changes", "Find and fix a bug"];
+
 function EmptyState({ banner }: { banner: boolean }) {
   const projectCwd = useApp((s) => s.projectCwd);
+  // A draft of the user's own is theirs: the starts wait for an empty box.
+  const drafted = useApp((s) => !!(s.drafts.new ?? "").trim());
   const choose = () => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p));
   return (
     <div className="flex flex-col items-center gap-3.5 pb-6 text-center">
@@ -373,6 +384,15 @@ function EmptyState({ banner }: { banner: boolean }) {
           {projectCwd ? "Change" : "Choose…"}
         </button>
       </div>
+      {!drafted && (
+        <div className="flex max-w-[520px] flex-wrap items-center justify-center gap-1.5">
+          {STARTS.map((start) => (
+            <Pill key={start} size="sm" quiet onClick={() => setDraft("new", start)}>
+              {start}
+            </Pill>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

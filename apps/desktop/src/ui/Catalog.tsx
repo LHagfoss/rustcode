@@ -9,13 +9,15 @@ import {
   ChromeButton,
   Cluster,
   ClusterButton,
+  cx,
   inputClass,
   Kbd,
+  MenuContent,
+  MenuShortcut,
   menuItem,
   menuItemDanger,
   menuLabel,
   menuSeparator,
-  menuSurface,
   Pill,
   Segments,
   Select,
@@ -109,21 +111,20 @@ export function Catalog() {
               <DropdownMenu.Trigger asChild>
                 <Pill>Open menu</Pill>
               </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content align="start" sideOffset={6} className={menuSurface}>
-                  <DropdownMenu.Label className={menuLabel}>Label</DropdownMenu.Label>
-                  <DropdownMenu.Item className={menuItem}>
-                    <Copy size={13} className="text-fg-muted" /> Item
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item disabled className={menuItem}>
-                    Disabled
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Separator className={menuSeparator} />
-                  <DropdownMenu.Item className={`${menuItem} ${menuItemDanger}`}>
-                    <Trash2 size={13} /> Destructive
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
+              <MenuContent>
+                <DropdownMenu.Label className={menuLabel}>Label</DropdownMenu.Label>
+                <DropdownMenu.Item className={menuItem}>
+                  <Copy size={13} className="text-fg-muted" /> Item
+                  <MenuShortcut>⌘C</MenuShortcut>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item disabled className={menuItem}>
+                  Disabled
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator className={menuSeparator} />
+                <DropdownMenu.Item className={cx(menuItem, menuItemDanger)}>
+                  <Trash2 size={13} /> Destructive
+                </DropdownMenu.Item>
+              </MenuContent>
             </DropdownMenu.Root>
           </Section>
           <Section title="Status">
