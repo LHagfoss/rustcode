@@ -23,6 +23,10 @@ a harness's: a link keeps the message its parent sent and the answer the child
 returned (the `body` column below), because that is what the book is for. It
 holds nothing that `history.json` does not already have.
 
+Command receipts keep even less: the orchestration tool, a hash of its
+arguments and the answer. No prompt, message or argument text is stored, so a
+receipt cannot leak what a call said.
+
 The request and protocol tables below record metadata by default. They hold a
 payload only when the user turns payload capture on ("Captured payloads").
 
@@ -39,6 +43,7 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `provider_requests` | one row per built-in provider HTTP attempt or retry: `thread_id`, `turn_id`, `round`, `provider`, `model`, `endpoint_host`, `endpoint_path`, `method`, `attempt`, `started_at`, `headers_at`, `finished_at`, `latency_ms`, `status_code`, `request_bytes`, `response_bytes`, `stream_event_count`, `input_tokens`, `output_tokens`, `cached_tokens`, `error_kind`, `request_payload_json`, `response_summary_json`, `payload_truncated`, `redaction_version` |
 | `harness_rpc_messages` | one row per ACP or Codex JSON-RPC message: `thread_id`, `turn_id`, `harness`, `protocol`, `direction`, `message_kind`, `rpc_id`, `method`, `at`, `latency_ms`, `byte_size`, `payload_json`, `payload_truncated`, `redaction_version` |
 | `operational_events` | one row per allowlisted event: `thread_id`, `turn_id`, `sequence`, `event_type`, `at`, `fields_json`, `original_bytes`, `captured_bytes`, `payload_truncated`, `redaction_version` |
+| `command_receipts` | one row per orchestration call made with a retry key: `caller` (the calling thread), `client_request_id`, `action` (the tool), `args_hash`, `result_json`, `created_at`, keyed on `(caller, client_request_id)` |
 | `store_meta` | internal bookkeeping, such as whether the one-time backfill ran |
 
 Tokens and cost are `NULL` when a harness did not report them, and are never
@@ -73,6 +78,32 @@ and no agent could read it. It is here instead:
 The app asks through `_rustcode/data/links/load` and
 `_rustcode/data/links/save` (`engine/src/acp/data.rs`); an engine without them
 answers `unknown method`, and the app keeps its local copy as before.
+
+## Command receipts
+
+An orchestration call that can start a thread or deliver a message
+(`start_session`, `message_session`, `fan_out`) may carry a
+`client_request_id` (`docs/orchestrator.md` § Retrying a call). The app asks
+this store, through `_rustcode/data/receipts/get` and
+`_rustcode/data/receipts/put`, *before* it acts, and records the answer right
+after the call succeeds. So a retry whose answer was dropped — at the MCP
+layer, or because the app restarted — replays the recorded answer instead of
+starting or delivering a second time.
+
+- The key is the calling thread plus the caller's `client_request_id`, so two
+  threads may use the same key and one caller's key never answers another's.
+- `args_hash` is the engine's sha256 of the tool and the call's arguments with
+  object keys sorted (`orchestration::args_hash`). The same key with another
+  action or another hash is a conflict, not a replay.
+- `result_json` is the answer the app gave; nothing else about the call is
+  written, so no prompt or message text is here.
+- The first receipt under a key stays: a later write under the same key does
+  nothing, so a race cannot overwrite what actually happened.
+- Only a successful call is recorded. A refusal (the user said no, a busy
+  limit) or a failure records nothing, so a corrected call may use the key.
+
+Receipts age out after 7 days and the newest 10,000 are kept, pruned by the
+same hourly pass as the telemetry tables.
 
 ## Request and protocol telemetry
 
@@ -195,6 +226,9 @@ opens the store) and at the start:
 - payload columns of rows older than 7 days are set to `NULL`, and the
   metadata row stays;
 - rows older than 30 days are deleted;
+- command receipts older than 7 days are deleted, then the oldest until at
+  most 10,000 are left: they exist to make a retry safe for a while, not to
+  keep history (`COMMAND_RECEIPT_RETENTION_DAYS`, `COMMAND_RECEIPT_MAX_ROWS`);
 - if the three tables hold more than 256 MiB of payload together (estimated as
   the summed length of the payload columns), the oldest payloads are dropped
   first and the oldest rows only after that;

@@ -190,6 +190,20 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
     CREATE INDEX operational_events_thread ON operational_events(thread_id, at);
     CREATE INDEX operational_events_at ON operational_events(at);",
     ),
+    (
+        5,
+        "command_receipts",
+        "CREATE TABLE command_receipts (
+        caller TEXT NOT NULL,
+        client_request_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        args_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (caller, client_request_id)
+    );
+    CREATE INDEX command_receipts_created ON command_receipts(created_at);",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -853,6 +867,145 @@ pub fn load_link_book_at(path: &Path) -> Result<Value, String> {
     Ok(json!({ "stored": stored, "book": book }))
 }
 
+// ------------------------------------------------------------- command receipts
+
+/// One receipt: what a caller's earlier orchestration call with the same retry
+/// key did. It keeps the action, a hash of the arguments and the answer —
+/// never the arguments themselves, so a message or a prompt is not stored.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReceiptRow {
+    /// The thread that made the call.
+    pub caller: String,
+    /// The caller's retry key: the `client_request_id` it sent.
+    pub client_request_id: String,
+    /// The orchestration tool: `start_session`, `message_session` or `fan_out`.
+    pub action: String,
+    /// sha256 of the action and the call's canonical arguments JSON.
+    pub args_hash: String,
+    /// The answer the call gave, as JSON.
+    pub result_json: String,
+}
+
+/// What a caller's earlier call under the same retry key left behind.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Receipt {
+    /// Nothing under that key: never stored, or aged out of the retry window.
+    /// The call may run.
+    None,
+    /// The same call: this is what it answered, and it must not run again.
+    Replay { result: Value, created_at: String },
+    /// The key was used for another action or for other arguments.
+    Conflict,
+}
+
+/// [`check_receipt`] against one store file, so a test can use a temporary one.
+pub fn check_receipt_at(
+    path: &Path,
+    caller: &str,
+    client_request_id: &str,
+    action: &str,
+    args_hash: &str,
+) -> Result<Receipt, String> {
+    let connection = open(path)?;
+    let row: Option<(String, String, String, String)> = connection
+        .query_row(
+            "SELECT action, args_hash, result_json, created_at FROM command_receipts
+             WHERE caller = ?1 AND client_request_id = ?2",
+            params![caller, client_request_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some((stored_action, stored_hash, result, created_at)) = row else {
+        return Ok(Receipt::None);
+    };
+    // The action is compared as well as the hash: the hash covers the action
+    // already, and a stored row from an older release may not.
+    if stored_action != action || stored_hash != args_hash {
+        return Ok(Receipt::Conflict);
+    }
+    Ok(Receipt::Replay {
+        result: serde_json::from_str(&result).unwrap_or(Value::Null),
+        created_at,
+    })
+}
+
+/// [`check_receipt`] against the store this machine uses.
+pub fn check_receipt(
+    caller: &str,
+    client_request_id: &str,
+    action: &str,
+    args_hash: &str,
+) -> Result<Receipt, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    check_receipt_at(&path, caller, client_request_id, action, args_hash)
+}
+
+/// [`record_receipt`] against one store file, so a test can use a temporary one.
+pub fn record_receipt_at(path: &Path, receipt: &ReceiptRow) -> Result<(), String> {
+    let connection = open(path)?;
+    write_receipt(&connection, receipt)
+}
+
+/// [`record_receipt`] against the store this machine uses.
+pub fn record_receipt(receipt: &ReceiptRow) -> Result<(), String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    record_receipt_at(&path, receipt)
+}
+
+fn write_receipt(connection: &Connection, receipt: &ReceiptRow) -> Result<(), String> {
+    if receipt.caller.trim().is_empty() || receipt.client_request_id.trim().is_empty() {
+        return Err("a receipt needs a caller and a client_request_id".to_owned());
+    }
+    if receipt.result_json.len() > MAX_RECEIPT_RESULT_BYTES {
+        return Err(format!(
+            "the receipt's result is {} bytes; at most {MAX_RECEIPT_RESULT_BYTES} are kept",
+            receipt.result_json.len()
+        ));
+    }
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    // The first receipt under a key stays: a second write is either a retry
+    // that slipped past the check or a race, and the call that already
+    // happened is the one to replay.
+    connection
+        .execute(
+            "INSERT INTO command_receipts
+                (caller, client_request_id, action, args_hash, result_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(caller, client_request_id) DO NOTHING",
+            params![
+                receipt.caller,
+                receipt.client_request_id,
+                receipt.action,
+                receipt.args_hash,
+                receipt.result_json,
+                created_at,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Drops receipts past the retry window, then the oldest until at most
+/// `max_rows` are left. Called by the telemetry prune pass.
+fn prune_receipts(connection: &Connection, days: i64, max_rows: i64) -> Result<usize, String> {
+    let cutoff = rfc3339_days_ago(chrono::Utc::now(), days);
+    let mut deleted = connection
+        .execute(
+            "DELETE FROM command_receipts WHERE created_at < ?1",
+            [cutoff],
+        )
+        .map_err(|error| error.to_string())?;
+    deleted += connection
+        .execute(
+            "DELETE FROM command_receipts WHERE rowid NOT IN
+                (SELECT rowid FROM command_receipts ORDER BY created_at DESC, rowid DESC LIMIT ?1)",
+            [max_rows],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(deleted)
+}
+
 /// Records a turn (and its tool calls) in the store; a failure is logged and
 /// swallowed, because the turn itself already succeeded or failed on its own.
 pub fn record_turn(turn: &TurnRow) {
@@ -1504,6 +1657,19 @@ pub const PAYLOAD_RETENTION_DAYS: i64 = 7;
 /// How long a telemetry row itself is kept.
 pub const ROW_RETENTION_DAYS: i64 = 30;
 
+/// How long a command receipt stays usable: an orchestration call retried
+/// inside this window is answered from its receipt, and one retried later is
+/// a new call, like one that carried no retry key.
+pub const COMMAND_RECEIPT_RETENTION_DAYS: i64 = 7;
+
+/// The most receipts the store keeps. The oldest go first, so the retry
+/// window is bounded in rows as well as in days.
+pub const COMMAND_RECEIPT_MAX_ROWS: i64 = 10_000;
+
+/// The most of one receipt's recorded result a row keeps: a `start_session`
+/// or `fan_out` answer is a few hundred bytes, so more is a mistake.
+pub const MAX_RECEIPT_RESULT_BYTES: usize = 16 * 1024;
+
 /// What `provider_requests`, `harness_rpc_messages` and `operational_events`
 /// may hold together in payload bytes before the oldest payloads are dropped.
 pub const TELEMETRY_MAX_BYTES: i64 = 256 * 1024 * 1024;
@@ -1936,8 +2102,11 @@ pub fn prune_telemetry_at(path: &Path) -> Result<PruneReport, String> {
 /// The retention policy: payloads older than [`PAYLOAD_RETENTION_DAYS`] are
 /// dropped, rows older than [`ROW_RETENTION_DAYS`] deleted, and the three
 /// tables held under [`TELEMETRY_MAX_BYTES`] by dropping the oldest payloads
-/// first. The file is then checkpointed (and vacuumed only when the database
-/// already vacuums incrementally) so deleting rows actually frees space.
+/// first. Command receipts have their own, shorter window
+/// ([`COMMAND_RECEIPT_RETENTION_DAYS`], [`COMMAND_RECEIPT_MAX_ROWS`]): they
+/// exist to make a retry safe for a while, not to keep history. The file is
+/// then checkpointed (and vacuumed only when the database already vacuums
+/// incrementally) so deleting rows actually frees space.
 pub fn prune(connection: &Connection) -> Result<PruneReport, String> {
     prune_with(connection, TELEMETRY_MAX_BYTES)
 }
@@ -1954,6 +2123,11 @@ fn prune_with(connection: &Connection, max_bytes: i64) -> Result<PruneReport, St
     };
     report.payloads_cleared += clear_payloads_before(connection, &payload_cutoff)?;
     report.rows_deleted += delete_rows_before(connection, &row_cutoff)?;
+    report.rows_deleted += prune_receipts(
+        connection,
+        COMMAND_RECEIPT_RETENTION_DAYS,
+        COMMAND_RECEIPT_MAX_ROWS,
+    )?;
     trim_to_budget(connection, max_bytes, &mut report)?;
     report.bytes_after = telemetry_bytes(connection)?;
     compact(connection);
@@ -4078,5 +4252,128 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    fn receipt(caller: &str, key: &str, action: &str, hash: &str) -> ReceiptRow {
+        ReceiptRow {
+            caller: caller.to_owned(),
+            client_request_id: key.to_owned(),
+            action: action.to_owned(),
+            args_hash: hash.to_owned(),
+            result_json: json!({ "session_id": "child", "link_id": "a/1" }).to_string(),
+        }
+    }
+
+    #[test]
+    fn a_receipt_round_trips_and_a_changed_call_is_a_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+
+        assert_eq!(
+            check_receipt_at(&path, "a", "k1", "start_session", "h1").unwrap(),
+            Receipt::None
+        );
+        record_receipt_at(&path, &receipt("a", "k1", "start_session", "h1")).unwrap();
+
+        // The same call again: the recorded answer, and nothing stored but the
+        // action, the hash and the result.
+        let again = check_receipt_at(&path, "a", "k1", "start_session", "h1").unwrap();
+        let Receipt::Replay { result, .. } = again else {
+            panic!("expected a replay, got {again:?}");
+        };
+        assert_eq!(result["session_id"], "child");
+        assert_eq!(result["link_id"], "a/1");
+        let row = one_row(
+            &path,
+            "SELECT action, args_hash, result_json FROM command_receipts",
+        );
+        assert_eq!(row["action"], "start_session");
+        assert_eq!(row["args_hash"], "h1");
+
+        // The same key for other arguments or another action is refused.
+        assert_eq!(
+            check_receipt_at(&path, "a", "k1", "start_session", "h2").unwrap(),
+            Receipt::Conflict
+        );
+        assert_eq!(
+            check_receipt_at(&path, "a", "k1", "fan_out", "h1").unwrap(),
+            Receipt::Conflict
+        );
+        // Another caller, or no key, is another call.
+        assert_eq!(
+            check_receipt_at(&path, "b", "k1", "start_session", "h1").unwrap(),
+            Receipt::None
+        );
+        assert_eq!(
+            check_receipt_at(&path, "a", "k2", "start_session", "h1").unwrap(),
+            Receipt::None
+        );
+
+        // A second write under a key keeps the first receipt.
+        let mut second = receipt("a", "k1", "start_session", "h1");
+        second.result_json = json!({ "session_id": "other" }).to_string();
+        record_receipt_at(&path, &second).unwrap();
+        let Receipt::Replay { result, .. } =
+            check_receipt_at(&path, "a", "k1", "start_session", "h1").unwrap()
+        else {
+            panic!("the first receipt must stay");
+        };
+        assert_eq!(result["session_id"], "child");
+
+        // A receipt that carries no caller or key is refused, never written.
+        assert!(record_receipt_at(&path, &receipt("", "k1", "start_session", "h1")).is_err());
+        assert_eq!(count_rows(&path, "command_receipts"), 1);
+    }
+
+    #[test]
+    fn receipts_age_out_of_the_retry_window_and_stay_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        // One inside the window, one past it, inserted with its own timestamp.
+        for (key, created) in [("fresh", days_ago(1)), ("old", days_ago(9))] {
+            connection
+                .execute(
+                    "INSERT INTO command_receipts
+                        (caller, client_request_id, action, args_hash, result_json, created_at)
+                     VALUES ('a', ?1, 'message_session', 'h1', '{}', ?2)",
+                    params![key, created],
+                )
+                .unwrap();
+        }
+
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES).unwrap();
+        assert_eq!(report.rows_deleted, 1, "{report:?}");
+        assert_eq!(
+            check_receipt_at(&path, "a", "old", "message_session", "h1").unwrap(),
+            Receipt::None,
+            "past the window a call is new again"
+        );
+        assert!(matches!(
+            check_receipt_at(&path, "a", "fresh", "message_session", "h1").unwrap(),
+            Receipt::Replay { .. }
+        ));
+
+        // The row cap drops the oldest keepers of the window, not the newest.
+        for key in ["k1", "k2", "k3"] {
+            record_receipt_at(&path, &receipt("a", key, "fan_out", "h1")).unwrap();
+        }
+        let deleted = prune_receipts(&connection, COMMAND_RECEIPT_RETENTION_DAYS, 2).unwrap();
+        assert_eq!(deleted, 2, "four receipts, two kept");
+        assert_eq!(count_rows(&path, "command_receipts"), 2);
+        let mut keys: Vec<String> =
+            query_path(&path, "SELECT client_request_id FROM command_receipts", 10)
+                .unwrap()
+                .rows
+                .iter()
+                .map(|row| {
+                    row["client_request_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect();
+        keys.sort();
+        assert_eq!(keys, ["k2", "k3"], "the newest two stay");
     }
 }

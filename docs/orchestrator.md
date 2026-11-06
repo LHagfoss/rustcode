@@ -152,7 +152,7 @@ delegation is on, as in M1). M1 clients send `1` and get exactly the M1
 tools, descriptions and prompt hint; a version 2 call from a version 1
 session (a made-up one) is refused in the engine and nothing is sent. Plan
 mode and subagents never get any of them. Each call is forwarded as today:
-`_rustcode/orchestration` `{ "tool": <name>, "args": {...}, "sessionId": <calling session>, "callId": <the engine's name for this call> }`.
+`_rustcode/orchestration` `{ "tool": <name>, "args": {...}, "sessionId": <calling session>, "callId": <the engine's name for this call> }`, plus `clientRequestId` and `argsHash` when the call carries a retry key (see [Retrying a call](#retrying-a-call)).
 
 The engine drops a call when the harness stops waiting for it (its own tool
 timeout, a cancel, the MCP server closing). It then sends the client
@@ -169,11 +169,11 @@ the wait is released the same way.
 | `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
 | `read_session` | `{ session_id, last_turns?: 1..10, offset?: bytes }` (default 3 turns, offset 0) | `{ session_id, title, status, project, offset, text, next_offset?, complete }`: the rendered answer as text, one page at a time (16 KiB); when `next_offset` is present, pass it as `offset` for the rest. Pages join with nothing lost or repeated, cut on a UTF-8 character boundary. Any project's thread |
 
-| `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
-| `message_session` | M1 | M1 |
+| `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path, client_request_id? }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left, replayed? }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
+| `message_session` | M1 + `client_request_id?` | M1 + `replayed: true` when the call was answered from its receipt |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
-| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort?, account? (v5) }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, account?, access, model?, effort? } \| { harness, error }], fan_out_id, links_left }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
+| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort?, account? (v5) }] (2..4), title?, client_request_id? }` | `{ links: [{ session_id, link_id, harness, account?, access, model?, effort? } \| { harness, error }], fan_out_id, links_left, replayed? }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
 Checked in the engine before anything is sent (`validate`): `prompt` and
 `message` are required and at most 32 KiB; `title` at most 200 characters;
@@ -181,7 +181,9 @@ Checked in the engine before anything is sent (`validate`): `prompt` and
 same but only a version 5 client may send it (below); `worktree` a boolean;
 `project` an absolute path; `offset` a whole number of bytes; `fan_out` takes
 2 to 4 entries, each with a `harness`, and no entry twice (the same harness on
-two models, or on two named accounts, is fine). The engine waits for the
+two models, or on two named accounts, is fine); `client_request_id`, when
+given, is 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`
+(see [Retrying a call](#retrying-a-call)). The engine waits for the
 client's answer 15 min for `start_session` and `fan_out` (approval, worktrees,
 harness start),
 `timeout_ms` + 30 s for `wait_session`, and 10 min otherwise. The client bounds
@@ -218,6 +220,44 @@ effort and login, however they were spelled. `account` and the answers'
 `account` are version 5 only: an older client is not shown the field, and the
 engine refuses one it sends rather than letting that app ignore it (see
 [Orchestration tools v5](#orchestration-tools-v5)).
+
+### Retrying a call
+
+An agent's `start_session`, `message_session` or `fan_out` can time out at the
+MCP layer after the app already started the thread or delivered the message,
+and a blind retry starts or delivers a second time. Those three tools take an
+optional `client_request_id`: a key the caller picks, which makes the call safe
+to repeat.
+
+- Same key, same tool, same arguments: the call is not made again. The app
+  answers with the result it recorded the first time, plus `replayed: true`, so
+  the retry gets the same `session_id` and `link_id` as the original.
+- Same key, another tool or other arguments: refused with
+  `client_request_id reused with different arguments`. Nothing is started or
+  sent; the model should use a new key for a different call.
+- No key: exactly the behaviour above, unchanged.
+- A second copy of the same call while the first is still running (the user
+  has not answered the card yet) waits for the first and answers with its
+  result, marked `replayed`, instead of asking the user twice.
+- Only a call that succeeded is recorded, so a refusal or a failure leaves
+  nothing behind and a corrected call under the same key runs.
+
+The check happens in the app **before** it acts and the receipt is written
+**right after** the call succeeds, before the answer goes back — which is what
+makes it work when the answer is what got lost. Receipts live in the engine's
+data store (`command_receipts` in `docs/data-store.md`), so they survive an app
+restart: a key is usable for 7 days and the store keeps the newest 10,000. The
+engine forwards `clientRequestId` and an `argsHash` (sha256 of the tool and the
+call's arguments, keys sorted, so a reordered retry matches) with the request;
+the app asks `_rustcode/data/receipts/get`
+(`rustcode/engine/src/acp/data.rs`) and writes `_rustcode/data/receipts/put`.
+Nothing about the prompt or message is stored: only the tool, the hash and the
+answer. Keys are scoped to the calling thread, so two threads may use the same
+one.
+
+The field is additive and needs no new orchestration version: an app that does
+not know receipts ignores it, and such a retry behaves as it did before. The
+dropped-call errors the engine returns say whether the call carried a key.
 
 ### A delegated thread's access
 

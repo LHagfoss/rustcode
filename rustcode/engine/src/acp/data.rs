@@ -114,6 +114,94 @@ pub(crate) fn links_save(request: DataLinksSaveRequest) -> Result<Value, String>
     Ok(serde_json::json!({ "saved": true, "bytes": size }))
 }
 
+/// `_rustcode/data/receipts/get`: what the caller's earlier call under the same
+/// retry key did — `none`, its recorded `result`, or `conflict` when the key
+/// was used for another action or other arguments. The app asks before it acts;
+/// the check is what makes a retried `start_session`, `message_session` or
+/// `fan_out` safe.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/data/receipts/get", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataReceiptsGetRequest {
+    /// The thread making the call.
+    pub caller: String,
+    /// Its retry key: the call's `client_request_id`.
+    pub client_request_id: String,
+    /// The orchestration tool the call names.
+    pub action: String,
+    /// The engine's sha256 of the action and the call's arguments.
+    pub args_hash: String,
+}
+
+/// `_rustcode/data/receipts/put`: records what a call did, right after it
+/// succeeded and before the answer goes back, so a retry whose answer was
+/// dropped is answered from here instead of acting again.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/data/receipts/put", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataReceiptsPutRequest {
+    pub caller: String,
+    pub client_request_id: String,
+    pub action: String,
+    pub args_hash: String,
+    /// The answer the call gave.
+    pub result: Value,
+}
+
+pub(crate) fn receipts_get(request: DataReceiptsGetRequest) -> Result<Value, String> {
+    let caller = non_empty(&request.caller, "caller")?;
+    let key = client_request_id(&request.client_request_id)?;
+    let action = non_empty(&request.action, "action")?;
+    let hash = non_empty(&request.args_hash, "args_hash")?;
+    match crate::data_store::check_receipt(caller, key, action, hash)? {
+        crate::data_store::Receipt::None => Ok(serde_json::json!({ "state": "none" })),
+        crate::data_store::Receipt::Conflict => Ok(serde_json::json!({ "state": "conflict" })),
+        crate::data_store::Receipt::Replay { result, created_at } => Ok(serde_json::json!({
+            "state": "replayed",
+            "result": result,
+            "created_at": created_at,
+        })),
+    }
+}
+
+pub(crate) fn receipts_put(request: DataReceiptsPutRequest) -> Result<Value, String> {
+    let caller = non_empty(&request.caller, "caller")?;
+    let key = client_request_id(&request.client_request_id)?;
+    let action = non_empty(&request.action, "action")?;
+    let hash = non_empty(&request.args_hash, "args_hash")?;
+    if !request.result.is_object() {
+        return Err("result must be a JSON object".to_owned());
+    }
+    let result_json = serde_json::to_string(&request.result).map_err(|error| error.to_string())?;
+    let receipt = crate::data_store::ReceiptRow {
+        caller: caller.to_owned(),
+        client_request_id: key.to_owned(),
+        action: action.to_owned(),
+        args_hash: hash.to_owned(),
+        result_json,
+    };
+    crate::data_store::record_receipt(&receipt)?;
+    Ok(serde_json::json!({ "saved": true }))
+}
+
+fn non_empty<'a>(value: &'a str, field: &str) -> Result<&'a str, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{field} is required"));
+    }
+    Ok(value)
+}
+
+fn client_request_id(value: &str) -> Result<&str, String> {
+    let value = non_empty(value, "client_request_id")?;
+    crate::orchestration::check_request_id(value)?;
+    Ok(value)
+}
+
 pub(crate) fn usage(request: DataUsageRequest) -> Result<Value, String> {
     // The first reader of a fresh install runs the one-time backfill, as the CLI does.
     crate::data_store::ensure_ready()?;
@@ -211,6 +299,34 @@ mod tests {
             limit: None,
         });
         assert_eq!(refused.unwrap_err(), "session_id is required");
+    }
+
+    #[test]
+    fn a_receipt_needs_a_caller_and_a_valid_key_before_the_store_is_opened() {
+        // Refused before the store is opened, so this needs no config directory.
+        let get = |caller: &str, key: &str| {
+            super::receipts_get(super::DataReceiptsGetRequest {
+                caller: caller.to_owned(),
+                client_request_id: key.to_owned(),
+                action: "start_session".to_owned(),
+                args_hash: "h1".to_owned(),
+            })
+        };
+        assert_eq!(get("", "k1").unwrap_err(), "caller is required");
+        assert_eq!(get("a", "  ").unwrap_err(), "client_request_id is required");
+        assert!(
+            get("a", "has space")
+                .unwrap_err()
+                .contains("must be 1 to 128")
+        );
+        let put = super::receipts_put(super::DataReceiptsPutRequest {
+            caller: "a".to_owned(),
+            client_request_id: "k1".to_owned(),
+            action: "start_session".to_owned(),
+            args_hash: "h1".to_owned(),
+            result: serde_json::json!([1, 2]),
+        });
+        assert_eq!(put.unwrap_err(), "result must be a JSON object");
     }
 
     #[test]

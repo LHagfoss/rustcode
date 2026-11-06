@@ -88,6 +88,14 @@ pub const MAX_LAST_TURNS: u64 = 10;
 /// How many harnesses one `fan_out` starts.
 pub const MIN_FAN_OUT: usize = 2;
 pub const MAX_FAN_OUT: usize = 4;
+/// The retry key a caller may give a call that creates a thread or delivers a
+/// message: the app stores that call's receipt under it, so a retry whose
+/// answer was dropped returns the first result instead of acting twice.
+pub const CLIENT_REQUEST_ID: &str = "client_request_id";
+/// The tools a retry key applies to.
+pub const KEYED_TOOL_NAMES: [&str; 3] = [MESSAGE_SESSION, START_SESSION, FAN_OUT];
+/// The longest retry key, and the characters it may hold.
+pub const MAX_CLIENT_REQUEST_ID_CHARS: usize = 128;
 /// The longest SQL `query_data` takes: a question, not a dump.
 pub const MAX_SQL_BYTES: usize = 8 * 1024;
 /// The longest `after` cursor `read_activity` accepts: an `at`, a source and a
@@ -264,6 +272,90 @@ pub(crate) fn names_an_account(name: &str, args: &Value) -> bool {
     }
 }
 
+/// The retry key a call carries, when the tool takes one: `None` for a call
+/// with no key, which behaves exactly as before.
+pub fn request_key<'a>(name: &str, args: &'a Value) -> Option<&'a str> {
+    if !KEYED_TOOL_NAMES.contains(&name) {
+        return None;
+    }
+    args.get(CLIENT_REQUEST_ID).and_then(Value::as_str)
+}
+
+/// What a retry key is checked against: sha256 of the action and the call's
+/// arguments, so a retry that spelled the same arguments in another order
+/// still matches. The prompt is part of that hash and is never stored itself.
+pub fn args_hash(name: &str, args: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let mut canonical = String::new();
+    canonical_json(args, &mut canonical);
+    let mut hasher = Sha256::new();
+    hasher.update(name.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(canonical.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// `value` as JSON with object keys sorted: `serde_json` keeps the order it
+/// read (`preserve_order`), and a hash of that would change with the wording
+/// alone. Anything else is written as it parses.
+fn canonical_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_unstable();
+            out.push('{');
+            for (index, key) in keys.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String((*key).clone()).to_string());
+                out.push(':');
+                canonical_json(&map[*key], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                canonical_json(item, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// A retry key: 1 to [`MAX_CLIENT_REQUEST_ID_CHARS`] characters of A-Z, a-z,
+/// 0-9, `.`, `_`, `:` and `-`. The app's receipt store checks the same thing,
+/// through this one rule.
+pub(crate) fn check_request_id(id: &str) -> Result<(), String> {
+    let allowed = !id.is_empty()
+        && id.chars().count() <= MAX_CLIENT_REQUEST_ID_CHARS
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'));
+    if allowed {
+        return Ok(());
+    }
+    Err(format!(
+        "{CLIENT_REQUEST_ID} must be 1 to {MAX_CLIENT_REQUEST_ID_CHARS} characters of A-Z, a-z, 0-9, '.', '_', ':' or '-'"
+    ))
+}
+
+/// An optional retry key, absent or [`check_request_id`]'s shape.
+fn optional_request_id(args: &Value) -> Result<(), String> {
+    match args.get(CLIENT_REQUEST_ID) {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(id)) => check_request_id(id),
+        Some(_) => Err(format!(
+            "{CLIENT_REQUEST_ID} must be 1 to {MAX_CLIENT_REQUEST_ID_CHARS} characters of A-Z, a-z, 0-9, '.', '_', ':' or '-'"
+        )),
+    }
+}
+
 fn text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
 }
@@ -422,7 +514,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             if message.len() > MAX_MESSAGE_BYTES {
                 return Err(format!("message is over {MAX_MESSAGE_BYTES} bytes"));
             }
-            Ok(())
+            optional_request_id(args)
         }
         READ_SESSION => {
             if text(args, "session_id").unwrap_or("").trim().is_empty() {
@@ -476,7 +568,8 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 None | Some(Value::Null) => Ok(()),
                 Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
                 Some(_) => Err("project must be an absolute path".to_owned()),
-            }
+            }?;
+            optional_request_id(args)
         }
         FAN_OUT => {
             bounded_text(args, "prompt")?;
@@ -509,7 +602,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 }
                 seen.push(key);
             }
-            Ok(())
+            optional_request_id(args)
         }
         WAIT_SESSION => {
             let one = args.get("link_id").and_then(Value::as_str).is_some();
@@ -626,13 +719,24 @@ pub async fn execute_with(
     // The client is told this call by an id of its own, so a dropped call can be
     // ended on its side: an answer it is still preparing would be read by nobody.
     let call_id = next_call_id();
-    let request = client.request(json!({ "tool": name, "args": args, "callId": call_id }));
+    let mut forwarded = json!({ "tool": name, "args": args, "callId": call_id });
+    // A call that can create a thread or deliver a message carries its retry key
+    // and the hash the client checks it against, so a retry after a dropped
+    // answer is answered from the receipt instead of acting twice.
+    if let Some(key) = request_key(name, args) {
+        forwarded["clientRequestId"] = json!(key);
+        forwarded["argsHash"] = json!(args_hash(name, args));
+    }
+    let request = client.request(forwarded);
     let answer = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
             client.call_cancelled(&call_id);
             return ToolExecutionOutput::failure_with_kind(
-                format!("error: {name} was cancelled before the app answered; if it was a message, it may have been delivered"),
+                format!(
+                    "error: {name} was cancelled before the app answered; if it was a message, it may have been delivered{}",
+                    retry_hint(name, args)
+                ),
                 ToolErrorKind::Cancelled,
                 false,
             );
@@ -642,7 +746,8 @@ pub async fn execute_with(
     match answer {
         Err(_) => ToolExecutionOutput::failure_with_kind(
             format!(
-                "error: the app did not answer {name} in time; if it was a message, it may have been delivered"
+                "error: the app did not answer {name} in time; if it was a message, it may have been delivered{}",
+                retry_hint(name, args)
             ),
             ToolErrorKind::UnavailableDependency,
             true,
@@ -653,6 +758,16 @@ pub async fn execute_with(
             false,
         ),
         Ok(Ok(value)) => output(name, value),
+    }
+}
+
+/// The sentence a dropped call ends with: a call that carried a retry key is
+/// safe to retry, because the app replays what it already did.
+pub(crate) fn retry_hint(name: &str, args: &Value) -> &'static str {
+    if KEYED_TOOL_NAMES.contains(&name) && request_key(name, args).is_some() {
+        "; retry it with the same client_request_id and the app replays that result instead of acting twice"
+    } else {
+        ""
     }
 }
 
@@ -1231,6 +1346,136 @@ mod tests {
             timeout(WAIT_SESSION, &json!({"timeout_ms": 9_999_999})),
             Duration::from_millis(MAX_WAIT_MS) + Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn a_retry_key_is_checked_and_hashes_the_same_arguments_the_same() {
+        let keyed = |args: Value| validate(MESSAGE_SESSION, &args).is_ok();
+        assert!(keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": "call-1"})
+        ));
+        assert!(keyed(json!({"session_id": "b", "message": "hi"})));
+        assert!(keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": null})
+        ));
+        // 1 to 128 characters of A-Z, a-z, 0-9, '.', '_', ':' and '-'.
+        assert!(keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": "a.b_c:d-9"})
+        ));
+        assert!(keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": "x".repeat(128)})
+        ));
+        assert!(!keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": "x".repeat(129)})
+        ));
+        assert!(!keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": ""})
+        ));
+        assert!(!keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": "has space"})
+        ));
+        assert!(!keyed(
+            json!({"session_id": "b", "message": "hi", "client_request_id": 7})
+        ));
+        // The same tools take it, and start_session and fan_out too.
+        assert!(
+            validate(
+                START_SESSION,
+                &json!({"prompt": "go", "client_request_id": "k"})
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                FAN_OUT,
+                &json!({"prompt": "go", "harnesses": [{"harness": "a"}, {"harness": "b"}],
+                        "client_request_id": "k"})
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                FAN_OUT,
+                &json!({"prompt": "go", "harnesses": [{"harness": "a"}, {"harness": "b"}],
+                        "client_request_id": "not allowed"})
+            )
+            .is_err()
+        );
+
+        // Only the keyed tools forward a key.
+        let key = json!({"session_id": "b", "message": "hi", "client_request_id": "k"});
+        assert_eq!(request_key(MESSAGE_SESSION, &key), Some("k"));
+        assert_eq!(request_key(LIST_SESSIONS, &key), None);
+        assert_eq!(
+            request_key(MESSAGE_SESSION, &json!({"message": "hi"})),
+            None
+        );
+
+        // The hash ignores how the arguments were ordered and says nothing about
+        // the text: the same prompt and session hash alike, and a changed
+        // prompt, target or action does not.
+        let one = json!({"session_id": "b", "message": "hi", "client_request_id": "k"});
+        let other = json!({"client_request_id": "k", "message": "hi", "session_id": "b"});
+        assert_eq!(
+            args_hash(MESSAGE_SESSION, &one),
+            args_hash(MESSAGE_SESSION, &other)
+        );
+        assert_ne!(
+            args_hash(MESSAGE_SESSION, &one),
+            args_hash(
+                MESSAGE_SESSION,
+                &json!({"session_id": "b", "message": "hi there", "client_request_id": "k"})
+            )
+        );
+        assert_ne!(
+            args_hash(MESSAGE_SESSION, &one),
+            args_hash(
+                START_SESSION,
+                &json!({"session_id": "b", "message": "hi", "client_request_id": "k"})
+            )
+        );
+        let hash = args_hash(MESSAGE_SESSION, &one);
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!hash.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn a_retry_key_and_its_args_hash_are_forwarded_to_the_client() {
+        struct Recording(Arc<std::sync::Mutex<Vec<Value>>>);
+        impl PreviewClient for Recording {
+            fn request(&self, params: Value) -> crate::preview::PreviewFuture {
+                self.0.lock().unwrap().push(params);
+                Box::pin(async { Ok(json!({"link_id": "a/1"})) })
+            }
+        }
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let args = json!({"session_id": "b", "message": "hi", "client_request_id": "call-1"});
+        let output = execute_with(
+            Some(Arc::new(Recording(Arc::clone(&seen))) as Arc<dyn PreviewClient>),
+            &cancel,
+            MESSAGE_SESSION,
+            &args,
+        )
+        .await;
+        assert!(output.success, "{}", output.content);
+        let sent = seen.lock().unwrap()[0].clone();
+        assert_eq!(sent["clientRequestId"], "call-1");
+        assert_eq!(sent["argsHash"], json!(args_hash(MESSAGE_SESSION, &args)));
+
+        // Without a key nothing is added, so the client sees the call it always saw.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        execute_with(
+            Some(Arc::new(Recording(Arc::clone(&seen))) as Arc<dyn PreviewClient>),
+            &cancel,
+            MESSAGE_SESSION,
+            &json!({"session_id": "b", "message": "hi"}),
+        )
+        .await;
+        let sent = seen.lock().unwrap()[0].clone();
+        assert!(sent.get("clientRequestId").is_none());
+        assert!(sent.get("argsHash").is_none());
     }
 
     #[tokio::test]

@@ -305,7 +305,7 @@ pub const LIST_SESSIONS: Tool = Tool {
 pub const MESSAGE_SESSION: Tool = Tool {
     name: crate::orchestration::MESSAGE_SESSION,
     description: "Send another thread of this project a message; it answers in a turn of its own, with its own history and approvals. The user is asked once. Returns a link_id for wait_session; the message queues while that thread is busy. Send what it needs: it does not see this conversation.",
-    arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do"}"#,
+    arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -313,7 +313,8 @@ pub const MESSAGE_SESSION: Tool = Tool {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
-                "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES}
+                "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
+                "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["session_id", "message"],
             "additionalProperties": false
@@ -371,7 +372,7 @@ pub const READ_SESSION: Tool = Tool {
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
     description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Pass the task itself as prompt: when the user says to start this or the current task in another thread, write that task out; the new thread does not see this conversation. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first. Returns session_id and a link_id for wait_session.",
-    arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex"}"#,
+    arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -385,7 +386,8 @@ pub const START_SESSION: Tool = Tool {
                 "effort": {"type": "string"},
                 "account": {"type": "string", "description": "Named login of the harness's accounts as list_harnesses lists them; omitted is the caller's account on the same harness, else the login a new thread would start on"},
                 "worktree": {"type": "boolean"},
-                "project": {"type": "string", "description": "absolute path of another project"}
+                "project": {"type": "string", "description": "absolute path of another project"},
+                "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["prompt"],
             "additionalProperties": false
@@ -398,7 +400,7 @@ pub const START_SESSION: Tool = Tool {
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
     description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
-    arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}]}"#,
+    arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -422,7 +424,8 @@ pub const FAN_OUT: Tool = Tool {
                         "required": ["harness"],
                         "additionalProperties": false
                     }
-                }
+                },
+                "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["prompt", "harnesses"],
             "additionalProperties": false

@@ -35,6 +35,9 @@ export const Method = {
   dataActivity: "_rustcode/data/activity",
   dataLinksLoad: "_rustcode/data/links/load",
   dataLinksSave: "_rustcode/data/links/save",
+  /** An orchestration call's receipt: checked before the app acts, written after it succeeds. */
+  dataReceiptGet: "_rustcode/data/receipts/get",
+  dataReceiptPut: "_rustcode/data/receipts/put",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",
