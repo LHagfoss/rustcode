@@ -318,11 +318,11 @@ export interface AppState {
   /** The thread shown beside this one in the panel's Thread tab. */
   peekId: string | null;
   /**
-   * The thread whose panel the user closed with its own controls. A thread
-   * opens with the panel by default, and this keeps that choice for the thread
-   * on screen; opening the panel, or viewing another thread, forgets it.
+   * The panel each thread opens with, by thread id: the view it was last
+   * showing, or null when it was closed by hand. A thread never seen has no
+   * entry and opens closed, and nothing opens the panel on its own.
    */
-  panelClosedFor: string | null;
+  panelByThread: Record<string, PanelKind | null>;
   /** Each thread's subagents, as `_rustcode/agents` last listed them. */
   agents: Record<string, SubagentInfo[]>;
   /** The plan's usage windows (`_rustcode/usage/limits`), by thread. */
@@ -420,6 +420,9 @@ export interface AppState {
 /** A cached plan older than this is dropped on launch: its windows have moved on. */
 export const PLAN_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
 
+/** How many threads keep their panel; past this the oldest entry is dropped. */
+export const MAX_PANELS = 500;
+
 const STORAGE = {
   smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
@@ -457,6 +460,8 @@ const STORAGE = {
   planCache: "rustcode.planCache",
   /** Bindings the user changed, by command id; the table in lib/keys.ts holds the rest. */
   shortcuts: SHORTCUTS_KEY,
+  /** Each thread's panel, so opening it returns to the view it had (state/store.ts `panelForThread`). */
+  panelByThread: "rustcode.panelByThread",
 };
 
 /**
@@ -567,7 +572,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   terminalOpen: false,
   panel: null,
   peekId: null,
-  panelClosedFor: null,
+  panelByThread: parsePanels(storedJson<unknown>(STORAGE.panelByThread, {})),
   agents: {},
   planUsage: {},
   planCache: prunePlans(storedJson<Record<string, CachedPlan>>(STORAGE.planCache, {})),
@@ -1355,9 +1360,8 @@ export function startNewThread(cwd?: string) {
     selectedId: null,
     projectCwd,
     // The panel belongs to a thread: the new-thread screen has none, and a
-    // thread picked next opens it again (unless it was closed there by hand).
+    // thread picked next restores the panel it had.
     panel: null,
-    panelClosedFor: null,
     // The Thread tab shows a thread beside this one; a new thread has none.
     peekId: null,
     settings: null,
@@ -3300,64 +3304,81 @@ export function setTerminalOpen(open: boolean) {
   set({ terminalOpen: open });
 }
 
-/** The panel last shown, so ⌘⌥B brings it back. */
-/**
- * The view the panel opens with: the thread's own overview. Changes, Pull
- * requests and the Thread tab are a tab away, and whichever was last shown
- * opens again on the next thread.
- */
-export const DEFAULT_PANEL: NonNullable<AppState["panel"]> = "details";
-let lastPanel: NonNullable<AppState["panel"]> = DEFAULT_PANEL;
+/** A panel view: one of the side views, never closed. */
+export type PanelKind = NonNullable<AppState["panel"]>;
+
+/** The views the panel can show. */
+const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 /**
- * The view to show: the one last shown, when this project or thread offers it
- * (a project without pull requests has no Pull requests tab, and the Thread
- * tab needs a thread to show).
+ * The view a thread with no panel open might show: its own overview. Changes,
+ * Pull requests and the Thread tab are a tab away. It is only what ⌘⌥B opens on
+ * a thread whose own panel was never opened; nothing opens it on its own.
  */
-function rememberedPanel(s: AppState): NonNullable<AppState["panel"]> {
-  if (lastPanel === "pulls" && !s.agent?.pullRequests) return DEFAULT_PANEL;
-  if (lastPanel === "peek" && !s.peekId) return DEFAULT_PANEL;
-  return lastPanel;
+export const DEFAULT_PANEL: PanelKind = "details";
+
+/** The memory without the oldest entries past `MAX_PANELS` (the map keeps insertion order). */
+export function prunePanels(panels: Record<string, PanelKind | null>): Record<string, PanelKind | null> {
+  const ids = Object.keys(panels);
+  if (ids.length <= MAX_PANELS) return panels;
+  return Object.fromEntries(ids.slice(ids.length - MAX_PANELS).map((id) => [id, panels[id]!]));
+}
+
+/** The memory from storage: this build's views and closes only, kept to the last `MAX_PANELS`. */
+export function parsePanels(raw: unknown): Record<string, PanelKind | null> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const kept: Record<string, PanelKind | null> = {};
+  for (const [id, panel] of Object.entries(raw as Record<string, unknown>)) {
+    if (panel === null || PANELS.includes(panel as PanelKind)) kept[id] = panel as PanelKind | null;
+  }
+  return prunePanels(kept);
 }
 
 /**
- * The panel a thread opens with: the view last shown, unless the user closed
- * the panel on this very thread; a new thread has none.
+ * The panel a thread opens with: the view it was last showing, or none when it
+ * was closed by hand — and none for a thread never seen. A view this project or
+ * thread cannot show right now (Pull requests in a project without them, the
+ * Thread tab with nothing peeked) opens nothing rather than something else.
  */
 function panelForThread(s: AppState, id: string | null): AppState["panel"] {
-  if (!id || s.panelClosedFor === id) return null;
-  return rememberedPanel(s);
+  if (!id) return null;
+  const kept = s.panelByThread[id];
+  if (!kept) return null;
+  if (kept === "pulls" && !s.agent?.pullRequests) return null;
+  if (kept === "peek" && !s.peekId) return null;
+  return kept;
 }
 
 /**
- * The state a thread opens with: selected, on the panel it last showed, and
- * the close it was given by hand kept on it alone (another thread opens the
- * panel again).
+ * The memory with `panel` kept for `id` as its newest entry, persisted; nothing
+ * is kept on the new-thread screen, which has no thread.
  */
-function viewingThread(
-  s: AppState,
-  id: string | null,
-): Pick<AppState, "selectedId" | "panel" | "panelClosedFor" | "peekId"> {
+function keptPanels(id: string | null, panel: AppState["panel"]): Record<string, PanelKind | null> {
+  const current = get().panelByThread;
+  if (!id) return current;
+  const { [id]: _before, ...rest } = current;
+  const next = prunePanels({ ...rest, [id]: panel });
+  store(STORAGE.panelByThread, JSON.stringify(next));
+  return next;
+}
+
+/**
+ * The state a thread opens with: selected, on the panel that thread was last
+ * showing (none for one never seen, or one whose panel was closed by hand).
+ */
+function viewingThread(s: AppState, id: string | null): Pick<AppState, "selectedId" | "panel" | "peekId"> {
   // The Thread tab shows another thread beside this one: opening the thread it
-  // shows ends the peek, so the panel goes back to Changes.
+  // shows ends the peek, so the panel goes back to this thread's own view.
   const shown = id && s.peekId === id ? { ...s, peekId: null } : s;
-  return {
-    selectedId: id,
-    panel: panelForThread(shown, id),
-    panelClosedFor: s.panelClosedFor === id ? id : null,
-    peekId: shown.peekId,
-  };
+  return { selectedId: id, panel: panelForThread(shown, id), peekId: shown.peekId };
 }
 
 /** Opens `panel`, or closes it when it is the one open (the header's buttons). */
 export function setPanel(panel: AppState["panel"]) {
-  if (panel) lastPanel = panel;
-  set((s) => {
-    const next = s.panel === panel ? null : panel;
-    // Closing by hand is kept for the thread on screen, so the next auto-open
-    // (picking the same thread again) leaves it closed.
-    return { panel: next, panelClosedFor: next ? null : s.selectedId };
-  });
+  const s = get();
+  const next = s.panel === panel ? null : panel;
+  // Kept on the thread it was opened or closed on, so only that thread gets it back.
+  set({ panel: next, panelByThread: keptPanels(s.selectedId, next) });
 }
 
 /** Shows a thread in the side panel, next to the one you are in. */
@@ -3368,17 +3389,16 @@ export function peekThread(id: string) {
 }
 
 /** Shows `panel` (the panel's tabs): never closes. */
-export function showPanel(panel: NonNullable<AppState["panel"]>) {
-  lastPanel = panel;
-  set({ panel, panelClosedFor: null });
+export function showPanel(panel: PanelKind) {
+  const s = get();
+  set({ panel, panelByThread: keptPanels(s.selectedId, panel) });
 }
 
-/** ⌘⌥B: the right panel open or closed, with what it showed last. */
+/** ⌘⌥B: the right panel open or closed, with this thread's own view, else the overview. */
 export function toggleRightPanel() {
-  set((s) => ({
-    panel: s.panel ? null : rememberedPanel(s),
-    panelClosedFor: s.panel ? s.selectedId : null,
-  }));
+  const s = get();
+  const next = s.panel ? null : (panelForThread(s, s.selectedId) ?? DEFAULT_PANEL);
+  set({ panel: next, panelByThread: keptPanels(s.selectedId, next) });
 }
 
 /** Whether the thread's harness lists subagents (`_rustcode/agents`). */
@@ -3903,8 +3923,6 @@ export async function request<T = Json>(
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
-  // The module's remembered panel view is state too: a test starts from the default.
-  lastPanel = "changes";
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
   limitTimer = null;
@@ -3948,7 +3966,7 @@ export function resetForTests() {
     editing: {},
     confirm: null,
     panel: null,
-    panelClosedFor: null,
+    panelByThread: {},
     agents: {},
     planUsage: {},
     planCache: {},
