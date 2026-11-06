@@ -1,14 +1,18 @@
 // The right panel (docs/design.md, Right panel): one floating card at the
 // window's right edge for the side views that take a pane (Changes, Pull
-// requests, Thread). It is the details card, full height: inset from the
-// window's edges by the same gap, the same radius, glass and elevation, with
-// tabs between the views, a close button and a draggable left edge. It takes no
-// slot in the layout, so the chat keeps its full width and the transcript
-// scrolls under the card; the lane centres in the room the card leaves
-// (ui/ChatView.tsx `laneLayout`). The card never draws past the column's edges,
-// and its foot stops above the composer (`--rc-composer-top`) so the composer
-// stays usable. It slides and fades in and out on the compositor, and its
-// content stays mounted while it closes (docs/desktop.md › Native frame rate).
+// requests, Thread). It is the details card, in the same surface: inset from
+// the window's edges by the same gap, the same radius, glass and elevation,
+// with tabs between the views, a close button and a draggable left edge. It
+// takes no slot in the layout, so the chat keeps its full width and the
+// transcript scrolls under the card; the lane centres in the room the card
+// leaves (ui/ChatView.tsx `laneLayout`). The card never draws past the column's
+// edges. A list view sizes the card to what it holds (a file or two, a short
+// list of pull requests, an empty state), capped at the room above the composer
+// (`--rc-composer-top`) so nothing it draws reaches the field and a long list
+// scrolls inside it; the Thread view is a transcript, which has no height of
+// its own, so that card keeps the whole room. It slides and fades in and out
+// on the compositor, and its content stays mounted while it closes
+// (docs/desktop.md › Native frame rate).
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
@@ -53,6 +57,18 @@ export const DETAILS_CARD = { width: 280, gap: CARD_GAP } as const;
 const CARD_SURFACE = "rc-glass rc-glass-strong rounded-2xl shadow-2";
 
 const PANE_ID = "rc-side-panel";
+
+/**
+ * How tall a pane's card draws. A list view (`changes`, `pulls`) is as tall as
+ * what it holds, and never taller than the room between its own top and the
+ * composer: over that, the view scrolls inside it. A transcript (`peek`) has no
+ * height to be as tall as, so that card takes the room it has.
+ */
+export function paneSizing(kind: Pane): { bottom?: string; maxHeight?: string } {
+  const foot = `calc(var(--rc-composer-top, 0px) + ${CARD_GAP}px)`;
+  if (kind === "peek") return { bottom: foot };
+  return { maxHeight: `calc(100% - ${HEADER_HEIGHT + CARD_GAP}px - ${foot})` };
+}
 
 function clampWidth(width: number): number {
   return Math.min(MAX, Math.max(MIN, Math.round(width)));
@@ -295,8 +311,8 @@ export function RightPanel() {
           style={{
             top: HEADER_HEIGHT + CARD_GAP,
             right: CARD_GAP,
-            // The card ends above the composer, so the foot of the chat keeps its field.
-            bottom: `calc(var(--rc-composer-top, 0px) + ${CARD_GAP}px)`,
+            // Content high, capped above the composer so the foot of the chat keeps its field.
+            ...paneSizing(pane),
             width: fitted,
           }}
           onTransitionEnd={(e) => {
