@@ -33,6 +33,7 @@ import {
   useApp,
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
+import { composerPopoverCollisionPadding, useComposerPopoverOffset } from "./composerPopover";
 import { HarnessIcon } from "./HarnessIcon";
 import { cx, Skeleton, Tooltip } from "./primitives";
 
@@ -456,6 +457,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   }, [ask]);
   const [pane, setPane] = useState<"main" | "models" | "accounts">("main");
   const [preview, setPreview] = useState<string | null>(null);
+  const { triggerRef, sideOffset } = useComposerPopoverOffset();
 
   const isNew = !thread;
   const effective: NewThreadChoice = newThreadChoice({ newThread: choice, harnesses }) ?? {
@@ -576,6 +578,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     >
       <Popover.Trigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           aria-label="Model and effort"
           className={cx(
@@ -605,8 +608,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         <Popover.Content
           side="top"
           align="end"
-          sideOffset={8}
-          collisionPadding={10}
+          sideOffset={sideOffset}
+          collisionPadding={composerPopoverCollisionPadding}
           className="elevated z-40 w-[min(420px,calc(100vw-40px))] overflow-hidden p-1.5"
         >
           {shownPane === "main" && (

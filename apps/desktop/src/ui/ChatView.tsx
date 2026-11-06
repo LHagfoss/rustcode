@@ -624,18 +624,10 @@ export function ChatView() {
       ) : (
         <div className="flex-1" />
       )}
-      {/* The whole stack sits on one surface, as tall as the stack and the gap above it, so a
-          queued message or the strip of linked threads is never half-hidden under the composer's
-          glass; the transcript's text fades into it at the top. */}
-      {!isNew && (
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0"
-          style={{
-            height: stackHeight + 24,
-            background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 16px)",
-          }}
-        />
-      )}
+      {/* The transcript fades out at the pane's bottom edge, behind the composer: the card
+          floats over the chat and its glass blurs the text behind it, while this short fade
+          stops text reading against the window's very edge. */}
+      {!isNew && <div className="rc-composer-fade pointer-events-none absolute inset-x-0 bottom-0" />}
       <div
         ref={stackRef}
         // Centred by `mx-auto` and not by a transform, so its children can set their own z-index

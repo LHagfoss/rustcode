@@ -97,6 +97,7 @@ import {
 import { localId, type ThreadState } from "../state/thread";
 import { AgentPill } from "./AgentViews";
 import { ContextRing, PlanMeter } from "./ComposerUsage";
+import { composerPopoverCollisionPadding, useComposerPopoverOffset } from "./composerPopover";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
@@ -1016,10 +1017,12 @@ export const Composer = memo(function Composer({
  * (`apps/web/src/components/composerFooterLayout.ts`).
  */
 function MetersMenu({ thread }: { thread?: ThreadState }) {
+  const { triggerRef, sideOffset } = useComposerPopoverOffset();
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           aria-label="Plan, context and agents"
           className="flex size-[28px] shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
@@ -1031,8 +1034,8 @@ function MetersMenu({ thread }: { thread?: ThreadState }) {
         <Popover.Content
           side="top"
           align="end"
-          sideOffset={8}
-          collisionPadding={10}
+          sideOffset={sideOffset}
+          collisionPadding={composerPopoverCollisionPadding}
           className="elevated z-40 w-[min(260px,calc(100vw-40px))] p-1.5"
         >
           <MeterRow label="Plan">
@@ -1246,11 +1249,13 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
     () => [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 30),
     [sessions],
   );
+  const { triggerRef, sideOffset } = useComposerPopoverOffset();
   return (
     <DropdownMenu.Root>
       <Tooltip side="bottom" label={cwd || "Choose a folder"}>
         <DropdownMenu.Trigger asChild>
           <button
+            ref={triggerRef}
             type="button"
             // The name is the trigger's own text at full width and its icon's label when it drops
             // out under a container width, so the button keeps a name either way.
@@ -1270,12 +1275,12 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         </DropdownMenu.Trigger>
       </Tooltip>
       <DropdownMenu.Portal>
-        {/* At most 360px and never over the header: Radix measures the room left above the trigger. */}
+        {/* At most 360px and never over the header: Radix measures the room left above the card. */}
         <DropdownMenu.Content
           side="top"
           align="start"
-          sideOffset={8}
-          collisionPadding={{ top: 58, left: 8, right: 8, bottom: 8 }}
+          sideOffset={sideOffset}
+          collisionPadding={composerPopoverCollisionPadding}
           className="elevated z-50 flex w-[300px] flex-col p-1.5"
           style={{ maxHeight: "min(360px, var(--radix-dropdown-menu-content-available-height))" }}
         >
@@ -1361,11 +1366,13 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
   const mode = useApp((s) => permissionModeOf(s, threadId));
   const current = PERMISSION_MODES.find((m) => m.id === mode)!;
   const Icon = PERMISSION_ICON[mode];
+  const { triggerRef, sideOffset } = useComposerPopoverOffset();
   return (
     <DropdownMenu.Root>
       <Tooltip side="bottom" label={current.detail}>
         <DropdownMenu.Trigger asChild>
           <button
+            ref={triggerRef}
             type="button"
             aria-label={`Permissions: ${current.label}`}
             className={cx(
@@ -1384,7 +1391,8 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
         <DropdownMenu.Content
           side="top"
           align="start"
-          sideOffset={8}
+          sideOffset={sideOffset}
+          collisionPadding={composerPopoverCollisionPadding}
           className={cx(menuSurface, "w-[280px]")}
         >
           <DropdownMenu.RadioGroup
@@ -1427,11 +1435,13 @@ function PlusMenu({
   attachLabel: string;
   cwd: string;
 }) {
+  const { triggerRef, sideOffset } = useComposerPopoverOffset();
   return (
     <DropdownMenu.Root>
       <Tooltip label="Attach and more">
         <DropdownMenu.Trigger asChild>
           <button
+            ref={triggerRef}
             type="button"
             aria-label="Attach and more"
             className="flex size-[30px] items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong"
@@ -1444,7 +1454,8 @@ function PlusMenu({
         <DropdownMenu.Content
           side="top"
           align="start"
-          sideOffset={8}
+          sideOffset={sideOffset}
+          collisionPadding={composerPopoverCollisionPadding}
           className={cx(menuSurface, "min-w-[220px]")}
         >
           <DropdownMenu.Item className={menuItem} onSelect={onAttach}>

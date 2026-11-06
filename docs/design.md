@@ -98,7 +98,7 @@ the accent marks state (on, selected, linked), it does not shout.
 | lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, tooltips, pictures in replies |
 | xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels |
 | 2xl | 20 | `rounded-2xl` | The settings panel, toasts |
-| composer | 28 | `--rc-composer-radius` | The composer's box, two steps above 2xl so the one floating surface reads rounder than the cards |
+| composer | 16 | `--rc-composer-radius` | The composer's box: one floating card at the `xl` step, like menus and popovers |
 | 3xl | 26 | `rounded-3xl` | The largest floating surface (nothing uses it yet) |
 | full | — | `rounded-full` | Switches, avatars, dots, trackbars; never a labelled button |
 
@@ -135,8 +135,9 @@ theme and `#0000001a` in the light one), a small blur, close to the edge.
 A raised surface is told apart by its edge and glass, not by a dark halo.
 
 - `--rc-shadow-1` (`shadow-1`, `0 1px 1px` + ring): things resting above the
-  chat: the jump-to-latest button, error cards over the transcript. (The composer and toasts share a slight shadow under them,
-  `0 2px 8px -4px`.)
+  chat: the jump-to-latest button, error cards over the transcript. (Toasts
+  share a slight shadow under them, `0 2px 8px -4px`; the composer lifts with
+  a slightly stronger `0 3px 12px -4px`.)
 - `--rc-shadow-2` (`shadow-2`, `0 2px 8px` + ring): things that open over
   everything: popovers, menus, tooltips, dialogs, the command palette.
 
@@ -177,8 +178,7 @@ scrolls under all day: `surface-2` at **75%** (84% focused), its own
 `--rc-composer-filter` (`saturate(1.14) blur(16px)`; `saturate(1.08)
 blur(20px)` in dark), and a 1px `--rc-composer-outline` (`black` at 8% in
 light, `white` at 5% in dark) with a 3% `white` inner highlight in dark.
-It is the one surface with a radius of its own, one step above the
-largest card's.
+It keeps a radius token of its own, at the `xl` step.
 
 Near-solid and lightly blurred on purpose: text scrolling under a panel
 should be a hint, not a smear. One filter per surface, two recipes in all
@@ -450,7 +450,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
-  28px, two steps above 2xl), with no padding of its own: the field row is
+  16px, the `xl` step), with no padding of its own: the field row is
   padded `px-4 pt-1` and its control row `px-4 pt-1 pb-3.5`. Glass at
   `--rc-composer-bg` (75%, 84% focused) with `--rc-composer-filter` and a
   1px `--rc-composer-outline`; no ring or colour on focus, the glass step
@@ -489,8 +489,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   folder name shortens, then the worktree label and the branch chip, then
   the permission label, the folder name and the agents pill) rather than
   dropping controls or overflowing. The
-  transcript scrolls under the card (its bottom padding is the stack's
-  height) and fades out from 56px above it. A draft is kept in app storage
+  transcript scrolls under the card (its bottom padding clears the stack
+  plus air) and fades out over the pane's bottom 56px, behind the card. A
+  draft is kept in app storage
   under `rustcode.drafts` (400ms after typing stops, and at once when the
   window closes), so an unsent message is still there after a restart:
   sending clears the entry, a draft over 100 KB is not kept, and only the
