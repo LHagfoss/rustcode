@@ -4,6 +4,8 @@
 // the block names `rustcode-lib:chart.js`. The names here are a contract
 // with the engine's `smart-ui` skill (docs/smart-ui.md, "Runtime").
 
+import { stripEmptyTags } from "./parse";
+
 export const PAGE_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; " +
   "connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'";
@@ -218,10 +220,23 @@ export function runtimeScript(token: string, theme: PageTheme): string {
   window.alert = () => undefined;
   window.confirm = () => false;
   window.prompt = () => null;
+  // A second argument rides after the text as a JSON fence, so a view can send values back.
+  const compose = (text, context) => {
+    text = String(text == null ? "" : text).trim();
+    if (context && typeof context === "object") {
+      try {
+        const json = JSON.stringify(context, null, 2);
+        if (json) text = (text ? text + "\\n\\n" : "") + "\`\`\`json\\n" + json + "\\n\`\`\`";
+      } catch (e) {
+        // Not serialisable: the text still goes.
+      }
+    }
+    return text.slice(0, 2000);
+  };
   const rustcode = {
-    send(text) {
+    send(text, context) {
       if (!(navigator.userActivation ? navigator.userActivation.isActive : true)) return false;
-      text = String(text == null ? "" : text).slice(0, 2000);
+      text = compose(text, context);
       if (!text.trim()) return false;
       post({ type: "send", text });
       return true;
@@ -286,11 +301,43 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     const timer = setTimeout(() => { flashes.delete(el); el.replaceChildren(...nodes); }, 1500);
     flashes.set(el, { nodes, timer });
   };
+  // A form's named fields ride along after the prompt, as name: value lines.
+  const formText = (form) => {
+    const lines = [];
+    let data;
+    try { data = new FormData(form); } catch (e) { return ""; }
+    for (const [name, value] of data) {
+      if (!name || typeof value !== "string") continue;
+      const v = value.trim().replace(/\\s+/g, " ");
+      if (v) lines.push(name + ": " + v.slice(0, 200));
+    }
+    return lines.join("\\n");
+  };
+  const sendForm = (form, prompt) => {
+    const fields = formText(form);
+    rustcode.send(fields ? (prompt ? prompt + "\\n\\n" : "") + fields : prompt);
+  };
+  document.addEventListener("submit", (event) => {
+    // A form never navigates (CSP would not allow it). One marked data-rc-send sends its
+    // prompt and its fields when submitted: its submit button, or Enter in a field.
+    event.preventDefault();
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (form && form.hasAttribute("data-rc-send")) {
+      sendForm(form, (form.getAttribute("data-rc-send") || "").trim());
+    }
+  });
   document.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
     const send = target.closest("[data-rc-send]");
-    if (send) rustcode.send(send.getAttribute("data-rc-send"));
+    // A form marked data-rc-send sends on submit (above), never on a click into it. A control
+    // marked inside a form sends its own text with that form's fields.
+    if (send && send.tagName !== "FORM") {
+      const form = send.closest("form");
+      const prompt = (send.getAttribute("data-rc-send") || "").trim();
+      if (form) sendForm(form, prompt);
+      else rustcode.send(prompt);
+    }
     const copy = target.closest("[data-rc-copy]");
     if (copy) { rustcode.copy(copy.getAttribute("data-rc-copy")); flashCopied(copy); }
     const tab = target.closest("[data-rc-tab]");
@@ -308,24 +355,51 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     event.preventDefault();
     selectTab(group, tabs[(to + tabs.length) % tabs.length].getAttribute("data-rc-tab"), true);
   });
-  document.addEventListener("DOMContentLoaded", () => {
+  // The parts of the kit that need the document: the first tab of each group, and a box
+  // around a wide table so it scrolls by itself on a narrow window (one in .rc-scroll already does).
+  // Idempotent, so a streamed fragment can be set up again as it grows.
+  const kit = () => {
     for (const group of document.querySelectorAll(".rc-tabs")) {
       const first = own(group, "[data-rc-tab]")[0];
       if (first) selectTab(group, first.getAttribute("data-rc-tab"), false);
     }
-    // A wide table scrolls by itself on a narrow window; one in .rc-scroll already does.
     for (const table of document.querySelectorAll("table.rc-table")) {
-      if (table.closest(".rc-scroll")) continue;
+      const parent = table.parentElement;
+      if (table.closest(".rc-scroll") || (parent && parent.classList.contains("rc-table-box"))) continue;
       const box = document.createElement("div");
       box.className = "rc-table-box";
       table.replaceWith(box);
       box.append(table);
     }
+  };
+  // A block that is still streaming: the app injects the fragment as it arrives, already
+  // closed so it renders. Injected HTML never runs a script, so the view's own script waits
+  // for the finished page (docs/smart-ui.md).
+  let streamHtml = null;
+  const applyStream = (html) => {
+    // Looked up now: this runtime runs in the head, before the box exists.
+    const box = document.getElementById("rc-stream");
+    if (!box) return;
+    if (!parsed) { streamHtml = html; return; }
+    box.innerHTML = html;
+    kit();
+    report();
+  };
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (event.source !== parent || !data || data.rc !== token || data.type !== "stream") return;
+    applyStream(String(data.html == null ? "" : data.html));
+  });
+  document.addEventListener("DOMContentLoaded", () => {
+    kit();
     parsed = true;
+    if (streamHtml !== null) applyStream(streamHtml);
     report();
     const observer = new ResizeObserver(report);
     observer.observe(document.documentElement);
     observer.observe(document.body);
+    // The frame can take a fragment from here on.
+    post({ type: "stream-ready" });
   });
   window.addEventListener("load", report);
   window.addEventListener("error", (e) => post({ type: "error", message: String(e.message || "Script error") }));
@@ -404,14 +478,8 @@ export const usesChart = (source: string) => {
 /** Inline text inside a `<script>` element must not close it. */
 const scriptSafe = (code: string) => code.replace(/<\/script/gi, "<\\/script");
 
-/** The page for a block: CSP, theme, base CSS, runtime, then the block with Chart.js inlined once. */
-export function buildPage(source: string, token: string, theme: PageTheme, chartJs?: string): string {
-  let first = true;
-  const body = source.replace(CHART_TAG, () => {
-    if (!first || !chartJs) return "";
-    first = false;
-    return `<script>${scriptSafe(chartJs)}</script><script>${CHART_THEME_SCRIPT}</script>`;
-  });
+/** The page around a body: policy, variables, stylesheet and the runtime, first. */
+function pageAt(body: string, token: string, theme: PageTheme): string {
   return [
     '<!doctype html><html><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${PAGE_CSP}">`,
@@ -423,4 +491,25 @@ export function buildPage(source: string, token: string, theme: PageTheme, chart
     body,
     "</body></html>",
   ].join("");
+}
+
+/**
+ * The page a block is drawn in while its fence is still streaming: the runtime
+ * and the stylesheet, and an empty container the app fills with the fragment as
+ * it arrives. The block's own script stays inert here; the finished block gets
+ * its own page (docs/smart-ui.md, "Streaming").
+ */
+export function buildStreamPage(token: string, theme: PageTheme): string {
+  return pageAt('<div id="rc-stream"></div>', token, theme);
+}
+
+/** The page for a block: CSP, theme, base CSS, runtime, then the block with Chart.js inlined once. */
+export function buildPage(source: string, token: string, theme: PageTheme, chartJs?: string): string {
+  let first = true;
+  const body = source.replace(CHART_TAG, () => {
+    if (!first || !chartJs) return "";
+    first = false;
+    return `<script>${scriptSafe(chartJs)}</script><script>${CHART_THEME_SCRIPT}</script>`;
+  });
+  return pageAt(stripEmptyTags(body), token, theme);
 }
