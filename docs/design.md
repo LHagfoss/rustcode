@@ -432,30 +432,36 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
-  24px, one step above 2xl), with no padding of its own: the field is
-  padded `px-3` and the foot `px-3 pb-2`. Glass at
+  24px, one step above 2xl), with no padding of its own: the field row is
+  padded `px-3.5` and the foot `px-3.5 pb-1.5`. Glass at
   `--rc-composer-bg` (75%, 84% focused) with `--rc-composer-filter` and a
   1px `--rc-composer-outline`; no ring or colour on focus, the glass step
   is the focus. The card clips to its own corner. The editor reads at
-  `text-body leading-relaxed` (22.75px), one line at rest above the foot
+  `text-body leading-relaxed` (22.75px), two lines at rest above the foot
   and 217px (nine lines) at most, then it scrolls; its text carries 6px
   above and below inside the scroller, so the padding scrolls with it and
   the first and last lines keep their room (the box is sized to whole
   lines plus that padding). The edge it is cut at fades over 20px
   (`mask-image`, `.rc-field-fade`, whose two edges `lib/fade.ts` decides):
   the top once it is scrolled down, the bottom while there is text below,
-  and neither when the draft fits, so a short message never dims. A
+  and neither when the draft fits, so a short message never dims. Typing
+  at the end of a draft that scrolls takes the field to its very end, so
+  the line the caret is on is never inside a faded band. A
   slash-command chip in front of it
   is that same line box, so it keeps the field's baseline. The foot is one
   row **inside** the card: attach (**+**) on the left, send/queue/stop on
-  the right. The tray tucked behind the foot carries the rest: the folder,
-  the worktree or branch and the permissions mode on the left; the plan
-  meter, the context ring, the model pill and the working agents on the
-  right. What rests on the card's own surface (the **+**, the model pill) is
+  the right. The tray is the card's last row, divided from the foot by a
+  1px `border` hairline, not a slab of its own: it carries the rest, in
+  two groups with one height (`28px`, `.rc-composer-tray` sets it) and one
+  baseline — the folder, the worktree or branch and the permissions mode on
+  the left, the plan meter, the context ring, the model pill and the
+  working agents on the right. What rests on the card's own surface (the
+  **+**, the model pill) is
   `bg-fill-subtle`, `bg-fill` on hover, `bg-fill-strong` when open. The
   card is a container (`@container`), so a narrow window drops labels (the
-  folder name shortens, then the permission label, the branch chip and
-  the agents pill go) rather than dropping controls or overflowing. The
+  folder name shortens, then the worktree label and the branch chip, then
+  the permission label, the folder name and the agents pill) rather than
+  dropping controls or overflowing. The
   transcript scrolls under the card (its bottom padding is the stack's
   height) and fades out from 56px above it. A draft is kept in app storage
   under `rustcode.drafts` (400ms after typing stops, and at once when the

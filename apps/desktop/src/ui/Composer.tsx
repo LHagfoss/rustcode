@@ -117,9 +117,9 @@ const LINE = 22.75;
 // Real padding inside the scroller, so it scrolls with the text: the first and last lines keep their
 // room at either end, and the caret on the last line sits above the padding, never on the edge.
 const PAD = 6;
-// It opens at one line above the card's foot and scrolls past the ninth. Both heights are whole
+// It opens at two lines above the card's foot and scrolls past the ninth. Both heights are whole
 // lines plus that padding (`MIN_HEIGHT`, `MAX_HEIGHT`), so the field cuts no line in half.
-const MIN_HEIGHT = Math.round(LINE + PAD * 2);
+const MIN_HEIGHT = Math.round(LINE * 2 + PAD * 2);
 const MAX_HEIGHT = Math.round(LINE * 9 + PAD * 2);
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
@@ -307,6 +307,19 @@ export const Composer = memo(function Composer({
     setFade(fieldFade(el.scrollTop, el.scrollHeight, el.clientHeight));
   };
 
+  // A draft taller than the box scrolls, and the browser parks it so the caret's line only just
+  // clears the bottom edge, leaving a line's worth of slack under it. The fade then dims the very
+  // line being typed on (a new line after ⇧⏎ lands in the shadow). Typing at the end of the draft
+  // asks to see its end, so go all the way down: the scroll range is whole lines, so the end is a
+  // line boundary too, the last line reads clear of the fade, and the fade itself turns off there.
+  const followCaret = () => {
+    const el = field.current;
+    if (!el || el.scrollHeight <= el.clientHeight) return;
+    if (el.selectionStart === el.value.length && el.selectionStart === el.selectionEnd) {
+      el.scrollTop = el.scrollHeight;
+    }
+  };
+
   // Ready to type on entering a thread, and again on coming back to the chat from Settings or
   // another view (the draft is kept either way).
   const inChat = useApp((s) => !s.settings && s.view.kind === "chat" && !s.switcherOpen);
@@ -324,10 +337,15 @@ export const Composer = memo(function Composer({
     // `scrollHeight` is the text plus the padding above and below, which is room the descenders of
     // the last line (g, j, p, y in the rounded font) need inside the box instead of at its edge.
     el.style.height = `${Math.min(Math.max(el.scrollHeight, MIN_HEIGHT), MAX_HEIGHT)}px`;
+    followCaret();
     syncField();
     // The browser parks the field at the caret a frame after a new value lands, so ask again then:
-    // a pasted draft would otherwise show a hard top edge until the next scroll.
-    const frame = requestAnimationFrame(syncField);
+    // a pasted draft would otherwise show a hard top edge until the next scroll, and the caret it
+    // scrolled to would sit in the fade.
+    const frame = requestAnimationFrame(() => {
+      followCaret();
+      syncField();
+    });
     return () => cancelAnimationFrame(frame);
   }, [draft]);
 
@@ -714,7 +732,7 @@ export const Composer = memo(function Composer({
           {queuedEdit && (
             // A queued message is edited here, not in an input of its own: its text, command, links
             // and attachments are the composer's while it is open, and ⏎ saves them where it waits.
-            <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-accent">
+            <div className="flex items-center gap-1.5 px-3.5 pt-2 text-caption text-accent">
               <Pencil size={11} />
               <b>Editing a queued message</b>
               <span className="text-fg-muted">· ⏎ saves it in the queue, esc leaves it</span>
@@ -724,7 +742,7 @@ export const Composer = memo(function Composer({
             </div>
           )}
           {editing && (
-            <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-accent">
+            <div className="flex items-center gap-1.5 px-3.5 pt-2 text-caption text-accent">
               <Pencil size={11} />
               <b>Editing a sent message</b>
               <span className="text-fg-muted">· sending takes the thread back to it</span>
@@ -751,7 +769,7 @@ export const Composer = memo(function Composer({
           )}
           {/* The field and what reads in front of it. The chip and the links drop the field's own 6px
               of padding so they sit on its first line box, not above it. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-3">
+          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-3.5">
             {extras.command && (
               // One line of the field's own height (22.75px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
@@ -803,7 +821,11 @@ export const Composer = memo(function Composer({
                   setCaret(e.target.selectionStart);
                   onChange(e.target.value);
                 }}
-                onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+                onSelect={(e) => {
+                  setCaret(e.currentTarget.selectionStart);
+                  // A line wrapped or a ⇧⏎ pressed with the caret at the end: keep its line clear.
+                  followCaret();
+                }}
                 onKeyDown={onKeyDown}
                 onPaste={onPaste}
                 onScroll={syncField}
@@ -821,7 +843,7 @@ export const Composer = memo(function Composer({
           </div>
           {/* The card's foot: what adds to the message on the left, what sends it on the right, on a
               row of their own so neither floats over the text. */}
-          <div className="flex items-center gap-1 px-3 pb-2">
+          <div className="flex items-center gap-1 px-3.5 pb-1.5">
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
@@ -900,38 +922,47 @@ export const Composer = memo(function Composer({
               )}
             </div>
           </div>
+          {/* The tray inside the card, under a hairline: where the thread works on the left, what it
+              costs and runs on on the right. One row of one height, so a meter, the ring, the model
+              pill and the agent pill line up with the folder and the menus. Labels drop out with the
+              card's width (the folder falls back to its icon); the controls do not, and the two that
+              can still be long (the folder and the model) shrink and ellipsize before the row
+              overflows. */}
+          <div className="rc-composer-tray flex h-11 items-center gap-2 border-border border-t px-3.5">
+            <div className="flex min-w-0 items-center gap-0.5">
+              <FolderMenu thread={thread} cwd={cwd} />
+              {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+              {thread?.worktree && (
+                <Tooltip side="bottom" label={thread.worktree.path}>
+                  <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
+                    <GitBranch size={12} className="shrink-0" />
+                    <span className="truncate">{thread.worktree.branch}</span>
+                  </span>
+                </Tooltip>
+              )}
+              <PermissionMenu threadId={thread?.id} compact={compact} />
+            </div>
+            <span className="flex-1" />
+            <div className="flex shrink-0 items-center gap-1">
+              <span className="flex h-7 shrink-0 items-center">
+                <PlanMeter threadId={thread?.id} />
+              </span>
+              {/* The meters keep their size: a ring squeezed under 30px is unreadable. */}
+              {thread && (
+                <span className="flex h-7 shrink-0 items-center empty:hidden">
+                  <ContextRing threadId={thread.id} />
+                </span>
+              )}
+              <ModelPicker thread={thread} compact={compact} />
+              {/* The marks keep their size; the card drops the whole pill below 24rem, the same step
+                  at which the folder falls back to its icon, and the thread's own agent card says the
+                  same. */}
+              <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
+                <AgentPill threadId={thread?.id} />
+              </span>
+            </div>
+          </div>
         </div>
-      </div>
-      {/* The tray under the box: where the thread works and what it runs on. Labels drop out with
-          the card's width (the folder falls back to its icon); the controls do not, and the two
-          labels that can still be long (the folder and the model) shrink and ellipsize before the
-          meters or the row overflows. */}
-      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[58px] items-end gap-0.5 px-2 pt-[18px] pb-1.5">
-        <FolderMenu thread={thread} cwd={cwd} />
-        {!thread && <WorktreeToggle draft={draft} compact={compact} />}
-        {thread?.worktree && (
-          <Tooltip side="bottom" label={thread.worktree.path}>
-            <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
-              <GitBranch size={12} className="shrink-0" />
-              <span className="truncate">{thread.worktree.branch}</span>
-            </span>
-          </Tooltip>
-        )}
-        <PermissionMenu threadId={thread?.id} compact={compact} />
-        <span className="flex-1" />
-        <PlanMeter threadId={thread?.id} />
-        {/* The meters keep their size: a ring squeezed under 30px is unreadable. */}
-        {thread && (
-          <span className="flex shrink-0 empty:hidden">
-            <ContextRing threadId={thread.id} />
-          </span>
-        )}
-        <ModelPicker thread={thread} compact={compact} />
-        {/* The marks keep their size; the card drops the whole pill below 24rem, the same step at
-            which the folder falls back to its icon, and the thread's own agent card says the same. */}
-        <span className="shrink-0 empty:hidden @max-sm/composer:hidden">
-          <AgentPill threadId={thread?.id} />
-        </span>
       </div>
     </div>
   );
@@ -944,7 +975,7 @@ function LimitWaitRow({ threadId }: { threadId: string }) {
   const running = useApp((s) => s.threads[threadId]?.running);
   if (!wait || running) return null;
   return (
-    <div className="flex items-center gap-1.5 px-3 pt-2 text-caption text-fg-muted">
+    <div className="flex items-center gap-1.5 px-3.5 pt-2 text-caption text-fg-muted">
       <Clock size={11} className="shrink-0" />
       <span className="min-w-0 truncate">Continues when the limit resets, at {limitTime(wait.until)}</span>
       <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => dropLimitWait(threadId)}>
@@ -1035,7 +1066,9 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
   }, [suggested, wt.on, wt.edited]);
   const valid = !wt.branch.trim() || validBranch(wt.branch.trim());
   return (
-    <div className="flex min-w-0 items-center gap-1">
+    // Not `shrink`: the toggle keeps its button's width so it never runs under the mode beside it;
+    // the folder name is the one label that gives way.
+    <div className="flex min-w-0 shrink-0 items-center gap-1">
       <Tooltip
         side="bottom"
         label={
@@ -1056,7 +1089,9 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           )}
         >
           <GitBranch size={12} className="shrink-0" />
-          {!compact && !wt.on && <span>Worktree</span>}
+          {/* The label drops at the same step as the branch chip beside it, so a narrow card keeps
+              the toggle, the folder and the mode without the row running out of room. */}
+          {!compact && !wt.on && <span className="@max-xl/composer:hidden">Worktree</span>}
         </button>
       </Tooltip>
       {wt.on && (

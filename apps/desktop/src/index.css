@@ -784,8 +784,8 @@
  * The composer floats over the transcript in glass on the raised surface: 75% at rest,
  * 84% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
  * coloured ring. Its corner is one step rounder than a card's (`--rc-composer-radius`),
- * and its drawer and its tray are the same glass, tucked behind its edge, so the three
- * read as one surface.
+ * and its drawer is the same glass, tucked behind that edge, so the two read as one
+ * surface. The foot and the tray are rows inside the one card, not slabs beside it.
  */
 .rc-composer,
 .rc-toast {
@@ -801,8 +801,7 @@
   background: var(--rc-glass-bg-strong);
 }
 /* The composer's own pair: lighter than the raised glass, with its own filter and edge. */
-.rc-composer,
-.rc-composer-tray::before {
+.rc-composer {
   background: var(--rc-composer-bg);
   backdrop-filter: var(--rc-composer-filter);
   -webkit-backdrop-filter: var(--rc-composer-filter);
@@ -817,18 +816,14 @@
   border-radius: var(--rc-composer-radius);
   overflow: hidden;
 }
-/* The tray's glass starts where the box ends: the box is translucent, so glass under it would
-   show as a darker band. It sits on a pseudo-element so the tray's menus are not clipped. */
-.rc-composer-tray {
-  position: relative;
-  isolation: isolate;
-}
-.rc-composer-tray::before {
-  content: "";
-  position: absolute;
-  inset: 17px 0 0;
-  z-index: -1;
-  border-radius: 0 0 var(--rc-composer-radius) var(--rc-composer-radius);
+/* The tray is the card's last row, not a slab of its own: the card's one glass carries it, and a
+   hairline (Tailwind `border-t border-border`) divides it from the foot. Its controls come from
+   four files, so the row sets their height and the box keeps the menus unclipped. */
+.rc-composer-tray button,
+.rc-composer-tray input,
+.rc-composer-tray [role="img"],
+.rc-composer-tray [role="status"] {
+  height: 28px;
 }
 /* A drawer is read, not looked through: opaque, its foot cut where the box begins. Its top
    corners are the box's own radius, one inset inside them. */
@@ -877,8 +872,7 @@
       0 0 0 1px var(--rc-composer-outline);
   }
 }
-.rc-composer:focus-within,
-.rc-composer-shell:focus-within > .rc-composer-tray::before {
+.rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
 }
 /* A toast drops in from under the header and lifts away. */
