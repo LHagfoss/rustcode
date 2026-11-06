@@ -168,7 +168,7 @@ export const UserRow = memo(function UserRow({
         className={cx(
           // A card a step off the pane, not a fill that moves with the text colour. Messages sent
           // one after another soften the corners they share, so they read as one run.
-          "relative max-w-[80%] rounded-2xl bg-message p-3",
+          "relative max-w-[80%] selectable rounded-2xl bg-message p-3",
           // A message after this one continues the run: the bottom-right corner joins it.
           after && "rounded-br-md",
           before && "rounded-tr-md",
@@ -197,7 +197,7 @@ export const UserRow = memo(function UserRow({
       </div>
       {/* Time and actions show on hover, clipped to the bubble's width; `.rc-meta-reveal` is the
           same reveal the queued row's foot uses. */}
-      <div className="rc-meta-reveal mt-0.5 flex h-[22px] max-w-[80%] min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular">
+      <div className="rc-meta-reveal mt-0.5 flex h-[22px] max-w-[80%] min-w-0 select-none items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular">
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
@@ -256,7 +256,7 @@ export const QuestionRow = memo(function QuestionRow({
       <div className="selectable line-clamp-3 text-body text-fg-muted">{item.text}</div>
       <div className="flex min-w-0 items-start gap-1.5 text-body text-fg">
         <CornerDownRight size={13} className="mt-[3px] shrink-0 text-success" />
-        <span className="min-w-0 break-words">{item.answer}</span>
+        <span className="selectable min-w-0 break-words">{item.answer}</span>
       </div>
     </div>
   );
@@ -293,7 +293,7 @@ export const AssistantRow = memo(function AssistantRow({
   // turn, at the foot of its last reply (`TurnEndRow`), and nothing else has any.
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <div className="px-1">
+      <div className="selectable px-1">
         <Markdown
           text={item.text}
           streaming={streaming}
@@ -306,7 +306,7 @@ export const AssistantRow = memo(function AssistantRow({
       </div>
     );
   return (
-    <div className="flex flex-col gap-2.5 px-1">
+    <div className="flex flex-col gap-2.5 selectable px-1">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown
