@@ -688,6 +688,30 @@ pub const QUERY_DATA: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Orchestration version 6 (`docs/orchestrator.md`): one thread's recorded
+/// activity, read back from the local data store.
+pub const READ_ACTIVITY: Tool = Tool {
+    name: crate::orchestration::READ_ACTIVITY,
+    description: "Page one thread's recorded activity, oldest first: operational events, provider attempts (status, latency, tokens) and harness messages — metadata only, never prompts or payloads. Pass `next` back as `after` for the next page. Any project's thread.",
+    arguments: r#"{"session_id": "id from list_sessions", "after": "next from the last page", "limit": 50}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "after": {"type": "string", "description": "Opaque `next` token from an earlier page; omit for the first page"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": crate::data_store::MAX_ACTIVITY_ITEMS, "default": crate::data_store::DEFAULT_ACTIVITY_ITEMS}
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn smart_ui_preview_schema() -> Value {
     crate::smart_ui::schema()
 }

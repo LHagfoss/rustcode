@@ -32,6 +32,7 @@ export const Method = {
   commands: "_rustcode/commands",
   dataUsage: "_rustcode/data/usage",
   dataQuery: "_rustcode/data/query",
+  dataActivity: "_rustcode/data/activity",
   dataLinksLoad: "_rustcode/data/links/load",
   dataLinksSave: "_rustcode/data/links/save",
   pullView: "_rustcode/pulls/view",

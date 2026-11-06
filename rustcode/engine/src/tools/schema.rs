@@ -154,6 +154,8 @@ pub struct ToolSchemaPolicy {
     pub(crate) include_orchestration_v2_tools: bool,
     pub(crate) include_orchestration_v3_tools: bool,
     pub(crate) include_orchestration_v4_tools: bool,
+    /// `read_activity`, for a client that advertises orchestration version 6.
+    pub(crate) include_orchestration_v6_tools: bool,
     /// What the client advertised, capped at [`crate::orchestration::VERSION`]:
     /// the tool set follows the flags above, and the args follow this one.
     pub(crate) orchestration_version: u8,
@@ -220,6 +222,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
             include_orchestration_v4_tools: false,
+            include_orchestration_v6_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
@@ -246,6 +249,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
             include_orchestration_v4_tools: false,
+            include_orchestration_v6_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
@@ -265,6 +269,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v2_tools: false,
             include_orchestration_v3_tools: false,
             include_orchestration_v4_tools: false,
+            include_orchestration_v6_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
@@ -321,6 +326,7 @@ impl ToolSchemaPolicy {
         self.include_orchestration_v2_tools = self.include_orchestration_tools && version >= 2;
         self.include_orchestration_v3_tools = self.include_orchestration_tools && version >= 3;
         self.include_orchestration_v4_tools = self.include_orchestration_tools && version >= 4;
+        self.include_orchestration_v6_tools = self.include_orchestration_tools && version >= 6;
         self.orchestration_version = version.min(crate::orchestration::VERSION);
         self
     }
@@ -698,13 +704,11 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
 }
 /// The hard cap before the menu is pruned from the specialised end. The
 /// orchestration tools are the tail and the biggest: a client advertising
-/// version 4 gets 37,216 bytes of built-in schema with all of them, and 32 KiB
-/// already pruned five v3 tools (`list_projects`, `configure_session`,
-/// `transfer_session`, …) that the client could answer — the model then never
-/// saw them. Version- and setting-gated tools are not worth silently dropping,
-/// so the cap clears the whole menu (`schema_budget_tests` keeps it that way);
-/// the 25 KiB budget below still keeps a plain root prompt lean.
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 38 * 1024;
+/// version 6 gets the whole built-in menu, and 38 KiB already sat within 53
+/// bytes of the v5 set. Raising the cap rather than dropping a tool keeps every
+/// version- and setting-gated tool advertised (`schema_budget_tests` keeps it
+/// that way); the 25 KiB budget below still keeps a plain root prompt lean.
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 40 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -903,6 +907,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (crate::orchestration::is_v3_tool(tool.name) && !policy.include_orchestration_v3_tools)
         || (crate::orchestration::is_v4_tool(tool.name) && !policy.include_orchestration_v4_tools)
+        || (crate::orchestration::is_v6_tool(tool.name) && !policy.include_orchestration_v6_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
@@ -2777,18 +2782,10 @@ pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy)
     if policy.include_smart_ui_preview_tool {
         prompt.push_str(crate::smart_ui::PREVIEW_PROMPT_HINT);
     }
-    if policy.include_orchestration_tools
-        && policy.orchestration_version >= crate::orchestration::ACCOUNT_VERSION
-    {
-        prompt.push_str(crate::orchestration::PROMPT_HINT_V5);
-    } else if policy.include_orchestration_v4_tools {
-        prompt.push_str(crate::orchestration::PROMPT_HINT_V4);
-    } else if policy.include_orchestration_v3_tools {
-        prompt.push_str(crate::orchestration::PROMPT_HINT_V3);
-    } else if policy.include_orchestration_v2_tools {
-        prompt.push_str(crate::orchestration::PROMPT_HINT_V2);
-    } else if policy.include_orchestration_tools {
-        prompt.push_str(crate::orchestration::PROMPT_HINT);
+    if policy.include_orchestration_tools {
+        prompt.push_str(crate::orchestration::prompt_hint(
+            policy.orchestration_version,
+        ));
     }
 }
 
@@ -2859,6 +2856,7 @@ pub(crate) fn tool_system_prompt_for_policy(
         include_orchestration_v2_tools: false,
         include_orchestration_v3_tools: false,
         include_orchestration_v4_tools: false,
+        include_orchestration_v6_tools: false,
         ..policy
     };
     let mut p = String::new();
@@ -3181,7 +3179,7 @@ mod schema_budget_tests {
         // A client at the newest version gets every orchestration tool in its
         // built-in schema; the hard cap must not start withholding any of them
         // (which would drop tools the client can answer).
-        for version in [1, 2, 3, 4, 5] {
+        for version in [1, 2, 3, 4, 5, 6] {
             let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
             let advertised = crate::tools::TOOLS
                 .iter()
