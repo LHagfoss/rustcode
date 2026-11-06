@@ -414,11 +414,14 @@ composer's keys stay outside the table.
   child through the same card, and it leaves both chats. The composer is glass
   (`--rc-composer-bg`: 80% of the raised surface, 88% on focus; blur 12px,
   16px in dark), solid under Reduce transparency. Queued messages are rows above the composer that can be
-  edited in place, moved up, sent now as a steer, or removed. A steer
-  carries text only, so a message with images (or links, or a command
-  token) queues whole for the next turn, with a toast saying so; its row
-  shows a paperclip count, its text stays editable (the images stay), and
-  its send-now arrow is greyed with the reason on hover.
+  edited in place, moved up, sent now as a steer, or removed. Whether a message
+  steers is the harness's `steering` record and the turn's state read by one
+  rule (`state/queue.ts` `sendDecision`), the same one the composer's
+  running-state hint shows: a message with links, a command token or a file
+  queues whole for the next turn, as does a picture on the built-in harness
+  (its steer is text) and anything sent while an approval or question waits
+  there. The row shows a paperclip count, its text stays editable (the images
+  stay), and its send-now arrow is greyed with the reason on hover.
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.

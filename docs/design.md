@@ -532,16 +532,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   way a sent message's time and actions are (and shown on a coarse pointer,
   which cannot hover). `Held` stays at rest when a stopped or failed turn left
   the queue waiting, since that is why nothing runs; so does `Editing in the
-  composer` with Cancel. Send now follows one rule, shared with ⌘⏎ and
-  `state/queue.ts` (`steerability`): plain text steers; pictures steer on a
-  harness that takes images mid-turn and is not the built-in one; a command, a
-  link chip or a file waits for the next turn, and the dimmed arrow's tooltip
-  is that reason (`Files go with the next turn`, `Commands go with the next
-  turn`, `Links go with the next turn`, or the harness cannot take a message
-  mid-turn). ⌘⏎ reads the message rather than the thread's learned `steer`
-  flag for text and pictures, so a thread started before its harness learned it
-  can steer is still tried against the engine; the row stays dimmed on such a
-  thread. It is edited in the composer,
+  composer` with Cancel. Send now follows one rule, shared with ⌘⏎, the
+  composer's running-state hint and `state/queue.ts` (`sendDecision`): plain
+  text steers; pictures steer on a harness whose steer takes them (Codex, and
+  Claude Code through `_session/steering`); a command, a link chip or a file
+  waits for the next turn, as does any message on a harness that cannot steer,
+  and one sent while an approval or a question waits on a harness that reads
+  steers between steps only (the built-in one). The dimmed arrow's tooltip and
+  the hint are that reason (`Files go with the next turn`, `The turn is waiting
+  on you: this goes with the next one`, …). The rule reads the harness's
+  freshest `steering` record (`_rustcode/harnesses`, else the thread's own), so
+  the hint, ⌘⏎ and the row cannot disagree, and only a harness that cannot
+  queue stops the turn and sends the message in its place. It is edited in the composer,
   never in a field of its own: its pencil, or ↑ at the start of an empty
   composer, loads its text, command, links and attachments there, ⏎ saves it
   back in the queue and Esc leaves it. A held queue ends with Resume, which

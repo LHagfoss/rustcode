@@ -51,45 +51,81 @@ export function nextQueued(
   return queue[0];
 }
 
-/** What the steer rule needs to know about the thread a message would be steered into. */
-export interface SteerConditions {
-  /** The harness takes a message mid-turn (`canSteer`). */
+/** How a harness takes a message sent mid-turn, as the engine reports it (`HarnessSteering`). */
+export interface SteeringCapabilities {
   live: boolean;
-  /** The harness takes image blocks (`acceptsImages`). */
-  images: boolean;
-  /** The built-in harness reads a steer as text: the engine refuses one with pictures. */
-  builtin: boolean;
+  attachments: boolean;
+  /** A live steer goes in while an approval or a question waits; the built-in turn does not. */
+  while_awaiting_user: boolean;
+  interrupt_restart: boolean;
+  queue: boolean;
 }
 
-/** Why a message cannot be steered: it waits for the next turn. */
-export type SteerRefusal = "files" | "commands" | "links" | "harness";
+/** What the running turn is doing, as the one send rule needs it. */
+export interface TurnState {
+  /** A turn runs now: nothing steers into an idle thread. */
+  running: boolean;
+  /** An approval card or a question waits on the user: the turn reads no steer until it is answered. */
+  awaitingUser: boolean;
+}
 
-export type Steerability = { ok: true } | { ok: false; reason: SteerRefusal };
+/** What a message sent now does: it steers, it waits, or it stops the turn and starts the next. */
+export type SendAction = "steer" | "queue" | "interruptRestart";
+
+/** Why a message cannot be steered: it goes with the next turn. */
+export type QueueReason =
+  | "idle"
+  | "files"
+  | "commands"
+  | "links"
+  | "attachments"
+  | "awaiting"
+  | "refused"
+  | "harness";
+
+export type SendDecision =
+  | { action: "steer" }
+  | { action: "queue"; reason: QueueReason }
+  | { action: "interruptRestart" };
 
 /** What a dimmed Send now says: the tooltip and the label are one sentence, so they cannot drift. */
-export const STEER_REFUSAL: Record<SteerRefusal, string> = {
+export const QUEUE_REASON: Record<QueueReason, string> = {
+  idle: "No turn is running: this starts one",
   files: "Files go with the next turn",
   commands: "Commands go with the next turn",
   links: "Links go with the next turn",
+  attachments: "This harness takes text mid-turn only: the pictures go with the next turn",
+  awaiting: "The turn is waiting on you: this goes with the next one",
+  refused: "The turn can't take it now: it goes with the next one",
   harness: "This harness can't take a message mid-turn: it waits for the next one",
 };
 
 /**
- * One rule for steering, shared by ⌘⏎, Send now and the queued row's arrow, so the three cannot
- * disagree: plain text steers; pictures steer when the harness takes images mid-turn and is not the
- * built-in one (which reads a steer as text); a command, a link chip or a file waits for the next
- * turn. A file really could ride along on some harnesses, but the choice here is that only text and
- * pictures do, and the tooltip says what happens rather than claiming it is impossible.
+ * The one rule for a message sent while a turn runs, shared by ⌘⏎, Send now and the queued row's
+ * arrow, so the three cannot disagree, and read by the composer's hint so it says what will happen
+ * rather than what might. It goes in: a message that carries a command, a link chip or a file never
+ * does (those are turn-shaped), and neither does one while an approval or a question waits on the
+ * user. It steers when the harness takes it mid-turn, with its pictures when the harness takes
+ * those too. Otherwise it waits for the next turn when the harness queues, and only a harness that
+ * cannot queue takes the turn down instead (`interruptRestart`).
  */
-export function steerability(extras: ComposeExtras | undefined, conditions: SteerConditions): Steerability {
+export function sendDecision(
+  extras: ComposeExtras | undefined,
+  steering: SteeringCapabilities,
+  turn: TurnState,
+): SendDecision {
+  if (!turn.running) return { action: "queue", reason: "idle" };
   const attachments = extras?.attachments ?? [];
-  if (attachments.some((a) => a.kind === "file")) return { ok: false, reason: "files" };
-  if (extras?.command) return { ok: false, reason: "commands" };
-  if ((extras?.links.length ?? 0) > 0) return { ok: false, reason: "links" };
-  if (!conditions.live) return { ok: false, reason: "harness" };
-  if (attachments.length > 0 && !(conditions.images && !conditions.builtin))
-    return { ok: false, reason: "harness" };
-  return { ok: true };
+  if (attachments.some((a) => a.kind === "file")) return { action: "queue", reason: "files" };
+  if (extras?.command) return { action: "queue", reason: "commands" };
+  if ((extras?.links.length ?? 0) > 0) return { action: "queue", reason: "links" };
+  // An approval or a question is the user's to answer first, where the turn reads a steer only
+  // between steps; a Codex or an ACP turn takes one anyway.
+  if (turn.awaitingUser && !steering.while_awaiting_user) return { action: "queue", reason: "awaiting" };
+  if (steering.live && (attachments.length === 0 || steering.attachments)) return { action: "steer" };
+  if (steering.queue) return { action: "queue", reason: steering.live ? "attachments" : "harness" };
+  if (steering.interrupt_restart) return { action: "interruptRestart" };
+  return { action: "queue", reason: "harness" };
 }
 
 /** What the live region says when the queue changes: what is waiting, and whether it is held. */

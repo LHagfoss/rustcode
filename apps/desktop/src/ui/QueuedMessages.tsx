@@ -9,7 +9,15 @@ import { ArrowUp, ChevronDown, ChevronUp, Clock, FileText, Pencil, RotateCw, X }
 import { memo, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Attachment } from "../state/compose";
-import { isOwnQueued, queuedAnnouncement, queueView, STEER_REFUSAL, steerability } from "../state/queue";
+import {
+  isOwnQueued,
+  QUEUE_REASON,
+  queuedAnnouncement,
+  queueView,
+  type SteeringCapabilities,
+  sendDecision,
+  type TurnState,
+} from "../state/queue";
 import {
   cancelQueuedEdit,
   moveQueued,
@@ -107,9 +115,8 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
   index,
   count,
   held,
-  steerable,
-  images,
-  builtin,
+  steering,
+  turn,
   from,
 }: {
   threadId: string;
@@ -117,10 +124,9 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
   index: number;
   count: number;
   held: boolean;
-  /** The harness-level half of the steer rule; `images` and `builtin` come from the same thread. */
-  steerable: boolean;
-  images: boolean;
-  builtin: boolean;
+  /** The harness's steering record and the turn's state: the send rule's other half. */
+  steering: SteeringCapabilities;
+  turn: TurnState;
   /** The thread that sent it, for a message delivered for another thread. */
   from?: string;
 }) {
@@ -132,9 +138,10 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
   const links = item.extras?.links ?? [];
   const state = held ? "Held" : "Queued";
   const label = `${state} message ${index + 1} of ${count}, not sent`;
-  // The same rule ⌘⏎ and `sendQueuedNow` follow: the arrow is active whenever it says yes — for
+  // The same rule ⌘⏎ and `sendQueuedNow` follow: the arrow is active whenever it says steer — for
   // pictures too, on a harness that takes them mid-turn — and otherwise says exactly why it waits.
-  const steer = steerability(item.extras, { live: steerable, images, builtin });
+  const send = sendDecision(item.extras, steering, turn);
+  const why = send.action === "queue" ? QUEUE_REASON[send.reason] : "Stops this turn and sends this one";
   return (
     <div className="group flex flex-col items-end" role="group" aria-label={label}>
       {/* A message another thread sent is that thread's, not the user's: it says whose it is, and
@@ -201,7 +208,7 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
         ) : (
           <span className="rc-meta-reveal flex items-center gap-0.5">
             {!held &&
-              (steer.ok ? (
+              (send.action === "steer" ? (
                 <RowAction
                   label="Send now"
                   tip="Send now: the turn reads it after its current step"
@@ -210,10 +217,10 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
                   <ArrowUp size={13} />
                 </RowAction>
               ) : (
-                <Tooltip label={STEER_REFUSAL[steer.reason]}>
+                <Tooltip label={why}>
                   <span
                     role="img"
-                    aria-label={STEER_REFUSAL[steer.reason]}
+                    aria-label={why}
                     className="flex size-[22px] items-center justify-center text-fg-faint"
                   >
                     <ArrowUp size={13} />

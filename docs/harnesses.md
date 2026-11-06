@@ -53,7 +53,14 @@ to imitate one).
 
 ```jsonc
 {
-  "steer": "live" | "next_turn" | "none",   // _rustcode/steer
+  "steer": "live" | "next_turn" | "none",   // _rustcode/steer, for clients that predate `steering`
+  "steering": {                              // the same fact, and what a steer can carry
+    "live": true,                            // a message goes into the running turn
+    "attachments": false,                    // a live steer takes its pictures and files too
+    "while_awaiting_user": false,            // a live steer goes in while an approval waits
+    "interrupt_restart": true,               // the turn can be stopped, the message sent in its place
+    "queue": true                            // a message that does not steer waits for the next turn
+  },
   "cancel": true,                            // session/cancel
   "resume": true,                            // session/load after restart
   "rewind": false,                           // _rustcode/rewind
@@ -396,13 +403,21 @@ What each part does for an external thread:
   are relayed under the thread's id. RustCode advertises no `fs` or `terminal` client capability,
   and refuses those requests, so the agent uses its own tools.
 - **Steer.** `_rustcode/steer` on a Codex thread sends `turn/steer` while a
-  turn runs (`steer: "live"`). On an ACP thread it uses the agent's
-  `_session/steering` extension when the agent advertised it at `initialize`
-  (`_meta.steering.supported`; `steer: "live"` then), and the client sends the
-  message as the next prompt otherwise (`steer: "next_turn"`, or `"none"` when
-  the agent takes no prompt at all). `pi-acp` 0.0.34 advertises no steering and
-  queues a prompt sent mid-turn behind the running one, so a Pi thread is
-  `next_turn` even though Pi itself has steering modes.
+  turn runs, with the message's images too. On an ACP thread it uses the
+  agent's `_session/steering` extension when the agent advertised it at
+  `initialize` (`_meta.steering.supported`). Claude Code steers live that way:
+  its adapter pushes the message onto the SDK's `--input-format stream-json`
+  input itself, so RustCode writes nothing into that pipe — the child's stdin
+  is the ACP channel, and a raw stream-json line there would break it. An
+  agent that advertises no steering waits for the next turn instead (Gemini
+  CLI, OpenCode, and `pi-acp` 0.0.34, which queues a prompt sent mid-turn
+  behind the running one even though Pi itself has steering modes). The same
+  wait applies to the built-in harness for a message with pictures, and to it
+  alone while an approval or a question waits on the user: it reads a steer
+  between steps only, where Codex and an ACP agent take one with the card up.
+  Each harness reports all of that as `steering`, and the client decides once
+  from it — steer, queue, or stop the turn and send the message in its place —
+  instead of branching on the harness id (`state/queue.ts` in the desktop app).
 - **Load.** `session/load` replays the recorded transcript (messages,
   thoughts, each tool call as one finished card with its title, kind,
   status, locations and output summary, each turn's last plan) and then the

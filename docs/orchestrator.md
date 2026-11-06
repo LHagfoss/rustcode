@@ -188,7 +188,11 @@ harness start),
 an answer: `wait_session` at 8 KiB (with `answer_truncated`), `read_session`
 at a 16 KiB page (with `next_offset`).
 
-The version 2 prompt hint replaces the M1 one (about 80 tokens, tested).
+The version 2 prompt hint replaces the M1 one (about 110 tokens, tested), and
+it says what the tools make a thread: one started with `start_session` or
+`fan_out` is a delegate of the caller, shown nested under it, so it gets a
+whole task, while a quick read-only lookup belongs to the harness's own
+subagents.
 
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);

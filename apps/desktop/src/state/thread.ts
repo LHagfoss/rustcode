@@ -136,6 +136,12 @@ export interface QueuedPrompt {
   wakeAsking?: string[];
   /** Delivered for another thread (orchestration link id): its answer goes back there. */
   link?: string;
+  /**
+   * It stops the turn it waits behind instead of waiting for the next one (`store.ts`
+   * `restartWith`): a stopped turn leaves the queue for Resume otherwise, but this message starts
+   * as soon as the stop lands.
+   */
+  restart?: boolean;
 }
 
 /**
@@ -601,8 +607,9 @@ export function finishTurn(
     ...state,
     running: false,
     // A turn that completed runs the queue on (store.ts `runPrompt`); one the user stopped, or that
-    // failed, leaves its messages in order for Resume.
-    queueHeld: holdsQueue(outcome) && state.queue.length ? true : undefined,
+    // failed, leaves its messages in order for Resume. A message that stopped the turn (`restart`)
+    // starts as soon as the stop lands.
+    queueHeld: holdsQueue(outcome) && state.queue.length && !state.queue[0]?.restart ? true : undefined,
     turnStartedAt: undefined,
     woken: undefined,
     pendingTurn: undefined,

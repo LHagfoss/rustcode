@@ -5,12 +5,14 @@ import {
   isOwnQueued,
   isQueuedMessage,
   nextQueued,
+  QUEUE_REASON,
+  type QueueReason,
   queuedAnnouncement,
   queueView,
-  STEER_REFUSAL,
-  type SteerConditions,
-  type SteerRefusal,
-  steerability,
+  type SendDecision,
+  type SteeringCapabilities,
+  sendDecision,
+  type TurnState,
 } from "./queue";
 import type { QueuedPrompt } from "./thread";
 
@@ -112,7 +114,7 @@ describe("what the live region says", () => {
   });
 });
 
-describe("the steer rule", () => {
+describe("the one send rule", () => {
   const image = { id: "i", kind: "image" as const, name: "shot.png", mimeType: "image/png", data: "AAAA" };
   const file = { id: "f", kind: "file" as const, name: "notes.txt", path: "/tmp/notes.txt" };
   const extras = (over: Partial<ComposeExtras> = {}): ComposeExtras => ({
@@ -127,46 +129,90 @@ describe("the steer rule", () => {
     report: false,
     action: "execute",
   };
-  const harness = (over: Partial<SteerConditions>): SteerConditions => ({
+  const steering = (over: Partial<SteeringCapabilities> = {}): SteeringCapabilities => ({
     live: true,
-    images: true,
-    builtin: false,
+    attachments: true,
+    while_awaiting_user: true,
+    interrupt_restart: true,
+    queue: true,
     ...over,
   });
-  const no = (reason: SteerRefusal) => ({ ok: false, reason });
+  const turn = (over: Partial<TurnState> = {}): TurnState => ({
+    running: true,
+    awaitingUser: false,
+    ...over,
+  });
+  const queued = (reason: QueueReason): SendDecision => ({ action: "queue", reason });
 
   test("plain text steers wherever the turn takes a message at all", () => {
-    expect(steerability(undefined, harness({}))).toEqual({ ok: true });
-    expect(steerability(extras(), harness({}))).toEqual({ ok: true });
-    expect(steerability(extras(), harness({ live: false }))).toEqual(no("harness"));
+    expect(sendDecision(undefined, steering(), turn())).toEqual({ action: "steer" });
+    expect(sendDecision(extras(), steering(), turn())).toEqual({ action: "steer" });
+    expect(sendDecision(extras(), steering({ live: false }), turn())).toEqual(queued("harness"));
+    // Nothing running: nothing to steer into.
+    expect(sendDecision(extras(), steering(), turn({ running: false }))).toEqual(queued("idle"));
   });
 
-  test("pictures steer only where the harness takes them mid-turn, and not on the built-in one", () => {
+  test("pictures steer only where the harness takes them mid-turn", () => {
     const pictures = extras({ attachments: [image] });
-    expect(steerability(pictures, harness({}))).toEqual({ ok: true });
-    expect(steerability(pictures, harness({ images: false }))).toEqual(no("harness"));
-    // The engine answers `accepted: false` to a steer with an image block on the built-in harness.
-    expect(steerability(pictures, harness({ builtin: true }))).toEqual(no("harness"));
-    expect(steerability(pictures, harness({ live: false }))).toEqual(no("harness"));
+    expect(sendDecision(pictures, steering(), turn())).toEqual({ action: "steer" });
+    // The built-in turn reads a steer as text, so its pictures wait.
+    expect(sendDecision(pictures, steering({ attachments: false }), turn())).toEqual(queued("attachments"));
+    expect(sendDecision(pictures, steering({ live: false }), turn())).toEqual(queued("harness"));
+  });
+
+  test("an approval or a question stops a turn that reads steers between steps only", () => {
+    // The built-in turn: it queues, and says the turn is what waits.
+    const between = steering({ while_awaiting_user: false });
+    expect(sendDecision(extras(), between, turn({ awaitingUser: true }))).toEqual(queued("awaiting"));
+    // Even a message that would otherwise wait for its pictures.
+    expect(
+      sendDecision(
+        extras({ attachments: [image] }),
+        { ...between, attachments: false },
+        turn({ awaitingUser: true }),
+      ),
+    ).toEqual(queued("awaiting"));
+    // Codex and a steering ACP agent take a message while the card is up.
+    expect(sendDecision(extras(), steering(), turn({ awaitingUser: true }))).toEqual({ action: "steer" });
+    // And nothing steers into a turn that is not running, whoever the harness is.
+    expect(sendDecision(extras(), steering(), turn({ running: false, awaitingUser: true }))).toEqual(
+      queued("idle"),
+    );
   });
 
   test("a file, a command or a link waits for the next turn, pictures or not", () => {
-    expect(steerability(extras({ attachments: [file] }), harness({}))).toEqual(no("files"));
-    expect(steerability(extras({ command }), harness({}))).toEqual(no("commands"));
-    expect(steerability(extras({ links: ["https://example.com"] }), harness({}))).toEqual(no("links"));
-    expect(steerability(extras({ attachments: [image, file] }), harness({}))).toEqual(no("files"));
+    expect(sendDecision(extras({ attachments: [file] }), steering(), turn())).toEqual(queued("files"));
+    expect(sendDecision(extras({ command }), steering(), turn())).toEqual(queued("commands"));
+    expect(sendDecision(extras({ links: ["https://example.com"] }), steering(), turn())).toEqual(
+      queued("links"),
+    );
+    expect(sendDecision(extras({ attachments: [image, file] }), steering(), turn())).toEqual(queued("files"));
     expect(
-      steerability(extras({ attachments: [image], links: ["https://example.com"] }), harness({})),
-    ).toEqual(no("links"));
+      sendDecision(extras({ attachments: [image], links: ["https://example.com"] }), steering(), turn()),
+    ).toEqual(queued("links"));
     // A command is the headline when both wait: it is what the message runs.
-    expect(steerability(extras({ command, links: ["https://example.com"] }), harness({}))).toEqual(
-      no("commands"),
+    expect(sendDecision(extras({ command, links: ["https://example.com"] }), steering(), turn())).toEqual(
+      queued("commands"),
     );
     // A file outranks the harness: it would wait for the next turn there too.
-    expect(steerability(extras({ attachments: [file] }), harness({ live: false }))).toEqual(no("files"));
+    expect(sendDecision(extras({ attachments: [file] }), steering({ live: false }), turn())).toEqual(
+      queued("files"),
+    );
   });
 
-  test("every combination of text, pictures, files, commands, links and harness has one answer", () => {
+  test("a harness that cannot queue stops the turn instead, and only then", () => {
+    const restart: SendDecision = { action: "interruptRestart" };
+    expect(sendDecision(extras(), steering({ live: false, queue: false }), turn())).toEqual(restart);
+    expect(
+      sendDecision(extras({ attachments: [file] }), steering({ live: false, queue: false }), turn()),
+    ).toEqual(queued("files"));
+    // The last resort: a harness that says it can do none of the three still waits.
+    expect(
+      sendDecision(extras(), steering({ live: false, queue: false, interrupt_restart: false }), turn()),
+    ).toEqual(queued("harness"));
+  });
+
+  test("every combination of content, harness and turn has one answer", () => {
     const lists = [[], [image], [file], [image, file]];
     const kinds = [
       { cmd: undefined, links: [] as string[] },
@@ -178,40 +224,84 @@ describe("the steer rule", () => {
     for (const attachments of lists)
       for (const { cmd, links } of kinds)
         for (const live of [true, false])
-          for (const images of [true, false])
-            for (const builtin of [true, false]) {
-              const verdict = steerability(extras({ attachments, command: cmd, links }), {
-                live,
-                images,
-                builtin,
-              });
-              // The refusal names the reason the user is shown, never a blank arrow.
-              if (!verdict.ok) expect(STEER_REFUSAL[verdict.reason]).toBeTruthy();
-              seen.push(
-                `${attachments.map((a) => a.kind).join("+") || "text"}|${cmd ? "cmd" : ""}${links.length ? "link" : ""}|${live}${images}${builtin}|${
-                  verdict.ok ? "yes" : verdict.reason
-                }`,
-              );
-            }
-    // 4 contents × 4 command/link shapes × 8 harness shapes, each answered once.
-    expect(seen).toHaveLength(128);
-    expect(seen).toContain("text||truetruefalse|yes");
-    expect(seen).toContain("image||truetruefalse|yes");
-    expect(seen).toContain("image||truetruetrue|harness");
-    expect(seen).toContain("image||truefalsetrue|harness");
-    expect(seen).toContain("text||falsetruefalse|harness");
-    expect(seen).toContain("file||truetruefalse|files");
-    expect(seen).toContain("image+file|cmd|truetruefalse|files");
-    expect(seen).toContain("text|cmd|truetruefalse|commands");
-    expect(seen).toContain("image|link|truetruefalse|links");
-    expect(seen).toContain("text|cmdlink|truetruefalse|commands");
+          for (const takes of [true, false])
+            for (const queue of [true, false])
+              for (const awaiting of [true, false])
+                for (const awaitingUser of [true, false]) {
+                  const decision = sendDecision(
+                    extras({ attachments, command: cmd, links }),
+                    steering({
+                      live,
+                      attachments: takes,
+                      while_awaiting_user: awaiting,
+                      queue,
+                    }),
+                    turn({ awaitingUser }),
+                  );
+                  // Every wait names a reason the user is shown, never a blank arrow.
+                  if (decision.action === "queue") expect(QUEUE_REASON[decision.reason]).toBeTruthy();
+                  seen.push(
+                    `${attachments.map((a) => a.kind).join("+") || "text"}|${cmd ? "cmd" : ""}${links.length ? "link" : ""}|${live}${takes}${queue}${awaiting}${awaitingUser}|${
+                      decision.action === "queue" ? decision.reason : decision.action
+                    }`,
+                  );
+                }
+    // 4 contents × 4 command/link shapes × 32 harness/turn shapes, each answered once.
+    expect(seen).toHaveLength(512);
+    expect(seen).toContain("text||truetruetruetruefalse|steer");
+    expect(seen).toContain("image||truetruetruetruefalse|steer");
+    expect(seen).toContain("image||truefalsetruetruefalse|attachments");
+    expect(seen).toContain("text||truetruetruefalsetrue|awaiting");
+    expect(seen).toContain("text||falsefalsetruetruefalse|harness");
+    expect(seen).toContain("text||falsefalsefalsetruefalse|interruptRestart");
+    expect(seen).toContain("file||truetruetruetruefalse|files");
+    expect(seen).toContain("image+file|cmd|truetruetruetruefalse|files");
+    expect(seen).toContain("text|cmd|truetruetruetruefalse|commands");
+    expect(seen).toContain("image|link|truetruetruetruefalse|links");
+    expect(seen).toContain("text|cmdlink|truetruetruetruefalse|commands");
   });
 
-  test("the words a dimmed arrow shows are the four reasons", () => {
-    expect(STEER_REFUSAL).toEqual({
+  test("every harness the engine ships has one answer, from its own capabilities", () => {
+    const caps = {
+      rustcode: steering({ attachments: false }),
+      codex: steering(),
+      "claude-code": steering(),
+      gemini: steering({ live: false }),
+      opencode: steering({ live: false }),
+      pi: steering({ live: false }),
+    };
+    const answers = Object.fromEntries(
+      Object.entries(caps).map(([id, harness]) => [
+        id,
+        sendDecision(extras(), harness, turn()).action === "steer" ? "steer" : "queue",
+      ]),
+    );
+    expect(answers).toEqual({
+      rustcode: "steer",
+      codex: "steer",
+      "claude-code": "steer",
+      gemini: "queue",
+      opencode: "queue",
+      pi: "queue",
+    });
+    // And a picture: the built-in turn takes text only, the others take it with the message.
+    const picture = extras({ attachments: [image] });
+    expect(sendDecision(picture, caps.rustcode, turn())).toEqual(queued("attachments"));
+    expect(sendDecision(picture, caps.codex, turn())).toEqual({ action: "steer" });
+    expect(sendDecision(picture, caps["claude-code"], turn())).toEqual({ action: "steer" });
+    // A harness that steers only its text takes a picture with the next turn, not as a stop.
+    expect(sendDecision(picture, steering({ attachments: false }), turn())).toEqual(queued("attachments"));
+  });
+
+  test("the words a dimmed arrow shows name every reason", () => {
+    expect(QUEUE_REASON).toEqual({
+      idle: "No turn is running: this starts one",
       files: "Files go with the next turn",
       commands: "Commands go with the next turn",
       links: "Links go with the next turn",
+      attachments: "This harness takes text mid-turn only: the pictures go with the next turn",
+      awaiting: "The turn is waiting on you: this goes with the next one",
+      refused: "The turn can't take it now: it goes with the next one",
       harness: "This harness can't take a message mid-turn: it waits for the next one",
     });
   });
