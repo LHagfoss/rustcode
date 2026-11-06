@@ -594,6 +594,9 @@ pub(super) async fn collect_round(
         s.current_provider_request_prompt_estimate = 0;
         s.token_usage_in_flight = true;
         s.provider_request_in_flight = false;
+        // The round this request belongs to, for the data store's
+        // `provider_requests.round` (`docs/data-store.md`).
+        s.provider_request_round = Some(ctx.budget.tool_rounds as i64);
         s.current_thought_time_ms = 0;
         s.current_thought_tokens = 0;
         s.current_thought_started_at = None;

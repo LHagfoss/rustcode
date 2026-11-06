@@ -82,8 +82,17 @@ be read back instead of guessed at:
 - `provider_requests`: one row per attempt of the built-in harness's own HTTP
   request, retries included. `endpoint_host` and `endpoint_path` are stored
   without the query or fragment, which can carry a key. `error_kind` is a
-  short classification (`timeout`, `http_500`, `stream_failure`), never the
-  provider's message text.
+  short classification (`timeout`, `connect`, `cancelled`, `stream`,
+  `http_500`), never the provider's message text. A row is written when the
+  attempt ends, so `started_at`, `headers_at` and `finished_at` bound the
+  send, the wait for headers and the stream separately, and `latency_ms` is
+  the whole attempt — the backoff before a retry belongs to no row. `attempt`
+  counts the sends of one request from 1, and each retry is a separate row
+  with its own status, bytes and error kind. `provider` is the profile's
+  credential provider (`openai`, `claude`, `github-copilot`), else its engine,
+  else the profile name; `round` is the turn round the request belongs to,
+  zero-based like `operational_events`. Tokens are the ones that response
+  reported and stay `NULL` for a side request whose usage is not parsed.
 - `harness_rpc_messages`: one row per JSON-RPC request, response or
   notification that crossed RustCode's ACP or Codex stdio boundary.
   `direction` is `harness_to_rustcode` or `rustcode_to_harness`, and
@@ -172,8 +181,8 @@ Every write logs and returns: a locked or full store cannot fail a turn.
 The inserts are the API other modules call: `record_provider_request`,
 `record_rpc_message`/`record_rpc_messages` (one transaction for a batch) and
 `record_operational_event` (which returns the per-thread sequence). The
-provider and harness hooks that call them are separate changes; until they
-land the tables stay empty and nothing reads them.
+built-in harness's provider hook is in `network/stream_request.rs` and the
+harness RPC hook in `harness/rpc_capture.rs`.
 
 ## Writers
 
