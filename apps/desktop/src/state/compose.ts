@@ -69,6 +69,25 @@ function relative(path: string, cwd: string): string {
     : path;
 }
 
+/** A message another thread delivered: the app writes it as `From thread “…” (agent): …`. */
+const DELIVERED = /^From thread “/;
+
+/**
+ * What ↑ walks in the composer: the user's own messages in this thread, oldest first. A wake is the
+ * app's own turn, a message another thread delivered is not the user's to recall, and one with no
+ * text (attachments only) has nothing to put back in the field.
+ */
+export function sentMessages(items: readonly { kind: string; text?: string; wake?: boolean }[]): string[] {
+  const out: string[] = [];
+  for (const item of items) {
+    if (item.kind !== "user" || item.wake) continue;
+    const text = item.text;
+    if (!text?.trim() || DELIVERED.test(text)) continue;
+    out.push(text);
+  }
+  return out;
+}
+
 export interface BlockOptions {
   /** The thread's harness takes image blocks. */
   images: boolean;

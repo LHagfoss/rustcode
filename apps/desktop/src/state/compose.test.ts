@@ -5,6 +5,7 @@ import {
   hasTokens,
   messageCollapses,
   promptBlocks,
+  sentMessages,
   splitImageMarkers,
   splitSlashCommand,
   splitTokens,
@@ -118,5 +119,20 @@ describe("a sent message", () => {
     expect(messageCollapses(176)).toBe(false);
     expect(messageCollapses(176 + 44)).toBe(false);
     expect(messageCollapses(176 + 67)).toBe(true);
+  });
+
+  test("↑ walks the user's own messages, oldest first", () => {
+    expect(
+      sentMessages([
+        { kind: "user", text: "first" },
+        { kind: "assistant", text: "reply" },
+        { kind: "tool" },
+        { kind: "user", text: "second" },
+        // The app's own wake, a message another thread delivered, and an attachments-only one.
+        { kind: "user", text: "A child finished", wake: true },
+        { kind: "user", text: "From thread “Parent” (agent):\n\nDo this" },
+        { kind: "user", text: "   " },
+      ]),
+    ).toEqual(["first", "second"]);
   });
 });

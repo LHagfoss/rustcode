@@ -593,8 +593,8 @@ export function ChatView() {
   const ownRequest = thread?.permissions[0];
   const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
-  // The lane's gutter is `px-3 sm:px-5` on the row itself, the same classes the transcript's rows use,
-  // so the field's edges and a message's edges line up at every width.
+  // The lane's gutter is on the scroller (`px-3 sm:px-12` in ui/Transcript.tsx) and here, outside the
+  // cap, so the field's edges and a message's edges line up at every width.
   const showsBanner = isNew && !!banner.name;
 
   return (
@@ -636,7 +636,7 @@ export function ChatView() {
           transition: "bottom 500ms var(--ease-snappy)",
           ...(isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined),
         }}
-        className="absolute inset-x-0 bottom-4 mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5 px-3 sm:px-5"
+        className="absolute inset-x-3 bottom-4 mx-auto flex max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5 sm:inset-x-12"
       >
         {isNew && (
           <LaneItem>

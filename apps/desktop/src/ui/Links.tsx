@@ -70,13 +70,14 @@ function LinkRow({ link }: { link: Link }) {
   return (
     <ThreadAgentRow
       link={link}
+      peek={false}
       action={
         <Tooltip label={active ? "Stop this work in that thread" : "Remove"}>
           <button
             type="button"
             aria-label={active ? `Stop ${link.targetTitle}` : `Remove ${link.targetTitle}`}
             onClick={() => (active ? void stopLink(link.id) : dismissLink(link.id))}
-            className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
+            className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
           >
             <X size={12} strokeWidth={2.5} />
           </button>
@@ -172,7 +173,7 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     // The one surface this strip shares with the jump-to-latest pill above it and its own group card
     // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
     // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
-    <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1">
+    <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
       {drivenBy && <WorkingFor link={drivenBy} />}
       {(live.length > 0 || fanOuts.length > 0) && (
         <div className="flex flex-col gap-0.5">

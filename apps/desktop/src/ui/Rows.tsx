@@ -314,7 +314,7 @@ export const AssistantRow = memo(function AssistantRow({
   ) : null;
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <div className="group/reply">
+      <div className="group/reply px-1">
         <Markdown
           text={item.text}
           streaming={streaming}
@@ -328,7 +328,7 @@ export const AssistantRow = memo(function AssistantRow({
       </div>
     );
   return (
-    <div className="group/reply flex flex-col gap-2.5">
+    <div className="group/reply flex flex-col gap-2.5 px-1">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown
@@ -516,7 +516,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           type="button"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="-mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left leading-relaxed hover:bg-fill-subtle"
+          className="-mx-0.5 flex min-h-6 w-fit max-w-[calc(100%+4px)] items-center gap-1.5 rounded-sm px-0.5 text-left leading-relaxed hover:bg-fill-subtle"
         >
           <span className="flex w-[18px] shrink-0 justify-center">
             {running ? (
@@ -595,7 +595,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         </pre>
       )}
       {open && (
-        <div className="rc-expand mt-1.5 mb-1 ml-[26px] flex flex-col gap-2.5">
+        <div className="rc-expand mt-1.5 mb-1 ml-[26px] flex flex-col gap-2">
           {item.diffs.length > 0 ? (
             item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
           ) : (
@@ -839,7 +839,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         onClick={() => onToggle(group.key)}
         title={group.open ? "Hide these steps" : `Show ${group.count} steps`}
         data-kind={group.kind}
-        className="group -mx-1 flex min-h-6 w-fit max-w-[calc(100%+8px)] items-center gap-2 rounded-sm px-1 text-left leading-relaxed hover:bg-fill-subtle"
+        className="group -mx-0.5 flex min-h-6 w-fit max-w-[calc(100%+4px)] items-center gap-1.5 rounded-sm px-0.5 text-left leading-relaxed hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
           {(() => {
