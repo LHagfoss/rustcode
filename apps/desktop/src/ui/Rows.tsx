@@ -776,7 +776,7 @@ export const TurnFoldRow = memo(function TurnFoldRow({
         fold.open ? "Hide the work" : `Show the work: ${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`
       }
       className={cx(
-        "group flex w-full items-center gap-1.5 pt-0 pb-2 text-left text-body text-fg-muted hover:text-fg",
+        "group flex w-full items-center gap-1.5 pt-0 pb-2.5 text-left text-body text-fg-muted hover:text-fg",
         rule && "border-border/60 border-b",
       )}
     >
@@ -807,10 +807,11 @@ export const ToolGroupRow = memo(function ToolGroupRow({
   onToggle: (key: string) => void;
 }) {
   return (
-    // Two or more finished calls read as one step of the turn, closed by a hairline so the run
-    // below it is told apart from the answer that follows. Its own air is the row gap's alone:
-    // the transcript sets the spacing between items, so a row adds none above it.
-    <div className="border-border/60 border-b pt-0 pb-2">
+    // Two or more finished calls read as one step of the turn, and stay quieter than the prose
+    // around it: no hairline, a smaller and fainter line of it, and the words and icon only come
+    // up to the text colour on hover. Its own air is the row gap's alone: the transcript sets the
+    // spacing between items, so a row adds none above or below it.
+    <div>
       <button
         type="button"
         aria-expanded={group.open}
@@ -822,10 +823,10 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         <span className="flex w-[18px] shrink-0 justify-center">
           {(() => {
             const Icon = (group.kind && KIND_ICON[group.kind]) || Layers;
-            return <Icon size={16} className="text-fg-muted" />;
+            return <Icon size={14} className="text-fg-faint group-hover:text-fg" />;
           })()}
         </span>
-        <span className="min-w-0 truncate text-body text-fg-muted">{group.label}</span>
+        <span className="min-w-0 truncate text-callout text-fg-muted group-hover:text-fg">{group.label}</span>
         {group.failed > 0 && (
           <span className="flex shrink-0 items-center gap-0.5 text-caption text-danger">
             <CircleX size={11} aria-hidden />
@@ -887,7 +888,7 @@ export function TurnEndRow({
     ...(timeInFold ? [] : [messageTime(item.at)]),
   ].filter(Boolean);
   return (
-    <div className="-mt-2">
+    <div className="-mt-1.5">
       {completion && <CompletionCard completion={completion} />}
       <div className="mt-1 flex h-5 items-center gap-2 text-caption text-fg-faint">
         {item.outcome === "cancelled" && !folded && <SquareStop size={11} />}
@@ -933,7 +934,7 @@ export function WorkingRow({ startedAt, now }: { startedAt?: number; now: number
   const elapsed = startedAt ? Math.max(0, now - startedAt) : undefined;
   return (
     <div
-      className="flex h-[30px] items-center border-border/60 border-b pt-1 pb-2 text-body text-fg-muted tabular"
+      className="flex h-[34px] items-center border-border/60 border-b pt-1 pb-2.5 text-body text-fg-muted tabular"
       role="status"
     >
       {elapsed !== undefined
