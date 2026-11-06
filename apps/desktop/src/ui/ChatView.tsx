@@ -478,7 +478,7 @@ function releaseComposer(e: React.MouseEvent) {
   if (!active?.matches('textarea[aria-label="Message"]')) return;
   if (
     target.closest(
-      'button, a, input, textarea, select, label, [role="button"], [contenteditable], .rc-composer, .rc-composer-tray, .rc-composer-drawer',
+      'button, a, input, textarea, select, label, [role="button"], [contenteditable], .rc-composer, .rc-composer-footer, .rc-composer-tray, .rc-composer-drawer',
     )
   )
     return;
