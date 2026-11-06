@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  foldEnds,
   foldLabel,
   foldTurns,
   groupTools,
@@ -8,6 +9,7 @@ import {
   type TurnFold,
   toolGroupLabel,
   turnChangeLine,
+  turnFoldKey,
 } from "./fold";
 import type { TranscriptItem } from "./thread";
 
@@ -320,23 +322,21 @@ describe("the change line a finished turn draws", () => {
   });
 
   test("a turn that reported a completion draws that card and no chip", () => {
-    const line = turnChangeLine({ completion: completion(1, 0), checkpoint: checkpoint(9, 9), newest: true });
+    const line = turnChangeLine({ completion: completion(1, 0), checkpoint: checkpoint(9, 9) });
     expect(line?.kind).toBe("completion");
     // Its numbers are the completion's, the one source, so the two can never disagree.
     expect(line?.kind === "completion" && line.completion).toMatchObject({ added: 1, removed: 0 });
   });
 
   test("without a completion the checkpoint chip draws, from the checkpoint alone", () => {
-    const line = turnChangeLine({ completion: null, checkpoint: checkpoint(4, 2), newest: true });
+    const line = turnChangeLine({ completion: null, checkpoint: checkpoint(4, 2) });
     expect(line?.kind).toBe("checkpoint");
     expect(line?.kind === "checkpoint" && line.checkpoint).toMatchObject({ insertions: 4, deletions: 2 });
   });
 
   test("a checkpoint that changed no files draws nothing, and so does no report", () => {
-    expect(
-      turnChangeLine({ completion: null, checkpoint: checkpoint(0, 0, 0), newest: true }),
-    ).toBeUndefined();
-    expect(turnChangeLine({ newest: true })).toBeUndefined();
+    expect(turnChangeLine({ completion: null, checkpoint: checkpoint(0, 0, 0) })).toBeUndefined();
+    expect(turnChangeLine({})).toBeUndefined();
   });
 
   test("a completion with only checks keeps its card", () => {
@@ -344,7 +344,6 @@ describe("the change line a finished turn draws", () => {
     const line = turnChangeLine({
       completion: { files: [], added: 0, removed: 0, checks },
       checkpoint: checkpoint(3, 1),
-      newest: true,
     });
     expect(line?.kind).toBe("completion");
   });
@@ -372,24 +371,48 @@ describe("changes once a newer turn exists", () => {
     deletions: n,
   });
 
-  test("three finished turns keep one fold row each and their changes only on the newest", () => {
+  test("three finished turns keep one fold row each and one change line each", () => {
     const rows = foldTurns([...turn(1), ...turn(2), ...turn(3)], false, new Set());
     // Scrolling back reads one `Worked for …` row per turn: the old work is folded away.
     expect(rows.flatMap((r) => ("fold" in r ? [r.fold.key] : []))).toEqual(["fold-e1", "fold-e2", "fold-e3"]);
-    const newest = newestTurnEnd(rows);
-    expect(newest).toBe("e3");
-    // Every turn has both a completion and a checkpoint to draw from; one line each, newest only.
-    const lines = ["e1", "e2", "e3"].map((id, i) =>
-      turnChangeLine({ completion: completion(i + 1), checkpoint: checkpoint(i + 1), newest: id === newest }),
+    expect(newestTurnEnd(rows)).toBe("e3");
+    // Every turn has both a completion and a checkpoint to draw from; the completion wins, once.
+    const lines = [1, 2, 3].map((n) =>
+      turnChangeLine({ completion: completion(n), checkpoint: checkpoint(n) }),
     );
-    expect(lines.map((l) => l?.kind)).toEqual([undefined, undefined, "completion"]);
+    expect(lines.map((l) => l?.kind)).toEqual(["completion", "completion", "completion"]);
+    expect(lines.map((l) => l?.kind === "completion" && l.completion.added)).toEqual([1, 2, 3]);
   });
 
   test("the newest turn keeps its line whether it reported a completion or only a checkpoint", () => {
     const rows = foldTurns([...turn(1), ...turn(2)], false, new Set());
-    const newest = newestTurnEnd(rows);
-    expect(
-      turnChangeLine({ completion: null, checkpoint: checkpoint(2), newest: newest === "e2" })?.kind,
-    ).toBe("checkpoint");
+    expect(newestTurnEnd(rows)).toBe("e2");
+    expect(turnChangeLine({ completion: null, checkpoint: checkpoint(2) })?.kind).toBe("checkpoint");
+  });
+
+  test("an older turn draws its change line as the last row inside its own fold", () => {
+    const items = [...turn(1), ...turn(2), ...turn(3)];
+    // Folded shut, an old turn's steps are not on the page, and neither is its change line.
+    expect(foldEnds(foldTurns(items, false, new Set()))).toEqual({});
+    const opened = foldTurns(items, false, new Set(["e1", "e2", "e3"].map(turnFoldKey)));
+    const ends = foldEnds(opened);
+    // Each fold ends on its own turn's last step: after it, before the next turn's header.
+    for (const n of [1, 2, 3]) {
+      const at = ends[turnFoldKey(`e${n}`)]!;
+      expect(opened[at]).toMatchObject({ item: { kind: "tool", id: `t${n}` } });
+      const next = opened.findIndex((r) => "fold" in r && r.fold.key === turnFoldKey(`e${n + 1}`));
+      if (next >= 0) expect(at).toBeLessThan(next);
+    }
+  });
+
+  test("a run of calls folded into a group still ends the fold on its last step", () => {
+    const rows = foldTurns(
+      [{ kind: "user", id: "u", text: "go" }, tool("a"), tool("b"), end("e")],
+      false,
+      new Set([turnFoldKey("e")]),
+    );
+    // Opened, the group lists its calls: the fold ends on the last of them, not on its header.
+    const grouped = groupTools(rows, new Set(["tools-a"]));
+    expect(grouped[foldEnds(grouped)[turnFoldKey("e")]!]).toMatchObject({ item: { id: "b" } });
   });
 });
