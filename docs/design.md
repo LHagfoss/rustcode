@@ -497,23 +497,33 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   copy that sets each URL on an accent pill and each `@file` reference on a quiet
   one (`state/compose.ts` `splitTokens`). The two take the same padding, scroll
   and mask, and a token's span adds **no** horizontal padding — that is what
-  keeps the caret on its character. Under the field is the card's
-  one control row (`28px` controls, `.rc-composer-tray` sets their height), in
-  two groups on one baseline with no divider above it: the air between the
-  field and the row, and the row's own `pt-1`, separate them — the attach
-  button (**+**), the folder, the worktree or branch and the permissions mode
-  on the left, the plan meter, the context ring, the model and the working
-  agents on the right, then send/queue/stop at the row's end. The meters are
-  the row's overflow: measured rather than stepped by a breakpoint, they move
-  into one `…` menu (`MetersMenu`) when the row is too narrow to hold them and
-  come back when their measured width fits again. The model reads
-  as its own name and effort, plain on the card, `bg-fill-strong` only while
-  its popover is open; the **+** rests on `bg-fill-subtle` (`bg-fill` on
-  hover). The
-  card is a container (`@container`), so a narrow window drops labels (the
-  folder name shortens, then the worktree label and the branch chip, then
-  the permission label, the folder name and the agents pill) rather than
-  dropping controls or overflowing. The
+  keeps the caret on its character. The field's height is measured on an
+  off-screen twin of it (same font, leading, padding and width, no transition,
+  `lib/fieldHeight.ts`): reading the field's own box while its height animates
+  reports where it still is, so the twin is asked instead and the field is
+  given the final height once, which lets its 150ms transition run from the
+  height it had to the height it needs — growing and shrinking alike. Under
+  the field is the card's own row (`28px` controls, `.rc-composer-tray` sets
+  their height): the attach button (**+**, a 28px round target with an 18px
+  mark) at its start, then the working agents, the model and send/queue/stop
+  at its end, with no divider above it — the air between the field and the row,
+  and the row's own `pt-1`, separate them. The model reads as its own name and
+  effort, plain on the card, `bg-fill-strong` only while its popover is open;
+  the **+** rests on `bg-fill-subtle` (`bg-fill` on hover).
+- **Composer strip:** what the thread works in and what it is allowed to do
+  hang off the card's bottom edge instead of sitting in its glass: a 36px strip
+  (`.rc-composer-footer`) inset 12px each side, its top edge tucked 8px behind
+  the card so the two read as one stack, its own corners round only at the
+  bottom, a hairline edge and `--rc-composer-footer-bg` (the pane mixed 5%
+  towards the text, derived like `--rc-message`) instead of the card's
+  translucency; `text-callout` in `fg-muted`, 14px icons, `gap-4` between the
+  groups. The thread's folder, its worktree toggle and its branch chip are on
+  the left, the permissions mode and the usage meter on the right; every one of
+  them is a pill whose panel opens off the pill itself, 8px above it. The card
+  is a container (`@container`), so a narrow window drops labels (the folder
+  name shortens, then the worktree label and the branch chip, then the
+  permission label, the folder name and the agents pill) rather than dropping
+  controls or overflowing. The
   transcript scrolls under the card (its bottom padding clears the stack
   plus air) and fades out over the pane's bottom 56px, behind the card. A
   draft is kept in app storage

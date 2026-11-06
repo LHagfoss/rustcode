@@ -1,8 +1,9 @@
-// The menus and panels the composer hangs off itself: the model pill's picker, the +, folder,
-// permissions and meters menus. They are anchored to the composer card, not to the pill that
-// opened them, so a panel always clears the card's own top edge with the 8px gap the design keeps
-// between a surface and what it belongs to, and never lands 100px under the pill just because the
-// window ran out of room above. Radix measures the room that is left and publishes it as
+// The menus and panels the composer hangs off itself: the model picker, the +, folder, permissions
+// and usage menus. Each one is anchored to the control that opened it, 8px above that control's own
+// top edge (`CARD_GAP`), so a panel reads as coming out of the button pressed and not out of the
+// card it happens to sit in. The side is pinned to `top`; only the alignment follows the control —
+// `start` on the card's left half, `end` on its right — so a panel opens inward and stays inside the
+// window. Collisions never move it down under its control; Radix still measures the room above as
 // `--radix-popper-available-height`, so a short window shrinks the panel instead of moving it.
 
 import { Popover } from "radix-ui";
@@ -16,6 +17,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
+  useCallback,
   useContext,
   useLayoutEffect,
   useRef,
@@ -23,13 +26,19 @@ import {
 } from "react";
 import { cx, menuItem, surfaceCollisionPadding, Tooltip } from "./primitives";
 
-/** Anything floating-ui can position against: here, the composer card's own box. */
+/** Anything floating-ui can position against: here, the control that opens a panel. */
 interface Measurable {
   getBoundingClientRect(): DOMRect;
 }
 
-/** The gap between the composer card and anything hanging off it (docs/design.md › Composer). */
+/** The gap between a control and its panel, and between the card and what hangs off it
+ * (docs/design.md › Composer). */
 const CARD_GAP = 8;
+
+/** The composer card a control sits in: the one surface its panels relate to. */
+function findCard(from?: Element | null): HTMLElement | null {
+  return from?.closest<HTMLElement>(".rc-composer") ?? document.querySelector<HTMLElement>(".rc-composer");
+}
 
 export interface CardTriggerProps {
   onClick: (event: ReactMouseEvent<HTMLElement>) => void;
@@ -54,7 +63,7 @@ export function CardPopover({
   trigger,
   tooltip,
   children,
-  align = "start",
+  align,
   side = "top",
   className,
   style,
@@ -67,10 +76,11 @@ export function CardPopover({
   onOpenAutoFocus,
   avoidCollisions = false,
 }: {
-  /** The pill that opens it. */
+  /** The pill that opens it: the panel hangs off this control's own box. */
   trigger: ReactElement<CardTriggerProps & Record<string, unknown>>;
   tooltip?: ReactNode;
   children: ReactNode;
+  /** Left unset, the panel opens on the side of its control: inward from the window's edge. */
   align?: "start" | "center" | "end";
   side?: "top" | "bottom";
   className?: string;
@@ -85,8 +95,8 @@ export function CardPopover({
   onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onOpenAutoFocus?: (event: Event) => void;
   /**
-   * Off by default: a card menu stays above the card and shrinks to the room it has, rather than
-   * flipping under the card to a place the user did not point at.
+   * Off by default: a card menu stays above its control and shrinks to the room it has, rather than
+   * flipping under the control to a place the user did not point at.
    */
   avoidCollisions?: boolean;
 }) {
@@ -96,24 +106,41 @@ export function CardPopover({
     if (controlledOpen === undefined) setUncontrolled(next);
     onOpenChange?.(next);
   };
-  // The card this pill sits in. Measured when the pill is pressed (and once on mount, for a panel
-  // the app opens itself, such as `/model`), so it never disagrees with where the card is.
+  // The control this panel hangs off, and the card it sits in: the pill gives the position, the
+  // card which side of itself the panel should open on.
   const card = useRef<HTMLElement | null>(null);
   const pill = useRef<HTMLElement | null>(null);
-  const findCard = (from?: Element | null) =>
-    from?.closest<HTMLElement>(".rc-composer") ?? document.querySelector<HTMLElement>(".rc-composer");
+  const [aligned, setAligned] = useState<"start" | "end">("start");
   const anchor = useRef<Measurable>({
-    getBoundingClientRect: () => card.current?.getBoundingClientRect() ?? new DOMRect(),
+    getBoundingClientRect: () => pill.current?.getBoundingClientRect() ?? new DOMRect(),
   });
+  // The trigger's own ref, kept: a panel the app opens itself (`/model`) has no press to measure
+  // from, so the node has to be known from the moment it mounts.
+  const ownRef = (trigger.props as { ref?: Ref<HTMLElement> }).ref;
+  const attachPill = useCallback(
+    (node: HTMLElement | null) => {
+      pill.current = node;
+      card.current = node ? findCard(node) : null;
+      if (typeof ownRef === "function") ownRef(node);
+      else if (ownRef) (ownRef as { current: HTMLElement | null }).current = node;
+    },
+    [ownRef],
+  );
+  // Which way the panel grows: away from the window's edge, from the card's own middle.
   useLayoutEffect(() => {
-    card.current ??= findCard(pill.current);
-  });
+    if (!open) return;
+    const button = pill.current;
+    const box = card.current ?? findCard(button);
+    if (!button || !box) return;
+    const at = button.getBoundingClientRect();
+    const inCard = box.getBoundingClientRect();
+    setAligned(at.left + at.width / 2 > inCard.left + inCard.width / 2 ? "end" : "start");
+  }, [open]);
 
   const element = isValidElement(trigger)
     ? cloneElement(trigger, {
+        ref: attachPill,
         onClick: (event: ReactMouseEvent<HTMLElement>) => {
-          pill.current = event.currentTarget;
-          card.current = findCard(event.currentTarget);
           (trigger.props.onClick as CardTriggerProps["onClick"] | undefined)?.(event);
           setOpen(!open);
         },
@@ -136,7 +163,7 @@ export function CardPopover({
       <Popover.Portal>
         <Popover.Content
           side={side}
-          align={align}
+          align={align ?? aligned}
           sideOffset={CARD_GAP}
           collisionPadding={surfaceCollisionPadding}
           avoidCollisions={avoidCollisions}

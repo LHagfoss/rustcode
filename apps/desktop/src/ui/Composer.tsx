@@ -1,9 +1,10 @@
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
-// send/queue/stop on the right. The tray tucked behind that foot carries the rest
-// (the folder, the worktree, access, the meter, the model pill). What waits for
-// the thread is not here: queued messages are rows at the end of the transcript
+// the model pill and send/queue/stop on the right. What the thread works in and
+// what it may do hang off that box's bottom edge as a strip of their own (the
+// folder, the worktree, access, the meter), because they describe the thread and
+// not the message. What waits for the thread is not here: queued messages are rows at the end of the transcript
 // (ui/QueuedMessages.tsx), and one of them is edited in this field. Keys follow
 // the SwiftUI app: ⏎ send (or queue while running), ⇧⏎ newline, ⌘⏎ steer, Esc
 // closes suggestions, then leaves a queued edit, then clears the draft, then
@@ -16,7 +17,6 @@ import {
   Clock,
   Command,
   Copy,
-  Ellipsis,
   FileText,
   Folder,
   FolderOpen,
@@ -34,11 +34,13 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
+import { measuredFieldHeight } from "../lib/fieldHeight";
+import { folderRows, matchSpans, middleEllipsis } from "../lib/folderList";
 import { haptic } from "../lib/haptics";
 import {
   canOpenTerminal,
@@ -126,6 +128,8 @@ const PAD = 6;
 // maximum the fade (`.rc-field-fade`) hides the cut, as it does in any scroller.
 const MIN_HEIGHT = Math.round(LINE * 2 + PAD * 2);
 const MAX_HEIGHT = 208;
+// How much of a folder's path the picker shows: its ends, not the whole of a deep path.
+const PATH_CHARS = 30;
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -245,6 +249,9 @@ export const Composer = memo(function Composer({
   useApp((s) => s.harnesses); // re-render when harness capabilities arrive
   const status = useApp((s) => s.status);
   const field = useRef<HTMLTextAreaElement>(null);
+  // The field's twin: the draft is measured on it, never on the field, whose own box may be halfway
+  // through its height transition (lib/fieldHeight.ts).
+  const gauge = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -295,13 +302,6 @@ export const Composer = memo(function Composer({
   const cwd = thread?.cwd ?? projectCwd;
   const canSend = !!draft.trim() || hasExtras(extras);
   const mirror = useRef<HTMLDivElement>(null);
-  // The control row and the meters it may have to give up: measured, not stepped by a container
-  // query (docs/design.md › Composer). `groupWidth` keeps the meters' own width from when they
-  // last drew, so the row knows what would have to fit again before they come back.
-  const row = useRef<HTMLDivElement>(null);
-  const meters = useRef<HTMLDivElement>(null);
-  const groupWidth = useRef(0);
-  const [tight, setTight] = useState(false);
   const shell = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   // Where the field is in what ↑/↓ walks (`sentMessages`), and the draft the walk started from.
@@ -337,29 +337,19 @@ export const Composer = memo(function Composer({
     }
   };
 
-  // The row's controls fit or they do not: measured, so a narrow window moves the meters into one
-  // menu instead of squeezing them, and a wide one puts them back. The meters keep their size (a
-  // ring under 30px is unreadable), which is why they overflow rather than shrink.
-  useLayoutEffect(() => {
-    const el = row.current;
+  // The field's height follows its draft: one line box per line, between the two-line minimum and
+  // the point it scrolls. Measured on the twin at zero height, so the number is the text's own and
+  // not the box the field is still animating towards; the field is then given the final height once,
+  // and its transition (index.css) runs from where it was to where it belongs, growing or shrinking.
+  const fitHeight = () => {
+    const el = field.current;
     if (!el) return;
-    const measure = () => {
-      const line = row.current;
-      if (!line) return;
-      if (meters.current) groupWidth.current = meters.current.offsetWidth;
-      if (!tight) {
-        // Everything drawn: a row wider than its box is one control past its edge.
-        if (line.scrollWidth > line.clientWidth + 1) setTight(true);
-        return;
-      }
-      // Tight: the meters come back when what is drawn leaves room for what they measured.
-      const used = [...line.children].reduce((sum, c) => sum + (c as HTMLElement).offsetWidth, 0);
-      const gaps = 8 * Math.max(0, line.children.length - 1);
-      if (used + gaps + groupWidth.current + 8 <= line.clientWidth) setTight(false);
-    };
-    measure();
-    return observeSize(el, measure);
-  }, [tight]);
+    const twin = gauge.current;
+    const height = twin
+      ? measuredFieldHeight(twin, { value: el.value, width: el.clientWidth }, MIN_HEIGHT, MAX_HEIGHT)
+      : Math.min(Math.max(el.scrollHeight, MIN_HEIGHT), MAX_HEIGHT);
+    el.style.height = `${height}px`;
+  };
 
   // Ready to type on entering a thread, and again on coming back to the chat from Settings or
   // another view (the draft is kept either way).
@@ -370,15 +360,10 @@ export const Composer = memo(function Composer({
     if (inChat) field.current?.focus();
   }, [key, inChat]);
 
-  // Grow from one line to the field's height, then scroll.
+  // Grow from two lines to the field's height, then scroll.
   // biome-ignore lint/correctness/useExhaustiveDependencies: measure on every draft change
   useLayoutEffect(() => {
-    const el = field.current;
-    if (!el) return;
-    el.style.height = "0px";
-    // `scrollHeight` is the text plus the padding above and below, which is room the descenders of
-    // the last line (g, j, p, y in the rounded font) need inside the box instead of at its edge.
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, MIN_HEIGHT), MAX_HEIGHT)}px`;
+    fitHeight();
     followCaret();
     syncField();
     // The browser parks the field at the caret a frame after a new value lands, so ask again then:
@@ -399,7 +384,10 @@ export const Composer = memo(function Composer({
   useEffect(() => {
     const el = field.current;
     if (!el) return;
-    return observeSize(el, syncField);
+    return observeSize(el, () => {
+      fitHeight();
+      syncField();
+    });
   }, []);
 
   const update = (text: string) => setDraft(key, text);
@@ -907,6 +895,17 @@ export const Composer = memo(function Composer({
                   {"\u200b"}
                 </div>
               )}
+              {/* The field's twin: same font, leading, padding and width, no transition, never
+                  seen or reached. The draft is measured on it (lib/fieldHeight.ts). */}
+              <textarea
+                ref={gauge}
+                aria-hidden
+                tabIndex={-1}
+                readOnly
+                rows={1}
+                className="pointer-events-none invisible absolute top-0 left-0 block resize-none overflow-hidden py-1.5 text-body leading-relaxed"
+                style={{ height: 0, width: 0 }}
+              />
               <textarea
                 ref={field}
                 value={draft}
@@ -935,14 +934,12 @@ export const Composer = memo(function Composer({
               />
             </div>
           </div>
-          {/* The card's one control row: what adds to the message and where the thread works on the
-              left, what it costs, how it runs and how it is sent on the right. No divider: the
-              field's own air, and the row's `pt-0.5`, separate them. One row of one height, so the
-              attach button, the folder and the menus line up with the meter, the ring, the model
-              pill and the agent pill. Labels drop out with the card's width (the folder falls back
-              to its icon); the controls do not, and the two that can still be long (the folder and
-              the model) shrink and ellipsize before the row overflows. */}
-          <div ref={row} className="rc-composer-tray flex items-center gap-2 px-2 pt-1 pb-2">
+          {/* The card's own row: the + that adds to the message at one end, what sends it at the
+              other. Where the thread works and what it may do are not here: they are the strip under
+              the card (index.css `.rc-composer-footer`), so this row keeps the two things it is
+              about — writing the message and sending it — apart and quiet. No divider: the field's
+              own air, and the row's `pt-1`, separate them. */}
+          <div className="rc-composer-tray flex items-center gap-2 px-2 pt-1 pb-2">
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
@@ -959,35 +956,13 @@ export const Composer = memo(function Composer({
                 void attachmentsFromFiles(files, images, harnessName).then(attach);
               }}
             />
-            <div className="flex min-w-0 items-center gap-0.5">
-              <FolderMenu thread={thread} cwd={cwd} />
-              {!thread && <WorktreeToggle draft={draft} compact={compact} />}
-              {thread?.worktree && (
-                <Tooltip side="bottom" label={thread.worktree.path}>
-                  <span className="flex h-7 max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden sm:h-6">
-                    <GitBranch size={12} className="shrink-0" />
-                    <span className="truncate">{thread.worktree.branch}</span>
-                  </span>
-                </Tooltip>
-              )}
-              <PermissionMenu threadId={thread?.id} compact={compact} />
-            </div>
             <span className="flex-1" />
             <div className="flex shrink-0 items-center gap-2">
-              {/* The meters keep their size: a ring squeezed under 30px is unreadable. A row too
-                  narrow for them draws them in one menu instead, measured rather than stepped. */}
-              {!tight ? (
-                <div ref={meters} className="flex items-center gap-1.5">
-                  <span className="flex h-7 shrink-0 items-center empty:hidden">
-                    <UsageMeter threadId={thread?.id} />
-                  </span>
-                  <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
-                    <AgentPill threadId={thread?.id} />
-                  </span>
-                </div>
-              ) : (
-                <MetersMenu thread={thread} />
-              )}
+              {/* Who is working for the thread, when any agent is: a status beside the model it runs
+                  on, never a control, so it leaves the strip's business to the strip. */}
+              <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
+                <AgentPill threadId={thread?.id} />
+              </span>
               <ModelPicker thread={thread} compact={compact} />
               {queuedEdit ? (
                 <Tooltip label="Save in the queue (⏎)">
@@ -1051,51 +1026,36 @@ export const Composer = memo(function Composer({
           </div>
         </div>
       </div>
+      {/* The strip under the card: where this thread works (its folder, its worktree or branch),
+          what it may do without asking, and what it has spent. It is the card's footer rather than
+          a row in it: the card floats and keeps its own air, and the strip is attached under its
+          bottom edge, a step lighter than the pane, inset 12px each side, its top edge tucked
+          behind the card (index.css `.rc-composer-footer`). Labels give way with the width (the
+          folder's first), so a narrow window keeps every control and drops what it says. */}
+      <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex h-9 items-center gap-4 px-3 pt-2 text-callout text-fg-muted">
+        <div className="flex min-w-0 items-center gap-1">
+          <FolderMenu thread={thread} cwd={cwd} />
+          {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+          {thread?.worktree && (
+            <Tooltip side="bottom" label={thread.worktree.path}>
+              <span className="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-full px-2 text-fg-muted @max-xl/composer:hidden sm:h-6">
+                <GitBranch size={14} className="shrink-0" />
+                <span className="truncate">{thread.worktree.branch}</span>
+              </span>
+            </Tooltip>
+          )}
+        </div>
+        <span className="flex-1" />
+        <div className="flex shrink-0 items-center gap-1.5">
+          <PermissionMenu threadId={thread?.id} compact={compact} />
+          <span className="flex h-7 shrink-0 items-center empty:hidden">
+            <UsageMeter threadId={thread?.id} />
+          </span>
+        </div>
+      </div>
     </div>
   );
 }, sameComposer);
-
-/**
- * The meters a control row too narrow to hold them: one button, and the same meters inside it, in
- * the order they would have stood. The row is measured, not stepped by a breakpoint.
- */
-function MetersMenu({ thread }: { thread?: ThreadState }) {
-  return (
-    <CardPopover
-      align="end"
-      role="dialog"
-      label="Usage and agents"
-      className="w-[min(300px,calc(100vw-40px))]"
-      trigger={
-        <button
-          type="button"
-          aria-label="Usage and agents"
-          className="flex size-[28px] shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
-        >
-          <Ellipsis size={14} />
-        </button>
-      }
-    >
-      <MeterRow label="Usage">
-        <UsageMeter threadId={thread?.id} />
-      </MeterRow>
-      <MeterRow label="Agents">
-        <AgentPill threadId={thread?.id} />
-      </MeterRow>
-    </CardPopover>
-  );
-}
-
-/** One meter in `MetersMenu`: its name on the left, the control itself on the right. A meter with
- * nothing to say hides its row rather than drawing a label over an empty slot. */
-function MeterRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-8 items-center justify-between gap-3 rounded-sm px-1.5 py-1 empty:hidden has-[>span:empty]:hidden">
-      <span className="text-callout text-fg-muted">{label}</span>
-      <span className="flex h-7 shrink-0 items-center">{children}</span>
-    </div>
-  );
-}
 
 /** The thread stopped on its plan's limit and carries on by itself when it resets. */
 function LimitWaitRow({ threadId }: { threadId: string }) {
@@ -1244,7 +1204,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
               : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong",
           )}
         >
-          <GitBranch size={12} className="shrink-0" />
+          <GitBranch size={14} className="shrink-0" />
           {/* The label drops at the same step as the branch chip beside it, so a narrow card keeps
               the toggle, the folder and the mode without the row running out of room. */}
           {!compact && !wt.on && <span className="@max-xl/composer:hidden">Worktree</span>}
@@ -1273,27 +1233,31 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
  * The folder a thread works in: for a new thread a menu of projects to start
  * in; once the thread exists, what to do with its folder (Finder, Terminal,
  * copy the path, another thread there).
+ *
+ * The list is projects, not every folder a thread ever ran in: a folder that only holds other
+ * projects (the root, the home folder, `~/code`) is not offered, and a worktree nests under the repo
+ * it was cut from (lib/folderList.ts). One line per row — the name, then the end of its path,
+ * faded — so a deep checkout never turns the list into a wall of wrapping text. "Choose Folder…"
+ * is the last row, and the last thing the arrow keys reach.
  */
 function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   const sessions = useApp((s) => s.sessions);
-  const projects = useMemo(
-    () => [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 30),
-    [sessions],
-  );
   const [filter, setFilter] = useState("");
-  const shown = projects.filter(
-    (p) =>
-      !filter.trim() ||
-      projectName(p).toLowerCase().includes(filter.trim().toLowerCase()) ||
-      p.toLowerCase().includes(filter.trim().toLowerCase()),
-  );
+  const sources = useMemo(() => sessions.map((s) => ({ cwd: s.cwd, worktree: s.worktree })), [sessions]);
+  const all = useMemo(() => folderRows(sources), [sources]);
+  const rows = useMemo(() => folderRows(sources, { filter }), [sources, filter]);
+  // The search appears once there is a list worth searching, and stays while it holds something.
+  const searchable = all.length > 4 || !!filter.trim();
   return (
     <CardPopover
-      align="start"
       label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
       onKeyDown={menuKeys}
       tooltip={cwd || "Choose a folder"}
       className="flex w-[300px] flex-col gap-1"
+      onOpenChange={(open) => {
+        // A search is about the panel it was typed in, not a filter the next one inherits.
+        if (!open) setFilter("");
+      }}
       trigger={
         <button
           type="button"
@@ -1306,11 +1270,11 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
             "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
           )}
         >
-          <Folder size={12} className="shrink-0" />
+          <Folder size={14} className="shrink-0" />
           <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
             {cwd ? projectName(cwd) : "Choose a folder"}
           </span>
-          <ChevronDown size={11} className="shrink-0 text-fg-faint" />
+          <ChevronDown size={12} className="shrink-0 text-fg-faint" />
         </button>
       }
     >
@@ -1318,8 +1282,9 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
         <FolderActions cwd={cwd} />
       ) : (
         <>
-          {/* The projects scroll under a search that filters them; "Choose Folder…" stays pinned. */}
-          {projects.length > 4 && (
+          {/* The folders scroll under a search that filters them; "Choose Folder…" stays pinned
+              under them, last in the list and last to the arrow keys. */}
+          {searchable && (
             <div data-menu-static className="px-0.5 pb-0.5">
               <MenuSearchField
                 value={filter}
@@ -1330,21 +1295,36 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
             </div>
           )}
           <div className="scroll-stable min-h-0 flex-1">
-            {shown.map((p) => (
+            {rows.map((row) => (
               <CardMenuItem
-                key={p}
-                onSelect={() => setProjectCwd(p)}
-                className={cx("flex-col items-start gap-0", p === cwd && "bg-fill")}
+                key={row.path}
+                onSelect={() => setProjectCwd(row.path)}
+                className={cx("gap-2", row.path === cwd && "bg-fill", row.repo && "pl-6")}
               >
-                <span className="text-body text-fg">{projectName(p)}</span>
-                <span className="w-full truncate text-caption text-fg-muted" dir="rtl">
-                  <bdi>{p}</bdi>
+                {/* A worktree is the repo's, not a project of its own: indented under it, marked by
+                    the branch it is. */}
+                {row.repo && <GitBranch size={12} className="shrink-0 text-fg-faint" />}
+                <span className="min-w-0 flex-1 truncate text-body text-fg">
+                  {matchSpans(row.name, filter).map((span, i) =>
+                    span.hit ? (
+                      <mark key={i} className="rounded-xs bg-fill-strong text-fg">
+                        {span.text}
+                      </mark>
+                    ) : (
+                      span.text
+                    ),
+                  )}
+                </span>
+                <span className="shrink-0 truncate text-caption text-fg-faint">
+                  {middleEllipsis(row.path, PATH_CHARS)}
                 </span>
               </CardMenuItem>
             ))}
-            {!shown.length && <p className="px-3 py-2 text-callout text-fg-muted">No folder matches</p>}
+            {!rows.length && all.length > 0 && (
+              <p className="px-3 py-2 text-callout text-fg-muted">No folder matches</p>
+            )}
           </div>
-          {projects.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
+          {all.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
           <CardMenuItem onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}>
             <FolderPlus size={13} className="text-fg-muted" /> Choose Folder…
           </CardMenuItem>
@@ -1358,8 +1338,8 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
 function FolderActions({ cwd }: { cwd: string }) {
   return (
     <>
-      <div className="truncate px-3 pt-1 pb-1.5 text-caption text-fg-muted" dir="rtl">
-        <bdi>{cwd}</bdi>
+      <div className="truncate px-3 pt-1 pb-1.5 text-caption text-fg-muted">
+        {middleEllipsis(cwd, PATH_CHARS + 10)}
       </div>
       <CardMenuItem onSelect={() => openPath(cwd)}>
         <FolderOpen size={13} className="text-fg-muted" /> Open in Finder
@@ -1400,7 +1380,6 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
   const Icon = PERMISSION_ICON[mode];
   return (
     <CardPopover
-      align="start"
       role="menu"
       label="Permissions"
       tooltip={current.detail}
@@ -1416,9 +1395,9 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
             mode === "full" && "text-warning hover:text-warning",
           )}
         >
-          <Icon size={12} />
+          <Icon size={14} />
           {!compact && <span className="@max-md/composer:hidden">{current.label}</span>}
-          <ChevronDown size={11} className="text-fg-faint" />
+          <ChevronDown size={12} className="text-fg-faint" />
         </button>
       }
     >
@@ -1463,19 +1442,20 @@ function PlusMenu({
 }) {
   return (
     <CardPopover
-      align="start"
       role="menu"
       label="Attach and more"
       tooltip="Attach and more"
       onKeyDown={menuKeys}
       className="min-w-[220px]"
       trigger={
+        // The one button the message is added to: a 28px round target with an 18px mark, the size
+        // the send circle answers with, so the row's two ends read as the row's two ends.
         <button
           type="button"
           aria-label="Attach and more"
-          className="flex size-7 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-6"
+          className="flex size-7 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong"
         >
-          <Plus size={14} strokeWidth={2.25} />
+          <Plus size={18} strokeWidth={2.25} />
         </button>
       }
     >
