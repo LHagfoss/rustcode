@@ -970,6 +970,218 @@ pub fn operational_event(event: &str, fields: Value) {
     let (fields, session_id) = attributed_fields(fields);
     let payload = serde_json::json!({"event": event, "fields": fields});
     append_line_with_session(&format!("[op] {payload}"), session_id.as_deref());
+    // The same event, projected for an agent to read back from the data store
+    // (`read_activity`, `docs/data-store.md`): allowlisted names and fields
+    // only, so provider text and prompts stay in this log.
+    record_projected_event(event, &fields, session_id.as_deref());
+}
+
+/// The most one string an operational event projects keeps. The allowlist below
+/// has no field that carries prose; ids, enum labels and finish reasons are
+/// short, and anything longer is cut.
+const MAX_EVENT_STRING_CHARS: usize = 96;
+
+/// The operational events the data store projects, with the only field keys
+/// each may carry. Everything else in the `[op]` line stays in `debug.log`: a
+/// provider's error text, a prompt or a path with user content must not become
+/// a table an agent can page.
+const ALLOWED_EVENT_FIELDS: &[(&str, &[&str])] = &[
+    (
+        "turn.start",
+        &[
+            "wakeup",
+            "tool_rounds",
+            "segment_rounds",
+            "segment_limit",
+            "total_round_limit",
+        ],
+    ),
+    (
+        "turn.finish",
+        &[
+            "completed_task",
+            "tool_rounds",
+            "content_bytes",
+            "cancelled",
+            "metrics",
+        ],
+    ),
+    ("turn.performance", &["performance"]),
+    ("turn.stream_retry", &["attempt", "output_phase", "reason"]),
+    (
+        "turn.stream_recovery",
+        &["attempt", "kind", "partial_content_bytes", "outcome"],
+    ),
+    (
+        "turn.budget_exceeded",
+        &[
+            "limit",
+            "tool_rounds",
+            "elapsed_secs",
+            "tokens_used",
+            "failed_mutations",
+            "segment_rounds",
+            "segment_limit",
+            "total_round_limit",
+            "continuation",
+        ],
+    ),
+    (
+        "turn.recovery_decision",
+        &[
+            "round",
+            "source",
+            "decision",
+            "reason",
+            "loop_recovery_attempts",
+            "reasoning_recovery_attempts",
+            "no_progress_streak",
+        ],
+    ),
+    (
+        "tools.batch.finish",
+        &[
+            "count",
+            "requested",
+            "executed",
+            "deferred",
+            "queued",
+            "auto_executed",
+            "successes",
+            "failed",
+            "pending",
+            "changed_paths",
+        ],
+    ),
+    (
+        "context.compaction",
+        &[
+            "trigger",
+            "mode",
+            "before_tokens",
+            "after_tokens",
+            "reclaimed_tokens",
+            "count",
+            "history_tokens",
+            "budget",
+            "messages_considered",
+            "summary_generated",
+            "originating_path",
+            "deterministic_record",
+        ],
+    ),
+    (
+        "harness.reaped",
+        &["harness", "native_session_id", "reason", "idle_ms"],
+    ),
+    ("harness.resumed", &["harness", "native_session_id"]),
+    (
+        "harness.turn_silent",
+        &["harness", "native_session_id", "timeout_ms"],
+    ),
+    (
+        "subagent.spawn",
+        &[
+            "agent_id",
+            "parent_id",
+            "agent_type",
+            "context_inheritance",
+            "inherited_messages",
+        ],
+    ),
+    (
+        "subagent.finish",
+        &["agent_id", "status", "reason", "rounds"],
+    ),
+];
+
+/// The safe projection of one operational event, or `None` when the event is
+/// not allowlisted (no row is written). Scalars are kept and strings clipped;
+/// an allowlisted object (a typed performance or metrics block) keeps its
+/// scalar members only; arrays and deeper objects are dropped.
+fn projected_fields(event: &str, fields: &Value) -> Option<Value> {
+    let allowed = ALLOWED_EVENT_FIELDS
+        .iter()
+        .find(|(name, _)| *name == event)
+        .map(|(_, fields)| *fields)?;
+    let source = fields.as_object()?;
+    let mut projected = serde_json::Map::new();
+    for key in allowed {
+        let Some(value) = source.get(*key) else {
+            continue;
+        };
+        match value {
+            Value::Object(object) => {
+                let mut nested = serde_json::Map::new();
+                for (name, value) in object {
+                    if let Some(value) = safe_scalar(value) {
+                        nested.insert(name.clone(), value);
+                    }
+                }
+                if !nested.is_empty() {
+                    projected.insert((*key).to_owned(), Value::Object(nested));
+                }
+            }
+            other => {
+                if let Some(value) = safe_scalar(other) {
+                    projected.insert((*key).to_owned(), value);
+                }
+            }
+        }
+    }
+    Some(Value::Object(projected))
+}
+
+fn safe_scalar(value: &Value) -> Option<Value> {
+    match value {
+        Value::Number(_) | Value::Bool(_) => Some(value.clone()),
+        Value::String(text) => Some(Value::String(
+            text.chars().take(MAX_EVENT_STRING_CHARS).collect(),
+        )),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// Records the allowlisted projection off the caller's path, never failing it.
+fn record_projected_event(event: &str, fields: &Value, session_id: Option<&str>) {
+    let Some(thread_id) = session_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let Some(projected) = projected_fields(event, fields) else {
+        return;
+    };
+    let Some(path) = crate::data_store::data_path() else {
+        return;
+    };
+    let row = crate::data_store::OperationalEventRow {
+        thread_id: thread_id.to_owned(),
+        turn_id: None,
+        event_type: event.to_owned(),
+        at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        original_bytes: serde_json::to_string(fields)
+            .ok()
+            .map(|text| text.len() as i64),
+        fields_json: Some(projected.to_string()),
+        captured_bytes: None,
+        payload_truncated: false,
+    };
+    // Opening the store, migrating it and inserting must not stall a turn, as
+    // with a provider attempt (`network/stream_request.rs`).
+    let write = move || {
+        if let Err(error) = crate::data_store::record_operational_event_at(&path, &row) {
+            crate::dbg_log!(
+                "data store: {} event of {} not recorded: {error}",
+                row.event_type,
+                row.thread_id
+            );
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let _ = handle.spawn_blocking(write);
+        }
+        Err(_) => write(),
+    }
 }
 
 #[macro_export]
@@ -1168,6 +1380,75 @@ mod tests {
         let session = std::fs::read_to_string(session_path).expect("session log");
         assert!(global.contains("turn.start"));
         assert!(session.contains("turn.start"));
+    }
+
+    #[test]
+    fn only_allowlisted_events_are_projected() {
+        assert!(
+            projected_fields(
+                "turn.start",
+                &serde_json::json!({"session_id": "s", "wakeup": true})
+            )
+            .is_some()
+        );
+        // Every other event stays in the log: the projection is an allowlist.
+        assert!(
+            projected_fields("data_store.backfill", &serde_json::json!({"threads": 3})).is_none()
+        );
+        assert!(
+            projected_fields("turn.summary", &serde_json::json!({"completed_task": true}))
+                .is_none()
+        );
+        assert!(projected_fields("nonsense", &serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn a_projection_drops_keys_it_does_not_allow() {
+        let fields = serde_json::json!({
+            "session_id": "s",
+            "attempt": 2,
+            "output_phase": "content",
+            "reason": "timeout",
+            "error": "provider said: invalid api key sk-live-123",
+            "prompt": "a user's private message",
+            "trace": {"path": "/Users/someone/secret"},
+        });
+        let projected = projected_fields("turn.stream_retry", &fields).expect("allowlisted");
+        assert_eq!(projected["attempt"], 2);
+        assert_eq!(projected["output_phase"], "content");
+        assert_eq!(projected["reason"], "timeout");
+        for key in ["error", "prompt", "session_id", "trace"] {
+            assert!(projected.get(key).is_none(), "{key} must not be projected");
+        }
+    }
+
+    #[test]
+    fn projected_strings_are_clipped_and_typed_blocks_keep_only_scalars() {
+        let long = "x".repeat(500);
+        let fields = serde_json::json!({
+            "completed_task": true,
+            "tool_rounds": 4,
+            "metrics": {
+                "tool_calls": 3,
+                "stop_reason": long,
+                "changed_paths": ["/Users/someone/private"],
+                "performance": {"wall_us": 5},
+            },
+        });
+        let projected = projected_fields("turn.finish", &fields).expect("allowlisted");
+        assert_eq!(projected["completed_task"], true);
+        assert_eq!(projected["tool_rounds"], 4);
+        assert_eq!(projected["metrics"]["tool_calls"], 3);
+        assert_eq!(
+            projected["metrics"]["stop_reason"]
+                .as_str()
+                .expect("clipped string")
+                .chars()
+                .count(),
+            MAX_EVENT_STRING_CHARS
+        );
+        assert!(projected["metrics"].get("changed_paths").is_none());
+        assert!(projected["metrics"].get("performance").is_none());
     }
 
     #[test]

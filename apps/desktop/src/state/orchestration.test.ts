@@ -18,6 +18,7 @@ import {
   checkMessage,
   checkQueryData,
   checkStart,
+  DEFAULT_ACTIVITY_ITEMS,
   depthOf,
   emptyBook,
   failureJson,
@@ -36,6 +37,7 @@ import {
   linksLeft,
   listSessions,
   MAX_ACTIVE_LINKS,
+  MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
   MAX_DEPTH,
   MAX_TREE_LINKS,
@@ -141,7 +143,7 @@ describe("management tools", () => {
 describe("orchestration rules", () => {
   test("the app advertises the version whose account argument it answers", () => {
     // The engine strips `account` below this version and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(5);
+    expect(CAPABILITY_VERSION).toBe(6);
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {
@@ -460,6 +462,32 @@ describe("the data store", () => {
       limit: MAX_DATA_ROWS,
     });
     expect(isFailure(parseCall({ tool: "query_data", args: { sql: "  " } }))).toBe(true);
+  });
+
+  test("parses read_activity and clamps its page", () => {
+    expect(parseCall({ tool: "read_activity", args: { session_id: "b" } })).toEqual({
+      tool: "read_activity",
+      target: "b",
+      after: undefined,
+      limit: DEFAULT_ACTIVITY_ITEMS,
+    });
+    expect(
+      parseCall({ tool: "read_activity", args: { session_id: "b", after: " at|event|3 ", limit: 2 } }),
+    ).toEqual({ tool: "read_activity", target: "b", after: "at|event|3", limit: 2 });
+    // A limit is clamped, never refused: the store bounds the page either way.
+    expect(parseCall({ tool: "read_activity", args: { session_id: "b", limit: 1e9 } })).toMatchObject({
+      limit: MAX_ACTIVITY_ITEMS,
+    });
+    expect(parseCall({ tool: "read_activity", args: { session_id: "b", limit: 0 } })).toMatchObject({
+      limit: 1,
+    });
+    expect(isFailure(parseCall({ tool: "read_activity", args: {} }))).toBe(true);
+  });
+
+  test("read_activity refuses an unknown thread and the caller's own", () => {
+    const a = thread("a");
+    expect(checkMessage(a, undefined, emptyBook(), true)?.code).toBe("not_found");
+    expect(checkMessage(a, a, emptyBook(), true)?.code).toBe("not_allowed");
   });
 
   test("usage is scoped to the caller's project while reading across projects is off", () => {

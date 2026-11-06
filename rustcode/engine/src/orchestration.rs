@@ -48,6 +48,7 @@ pub const TRANSFER_SESSION: &str = "transfer_session";
 pub const LIST_PENDING_REQUESTS: &str = "list_pending_requests";
 pub const THREAD_USAGE: &str = "thread_usage";
 pub const QUERY_DATA: &str = "query_data";
+pub const READ_ACTIVITY: &str = "read_activity";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
@@ -67,8 +68,10 @@ pub const V3_TOOL_NAMES: [&str; 10] = [
 ];
 /// Added by version 4: the data store — tokens and reported cost, and SQL.
 pub const V4_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
+/// Added by version 6: one thread's recorded activity, paged.
+pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 5;
+pub const VERSION: u8 = 6;
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -87,6 +90,9 @@ pub const MIN_FAN_OUT: usize = 2;
 pub const MAX_FAN_OUT: usize = 4;
 /// The longest SQL `query_data` takes: a question, not a dump.
 pub const MAX_SQL_BYTES: usize = 8 * 1024;
+/// The longest `after` cursor `read_activity` accepts: an `at`, a source and a
+/// row id, so anything longer is not one of its tokens.
+pub const MAX_ACTIVITY_CURSOR_BYTES: usize = 128;
 /// The longest title a new thread takes.
 pub const MAX_TITLE_CHARS: usize = 200;
 
@@ -121,6 +127,9 @@ pub const PROMPT_HINT_V4: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V4`] for version 5 clients, which can name a login.
 pub const PROMPT_HINT_V5: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
+/// [`PROMPT_HINT_V5`] for version 6 clients, which can page a thread's activity.
+pub const PROMPT_HINT_V6: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -129,7 +138,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         2 => PROMPT_HINT_V2,
         3 => PROMPT_HINT_V3,
         4 => PROMPT_HINT_V4,
-        _ => PROMPT_HINT_V5,
+        5 => PROMPT_HINT_V5,
+        _ => PROMPT_HINT_V6,
     }
 }
 
@@ -139,6 +149,7 @@ pub fn is_tool(name: &str) -> bool {
         || V2_TOOL_NAMES.contains(&name)
         || V3_TOOL_NAMES.contains(&name)
         || V4_TOOL_NAMES.contains(&name)
+        || V6_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -154,6 +165,11 @@ pub fn is_v3_tool(name: &str) -> bool {
 /// Whether `name` needs a version 4 client (the local data store).
 pub fn is_v4_tool(name: &str) -> bool {
     V4_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 6 client (the activity read).
+pub fn is_v6_tool(name: &str) -> bool {
+    V6_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -175,9 +191,16 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.extend(V3_TOOL_NAMES);
             names
         }
-        _ => {
+        4 => {
             let mut names = tool_names(3);
             names.extend(V4_TOOL_NAMES);
+            names
+        }
+        // Version 5 adds account targeting to existing tools, not another tool.
+        5 => tool_names(4),
+        _ => {
+            let mut names = tool_names(5);
+            names.extend(V6_TOOL_NAMES);
             names
         }
     }
@@ -417,6 +440,24 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 None | Some(Value::Null) => Ok(()),
                 Some(offset) if offset.as_u64().is_some() => Ok(()),
                 Some(_) => Err("offset must be a whole number of bytes".to_owned()),
+            }
+        }
+        READ_ACTIVITY => {
+            required_name(args, "session_id")?;
+            match args.get("after") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(after)) if after.len() <= MAX_ACTIVITY_CURSOR_BYTES => {}
+                Some(_) => {
+                    return Err(
+                        "after must be the `next` token an earlier read_activity returned"
+                            .to_owned(),
+                    );
+                }
+            }
+            match args.get("limit") {
+                None | Some(Value::Null) => Ok(()),
+                Some(limit) if limit.as_u64().is_some() => Ok(()),
+                Some(_) => Err("limit must be a whole number of items".to_owned()),
             }
         }
         START_SESSION => {
@@ -719,7 +760,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 5);
+        assert_eq!(VERSION, 6);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -727,9 +768,11 @@ mod tests {
         assert!(v4.contains(&THREAD_USAGE) && v4.contains(&QUERY_DATA));
         // Version 5 adds account targeting to existing tools, not another tool.
         assert_eq!(tool_names(5), v4);
+        // Version 6 adds the activity read.
+        assert_eq!(tool_names(6), [v4.clone(), V6_TOOL_NAMES.to_vec()].concat());
         assert_eq!(
             tool_names(9),
-            v4,
+            tool_names(6),
             "a newer client gets what this engine speaks"
         );
         for name in [THREAD_USAGE, QUERY_DATA] {
@@ -737,13 +780,23 @@ mod tests {
             assert!(PROMPT_HINT_V4.contains(name), "{name}");
             assert!(!PROMPT_HINT_V3.contains(name), "{name} is v4 only");
         }
+        for name in V6_TOOL_NAMES {
+            assert!(is_tool(name) && is_v6_tool(name));
+            assert!(
+                !is_v4_tool(name) && !v4.contains(&name),
+                "{name} is v6 only"
+            );
+            assert!(PROMPT_HINT_V6.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V5.contains(name), "{name} is v6 only");
+        }
         // The hint a client is told follows the version it advertised.
         assert_eq!(prompt_hint(1), PROMPT_HINT);
         assert_eq!(prompt_hint(2), PROMPT_HINT_V2);
         assert_eq!(prompt_hint(3), PROMPT_HINT_V3);
         assert_eq!(prompt_hint(4), PROMPT_HINT_V4);
         assert_eq!(prompt_hint(5), PROMPT_HINT_V5);
-        assert_eq!(prompt_hint(9), PROMPT_HINT_V5);
+        assert_eq!(prompt_hint(6), PROMPT_HINT_V6);
+        assert_eq!(prompt_hint(9), PROMPT_HINT_V6);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -755,7 +808,7 @@ mod tests {
                     .cloned()
                     .unwrap()
             )),
-            5
+            6
         );
         assert_eq!(
             client_meta_version(Some(
@@ -768,14 +821,16 @@ mod tests {
         );
         // It rides in the root prompt and in the MCP server's instructions, so
         // it is bounded: v4 adds the two data tools, v5 the account line and
-        // the line that says a thread an agent starts is its delegate.
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V5);
+        // the line that says a thread an agent starts is its delegate, v6 the
+        // activity read.
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V6);
         println!(
-            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {tokens} tokens",
+            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
-            crate::network::compaction::estimate_tokens(PROMPT_HINT_V4)
+            crate::network::compaction::estimate_tokens(PROMPT_HINT_V4),
+            crate::network::compaction::estimate_tokens(PROMPT_HINT_V5)
         );
-        assert!(tokens < 300, "{tokens}");
+        assert!(tokens < 330, "{tokens}");
     }
 
     #[test]
