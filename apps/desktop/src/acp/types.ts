@@ -52,6 +52,7 @@ export const Method = {
   capabilitiesSet: "_rustcode/capabilities/set",
   mcpAdd: "_rustcode/capabilities/mcp/add",
   mcpRemove: "_rustcode/capabilities/mcp/remove",
+  mcpRestart: "_rustcode/capabilities/mcp/restart",
   connections: "_rustcode/connections",
   githubLogin: "_rustcode/connections/github/login",
   githubWait: "_rustcode/connections/github/wait",

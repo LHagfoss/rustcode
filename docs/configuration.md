@@ -181,7 +181,10 @@ header and environment names; their values are left out of the prompt, the tool
 result and startup errors, as in `mcp list`. The values the model passes are
 still part of its own tool call in the session history, so prefer adding a
 server that needs a real secret with `rustcode mcp add` yourself. A server that
-fails to start stays saved, and `start` retries it. When a project
+fails to start stays saved, and `start` retries it. In the app, Settings ›
+Capabilities has a Retry action on every server row that reconnects it in place
+without rewriting `config.toml`, so a failed server needs no off-and-on toggle.
+When a project
 `.rustcode/config.toml` sets its own `mcp_servers`, a server added to the user
 config is saved but is not active, and not started, in that workspace.
 

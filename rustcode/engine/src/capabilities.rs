@@ -290,6 +290,26 @@ pub async fn remove_mcp_server(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Restart a configured server in place: stop it and start it again from the
+/// current config, leaving the config file untouched. A start failure is
+/// recorded like a toggle's, so the settings surfaces report it in the
+/// snapshot rather than as a failed request.
+pub async fn restart_mcp_server(name: &str) -> Result<(), String> {
+    let workspace = mcp_workspace();
+    let servers = crate::config::workspace_mcp_servers_in(&user_config_dir()?, &workspace);
+    let Some(server) = servers.iter().find(|server| server.name == name) else {
+        return Err(format!("MCP server '{name}' is no longer configured"));
+    };
+    if !server.enabled {
+        return Err(format!("MCP server '{name}' is disabled"));
+    }
+    crate::mcp::shutdown_server(name).await;
+    if let Err(error) = crate::mcp::start_server_by_name_in_workspace(name, &workspace).await {
+        crate::mcp::record_mcp_startup_failure(name, &error);
+    }
+    Ok(())
+}
+
 /// Start or stop a server after its toggle was saved, recording a start
 /// failure so the settings surfaces can show it.
 pub async fn apply_mcp_toggle(name: &str, enabled: bool) {
