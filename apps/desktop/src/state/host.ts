@@ -433,25 +433,143 @@ export async function answerOrchestration(params: JsonObject): Promise<JsonObjec
 }
 
 async function answer(params: JsonObject): Promise<JsonObject> {
-  const s = useApp.getState();
-  const callerId = typeof params.sessionId === "string" ? params.sessionId : "";
-  const caller = ruleThread(s, callerId);
+  const caller = ruleThread(useApp.getState(), typeof params.sessionId === "string" ? params.sessionId : "");
   if (!caller) return failureJson(failure("not_found", "the calling thread is not listed"));
   const call = parseCall(params);
   if (isFailure(call)) return failureJson(call);
-  const acrossProjects = () => useApp.getState().readAcrossProjects;
-  /** A read that asked for every project and may not have it: say so, rather than answer half. */
-  const reachRefused = () =>
-    failureJson(
-      failure(
-        "not_allowed",
-        "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Agents",
-      ),
+  // A call that can create a thread or deliver a message may carry a retry key:
+  // its answer is kept, so the same call retried after a dropped answer is
+  // answered from there instead of acting twice (`docs/orchestrator.md`).
+  const key = retryKey(params, call);
+  if (!key) return perform(caller, call);
+  return receipted(caller, call, key, () => perform(caller, call));
+}
+
+/** The tools a retry key applies to: the ones that can start or deliver twice. */
+const KEYED_TOOLS: ReadonlySet<string> = new Set(["message_session", "start_session", "fan_out"]);
+
+/** The retry key a request carries, when it is one the app keeps a receipt for. */
+function retryKey(params: JsonObject, call: { tool: string }): { id: string; argsHash: string } | null {
+  if (!KEYED_TOOLS.has(call.tool)) return null;
+  const id = typeof params.clientRequestId === "string" ? params.clientRequestId : "";
+  const argsHash = typeof params.argsHash === "string" ? params.argsHash : "";
+  // The engine sends both; one without the other is a call with no receipt.
+  return id && argsHash ? { id, argsHash } : null;
+}
+
+/** Calls with a retry key still running in this window, so a duplicate waits for the first. */
+const inFlight = new Map<string, Promise<JsonObject>>();
+
+/**
+ * One call with a retry key, made safe to retry: the receipt the data store
+ * keeps under the caller's key is checked before the app acts and written
+ * right after it succeeds, so the same key and arguments return the recorded
+ * answer (`replayed: true`) instead of starting or delivering twice, for a
+ * week and across restarts. The same key with another action or other
+ * arguments is refused. A duplicate still running here waits for the first
+ * rather than asking the user again.
+ */
+async function receipted(
+  caller: RuleThread,
+  call: { tool: string },
+  key: { id: string; argsHash: string },
+  run: () => Promise<JsonObject>,
+): Promise<JsonObject> {
+  const scope = `${caller.id}\u0000${key.id}`;
+  const running = inFlight.get(scope);
+  if (running) return replayed(await running);
+  // Reserved before the first await, so two duplicates cannot both act.
+  const work = (async () => {
+    const earlier = await receiptLookup(caller.id, call.tool, key);
+    if (earlier.state === "replayed") return replayed(earlier.result);
+    if (earlier.state === "conflict") {
+      return failureJson(failure("invalid", "client_request_id reused with different arguments"));
+    }
+    const result = await run();
+    // A refusal or a failure did nothing to record; a success is the receipt.
+    if (!result.error) await receiptSave(caller.id, call.tool, key, result);
+    return result;
+  })();
+  inFlight.set(scope, work);
+  try {
+    return await work;
+  } finally {
+    inFlight.delete(scope);
+  }
+}
+
+/** A recorded answer, marked so an agent knows it is not new work. */
+const replayed = (result: JsonObject): JsonObject => (result.error ? result : { ...result, replayed: true });
+
+type Earlier = { state: "none" } | { state: "conflict" } | { state: "replayed"; result: JsonObject };
+
+/**
+ * What the store remembers under a caller's retry key. A store that cannot
+ * answer counts as nothing remembered: a receipt is a safety net, and losing
+ * it must not stop the call the user allowed.
+ */
+async function receiptLookup(
+  caller: string,
+  action: string,
+  key: { id: string; argsHash: string },
+): Promise<Earlier> {
+  try {
+    const answer = await request<JsonObject>(
+      Method.dataReceiptGet,
+      { caller, clientRequestId: key.id, action, argsHash: key.argsHash },
+      20_000,
     );
-  const threads = () => {
-    const st = useApp.getState();
-    return st.sessions.flatMap((x) => ruleThread(st, x.id) ?? []);
-  };
+    if (answer.state === "conflict") return { state: "conflict" };
+    if (answer.state === "replayed") {
+      return { state: "replayed", result: (answer.result ?? {}) as JsonObject };
+    }
+    return { state: "none" };
+  } catch {
+    return { state: "none" };
+  }
+}
+
+/** Writes the receipt of a call that succeeded; a store that cannot keep it does not fail the call. */
+async function receiptSave(
+  caller: string,
+  action: string,
+  key: { id: string; argsHash: string },
+  result: JsonObject,
+): Promise<void> {
+  try {
+    await request(
+      Method.dataReceiptPut,
+      { caller, clientRequestId: key.id, action, argsHash: key.argsHash, result },
+      20_000,
+    );
+  } catch {
+    // The call happened either way; a lost receipt only costs a safe retry.
+  }
+}
+
+/** A read that asked for every project and may not have it: say so, rather than answer half. */
+function reachRefused(): JsonObject {
+  return failureJson(
+    failure(
+      "not_allowed",
+      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Agents",
+    ),
+  );
+}
+
+/** Every thread the app lists, as the rules see it. */
+function allThreads(): RuleThread[] {
+  const st = useApp.getState();
+  return st.sessions.flatMap((x) => ruleThread(st, x.id) ?? []);
+}
+
+/** The answer to one call, once its retry key (if any) has been checked. */
+async function perform(
+  caller: RuleThread,
+  call: Exclude<ReturnType<typeof parseCall>, Failure>,
+): Promise<JsonObject> {
+  const acrossProjects = () => useApp.getState().readAcrossProjects;
+  const threads = allThreads;
   switch (call.tool) {
     case "list_sessions":
       if (call.allProjects && !acrossProjects()) return reachRefused();
@@ -475,7 +593,7 @@ async function answer(params: JsonObject): Promise<JsonObject> {
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return listWorktrees(threads(), caller, call.allProjects);
     case "list_projects":
-      return listProjects(s);
+      return listProjects(useApp.getState());
     case "list_pull_requests":
       return listPullRequests(caller, call.state);
     case "update_session":

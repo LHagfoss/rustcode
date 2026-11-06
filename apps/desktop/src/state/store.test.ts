@@ -2017,6 +2017,120 @@ describe("what a delegated thread may do without asking", () => {
   });
 });
 
+describe("retrying a call that starts or messages a thread", () => {
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const caller = useApp.getState().sessions[0]!.id;
+    // Full access answers for the user on the card, so these tests see the
+    // receipt and nothing else.
+    setPermissionMode(caller, "full");
+    return caller;
+  };
+  /** A call the engine forwards with a retry key and the hash of its arguments. */
+  const keyed = (caller: string, argsHash: string, args: JsonObject = {}) => ({
+    sessionId: caller,
+    tool: "start_session",
+    args: { prompt: "do it", title: "Child", client_request_id: "call-1", ...args },
+    clientRequestId: "call-1",
+    argsHash,
+  });
+  const started = () => useApp.getState().links.links.length;
+
+  test("a retried start returns the first answer instead of starting another thread", async () => {
+    const caller = await ready();
+    const threads = useApp.getState().sessions.length;
+    const first = await answerOrchestration(keyed(caller, "h1"));
+    expect(first.error).toBeUndefined();
+    expect(first.replayed).toBeUndefined();
+    expect(started()).toBe(1);
+    const session = String(first.session_id);
+    const link = String(first.link_id);
+
+    // The answer the app gave was dropped on the way back: the same call again.
+    const again = await answerOrchestration(keyed(caller, "h1"));
+    expect(again.error).toBeUndefined();
+    expect(again.replayed).toBe(true);
+    expect(again.session_id).toBe(session);
+    expect(again.link_id).toBe(link);
+    expect(started()).toBe(1);
+    expect(useApp.getState().sessions.length).toBe(threads + 1);
+  });
+
+  test("the same key with other arguments is refused", async () => {
+    const caller = await ready();
+    await answerOrchestration(keyed(caller, "h1"));
+    const changed = await answerOrchestration(keyed(caller, "h2", { prompt: "something else" }));
+    const said = (changed.error as { message: string } | undefined)?.message ?? "";
+    expect(said).toContain("client_request_id reused with different arguments");
+    expect(started()).toBe(1);
+    // Its own key is what another call of the same arguments may use.
+    const other = await answerOrchestration({
+      ...keyed(caller, "h2", { prompt: "elsewhere" }),
+      clientRequestId: "call-2",
+    });
+    expect(other.error).toBeUndefined();
+    expect(other.replayed).toBeUndefined();
+    expect(started()).toBe(2);
+  });
+
+  test("two duplicates in flight at once start one thread and both hear of it", async () => {
+    const caller = await ready();
+    const [one, two] = await Promise.all([
+      answerOrchestration(keyed(caller, "h1")),
+      answerOrchestration(keyed(caller, "h1")),
+    ]);
+    expect(one.error).toBeUndefined();
+    expect(two.error).toBeUndefined();
+    expect(started()).toBe(1);
+    expect(two.session_id).toBe(one.session_id);
+    // Whichever finished second is the replay.
+    expect([one.replayed, two.replayed].filter(Boolean)).toHaveLength(1);
+  });
+
+  test("a refused call leaves no receipt, so a corrected retry runs", async () => {
+    const caller = await ready();
+    const refused = await answerOrchestration(keyed(caller, "h1", { harness: "nope" }));
+    expect((refused.error as { message: string } | undefined)?.message).toContain("can run now");
+    const corrected = await answerOrchestration(keyed(caller, "h2", { harness: "rustcode" }));
+    expect(corrected.error).toBeUndefined();
+    expect(corrected.replayed).toBeUndefined();
+    expect(started()).toBe(1);
+  });
+
+  test("a retried message is delivered once, not twice", async () => {
+    const caller = await ready();
+    const child = String((await answerOrchestration(keyed(caller, "h1"))).session_id);
+    const params = {
+      sessionId: caller,
+      tool: "message_session",
+      args: { session_id: child, message: "one more thing", client_request_id: "m1" },
+      clientRequestId: "m1",
+      argsHash: "hm",
+    };
+    const first = await answerOrchestration(params);
+    expect(first.error).toBeUndefined();
+    const again = await answerOrchestration(params);
+    expect(again.replayed).toBe(true);
+    expect(again.link_id).toBe(first.link_id);
+    const sent = useApp.getState().links.links.filter((l) => l.message === "one more thing");
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a call with no retry key behaves as before", async () => {
+    const caller = await ready();
+    const plain = { sessionId: caller, tool: "start_session", args: { prompt: "do it", title: "Child" } };
+    const first = await answerOrchestration(plain);
+    const second = await answerOrchestration(plain);
+    expect(first.error).toBeUndefined();
+    expect(second.error).toBeUndefined();
+    expect(second.replayed).toBeUndefined();
+    // Two calls, two threads: nothing is remembered without a key.
+    expect(first.session_id).not.toBe(second.session_id);
+    expect(started()).toBe(2);
+  });
+});
+
 describe("a delegated thread's place in the sidebar", () => {
   const ready = async () => {
     await connect(new MockTransport({ delayMs: 0 }));

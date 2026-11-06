@@ -393,9 +393,10 @@ mod listen {
             return CallAnswer::failure(format!("error: RustCode did not answer: {error}"));
         }
         serde_json::from_slice(&answer).unwrap_or_else(|_| {
-            CallAnswer::failure(
-                "error: RustCode closed the call without an answer; if it was a message, it may have been delivered",
-            )
+            CallAnswer::failure(format!(
+                "error: RustCode closed the call without an answer; if it was a message, it may have been delivered{}",
+                super::super::retry_hint(&request.tool, &request.args)
+            ))
         })
     }
 }

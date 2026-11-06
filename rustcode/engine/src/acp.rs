@@ -1685,9 +1685,35 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: data::DataReceiptsGetRequest, responder, connection| {
+                connection.spawn(async move {
+                    match data::receipts_get(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |_request: telemetry::TelemetryRequest, responder, connection| {
                 connection.spawn(async move {
                     match telemetry::answer() {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: data::DataReceiptsPutRequest, responder, connection| {
+                connection.spawn(async move {
+                    match data::receipts_put(request) {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),

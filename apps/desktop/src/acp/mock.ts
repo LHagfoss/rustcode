@@ -31,6 +31,12 @@ export interface MockOptions {
    * `MockEngine` on the same transport). Seeded here when a test starts from a stored book.
    */
   links?: JsonObject;
+  /**
+   * The orchestration command receipts the engine's data store keeps, by
+   * `<caller>\u0000<client_request_id>`. Kept across an engine restart like
+   * `links`, since surviving one is the point of a receipt.
+   */
+  receipts?: JsonObject;
 }
 
 interface MockThread {
@@ -291,6 +297,11 @@ function update(sessionId: string, body: JsonObject): JsonObject {
 }
 
 const text = (t: string) => ({ type: "text", text: t });
+
+/** An orchestration call's receipt key: the caller thread and its retry key, as the store holds it. */
+function receiptKey(params: JsonObject | undefined): string {
+  return `${str(params?.caller) ?? ""}\u0000${str(params?.clientRequestId) ?? ""}`;
+}
 
 /** A recorded parent as `session/list` carries it in `_meta.rustcode.parent`. */
 const mockParent = (parent: { id?: string; title?: string }): Json => ({
@@ -1014,6 +1025,11 @@ export class MockEngine {
   private set linkBook(book: JsonObject | undefined) {
     this.options.links = book;
   }
+  /** What the store remembers of each orchestration call made with a retry key. */
+  private get receipts(): JsonObject {
+    this.options.receipts ??= {};
+    return this.options.receipts;
+  }
   /** The engine's themes: the app's built-ins plus one user theme, as `_rustcode/themes` lists them. */
   private themes: JsonObject[] = [
     ...BUILTIN_THEMES.map((t) => ({ ...t, tokens: { ...t.tokens } }) as unknown as JsonObject),
@@ -1487,6 +1503,29 @@ export class MockEngine {
           stored: this.linkBook !== undefined,
           book: this.linkBook ?? { links: [], grants: {}, counters: {}, fanOuts: [] },
         };
+      case "_rustcode/data/receipts/get": {
+        // The same shape engine/src/acp/data.rs answers with.
+        const key = receiptKey(params);
+        const stored = obj(this.receipts[key]);
+        if (!stored) return { state: "none" };
+        if (stored.action !== str(obj(params)?.action) || stored.argsHash !== str(obj(params)?.argsHash)) {
+          return { state: "conflict" };
+        }
+        return { state: "replayed", result: stored.result ?? {}, created_at: stored.createdAt ?? "" };
+      }
+      case "_rustcode/data/receipts/put": {
+        const key = receiptKey(params);
+        const result = obj(obj(params)?.result);
+        if (!result) throw Object.assign(new Error("result must be a JSON object"), { code: -32602 });
+        // The first receipt under a key stays, as the store keeps it.
+        this.receipts[key] ??= {
+          action: str(obj(params)?.action) ?? "",
+          argsHash: str(obj(params)?.argsHash) ?? "",
+          result,
+          createdAt: new Date().toISOString(),
+        };
+        return { saved: true };
+      }
       case "_rustcode/data/links/save": {
         const book = obj(params)?.book;
         if (!book || typeof book !== "object" || Array.isArray(book)) {

@@ -35,6 +35,9 @@ export const Method = {
   dataActivity: "_rustcode/data/activity",
   dataLinksLoad: "_rustcode/data/links/load",
   dataLinksSave: "_rustcode/data/links/save",
+  /** An orchestration call's receipt: checked before the app acts, written after it succeeds. */
+  dataReceiptGet: "_rustcode/data/receipts/get",
+  dataReceiptPut: "_rustcode/data/receipts/put",
   /** The two payload-capture switches (`engine/src/acp/telemetry.rs`). */
   telemetry: "_rustcode/config/telemetry",
   telemetrySet: "_rustcode/config/telemetry/set",
