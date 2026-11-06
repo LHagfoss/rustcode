@@ -24,6 +24,7 @@ import {
   connect,
   createSession,
   DEFAULT_PANEL,
+  dismissPendingSetup,
   editMessage,
   ensureHarnessModels,
   errorText,
@@ -55,6 +56,7 @@ import {
   request,
   resetForTests,
   resumeQueue,
+  retryPendingSetup,
   saveQueuedEdit,
   selectThread,
   sendDecisionFor,
@@ -2047,6 +2049,94 @@ describe("a delegated thread's place in the sidebar", () => {
     const summary = useApp.getState().sessions.find((x) => x.id === id)!;
     expect(summary.parent).toBeUndefined();
     expect(topLevel(summary, [], new Set([id]))).toBe("shown");
+  });
+});
+
+describe("a message sent from the new-thread screen", () => {
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    startNewThread();
+  };
+  const picture = {
+    id: "img1",
+    kind: "image" as const,
+    name: "shot.png",
+    mimeType: "image/png",
+    data: "AAAA",
+  };
+
+  test("shows the message before the session exists, and sends it once after", async () => {
+    await ready();
+    const before = useApp.getState().sessions.length;
+    const sending = submit("rename the greeting");
+    // The press is answered on the spot: the message is on screen, and no session is asked for yet.
+    const pending = useApp.getState().pendingSetup;
+    expect(pending?.text).toBe("rename the greeting");
+    expect(pending?.title).toBe("rename the greeting");
+    expect(useApp.getState().selectedId).toBeNull();
+    expect(useApp.getState().sessions.length).toBe(before);
+
+    expect(await sending).toBe(true);
+    const s = useApp.getState();
+    const id = s.selectedId!;
+    expect(s.pendingSetup).toBeNull();
+    expect(s.sessions[0]?.id).toBe(id);
+    expect(s.sessions.length).toBe(before + 1);
+    // One message, and no second copy waiting behind it.
+    const mine = s.threads[id]!.items.filter((i) => i.kind === "user");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.text).toBe("rename the greeting");
+    expect(s.threads[id]!.queue).toHaveLength(0);
+  });
+
+  test("a second send while the first sets up starts no second thread", async () => {
+    await ready();
+    const before = useApp.getState().sessions.length;
+    const first = submit("one");
+    const setupId = useApp.getState().pendingSetup?.id;
+    // The composer puts its text back when the send answers false: nothing is lost either way.
+    expect(await submit("two")).toBe(false);
+    expect(useApp.getState().pendingSetup?.id).toBe(setupId);
+    expect(await first).toBe(true);
+    expect(useApp.getState().sessions).toHaveLength(before + 1);
+    expect(
+      useApp.getState().threads[useApp.getState().selectedId!]?.items.filter((i) => i.kind === "user"),
+    ).toHaveLength(1);
+  });
+
+  test("a failure keeps the message and its pictures, and Retry sends them again", async () => {
+    await ready();
+    const before = useApp.getState().sessions.length;
+    useApp.setState({ newThread: { harness: "no-such-harness", model: null, effort: null } });
+    // True: the field stays clear, because the failed bubble holds the message and it can be retried.
+    expect(await submit("look at this", { ...emptyExtras, attachments: [picture] })).toBe(true);
+    const failed = useApp.getState().pendingSetup;
+    expect(failed?.failure?.text).toContain("no-such-harness");
+    expect(failed?.text).toBe("look at this");
+    expect(failed?.extras?.attachments).toHaveLength(1);
+    expect(useApp.getState().sessions.length).toBe(before);
+    expect(useApp.getState().selectedId).toBeNull();
+
+    // Retry on a harness that starts sends the same message, with its picture, once.
+    switchNewThreadHarness("rustcode");
+    expect(await retryPendingSetup()).toBe(true);
+    const s = useApp.getState();
+    expect(s.pendingSetup).toBeNull();
+    const mine = s.threads[s.selectedId!]!.items.filter((i) => i.kind === "user");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.text).toBe("look at this");
+    expect(mine[0]!.attachments).toHaveLength(1);
+  });
+
+  test("Dismiss gives up the failed send and puts what it held back in the field", async () => {
+    await ready();
+    useApp.setState({ newThread: { harness: "no-such-harness", model: null, effort: null } });
+    await submit("look at this", { ...emptyExtras, attachments: [picture] });
+    dismissPendingSetup();
+    expect(useApp.getState().pendingSetup).toBeNull();
+    expect(useApp.getState().drafts.new).toBe("look at this");
+    expect(useApp.getState().extras.new?.attachments).toHaveLength(1);
   });
 });
 

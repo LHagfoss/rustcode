@@ -18,19 +18,22 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
+import { flyInFromComposer } from "../lib/sendFlight";
+import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
-import type { PendingSetup } from "../state/setup";
+import { type PendingSetup, pendingStatus } from "../state/setup";
 import {
   dismissPendingSetup,
   refreshSessions,
   repairThread,
+  retryPendingSetup,
   setDraft,
   setPanel,
   setProjectCwd,
@@ -496,30 +499,65 @@ function PendingClock({ since }: { since: number }) {
 }
 
 /**
- * The message a thread was sent with, while its worktree is made: the same user row the transcript
- * draws, then Setting up with its clock. Failed, the error takes its place with the way to dismiss.
+ * The message a thread was sent with, while the engine is still making it: the same user row the
+ * transcript will draw, with its pictures and files, in the place it will keep, and under it what is
+ * happening and for how long. Nothing here waits on the field at the foot: the thread's own chat
+ * takes the screen the moment the session exists. Failed, the reason takes the line's place with
+ * Retry, which sends the same message again, and Dismiss, which puts the text back in the field.
  */
-function PendingSetupView({ pending }: { pending: PendingSetup }) {
+function PendingSetupView({ pending, bottomInset }: { pending: PendingSetup; bottomInset: number }) {
+  const row = useRef<HTMLDivElement>(null);
+  // The message rises out of the composer it was sent from, as every sent message does; a retry
+  // has its own clock, so it rises again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the clock is the cue to replay it
+  useLayoutEffect(() => {
+    flyInFromComposer(row.current);
+  }, [pending.startedAt]);
+  const extras = pending.extras ?? emptyExtras;
+  const shown = composedText(pending.text, extras);
+  const attachments = sentAttachments(extras);
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="min-h-0 flex-1 overflow-y-auto px-3 [scrollbar-gutter:stable_both-edges] sm:px-12">
       <div
-        className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5 px-3 pb-4 sm:px-5"
-        style={{ paddingTop: HEADER_HEIGHT + 20 }}
+        // Bottom-aligned by the same inset the transcript uses, so the row does not move when the
+        // session arrives and the thread's own transcript takes over.
+        className="flex min-h-full flex-col justify-end"
+        style={{ paddingTop: HEADER_HEIGHT + 20, paddingBottom: bottomInset }}
       >
-        <UserRow item={{ kind: "user", id: pending.id, text: pending.text || pending.title }} />
-        {pending.failure ? (
-          <Callout action={<Pill onClick={dismissPendingSetup}>Dismiss</Pill>}>
-            {pending.failure.text}
-          </Callout>
-        ) : (
-          <div className="flex items-center gap-2 text-body text-fg-muted" role="status">
-            <Spinner size={14} />
-            <span>Setting up worktree…</span>
-            <span className="text-fg-faint tabular">
-              <PendingClock since={pending.startedAt} />
-            </span>
+        <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5">
+          <div ref={row}>
+            <UserRow
+              item={{
+                kind: "user",
+                id: pending.id,
+                text: shown || pending.title,
+                attachments: attachments.length ? attachments : undefined,
+              }}
+            />
           </div>
-        )}
+          {pending.failure ? (
+            <Callout
+              action={
+                <>
+                  <Pill prominent onClick={() => void retryPendingSetup()}>
+                    Retry
+                  </Pill>
+                  <Pill onClick={dismissPendingSetup}>Dismiss</Pill>
+                </>
+              }
+            >
+              {pending.failure.text}
+            </Callout>
+          ) : (
+            <div className="flex items-center gap-2 text-body text-fg-muted" role="status">
+              <Spinner size={14} />
+              <span>{pendingStatus(pending)}</span>
+              <span className="text-fg-faint tabular">
+                <PendingClock since={pending.startedAt} />
+              </span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -632,7 +670,7 @@ export function ChatView() {
           ) : thread?.loading ? (
             <TranscriptSkeleton />
           ) : showsPending && pending ? (
-            <PendingSetupView pending={pending} />
+            <PendingSetupView pending={pending} bottomInset={stackHeight + 32} />
           ) : (
             <div className="flex-1" />
           )}

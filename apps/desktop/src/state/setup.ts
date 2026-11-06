@@ -1,9 +1,11 @@
-// A thread the app has sent but the engine has not made yet: `session/new` is checking out a
-// worktree and starting a harness, which can take a minute. The row and the chat show it while
-// that runs, and it becomes the real thread in one update when the session exists. Pure, so the
-// store and its tests share one answer (store.ts `createThread`, ui/Sidebar.tsx, ui/ChatView.tsx).
+// A thread the app has sent but the engine has not made yet: `session/new` is starting a harness
+// and may be checking out a worktree, which can take a minute. The row and the chat show the
+// message while that runs, so sending is instant, and it becomes the real thread in one update
+// when the session exists. Pure, so the store and its tests share one answer (store.ts
+// `createThread`, ui/Sidebar.tsx, ui/ChatView.tsx).
 
 import type { SessionSummary } from "../acp/types";
+import type { ComposeExtras } from "./compose";
 
 /** The worktree `session/new` was asked to make. */
 export interface SetupWorktree {
@@ -17,11 +19,14 @@ export interface PendingSetup {
   id: string;
   /** The message waiting to be sent once the thread exists. */
   text: string;
+  /** What goes with it: its images and files, its links and the command in front of it. */
+  extras?: ComposeExtras;
   /** What the row calls it: the message's title. */
   title: string;
   /** Where the thread starts, before the worktree exists. */
   cwd: string;
-  worktree: SetupWorktree;
+  /** The worktree `session/new` was asked for, when the toggle was on. */
+  worktree?: SetupWorktree;
   /** When the send happened: the row and the chat tick from here. */
   startedAt: number;
   /** Set when `session/new` refused or failed: the row and the chat keep it until dismissed. */
@@ -77,11 +82,19 @@ export function pendingSummary(pending: PendingSetup): SessionSummary {
     cwd: pending.cwd,
     title: pending.title,
     updatedAt: pending.startedAt,
-    // Its repository places it under the right project, as the real thread will be.
-    worktree: {
-      path: pending.cwd,
-      branch: pending.worktree.branch ?? "",
-      repo: pending.worktree.repo,
-    },
+    // Its repository places it under the right project, as the real thread will be; one with no
+    // worktree is placed by its folder, as its own row will be.
+    worktree: pending.worktree
+      ? {
+          path: pending.cwd,
+          branch: pending.worktree.branch ?? "",
+          repo: pending.worktree.repo,
+        }
+      : undefined,
   };
+}
+
+/** What the setup's row says it is doing: its worktree, or the harness it is reading in. */
+export function pendingStatus(pending: PendingSetup): string {
+  return pending.worktree ? "Setting up worktree…" : "Starting…";
 }

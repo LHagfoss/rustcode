@@ -270,6 +270,23 @@ composer's keys stay outside the table.
   built-in harness (it ignores `resource_link`) and as `resource_link`
   blocks on others; a file without a path (the browser) is inlined as text
   up to 200 KB.
+- **Sending.** ⏎ answers at once, whatever the harness or the worktree
+  costs: `session/new` starts a harness and may check out a worktree, which
+  can take a minute, so the message is shown before it is asked for
+  (`state/setup.ts` `PendingSetup`). From the new-thread screen the message
+  bubble and the `Starting…` line (with the setup's clock) take the place the
+  thread's first row will keep, with its pictures and files, its links and
+  its command, and the composer waits at the foot; the prompt goes out the
+  moment the session exists, and the thread's own transcript takes over in the
+  same place (`createThread` and `startSetup` in `state/store.ts`). The
+  message's title is the thread's from the first frame, so the row never
+  blinks back to "New thread". A failure keeps the message, its attachments
+  and the reason on the bubble with *Retry*, which sends exactly that again,
+  and *Dismiss*, which gives up and puts the text and its attachments back in
+  the field; a second ⏎ while one is starting starts nothing. Attachments are
+  read when they are attached, not when they are sent, and the prompt's blocks
+  are built after the bubble is on screen, so a long paste or a 20 MB picture
+  does not hold the row back.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries

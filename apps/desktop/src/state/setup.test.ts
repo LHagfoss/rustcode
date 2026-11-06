@@ -4,6 +4,7 @@ import {
   dismissSetup,
   type NewSetup,
   type PendingSetup,
+  pendingStatus,
   pendingSummary,
   setupFailed,
   setupInProgress,
@@ -42,7 +43,7 @@ describe("a thread setting up", () => {
     const failed = setupFailed(started(), "the branch is already checked out", 2_000);
     expect(failed.failure).toEqual({ text: "the branch is already checked out", at: 2_000 });
     expect(failed.text).toBe("Add the login form");
-    expect(failed.worktree.branch).toBeUndefined();
+    expect(failed.worktree?.branch).toBeUndefined();
     expect(setupInProgress(failed)).toBe(false);
   });
 
@@ -72,5 +73,26 @@ describe("a thread setting up", () => {
       updatedAt: 1_000,
     });
     expect(row.worktree).toMatchObject({ branch: "feat/login", repo: "/Users/you/code/rustcode" });
+  });
+
+  test("a thread with no worktree is placed by its folder, as its own row will be", () => {
+    const row = pendingSummary(started({ worktree: undefined }));
+    expect(row.worktree).toBeUndefined();
+    expect(row.cwd).toBe("/Users/you/code/rustcode");
+    expect(pendingStatus(started({ worktree: undefined }))).toBe("Starting…");
+    expect(pendingStatus(started())).toBe("Setting up worktree…");
+  });
+
+  test("it holds the message's own attachments and links until the session exists", () => {
+    const extras = {
+      links: ["https://example.com"],
+      attachments: [
+        { id: "img1", kind: "image" as const, name: "shot.png", mimeType: "image/png", data: "AAAA" },
+      ],
+    };
+    const pending = beginSetup(null, { ...NEXT, extras }, 1_000)!;
+    expect(pending.extras).toBe(extras);
+    // A failure keeps them with the message: a retry sends exactly what was written.
+    expect(setupFailed(pending, "no git here").extras).toBe(extras);
   });
 });

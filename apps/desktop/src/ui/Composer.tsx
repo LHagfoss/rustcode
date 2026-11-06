@@ -53,6 +53,7 @@ import {
   readImage,
 } from "../lib/native";
 import { observeSize } from "../lib/resize";
+import { fadeClearedField } from "../lib/sendFlight";
 import {
   type Attachment,
   type ComposeExtras,
@@ -249,6 +250,8 @@ export const Composer = memo(function Composer({
   useApp((s) => s.harnesses); // re-render when harness capabilities arrive
   const status = useApp((s) => s.status);
   const field = useRef<HTMLTextAreaElement>(null);
+  // The field's own box (the mirror and the field): what fades when the message leaves it.
+  const fieldBox = useRef<HTMLDivElement>(null);
   // The field's twin: the draft is measured on it, never on the field, whose own box may be halfway
   // through its height transition (lib/fieldHeight.ts).
   const gauge = useRef<HTMLTextAreaElement>(null);
@@ -452,6 +455,8 @@ export const Composer = memo(function Composer({
     }
     update("");
     change(() => emptyExtras);
+    // The field comes back empty in a breath: the message has left for the transcript, not blinked.
+    fadeClearedField(fieldBox.current);
     const sending = steer ? steerOrSubmit(text, sentExtras) : submit(text, sentExtras);
     void sending.then((sent) => {
       // A thread that could not start keeps the message for another try.
@@ -778,6 +783,9 @@ export const Composer = memo(function Composer({
             "rc-composer relative z-10 flex flex-col gap-1",
             dropping && "outline-2 outline-accent outline-dashed",
           )}
+          // Where a message sent from here comes from: its row in the transcript rises out of this
+          // edge (lib/sendFlight.ts).
+          data-rc-composer=""
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) {
               e.preventDefault();
@@ -868,7 +876,7 @@ export const Composer = memo(function Composer({
                   editing stay the field's. The two take the same padding, the same scroll offset and
                   the same mask, so neither drifts from the other; a token's span adds no horizontal
                   padding, which is what keeps the caret on its character. */}
-            <div className="relative min-w-[160px] flex-1 basis-[160px]">
+            <div ref={fieldBox} className="relative min-w-[160px] flex-1 basis-[160px]">
               {tokenized && (
                 <div
                   ref={mirror}
