@@ -87,7 +87,24 @@ be read back instead of guessed at:
 - `harness_rpc_messages`: one row per JSON-RPC request, response or
   notification that crossed RustCode's ACP or Codex stdio boundary.
   `direction` is `harness_to_rustcode` or `rustcode_to_harness`, and
-  `message_kind` is `request`, `response` or `notification`.
+  `message_kind` is `request`, `response` or `notification`. `protocol` is
+  `acp` or `codex-app-server`. `byte_size` is the frame's length and `at` the
+  moment it parsed (inbound) or was handed to the writer (outbound); a
+  response carries the method of the request it answers and, for a request
+  RustCode or the harness sent through this engine, how long it took as
+  `latency_ms`.
+
+  Streamed text is folded, not stored frame by frame: per flush window
+  (about a second) one row stands for every `session/update` notification of
+  the same chunk kind (`agent_message_chunk`, `agent_thought_chunk`,
+  `user_message_chunk`) and for Codex's delta notifications
+  (`item/agentMessage/delta`, `item/reasoning/*Delta`). Its `byte_size` is
+  the total, and its `payload_json` is metadata that is there even with
+  payload capture off: `{"coalesced": <frames>, "update": "<chunk kind>",
+  "bytes": <total>}`. Every other message gets a row of its own. The
+  recorder batches rows and writes them to the store about once a second, a
+  full 128-row buffer, or when the harness stops, so a locked store cannot
+  stall a turn; a buffer over 4096 rows drops them and logs the count.
 - `operational_events`: a small allowlisted projection for an agent to read,
   with a per-thread `sequence` the store assigns (the cursor a reader pages
   with) and safe, bounded fields only.
