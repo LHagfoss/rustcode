@@ -1,3 +1,17 @@
+## [v1.16.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.16.0) - 2026-11-06
+
+### Features
+- The update row appears within 30 seconds of a release, and only once the release can actually be installed. (#3085)
+- The side panel stays closed until you open it, and each thread reopens the panel you last had open on it. (#3086)
+- The composer grows and shrinks smoothly with your message, its menus open from the button you pressed, and project, branch, access and usage move to a strip under it. (#3087)
+- Chat turns are tighter: only a finished reply shows copy and fork, and the agent icons for delegated threads are clearer. (#3089)
+- Smart UI views fill in while the agent writes them, and their forms can send your choices back to the agent. (#3088)
+- Links in chat and the composer sit on the text line, and you can mark and copy chat text across messages, links and code. (#3090)
+- Idle agent processes shut down after 30 minutes and pick up where they left off on your next message. (#3092)
+- RustCode sends a system notification and badges the Dock when a thread needs you or finishes. (#3091)
+- Queued messages survive a restart, and a delegated thread's question reaches its busy parent right away when that agent can take it. (#3093)
+- A new thread shows your first message instantly while the agent starts, and sent messages animate into the chat. (#3095)
+- Codex's own subagents show up as live agents in the thread, the same as other harnesses' subagents. (#3094)
 ## [v1.15.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.15.0) - 2026-11-06
 
 ### Features
