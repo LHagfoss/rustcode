@@ -4,11 +4,18 @@
 
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
-import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
+import {
+  foldTurns,
+  groupTools,
+  newestTurnEnd,
+  type ToolGroup,
+  type TurnFold,
+  turnChangeLine,
+} from "../state/fold";
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView } from "../state/queue";
@@ -438,6 +445,29 @@ export function Transcript({
     return checkpointsByTurn(turns, checkpoints);
   }, [thread.items, checkpoints]);
 
+  // The newest finished turn keeps its actions and its change line in view; the older ones wait
+  // for a hover, and their changes fold away with their steps (state/fold.ts, turnChangeLine).
+  const lastEnd = useMemo(() => newestTurnEnd(rows), [rows]);
+
+  // Each finished turn's one change line: the completion card where the harness reported one,
+  // else the checkpoint chip. Never both, and only on the newest turn.
+  const changeLines = useMemo(() => {
+    const map: Record<string, { completion?: TurnCompletion; changes?: ReactNode }> = {};
+    for (const row of rows) {
+      const item = row.item;
+      if (item?.kind !== "turnEnd") continue;
+      const line = turnChangeLine({
+        completion: completions[item.id],
+        checkpoint: turnCheckpoints[item.id],
+        newest: item.id === lastEnd,
+      });
+      if (line?.kind === "completion") map[item.id] = { completion: line.completion };
+      else if (line?.kind === "checkpoint")
+        map[item.id] = { changes: <TurnChanges threadId={thread.id} checkpoint={line.checkpoint} /> };
+    }
+    return map;
+  }, [rows, completions, turnCheckpoints, lastEnd, thread.id]);
+
   // Turn footers that render nothing at all. Nothing measures a row that never mounts, so the
   // virtualizer has to estimate no height for it, or every row below drifts by a footer.
   const footerless = useMemo(() => {
@@ -445,25 +475,18 @@ export function Transcript({
     for (const row of rows) {
       const item = row.item;
       if (item?.kind !== "turnEnd") continue;
+      const line = changeLines[item.id];
       const hidden = turnFooterHidden({
         folded: foldedEnds.has(item.id),
         reply: turnReply.byEnd[item.id]?.text,
-        completion: !!completions[item.id],
-        // A checkpoint with no files changed draws no chip either.
-        changes: !!turnCheckpoints[item.id]?.filesChanged,
+        completion: !!line?.completion,
+        changes: !!line?.changes,
         outcome: item.outcome,
       });
       if (hidden) set.add(item.id);
     }
     return set;
-  }, [rows, foldedEnds, turnReply, completions, turnCheckpoints]);
-
-  // The newest finished turn keeps its actions in view; the older ones wait for a hover.
-  const lastEnd = useMemo(() => {
-    for (let i = rows.length - 1; i >= 0; i--)
-      if (rows[i]!.item?.kind === "turnEnd") return rows[i]!.item!.id;
-    return undefined;
-  }, [rows]);
+  }, [rows, foldedEnds, turnReply, changeLines]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -964,12 +987,8 @@ export function Transcript({
                         lastTurn={item.id === lastEnd}
                         threadId={thread.id}
                         reply={turnReply.byEnd[item.id]?.text}
-                        completion={completions[item.id]}
-                        changes={
-                          turnCheckpoints[item.id]?.filesChanged ? (
-                            <TurnChanges threadId={thread.id} checkpoint={turnCheckpoints[item.id]!} />
-                          ) : undefined
-                        }
+                        completion={changeLines[item.id]?.completion}
+                        changes={changeLines[item.id]?.changes}
                       />
                     ) : null}
                   </div>

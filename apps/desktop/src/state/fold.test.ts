@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { foldLabel, foldTurns, groupTools, inferToolKind, type TurnFold, toolGroupLabel } from "./fold";
+import {
+  foldLabel,
+  foldTurns,
+  groupTools,
+  inferToolKind,
+  newestTurnEnd,
+  type TurnFold,
+  toolGroupLabel,
+  turnChangeLine,
+} from "./fold";
 import type { TranscriptItem } from "./thread";
 
 const user = (id: string): TranscriptItem => ({ kind: "user", id, text: id });
@@ -286,5 +295,101 @@ describe("what a finished turn keeps in view", () => {
     );
     const keys = rows.flatMap((r) => ("item" in r ? [r.item.id] : []));
     expect(keys).toEqual(["u", "a", "s", "e"]);
+  });
+});
+
+describe("the change line a finished turn draws", () => {
+  const completion = (
+    added: number,
+    removed: number,
+    files = 1,
+    checks: { command: string; outcome: "passed" | "failed" | "unknown" }[] = [],
+  ) => ({
+    files: Array.from({ length: files }, (_, i) => ({ path: `src/f${i}.ts`, added, removed })),
+    added: added * files,
+    removed: removed * files,
+    checks,
+  });
+  const checkpoint = (insertions: number, deletions: number, filesChanged = 1) => ({
+    turn: 1,
+    ref: "refs/rustcode/checkpoints/t/1",
+    prompt: "go",
+    filesChanged,
+    insertions,
+    deletions,
+  });
+
+  test("a turn that reported a completion draws that card and no chip", () => {
+    const line = turnChangeLine({ completion: completion(1, 0), checkpoint: checkpoint(9, 9), newest: true });
+    expect(line?.kind).toBe("completion");
+    // Its numbers are the completion's, the one source, so the two can never disagree.
+    expect(line?.kind === "completion" && line.completion).toMatchObject({ added: 1, removed: 0 });
+  });
+
+  test("without a completion the checkpoint chip draws, from the checkpoint alone", () => {
+    const line = turnChangeLine({ completion: null, checkpoint: checkpoint(4, 2), newest: true });
+    expect(line?.kind).toBe("checkpoint");
+    expect(line?.kind === "checkpoint" && line.checkpoint).toMatchObject({ insertions: 4, deletions: 2 });
+  });
+
+  test("a checkpoint that changed no files draws nothing, and so does no report", () => {
+    expect(
+      turnChangeLine({ completion: null, checkpoint: checkpoint(0, 0, 0), newest: true }),
+    ).toBeUndefined();
+    expect(turnChangeLine({ newest: true })).toBeUndefined();
+  });
+
+  test("a completion with only checks keeps its card", () => {
+    const checks = [{ command: "bun test", outcome: "passed" as const }];
+    const line = turnChangeLine({
+      completion: { files: [], added: 0, removed: 0, checks },
+      checkpoint: checkpoint(3, 1),
+      newest: true,
+    });
+    expect(line?.kind).toBe("completion");
+  });
+});
+
+describe("changes once a newer turn exists", () => {
+  const turn = (n: number): TranscriptItem[] => [
+    { kind: "user", id: `u${n}`, text: `go ${n}` },
+    tool(`t${n}`, "completed", `src/f${n}.ts`),
+    reply(`a${n}`),
+    end(`e${n}`),
+  ];
+  const completion = (n: number) => ({
+    files: [{ path: `src/f${n}.ts`, added: n, removed: n }],
+    added: n,
+    removed: n,
+    checks: [],
+  });
+  const checkpoint = (n: number) => ({
+    turn: n,
+    ref: `refs/rustcode/checkpoints/t/${n}`,
+    prompt: `go ${n}`,
+    filesChanged: 1,
+    insertions: n,
+    deletions: n,
+  });
+
+  test("three finished turns keep one fold row each and their changes only on the newest", () => {
+    const rows = foldTurns([...turn(1), ...turn(2), ...turn(3)], false, new Set());
+    // Scrolling back reads one `Worked for …` row per turn: the old work is folded away.
+    expect(rows.flatMap((r) => ("fold" in r ? [r.fold.key] : []))).toEqual(["fold-e1", "fold-e2", "fold-e3"]);
+    const newest = newestTurnEnd(rows);
+    expect(newest).toBe("e3");
+    // Every turn has both a completion and a checkpoint to draw from; one line each, newest only.
+    const lines = ["e1", "e2", "e3"].map((id, i) =>
+      turnChangeLine({ completion: completion(i + 1), checkpoint: checkpoint(i + 1), newest: id === newest }),
+    );
+    expect(lines.map((l) => l?.kind)).toEqual([undefined, undefined, "completion"]);
+  });
+
+  test("the newest turn keeps its line whether it reported a completion or only a checkpoint", () => {
+    const rows = foldTurns([...turn(1), ...turn(2)], false, new Set());
+    const newest = newestTurnEnd(rows);
+    expect(
+      turnChangeLine({ completion: null, checkpoint: checkpoint(2), newest: newest === "e2" })?.kind,
+    ).toBe("checkpoint");
   });
 });

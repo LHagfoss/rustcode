@@ -1,7 +1,9 @@
 // The "Changes" chip under a finished turn: what that turn changed, from its
 // checkpoint (`_rustcode/checkpoints/diff`), and Restore, which puts the
 // files back to before the turn (and the conversation too, when the
-// harness can rewind).
+// harness can rewind). A turn the harness reported a completion for draws
+// that card instead, so a turn never shows its changes twice
+// (state/fold.ts `turnChangeLine`).
 
 import { FileDiff, History } from "lucide-react";
 import { Popover } from "radix-ui";

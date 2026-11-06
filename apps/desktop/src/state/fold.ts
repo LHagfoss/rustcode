@@ -8,7 +8,8 @@
 // Changes). Pure, so the
 // transcript and the tests share it; one pass over the items.
 
-import { subagentOf, type TranscriptItem } from "./thread";
+import type { Checkpoint } from "../acp/v2";
+import { subagentOf, type TranscriptItem, type TurnCompletion } from "./thread";
 import { orchestrationTool } from "./toolNames";
 
 export interface TurnFold {
@@ -44,10 +45,53 @@ export interface ToolGroup {
   kind?: string;
 }
 
+/**
+ * The one change line a finished turn draws: the harness's own report of what
+ * it changed and which checks it ran, else the engine's checkpoint. Never both,
+ * so a turn states its numbers from one source and cannot contradict itself.
+ */
+export type TurnChangeLine =
+  | { kind: "completion"; completion: TurnCompletion }
+  | { kind: "checkpoint"; checkpoint: Checkpoint };
+
+/**
+ * The change line a finished turn draws, if any. A completion card wins where
+ * the harness reported one, since it carries the checks too, and the checkpoint
+ * chip draws only where it did not; a turn therefore shows one set of numbers.
+ * Only the newest finished turn keeps it: once the conversation has moved on,
+ * the turn's changes fold away with its steps, so old work stops announcing
+ * itself further up the thread.
+ */
+export function turnChangeLine({
+  completion,
+  checkpoint,
+  newest,
+}: {
+  completion?: TurnCompletion | null;
+  checkpoint?: Checkpoint | null;
+  /** The thread's newest finished turn. */
+  newest: boolean;
+}): TurnChangeLine | undefined {
+  if (!newest) return undefined;
+  if (completion) return { kind: "completion", completion };
+  if (checkpoint?.filesChanged) return { kind: "checkpoint", checkpoint };
+  return undefined;
+}
+
 export type FoldRow =
   | { key: string; item: TranscriptItem; inFold?: string }
   | { key: string; fold: TurnFold; inFold?: string }
   | { key: string; group: ToolGroup; inFold?: string };
+
+/** The newest finished turn: the one that keeps its change line in view. */
+export function newestTurnEnd(rows: readonly (FoldRow | { item?: TranscriptItem })[]): string | undefined {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!;
+    const item = "item" in row ? row.item : undefined;
+    if (item?.kind === "turnEnd") return item.id;
+  }
+  return undefined;
+}
 
 /** Whether an item stays in view when its turn folds. */
 function staysVisible(item: TranscriptItem): boolean {

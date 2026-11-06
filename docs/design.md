@@ -565,6 +565,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   clipped to the bubble), the final answer (the replies after the last
   step), warnings and errors, and the footer (time, copy, Changes), which
   says only the time: no duration, so a folded turn never states it twice.
+  A turn's changes are one line, never two: the completion card
+  (`N files changed +A −R ›`, with the checks and the files it opens)
+  where the harness reported one, else the checkpoint's `Changes +A −R`
+  chip. The two sources are picked once per turn, so the numbers can't
+  disagree, and only the newest finished turn keeps the line: an older
+  turn's changes fold away with its steps, so scrolling back reads one
+  `Worked for 2m` row per turn. The right panel's Changes view is the
+  thread's own and stays as it is.
   Copy and fork wait for a hover or keyboard focus on the footer, and stay in
   view on the newest finished turn. Opening it shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
