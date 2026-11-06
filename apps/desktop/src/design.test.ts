@@ -48,7 +48,7 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/ChatView.tsx", "Thread status:", "the status pill is a menu trigger"],
   ["ui/Composer.tsx", 'role="option"', "a slash-command menu row"],
   ["ui/Composer.tsx", "aria-pressed={wt.on}", "a worktree toggle; its fill is its state"],
-  ["ui/Composer.tsx", "Attach and more", "a 28px icon button"],
+  ["ui/Composer.tsx", "Attach and more", "a round icon button, the send button's size"],
   ["ui/Composer.tsx", "Show all", "the +N thumbnail tile, sized and shaped as the pictures beside it"],
   ["ui/Review.tsx", "aria-current={selected === path", "a file row in the review pane"],
   ["ui/TurnChanges.tsx", "bg-fill-subtle", "the changes pill is a popover trigger"],

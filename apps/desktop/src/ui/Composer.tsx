@@ -768,7 +768,7 @@ export const Composer = memo(function Composer({
                 );
               })}
             {(drawer === "commands" ? !list.length : !fileList.length) && (
-              <p className="px-5 pt-3.5 pb-7 text-fg-muted text-sub">
+              <p className="px-5 pt-4 pb-7 text-fg-muted text-sub">
                 {drawer === "commands" ? "No matching command." : "No matching files or folders."}
               </p>
             )}
@@ -810,7 +810,7 @@ export const Composer = memo(function Composer({
           {queuedEdit && (
             // A queued message is edited here, not in an input of its own: its text, command, links
             // and attachments are the composer's while it is open, and ⏎ saves them where it waits.
-            <div className="flex items-center gap-1.5 px-4 pt-2 text-caption text-accent">
+            <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-accent">
               <Pencil size={11} />
               <b>Editing a queued message</b>
               <span className="text-fg-muted">· ⏎ saves it in the queue, esc leaves it</span>
@@ -820,7 +820,7 @@ export const Composer = memo(function Composer({
             </div>
           )}
           {editing && (
-            <div className="flex items-center gap-1.5 px-4 pt-2 text-caption text-accent">
+            <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-accent">
               <Pencil size={11} />
               <b>Editing a sent message</b>
               <span className="text-fg-muted">· sending takes the thread back to it</span>
@@ -847,9 +847,10 @@ export const Composer = memo(function Composer({
           )}
           {/* The field and what reads in front of it. The chip and the links drop the field's own 6px
               of padding so they sit on its first line box, not above it. Every text row in the card
-              starts at the same 16px (`px-4`); the tray is inset 8px because its round controls carry
-              8px of their own, which puts their icons on that same edge. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-4 pt-3.5 sm:pt-4">
+              starts at the same 20px (`px-5`), the bigger card's own inset; the tray is inset 12px
+              (`px-3`) because its round controls carry a few px of their own, which puts their icons
+              on the same edge. */}
+          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-5 pt-4">
             {extras.command && (
               // One line of the field's own height (22.75px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
@@ -950,7 +951,7 @@ export const Composer = memo(function Composer({
               the card (index.css `.rc-composer-footer`), so this row keeps the two things it is
               about — writing the message and sending it — apart and quiet. No divider: the field's
               own air, and the row's `pt-1`, separate them. */}
-          <div className="rc-composer-tray flex items-center gap-2 px-2 pt-1 pb-2">
+          <div className="rc-composer-tray flex items-center gap-2 px-3 pt-1 pb-3">
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
@@ -1041,15 +1042,17 @@ export const Composer = memo(function Composer({
           what it may do without asking, and what it has spent. It is the card's footer rather than
           a row in it: the card floats and keeps its own air, and the strip is attached under its
           bottom edge, a step lighter than the pane, inset 12px each side, its top edge tucked
-          behind the card (index.css `.rc-composer-footer`). Labels give way with the width (the
-          folder's first), so a narrow window keeps every control and drops what it says. */}
-      <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex h-9 items-center gap-4 px-3 pt-2 text-callout text-fg-muted">
+          behind the card (index.css `.rc-composer-footer`). Its padding (`px-2 pt-[14px] pb-1.5`,
+          the top 8px of it behind the card) leaves its pills the same 8px on every side. Labels give
+          way with the width (the folder's first), so a narrow window keeps every control and drops
+          what it says. */}
+      <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex items-center gap-4 px-2 pt-[14px] pb-1.5 text-callout text-fg-muted">
         <div className="flex min-w-0 items-center gap-1">
           <FolderMenu thread={thread} cwd={cwd} />
           {!thread && <WorktreeToggle draft={draft} compact={compact} />}
           {thread?.worktree && (
             <Tooltip side="bottom" label={thread.worktree.path}>
-              <span className="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-full px-2 text-fg-muted @max-xl/composer:hidden sm:h-6">
+              <span className="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-full px-2 text-fg-muted @max-xl/composer:hidden">
                 <GitBranch size={14} className="shrink-0" />
                 <span className="truncate">{thread.worktree.branch}</span>
               </span>
@@ -1075,7 +1078,7 @@ function LimitWaitRow({ threadId }: { threadId: string }) {
   const running = useApp((s) => s.threads[threadId]?.running);
   if (!wait || running) return null;
   return (
-    <div className="flex items-center gap-1.5 px-4 pt-2 text-caption text-fg-muted">
+    <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-fg-muted">
       <Clock size={11} className="shrink-0" />
       <span className="min-w-0 truncate">Continues when the limit resets, at {limitTime(wait.until)}</span>
       <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => dropLimitWait(threadId)}>
@@ -1110,7 +1113,7 @@ function AttachmentStrip({
   return (
     // Its own band above the field, inset from the box's rounder corner and never shrinking, so the
     // thumbnails clear the curve and only the field below scrolls.
-    <div className="flex shrink-0 gap-2 overflow-x-auto px-4 pt-2.5 pb-1">
+    <div className="flex shrink-0 gap-2 overflow-x-auto px-5 pt-2.5 pb-1">
       {shown.map((a) =>
         a.kind === "image" ? (
           <div key={a.id} className="group relative shrink-0 rc-in">
@@ -1209,7 +1212,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           disabled={!!missing}
           onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
           className={cx(
-            "flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40 sm:h-6",
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40",
             wt.on
               ? "bg-fill-strong text-fg"
               : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong",
@@ -1375,8 +1378,9 @@ function FolderActions({ cwd }: { cwd: string }) {
 
 // A button in the composer's footer: quiet until hovered, and its fill is its open state. It is
 // not `shrink-0`: a long folder name gives way to the controls to its right (see FolderMenu).
+// Its height is the footer's one height at every width, so the air around it stays even.
 const footerButton =
-  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong sm:h-6";
+  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
 const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
   ask: Shield,
@@ -1459,14 +1463,14 @@ function PlusMenu({
       onKeyDown={menuKeys}
       className="min-w-[220px]"
       trigger={
-        // The one button the message is added to: a 28px round target with an 18px mark, the size
-        // the send circle answers with, so the row's two ends read as the row's two ends.
+        // The one button the message is added to: the send circle's own diameter with a 20px mark,
+        // so the row's two ends read as the row's two ends and sit on one line.
         <button
           type="button"
           aria-label="Attach and more"
-          className="flex size-7 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-8"
         >
-          <Plus size={18} strokeWidth={2.25} />
+          <Plus size={20} strokeWidth={2.25} />
         </button>
       }
     >
