@@ -2274,6 +2274,186 @@ fn value_json(value: ValueRef<'_>) -> Value {
     }
 }
 
+/// How many items one `read_activity` page holds by default, and at most.
+pub const DEFAULT_ACTIVITY_ITEMS: usize = 50;
+pub const MAX_ACTIVITY_ITEMS: usize = 200;
+
+/// The three sources an activity page merges, in cursor tie-break order.
+const ACTIVITY_SOURCES: [&str; 3] = ["event", "provider_request", "rpc_message"];
+
+/// One page of a thread's recorded activity: its allowlisted operational
+/// events, built-in provider attempts and harness protocol messages, merged
+/// in time order. Payload columns are never selected: these are summaries.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct ActivityPage {
+    pub items: Vec<Value>,
+    /// The opaque cursor token of the last item; pass it back as `after`. At
+    /// most one `|`-free `at`, a source name and a row id, so it stays short.
+    pub next: Option<String>,
+    pub has_more: bool,
+}
+
+/// One thread's activity, oldest first, from the store the app reads.
+pub fn activity(
+    thread_id: &str,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<ActivityPage, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    activity_at(&path, thread_id, after, limit)
+}
+
+/// [`activity`] against one store file (tests). A store that does not exist
+/// yet is an empty page, not an error: a new thread has done nothing.
+pub fn activity_at(
+    path: &Path,
+    thread_id: &str,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<ActivityPage, String> {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        return Err("session_id is required".to_owned());
+    }
+    let (after_at, after_source, after_row) = activity_cursor(after)?;
+    let limit = limit.clamp(1, MAX_ACTIVITY_ITEMS);
+    if !path.is_file() {
+        return Ok(ActivityPage::default());
+    }
+    let connection = open_readonly(path)?;
+    let mut statement = connection
+        .prepare(ACTIVITY_SQL)
+        .map_err(|error| error.to_string())?;
+    // One more than the page, so `has_more` needs no second count.
+    let mut rows = statement
+        .query(params![
+            thread_id,
+            after_at,
+            after_source,
+            after_row,
+            (limit + 1) as i64
+        ])
+        .map_err(query_error)?;
+    let mut page: Vec<(Value, String)> = Vec::with_capacity(limit + 1);
+    while let Some(row) = rows.next().map_err(query_error)? {
+        let at: String = row.get("at").map_err(query_error)?;
+        let source: String = row.get("source").map_err(query_error)?;
+        let row_id: i64 = row.get("row_id").map_err(query_error)?;
+        let item = activity_item(row, &source, &at).map_err(query_error)?;
+        page.push((item, format!("{at}|{source}|{row_id}")));
+    }
+    let has_more = page.len() > limit;
+    page.truncate(limit);
+    let next = page.last().map(|(_, cursor)| cursor.clone());
+    Ok(ActivityPage {
+        items: page.into_iter().map(|(item, _)| item).collect(),
+        next,
+        has_more,
+    })
+}
+
+/// The cursor a page starts after: the `(at, source, row id)` of its last item,
+/// or the beginning of the thread when `after` is absent.
+fn activity_cursor(after: Option<&str>) -> Result<(String, String, i64), String> {
+    let Some(after) = after.map(str::trim).filter(|after| !after.is_empty()) else {
+        return Ok((String::new(), String::new(), 0));
+    };
+    let parts: Vec<&str> = after.split('|').collect();
+    let invalid = || "after is not the next token an earlier read_activity returned".to_owned();
+    let [at, source, row] = parts.as_slice() else {
+        return Err(invalid());
+    };
+    if !ACTIVITY_SOURCES.contains(source) {
+        return Err(invalid());
+    }
+    let row = row.parse::<i64>().map_err(|_| invalid())?;
+    Ok((at.to_string(), source.to_string(), row))
+}
+
+/// The one statement behind [`activity`]: the three tables with the columns
+/// each source needs, and a row-value comparison for the cursor, so a page can
+/// neither repeat nor skip an item when two rows share a timestamp.
+const ACTIVITY_SQL: &str = "
+WITH merged AS (
+    SELECT 'event' AS source, id AS row_id, at AS at, event_type, fields_json,
+           NULL AS provider, NULL AS model, NULL AS status_code, NULL AS latency_ms,
+           NULL AS error_kind, NULL AS input_tokens, NULL AS output_tokens,
+           NULL AS cached_tokens, NULL AS direction, NULL AS message_kind,
+           NULL AS method, NULL AS byte_size, NULL AS attempt
+      FROM operational_events WHERE thread_id = ?1
+    UNION ALL
+    SELECT 'provider_request', id, started_at, NULL, NULL, provider, model, status_code,
+           latency_ms, error_kind, input_tokens, output_tokens, cached_tokens,
+           NULL, NULL, NULL, NULL, attempt
+      FROM provider_requests WHERE thread_id = ?1
+    UNION ALL
+    SELECT 'rpc_message', id, at, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+           NULL, direction, message_kind, method, byte_size, NULL
+      FROM harness_rpc_messages WHERE thread_id = ?1
+)
+SELECT source, row_id, at, event_type, fields_json, provider, model, status_code,
+       latency_ms, error_kind, input_tokens, output_tokens, cached_tokens, direction,
+       message_kind, method, byte_size, attempt
+  FROM merged
+ WHERE (at, source, row_id) > (?2, ?3, ?4)
+ ORDER BY at, source, row_id
+ LIMIT ?5";
+
+/// One merged row as the item `read_activity` returns. `fields_json` was already
+/// redacted and bounded when it was written; it is re-parsed so the answer is
+/// JSON, never a string a reader has to decode.
+fn activity_item(row: &rusqlite::Row<'_>, source: &str, at: &str) -> rusqlite::Result<Value> {
+    let mut item = serde_json::Map::new();
+    item.insert("source".to_owned(), json!(source));
+    item.insert("at".to_owned(), json!(at));
+    let text = |name: &str| row.get::<_, Option<String>>(name);
+    let number = |name: &str| row.get::<_, Option<i64>>(name);
+    match source {
+        "event" => {
+            item.insert(
+                "type".to_owned(),
+                json!(text("event_type")?.unwrap_or_default()),
+            );
+            if let Some(fields) = text("fields_json")? {
+                let fields = serde_json::from_str::<Value>(&fields).unwrap_or(json!(fields));
+                item.insert("fields".to_owned(), fields);
+            }
+        }
+        "provider_request" => {
+            insert_text(&mut item, "provider", text("provider")?);
+            insert_text(&mut item, "model", text("model")?);
+            insert_text(&mut item, "error_kind", text("error_kind")?);
+            insert_number(&mut item, "status_code", number("status_code")?);
+            insert_number(&mut item, "latency_ms", number("latency_ms")?);
+            insert_number(&mut item, "input_tokens", number("input_tokens")?);
+            insert_number(&mut item, "output_tokens", number("output_tokens")?);
+            insert_number(&mut item, "cached_tokens", number("cached_tokens")?);
+            insert_number(&mut item, "attempt", number("attempt")?);
+        }
+        "rpc_message" => {
+            insert_text(&mut item, "direction", text("direction")?);
+            insert_text(&mut item, "kind", text("message_kind")?);
+            insert_text(&mut item, "method", text("method")?);
+            insert_number(&mut item, "latency_ms", number("latency_ms")?);
+            insert_number(&mut item, "byte_size", number("byte_size")?);
+        }
+        _ => {}
+    }
+    Ok(Value::Object(item))
+}
+
+fn insert_text(item: &mut serde_json::Map<String, Value>, key: &str, value: Option<String>) {
+    if let Some(value) = value {
+        item.insert(key.to_owned(), json!(value));
+    }
+}
+
+fn insert_number(item: &mut serde_json::Map<String, Value>, key: &str, value: Option<i64>) {
+    if let Some(value) = value {
+        item.insert(key.to_owned(), json!(value));
+    }
+}
+
 /// True when `sql` holds one statement: semicolons inside quotes and comments
 /// do not count, and anything but whitespace or a comment after the
 /// terminating `;` is a second statement.
@@ -3750,6 +3930,153 @@ mod tests {
         assert!(
             oldest["request_payload_json"].is_null(),
             "the oldest payload goes"
+        );
+    }
+
+    // -------------------------------------------------------------- activity
+
+    /// One row in each telemetry table per minute, oldest first, so a page
+    /// boundary can fall inside, between and across sources.
+    fn mixed_activity(path: &Path, thread: &str, minutes: usize) {
+        for minute in (0..minutes).rev() {
+            let at = minutes_ago(minute as i64);
+            let mut request = provider_row(thread, &at, None);
+            request.error_kind = (minute % 3 == 0).then(|| "http_500".to_owned());
+            write_provider_request(&open(path).unwrap(), &request).unwrap();
+            record_rpc_messages_at(path, &[&rpc_row(thread, &at, None)]).unwrap();
+            record_operational_event_at(
+                path,
+                &OperationalEventRow {
+                    event_type: "turn.start".to_owned(),
+                    ..event_row(thread, &at, Some("{\"tool_rounds\":1}"))
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn activity_pages_have_no_gaps_or_duplicates_across_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        mixed_activity(&path, "t", 4);
+        mixed_activity(&path, "other", 2);
+
+        let mut seen: Vec<(String, String)> = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let page = activity_at(&path, "t", after.as_deref(), 5).unwrap();
+            assert!(page.items.len() <= 5);
+            for item in &page.items {
+                let at = item["at"].as_str().unwrap().to_owned();
+                let source = item["source"].as_str().unwrap().to_owned();
+                seen.push((at, source));
+            }
+            if let Some(next) = page.next {
+                after = Some(next);
+            }
+            if !page.has_more {
+                break;
+            }
+        }
+        // 4 minutes x 3 sources, this thread only.
+        assert_eq!(seen.len(), 12, "{seen:?}");
+        let mut unique = seen.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), seen.len(), "a page repeated an item");
+        let mut sorted = seen.clone();
+        sorted.sort();
+        assert_eq!(sorted, seen, "pages are in time order");
+        assert!(
+            seen.iter().all(|(_, source)| source != ""),
+            "every item names its source"
+        );
+    }
+
+    #[test]
+    fn activity_limits_are_clamped_and_a_bad_cursor_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        mixed_activity(&path, "t", 3);
+
+        assert_eq!(activity_at(&path, "t", None, 0).unwrap().items.len(), 1);
+        // More rows than one capped page, so the cap is visible and a page says
+        // there is more instead of silently stopping at 200.
+        mixed_activity(&path, "t", 80);
+        let capped = activity_at(&path, "t", None, MAX_ACTIVITY_ITEMS + 1).unwrap();
+        assert_eq!(capped.items.len(), MAX_ACTIVITY_ITEMS);
+        assert!(capped.has_more);
+
+        let error = activity_at(&path, "t", Some("nonsense"), 5).unwrap_err();
+        assert!(error.contains("next token"), "{error}");
+        let error = activity_at(&path, "t", Some("2026-11-01T00:00:00Z|nope|1"), 5).unwrap_err();
+        assert!(error.contains("next token"), "{error}");
+        assert!(activity_at(&path, "  ", None, 5).is_err());
+    }
+
+    #[test]
+    fn activity_returns_summaries_and_never_a_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let at = "2026-11-01T10:00:00Z";
+        record_provider_request_at(
+            &path,
+            &provider_row("t", at, Some("{\"messages\":\"SECRET-PROMPT\"}")),
+        )
+        .unwrap();
+        record_rpc_messages_at(
+            &path,
+            &[&rpc_row("t", at, Some("{\"params\":\"SECRET-RPC\"}"))],
+        )
+        .unwrap();
+        record_operational_event_at(&path, &event_row("t", at, Some("{\"n\":1}"))).unwrap();
+
+        let page = activity_at(&path, "t", None, 10).unwrap();
+        assert_eq!(page.items.len(), 3);
+        let rendered = serde_json::to_string(&page.items).unwrap();
+        assert!(!rendered.contains("SECRET"), "{rendered}");
+        let request = page
+            .items
+            .iter()
+            .find(|item| item["source"] == "provider_request")
+            .unwrap();
+        assert_eq!(request["provider"], "openai");
+        assert_eq!(request["model"], "gpt-6-luna");
+        assert_eq!(request["status_code"], 200);
+        assert_eq!(request["latency_ms"], 412);
+        assert_eq!(request["input_tokens"], 100);
+        assert!(request.get("request_payload_json").is_none());
+        let rpc = page
+            .items
+            .iter()
+            .find(|item| item["source"] == "rpc_message")
+            .unwrap();
+        assert_eq!(rpc["direction"], DIRECTION_RUSTCODE_TO_HARNESS);
+        assert_eq!(rpc["kind"], KIND_REQUEST);
+        assert_eq!(rpc["method"], "session/prompt");
+        assert_eq!(rpc["byte_size"], 512);
+        assert!(rpc.get("payload_json").is_none());
+        let event = page
+            .items
+            .iter()
+            .find(|item| item["source"] == "event")
+            .unwrap();
+        assert_eq!(event["type"], "turn.summary");
+        assert_eq!(event["fields"]["n"], 1);
+
+        // A thread nothing was recorded for is an empty page, and so is a
+        // store that does not exist yet.
+        assert_eq!(
+            activity_at(&path, "nobody", None, 10).unwrap().items.len(),
+            0
+        );
+        assert_eq!(
+            activity_at(&dir.path().join("missing.sqlite"), "t", None, 10)
+                .unwrap()
+                .items
+                .len(),
+            0
         );
     }
 }

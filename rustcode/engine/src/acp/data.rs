@@ -1,6 +1,7 @@
-//! `_rustcode/data/usage` and `_rustcode/data/query`: the local data store
-//! (`docs/data-store.md`) for the app, which asks on an agent's behalf for
-//! `thread_usage` and `query_data`. Both are read-only and need no session.
+//! `_rustcode/data/usage`, `_rustcode/data/query` and `_rustcode/data/activity`:
+//! the local data store (`docs/data-store.md`) for the app, which asks on an
+//! agent's behalf for `thread_usage`, `query_data` and `read_activity`. All
+//! three are read-only and need no session.
 //!
 //! `_rustcode/data/links/load` and `_rustcode/data/links/save` keep the app's
 //! link book (who started whom, and what may be done without asking again) in
@@ -45,6 +46,22 @@ pub(crate) struct DataUsageRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DataQueryRequest {
     pub sql: String,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// `_rustcode/data/activity`: one page of a thread's recorded activity, merged
+/// from its operational events, provider attempts and harness messages.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/data/activity", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataActivityRequest {
+    pub session_id: String,
+    /// The `next` token an earlier page returned; absent starts at the oldest.
+    #[serde(default)]
+    pub after: Option<String>,
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -136,6 +153,30 @@ pub(crate) fn query(request: DataQueryRequest) -> Result<Value, String> {
     serde_json::to_value(result).map_err(|error| error.to_string())
 }
 
+pub(crate) fn activity(request: DataActivityRequest) -> Result<Value, String> {
+    if request.session_id.trim().is_empty() {
+        return Err("session_id is required".to_owned());
+    }
+    // The first reader of a fresh install migrates the store once, as
+    // `thread_usage` does; the page itself is still read read-only.
+    crate::data_store::ensure_ready()?;
+    // A page is bounded here as well as in the store: a caller cannot ask for
+    // the whole table in one answer.
+    let limit = request
+        .limit
+        .map(|limit| limit as usize)
+        .unwrap_or(crate::data_store::DEFAULT_ACTIVITY_ITEMS)
+        .clamp(1, crate::data_store::MAX_ACTIVITY_ITEMS);
+    let page = crate::data_store::activity(&request.session_id, request.after.as_deref(), limit)?;
+    Ok(serde_json::json!({
+        "session_id": request.session_id,
+        "items": page.items,
+        "next": page.next,
+        "has_more": page.has_more,
+        "version": DATA_METHOD_VERSION,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -158,6 +199,18 @@ mod tests {
                 .map(|_| ())
                 .ok_or_else(|| "bad group".to_owned()),
         }
+    }
+
+    #[test]
+    fn an_activity_page_is_bounded_before_the_store_is_opened() {
+        // An empty session is refused without a store; the limit is clamped to
+        // the store's page cap rather than erroring.
+        let refused = super::activity(super::DataActivityRequest {
+            session_id: "  ".to_owned(),
+            after: None,
+            limit: None,
+        });
+        assert_eq!(refused.unwrap_err(), "session_id is required");
     }
 
     #[test]

@@ -438,8 +438,9 @@ Built. Version 5 adds no tool: it adds named-account targeting to two existing
 ones, and the accounts to discovery. Clients advertising
 `_meta.rustcode.orchestration >= 5` get `account` on `start_session`, on each
 `fan_out` entry, and in `list_harnesses` (plus in `start_session` / `fan_out`
-answers when the thread runs on a named login). The app advertises 5 from
-`CAPABILITY_VERSION` (`state/orchestration.ts`).
+answers when the thread runs on a named login). The app advertised 5 from
+`CAPABILITY_VERSION` while v5 was newest, and a v6 app (below) still answers
+it.
 
 An older client must not silently ignore the argument: it would start the
 child on whatever login it inherited. So the engine does both halves:
@@ -453,9 +454,9 @@ child on whatever login it inherited. So the engine does both halves:
 - **Execution.** `orchestration::execute_versioned` refuses a call that carries
   `account` from a client below 5 with *needs a newer RustCode app. Nothing was
   sent.* (`UnavailableDependency`) before anything reaches the client. The
-  app's own `CAPABILITY_VERSION` is 5, so a matching app and engine agree; an
-  older app on a newer engine gets the v4 schema and a clear refusal instead of
-  a child on an unexpected login. The MCP server also refuses the argument in
+  app's own `CAPABILITY_VERSION` is 6, so a matching app and engine agree; an
+  older app on a newer engine gets the older schema and a clear refusal instead
+  of a child on an unexpected login. The MCP server also refuses the argument in
   its own `call` before forwarding, and the hub registers every external thread
   with that thread client's version and passes it to `execute_versioned` — not
   the engine's newest version — so a v4 thread cannot reach the app by calling
@@ -477,6 +478,30 @@ before (the parent's login on the same harness, else what a new thread would
 start on). `fan_out` resolves every entry before asking and refuses two entries
 that land on the same harness, model, effort and login — including `work` and
 `Work`, which the engine cannot see as the same.
+
+## Orchestration tools v6
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 6` also get
+`read_activity`, a page over what the store recorded about one thread. The
+version is bumped rather than the tool added to v5 for the same reason as v4:
+the *client* carries it out, and a v5 app has no `_rustcode/data/activity` to
+ask. The app advertises 6 from `CAPABILITY_VERSION`
+(`state/orchestration.ts`), and a v5 client keeps exactly the v5 set and
+`PROMPT_HINT_V5`.
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `read_activity` | `{ session_id, after?, limit? }` — `limit` 1..200 (default 50); `after` is the opaque `next` token an earlier page returned | `{ session_id, items, next, has_more }`: `operational_events`, provider attempts and harness messages merged in time order, oldest first, with `source` on each item and no payload columns. `next` encodes the last item's `(at, source, row id)` | None |
+
+The app gates it like `read_session`'s reach — any project while **Let agents
+read threads in other projects** is on, this project's threads otherwise, and
+the calling thread itself is refused — but it asks no approval, since it only
+reads metadata and never a prompt or payload. It asks the engine
+`_rustcode/data/activity` (`engine/src/acp/data.rs`), which reads through the
+same read-only connection as `query` with at most 200 items and no payload
+column selected. The allowlist of projected events is in `docs/data-store.md`
+(§ Request and protocol telemetry).
+
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
@@ -494,7 +519,7 @@ process list. `--token` still works for manual testing.
 The same environment carries `RUSTCODE_ORCHESTRATION_VERSION` (the client's
 version), so the server lists exactly that version's tools and prompt hint — a
 v3 app is never offered `thread_usage` or `query_data`, which it could not
-answer.
+answer, and a v5 app is never offered `read_activity`.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -551,6 +576,6 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 4` while threads may orchestrate
+`_meta.rustcode.orchestration = 6` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
-v4 data-store tools.
+v4 data-store tools and the v6 activity read.

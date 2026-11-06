@@ -515,6 +515,26 @@ async function answer(params: JsonObject): Promise<JsonObject> {
         return failureJson(failure("failed", `the data store did not answer: ${errorText(error)}`));
       }
     }
+    case "read_activity": {
+      // A read of the store, like thread_usage: the project rule applies (any
+      // project while the setting allows it), and no approval is asked.
+      const target = ruleThread(useApp.getState(), call.target);
+      const refused = checkMessage(caller, target, book(), true, acrossProjects());
+      if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
+      try {
+        return await request<JsonObject>(
+          Method.dataActivity,
+          {
+            sessionId: target.id,
+            ...(call.after ? { after: call.after } : {}),
+            limit: call.limit,
+          },
+          20_000,
+        );
+      } catch (error) {
+        return failureJson(failure("failed", `the data store did not answer: ${errorText(error)}`));
+      }
+    }
   }
 }
 

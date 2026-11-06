@@ -1456,6 +1456,29 @@ export class MockEngine {
           ],
           truncated: false,
         };
+      case "_rustcode/data/activity": {
+        // The same shape engine/src/acp/data.rs answers with: summaries only.
+        const at = new Date(Date.now() - 60_000).toISOString();
+        return {
+          session_id: str(params.sessionId) ?? "",
+          items: [
+            { source: "event", at, type: "turn.start", fields: { tool_rounds: 0 } },
+            {
+              source: "provider_request",
+              at,
+              provider: "openai",
+              model: "gpt-6-luna",
+              status_code: 200,
+              latency_ms: 412,
+              input_tokens: 1200,
+              output_tokens: 80,
+              attempt: 1,
+            },
+          ],
+          next: null,
+          has_more: false,
+        };
+      }
       case "_rustcode/data/links/load":
         // The same shape `_rustcode/data/links/load` answers with (engine/src/acp/data.rs).
         return {

@@ -118,6 +118,33 @@ be read back instead of guessed at:
   with a per-thread `sequence` the store assigns (the cursor a reader pages
   with) and safe, bounded fields only.
 
+The projection is written from the same `operational_event` call that writes
+`debug.log` (`engine/src/logger.rs`), off the caller's path and only when the
+event has an owning thread. **Only these events are projected**, with the
+fields listed; every other event and field stays in `debug.log`:
+
+| event | fields kept |
+| --- | --- |
+| `turn.start` | `wakeup`, `tool_rounds`, `segment_rounds`, `segment_limit`, `total_round_limit` |
+| `turn.finish` | `completed_task`, `tool_rounds`, `content_bytes`, `cancelled`, and the scalar members of `metrics` |
+| `turn.performance` | the scalar members of `performance` (wall, model, tool and user-wait times, tokens, rounds, calls) |
+| `turn.stream_retry` | `attempt`, `output_phase`, `reason` (never `error`) |
+| `turn.stream_recovery` | `attempt`, `kind`, `partial_content_bytes`, `outcome` |
+| `turn.budget_exceeded` | `limit`, `tool_rounds`, `elapsed_secs`, `tokens_used`, `failed_mutations`, `segment_rounds`, `segment_limit`, `total_round_limit`, `continuation` |
+| `turn.recovery_decision` | `round`, `source`, `decision`, `reason`, `loop_recovery_attempts`, `reasoning_recovery_attempts`, `no_progress_streak` |
+| `tools.batch.finish` | `count`, `requested`, `executed`, `deferred`, `queued`, `auto_executed`, `successes`, `failed`, `pending`, `changed_paths` |
+| `context.compaction` | `trigger`, `mode`, `before_tokens`, `after_tokens`, `reclaimed_tokens`, `count`, `history_tokens`, `budget`, `messages_considered`, `summary_generated`, `originating_path`, `deterministic_record` |
+| `harness.reaped` | `harness`, `native_session_id`, `reason`, `idle_ms` |
+| `harness.resumed` | `harness`, `native_session_id` |
+| `harness.turn_silent` | `harness`, `native_session_id`, `timeout_ms` |
+| `subagent.spawn` | `agent_id`, `parent_id`, `agent_type`, `context_inheritance`, `inherited_messages` |
+| `subagent.finish` | `agent_id`, `status`, `reason`, `rounds` |
+
+Numbers and booleans are kept as they are, strings are clipped to 96
+characters, and an allowlisted object keeps its scalar members only — arrays
+(dropped) can name paths with user content, and a provider's error text is
+never in the list. The insert bounds the fields object at 8 KiB as well.
+
 **These are protocol messages, not provider traffic.** An external harness
 (Claude Code, Codex, Gemini CLI, OpenCode, Pi) is a separate process that owns
 its own model login and its outbound provider HTTP; RustCode sees only the
@@ -280,17 +307,18 @@ among the stores.
 
 ## For agents
 
-Two orchestration tools (v4, `docs/orchestrator.md`) read the store for an
-agent in a thread, forwarded through the app like `list_sessions`:
+Three orchestration tools (v4 and v6, `docs/orchestrator.md`) read the store
+for an agent in a thread, forwarded through the app like `list_sessions`:
 
 | Tool | Args | Answer |
 | --- | --- | --- |
 | `thread_usage` | `{ since?, group_by?, project? }` — `group_by` is `harness` (default), `model`, `day`, `project` or `thread`; `since` is `YYYY-MM-DD` or `YYYY-MM`; `project` is an absolute path | `{ group_by, since, project, scope, rows, totals, truncated, note }`, each row with input, output, cached and cache-write tokens, `cost_usd`, `turns`, `turns_without_tokens`, `turns_without_any_tokens`, `turns_without_input_tokens`, `turns_without_output_tokens`, `turns_without_cached_tokens`, `turns_without_cache_write_tokens`, and `turns_without_cost`; a group that reported nothing keeps `NULL`, never a `0`, and a thread row also carries `parent_id` and `parent_title` |
 | `query_data` | `{ sql, limit? }`, one read-only statement, at most 1000 rows | `{ columns, rows, truncated }` through the guards above; its description lists the tables and their key columns, including `thread_links`, `provider_requests`, `harness_rpc_messages` and `operational_events`, so an agent needs no extra call |
+| `read_activity` | `{ session_id, after?, limit? }` — `limit` 1..200 (default 50); `after` is the opaque `next` token an earlier page returned | `{ session_id, items, next, has_more }`, one merged time-ordered list: `{ source: "event", at, type, fields }`, `{ source: "provider_request", at, provider, model, status_code, latency_ms, error_kind, input_tokens, output_tokens, cached_tokens, attempt }` and `{ source: "rpc_message", at, direction, kind, method, latency_ms, byte_size }`. Items are ordered by `(at, source, row id)`; `next` encodes the last one, so pages join with no gap and no repeat. Payload columns (`request_payload_json`, `response_summary_json`, `payload_json`) are never selected |
 
-Both are reads, so neither asks the user. They follow **Let agents read
-threads in other projects** (Settings › Agents, on by default), because the
-store crosses projects and holds thread titles and paths:
+They are reads, so none asks the user. They follow **Let agents read threads
+in other projects** (Settings › Agents, on by default), because the store
+crosses projects and holds thread titles and paths:
 
 - With it on, `thread_usage` covers every project, or the one `project` names.
 - With it off, `thread_usage` is scoped to the calling thread's project even
@@ -299,6 +327,10 @@ store crosses projects and holds thread titles and paths:
 - `query_data` needs it on: SQL cannot be narrowed to one project safely (a
   join, a subquery, a view), so with the setting off it answers `not_allowed`
   and names the setting.
+- `read_activity` applies the same reach `read_session` does: any project
+  while the setting is on, this project's threads otherwise. It is a read, so
+  it asks no approval, and it refuses the calling thread itself, which has its
+  own transcript.
 
 Because `query_data` is refused while that setting is off, `thread_links` (and
 its `body`, which carries a link's message and answer) does not widen what a
@@ -307,7 +339,8 @@ anyway.
 
 A shell has the same data without an app: `rustcode usage` and
 `rustcode data query`. The engine answers the app through
-`_rustcode/data/usage` and `_rustcode/data/query` (`engine/src/acp/data.rs`).
+`_rustcode/data/usage`, `_rustcode/data/query` and `_rustcode/data/activity`
+(`engine/src/acp/data.rs`).
 
 ## Not in this store
 

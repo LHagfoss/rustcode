@@ -12,7 +12,7 @@ import { snoozeAt } from "./snooze";
 import { type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 5;
+export const CAPABILITY_VERSION = 6;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -219,7 +219,8 @@ export type Call =
   | { tool: "list_projects" }
   | { tool: "list_pull_requests"; state: PullStateChoice }
   | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
-  | { tool: "query_data"; sql: string; limit: number };
+  | { tool: "query_data"; sql: string; limit: number }
+  | { tool: "read_activity"; target: string; after?: string; limit: number };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -233,6 +234,9 @@ export type UsageGroup = "harness" | "model" | "day" | "project" | "thread";
 const USAGE_GROUPS: readonly string[] = ["harness", "model", "day", "project", "thread"];
 /** Rows `query_data` may bring back in one answer. */
 export const MAX_DATA_ROWS = 1000;
+/** Items `read_activity` returns by default, and at most. */
+export const DEFAULT_ACTIVITY_ITEMS = 50;
+export const MAX_ACTIVITY_ITEMS = 200;
 
 /** Pull requests listed, and projects: an agent's context pays for each. */
 export const MAX_PULL_REQUESTS = 30;
@@ -302,6 +306,19 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (!sql) return failure("invalid", "sql is required");
       const asked = typeof args.limit === "number" ? Math.floor(args.limit) : MAX_DATA_ROWS;
       return { tool: "query_data", sql, limit: Math.min(Math.max(asked, 1), MAX_DATA_ROWS) };
+    }
+    case "read_activity": {
+      const target = s(args.session_id) ?? "";
+      if (!target) return failure("invalid", "session_id is required");
+      const after = s(args.after)?.trim() || undefined;
+      const asked = typeof args.limit === "number" ? Math.floor(args.limit) : DEFAULT_ACTIVITY_ITEMS;
+      // Clamped, not refused: an agent asking for 500 items gets the 200 cap.
+      return {
+        tool: "read_activity",
+        target,
+        after,
+        limit: Math.min(Math.max(asked, 1), MAX_ACTIVITY_ITEMS),
+      };
     }
     case "configure_session":
       return {
