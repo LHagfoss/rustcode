@@ -45,6 +45,29 @@ export function linkMetaCached(url: string): LinkMeta | null {
   return cache.get(url) ?? null;
 }
 
+/** The site a URL points at, without a `www.` nobody reads. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * What a chip says: the page's title over its host, or the host alone when the shell
+ * had no title (or a title that is only the host). These are the chip's words, so a
+ * text selection dragged across a chip copies them and never the favicon or the arrow.
+ */
+export function linkChipLabel(
+  url: string,
+  meta: LinkMeta | null,
+): { title: string; host: string; showsHost: boolean } {
+  const host = hostOf(url);
+  const title = meta?.title?.trim() || host;
+  return { title, host, showsHost: title !== host };
+}
+
 const COLOR = /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%/]+\)|hsla?\([\d\s.,%/deg]+\))$/i;
 
 /** Only what the chip can use safely: plain strings, a data: image, a colour literal. */

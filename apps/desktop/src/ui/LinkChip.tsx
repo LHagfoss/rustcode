@@ -5,17 +5,9 @@
 
 import { ArrowUpRight, Globe, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { type LinkMeta, linkMetaCached, loadLinkMeta } from "../lib/links";
+import { type LinkMeta, linkChipLabel, linkMetaCached, loadLinkMeta } from "../lib/links";
 import { openExternal } from "../lib/native";
 import { cx, Tooltip } from "./primitives";
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
 
 export function useLinkMeta(url: string): LinkMeta | null {
   const [meta, setMeta] = useState<LinkMeta | null>(() => linkMetaCached(url));
@@ -34,20 +26,39 @@ export function LinkChip({
   url,
   onRemove,
   className,
+  variant = "inline",
 }: {
   url: string;
   onRemove?: () => void;
   className?: string;
+  /**
+   * `inline` sits in a paragraph and takes no more room than the text's own line box;
+   * `token` is one line of the composer's row, level with the field's first line and with
+   * the slash-command chip beside it.
+   */
+  variant?: "inline" | "token";
 }) {
   const meta = useLinkMeta(url);
-  const host = hostOf(url);
-  const title = meta?.title?.trim() || host;
+  const { title, host, showsHost } = linkChipLabel(url, meta);
   const tint = meta?.color;
+  const inline = variant === "inline";
   return (
     <Tooltip label={<span className="break-all">{url}</span>}>
       <span
+        // Never a drag source: a press on a chip and a drag across it select the words around
+        // it, instead of starting a drag of the URL that no text selection survives.
+        draggable={false}
         className={cx(
-          "group/link inline-flex h-[22px] max-w-[340px] shrink-0 items-center gap-1 rounded-md pr-1.5 pl-1 align-[-5px] text-callout leading-none hover:brightness-125",
+          // `align-middle` centres the chip on the x-height rather than on a flex baseline, and
+          // that keeps it inside the line box: on the reply's 14px/22.75px line an 18px chip
+          // reaches `9 - 3.65 = 5.35px` below the baseline, under the line's 6.2px of descent, so
+          // a line with a chip is exactly as tall as one without. A taller chip would push every
+          // line it sits on apart, which is what made the chip look off its baseline.
+          // The composer's row is a flex line, where `align-middle` does nothing: the chip takes
+          // the field's own line box (22.75px) and the call site gives it the field's 6px of top
+          // padding, so it sits on the first line and not above it.
+          "group/link inline-flex max-w-[340px] shrink-0 items-center gap-1 rounded-sm pr-1 pl-1.5 text-callout leading-none select-text hover:brightness-125",
+          inline ? "h-[18px] align-middle" : "h-[22.75px]",
           !tint && "bg-fill shadow-[inset_0_0_0_0.5px_var(--color-border)]",
           className,
         )}
@@ -62,6 +73,7 @@ export function LinkChip({
       >
         <a
           href={url}
+          draggable={false}
           onClick={(e) => {
             e.preventDefault();
             openExternal(url);
@@ -69,14 +81,17 @@ export function LinkChip({
           className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 text-fg no-underline"
         >
           {meta?.icon ? (
-            <img src={meta.icon} alt="" className="size-4 shrink-0 rounded-xs" draggable={false} />
+            <img src={meta.icon} alt="" className="size-[14px] shrink-0 rounded-xs" draggable={false} />
           ) : (
-            <Globe size={13} className="ml-0.5 shrink-0 text-fg-muted" />
+            <Globe size={12} className="ml-0.5 shrink-0 text-fg-muted" />
           )}
-          <span className="truncate font-medium">{title}</span>
-          {meta?.title && meta.title.trim() !== host && (
-            <span className="shrink-0 text-caption text-fg-faint">{host}</span>
-          )}
+          {/* One text run, so a selection across the chip copies "title host" and not
+              "titlehost": the host is the faint tail of the same words, and the whole run
+              truncates to the chip's cap. */}
+          <span className="truncate">
+            <span className="font-medium">{title}</span>
+            {showsHost && <span className="text-caption text-fg-faint"> {host}</span>}
+          </span>
           {!onRemove && (
             <ArrowUpRight
               size={11}
@@ -89,7 +104,7 @@ export function LinkChip({
             type="button"
             aria-label={`Remove link ${host}`}
             onClick={onRemove}
-            className="ml-0.5 flex shrink-0 text-fg-faint hover:text-fg"
+            className="ml-0.5 flex shrink-0 items-center text-fg-faint hover:text-fg"
           >
             <X size={11} />
           </button>

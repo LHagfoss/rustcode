@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { Tooltip } from "radix-ui";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderBlock } from "./Markdown";
 
-/** One block of a reply, drawn by the components the transcript uses. */
-const drawn = (text: string) => renderToStaticMarkup(renderBlock(text));
+/** One block of a reply, drawn by the components the transcript uses (a chip needs the tooltip's provider). */
+const drawn = (text: string) =>
+  renderToStaticMarkup(createElement(Tooltip.Provider, null, renderBlock(text)));
 
 /** The class list of every `<li>` in a drawn block, in order. */
 const items = (markup: string) => [...markup.matchAll(/<li class="([^"]*)"/g)].map((m) => m[1] ?? "");
@@ -44,6 +47,21 @@ describe("blocks in a reply", () => {
 
   test("bold is the semibold titles use, not the browser's 700", () => {
     expect(drawn("**bold**")).toContain('<strong class="font-semibold">');
+  });
+});
+
+describe("links in a reply", () => {
+  test("a bare URL is a chip that stays inside the text's line box", () => {
+    const out = drawn("See https://example.com/page for it.");
+    // `align-middle` seats the chip on the x-height without growing the line (ui/LinkChip.tsx).
+    expect(out).toContain("align-middle");
+    expect(out).toContain("h-[18px]");
+  });
+
+  test("a chip and a named link are not drag sources, so a drag selects the words", () => {
+    for (const out of [drawn("https://example.com"), drawn("[the docs](https://example.com)")]) {
+      expect(out).toContain('draggable="false"');
+    }
   });
 });
 
