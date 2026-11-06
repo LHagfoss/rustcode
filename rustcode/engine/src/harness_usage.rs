@@ -50,6 +50,85 @@ pub fn session_usage(
     }
 }
 
+/// Whether a harness keeps its token counts only in its own log. Those report
+/// nothing over ACP as a turn runs, so the client's gauge has to be fed from
+/// the log (`poll_logs`) and not only when the turn ends.
+pub fn log_based(harness: &str) -> bool {
+    matches!(harness, "claude-code" | "pi")
+}
+
+/// The same logs [`session_usage`] reads, for a poller that wants to stat them
+/// before paying for a read. Empty for a harness that keeps none.
+pub fn session_logs(
+    harness: &str,
+    native_session_id: Option<&str>,
+    cwd: Option<&Path>,
+    account_config_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let Some(id) = native_session_id.filter(|id| !id.trim().is_empty()) else {
+        return Vec::new();
+    };
+    match harness {
+        "claude-code" => claude_logs(id, cwd, account_config_dir),
+        "pi" => pi_log(id).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A set of logs' identity: a poll is worth a read only when this changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LogStamp {
+    /// Total bytes across the logs.
+    pub len: u64,
+    /// The latest modification among them.
+    pub modified: Option<std::time::SystemTime>,
+}
+
+impl LogStamp {
+    /// `None` when none of the paths exists: a session with no log yet.
+    fn of(paths: &[PathBuf]) -> Option<Self> {
+        let mut stamp = LogStamp::default();
+        let mut found = false;
+        for path in paths {
+            let Ok(metadata) = std::fs::metadata(path) else {
+                continue;
+            };
+            found = true;
+            stamp.len += metadata.len();
+            stamp.modified = stamp.modified.max(metadata.modified().ok());
+        }
+        found.then_some(stamp)
+    }
+}
+
+/// One poll of a running turn's log: what the client's gauge should show, and
+/// the stamp to compare against next time.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LiveRead {
+    /// The logs' identity now; `None` when there is no log to read.
+    pub stamp: Option<LogStamp>,
+    /// The tokens the session's latest request put in the context window;
+    /// `None` when the logs have not changed since `since`, or hold no usage
+    /// line yet.
+    pub used: Option<u64>,
+}
+
+/// The context a running turn's latest request occupies, read only when the
+/// logs grew since `since`: an hour-long turn over a large log costs one
+/// `stat` per poll, not one read.
+pub fn poll_logs(harness: &str, paths: &[PathBuf], since: Option<LogStamp>) -> LiveRead {
+    let stamp = LogStamp::of(paths);
+    if stamp.is_none() || stamp == since {
+        return LiveRead { stamp, used: None };
+    }
+    let used = match harness {
+        "claude-code" => read_claude_context(paths),
+        "pi" => paths.first().and_then(|path| read_pi_context(path)),
+        _ => None,
+    };
+    LiveRead { stamp, used }
+}
+
 /// Claude Code's transcripts of a session: in each config folder, the project
 /// folder named after the working directory, else any project folder that
 /// holds it. A session resumed under another profile has a log in both.
@@ -319,6 +398,89 @@ fn read_pi(path: &Path) -> SessionUsage {
     usage
 }
 
+/// Keeps the newest entry's token count: a later timestamp wins, and an entry
+/// with none is the file's tail, so it supersedes what came before it.
+fn keep_latest(current: &mut Option<(Option<String>, u64)>, at: Option<String>, tokens: u64) {
+    let newer = match current.as_ref() {
+        Some((Some(known), _)) => at.as_ref().is_none_or(|at| at >= known),
+        _ => true,
+    };
+    if newer {
+        *current = Some((at, tokens));
+    }
+}
+
+/// The tokens Claude Code's latest assistant message put in the window: what
+/// it read (input and both cache counters) plus what it wrote. No
+/// `totalTokens`, so the four are summed here.
+fn read_claude_context(paths: &[PathBuf]) -> Option<u64> {
+    let mut latest: Option<(Option<String>, u64)> = None;
+    for path in paths {
+        scan(path, |line| {
+            if !line.contains("\"usage\"") {
+                return;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                return;
+            };
+            if value.get("type").and_then(Value::as_str) != Some("assistant") {
+                return;
+            }
+            let Some(message) = value.get("message") else {
+                return;
+            };
+            if message.get("model").and_then(Value::as_str) == Some("<synthetic>") {
+                return;
+            }
+            let Some(entry) = message.get("usage") else {
+                return;
+            };
+            let tokens = [
+                "input_tokens",
+                "output_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            ]
+            .iter()
+            .filter_map(|key| count(entry.get(*key)))
+            .map(|count| count.max(0) as u64)
+            .sum::<u64>();
+            keep_latest(&mut latest, timestamp(value.get("timestamp")), tokens);
+        });
+    }
+    latest.map(|(_, tokens)| tokens)
+}
+
+/// The tokens Pi's latest response put in the window. Pi stamps each response
+/// with `totalTokens`; a log that lacks it still sums to the same number.
+fn read_pi_context(path: &Path) -> Option<u64> {
+    let mut latest: Option<(Option<String>, u64)> = None;
+    scan(path, |line| {
+        if !line.contains("\"usage\"") {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("message") {
+            return;
+        }
+        let Some(message) = value.get("message") else {
+            return;
+        };
+        let Some(entry) = message.get("usage") else {
+            return;
+        };
+        let tokens = ["input", "output", "cacheRead", "cacheWrite"]
+            .iter()
+            .filter_map(|key| count(entry.get(*key)))
+            .map(|count| count.max(0) as u64)
+            .sum::<u64>();
+        keep_latest(&mut latest, timestamp(message.get("timestamp")), tokens);
+    });
+    latest.map(|(_, tokens)| tokens)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +669,99 @@ mod tests {
         let usage = read_claude(&path);
         assert_eq!(usage.tokens.input, Some(3));
         assert_eq!(usage.tokens.output, Some(3));
+    }
+
+    const PI_LINE: &str = r#"{"type":"message","message":{"role":"assistant","timestamp":7,"usage":{"input":100,"output":10,"cacheRead":900,"cacheWrite":0,"totalTokens":1010}}}"#;
+
+    #[test]
+    fn a_log_that_did_not_grow_is_not_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "pi.jsonl", &[PI_LINE]);
+        let first = poll_logs("pi", std::slice::from_ref(&path), None);
+        assert_eq!(first.used, Some(1010), "the latest request's context");
+        let again = poll_logs("pi", &[path], first.stamp);
+        assert_eq!(again.stamp, first.stamp);
+        assert_eq!(again.used, None, "nothing changed, nothing is published");
+    }
+
+    #[test]
+    fn a_grown_log_reports_the_new_context_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "pi.jsonl", &[PI_LINE]);
+        let first = poll_logs("pi", std::slice::from_ref(&path), None);
+        let mut grown = std::fs::read_to_string(&path).unwrap();
+        grown.push('\n');
+        grown.push_str(
+            r#"{"type":"message","message":{"role":"assistant","timestamp":8,"usage":{"input":200,"output":20,"cacheRead":800,"cacheWrite":5,"totalTokens":1025}}}"#,
+        );
+        std::fs::write(&path, grown).unwrap();
+        let read = poll_logs("pi", std::slice::from_ref(&path), first.stamp);
+        assert_ne!(read.stamp, first.stamp);
+        assert_eq!(read.used, Some(1025));
+        assert_eq!(
+            poll_logs("pi", &[path], read.stamp).used,
+            None,
+            "the same numbers are not published twice"
+        );
+    }
+
+    #[test]
+    fn claude_context_is_its_latest_message_not_its_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "claude.jsonl",
+            &[
+                &claude_line("m1", 2, 100, 1000, 50),
+                &claude_line("m2", 3, 200, 2000, 0),
+            ],
+        );
+        let read = poll_logs("claude-code", &[path], None);
+        assert_eq!(read.used, Some(2203), "m2: in + out + both cache counters");
+    }
+
+    #[test]
+    fn a_session_with_no_log_or_no_usage_line_reads_as_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            poll_logs("pi", &[dir.path().join("absent.jsonl")], None),
+            LiveRead::default(),
+            "a session that has not written a log yet"
+        );
+        let path = write(
+            dir.path(),
+            "early.jsonl",
+            &[r#"{"type":"session","id":"x"}"#],
+        );
+        let read = poll_logs("pi", &[path], None);
+        assert!(
+            read.stamp.is_some(),
+            "the log is there, it just says nothing yet"
+        );
+        assert_eq!(read.used, None);
+        assert_eq!(
+            poll_logs("codex", &[dir.path().join("absent.jsonl")], None),
+            LiveRead::default(),
+            "a harness with no log format"
+        );
+    }
+
+    #[test]
+    fn the_turn_end_totals_are_unchanged_and_the_live_read_adds_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "pi.jsonl", &[PI_LINE, PI_LINE]);
+        // What the turn row still records: both lines, summed once.
+        let totals = read_pi(&path);
+        assert_eq!(
+            totals.tokens,
+            TokenTotals {
+                input: Some(200),
+                output: Some(20),
+                cached: Some(1800),
+                cache_write: Some(0),
+            }
+        );
+        // What a poll reports: one number, and no totals of its own.
+        assert_eq!(poll_logs("pi", &[path], None).used, Some(1010));
     }
 }
