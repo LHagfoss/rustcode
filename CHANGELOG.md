@@ -1,3 +1,17 @@
+## [v1.13.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.13.0) - 2026-11-06
+
+### Features
+### Chat and layout
+
+- The composer is one card with a single row of controls: the attach button, folder, worktree and access on the left, the meters, model and send on the right, with a rounder corner and less height at rest. (#3064)
+- A `@file` reference in the draft reads as a token in the text, and the plan meter, context ring and agent marks move into one menu when the control row is too narrow to hold them. (#3072)
+- Changes, Pull requests and the thread peek size the side panel to what it holds instead of drawing it full height, and a long list still stops above the composer and scrolls. (#3063)
+- A thread opens the right panel on its own overview (thread details) instead of the git Changes card, and the side cards float over the chat again instead of moving it aside: the chat keeps its place and the transcript scrolls under the card. (#3066)
+- A draft with more than three pictures shows three thumbnails and a `+N` count that opens the rest, instead of a strip that grows with every image. (#3067)
+
+### Threads
+
+- A thread's sidebar row counts each file once instead of summing every edit, so a row no longer shows `+12404` for work on a dozen files. (#3069)
 ## [v1.12.1-beta.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.1-beta.3) - 2026-11-06
 
 ### Fixes
