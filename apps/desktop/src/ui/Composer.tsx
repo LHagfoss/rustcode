@@ -769,7 +769,7 @@ export const Composer = memo(function Composer({
           )}
           {/* The field and what reads in front of it. The chip and the links drop the field's own 6px
               of padding so they sit on its first line box, not above it. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-3.5">
+          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-4 pt-1">
             {extras.command && (
               // One line of the field's own height (22.75px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
@@ -841,9 +841,14 @@ export const Composer = memo(function Composer({
               />
             </div>
           </div>
-          {/* The card's foot: what adds to the message on the left, what sends it on the right, on a
-              row of their own so neither floats over the text. */}
-          <div className="flex items-center gap-1 px-3.5 pb-1.5">
+          {/* The card's one control row: what adds to the message and where the thread works on the
+              left, what it costs, how it runs and how it is sent on the right. No divider: the
+              field's own air, and the row's `pt-0.5`, separate them. One row of one height, so the
+              attach button, the folder and the menus line up with the meter, the ring, the model
+              pill and the agent pill. Labels drop out with the card's width (the folder falls back
+              to its icon); the controls do not, and the two that can still be long (the folder and
+              the model) shrink and ellipsize before the row overflows. */}
+          <div className="rc-composer-tray flex items-center gap-2 px-4 pt-1 pb-3.5">
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
@@ -860,8 +865,37 @@ export const Composer = memo(function Composer({
                 void attachmentsFromFiles(files, images, harnessName).then(attach);
               }}
             />
+            <div className="flex min-w-0 items-center gap-0.5">
+              <FolderMenu thread={thread} cwd={cwd} />
+              {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+              {thread?.worktree && (
+                <Tooltip side="bottom" label={thread.worktree.path}>
+                  <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
+                    <GitBranch size={12} className="shrink-0" />
+                    <span className="truncate">{thread.worktree.branch}</span>
+                  </span>
+                </Tooltip>
+              )}
+              <PermissionMenu threadId={thread?.id} compact={compact} />
+            </div>
             <span className="flex-1" />
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="flex h-7 shrink-0 items-center">
+                <PlanMeter threadId={thread?.id} />
+              </span>
+              {/* The meters keep their size: a ring squeezed under 30px is unreadable. */}
+              {thread && (
+                <span className="flex h-7 shrink-0 items-center empty:hidden">
+                  <ContextRing threadId={thread.id} />
+                </span>
+              )}
+              <ModelPicker thread={thread} compact={compact} />
+              {/* The marks keep their size; the card drops the whole pill below 24rem, the same step
+                  at which the folder falls back to its icon, and the thread's own agent card says the
+                  same. */}
+              <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
+                <AgentPill threadId={thread?.id} />
+              </span>
               {queuedEdit ? (
                 <Tooltip label="Save in the queue (⏎)">
                   <button
@@ -920,46 +954,6 @@ export const Composer = memo(function Composer({
                   </button>
                 </Tooltip>
               )}
-            </div>
-          </div>
-          {/* The tray inside the card, under a hairline: where the thread works on the left, what it
-              costs and runs on on the right. One row of one height, so a meter, the ring, the model
-              pill and the agent pill line up with the folder and the menus. Labels drop out with the
-              card's width (the folder falls back to its icon); the controls do not, and the two that
-              can still be long (the folder and the model) shrink and ellipsize before the row
-              overflows. */}
-          <div className="rc-composer-tray flex h-11 items-center gap-2 border-border border-t px-3.5">
-            <div className="flex min-w-0 items-center gap-0.5">
-              <FolderMenu thread={thread} cwd={cwd} />
-              {!thread && <WorktreeToggle draft={draft} compact={compact} />}
-              {thread?.worktree && (
-                <Tooltip side="bottom" label={thread.worktree.path}>
-                  <span className="flex h-[28px] max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted @max-xl/composer:hidden">
-                    <GitBranch size={12} className="shrink-0" />
-                    <span className="truncate">{thread.worktree.branch}</span>
-                  </span>
-                </Tooltip>
-              )}
-              <PermissionMenu threadId={thread?.id} compact={compact} />
-            </div>
-            <span className="flex-1" />
-            <div className="flex shrink-0 items-center gap-1">
-              <span className="flex h-7 shrink-0 items-center">
-                <PlanMeter threadId={thread?.id} />
-              </span>
-              {/* The meters keep their size: a ring squeezed under 30px is unreadable. */}
-              {thread && (
-                <span className="flex h-7 shrink-0 items-center empty:hidden">
-                  <ContextRing threadId={thread.id} />
-                </span>
-              )}
-              <ModelPicker thread={thread} compact={compact} />
-              {/* The marks keep their size; the card drops the whole pill below 24rem, the same step
-                  at which the folder falls back to its icon, and the thread's own agent card says the
-                  same. */}
-              <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
-                <AgentPill threadId={thread?.id} />
-              </span>
             </div>
           </div>
         </div>

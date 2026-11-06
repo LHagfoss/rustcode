@@ -579,8 +579,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           type="button"
           aria-label="Model and effort"
           className={cx(
-            "flex h-[30px] min-w-0 max-w-[260px] items-center gap-1.5 rounded-full px-3 text-callout text-fg-muted hover:bg-fill hover:text-fg @max-lg/composer:max-w-[180px]",
-            open ? "bg-fill-strong text-fg" : "bg-fill-subtle",
+            "flex h-[30px] min-w-0 max-w-[260px] items-center gap-1.5 rounded-full px-2 text-callout text-fg hover:bg-fill @max-lg/composer:max-w-[180px]",
+            open && "bg-fill-strong text-fg",
           )}
         >
           <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />

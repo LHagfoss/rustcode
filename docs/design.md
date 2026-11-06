@@ -98,8 +98,8 @@ the accent marks state (on, selected, linked), it does not shout.
 | lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, tooltips, pictures in replies |
 | xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels |
 | 2xl | 20 | `rounded-2xl` | The settings panel, toasts |
-| composer | 24 | `--rc-composer-radius` | The composer's box and tray, one step above 2xl so the floating box reads rounder than the cards |
-| 3xl | 26 | `rounded-3xl` | The largest floating surface, above the composer's step (nothing uses it yet) |
+| composer | 28 | `--rc-composer-radius` | The composer's box, two steps above 2xl so the one floating surface reads rounder than the cards |
+| 3xl | 26 | `rounded-3xl` | The largest floating surface (nothing uses it yet) |
 | full | — | `rounded-full` | Switches, avatars, dots, trackbars; never a labelled button |
 
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
@@ -168,9 +168,9 @@ read as one surface. Only their radius differs. Latest is both the
 surface and the control, so its hover is a fill layer over the glass
 rather than a `hover:bg-…` utility a class rule would beat.
 
-The composer floats over the transcript in two parts: the main box (field and send), and a tray
-tucked behind its foot with every other control. Its slash and `@` menus are an opaque drawer
-attached to the box's top edge.
+The composer floats over the transcript as one card: the field, and under it one control row with
+every control the send needs. Its slash and `@` menus are an opaque drawer attached to the box's top
+edge.
 
 The composer is its own, lighter pair, because it is the one surface text
 scrolls under all day: `surface-2` at **75%** (84% focused), its own
@@ -296,9 +296,8 @@ content never shifts when a classic scrollbar appears.
 ## Component recipes
 
 Shape rule: **labelled buttons are pills** (`rounded-full` with
-horizontal padding, never a circle): the composer's footer buttons, the
-model pill, chips, segmented items, header actions, Settings' "New…" and
-"Edit config".
+horizontal padding, never a circle): the composer's footer buttons, chips,
+segmented items, header actions, Settings' "New…" and "Edit config".
 Circles only for icon-only round buttons (send, stop, close in a panel
 header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
 Rows are `rounded-md` (sidebar thread rows `rounded-lg`), menu items and cards `rounded-lg`, menus, popovers and
@@ -452,13 +451,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
-  24px, one step above 2xl), with no padding of its own: the field row is
-  padded `px-3.5` and the foot `px-3.5 pb-1.5`. Glass at
+  28px, two steps above 2xl), with no padding of its own: the field row is
+  padded `px-4 pt-1` and its control row `px-4 pt-1 pb-3.5`. Glass at
   `--rc-composer-bg` (75%, 84% focused) with `--rc-composer-filter` and a
   1px `--rc-composer-outline`; no ring or colour on focus, the glass step
   is the focus. The card clips to its own corner. The editor reads at
-  `text-body leading-relaxed` (22.75px), two lines at rest above the foot
-  and 217px (nine lines) at most, then it scrolls; its text carries 6px
+  `text-body leading-relaxed` (22.75px), two lines at rest above the control
+  row and 217px (nine lines) at most, then it scrolls; its text carries 6px
   above and below inside the scroller, so the padding scrolls with it and
   the first and last lines keep their room (the box is sized to whole
   lines plus that padding). The edge it is cut at fades over 20px
@@ -468,16 +467,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   at the end of a draft that scrolls takes the field to its very end, so
   the line the caret is on is never inside a faded band. A
   slash-command chip in front of it
-  is that same line box, so it keeps the field's baseline. The foot is one
-  row **inside** the card: attach (**+**) on the left, send/queue/stop on
-  the right. The tray is the card's last row, divided from the foot by a
-  1px `border` hairline, not a slab of its own: it carries the rest, in
-  two groups with one height (`28px`, `.rc-composer-tray` sets it) and one
-  baseline — the folder, the worktree or branch and the permissions mode on
-  the left, the plan meter, the context ring, the model pill and the
-  working agents on the right. What rests on the card's own surface (the
-  **+**, the model pill) is
-  `bg-fill-subtle`, `bg-fill` on hover, `bg-fill-strong` when open. The
+  is that same line box, so it keeps the field's baseline. Under the field is the card's
+  one control row (`28px` controls, `.rc-composer-tray` sets their height), in
+  two groups on one baseline with no divider above it: the air between the
+  field and the row, and the row's own `pt-1`, separate them — the attach
+  button (**+**), the folder, the worktree or branch and the permissions mode
+  on the left, the plan meter, the context ring, the model and the working
+  agents on the right, then send/queue/stop at the row's end. The model reads
+  as its own name and effort, plain on the card, `bg-fill-strong` only while
+  its popover is open; the **+** rests on `bg-fill-subtle` (`bg-fill` on
+  hover). The
   card is a container (`@container`), so a narrow window drops labels (the
   folder name shortens, then the worktree label and the branch chip, then
   the permission label, the folder name and the agents pill) rather than
@@ -515,7 +514,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   starts its first message. A wake turn the app sends is one quiet line (its
   first line, in the notice divider's style), never a bubble; a message another
   thread sent says `From “…”` and is not the user's to edit.
-- **Jump to latest:** the pill over the composer's foot (`shadow-1`,
+- **Jump to latest:** the pill over the composer's control row (`shadow-1`,
   `.rc-glass-overlay` — the strip below it shares that surface — 30px)
   says `Latest` and, while a turn runs, what
   that turn is doing now after a `·` (`Reading files`, `Thinking · …`), so
