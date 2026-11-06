@@ -77,7 +77,7 @@ function StackTip({ view }: { view: AgentStackView }) {
 const MARK_SIZE = { sidebar: 16, chat: 20 } as const;
 /** The glyph fills this much of the circle, so a π is legible at 16px. */
 const GLYPH = 0.6;
-/** Icons overlap by this much of the diameter; the ring between them is what keeps them apart. */
+/** Icons overlap by this much of the diameter; each one's shadow on the one under it keeps them apart. */
 const OVERLAP = 0.3;
 /** The one badge a stack draws, on the last of its icons. */
 const BADGE = 8;
@@ -86,8 +86,8 @@ const BADGE = 8;
  * The icons alone, for a trigger that has its own card: at most three, `+N`, one
  * sign of work.
  *
- * Each icon is one clean circle with a hairline ring in the surface it sits on,
- * so overlapping marks read as separate instead of merging into a grey blob,
+ * Each icon is one solid circle, a step off the surface, with a soft shadow on
+ * its leading edge, so overlapping marks read as separate without a border,
  * and the state is ONE badge on the stack rather than a badge per icon: what
  * needs you, else what failed. A stack whose marks all finished shows none of
  * it; the text beside it already says `done`.
@@ -104,7 +104,7 @@ export function AgentMarks({
   const harnesses = useApp((s) => s.harnesses?.harnesses);
   const view = agentStack(agents, { idle: size === "chat" ? "show" : "hide" });
   const chat = size === "chat";
-  // The ring takes the colour of what the stack sits on: that is the whole separation.
+  // The badge's ring takes the colour of what the stack sits on, so the dot stands off its icon.
   const ring = tone === "sidebar" ? "ring-sidebar" : "ring-surface";
   const icon = MARK_SIZE[size];
   const glyph = Math.round(icon * GLYPH);
@@ -118,8 +118,8 @@ export function AgentMarks({
         <span
           key={agent.id}
           className={cx(
-            "relative flex shrink-0 items-center justify-center rounded-full bg-fill text-fg-muted ring-[1.5px]",
-            ring,
+            // Opaque, so the mark under it never shows through; no ring (index.css `.rc-agent-mark`).
+            "rc-agent-mark relative flex shrink-0 items-center justify-center rounded-full text-fg-muted",
           )}
           style={{
             width: icon,
