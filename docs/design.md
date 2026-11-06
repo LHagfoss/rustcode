@@ -193,8 +193,10 @@ groups), 24 (between sections). The chat lane is **832px**
 (`--rc-chat-content-max-width`, 52rem) for the transcript's rows and the
 composer alike, inset by a 12px gutter, 20px from the `sm` breakpoint.
 Settings › Chat › Chat width moves that one cap and nothing else: Wide is
-72rem, Full is the pane's own width (the details card then overlays the
-lane, as it does on a narrow window).
+72rem, Full is the pane's own width. While a right-hand card is open the
+lane centres in the room the card leaves (`pane - card - its two 12px
+gaps`), narrowed to that room when it is below the cap, so the conversation
+reads centred beside the card instead of off-centre under it.
 
 ## Type
 
@@ -235,9 +237,11 @@ that change use `tabular`.
   sections.
 - Panels and sheets never animate a slot's `width`, `height`, `top` or
   grid rows across the chat: every frame would reflow the transcript (40 ms
-  of work a frame for the right panel, so well under 120 fps). The slot
-  takes its size at once and the panel moves with `transform` and
-  `opacity` (`rc-drill` in, `translate`/`opacity` out). Animate only
+  of work a frame for the right panel, so well under 120 fps). A card takes
+  no slot at all — it floats over the chat — so opening one refits the lane
+  once and the card moves with `transform` and `opacity` (`rc-drill` in,
+  `translate`/`opacity` out); only its left edge, dragged by hand, widens it
+  frame by frame. Animate only
   `transform`, `opacity` and colour; never `filter` or `box-shadow` on
   something that moves every frame.
 - Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
@@ -549,29 +553,36 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   When the control stacks under the text, the icon leaves the flow for the
   row's top right, so stacked controls share one left edge.
 - **Right panel:** one `RightPanel` for every side view (Details, Changes,
-  Pull requests): a docked, full-height pane at the window's right edge — the
-  sidebar's twin, `bg-sidebar` with a 1px `border-l` seam, no inset and no
-  rounded corners. Its header row is a `HEADER_HEIGHT` band with a segmented
-  switch between the views and a close button, divided from the view by a
-  hairline; views add a slim toolbar (`h-9`) under it. It is responsive: it
-  never takes more than the column it shares with the chat leaves it (the chat
-  keeps 420px, or 360px when that column is under 900px wide), and when the
-  column cannot hold both it floats over the transcript instead, ending just
-  above the composer (its top measured into `--rc-composer-top` by
-  `ui/ChatView.tsx`) with a bottom hairline and no shadow, so the composer stays
-  usable and the chat keeps its full width. The left edge drags (320–760px, kept
-  as asked, fitted when drawn) and answers the keyboard too: ←/→ 24px from the
+  Pull requests): a floating card at the window's right edge, inset 12px from
+  its top, right and foot, `rounded-2xl` in the same glass and elevation as
+  every other floating surface (`.rc-glass` + `-strong` + `shadow-2`, the
+  details card's own surface), so the transcript scrolls under it and the chat
+  keeps its full width. The details card is that surface, small (280px) and at
+  the top right. A pane's header row is a `HEADER_HEIGHT` band inside the card
+  with a segmented switch between the views and a close button, divided from the
+  view by a hairline; views add a slim toolbar (`h-9`) under it. It never draws
+  past the column's edges (320–760px, kept as asked, fitted when drawn), and its
+  foot stops above the composer (its top measured into `--rc-composer-top` by
+  `ui/ChatView.tsx`), so the composer stays usable; a new thread's centred hero
+  and composer leave it the pane's full height. The left edge drags and
+  answers the keyboard too: ←/→ 24px from the
   width on screen (Shift 96px), Home/End to the ends, ⏎ the default. Escape
   inside either surface closes the panel (unless a field in it is being edited),
   focus goes into it when a shortcut opens it with nothing focused, and closing
-  hands focus back. Every control under the transcript — composer, its slash
-  drawer, approvals, linked threads, a report — paints above a floating pane, so
-  none of it is ever out of reach; a new thread's hero is not a control and the
-  pane covers it. Each stack child rides the lane's shift on its own
+  hands focus back. The lane centres in the room the card leaves, narrowed to it
+  when that room is under its cap, and a column too narrow for a lane that
+  reads has the card float over the chat instead. Every control under the
+  transcript — composer, its slash drawer, approvals, linked threads, a report —
+  paints above the card, so none of it is ever out of reach; a new thread's hero
+  is not a control, and on a narrow column the card floats over it. Each stack
+  child rides the lane's shift on its own
   (`LaneItem`, `empty:hidden` so one that renders nothing leaves no gap), not the
   stack, so the hero and those
-  controls are separate stacking contexts. Its slot takes its width at once and
-  the panel slides and fades in 200ms (see Motion). ⌘⌥B toggles it with the last
+  controls are separate stacking contexts, and the whole stack sits on a scrim
+  as tall as itself, so a queued message or the strip of linked threads never
+  reads through the composer's glass. The card slides and fades in 200ms (see
+  Motion), its width published for the lane (`usePanelCardWidth`). ⌘⌥B toggles it
+  with the last
   view. A thread opens with the panel on the view it last showed (Changes
   when that view has nothing to show here; `state/store.ts`
   `panelForThread`); closing it by hand is kept for the thread on screen, so

@@ -1,30 +1,28 @@
-// The right panel (docs/design.md, Right panel): one docked, full-height pane
-// at the window's right edge for the side views that take a pane (Changes,
-// Pull requests, Thread) — the sidebar's twin on the other side: no inset, no
-// floating card, a 1px seam and the same rail surface. It has tabs between the
-// views, a close button and a draggable left edge, and it is responsive: it
-// never grows past the room the chat column keeps (CHAT_FLOOR px, less in a
-// column narrower than NARROW), so opening it narrows the conversation without
-// ever squeezing it out — and when the column cannot hold both (OVERLAY_BELOW)
-// it floats over the transcript instead, stopping above the composer so that
-// stays usable, and leaves the chat its full width. Its slot takes its width at
-// once (one reflow of the chat column, not one per frame), and the frame slides
-// and fades in and out on the compositor; its content stays mounted while it
-// closes (docs/desktop.md › Native frame rate).
+// The right panel (docs/design.md, Right panel): one floating card at the
+// window's right edge for the side views that take a pane (Changes, Pull
+// requests, Thread). It is the details card, full height: inset from the
+// window's edges by the same gap, the same radius, glass and elevation, with
+// tabs between the views, a close button and a draggable left edge. It takes no
+// slot in the layout, so the chat keeps its full width and the transcript
+// scrolls under the card; the lane centres in the room the card leaves
+// (ui/ChatView.tsx `laneLayout`). The card never draws past the column's edges,
+// and its foot stops above the composer (`--rc-composer-top`) so the composer
+// stays usable. It slides and fades in and out on the compositor, and its
+// content stays mounted while it closes (docs/desktop.md › Native frame rate).
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
 // default), Escape inside the panel closes it — the pane or the details card —
 // focus moves in when a shortcut opens it with nothing focused, and closing
-// gives the focus back to whatever had it. The composer is never covered: a
-// floating pane ends above it, and the composer's drawer and approvals paint
-// over one (ui/ChatView.tsx), so a field being typed in keeps the keyboard.
+// gives the focus back to whatever had it. The composer is never covered: the
+// card ends above it, and the composer's drawer and approvals paint over one
+// (ui/ChatView.tsx), so a field being typed in keeps the keyboard.
 //
-// Thread details is not a pane: it floats over the chat as a small card at the
-// top right, so reading it never narrows the transcript.
+// Thread details is the same card, small: it floats at the top right and lists
+// what a thread is, so reading it never moves the lane.
 
 import { X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { observeSize } from "../lib/resize";
 import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
 import { HEADER_HEIGHT } from "./MainHeader";
@@ -43,16 +41,16 @@ type Pane = Exclude<Kind, "details">;
 export const MIN = 320;
 export const MAX = 760;
 export const DEFAULT_WIDTH = 460;
-/** What the chat column keeps: this much, or NARROW_CHAT_FLOOR below NARROW. */
-export const CHAT_FLOOR = 420;
-export const NARROW = 900;
-export const NARROW_CHAT_FLOOR = 360;
 /** One press of an arrow key, and with Shift. */
 const STEP = 24;
 const STEP_LARGE = 96;
 const KEY = "rustcode.rightPanelWidth";
+/** The gap every floating card keeps from the window's edges, and from the chat lane. */
+const CARD_GAP = 12;
 /** The details card's width, and its gap from the window's edges; the chat lane clears it. */
-export const DETAILS_CARD = { width: 280, gap: 12 } as const;
+export const DETAILS_CARD = { width: 280, gap: CARD_GAP } as const;
+/** The surface a card of the right panel is drawn on: the details card and a pane alike. */
+const CARD_SURFACE = "rc-glass rc-glass-strong rounded-2xl shadow-2";
 
 const PANE_ID = "rc-side-panel";
 
@@ -78,36 +76,36 @@ function persist(width: number) {
   }
 }
 
-/** What the chat column keeps beside the pane: less in a column too narrow for both. */
-export function chatFloor(available: number): number {
-  return available >= NARROW ? CHAT_FLOOR : NARROW_CHAT_FLOOR;
-}
-
-/** The widest the pane may draw: its own cap, and the room past the chat's floor. */
-export function paneMax(available: number): number {
-  if (available <= 0) return MAX;
-  return Math.max(MIN, Math.min(MAX, available - chatFloor(available)));
-}
-
-/** Below this the pane cannot dock beside a chat that still reads: it floats over it. */
-export const OVERLAY_BELOW = MIN + CHAT_FLOOR;
-
-/** Whether the pane floats over the chat instead of taking a slot beside it. */
-export function overlays(available: number): boolean {
-  return available > 0 && available < OVERLAY_BELOW;
-}
-
-/** The width of the floating pane: the one asked for, no wider than the column. */
-export function overlayWidth(wanted: number, available: number): number {
-  return Math.max(MIN, Math.min(clampWidth(wanted), Math.round(available)));
+/**
+ * The width a pane's card draws: the one asked for (kept, so it comes back when
+ * the window widens), no wider than the column leaves it between its two gaps.
+ * 0 is before the first measurement, when the stored width stands as it is.
+ */
+export function panelWidth(wanted: number, available: number): number {
+  const room = available > 0 ? Math.max(MIN, available - CARD_GAP * 2) : MAX;
+  return Math.min(clampWidth(wanted), room);
 }
 
 /**
- * The width the pane takes: the one asked for (kept, so it comes back when the
- * window widens), fitted to the room the chat leaves it.
+ * The card over the chat, for the lane to centre in the room beside it
+ * (ui/ChatView.tsx): its width, 0 while no card is open.
  */
-export function fittedWidth(wanted: number, available: number): number {
-  return Math.min(clampWidth(wanted), paneMax(available));
+const cardListeners = new Set<() => void>();
+let cardWidth = 0;
+
+function subscribeCard(listener: () => void): () => void {
+  cardListeners.add(listener);
+  return () => cardListeners.delete(listener);
+}
+
+function publishCardWidth(width: number) {
+  if (width === cardWidth) return;
+  cardWidth = width;
+  for (const listener of cardListeners) listener();
+}
+
+export function usePanelCardWidth(): number {
+  return useSyncExternalStore(subscribeCard, () => cardWidth);
 }
 
 /**
@@ -147,9 +145,9 @@ export function RightPanel() {
   // What the panel shows: the open one, or while closing the one that was.
   const [shown, setShown] = useState<Kind | null>(panel);
   const [width, setWidth] = useState(storedWidth);
-  // The room the pane shares with the chat, measured on their common parent
-  // (the chat column absorbs its own width, so growing the pane never changes
-  // it); 0 until the first measurement, when the stored width stands as it is.
+  // The room the card is drawn in, measured on the column that holds the chat
+  // (the card takes no slot, so this is the chat's own width); 0 until the first
+  // measurement, when the stored width stands as it is.
   const [available, setAvailable] = useState(0);
   const slot = useRef<HTMLDivElement>(null);
   // The surface that is showing: the pane, or the details card.
@@ -161,8 +159,8 @@ export function RightPanel() {
   }, [panel]);
 
   useEffect(() => {
-    // offsetParent is the column that holds the chat and this slot: the chat is
-    // `flex-1`, so this width is the same whatever the pane takes.
+    // offsetParent is the column that holds the chat and this slot: the card
+    // floats over it, so its width is the whole room a card may draw in.
     const host = slot.current?.offsetParent;
     if (!(host instanceof HTMLElement)) return;
     const measure = () => setAvailable(host.clientWidth);
@@ -174,10 +172,12 @@ export function RightPanel() {
   const kind = panel ?? shown;
   const card = kind === "details";
   const pane = kind && !card ? kind : null;
-  // No room for both: the pane floats over the chat rather than squeeze it out.
-  const floating = overlays(available);
-  const fitted = floating ? overlayWidth(width, available) : fittedWidth(width, available);
-  const widest = floating ? Math.max(MIN, Math.round(available)) : paneMax(available);
+  const fitted = panelWidth(width, available);
+  const widest = panelWidth(MAX, available);
+  // The lane centres in the room beside the card, so it reads the width on
+  // screen here and moves with the edge while it is dragged.
+  const shownWidth = !panel ? 0 : card ? DETAILS_CARD.width : fitted;
+  useEffect(() => publishCardWidth(shownWidth), [shownWidth]);
 
   // Keyboard focus follows the panel, and never sits where it cannot be seen:
   // a shortcut opens it with nothing focused, a surface closing takes the focus
@@ -253,14 +253,7 @@ export function RightPanel() {
   ];
 
   return (
-    <div
-      ref={slot}
-      // A card floats past its edges; a docked pane clips its own, a floating
-      // one reaches left over the chat.
-      className={cx("relative shrink-0", pane && !floating ? "overflow-hidden" : "overflow-visible")}
-      style={{ width: pane && !floating ? fitted : 0 }}
-      aria-hidden={!open}
-    >
+    <div ref={slot} className="relative shrink-0" style={{ width: 0 }} aria-hidden={!open}>
       {card && (
         <aside
           ref={surface}
@@ -271,7 +264,8 @@ export function RightPanel() {
             if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
           }}
           className={cx(
-            "rc-glass rc-glass-strong absolute z-30 flex flex-col overflow-hidden rounded-2xl shadow-2 outline-none transition-[opacity,translate] duration-200 ease-snappy",
+            CARD_SURFACE,
+            "absolute z-30 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
             open ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0",
           )}
           style={{
@@ -294,13 +288,17 @@ export function RightPanel() {
           tabIndex={-1}
           onKeyDown={onSurfaceKey}
           className={cx(
-            "rc-drill absolute flex flex-col overflow-hidden border-border border-l bg-sidebar outline-none transition-[opacity,translate] duration-200 ease-snappy",
-            floating
-              ? "top-0 right-0 bottom-[calc(var(--rc-composer-top,0px)+6px)] z-20 border-b"
-              : "inset-y-0 left-0",
+            CARD_SURFACE,
+            "rc-drill absolute z-20 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
             open ? "translate-x-0 opacity-100" : "translate-x-3 opacity-0",
           )}
-          style={{ width: fitted }}
+          style={{
+            top: HEADER_HEIGHT + CARD_GAP,
+            right: CARD_GAP,
+            // The card ends above the composer, so the foot of the chat keeps its field.
+            bottom: `calc(var(--rc-composer-top, 0px) + ${CARD_GAP}px)`,
+            width: fitted,
+          }}
           onTransitionEnd={(e) => {
             if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
           }}
