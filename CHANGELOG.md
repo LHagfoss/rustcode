@@ -1,3 +1,11 @@
+## [v1.12.1-beta.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.1-beta.2) - 2026-11-06
+
+### Fixes
+### Chat and layout
+
+- A thread opens the right panel on its own overview (thread details) instead of the git Changes card, and a view with nothing to show in this project falls back to it. (#3066)
+- The side cards float over the chat again: the chat keeps its place and its width, the transcript scrolls under the card, and every card ends above the composer so the field is never covered. (#3066)
+- A draft with more than three pictures shows three thumbnails and a `+N` count that opens the rest, instead of a strip that grows with every image. (#3067)
 ## [v1.12.1-beta.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.1-beta.1) - 2026-11-06
 
 ### Fixes
