@@ -35,6 +35,9 @@ export const Method = {
   dataActivity: "_rustcode/data/activity",
   dataLinksLoad: "_rustcode/data/links/load",
   dataLinksSave: "_rustcode/data/links/save",
+  /** The two payload-capture switches (`engine/src/acp/telemetry.rs`). */
+  telemetry: "_rustcode/config/telemetry",
+  telemetrySet: "_rustcode/config/telemetry/set",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",
