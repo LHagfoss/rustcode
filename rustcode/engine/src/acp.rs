@@ -18,6 +18,7 @@ pub(crate) mod session_move;
 mod session_repair;
 mod steer;
 mod streaming;
+mod telemetry;
 mod themes;
 pub(crate) mod usage;
 
@@ -1697,12 +1698,38 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |_request: telemetry::TelemetryRequest, responder, connection| {
+                connection.spawn(async move {
+                    match telemetry::answer() {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: data::DataReceiptsPutRequest, responder, connection| {
                 connection.spawn(async move {
                     match data::receipts_put(request) {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: telemetry::SetTelemetryRequest, responder, connection| {
+                connection.spawn(async move {
+                    match telemetry::answer_set(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
                     }?;
                     Ok(())
                 })

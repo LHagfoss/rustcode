@@ -4,6 +4,7 @@ import {
   nextPlanRefresh,
   PLAN_REFRESH_MS,
   parseAgentList,
+  parsePayloadCapture,
   parsePlanUsage,
   parsePullList,
   repositoryOf,
@@ -64,6 +65,16 @@ describe("rustcode extensions", () => {
     expect(resetLabel({ usedPercent: 1, resetsAt: now + 134 * 60_000 }, now)).toBe("resets in 2 h 14 min");
     expect(resetLabel({ usedPercent: 1, resetsAt: now + 120 * 60_000 }, now)).toBe("resets in 2 h");
     expect(resetLabel({ usedPercent: 1, resetsAt: now - 1 }, now)).toBe("resetting now");
+  });
+
+  test("the payload switches read as off unless the engine says on", () => {
+    expect(parsePayloadCapture({ providerPayloads: true, harnessRpcPayloads: false })).toEqual({
+      providerPayloads: true,
+      harnessRpcPayloads: false,
+    });
+    // An engine that does not know the method yet, or answers nothing: capture off.
+    expect(parsePayloadCapture(undefined)).toEqual({ providerPayloads: false, harnessRpcPayloads: false });
+    expect(parsePayloadCapture({})).toEqual({ providerPayloads: false, harnessRpcPayloads: false });
   });
 
   test("a usage update carries the context breakdown", () => {

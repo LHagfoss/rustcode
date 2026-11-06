@@ -38,6 +38,9 @@ export const Method = {
   /** An orchestration call's receipt: checked before the app acts, written after it succeeds. */
   dataReceiptGet: "_rustcode/data/receipts/get",
   dataReceiptPut: "_rustcode/data/receipts/put",
+  /** The two payload-capture switches (`engine/src/acp/telemetry.rs`). */
+  telemetry: "_rustcode/config/telemetry",
+  telemetrySet: "_rustcode/config/telemetry/set",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",

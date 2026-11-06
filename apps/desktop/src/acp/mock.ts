@@ -1015,6 +1015,8 @@ export class MockEngine {
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
   private presence = true;
+  /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
+  private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
   private removedWorktrees = new Set<string>();
   /** The link book the app keeps in the data store: none until it saves one, and kept in `options` as the engine's disk does. */
   private get linkBook(): JsonObject | undefined {
@@ -1798,6 +1800,20 @@ export class MockEngine {
         }
         thread.checkpoints.splice(at);
         return { restored: true, conversation: params.rewind === true && canRewind ? "rewound" : "kept" };
+      }
+      case "_rustcode/config/telemetry":
+        // The same shape `_rustcode/config/telemetry` answers with (engine/src/acp/telemetry.rs).
+        return { ...this.payloadCapture };
+      case "_rustcode/config/telemetry/set": {
+        const asked = obj(params);
+        if (typeof asked?.providerPayloads !== "boolean" || typeof asked?.harnessRpcPayloads !== "boolean") {
+          throw Object.assign(new Error("both switches are required"), { code: -32602 });
+        }
+        this.payloadCapture = {
+          providerPayloads: asked.providerPayloads,
+          harnessRpcPayloads: asked.harnessRpcPayloads,
+        };
+        return { ...this.payloadCapture };
       }
       case "_rustcode/presence":
         return { enabled: this.presence, discordDetected: true };

@@ -570,3 +570,28 @@ export function parseUsageReport(result: Json | undefined): UsageReport {
     }),
   };
 }
+
+// ---------------------------------------------------------------- payload capture
+
+/**
+ * Whether the engine keeps the bodies it records (`docs/data-store.md` ›
+ * Captured payloads), from `_rustcode/config/telemetry`
+ * (`engine/src/acp/telemetry.rs`). Both are off by default and global: a
+ * checked-out project cannot turn them on. The engine reads them when it
+ * starts, so Settings offers a restart after a change.
+ */
+export interface PayloadCapture {
+  /** `capture_provider_payloads`: each built-in harness request body. */
+  providerPayloads: boolean;
+  /** `capture_harness_rpc_payloads`: each message exchanged with a harness. */
+  harnessRpcPayloads: boolean;
+}
+
+export function parsePayloadCapture(result: Json | undefined): PayloadCapture {
+  const root = obj(result);
+  // An older engine answers nothing, which is capture off.
+  return {
+    providerPayloads: bool(root?.providerPayloads) ?? false,
+    harnessRpcPayloads: bool(root?.harnessRpcPayloads) ?? false,
+  };
+}

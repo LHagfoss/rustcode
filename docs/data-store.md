@@ -197,6 +197,13 @@ does not turn any of this on. Project configuration cannot enable either key:
 capturing payloads is a choice about the user's own data, so it is global
 only, like skill roots.
 
+The app writes both keys from Settings › Advanced › **Record request bodies**
+through `_rustcode/config/telemetry` / `_rustcode/config/telemetry/set`
+(`engine/src/acp/telemetry.rs`), which edits only these two keys and leaves the
+rest of `config.toml` as it was. The engine reads them from the config it
+started with, so a change applies after it restarts (the row offers that
+directly); the terminal keeps using the keys by hand.
+
 Every payload is redacted and clipped before it is written
 (`engine/src/data_store/redact.rs`):
 
