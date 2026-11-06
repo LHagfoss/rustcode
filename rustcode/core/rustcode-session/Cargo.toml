@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-session"
-version = "1.12.1-beta.3"
+version = "1.13.0"
 edition = "2024"
 license = "Apache-2.0"
 
