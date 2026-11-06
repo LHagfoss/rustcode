@@ -5,7 +5,7 @@
 import type { SessionSummary } from "../acp/types";
 import { diffCounts, type TranscriptItem } from "./thread";
 
-/** A row the list draws. A delegated thread has no row of its own: it is in its parent's stack. */
+/** A row the list draws: a top-level thread, or the open delegate's indented row. */
 export interface OrderRow {
   id: string;
 }
@@ -39,9 +39,9 @@ export function visibleRows(sections: readonly OrderSection[]): string[] {
 }
 
 /**
- * The row that stands for the open thread. A delegated thread has no row, so the
- * open one answers with its nearest ancestor that is drawn: the parent row stays
- * lit as the context, and the keyboard lands on something visible.
+ * The row that stands for the open thread. A delegate is a row of its own while it is open; one
+ * whose indented row is not drawn (a filter took it away) answers with its nearest drawn ancestor,
+ * so the keyboard lands on something visible and the context stays lit.
  */
 export function contextRow(
   selectedId: string | null,

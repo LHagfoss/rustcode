@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { ContextMenu, Dialog, DropdownMenu } from "radix-ui";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -117,7 +118,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
-import { parentOf as parentOfThread, topLevel } from "../state/topLevel";
+import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
@@ -524,6 +525,7 @@ const ThreadRow = memo(function ThreadRow({
   grouped,
   now,
   snippet,
+  hint,
   pull,
   agents,
   navActive,
@@ -540,6 +542,8 @@ const ThreadRow = memo(function ThreadRow({
   now: number;
   /** While searching: the words around the match in what was said. */
   snippet?: string;
+  /** No parent row above it (a search result, or a filtered-out parent): the thread it belongs under. */
+  hint?: string;
   /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
   pull?: PullRequest;
   /** Threads this one started and still runs: the stack on its second line, in place of child rows. */
@@ -758,10 +762,17 @@ const ThreadRow = memo(function ThreadRow({
                 )
               )}
             </span>
-            {/* What it asks of you, or while searching, the words around the match. */}
-            {(snippet || request) && (
+            {/* What it asks of you; while searching, the words around the match; or which thread a
+                delegated one without a parent row above it belongs under. */}
+            {(snippet || request || hint) && (
               <span className="relative truncate text-fg-muted text-sub">
-                {snippet ? `“${snippet}”` : request!.question ? request!.question.text : request!.title}
+                {snippet
+                  ? `“${snippet}”`
+                  : request
+                    ? request.question
+                      ? request.question.text
+                      : request.title
+                    : hint}
               </span>
             )}
           </button>
@@ -966,6 +977,31 @@ function Fold({ open, children }: { open: boolean; children: React.ReactNode }) 
     >
       <div className="min-h-0 overflow-hidden">{children}</div>
     </div>
+  );
+}
+
+/**
+ * The open delegated thread as an indented row directly under the row of the thread that started
+ * it, and the chain of delegates under it. It unfolds in with the list's fold motion and folds
+ * away when the user opens another thread or goes back, instead of vanishing: the last row and
+ * what hung under it are held for the fold.
+ */
+function OpenChild({ row, deeper }: { row: React.ReactNode | null; deeper: React.ReactNode }) {
+  const held = useRef({ row, deeper });
+  if (row) held.current = { row, deeper };
+  return (
+    <Fold open={!!row}>
+      {held.current.row && (
+        // `rc-row-in` is the list's own arrival motion: the fold above it starts open, so the row
+        // would otherwise appear in place when the thread is opened.
+        <div className="rc-row-in relative pl-4">
+          {/* The subtle line saying this row belongs to the one above it. */}
+          <span aria-hidden className="pointer-events-none absolute inset-y-1 left-1.5 w-px bg-border" />
+          {held.current.row}
+          {held.current.deeper}
+        </div>
+      )}
+    </Fold>
   );
 }
 
@@ -1364,39 +1400,63 @@ export function Sidebar() {
 
   const links = useApp((s) => s.links.links);
   const messaged = useApp((s) => s.messaged);
-  // Where a thread an agent started goes: under the thread that started it, and
-  // nowhere else (state/topLevel.ts) — the parent survives link pruning in the
-  // thread's own metadata, and a thread with no parent in the list keeps a row
-  // of its own rather than going nowhere.
+  // Where a thread an agent started goes: under the thread that started it, and nowhere else
+  // (state/topLevel.ts) — the parent survives link pruning in the thread's own metadata. Every
+  // session is asked, not the filtered list: a project filter or a search changes what is drawn,
+  // never who a thread belongs to.
   const parentOf = useMemo(() => {
-    const listed = new Set(filtered.map((s) => s.id));
-    const flagged = new Set(flags.split(" "));
-    // A search lists every match as a row of its own, delegated or not: the thread you are
-    // looking for is not hidden under a parent that also matched.
-    const searching = !!query.trim();
+    const known = new Set(sessions.map((s) => s.id));
     const parentOf = new Map<string, string>();
-    if (searching) return parentOf;
-    for (const s of filtered) {
+    for (const s of sessions) {
       const placement = topLevel(
         {
           id: s.id,
-          live:
-            flagged.has(`${s.id}:n`) ||
-            flagged.has(`${s.id}:w`) ||
-            s.status === "running" ||
-            s.status === "needs_input",
           pinned: pinned.includes(s.id),
           messaged: messaged[s.id] !== undefined,
           parent: s.parent,
         },
         links,
-        listed,
+        known,
       );
       const parent = parentOfThread(s, links);
       if (placement === "nested" && parent) parentOf.set(s.id, parent);
     }
     return parentOf;
-  }, [filtered, links, flags, pinned, messaged, query]);
+  }, [sessions, links, pinned, messaged]);
+  const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
+  // A search lists every match as a row of its own: the thread you are looking for is not hidden
+  // under a parent that did not match. Each such row says which thread it belongs to instead.
+  const searching = !!query.trim();
+  // The threads with a row of their own, before the open delegate's chain is drawn under its parent.
+  const topRows = useMemo(
+    () => new Set(filtered.filter((s) => searching || !parentOf.has(s.id)).map((s) => s.id)),
+    [filtered, parentOf, searching],
+  );
+  // The open delegated thread and the threads between it and its row of its own: drawn as indented
+  // rows under the parent, and folded away when the user opens another thread or goes back.
+  const chain = useMemo(
+    () => (searching ? [] : openChain(selectedId, parentOf, topRows)),
+    [searching, selectedId, parentOf, topRows],
+  );
+  // A nested thread the filter left with no drawn row above it: it keeps a row of its own rather
+  // than going missing, saying which thread it belongs under.
+  const orphanOpen =
+    !searching &&
+    selectedId &&
+    parentOf.has(selectedId) &&
+    !chain.length &&
+    filtered.some((s) => s.id === selectedId)
+      ? selectedId
+      : undefined;
+  // Each open delegate by the row it hangs under. The chain is one path, so a parent has one child.
+  const subOf = useMemo(() => {
+    const map = new Map<string, SubRow>();
+    for (const sub of chain) map.set(sub.parent, sub);
+    return map;
+  }, [chain]);
+  // The last delegate drawn under each row, kept while it folds away: an unmount would skip the
+  // animation, and the session is no longer in the chain by then.
+  const lastSubs = useRef(new Map<string, SessionSummary>());
   const childrenByParent = useMemo(() => {
     const map: Record<string, SessionSummary[]> = {};
     for (const s of filtered) {
@@ -1443,7 +1503,9 @@ export function Sidebar() {
         ? pendingSummary(pending)
         : null;
     for (const s of filtered) {
-      if (parentOf.has(s.id)) continue;
+      // A delegated thread has no row of its own, unless a search lists it or the filter left the
+      // open one with no row to hang under (`orphanOpen`).
+      if (!searching && parentOf.has(s.id) && s.id !== orphanOpen) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads marked Done (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
@@ -1509,19 +1571,33 @@ export function Sidebar() {
     query,
     onlyProject,
     projectCwd,
+    searching,
+    orphanOpen,
   ]);
 
   const footShelf = sections.some((g) => g.id === "snoozed") ? "snoozed" : "settled";
+  // Settled is the shelf at the foot (ui/Sidebar.tsx SettledRow): its header sits in the footer,
+  // and its rows stay at the end of the list above it.
+  const settledSection = sections.find((g) => g.id === "settled");
+  // The open delegate's parent may have been settled: the shelf opens for it and its slice of the
+  // shelf grows to hold the row, so the row it hangs under is reachable rather than out of sight.
+  const settledAt = settledSection
+    ? Math.max(
+        -1,
+        ...settledSection.items.map((s, index) => (chain.some((c) => c.parent === s.id) ? index : -1)),
+      )
+    : -1;
+  const settledForChain = !searching && settledAt >= 0;
   // A search shows every match, folded sections too.
   const isOpen = (id: string) =>
-    id === "settled" ? !!query.trim() || settledOpen : !!query.trim() || !folded.includes(id);
+    id === "settled"
+      ? !!query.trim() || settledOpen || settledForChain
+      : !!query.trim() || !folded.includes(id);
   const toggle = (id: string) =>
     id === "settled"
       ? setSettledOpen(!settledOpen)
       : setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
-  // Settled is the shelf at the foot (ui/Sidebar.tsx SettledRow): its header sits in the footer,
-  // and its rows stay at the end of the list above it.
-  const settledSection = sections.find((g) => g.id === "settled");
+  const settledLimit = Math.max(settledShown, settledAt + 1);
 
   // ---------------------------------------------------------------- the list's rows, selection and keys
   // What is picked, and which row the keyboard is on, belong to the sidebar while it is drawn:
@@ -1596,7 +1672,19 @@ export function Sidebar() {
   // (state/sidebarRows.ts).
   const order = useMemo<OrderSection[]>(() => {
     const open = (id: string) => !!query.trim() || !folded.includes(id);
-    const toOrder = (items: SessionSummary[]): OrderRow[] => items.map((s) => ({ id: s.id }));
+    // A row with the open delegate under it draws its chain next: ↑ ↓ and the tab stop reach the
+    // sub-rows, because the list draws them.
+    const toOrder = (items: SessionSummary[]): OrderRow[] => {
+      const rows: OrderRow[] = [];
+      const add = (s: SessionSummary, depth: number) => {
+        rows.push({ id: s.id });
+        const sub = subOf.get(s.id);
+        const child = sub && depth < 8 ? byId.get(sub.id) : undefined;
+        if (child) add(child, depth + 1);
+      };
+      for (const s of items) add(s, 0);
+      return rows;
+    };
     return sections.map((section) =>
       section.projects
         ? {
@@ -1611,10 +1699,10 @@ export function Sidebar() {
             id: section.id,
             shut: section.id === "settled" && !open(section.id),
             rows: toOrder(section.items),
-            limit: section.id === "settled" && !query.trim() ? settledShown : undefined,
+            limit: section.id === "settled" && !query.trim() ? settledLimit : undefined,
           },
     );
-  }, [folded, query, sections, settledShown]);
+  }, [byId, folded, query, sections, settledLimit, subOf]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
   // The row the keyboard is on: where it was left, else the open thread, else the first row. A
@@ -1721,31 +1809,57 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
+  // A row that has no parent row above it says which thread it belongs under: a search result, or
+  // the open delegate whose parent the filter left out.
+  const hintFor = (s: SessionSummary): string | undefined => {
+    const above = parentOf.get(s.id);
+    if (!above) return undefined;
+    return `in ${byId.get(above)?.title || "another thread"}`;
+  };
+  const rowFor = (s: SessionSummary, grouped: boolean, hint = true) => (
+    <ThreadRow
+      session={s}
+      selected={s.id === selectedId}
+      context={s.id === contextSelected && s.id !== selectedId}
+      grouped={grouped}
+      pull={pullOf(s)}
+      now={now}
+      snippet={query.trim() ? contentHits[s.id] : undefined}
+      hint={hint ? hintFor(s) : undefined}
+      agents={stacks.get(s.id)}
+      navActive={s.id === currentId}
+      picked={picked.has(s.id)}
+      bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
+      onClearSelection={clearSelection}
+    />
+  );
+  // The open delegate and its descendants, each an indented row under the one above it. The last
+  // one drawn under a row is kept while it folds away (`OpenChild` holds it for the animation).
+  const openBelow = (parentId: string, grouped: boolean, depth = 0): React.ReactNode => {
+    const sub = subOf.get(parentId);
+    const current = sub ? byId.get(sub.id) : undefined;
+    if (current && sub) lastSubs.current.set(parentId, current);
+    const child = current ?? lastSubs.current.get(parentId);
+    if (!child || depth > 8) return null;
+    return (
+      <OpenChild
+        row={current ? rowFor(current, grouped, false) : null}
+        deeper={openBelow(child.id, grouped, depth + 1)}
+      />
+    );
+  };
   const rows = (items: SessionSummary[], grouped: boolean) => (
     <div className="flex flex-col gap-0.5">
-      {items.map((s) => {
-        if (pending && s.id === pending.id)
-          return (
-            <PendingRow key={s.id} pending={pending} selected={!selectedId} navActive={s.id === currentId} />
-          );
-        return (
-          <ThreadRow
-            key={s.id}
-            session={s}
-            selected={s.id === selectedId}
-            context={s.id === contextSelected && s.id !== selectedId}
-            grouped={grouped}
-            pull={pullOf(s)}
-            now={now}
-            snippet={query.trim() ? contentHits[s.id] : undefined}
-            agents={stacks.get(s.id)}
-            navActive={s.id === currentId}
-            picked={picked.has(s.id)}
-            bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
-            onClearSelection={clearSelection}
-          />
-        );
-      })}
+      {items.map((s) => (
+        <Fragment key={s.id}>
+          {pending && s.id === pending.id ? (
+            <PendingRow pending={pending} selected={!selectedId} navActive={s.id === currentId} />
+          ) : (
+            rowFor(s, grouped)
+          )}
+          {openBelow(s.id, grouped)}
+        </Fragment>
+      ))}
     </div>
   );
 
@@ -1892,12 +2006,12 @@ export function Sidebar() {
                         })
                       : rows(
                           section.id === "settled" && !query.trim()
-                            ? section.items.slice(0, settledShown)
+                            ? section.items.slice(0, settledLimit)
                             : section.items,
                           // Under its project's heading the row drops the mark and the name.
                           !!section.projects,
                         )}
-                    {section.id === "settled" && !query.trim() && section.items.length > settledShown && (
+                    {section.id === "settled" && !query.trim() && section.items.length > settledLimit && (
                       <button
                         type="button"
                         onClick={() => setSettledShown((n) => n + 25)}
