@@ -8,7 +8,7 @@ use super::transcript::Transcript;
 use super::{HarnessKind, HarnessModel, ResolvedHarness, acp_child, codex, process, watchdog};
 use agent_client_protocol::schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionConfigOption, SessionUpdate, StopReason, TextContent,
+    SessionConfigOption, SessionUpdate, StopReason, TextContent, UsageUpdate,
 };
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,10 @@ pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// How long starting a harness (process, handshake, session) may take.
 /// `npx` may download its package the first time.
 pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(120);
+/// How often a running turn's own log is re-read for the client's context
+/// gauge (`follow_live_usage`). A poll that finds an unchanged log costs one
+/// `stat`.
+pub(crate) const LIVE_USAGE_INTERVAL: Duration = Duration::from_secs(3);
 
 /// What an adapter hands the client side.
 pub(crate) enum Output {
@@ -370,6 +374,62 @@ fn waited(timeout: Duration) -> String {
     }
 }
 
+/// The config directory of the named account a thread runs on, when its
+/// session log lies there (`crate::harness_usage`).
+fn account_config_dir(record: &HarnessRecord, harness: &str) -> Option<PathBuf> {
+    let account = record.account.as_deref()?;
+    let dir = super::config::config_dir().ok()?;
+    super::config::load_accounts_in(&dir)
+        .into_iter()
+        .find(|known| known.id == account && known.harness == harness)
+        .map(|known| known.resolved_dir())
+}
+
+/// The context window a thread's last `usage_update` reported, if any.
+fn live_window(record: &HarnessRecord) -> Option<u64> {
+    record
+        .usage
+        .as_ref()
+        .and_then(|usage| usage.get("size"))
+        .and_then(serde_json::Value::as_u64)
+        .filter(|size| *size > 0)
+}
+
+/// A turn's poll of its harness's own log (`follow_live_usage`), stopped by
+/// dropping it: when the turn returns, when it is cancelled, or on an unwind.
+struct LivePoll(Arc<AtomicBool>);
+
+impl LivePoll {
+    /// The flag the poll reads, for a test that drives a turn's end.
+    #[cfg(test)]
+    fn handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+}
+
+impl Drop for LivePoll {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// The `usage_update` a poll of a running turn publishes: the context its
+/// latest request took and the window the thread last reported. No token
+/// totals ride in `_meta`: the turn's row is still what the harness's log says
+/// when the turn ends (`record_turn_in_data_store`), never a poll of it.
+fn live_usage_update(used: u64, size: u64) -> SessionUpdate {
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "rustcode".to_owned(),
+        serde_json::json!({
+            "kind": "usage",
+            "version": crate::acp::usage::USAGE_META_VERSION,
+            "estimated": false,
+        }),
+    );
+    SessionUpdate::UsageUpdate(UsageUpdate::new(used, size).meta(meta))
+}
+
 /// Count one output of the harness toward the turn's silence deadline
 /// (`watchdog`): its updates, including a thought or a usage report, are
 /// output.
@@ -714,7 +774,13 @@ impl ExternalSession {
     }
 
     /// Run one turn.
-    pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
+    ///
+    /// Taken on the `Arc` so the turn can follow itself in the client's
+    /// context gauge for as long as it runs (`follow_live_usage`).
+    pub(crate) async fn prompt(
+        self: &Arc<Self>,
+        prompt: Vec<ContentBlock>,
+    ) -> Result<StopReason, String> {
         let _turn = self.turn.lock().await;
         let _status = crate::thread_status::turn(&self.id);
         if self.persist {
@@ -732,6 +798,10 @@ impl ExternalSession {
             .unwrap_or_else(|error| error.into_inner())
             .history
             .len();
+        // A harness that keeps its token counts in its own log says nothing
+        // about them until the turn ends, so the gauge is fed from the log.
+        // Dropped when this function returns, whichever way the turn leaves.
+        let _poll = self.spawn_live_usage();
         let result = self.run_turn(prompt, &cancel).await;
         *self
             .cancel
@@ -746,6 +816,73 @@ impl ExternalSession {
         self.record_turn_in_data_store(started_at, history_from, &result)
             .await;
         result
+    }
+
+    /// Follow a running turn in the client's context gauge.
+    ///
+    /// A harness whose token counts live only in its own log
+    /// (`harness_usage::log_based`) reports nothing over ACP until the turn
+    /// ends, so the context ring would sit on the previous turn's numbers for
+    /// the whole turn. The log is polled instead; dropping the `LivePoll`
+    /// stops it.
+    fn spawn_live_usage(self: &Arc<Self>) -> LivePoll {
+        let running = Arc::new(AtomicBool::new(false));
+        let poll = LivePoll(Arc::clone(&running));
+        if !crate::harness_usage::log_based(&self.harness.id) {
+            return poll;
+        }
+        running.store(true, Ordering::Release);
+        let session = Arc::clone(self);
+        tokio::spawn(async move { session.follow_live_usage(&running).await });
+        poll
+    }
+
+    /// Poll the harness's own log for as long as the turn runs, and publish
+    /// what the latest request took when it changes.
+    async fn follow_live_usage(self: Arc<Self>, running: &AtomicBool) {
+        let harness = self.harness.id.clone();
+        // The log lies in the account's own config directory when the thread
+        // runs on a named login.
+        let account_dir = account_config_dir(&self.record(), &harness);
+        let cwd = self.cwd.clone();
+        let mut stamp: Option<crate::harness_usage::LogStamp> = None;
+        let mut published: Option<u64> = None;
+        while running.load(Ordering::Acquire) && !self.closed.load(Ordering::Acquire) {
+            tokio::time::sleep(LIVE_USAGE_INTERVAL).await;
+            if !running.load(Ordering::Acquire) || self.closed.load(Ordering::Acquire) {
+                break;
+            }
+            let record = self.record();
+            let Some(native) = record.native_session_id.clone() else {
+                continue;
+            };
+            // Without a window there is nothing to draw a gauge against: the
+            // size is what the harness sent with its last turn-end usage.
+            let Some(size) = live_window(&record) else {
+                continue;
+            };
+            let (harness, cwd, account_dir) = (harness.clone(), cwd.clone(), account_dir.clone());
+            let read = tokio::task::spawn_blocking(move || {
+                let paths = crate::harness_usage::session_logs(
+                    &harness,
+                    Some(&native),
+                    Some(cwd.as_path()),
+                    account_dir.as_deref(),
+                );
+                crate::harness_usage::poll_logs(&harness, &paths, stamp)
+            })
+            .await
+            .unwrap_or_default();
+            stamp = read.stamp;
+            let Some(used) = read.used.filter(|used| *used > 0) else {
+                continue;
+            };
+            if published == Some(used) {
+                continue;
+            }
+            published = Some(used);
+            let _ = self.out.send(Output::Update(live_usage_update(used, size)));
+        }
     }
 
     /// One row per turn in `data.sqlite` (`crate::data_store`): what the
@@ -804,16 +941,7 @@ impl ExternalSession {
             let harness = self.harness.id.clone();
             let native = record.native_session_id.clone();
             let cwd = self.cwd.clone();
-            // The log lies in the account's own config directory when the
-            // thread runs on a named login.
-            let account_dir = record.account.as_deref().and_then(|account| {
-                let dir = super::config::config_dir().ok()?;
-                let accounts = super::config::load_accounts_in(&dir);
-                accounts
-                    .into_iter()
-                    .find(|known| known.id == account && known.harness == self.harness.id)
-                    .map(|known| known.resolved_dir())
-            });
+            let account_dir = account_config_dir(&record, &harness);
             let scanned = tokio::task::spawn_blocking(move || {
                 crate::harness_usage::session_usage(
                     &harness,
@@ -1243,6 +1371,57 @@ mod removed_account_tests {
         assert!(
             thread.session.record().account.as_deref() == Some("removed-login"),
             "the record keeps the account, never a quiet fall back"
+        );
+    }
+}
+
+#[cfg(test)]
+mod live_usage_tests {
+    use super::*;
+
+    #[test]
+    fn a_live_usage_update_carries_the_context_and_no_totals() {
+        let value = serde_json::to_value(live_usage_update(12_345, 200_000)).unwrap();
+        assert_eq!(value["sessionUpdate"], "usage_update");
+        assert_eq!(value["used"], 12_345);
+        assert_eq!(value["size"], 200_000);
+        let meta = &value["_meta"]["rustcode"];
+        assert_eq!(meta["kind"], "usage");
+        assert_eq!(meta["version"], crate::acp::usage::USAGE_META_VERSION);
+        assert_eq!(meta["estimated"], false);
+        assert_eq!(
+            crate::data_store::totals(&value),
+            None,
+            "no token totals ride along: the turn row still reads them from the log"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_harness_whose_usage_lives_in_its_log_is_polled() {
+        let log_based = crate::harness_usage::log_based;
+        assert!(log_based("pi") && log_based("claude-code"));
+        assert!(!log_based("codex"), "codex reports its usage over ACP");
+        let harness = super::test_support::harness("codex", HarnessKind::Codex);
+        let thread = super::test_support::thread(&harness, None);
+        let poll = thread.session.spawn_live_usage();
+        assert!(
+            !poll.handle().load(Ordering::Acquire),
+            "nothing to poll, so nothing is spawned"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_poll_stops_when_the_turn_ends() {
+        let harness = super::test_support::harness("claude-code", HarnessKind::Acp);
+        let thread = super::test_support::thread(&harness, None);
+        let poll = thread.session.spawn_live_usage();
+        let flag = poll.handle();
+        assert!(flag.load(Ordering::Acquire), "a log-based turn is polled");
+        // What a finished, cancelled or failed turn does to it.
+        drop(poll);
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "the poll stops when the turn leaves"
         );
     }
 }
