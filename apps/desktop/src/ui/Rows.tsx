@@ -706,7 +706,8 @@ export function NoticeRow({
   );
 }
 
-/** What a finished turn changed and which checks it ran, as TurnCompletionCard.swift draws it. */
+/** What a finished turn changed and which checks it ran, completing the engine's checkpoint chip
+ * (the two are never drawn for the same turn, state/fold.ts `turnChangeLine`). */
 export function CompletionCard({ completion }: { completion: TurnCompletion }) {
   const [open, setOpen] = useState(false);
   const failed = completion.checks.filter((c) => c.outcome === "failed");
@@ -882,8 +883,9 @@ export function TurnEndRow({
   timeInFold?: boolean;
   /** The turn's last reply, whose copy and fork show here rather than under the reply. */
   reply?: string;
+  /** The turn's own change line: its completion card, when the harness reported one. */
   completion?: TurnCompletion | null;
-  /** The turn's checkpoint chip (Changes), when the engine keeps checkpoints. */
+  /** The turn's checkpoint chip (Changes), when the harness reported no completion. */
   changes?: ReactNode;
   /** The thread, so the footer's fork can copy its conversation. */
   threadId?: string;

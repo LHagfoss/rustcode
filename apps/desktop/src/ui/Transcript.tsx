@@ -4,11 +4,21 @@
 
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
-import { foldTurns, groupTools, type ToolGroup, type TurnFold } from "../state/fold";
+import {
+  foldEnds,
+  foldTurns,
+  groupTools,
+  newestTurnEnd,
+  type ToolGroup,
+  type TurnChangeLine,
+  type TurnFold,
+  turnChangeLine,
+  turnFoldKey,
+} from "../state/fold";
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView } from "../state/queue";
@@ -32,6 +42,7 @@ import { cx } from "./primitives";
 import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
 import {
   AssistantRow,
+  CompletionCard,
   HandoffRow,
   LiveActivityRow,
   NoticeRow,
@@ -194,6 +205,15 @@ function paintMatches(root: HTMLElement | null, query: string, current: HTMLElem
  */
 const LANE_SHIFT = { translate: "calc(-1 * var(--rc-lane-inset-end, 0px))" } as const;
 const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
+
+/** A turn's change line, wherever it draws: the completion card, else the checkpoint chip. */
+function ChangeLine({ threadId, line }: { threadId: string; line: TurnChangeLine }) {
+  return line.kind === "completion" ? (
+    <CompletionCard completion={line.completion} />
+  ) : (
+    <TurnChanges threadId={threadId} checkpoint={line.checkpoint} />
+  );
+}
 
 export function Transcript({
   thread,
@@ -438,6 +458,50 @@ export function Transcript({
     return checkpointsByTurn(turns, checkpoints);
   }, [thread.items, checkpoints]);
 
+  // The newest finished turn keeps its actions and its change line in view; the older ones wait
+  // for a hover, and their changes fold away with their steps (state/fold.ts, turnChangeLine).
+  const lastEnd = useMemo(() => newestTurnEnd(rows), [rows]);
+
+  // Each finished turn's one change line: the completion card where the harness reported one,
+  // else the checkpoint chip. Never both, so a turn shows one set of numbers.
+  const changeLines = useMemo(() => {
+    const map: Record<string, TurnChangeLine> = {};
+    for (const item of thread.items) {
+      if (item.kind !== "turnEnd") continue;
+      const line = turnChangeLine({
+        completion: completions[item.id],
+        checkpoint: turnCheckpoints[item.id],
+      });
+      if (line) map[item.id] = line;
+    }
+    return map;
+  }, [thread.items, completions, turnCheckpoints]);
+
+  // The newest finished turn keeps its change line in view under its footer; an older turn draws
+  // it as the last row inside its own fold, so it appears only when that turn is opened.
+  const foldChanges = useMemo(() => {
+    const map = new Map<number, ReactNode>();
+    const ends = foldEnds(rows);
+    for (const item of thread.items) {
+      if (item.kind !== "turnEnd" || item.id === lastEnd) continue;
+      const at = ends[turnFoldKey(item.id)];
+      const line = changeLines[item.id];
+      if (at === undefined || !line) continue;
+      map.set(at, <ChangeLine threadId={thread.id} line={line} />);
+    }
+    return map;
+  }, [rows, thread.items, changeLines, lastEnd, thread.id]);
+
+  // The newest turn's line as the footer's props: the completion card, else the checkpoint chip.
+  const footerChanges = useMemo(() => {
+    const map: Record<string, { completion?: TurnCompletion; changes?: ReactNode }> = {};
+    const line = lastEnd ? changeLines[lastEnd] : undefined;
+    if (line?.kind === "completion") map[lastEnd!] = { completion: line.completion };
+    else if (line?.kind === "checkpoint")
+      map[lastEnd!] = { changes: <ChangeLine threadId={thread.id} line={line} /> };
+    return map;
+  }, [changeLines, lastEnd, thread.id]);
+
   // Turn footers that render nothing at all. Nothing measures a row that never mounts, so the
   // virtualizer has to estimate no height for it, or every row below drifts by a footer.
   const footerless = useMemo(() => {
@@ -445,25 +509,19 @@ export function Transcript({
     for (const row of rows) {
       const item = row.item;
       if (item?.kind !== "turnEnd") continue;
+      // Only the newest turn keeps its change line in the footer; an older one folds it.
+      const line = footerChanges[item.id];
       const hidden = turnFooterHidden({
         folded: foldedEnds.has(item.id),
         reply: turnReply.byEnd[item.id]?.text,
-        completion: !!completions[item.id],
-        // A checkpoint with no files changed draws no chip either.
-        changes: !!turnCheckpoints[item.id]?.filesChanged,
+        completion: !!line?.completion,
+        changes: !!line?.changes,
         outcome: item.outcome,
       });
       if (hidden) set.add(item.id);
     }
     return set;
-  }, [rows, foldedEnds, turnReply, completions, turnCheckpoints]);
-
-  // The newest finished turn keeps its actions in view; the older ones wait for a hover.
-  const lastEnd = useMemo(() => {
-    for (let i = rows.length - 1; i >= 0; i--)
-      if (rows[i]!.item?.kind === "turnEnd") return rows[i]!.item!.id;
-    return undefined;
-  }, [rows]);
+  }, [rows, foldedEnds, turnReply, footerChanges]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -964,15 +1022,25 @@ export function Transcript({
                         lastTurn={item.id === lastEnd}
                         threadId={thread.id}
                         reply={turnReply.byEnd[item.id]?.text}
-                        completion={completions[item.id]}
-                        changes={
-                          turnCheckpoints[item.id]?.filesChanged ? (
-                            <TurnChanges threadId={thread.id} checkpoint={turnCheckpoints[item.id]!} />
-                          ) : undefined
-                        }
+                        completion={footerChanges[item.id]?.completion}
+                        changes={footerChanges[item.id]?.changes}
                       />
                     ) : null}
                   </div>
+                  {/* An older turn's change line rides at the end of its own fold, so it shows
+                      only once that turn's `Worked for …` is opened. */}
+                  {foldChanges.has(v.index) && (
+                    <div
+                      className={cx(
+                        "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
+                        LANE_MOTION,
+                        "rc-expand",
+                      )}
+                      style={LANE_SHIFT}
+                    >
+                      {foldChanges.get(v.index)}
+                    </div>
+                  )}
                 </div>
               );
             })}

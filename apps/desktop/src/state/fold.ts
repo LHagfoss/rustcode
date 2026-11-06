@@ -8,7 +8,8 @@
 // Changes). Pure, so the
 // transcript and the tests share it; one pass over the items.
 
-import { subagentOf, type TranscriptItem } from "./thread";
+import type { Checkpoint } from "../acp/v2";
+import { subagentOf, type TranscriptItem, type TurnCompletion } from "./thread";
 import { orchestrationTool } from "./toolNames";
 
 export interface TurnFold {
@@ -44,10 +45,84 @@ export interface ToolGroup {
   kind?: string;
 }
 
+/**
+ * The one change line a finished turn draws: the harness's own report of what
+ * it changed and which checks it ran, else the engine's checkpoint. Never both,
+ * so a turn states its numbers from one source and cannot contradict itself.
+ */
+export type TurnChangeLine =
+  | { kind: "completion"; completion: TurnCompletion }
+  | { kind: "checkpoint"; checkpoint: Checkpoint };
+
+/**
+ * The change line a finished turn draws, if any. A completion card wins where
+ * the harness reported one, since it carries the checks too, and the checkpoint
+ * chip draws only where it did not; a turn therefore shows one set of numbers.
+ * Where it draws is the transcript's to decide: the newest finished turn keeps
+ * it in view under its footer, an older one folds it with its steps.
+ */
+export function turnChangeLine({
+  completion,
+  checkpoint,
+}: {
+  completion?: TurnCompletion | null;
+  checkpoint?: Checkpoint | null;
+}): TurnChangeLine | undefined {
+  if (completion) return { kind: "completion", completion };
+  if (checkpoint?.filesChanged) return { kind: "checkpoint", checkpoint };
+  return undefined;
+}
+
+/** The newest finished turn: the one that keeps its change line in view. */
+export function newestTurnEnd(rows: readonly (FoldRow | { item?: TranscriptItem })[]): string | undefined {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!;
+    const item = "item" in row ? row.item : undefined;
+    if (item?.kind === "turnEnd") return item.id;
+  }
+  return undefined;
+}
+
 export type FoldRow =
   | { key: string; item: TranscriptItem; inFold?: string }
   | { key: string; fold: TurnFold; inFold?: string }
   | { key: string; group: ToolGroup; inFold?: string };
+
+/** The fold a finished turn draws under, from its footer's id. */
+export function turnFoldKey(endId: string): string {
+  return `fold-${endId}`;
+}
+
+/** A row as the fold's shape sees it: the transcript's rows, and the fold's own. */
+export type FoldBlockRow = { key: string; inFold?: string; fold?: TurnFold; group?: ToolGroup };
+
+/**
+ * Where each open fold's steps end, by fold key: the row index of its last step.
+ * An older turn's change line draws there, as the last row inside its fold, so
+ * it appears only when the reader has opened that turn's `Worked for …`. A fold
+ * that is closed is not in `rows` at all, and so has no end.
+ */
+export function foldEnds(rows: readonly FoldBlockRow[]): Record<string, number> {
+  const ends: Record<string, number> = {};
+  // A group row's children name the group, not the fold: the group row itself names its fold.
+  const foldOfGroup: Record<string, string> = {};
+  let open: string | undefined;
+  rows.forEach((row, i) => {
+    if (row.fold) {
+      open = row.fold.open ? row.fold.key : undefined;
+      return;
+    }
+    if (!row.inFold) {
+      open = undefined;
+      return;
+    }
+    if (!open) return;
+    if (row.inFold !== open && foldOfGroup[row.inFold] !== open) return;
+    if (row.group) foldOfGroup[row.key] = open;
+    ends[open] = i;
+  });
+  return ends;
+}
 
 /** Whether an item stays in view when its turn folds. */
 function staysVisible(item: TranscriptItem): boolean {
@@ -110,7 +185,7 @@ function pushTurn(
     return;
   }
   const end = items.slice(from, to).find((x) => x.kind === "turnEnd");
-  const key = `fold-${end?.id ?? items[work[0]!]!.id}`;
+  const key = turnFoldKey(end?.id ?? items[work[0]!]!.id);
   const files = new Set<string>();
   let tools = 0;
   let failed = 0;
