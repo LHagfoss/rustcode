@@ -748,6 +748,17 @@
 }
 
 /*
+ * The scrim a narrow window's side panel opens over (ui/RightPanel.tsx): `bg` at 60% with the
+ * shared glass filter, so the chat behind it reads as depth rather than as text to be read. It is
+ * the pane's recipe, not a third one: Reduce transparency takes the filter away with the rest.
+ */
+.rc-scrim {
+  background: color-mix(in srgb, var(--rc-bg) 60%, transparent);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
+}
+
+/*
  * What floats over the transcript at the composer's top edge: the strip of threads working for
  * this one, its group card, and the jump-to-latest pill (ui/Links.tsx, ui/Transcript.tsx). One
  * surface, the dense glass, so a label reads over whatever it is drawn on; the shadow-1 edge ring
