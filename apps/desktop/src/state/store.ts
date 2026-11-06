@@ -159,6 +159,7 @@ import {
   type Toast,
   type ToastTone,
 } from "./toasts";
+import { userTypedPrompt } from "./topLevel";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -2313,8 +2314,9 @@ export async function runPrompt(
   const thread = get().threads[id];
   // A prompt no agent asked for is the user's: the thread is theirs now, even
   // when it was started by an agent (state/topLevel.ts). A resume after a
-  // restart is not a message the user sent.
-  if (!options.link && !options.wake && !options.automatic) markMessaged(id);
+  // restart, a wake or a message from another thread is not a message the user
+  // sent, and neither is the turn that continues after a usage limit.
+  if (userTypedPrompt(options)) markMessaged(id);
   // Whoever starts a turn now moots the wait, and if this one hits the limit too it waits again.
   if (!options.limitResume && !thread?.running) dropLimitWait(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can

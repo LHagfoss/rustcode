@@ -449,12 +449,15 @@ composer's keys stay outside the table.
   also what was said: the engine's SQLite index (`index.sqlite`,
   `_rustcode/threads/search`) adds threads whose messages match, with the
   matching words under the title.
-  Threads another thread started have no rows of their own: their parent's row
+  Threads another thread started have no rows of their own while the parent
+  exists, whatever the filter or search shows: their parent's row
   ends with a stack of up to three marks for the ones still working or waiting
   on you, then `+N`, a warning dot on one that needs you, and the tooltip lists
   them (`ui/AgentStack.tsx`, `state/agentStack.ts`). Finished delegates show
-  nothing there, and an open child keeps its parent's row lit as the context.
-  The chat's agent and thread group cards show the same stack.
+  nothing there. The open delegate is drawn as an indented row under its
+  parent's, folded away when the user moves on, and a search result that is a
+  delegate says `in <parent title>`. The chat's agent and thread group cards
+  show the same stack.
   The toolbar's row carries Hide sidebar, New thread, Settings and, when
   the project has them, Pull requests, clear of the traffic lights; the
   header's cluster holds Show sidebar, New thread and Settings while the

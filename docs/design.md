@@ -357,10 +357,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   changed (`font-mono +N −N` in `success`/`danger`), for a thread the app has
   already read; one it has not opened shows neither, rather than a made-up zero.
 - **Delegated threads:** a thread an agent started has no row of its own while
-  its parent is in the list, and it is nested from its first frame: the parent
+  its parent exists, and it is nested from its first frame: the parent
   is recorded on the thread when it is created (`_meta.rustcode.parent`, carried
   by the row `session/new` adds), so a thread being spawned never shows as a
-  row of its own in between. Its
+  row of its own in between. The tree is resolved against every session, so a
+  project filter or a search never turns a delegate into a top-level row. Its
   parent's second line ends with a stack of at most three 18px round marks
   (`ui/AgentStack.tsx`), overlapping by 6px with a 2px ring in the sidebar's
   surface, then `+N` past the third and one quiet accent spinner while anything
@@ -368,10 +369,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   delegates show nothing, no dot and no count. The slot is a fixed 74px, so a
   count going from one to three never moves the title's start, the age or the
   status. Hovering lists the running threads and their state, and the row opens
-  the parent. An open child keeps its parent's row lit as the context. A
-  delegated thread whose parent is not in the current list (deleted, filtered
-  out, or in another project) keeps a row of its own: with no parent row to sit
-  under, nesting it would take it out of the app altogether. In the
+  the parent. The open delegate itself is drawn as an indented row, with a
+  subtle tree line, directly under its parent's row, unfolding in with the
+  list's fold motion and folding away when the user opens another thread or goes
+  back; the threads between it and its nearest row of its own come with it, and
+  a parent in the Settled shelf opens the shelf and its slice far enough to be
+  reached. A delegated thread whose parent is gone from the app entirely keeps a
+  row of its own: with no parent row to sit under, nesting it would take it out
+  of the app altogether. A search lists every match, delegates included, each
+  row saying `in <parent title>` rather than un-nesting the tree. In the
   chat's group cards the same stack reads at 24px with a `surface` ring; once
   all are done it shows the finished marks instead, with no spinner. Logic:
   `state/agentStack.ts`, `state/topLevel.ts`.
@@ -389,9 +395,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   subagents are
   their own section, said to be helpers inside this thread and not threads.
 - **Sidebar selection:** one tab stop for the whole list, on the row the
-  keyboard is on (the open thread, or the parent row kept lit for an open
-  delegated thread, else the first): ↑ ↓ move it through the rows on screen,
-  skipping shut sections and project groups, ⏎ opens the thread, Esc lets the
+  keyboard is on (the open thread — an open delegate is a row of its own while
+  it is open — else the first): ↑ ↓ move it through the rows on screen,
+  including an open delegate's indented row, skipping shut sections and project
+  groups, ⏎ opens the thread, Esc lets the
   selection go. Keys in a field inside the list (the
   rename box) stay the field's, and ⌘/⌃/⌥ stay the app's. ⌘-click toggles a
   row into the selection and ⇧-click takes the range from the last one clicked;
