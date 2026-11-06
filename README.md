@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="./images/readme-desktop.png" alt="The RustCode app with a thread open" width="100%"/>
+  <img src="./images/readme-desktop.png" alt="The RustCode app showing a new thread" width="100%"/>
 </p>
 
 RustCode is the orchestrator for your coding agents: one app and one `rustcode`
