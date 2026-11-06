@@ -481,7 +481,9 @@ composer's keys stay outside the table.
   move it across (pointer capture, so the webview's own drops never see it),
   ⌥↑/⌥↓ moves a focused row, and each row's Show/Hide button does the same
   without a pointer. A button's own condition still applies (no plan, no
-  pull requests), and hiding every button leaves the title alone. The order
+  pull requests), and hiding every button leaves the title alone. The two
+  panel toggles (details, changes) always draw after the rest, in their kept
+  order, so the panel's control is the header's last, rightmost one. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
   in a later release shows by default.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
@@ -609,12 +611,13 @@ composer's keys stay outside the table.
   the window's right edge (`src/ui/RightPanel.tsx`): the thread details card's
   surface, full height, inset from the window's edges by the same gap, with
   tabs between them, a close button, a draggable left edge (kept, and moved
-  with ←/→ or Home/End), Escape to close, and ⌘⌥B to toggle it. A thread opens
-  with the panel on the view it last showed
-  (Changes when that view has nothing to show here), unless the user closed it
-  on that thread; the new-thread screen opens without a panel (⌘⌥B still
-  opens one), and settling the selected thread while the chat is showing
-  closes it and leaves that thread. Its Changes read belongs to the thread's
+  with ←/→ or Home/End), Escape to close, and ⌘⌥B to toggle it. Each thread
+  keeps the view it was last showing, and opening it restores exactly that;
+  a thread never seen, or one whose panel was closed by hand, opens without
+  one, and nothing opens the panel on its own. The new-thread screen opens
+  without a panel (⌘⌥B still opens one), and settling the selected thread
+  while the chat is showing closes it and leaves that thread. Its Changes read
+  belongs to the thread's
   folder: an answer for the last thread's folder is dropped and never drawn
   with this thread's name, and while the turn runs the panel says the changes
   are read when it ends. It takes no slot, so the chat keeps the pane and the
