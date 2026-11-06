@@ -35,6 +35,9 @@ interface Measurable {
  * (docs/design.md › Composer). */
 const CARD_GAP = 8;
 
+/** The room under the composer's strip a menu needs before it opens downward instead of up. */
+const FOOTER_ROOM = 280;
+
 /** The composer card a control sits in: the one surface its panels relate to. */
 function findCard(from?: Element | null): HTMLElement | null {
   return from?.closest<HTMLElement>(".rc-composer") ?? document.querySelector<HTMLElement>(".rc-composer");
@@ -111,6 +114,7 @@ export function CardPopover({
   const card = useRef<HTMLElement | null>(null);
   const pill = useRef<HTMLElement | null>(null);
   const [aligned, setAligned] = useState<"start" | "end">("start");
+  const [placed, setPlaced] = useState<"top" | "bottom">(side);
   const anchor = useRef<Measurable>({
     getBoundingClientRect: () => pill.current?.getBoundingClientRect() ?? new DOMRect(),
   });
@@ -135,7 +139,11 @@ export function CardPopover({
     const at = button.getBoundingClientRect();
     const inCard = box.getBoundingClientRect();
     setAligned(at.left + at.width / 2 > inCard.left + inCard.width / 2 ? "end" : "start");
-  }, [open]);
+    // The strip under the card opens downward when the window has room there, so its menus
+    // never cover the field above; at the bottom of a thread there is none, and they open up.
+    const inStrip = button.closest(".rc-composer-footer");
+    setPlaced(inStrip && window.innerHeight - at.bottom >= FOOTER_ROOM ? "bottom" : side);
+  }, [open, side]);
 
   const element = isValidElement(trigger)
     ? cloneElement(trigger, {
@@ -162,7 +170,7 @@ export function CardPopover({
       <Popover.Anchor virtualRef={anchor} />
       <Popover.Portal>
         <Popover.Content
-          side={side}
+          side={placed}
           align={align ?? aligned}
           sideOffset={CARD_GAP}
           collisionPadding={surfaceCollisionPadding}

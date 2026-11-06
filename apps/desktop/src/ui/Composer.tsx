@@ -1304,7 +1304,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
                 {/* A worktree is the repo's, not a project of its own: indented under it, marked by
                     the branch it is. */}
                 {row.repo && <GitBranch size={12} className="shrink-0 text-fg-faint" />}
-                <span className="min-w-0 flex-1 truncate text-body text-fg">
+                <span className="min-w-[40%] flex-1 truncate text-body text-fg">
                   {matchSpans(row.name, filter).map((span, i) =>
                     span.hit ? (
                       <mark key={i} className="rounded-xs bg-fill-strong text-fg">
@@ -1315,7 +1315,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
                     ),
                   )}
                 </span>
-                <span className="shrink-0 truncate text-caption text-fg-faint">
+                <span className="min-w-0 shrink truncate text-caption text-fg-faint">
                   {middleEllipsis(row.path, PATH_CHARS)}
                 </span>
               </CardMenuItem>
