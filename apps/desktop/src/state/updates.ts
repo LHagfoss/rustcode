@@ -1,5 +1,5 @@
-// Updates, after the SwiftUI app's Updater: a check on launch and every 30
-// minutes while the app runs, an "Update to X" row at the foot of the sidebar
+// Updates, after the SwiftUI app's Updater: a check on launch, every 30
+// seconds while the window is in front and every 30 minutes behind it, an "Update to X" row at the foot of the sidebar
 // when a newer release is out, and What's New with the release's notes the
 // first time a new version starts. The shell does the work
 // (src-tauri/src/updater.rs); this keeps what the UI shows.
@@ -17,7 +17,10 @@ import {
   type UpdateInfo,
 } from "../lib/updater";
 
-export const UPDATE_CHECK_MS = 30 * 60_000;
+/** How often the app checks while its window is in front: a HEAD request to the release page. */
+export const UPDATE_CHECK_MS = 30_000;
+/** How often it checks while hidden or in the background. */
+export const UPDATE_CHECK_HIDDEN_MS = 30 * 60_000;
 const SEEN_KEY = "rustcode.seenVersion";
 /** Written just before an in-app install: the next launch shows What's New whatever else it knows. */
 const UPDATED_FROM_KEY = "rustcode.updatedFrom";
@@ -198,11 +201,15 @@ export function startUpdateChecks() {
   void appVersion().then((version) => version && useUpdates.setState({ version }));
   void whatsNewOnLaunch();
   setTimeout(() => void checkNow(), 5_000);
-  setInterval(() => void checkNow(), UPDATE_CHECK_MS);
+  setInterval(() => {
+    const last = useUpdates.getState().checkedAt;
+    const hidden = document.visibilityState !== "visible" || !document.hasFocus();
+    if (!hidden || !last || Date.now() - last >= UPDATE_CHECK_HIDDEN_MS) void checkNow();
+  }, UPDATE_CHECK_MS);
   // Back in front after a while away (a laptop that slept), or the window revealed again: check.
   const relaunched = () => {
     const last = useUpdates.getState().checkedAt;
-    if (!last || Date.now() - last > 10 * 60_000) void checkNow();
+    if (!last || Date.now() - last > UPDATE_CHECK_MS) void checkNow();
   };
   window.addEventListener("focus", relaunched);
   document.addEventListener("visibilitychange", () => {
