@@ -76,11 +76,9 @@ export function MainHeader({
         {title}
       </div>
       {right && (
-        // Each control stands on its own, without the track a Cluster draws: the header already
-        // has one shape in it (the title's project mark), and a pill beside it reads as a second.
-        <div className="flex shrink-0 items-center gap-0.5 [&>div]:h-7 [&>div]:gap-0 [&>div]:rounded-none [&>div]:bg-transparent [&>div]:px-0">
-          {right}
-        </div>
+        // Each group stands in its own track, like the sidebar's toolbar cluster: the icon buttons
+        // keep their pill, and the groups (and the pills beside them) are 6px apart.
+        <div className="flex shrink-0 items-center gap-1.5">{right}</div>
       )}
     </header>
   );

@@ -201,7 +201,7 @@
   --rc-radius-3xl: 26px;
   /* The composer's box and tray take a step of their own: it is the one surface the chat floats
      in, and the rounder corner reads as one floating card over the transcript. */
-  --rc-composer-radius: var(--rc-radius-2xl);
+  --rc-composer-radius: var(--rc-radius-3xl);
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md).
@@ -849,13 +849,15 @@
   overflow: hidden;
 }
 /* The tray is the card's last row, not a slab of its own: the card's one glass carries it. Its
-   controls come from four files and each sets its own height (`h-7 sm:h-6` on the pills, the
-   send's circle a size up), so no rule here reaches into another file's control. */
+   controls come from four files and each sets its own height (`h-7` on the pills, the round send
+   and + buttons one step up on both ends of the row), so no rule here reaches into another
+   file's control. */
 /*
  * The strip under the card: where the thread works (its folder, its worktree or branch), what it
  * may do without asking, and what it has spent. It hangs off the card's bottom edge rather than
  * sitting in its glass: inset 12px each side, its top edge tucked behind the card, its own corners
- * round only at the bottom, and a fill a step off the pane instead of the card's translucency. The
+ * round only at the bottom, and a fill a step off the pane instead of the card's translucency. Its
+ * 8px of padding (6px once the card's tuck is counted) keeps the pills' air even on every side. The
  * card paints over the overlap (its `z-10` against this strip's `z-0`), so the two read as one stack
  * with the card on top.
  */
