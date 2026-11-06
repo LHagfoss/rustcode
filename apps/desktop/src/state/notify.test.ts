@@ -111,8 +111,10 @@ describe("dedupe", () => {
 
 describe("a launch", () => {
   test("says nothing about what the threads already told the app", () => {
-    expect(warmingUp()).toBe(true);
-    expect(warmingUp(Date.now() + WARMUP_MS + 1)).toBe(false);
+    // From a fixed launch, not the module's: a slow test run must not outlast the window.
+    const launch = 1_000_000;
+    expect(warmingUp(launch + 10, launch)).toBe(true);
+    expect(warmingUp(launch + WARMUP_MS + 1, launch)).toBe(false);
   });
 });
 

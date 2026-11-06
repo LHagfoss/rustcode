@@ -126,8 +126,8 @@ export const WARMUP_MS = 3_000;
 const startedAt = Date.now();
 
 /** Whether the app has just started, and is still receiving what its threads already told it. */
-export function warmingUp(now = Date.now()): boolean {
-  return now - startedAt < WARMUP_MS;
+export function warmingUp(now = Date.now(), since = startedAt): boolean {
+  return now - since < WARMUP_MS;
 }
 
 /**
