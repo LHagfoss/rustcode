@@ -23,6 +23,9 @@ a harness's: a link keeps the message its parent sent and the answer the child
 returned (the `body` column below), because that is what the book is for. It
 holds nothing that `history.json` does not already have.
 
+The request and protocol tables below record metadata by default. They hold a
+payload only when the user turns payload capture on ("Captured payloads").
+
 ## Schema
 
 | object | holds |
@@ -33,6 +36,9 @@ holds nothing that `history.json` does not already have.
 | `daily_usage` | a view over `turns`: `day`, `harness`, `model`, summed tokens, `cost_usd` and turn count |
 | `thread_links` | one row per link between two threads: `id`, `orchestrator`, `target`, `state`, `started_at`, `settled_at`, `harness`, `files_changed`, and `body`, the whole link record as JSON |
 | `orchestration_state` | `key`, `body`: the rest of the link book, under `grants`, `counters` and `fanOuts` |
+| `provider_requests` | one row per built-in provider HTTP attempt or retry: `thread_id`, `turn_id`, `round`, `provider`, `model`, `endpoint_host`, `endpoint_path`, `method`, `attempt`, `started_at`, `headers_at`, `finished_at`, `latency_ms`, `status_code`, `request_bytes`, `response_bytes`, `stream_event_count`, `input_tokens`, `output_tokens`, `cached_tokens`, `error_kind`, `request_payload_json`, `response_summary_json`, `payload_truncated`, `redaction_version` |
+| `harness_rpc_messages` | one row per ACP or Codex JSON-RPC message: `thread_id`, `turn_id`, `harness`, `protocol`, `direction`, `message_kind`, `rpc_id`, `method`, `at`, `latency_ms`, `byte_size`, `payload_json`, `payload_truncated`, `redaction_version` |
+| `operational_events` | one row per allowlisted event: `thread_id`, `turn_id`, `sequence`, `event_type`, `at`, `fields_json`, `original_bytes`, `captured_bytes`, `payload_truncated`, `redaction_version` |
 | `store_meta` | internal bookkeeping, such as whether the one-time backfill ran |
 
 Tokens and cost are `NULL` when a harness did not report them, and are never
@@ -67,6 +73,90 @@ and no agent could read it. It is here instead:
 The app asks through `_rustcode/data/links/load` and
 `_rustcode/data/links/save` (`engine/src/acp/data.rs`); an engine without them
 answers `unknown method`, and the app keeps its local copy as before.
+
+## Request and protocol telemetry
+
+Three tables record what a turn did on the wire, so a slow or failing turn can
+be read back instead of guessed at:
+
+- `provider_requests`: one row per attempt of the built-in harness's own HTTP
+  request, retries included. `endpoint_host` and `endpoint_path` are stored
+  without the query or fragment, which can carry a key. `error_kind` is a
+  short classification (`timeout`, `http_500`, `stream_failure`), never the
+  provider's message text.
+- `harness_rpc_messages`: one row per JSON-RPC request, response or
+  notification that crossed RustCode's ACP or Codex stdio boundary.
+  `direction` is `harness_to_rustcode` or `rustcode_to_harness`, and
+  `message_kind` is `request`, `response` or `notification`.
+- `operational_events`: a small allowlisted projection for an agent to read,
+  with a per-thread `sequence` the store assigns (the cursor a reader pages
+  with) and safe, bounded fields only.
+
+**These are protocol messages, not provider traffic.** An external harness
+(Claude Code, Codex, Gemini CLI, OpenCode, Pi) is a separate process that owns
+its own model login and its outbound provider HTTP; RustCode sees only the
+messages that harness sends it. Nothing in these tables is a copy of an
+external harness's provider request or response, and no column should be read
+as one.
+
+### Captured payloads
+
+Metadata is always recorded; payloads are opt-in, and off by default:
+
+| config key | default | what it adds |
+| --- | --- | --- |
+| `capture_provider_payloads` | `false` | `provider_requests.request_payload_json` (the serialized request) and `response_summary_json` (a summary, never the raw successful stream) |
+| `capture_harness_rpc_payloads` | `false` | `harness_rpc_messages.payload_json` |
+
+`debug_verbose_network_logging` is a separate flag for `debug.log` output and
+does not turn any of this on. Project configuration cannot enable either key:
+capturing payloads is a choice about the user's own data, so it is global
+only, like skill roots.
+
+Every payload is redacted and clipped before it is written
+(`engine/src/data_store/redact.rs`):
+
+- A value under a key naming a credential — case-insensitive, separators
+  ignored, matching `authorization`, `api_key`, `apikey`, `token`, `secret`,
+  `credential`, `password`, `cookie` — is replaced with `[redacted]` at any
+depth. The match is deliberately broad: a key such as `max_tokens` is redacted
+  too, because guessing which `token` is a limit is one guess away from writing
+  a secret to disk.
+- Any `Bearer <token>` inside a string is replaced.
+- The result is clipped to the cap below while staying valid JSON: long
+  strings are cut, array items and object entries are dropped, and the drop is
+  marked (`__truncated` in an object, a `[truncated]` item in an array).
+  `payload_truncated` says a row was clipped.
+- `redaction_version` records which rules were applied (0 when the row holds no
+  payload), so a rule change is visible in the data.
+
+Caps: 64 KiB per provider payload, 16 KiB per RPC message, 8 KiB per
+`operational_events` fields object. A caller that sends more is clipped at the
+insert, so a mistake cannot write past the cap.
+
+### Retention
+
+A pass runs at most once an hour, from the store's open path (every writer
+opens the store) and at the start:
+
+- payload columns of rows older than 7 days are set to `NULL`, and the
+  metadata row stays;
+- rows older than 30 days are deleted;
+- if the three tables hold more than 256 MiB of payload together (estimated as
+  the summed length of the payload columns), the oldest payloads are dropped
+  first and the oldest rows only after that;
+- the WAL is checkpointed (`PRAGMA wal_checkpoint(TRUNCATE)`), and freed pages
+  are reclaimed with `PRAGMA incremental_vacuum` only when the database already
+  vacuums incrementally — turning that on for an existing file needs a full
+  `VACUUM`, which is not something a background pass starts on a user's store.
+
+Every write logs and returns: a locked or full store cannot fail a turn.
+
+The inserts are the API other modules call: `record_provider_request`,
+`record_rpc_message`/`record_rpc_messages` (one transaction for a batch) and
+`record_operational_event` (which returns the per-thread sequence). The
+provider and harness hooks that call them are separate changes; until they
+land the tables stay empty and nothing reads them.
 
 ## Writers
 
@@ -170,7 +260,7 @@ agent in a thread, forwarded through the app like `list_sessions`:
 | Tool | Args | Answer |
 | --- | --- | --- |
 | `thread_usage` | `{ since?, group_by?, project? }` — `group_by` is `harness` (default), `model`, `day`, `project` or `thread`; `since` is `YYYY-MM-DD` or `YYYY-MM`; `project` is an absolute path | `{ group_by, since, project, scope, rows, totals, truncated, note }`, each row with input, output, cached and cache-write tokens, `cost_usd`, `turns`, `turns_without_tokens`, `turns_without_any_tokens`, `turns_without_input_tokens`, `turns_without_output_tokens`, `turns_without_cached_tokens`, `turns_without_cache_write_tokens`, and `turns_without_cost`; a group that reported nothing keeps `NULL`, never a `0`, and a thread row also carries `parent_id` and `parent_title` |
-| `query_data` | `{ sql, limit? }`, one read-only statement, at most 1000 rows | `{ columns, rows, truncated }` through the guards above; its description lists every table and column, including `thread_links`, so an agent needs no extra call |
+| `query_data` | `{ sql, limit? }`, one read-only statement, at most 1000 rows | `{ columns, rows, truncated }` through the guards above; its description lists the tables and their key columns, including `thread_links`, `provider_requests`, `harness_rpc_messages` and `operational_events`, so an agent needs no extra call |
 
 Both are reads, so neither asks the user. They follow **Let agents read
 threads in other projects** (Settings › Agents, on by default), because the
@@ -198,4 +288,6 @@ A shell has the same data without an app: `rustcode usage` and
 Prices (only a cost a harness reports is kept), message text, tool arguments
 and output, and per-turn history for turns recorded before this file existed.
 Opencode reports no token counts RustCode can read, so its turns keep `NULL`
-tokens and only its reported cost.
+tokens and only its reported cost. Payloads are kept only when captured and
+only for 7 days; an external harness's provider HTTP is never visible here at
+all ("Request and protocol telemetry").

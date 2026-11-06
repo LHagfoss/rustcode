@@ -1408,6 +1408,20 @@ pub struct AppConfig {
     /// diagnosing a request-shape issue.
     #[serde(default = "default_false")]
     pub debug_verbose_network_logging: bool,
+    /// Opt-in: keep a redacted, capped copy of each built-in provider request
+    /// in `data.sqlite` (`provider_requests.request_payload_json`) instead of
+    /// its metadata only. Independent of `debug_verbose_network_logging`, so
+    /// that flag never starts writing more data than it used to. Payloads are
+    /// dropped after 7 days. Off by default (`docs/data-store.md`).
+    #[serde(default = "default_false")]
+    pub capture_provider_payloads: bool,
+    /// Opt-in: keep a redacted, capped copy of each JSON-RPC message that
+    /// crosses the harness boundary (`harness_rpc_messages.payload_json`).
+    /// These are harness-to-RustCode protocol messages, not an external
+    /// harness's own provider HTTP traffic, which RustCode cannot see. Off by
+    /// default.
+    #[serde(default = "default_false")]
+    pub capture_harness_rpc_payloads: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
     /// Extra directories scanned for skills, in addition to the project,
@@ -1589,6 +1603,10 @@ struct RuntimeConfig {
     verbosity: crate::app::state::Verbosity,
     #[serde(default = "default_false")]
     debug_verbose_network_logging: bool,
+    #[serde(default = "default_false")]
+    capture_provider_payloads: bool,
+    #[serde(default = "default_false")]
+    capture_harness_rpc_payloads: bool,
     #[serde(default = "default_theme")]
     theme: String,
     #[serde(default)]
@@ -1665,6 +1683,10 @@ struct TomlConfig {
     verbosity: Option<crate::app::state::Verbosity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     debug_verbose_network_logging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_provider_payloads: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_harness_rpc_payloads: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1826,6 +1848,8 @@ impl Default for AppConfig {
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
             debug_verbose_network_logging: false,
+            capture_provider_payloads: false,
+            capture_harness_rpc_payloads: false,
             theme: default_theme(),
             extra_skill_dirs: Vec::new(),
             disabled_skills: Vec::new(),
@@ -2078,6 +2102,8 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.agent_mode = runtime.agent_mode;
                     config.verbosity = runtime.verbosity;
                     config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
+                    config.capture_provider_payloads = runtime.capture_provider_payloads;
+                    config.capture_harness_rpc_payloads = runtime.capture_harness_rpc_payloads;
                     config.theme = runtime.theme;
                     config.start_time = runtime.start_time;
                     config.discord_rpc_enabled = runtime.discord_rpc_enabled;
@@ -2255,6 +2281,8 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
+        capture_provider_payloads: Some(config.capture_provider_payloads),
+        capture_harness_rpc_payloads: Some(config.capture_harness_rpc_payloads),
         theme: Some(config.theme.clone()),
         extra_skill_dirs: Some(config.extra_skill_dirs.clone()),
         disabled_skills: (!config.disabled_skills.is_empty())
@@ -2421,6 +2449,12 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(enabled) = file.debug_verbose_network_logging {
         config.debug_verbose_network_logging = enabled;
     }
+    if let Some(enabled) = file.capture_provider_payloads {
+        config.capture_provider_payloads = enabled;
+    }
+    if let Some(enabled) = file.capture_harness_rpc_payloads {
+        config.capture_harness_rpc_payloads = enabled;
+    }
     if let Some(theme) = file.theme {
         config.theme = theme;
     }
@@ -2485,6 +2519,10 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Skill roots widen what a prompt can see; only the user config may add
     // them, mirroring how project files cannot widen command permissions.
     file.extra_skill_dirs = None;
+    // Capturing request and protocol payloads is a privacy choice about the
+    // user's own data, so a checked-out project cannot turn it on.
+    file.capture_provider_payloads = None;
+    file.capture_harness_rpc_payloads = None;
     // Skill toggles are user-scoped (#2165): one explicit place to look.
     file.disabled_skills = None;
     // A harness entry names a command to run; only the user may choose one.
@@ -2560,6 +2598,12 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.debug_verbose_network_logging.is_some() {
         persisted.debug_verbose_network_logging = global.debug_verbose_network_logging;
     }
+    if file.capture_provider_payloads.is_some() {
+        persisted.capture_provider_payloads = global.capture_provider_payloads;
+    }
+    if file.capture_harness_rpc_payloads.is_some() {
+        persisted.capture_harness_rpc_payloads = global.capture_harness_rpc_payloads;
+    }
     if file.theme.is_some() {
         persisted.theme = global.theme.clone();
     }
@@ -2616,6 +2660,8 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         agent_mode: None,
         verbosity: None,
         debug_verbose_network_logging: None,
+        capture_provider_payloads: None,
+        capture_harness_rpc_payloads: None,
         theme: None,
         extra_skill_dirs: None,
         disabled_skills: None,

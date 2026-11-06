@@ -8,6 +8,14 @@
 //! is over, this file is not a disposable cache like `index.sqlite`: it is
 //! never deleted or rebuilt on a read error.
 //!
+//! The request and protocol tables ([`record_provider_request`],
+//! [`record_rpc_message`], [`record_operational_event`]) record identifiers,
+//! timings and counts by default. A payload is stored only when the user turned
+//! on `capture_provider_payloads` or `capture_harness_rpc_payloads`, and even
+//! then it is redacted and clipped ([`redact`]) before it is written, kept for
+//! [`PAYLOAD_RETENTION_DAYS`] days, and pruned to a byte budget
+//! ([`prune_telemetry`]).
+//!
 //! Writes never fail a turn: [`record_turn`] logs and returns. Reads go
 //! through [`query`], a read-only connection with a two-second cap, a single
 //! statement, no `ATTACH` and at most [`MAX_ROWS`] rows.
@@ -22,6 +30,8 @@ use rusqlite::limits::Limit;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
+
+pub mod redact;
 
 /// In the configuration directory, beside `index.sqlite`.
 pub const DATA_FILE: &str = "data.sqlite";
@@ -110,6 +120,75 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "ALTER TABLE threads ADD COLUMN parent_id TEXT;
     ALTER TABLE threads ADD COLUMN parent_title TEXT;
     CREATE INDEX threads_parent ON threads(parent_id);",
+    ),
+    (
+        4,
+        "request_and_protocol_telemetry",
+        "CREATE TABLE provider_requests (
+        id INTEGER PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT,
+        round INTEGER,
+        provider TEXT,
+        model TEXT,
+        endpoint_host TEXT,
+        endpoint_path TEXT,
+        method TEXT,
+        attempt INTEGER,
+        started_at TEXT NOT NULL,
+        headers_at TEXT,
+        finished_at TEXT,
+        latency_ms INTEGER,
+        status_code INTEGER,
+        request_bytes INTEGER,
+        response_bytes INTEGER,
+        stream_event_count INTEGER,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cached_tokens INTEGER,
+        error_kind TEXT,
+        request_payload_json TEXT,
+        response_summary_json TEXT,
+        payload_truncated INTEGER NOT NULL DEFAULT 0,
+        redaction_version INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX provider_requests_thread ON provider_requests(thread_id, started_at);
+    CREATE INDEX provider_requests_started ON provider_requests(started_at);
+    CREATE TABLE harness_rpc_messages (
+        id INTEGER PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT,
+        harness TEXT,
+        protocol TEXT,
+        direction TEXT NOT NULL,
+        message_kind TEXT NOT NULL,
+        rpc_id TEXT,
+        method TEXT,
+        at TEXT NOT NULL,
+        latency_ms INTEGER,
+        byte_size INTEGER,
+        payload_json TEXT,
+        payload_truncated INTEGER NOT NULL DEFAULT 0,
+        redaction_version INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX harness_rpc_messages_thread ON harness_rpc_messages(thread_id, at);
+    CREATE INDEX harness_rpc_messages_at ON harness_rpc_messages(at);
+    CREATE TABLE operational_events (
+        id INTEGER PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT,
+        sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        at TEXT NOT NULL,
+        fields_json TEXT,
+        original_bytes INTEGER,
+        captured_bytes INTEGER,
+        payload_truncated INTEGER NOT NULL DEFAULT 0,
+        redaction_version INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(thread_id, sequence)
+    );
+    CREATE INDEX operational_events_thread ON operational_events(thread_id, at);
+    CREATE INDEX operational_events_at ON operational_events(at);",
     ),
 ];
 
@@ -498,6 +577,9 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     migrate(&connection)?;
+    // Retention is checked here rather than after every write: every writer
+    // opens the store, and the pass itself runs at most once an hour.
+    maybe_prune(&connection);
     Ok(connection)
 }
 
@@ -1400,6 +1482,688 @@ pub fn set_meta(key: &str, value: &str) -> Result<(), String> {
         )
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+// ---------------------------------------------------------------- telemetry
+
+/// The most of one provider request or response payload a row keeps. Applied
+/// again at the insert, after redaction, so a caller's mistake cannot write
+/// more than this.
+pub const MAX_PROVIDER_PAYLOAD_BYTES: usize = 64 * 1024;
+
+/// The most of one JSON-RPC message a row keeps.
+pub const MAX_RPC_PAYLOAD_BYTES: usize = 16 * 1024;
+
+/// The most of one `operational_events.fields_json` a row keeps.
+pub const MAX_EVENT_FIELDS_BYTES: usize = 8 * 1024;
+
+/// How long a row keeps its payload. After this the payload columns are set
+/// to NULL and the metadata row stays.
+pub const PAYLOAD_RETENTION_DAYS: i64 = 7;
+
+/// How long a telemetry row itself is kept.
+pub const ROW_RETENTION_DAYS: i64 = 30;
+
+/// What `provider_requests`, `harness_rpc_messages` and `operational_events`
+/// may hold together in payload bytes before the oldest payloads are dropped.
+pub const TELEMETRY_MAX_BYTES: i64 = 256 * 1024 * 1024;
+
+/// The `direction` of a message that came from the harness.
+pub const DIRECTION_HARNESS_TO_RUSTCODE: &str = "harness_to_rustcode";
+/// The `direction` of a message RustCode sent to the harness.
+pub const DIRECTION_RUSTCODE_TO_HARNESS: &str = "rustcode_to_harness";
+/// The `message_kind` of a JSON-RPC request.
+pub const KIND_REQUEST: &str = "request";
+/// The `message_kind` of a JSON-RPC response.
+pub const KIND_RESPONSE: &str = "response";
+/// The `message_kind` of a JSON-RPC notification.
+pub const KIND_NOTIFICATION: &str = "notification";
+
+/// `store_meta` key holding when the last pass ran, in Unix seconds.
+const PRUNE_META_KEY: &str = "telemetry_pruned_at";
+const PRUNE_INTERVAL_SECS: i64 = 60 * 60;
+
+/// One built-in provider HTTP attempt: what was asked, where, how long it
+/// took, and — only when `capture_provider_payloads` is on — a redacted,
+/// capped copy of the request.
+///
+/// `endpoint_host` and `endpoint_path` are stored without the query or
+/// fragment, which can carry a key. The payload fields are stored as given:
+/// redact them with [`redact::prepare_payload`] before setting them, and the
+/// insert clips them again if they are still over the cap. The insert also
+/// redacts them again, so a caller that forgot cannot write a secret.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProviderRequestRow {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    /// The request round within the turn, when the caller counts them.
+    pub round: Option<i64>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub endpoint_host: Option<String>,
+    pub endpoint_path: Option<String>,
+    pub method: Option<String>,
+    /// 1 for the first send, 2 for the first retry, and so on.
+    pub attempt: Option<i64>,
+    pub started_at: String,
+    /// When the response headers arrived, if they did.
+    pub headers_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub status_code: Option<i64>,
+    pub request_bytes: Option<i64>,
+    pub response_bytes: Option<i64>,
+    pub stream_event_count: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
+    /// A short classification (`timeout`, `http_500`, `stream_failure`), never
+    /// the provider's message text.
+    pub error_kind: Option<String>,
+    pub request_payload_json: Option<String>,
+    /// A summary of the response, not the raw body.
+    pub response_summary_json: Option<String>,
+    /// Set by the clip; a caller that clipped already may set it too.
+    pub payload_truncated: bool,
+}
+
+/// One JSON-RPC message that crossed RustCode's ACP or Codex stdio boundary.
+/// These are harness-to-RustCode protocol messages: an external harness's own
+/// provider HTTP traffic never passes through here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RpcMessageRow {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub harness: Option<String>,
+    /// `acp` or `codex-app-server`, when the caller knows.
+    pub protocol: Option<String>,
+    /// [`DIRECTION_HARNESS_TO_RUSTCODE`] or [`DIRECTION_RUSTCODE_TO_HARNESS`].
+    pub direction: String,
+    /// [`KIND_REQUEST`], [`KIND_RESPONSE`] or [`KIND_NOTIFICATION`].
+    pub message_kind: String,
+    /// The JSON-RPC id as text, so an integer and a string id both fit.
+    pub rpc_id: Option<String>,
+    pub method: Option<String>,
+    pub at: String,
+    /// A request's answer time, when the caller could pair them.
+    pub latency_ms: Option<i64>,
+    pub byte_size: Option<i64>,
+    pub payload_json: Option<String>,
+    pub payload_truncated: bool,
+}
+
+/// One allowlisted operational event, projected for an agent to read.
+///
+/// The sequence is per thread and assigned by the store: it is the cursor a
+/// reader pages with, so it is monotonic even when two writers race.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OperationalEventRow {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub event_type: String,
+    pub at: String,
+    /// Safe, bounded fields only: a provider error's text does not belong here.
+    pub fields_json: Option<String>,
+    pub original_bytes: Option<i64>,
+    /// Set by the caller, or by the clip when the fields were too long.
+    pub captured_bytes: Option<i64>,
+    pub payload_truncated: bool,
+}
+
+/// Records one provider attempt. A failure is logged and swallowed: a turn
+/// must not fail because telemetry storage is locked or full.
+pub fn record_provider_request(row: &ProviderRequestRow) {
+    if !wants_row(&row.thread_id, &row.started_at) {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    if let Err(error) = record_provider_request_at(&path, row) {
+        crate::dbg_log!(
+            "data store: provider request of {} not recorded: {error}",
+            row.thread_id
+        );
+    }
+}
+
+/// [`record_provider_request`] against one store file (tests, backfill).
+pub fn record_provider_request_at(path: &Path, row: &ProviderRequestRow) -> Result<(), String> {
+    let connection = open(path)?;
+    write_provider_request(&connection, row)
+}
+
+fn write_provider_request(connection: &Connection, row: &ProviderRequestRow) -> Result<(), String> {
+    if !wants_row(&row.thread_id, &row.started_at) {
+        return Ok(());
+    }
+    let (request_payload, request_clipped) = capped_payload(
+        row.request_payload_json.as_deref(),
+        MAX_PROVIDER_PAYLOAD_BYTES,
+    );
+    let (response_summary, response_clipped) = capped_payload(
+        row.response_summary_json.as_deref(),
+        MAX_PROVIDER_PAYLOAD_BYTES,
+    );
+    let payload_truncated = row.payload_truncated || request_clipped || response_clipped;
+    let redaction_version =
+        redaction_version(request_payload.as_deref(), response_summary.as_deref());
+    connection
+        .execute(
+            "INSERT INTO provider_requests (thread_id, turn_id, round, provider, model,
+                    endpoint_host, endpoint_path, method, attempt, started_at, headers_at,
+                    finished_at, latency_ms, status_code, request_bytes, response_bytes,
+                    stream_event_count, input_tokens, output_tokens, cached_tokens, error_kind,
+                    request_payload_json, response_summary_json, payload_truncated,
+                    redaction_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                    ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+            params![
+                row.thread_id,
+                row.turn_id,
+                row.round,
+                row.provider,
+                row.model,
+                row.endpoint_host,
+                row.endpoint_path,
+                row.method,
+                row.attempt,
+                at_rfc3339(&row.started_at),
+                row.headers_at.as_deref().map(at_rfc3339),
+                row.finished_at.as_deref().map(at_rfc3339),
+                row.latency_ms,
+                row.status_code,
+                row.request_bytes,
+                row.response_bytes,
+                row.stream_event_count,
+                row.input_tokens,
+                row.output_tokens,
+                row.cached_tokens,
+                row.error_kind,
+                request_payload,
+                response_summary,
+                payload_truncated,
+                redaction_version,
+            ],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Records one JSON-RPC message. Logged and swallowed, like the others.
+pub fn record_rpc_message(row: &RpcMessageRow) {
+    record_rpc_messages(std::slice::from_ref(row));
+}
+
+/// Records messages that crossed the harness boundary in one transaction, so
+/// a busy turn pays for one open and one commit. Rows with no thread, no
+/// direction or no kind are skipped; a failure is logged and swallowed.
+pub fn record_rpc_messages(rows: &[RpcMessageRow]) {
+    let rows: Vec<&RpcMessageRow> = rows
+        .iter()
+        .filter(|row| wants_row(&row.thread_id, &row.at))
+        .filter(|row| !row.direction.trim().is_empty() && !row.message_kind.trim().is_empty())
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    if let Err(error) = record_rpc_messages_at(&path, &rows) {
+        crate::dbg_log!(
+            "data store: {} rpc message(s) not recorded: {error}",
+            rows.len()
+        );
+    }
+}
+
+/// [`record_rpc_messages`] against one store file (tests).
+pub fn record_rpc_messages_at(path: &Path, rows: &[&RpcMessageRow]) -> Result<usize, String> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let connection = open(path)?;
+    write_rpc_messages(&connection, rows)
+}
+
+fn write_rpc_messages(connection: &Connection, rows: &[&RpcMessageRow]) -> Result<usize, String> {
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    let mut written = 0usize;
+    {
+        let mut insert = transaction
+            .prepare_cached(
+                "INSERT INTO harness_rpc_messages (thread_id, turn_id, harness, protocol,
+                        direction, message_kind, rpc_id, method, at, latency_ms, byte_size,
+                        payload_json, payload_truncated, redaction_version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            )
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            if !wants_row(&row.thread_id, &row.at)
+                || row.direction.trim().is_empty()
+                || row.message_kind.trim().is_empty()
+            {
+                continue;
+            }
+            let (payload, clipped) =
+                capped_payload(row.payload_json.as_deref(), MAX_RPC_PAYLOAD_BYTES);
+            let redaction_version = redaction_version(payload.as_deref(), None);
+            insert
+                .execute(params![
+                    row.thread_id,
+                    row.turn_id,
+                    row.harness,
+                    row.protocol,
+                    row.direction,
+                    row.message_kind,
+                    row.rpc_id,
+                    row.method,
+                    at_rfc3339(&row.at),
+                    row.latency_ms,
+                    row.byte_size,
+                    payload,
+                    row.payload_truncated || clipped,
+                    redaction_version,
+                ])
+                .map_err(|error| error.to_string())?;
+            written += 1;
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(written)
+}
+
+/// Records one operational event and answers its per-thread sequence. Logged
+/// and swallowed: returns 0 when it was not written.
+pub fn record_operational_event(row: &OperationalEventRow) -> i64 {
+    if !wants_row(&row.thread_id, &row.at) || row.event_type.trim().is_empty() {
+        return 0;
+    }
+    let Some(path) = data_path() else { return 0 };
+    match record_operational_event_at(&path, row) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            crate::dbg_log!(
+                "data store: {} event of {} not recorded: {error}",
+                row.event_type,
+                row.thread_id
+            );
+            0
+        }
+    }
+}
+
+/// [`record_operational_event`] against one store file (tests), returning the
+/// sequence it was given.
+pub fn record_operational_event_at(path: &Path, row: &OperationalEventRow) -> Result<i64, String> {
+    let connection = open(path)?;
+    write_operational_event(&connection, row)
+}
+
+fn write_operational_event(
+    connection: &Connection,
+    row: &OperationalEventRow,
+) -> Result<i64, String> {
+    if !wants_row(&row.thread_id, &row.at) || row.event_type.trim().is_empty() {
+        return Ok(0);
+    }
+    let (fields, clipped) = capped_payload(row.fields_json.as_deref(), MAX_EVENT_FIELDS_BYTES);
+    let captured_bytes = fields
+        .as_deref()
+        .map(|fields| fields.len() as i64)
+        .or(row.captured_bytes);
+    let redaction_version = redaction_version(fields.as_deref(), None);
+    // The sequence is assigned by the same statement that reads it, so two
+    // writers cannot pick the same one and a retry cannot skip a number that
+    // another writer took.
+    connection
+        .execute(
+            "INSERT INTO operational_events (thread_id, turn_id, sequence, event_type, at,
+                    fields_json, original_bytes, captured_bytes, payload_truncated,
+                    redaction_version)
+             SELECT ?1, ?2, COALESCE(MAX(sequence), 0) + 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+             FROM operational_events WHERE thread_id = ?1",
+            params![
+                row.thread_id,
+                row.turn_id,
+                row.event_type,
+                at_rfc3339(&row.at),
+                fields,
+                row.original_bytes,
+                captured_bytes,
+                row.payload_truncated || clipped,
+                redaction_version,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    let id = connection.last_insert_rowid();
+    connection
+        .query_row(
+            "SELECT sequence FROM operational_events WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+}
+
+/// A row is only worth storing when it names a thread and a time.
+fn wants_row(thread_id: &str, at: &str) -> bool {
+    !thread_id.trim().is_empty()
+        && !at.trim().is_empty()
+        && !rustcode_session::is_scratch_session_id(thread_id)
+}
+
+/// `at` in the one format the store writes: RFC 3339 in UTC with
+/// milliseconds, so string order is time order and pruning compares strings.
+fn at_rfc3339(at: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(at)
+        .map(|at| {
+            at.with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        })
+        .unwrap_or_else(|_| at.to_owned())
+}
+
+/// The `redaction_version` a row carries: the rules used, or 0 when it holds
+/// no payload at all.
+fn redaction_version(payload: Option<&str>, other: Option<&str>) -> i64 {
+    if payload.is_some() || other.is_some() {
+        redact::REDACTION_VERSION
+    } else {
+        0
+    }
+}
+
+/// An optional payload held to `max` bytes. A payload a caller already
+/// clipped passes through; one that is still too long is clipped rather than
+/// stored (or dropped), and the flag says so.
+/// An optional payload held to `max` bytes and redacted on the way in.
+///
+/// Redaction is applied here as well as by [`redact::prepare_payload`]: it is
+/// idempotent, and the second pass means a caller that forgot cannot write a
+/// secret to disk. A payload that is not JSON keeps its text, redacted and cut.
+/// The flag says it was clipped.
+fn capped_payload(payload: Option<&str>, max: usize) -> (Option<String>, bool) {
+    let Some(text) = payload.map(str::trim).filter(|text| !text.is_empty()) else {
+        return (None, false);
+    };
+    match serde_json::from_str::<Value>(text) {
+        Ok(value) => {
+            let redacted = redact::redact(&value);
+            let text = redacted.to_string();
+            if text.len() <= max {
+                (Some(text), false)
+            } else {
+                let (clipped, _) = redact::clip_json(&redacted, max);
+                (Some(clipped), true)
+            }
+        }
+        Err(_) => {
+            let text = redact::redact_bearer(text);
+            let clipped = text.len() > max;
+            (Some(redact::clip_text(&text, max)), clipped)
+        }
+    }
+}
+
+/// What one retention pass did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PruneReport {
+    /// Payload columns set to NULL.
+    pub payloads_cleared: usize,
+    /// Rows deleted.
+    pub rows_deleted: usize,
+    /// Payload bytes before the pass.
+    pub bytes_before: i64,
+    /// Payload bytes after it.
+    pub bytes_after: i64,
+}
+
+/// Applies the retention policy to the store, logging and swallowing a
+/// failure like every other write.
+pub fn prune_telemetry() {
+    let Some(path) = data_path() else { return };
+    if let Err(error) = prune_telemetry_at(&path) {
+        crate::dbg_log!("data store: telemetry not pruned: {error}");
+    }
+}
+
+/// [`prune_telemetry`] against one store file, answering what it did.
+pub fn prune_telemetry_at(path: &Path) -> Result<PruneReport, String> {
+    let connection = open(path)?;
+    prune(&connection)
+}
+
+/// The retention policy: payloads older than [`PAYLOAD_RETENTION_DAYS`] are
+/// dropped, rows older than [`ROW_RETENTION_DAYS`] deleted, and the three
+/// tables held under [`TELEMETRY_MAX_BYTES`] by dropping the oldest payloads
+/// first. The file is then checkpointed (and vacuumed only when the database
+/// already vacuums incrementally) so deleting rows actually frees space.
+pub fn prune(connection: &Connection) -> Result<PruneReport, String> {
+    prune_with(connection, TELEMETRY_MAX_BYTES)
+}
+
+/// [`prune`] with an explicit payload budget, so a test can prove the byte
+/// cap without writing 256 MiB.
+fn prune_with(connection: &Connection, max_bytes: i64) -> Result<PruneReport, String> {
+    let now = chrono::Utc::now();
+    let payload_cutoff = rfc3339_days_ago(now, PAYLOAD_RETENTION_DAYS);
+    let row_cutoff = rfc3339_days_ago(now, ROW_RETENTION_DAYS);
+    let mut report = PruneReport {
+        bytes_before: telemetry_bytes(connection)?,
+        ..PruneReport::default()
+    };
+    report.payloads_cleared += clear_payloads_before(connection, &payload_cutoff)?;
+    report.rows_deleted += delete_rows_before(connection, &row_cutoff)?;
+    trim_to_budget(connection, max_bytes, &mut report)?;
+    report.bytes_after = telemetry_bytes(connection)?;
+    compact(connection);
+    Ok(report)
+}
+
+fn rfc3339_days_ago(now: chrono::DateTime<chrono::Utc>, days: i64) -> String {
+    (now - chrono::Duration::days(days)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// Payload bytes the three tables hold, as the store estimates them: the
+/// length of every payload column.
+fn telemetry_bytes(connection: &Connection) -> Result<i64, String> {
+    connection
+        .query_row(
+            "SELECT COALESCE((SELECT SUM(LENGTH(COALESCE(request_payload_json, '')) +
+                                       LENGTH(COALESCE(response_summary_json, '')))
+                               FROM provider_requests), 0)
+                  + COALESCE((SELECT SUM(LENGTH(COALESCE(payload_json, '')))
+                              FROM harness_rpc_messages), 0)
+                  + COALESCE((SELECT SUM(LENGTH(COALESCE(fields_json, '')))
+                              FROM operational_events), 0)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn clear_payloads_before(connection: &Connection, cutoff: &str) -> Result<usize, String> {
+    let mut cleared = connection
+        .execute(
+            "UPDATE provider_requests SET request_payload_json = NULL, response_summary_json = NULL
+             WHERE started_at < ?1
+               AND (request_payload_json IS NOT NULL OR response_summary_json IS NOT NULL)",
+            [cutoff],
+        )
+        .map_err(|error| error.to_string())?;
+    cleared += connection
+        .execute(
+            "UPDATE harness_rpc_messages SET payload_json = NULL
+             WHERE at < ?1 AND payload_json IS NOT NULL",
+            [cutoff],
+        )
+        .map_err(|error| error.to_string())?;
+    cleared += connection
+        .execute(
+            "UPDATE operational_events SET fields_json = NULL, captured_bytes = NULL
+             WHERE at < ?1 AND fields_json IS NOT NULL",
+            [cutoff],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(cleared)
+}
+
+fn delete_rows_before(connection: &Connection, cutoff: &str) -> Result<usize, String> {
+    let mut deleted = connection
+        .execute(
+            "DELETE FROM provider_requests WHERE started_at < ?1",
+            [cutoff],
+        )
+        .map_err(|error| error.to_string())?;
+    deleted += connection
+        .execute("DELETE FROM harness_rpc_messages WHERE at < ?1", [cutoff])
+        .map_err(|error| error.to_string())?;
+    deleted += connection
+        .execute("DELETE FROM operational_events WHERE at < ?1", [cutoff])
+        .map_err(|error| error.to_string())?;
+    Ok(deleted)
+}
+
+/// Drops the oldest payloads first, then the oldest rows, until the payload
+/// bytes fit the budget. Bounded: a batch per step and a finite number of
+/// steps, so a pathological store cannot hold the caller for long.
+fn trim_to_budget(
+    connection: &Connection,
+    max_bytes: i64,
+    report: &mut PruneReport,
+) -> Result<(), String> {
+    const BATCH: i64 = 256;
+    const MAX_PASSES: usize = 64;
+    let mut total = telemetry_bytes(connection)?;
+    for _ in 0..MAX_PASSES {
+        if total <= max_bytes {
+            return Ok(());
+        }
+        let cleared = clear_oldest_payloads(connection, BATCH)?;
+        if cleared > 0 {
+            report.payloads_cleared += cleared;
+            total = telemetry_bytes(connection)?;
+            continue;
+        }
+        let deleted = delete_oldest_rows(connection, BATCH)?;
+        if deleted == 0 {
+            return Ok(());
+        }
+        report.rows_deleted += deleted;
+        total = telemetry_bytes(connection)?;
+    }
+    Ok(())
+}
+
+fn clear_oldest_payloads(connection: &Connection, batch: i64) -> Result<usize, String> {
+    let mut cleared = connection
+        .execute(
+            "UPDATE provider_requests SET request_payload_json = NULL, response_summary_json = NULL
+             WHERE id IN (SELECT id FROM provider_requests
+                          WHERE request_payload_json IS NOT NULL
+                             OR response_summary_json IS NOT NULL
+                          ORDER BY started_at, id LIMIT ?1)",
+            [batch],
+        )
+        .map_err(|error| error.to_string())?;
+    cleared += connection
+        .execute(
+            "UPDATE harness_rpc_messages SET payload_json = NULL
+             WHERE id IN (SELECT id FROM harness_rpc_messages
+                          WHERE payload_json IS NOT NULL ORDER BY at, id LIMIT ?1)",
+            [batch],
+        )
+        .map_err(|error| error.to_string())?;
+    cleared += connection
+        .execute(
+            "UPDATE operational_events SET fields_json = NULL, captured_bytes = NULL
+             WHERE id IN (SELECT id FROM operational_events
+                          WHERE fields_json IS NOT NULL ORDER BY at, id LIMIT ?1)",
+            [batch],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(cleared)
+}
+
+fn delete_oldest_rows(connection: &Connection, batch: i64) -> Result<usize, String> {
+    let mut deleted = connection
+        .execute(
+            "DELETE FROM provider_requests WHERE id IN
+                (SELECT id FROM provider_requests ORDER BY started_at, id LIMIT ?1)",
+            [batch],
+        )
+        .map_err(|error| error.to_string())?;
+    deleted += connection
+        .execute(
+            "DELETE FROM harness_rpc_messages WHERE id IN
+                (SELECT id FROM harness_rpc_messages ORDER BY at, id LIMIT ?1)",
+            [batch],
+        )
+        .map_err(|error| error.to_string())?;
+    deleted += connection
+        .execute(
+            "DELETE FROM operational_events WHERE id IN
+                (SELECT id FROM operational_events ORDER BY at, id LIMIT ?1)",
+            [batch],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(deleted)
+}
+
+/// Writes the WAL back into the file, and reclaims pages only when the
+/// database already vacuums incrementally: switching `auto_vacuum` on an
+/// existing file needs a full `VACUUM`, which is not something a background
+/// pass should start on a user's store.
+fn compact(connection: &Connection) {
+    let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    let mode: i64 = connection
+        .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+        .unwrap_or(0);
+    if mode == 2 {
+        let _ = connection.execute_batch("PRAGMA incremental_vacuum;");
+    }
+}
+
+/// Runs [`prune`] at most [`PRUNE_INTERVAL_SECS`], stamped in `store_meta`.
+/// Called from [`open`], so every writer checks retention without a timer.
+fn maybe_prune(connection: &Connection) {
+    let now = chrono::Utc::now().timestamp();
+    let last: Option<String> = connection
+        .query_row(
+            "SELECT value FROM store_meta WHERE key = ?1",
+            [PRUNE_META_KEY],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let last = last
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    if last > 0 && now.saturating_sub(last) < PRUNE_INTERVAL_SECS {
+        return;
+    }
+    match prune(connection) {
+        Ok(report) => {
+            if report.payloads_cleared > 0 || report.rows_deleted > 0 {
+                crate::dbg_log!(
+                    "data store: telemetry pruned: {} payload(s) cleared, {} row(s) deleted, \
+                     {} bytes",
+                    report.payloads_cleared,
+                    report.rows_deleted,
+                    report.bytes_before - report.bytes_after
+                );
+            }
+        }
+        // The stamp is still written: a store that cannot be pruned must not
+        // be retried on every single write.
+        Err(error) => crate::dbg_log!("data store: telemetry not pruned: {error}"),
+    }
+    let _ = connection.execute(
+        "INSERT INTO store_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![PRUNE_META_KEY, now.to_string()],
+    );
 }
 
 // ------------------------------------------------------------------ reads
@@ -2611,5 +3375,381 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let error = query_path(&dir.path().join(DATA_FILE), "SELECT 1", 10).unwrap_err();
         assert!(error.contains("no data store yet"), "{error}");
+    }
+
+    // ------------------------------------------------------ request telemetry
+
+    fn days_ago(days: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::days(days))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    fn minutes_ago(minutes: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::minutes(minutes))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    fn count_rows(path: &Path, table: &str) -> i64 {
+        let sql = format!("SELECT COUNT(*) AS n FROM {table}");
+        query_path(path, &sql, 10).unwrap().rows[0]["n"]
+            .as_i64()
+            .unwrap()
+    }
+
+    fn one_row(path: &Path, sql: &str) -> Value {
+        let rows = query_path(path, sql, 10).unwrap().rows;
+        assert_eq!(rows.len(), 1, "{sql}: {rows:?}");
+        rows.into_iter().next().unwrap()
+    }
+
+    fn provider_row(thread: &str, started_at: &str, payload: Option<&str>) -> ProviderRequestRow {
+        ProviderRequestRow {
+            thread_id: thread.to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            round: Some(2),
+            provider: Some("openai".to_owned()),
+            model: Some("gpt-6-luna".to_owned()),
+            endpoint_host: Some("api.openai.com".to_owned()),
+            endpoint_path: Some("/v1/chat/completions".to_owned()),
+            method: Some("POST".to_owned()),
+            attempt: Some(1),
+            started_at: started_at.to_owned(),
+            headers_at: Some(started_at.to_owned()),
+            finished_at: Some(started_at.to_owned()),
+            latency_ms: Some(412),
+            status_code: Some(200),
+            request_bytes: Some(1024),
+            response_bytes: Some(2048),
+            stream_event_count: Some(37),
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            cached_tokens: None,
+            error_kind: None,
+            request_payload_json: payload.map(str::to_owned),
+            response_summary_json: None,
+            payload_truncated: false,
+        }
+    }
+
+    fn rpc_row(thread: &str, at: &str, payload: Option<&str>) -> RpcMessageRow {
+        RpcMessageRow {
+            thread_id: thread.to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            harness: Some("codex".to_owned()),
+            protocol: Some("acp".to_owned()),
+            direction: DIRECTION_RUSTCODE_TO_HARNESS.to_owned(),
+            message_kind: KIND_REQUEST.to_owned(),
+            rpc_id: Some("7".to_owned()),
+            method: Some("session/prompt".to_owned()),
+            at: at.to_owned(),
+            latency_ms: Some(30),
+            byte_size: Some(512),
+            payload_json: payload.map(str::to_owned),
+            payload_truncated: false,
+        }
+    }
+
+    fn event_row(thread: &str, at: &str, fields: Option<&str>) -> OperationalEventRow {
+        OperationalEventRow {
+            thread_id: thread.to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            event_type: "turn.summary".to_owned(),
+            at: at.to_owned(),
+            fields_json: fields.map(str::to_owned),
+            original_bytes: fields.map(|fields| fields.len() as i64),
+            captured_bytes: None,
+            payload_truncated: false,
+        }
+    }
+
+    #[test]
+    fn the_telemetry_tables_migrate_again_without_losing_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        write_turn(
+            &connection,
+            &turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed"),
+        )
+        .unwrap();
+        record_provider_request_at(&path, &provider_row("t", "2026-11-01T10:00:00Z", None))
+            .unwrap();
+
+        // Opening again runs `migrate` on a store that already has the tables,
+        // which must find its own work done rather than fail on CREATE TABLE.
+        let connection = open(&path).unwrap();
+        migrate(&connection).unwrap();
+        let recorded: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(recorded, MIGRATIONS.len() as i64);
+        assert_eq!(count_rows(&path, "turns"), 1, "the old rows survive");
+        assert_eq!(count_rows(&path, "provider_requests"), 1);
+        assert_eq!(count_rows(&path, "harness_rpc_messages"), 0);
+        assert_eq!(count_rows(&path, "operational_events"), 0);
+        let kept = one_row(&path, "SELECT status FROM turns");
+        assert_eq!(kept["status"], "completed");
+    }
+
+    #[test]
+    fn telemetry_rows_round_trip_without_a_payload_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let at = "2026-11-01T10:00:00Z";
+        record_provider_request_at(&path, &provider_row("t", at, None)).unwrap();
+        let written = record_rpc_messages_at(&path, &[&rpc_row("t", at, None)]).unwrap();
+        assert_eq!(written, 1);
+        let sequence = record_operational_event_at(&path, &event_row("t", at, None)).unwrap();
+        assert_eq!(sequence, 1);
+
+        let request = one_row(&path, "SELECT * FROM provider_requests");
+        assert_eq!(request["thread_id"], "t");
+        assert_eq!(request["turn_id"], "turn-1");
+        assert_eq!(request["round"], 2);
+        assert_eq!(request["provider"], "openai");
+        assert_eq!(request["endpoint_host"], "api.openai.com");
+        assert_eq!(request["endpoint_path"], "/v1/chat/completions");
+        assert_eq!(request["attempt"], 1);
+        assert_eq!(request["latency_ms"], 412);
+        assert_eq!(request["status_code"], 200);
+        assert_eq!(request["stream_event_count"], 37);
+        assert_eq!(request["input_tokens"], 100);
+        // Timestamps are normalised, so string order is time order.
+        assert_eq!(request["started_at"], "2026-11-01T10:00:00.000Z");
+        // Metadata by default: no payload, no redaction to record.
+        assert!(request["request_payload_json"].is_null(), "{request}");
+        assert_eq!(request["payload_truncated"], 0);
+        assert_eq!(request["redaction_version"], 0);
+
+        let rpc = one_row(&path, "SELECT * FROM harness_rpc_messages");
+        assert_eq!(rpc["direction"], DIRECTION_RUSTCODE_TO_HARNESS);
+        assert_eq!(rpc["message_kind"], KIND_REQUEST);
+        assert_eq!(rpc["rpc_id"], "7");
+        assert_eq!(rpc["method"], "session/prompt");
+        assert_eq!(rpc["byte_size"], 512);
+        assert!(rpc["payload_json"].is_null(), "{rpc}");
+
+        let event = one_row(&path, "SELECT * FROM operational_events");
+        assert_eq!(event["event_type"], "turn.summary");
+        assert_eq!(event["sequence"], 1);
+        assert!(event["fields_json"].is_null(), "{event}");
+        assert_eq!(event["redaction_version"], 0);
+    }
+
+    #[test]
+    fn a_captured_payload_is_redacted_and_capped_before_it_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let at = "2026-11-01T10:00:00Z";
+        let payload = json!({
+            "model": "gpt-6-luna",
+            "headers": {"authorization": "Bearer sk-live-123", "accept": "text/event-stream"},
+            "pad": "z".repeat(4000),
+        });
+        let (text, truncated) = redact::prepare_payload(&payload, 512);
+        assert!(truncated, "a 4 KiB pad is clipped");
+        let mut row = provider_row("t", at, Some(&text));
+        row.payload_truncated = truncated;
+        record_provider_request_at(&path, &row).unwrap();
+
+        let stored = one_row(&path, "SELECT * FROM provider_requests");
+        let kept = stored["request_payload_json"].as_str().unwrap();
+        assert!(
+            kept.len() <= MAX_PROVIDER_PAYLOAD_BYTES,
+            "{} bytes",
+            kept.len()
+        );
+        assert!(!kept.contains("sk-live-123"), "{kept}");
+        assert_eq!(stored["payload_truncated"], 1);
+        assert_eq!(stored["redaction_version"], redact::REDACTION_VERSION);
+        let parsed: Value = serde_json::from_str(kept).expect("the stored payload is valid JSON");
+        assert_eq!(parsed["model"], "gpt-6-luna");
+        assert_eq!(parsed["headers"]["authorization"], redact::REDACTED);
+
+        // A caller that skipped the cap is still capped, and told so.
+        let long = format!(
+            "{{\"pad\":\"{}\"}}",
+            "z".repeat(MAX_PROVIDER_PAYLOAD_BYTES + 200)
+        );
+        record_provider_request_at(&path, &provider_row("u", at, Some(&long))).unwrap();
+        let stored = one_row(
+            &path,
+            "SELECT * FROM provider_requests WHERE thread_id = 'u'",
+        );
+        let kept = stored["request_payload_json"].as_str().unwrap();
+        assert!(
+            kept.len() <= MAX_PROVIDER_PAYLOAD_BYTES,
+            "{} bytes",
+            kept.len()
+        );
+        assert_eq!(stored["payload_truncated"], 1);
+        assert!(serde_json::from_str::<Value>(kept).is_ok(), "{kept}");
+
+        // The insert redacts again, so a caller that skipped it cannot write
+        // a secret.
+        let raw = r#"{"headers": {"Authorization": "Bearer sk-raw-1"}, "max_tokens": 64}"#;
+        record_provider_request_at(&path, &provider_row("v", at, Some(raw))).unwrap();
+        let stored = one_row(
+            &path,
+            "SELECT * FROM provider_requests WHERE thread_id = 'v'",
+        );
+        let kept = stored["request_payload_json"].as_str().unwrap();
+        assert!(!kept.contains("sk-raw-1"), "{kept}");
+        assert_eq!(stored["redaction_version"], redact::REDACTION_VERSION);
+        let parsed: Value = serde_json::from_str(kept).unwrap();
+        assert_eq!(parsed["headers"]["Authorization"], redact::REDACTED);
+        // The rule is deliberately broad: a token limit is redacted too.
+        assert_eq!(parsed["max_tokens"], redact::REDACTED);
+    }
+
+    #[test]
+    fn every_telemetry_payload_is_held_to_its_own_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let at = "2026-11-01T10:00:00Z";
+        let long = |field: &str| format!("{{\"{field}\":\"{}\"}}", "z".repeat(32 * 1024));
+
+        record_rpc_messages_at(&path, &[&rpc_row("t", at, Some(&long("params")))]).unwrap();
+        let stored = one_row(&path, "SELECT * FROM harness_rpc_messages");
+        let kept = stored["payload_json"].as_str().unwrap();
+        assert!(kept.len() <= MAX_RPC_PAYLOAD_BYTES, "{} bytes", kept.len());
+        assert_eq!(stored["payload_truncated"], 1);
+        assert_eq!(stored["redaction_version"], redact::REDACTION_VERSION);
+        assert!(serde_json::from_str::<Value>(kept).is_ok(), "{kept}");
+
+        record_operational_event_at(&path, &event_row("t", at, Some(&long("fields")))).unwrap();
+        let stored = one_row(&path, "SELECT * FROM operational_events");
+        let kept = stored["fields_json"].as_str().unwrap();
+        assert!(kept.len() <= MAX_EVENT_FIELDS_BYTES, "{} bytes", kept.len());
+        assert_eq!(stored["payload_truncated"], 1);
+        assert_eq!(stored["captured_bytes"], kept.len() as i64);
+        assert!(serde_json::from_str::<Value>(kept).is_ok(), "{kept}");
+    }
+
+    #[test]
+    fn operational_events_number_themselves_per_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let at = "2026-11-01T10:00:00Z";
+        for expected in 1..=3 {
+            let sequence =
+                record_operational_event_at(&path, &event_row("a", at, Some("{\"n\":1}"))).unwrap();
+            assert_eq!(sequence, expected);
+        }
+        let other = record_operational_event_at(&path, &event_row("b", at, None)).unwrap();
+        assert_eq!(other, 1, "each thread has its own sequence");
+        // A scratch id is not a thread, so nothing is stored for it.
+        assert_eq!(
+            record_operational_event_at(&path, &event_row("session-title-1700000000000", at, None))
+                .unwrap(),
+            0,
+            "a title request is not a thread"
+        );
+        let sequences = query_path(
+            &path,
+            "SELECT thread_id, sequence FROM operational_events ORDER BY thread_id, sequence",
+            10,
+        )
+        .unwrap()
+        .rows;
+        assert_eq!(sequences.len(), 4, "{sequences:?}");
+    }
+
+    #[test]
+    fn pruning_drops_old_payloads_then_old_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let payload = "{\"a\":1}";
+        // Older than the payload retention but inside the row retention.
+        write_provider_request(&connection, &provider_row("t", &days_ago(8), Some(payload)))
+            .unwrap();
+        write_rpc_messages(&connection, &[&rpc_row("t", &days_ago(8), Some(payload))]).unwrap();
+        write_operational_event(&connection, &event_row("t", &days_ago(8), Some(payload))).unwrap();
+        // Older than both.
+        write_provider_request(
+            &connection,
+            &provider_row("t", &days_ago(40), Some(payload)),
+        )
+        .unwrap();
+        // Fresh: untouched.
+        write_provider_request(&connection, &provider_row("t", &days_ago(0), Some(payload)))
+            .unwrap();
+
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES).unwrap();
+        assert!(report.payloads_cleared >= 3, "{report:?}");
+        assert!(report.rows_deleted >= 1, "{report:?}");
+
+        let requests = query_path(
+            &path,
+            "SELECT started_at, request_payload_json FROM provider_requests ORDER BY started_at",
+            10,
+        )
+        .unwrap()
+        .rows;
+        assert_eq!(requests.len(), 2, "the 40-day row is gone: {requests:?}");
+        assert!(
+            requests[0]["request_payload_json"].is_null(),
+            "the 8-day payload is gone: {requests:?}"
+        );
+        assert_eq!(
+            requests[1]["request_payload_json"], payload,
+            "today keeps its payload"
+        );
+
+        let rpc = one_row(&path, "SELECT payload_json FROM harness_rpc_messages");
+        assert!(rpc["payload_json"].is_null(), "{rpc}");
+        let event = one_row(
+            &path,
+            "SELECT fields_json, captured_bytes FROM operational_events",
+        );
+        assert!(event["fields_json"].is_null(), "{event}");
+        assert!(event["captured_bytes"].is_null(), "{event}");
+    }
+
+    #[test]
+    fn the_byte_budget_drops_the_oldest_payloads_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let payload = format!("{{\"pad\":\"{}\"}}", "p".repeat(1024));
+        // 300 rows of ~1 KiB, one minute apart so none is old enough for the
+        // age policy, newest last.
+        for minutes in (0..300).rev() {
+            write_provider_request(
+                &connection,
+                &provider_row("t", &minutes_ago(minutes), Some(&payload)),
+            )
+            .unwrap();
+        }
+        let budget = 100 * 1024;
+        let report = prune_with(&connection, budget).unwrap();
+        assert!(report.bytes_before > budget, "{report:?}");
+        assert!(report.bytes_after <= budget, "{report:?}");
+        assert!(report.payloads_cleared > 0, "{report:?}");
+        assert_eq!(
+            report.rows_deleted, 0,
+            "payloads go before rows: {report:?}"
+        );
+        assert_eq!(count_rows(&path, "provider_requests"), 300);
+
+        let newest = one_row(
+            &path,
+            "SELECT request_payload_json FROM provider_requests ORDER BY started_at DESC LIMIT 1",
+        );
+        assert_eq!(
+            newest["request_payload_json"], payload,
+            "the newest payload stays"
+        );
+        let oldest = one_row(
+            &path,
+            "SELECT request_payload_json FROM provider_requests ORDER BY started_at LIMIT 1",
+        );
+        assert!(
+            oldest["request_payload_json"].is_null(),
+            "the oldest payload goes"
+        );
     }
 }
