@@ -1,3 +1,9 @@
+## [v1.12.1-beta.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.1-beta.3) - 2026-11-06
+
+### Fixes
+### Chat and layout
+
+- A thread's sidebar row counts each file once instead of summing every edit, so a row no longer shows five digits for work on a dozen files. (#3069)
 ## [v1.12.1-beta.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.1-beta.2) - 2026-11-06
 
 ### Fixes
