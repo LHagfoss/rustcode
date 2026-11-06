@@ -681,6 +681,11 @@ pub(crate) fn remove(path: &Path, force: bool) -> Result<Value, WorktreeError> {
         WorktreeError::failed(format!("git worktree remove failed: {message}"))
     })?;
     let _ = git(&repo, &["worktree", "prune"]);
+    // A thread whose folder is gone cannot be opened again, so every thread
+    // that ran here moves to the repository the worktree came from.
+    if let Some(record) = record.as_ref() {
+        move_threads_to_repo(&record.session_ids, &repo);
+    }
     let mut branch_removed = false;
     if let Some(branch) = branch {
         let into = record
@@ -731,6 +736,44 @@ pub(crate) fn attach(session_id: &str, worktree: &Worktree) {
         record.session_ids.push(session_id.to_owned());
         save_record(&record);
     }
+}
+
+/// Move the threads of a removed worktree back to its repository and forget
+/// the worktree on them, so each still opens.
+fn move_threads_to_repo(session_ids: &[String], repo: &Path) {
+    for session_id in session_ids {
+        if crate::acp::session_move::move_session(session_id, repo.to_path_buf()).is_ok() {
+            detach(session_id);
+        }
+    }
+}
+
+/// Forget the worktree `session_id` ran in: its folder is gone, or the thread
+/// moved to the repository it came from.
+pub(crate) fn detach(session_id: &str) {
+    if let Some(dir) = crate::config::get_active_session_dir(session_id) {
+        let _ = std::fs::remove_file(dir.join(THREAD_FILE));
+    }
+}
+
+/// A thread may still point at a worktree an older release removed without
+/// moving it. When the folder is gone and the worktree's repository is still
+/// there, move the thread back to it and answer the folder to open instead.
+/// Nothing else is guessed: a missing folder with no living repository stays
+/// the error it was.
+pub(crate) fn recover_missing_worktree(session_id: &str, cwd: &Path) -> Option<std::path::PathBuf> {
+    if cwd.is_dir() {
+        return None;
+    }
+    let worktree = of_session(session_id)?;
+    let same = rustcode_session::canonicalize_best_effort(&worktree.path)
+        == rustcode_session::canonicalize_best_effort(cwd);
+    if !same || !worktree.repo.is_dir() {
+        return None;
+    }
+    crate::acp::session_move::move_session(session_id, worktree.repo.clone()).ok()?;
+    detach(session_id);
+    Some(worktree.repo)
 }
 
 /// The worktree `session_id` runs in, if it was started in one.
@@ -1132,6 +1175,94 @@ pub(crate) mod tests {
         assert!(!branch_exists(&repo, "feat/clean"));
         // Never something RustCode did not make.
         assert_eq!(remove(&repo, true).unwrap_err().reason, "not_managed");
+    }
+
+    /// A history for `id`, so it is a thread the store knows, as every real
+    /// one is before it can run in a worktree.
+    fn seed_thread(id: &str) {
+        let store = rustcode_session::SessionStore::new(crate::config::get_config_dir().unwrap());
+        store.save_session_history(
+            id,
+            &vec![
+                crate::app::ChatMessage::new("user", "Run in a worktree"),
+                crate::app::ChatMessage::new("assistant", "Done"),
+            ],
+        );
+        rustcode_session::flush_history();
+    }
+
+    #[test]
+    fn removing_a_worktree_moves_its_threads_to_the_repository() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            branch: Some("feat/moved-threads".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let session_id = crate::config::create_detached_session();
+        seed_thread(&session_id);
+        crate::config::save_session_workspace(
+            &session_id,
+            &rustcode_session::SessionWorkspace {
+                cwd: worktree.path.clone(),
+                additional_directories: Vec::new(),
+                task_workspace_id: None,
+            },
+        )
+        .unwrap();
+        attach(&session_id, &worktree);
+
+        assert_eq!(remove(&worktree.path, false).unwrap()["removed"], true);
+
+        // The thread moved to the repository and no longer names the worktree.
+        let moved = crate::config::load_session_workspace(&session_id).unwrap();
+        assert_eq!(moved.cwd, repo);
+        assert_eq!(of_session(&session_id), None);
+        let dir = crate::config::get_active_session_dir(&session_id).unwrap();
+        assert!(!dir.join(THREAD_FILE).exists());
+    }
+
+    #[test]
+    fn a_thread_whose_worktree_is_gone_falls_back_to_its_repository() {
+        let (dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            branch: Some("feat/broken-thread".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let session_id = crate::config::create_detached_session();
+        seed_thread(&session_id);
+        crate::config::save_session_workspace(
+            &session_id,
+            &rustcode_session::SessionWorkspace {
+                cwd: worktree.path.clone(),
+                additional_directories: Vec::new(),
+                task_workspace_id: None,
+            },
+        )
+        .unwrap();
+        attach(&session_id, &worktree);
+        // A worktree removed before this release: the folder is gone, the
+        // thread still points at it.
+        std::fs::remove_dir_all(&worktree.path).unwrap();
+
+        // Only the worktree's own folder falls back, not any missing folder.
+        assert!(recover_missing_worktree(&session_id, &dir.path().join("elsewhere")).is_none());
+        assert_eq!(
+            recover_missing_worktree(&session_id, &worktree.path),
+            Some(repo.clone())
+        );
+        assert_eq!(
+            crate::config::load_session_workspace(&session_id)
+                .unwrap()
+                .cwd,
+            repo
+        );
+        assert_eq!(of_session(&session_id), None);
+        // A folder that is still there is opened as it is.
+        assert!(recover_missing_worktree(&session_id, &repo).is_none());
     }
 
     #[test]

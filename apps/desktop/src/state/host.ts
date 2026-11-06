@@ -819,7 +819,8 @@ async function read(
     detail: `Its last ${lastTurns} turn${lastTurns === 1 ? "" : "s"}: your messages and its replies, no tool output.${elsewhere}`,
   });
   if (no) return failureJson(no);
-  await openThread(target.id);
+  const openError = await openThread(target.id);
+  if (openError) return failureJson(failure("target_unavailable", openError));
   const items = useApp.getState().threads[target.id]?.items ?? [];
   const turns = turnsOf(items).slice(-lastTurns);
   // One rendered answer, then a page of it: pages join with nothing lost or repeated.

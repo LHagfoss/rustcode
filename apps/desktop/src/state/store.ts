@@ -1406,11 +1406,15 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
   return true;
 }
 
-/** Loads a thread's history (the replay) if it is not loaded yet. */
-export async function openThread(id: string) {
+/**
+ * Loads a thread's history (the replay) if it is not loaded yet. Answers the
+ * open error when it could not be opened, so a caller can say why instead of
+ * reporting an empty thread.
+ */
+export async function openThread(id: string): Promise<string | null> {
   const conn = connection;
   const existing = get().threads[id];
-  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return;
+  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return null;
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
   loading.add(id);
@@ -1428,8 +1432,11 @@ export async function openThread(id: string) {
     if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
     void refreshPlanUsage(id);
     void refreshCheckpoints(id);
+    return null;
   } catch (error) {
-    updateThread(id, (t) => ({ ...finishLoad(t), error: `Could not open this thread: ${errorText(error)}` }));
+    const message = `Could not open this thread: ${errorText(error)}`;
+    updateThread(id, (t) => ({ ...finishLoad(t), error: message }));
+    return message;
   } finally {
     loading.delete(id);
   }
