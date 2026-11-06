@@ -310,11 +310,12 @@ describe("smart ui", () => {
     // Both go the one way out, through `rustcode.send`.
     expect(script).toContain("new FormData(form)");
     expect(script).toContain('lines.join("\\n")');
-    // Clicking into a field of a form with data-rc-send fills it in; it does not send.
-    expect(script).toContain('target.closest("input, select, textarea, label, option")');
+    // A form marked data-rc-send sends on submit, never on a click into it.
+    expect(script).toContain('form.hasAttribute("data-rc-send")');
+    expect(script).toContain('send.tagName !== "FORM"');
     expect(script).toContain("JSON.stringify(context, null, 2)");
     expect(script).toContain("send(text, context)");
-    // A submit never navigates the frame, and the fields are sent by the click.
+    // A submit never navigates the frame.
     expect(script).toContain('addEventListener("submit"');
     expect(script).toContain("event.preventDefault()");
   });

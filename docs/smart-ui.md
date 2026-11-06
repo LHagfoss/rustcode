@@ -112,7 +112,7 @@ in both.
 | Kit: bars, tables, lists | `.rc-bars` of `<div class="rc-bar"><span>Name</span><i style="width:40%"></i><b>40</b></div>`, a bar chart with no canvas; `table.rc-table` (its header sticks inside `.rc-scroll`; elsewhere the runtime wraps it in a box that scrolls sideways on a narrow window); `.rc-list` of `.rc-item`. |
 | Kit: traces and folding | `.rc-steps` of `li.rc-step` with `.rc-done`, `.rc-active`, `.rc-failed` or `.rc-todo`; `details.rc-details` with a chevron drawn in CSS, `.rc-tree` for nested ones, `.rc-file` rows; `.rc-term`, a terminal block. |
 | Kit: actions and citations | `.rc-chip`, a pill follow-up button; `.rc-tabs`; `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`, opening on hover and focus inside the page's width. |
-| Kit: behaviour, no script | One delegated listener: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check; on a `<form data-rc-send="text">`, or on a control inside one, the form's named fields are sent after the text as `name: value` lines (a click into a field only fills it in, and a submit never navigates). `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
+| Kit: behaviour, no script | One delegated listener: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check; on a `<form data-rc-send="text">`, or on a control inside one, the form's named fields are sent after the text as `name: value` lines (a form sends when submitted, never on a click into it, and never navigates). `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
 | Height | The page reports its content, not the document: the body's height or its `scrollHeight`, plus its margins. The body is `position: relative`, so that also counts what is absolutely placed in it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
 | Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colors), so agents set no colors. A page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. System color keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
 | `window.rustcode` | `send(text, context?)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X"; `context`, a JSON-serialisable object, follows the text as a fenced `json` block, so a view sends values back structured rather than in prose. The whole message is capped at 2,000 characters, and it works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
@@ -130,13 +130,13 @@ the rate limit and the thread's own message list:
 </form>
 ```
 
-Pressing Apply sends "Apply these filters", an empty line, then `range: 7d`: the
+Submitting the form (its button, or Enter in a field) sends "Apply these filters", an empty line, then `range: 7d`: the
 prompt the view wrote, then one `name: value` line per named, non-empty field
-(unchecked boxes and unnamed controls are left out). A button with
-`data-rc-send` inside the form does the same, while a click into one of its
-fields only fills it in; a `data-rc-send` on a plain control outside a form
+(unchecked boxes and unnamed controls are left out). A control with
+its own `data-rc-send` inside a form sends its text with that form's fields;
+a click anywhere else in the form sends nothing; a `data-rc-send` on a plain control outside a form
 sends its text alone, as before. The form never
-submits: the runtime prevents it, and the policy would cancel the navigation.
+navigates: the runtime prevents it, and the policy would cancel it.
 
 From a script, the second argument of `send` is the structured form of the same
 thing:

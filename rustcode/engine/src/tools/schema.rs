@@ -2645,11 +2645,11 @@ pub(crate) fn runtime_reminder(instructions: &str) -> String {
 /// The format itself is `docs/smart-ui.md`.
 pub(crate) const SMART_UI_HARNESS_HINT: &str = "\
 # Smart UI
-This app runs views in chat: a ```rustcode-ui v1 fence of one HTML fragment with a <title>, optional inline <style> and <script>; omit them when empty, no imports or network, max 64 KB, 5,000 elements. \
+Views run in chat: a ```rustcode-ui v1 fence of one HTML fragment with a <title> (inline <style> or <script> only if needed), no imports or network, max 64 KB, 5,000 elements. \
 Default to a view for anything structured: a table, comparison, breakdown, status overview, plan, numbers, a chart or a dashboard, asked or not. Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in a sentence before the view. A report to another thread stays plain Markdown.
-Use the app's kit rather than CSS: set no colours, as little CSS as you can (every byte is a token). Classes: .rc-title .rc-lead .rc-label; .rc-stats > .rc-stat > .rc-stat-value .rc-stat-label; .rc-badge .rc-callout (tint .rc-ok .rc-warn .rc-bad .rc-info); .rc-progress > span[width%]; .rc-bars > .rc-bar > span i[width%] b; table.rc-table; .rc-list > .rc-item; .rc-steps > li.rc-step.rc-done|rc-active|rc-failed|rc-todo; details.rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0]; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-muted .rc-mono .rc-num .rc-card .rc-scroll. \
-No script: data-rc-send=\"text\" sends a follow-up (a <form data-rc-send> adds its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]. \
-Variables: --rc-text --rc-muted --rc-accent --rc-series-1…8. Chart.js: <script src=\"rustcode-lib:chart.js\"></script> in a sized div, already themed. \
+Use the app's kit, not CSS: set no colours, as little CSS as you can (every byte is a token). Classes: .rc-title .rc-lead .rc-label; .rc-stats > .rc-stat > .rc-stat-value .rc-stat-label .rc-stat-note; .rc-badge .rc-callout (tint .rc-ok .rc-warn .rc-bad .rc-info); .rc-progress > span[width%]; .rc-bars > .rc-bar > span i[width%] b; table.rc-table; .rc-list > .rc-item; .rc-steps > li.rc-step.rc-done|rc-active|rc-failed|rc-todo; details.rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span (hover text); .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-muted .rc-mono .rc-num .rc-card .rc-scroll. \
+No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]. \
+Variables: --rc-text --rc-muted --rc-accent --rc-separator --rc-series-1…8. Chart.js: <script src=\"rustcode-lib:chart.js\"></script> in a sized div, already themed. \
 No outer border, background or repeated title; relative widths, no vh. If `smart_ui_check` is listed, run it first.
 
 ";

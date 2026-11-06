@@ -313,21 +313,30 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     }
     return lines.join("\\n");
   };
+  const sendForm = (form, prompt) => {
+    const fields = formText(form);
+    rustcode.send(fields ? (prompt ? prompt + "\\n\\n" : "") + fields : prompt);
+  };
   document.addEventListener("submit", (event) => {
-    // A view's form sends through data-rc-send; it never navigates (CSP would not allow it).
+    // A form never navigates (CSP would not allow it). One marked data-rc-send sends its
+    // prompt and its fields when submitted: its submit button, or Enter in a field.
     event.preventDefault();
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (form && form.hasAttribute("data-rc-send")) {
+      sendForm(form, (form.getAttribute("data-rc-send") || "").trim());
+    }
   });
   document.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
     const send = target.closest("[data-rc-send]");
-    // A click into a field of such a form is the user filling it in, not sending it.
-    const filling = send && send.tagName === "FORM" && target.closest("input, select, textarea, label, option");
-    if (send && !filling) {
-      const form = send.tagName === "FORM" ? send : send.closest("form");
-      const fields = form ? formText(form) : "";
+    // A form marked data-rc-send sends on submit (above), never on a click into it. A control
+    // marked inside a form sends its own text with that form's fields.
+    if (send && send.tagName !== "FORM") {
+      const form = send.closest("form");
       const prompt = (send.getAttribute("data-rc-send") || "").trim();
-      rustcode.send(fields ? (prompt ? prompt + "\\n\\n" : "") + fields : prompt);
+      if (form) sendForm(form, prompt);
+      else rustcode.send(prompt);
     }
     const copy = target.closest("[data-rc-copy]");
     if (copy) { rustcode.copy(copy.getAttribute("data-rc-copy")); flashCopied(copy); }
