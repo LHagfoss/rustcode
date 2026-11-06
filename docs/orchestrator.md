@@ -308,7 +308,10 @@ they finish or ask, instead of having to poll with sleeps.
   in either place.
 - **Not twice.** Each link is marked in the link book (`notifiedAt`,
   `askedRequest`), which now lives in the data store (`docs/data-store.md`),
-  so a restart does not deliver it again. A parent blocked in `wait_session`
+  so a restart does not deliver it again. A queued row is guarded the same
+  way on its own: the id of a row that left a loaded thread's queue is kept as
+  spent in app storage, so a queue read back after a restart holds nothing that
+  was already sent (see *Across a restart* below). A parent blocked in `wait_session`
   on that link already has the answer — the wait marks it heard — and is not
   sent a second copy. That hold lasts only while the turn that asked runs: a
   wait whose turn ended (the user stopped it, or the harness dropped the call)
@@ -333,12 +336,41 @@ they finish or ask, instead of having to poll with sleeps.
   no link and grants nothing, and waking a parent does not in turn wake anyone.
   A wake turn that starts new children is ordinary work and its own completion
   is reported when it settles.
-- **Delivery.** If the parent is idle the wake starts a turn at once; if it is
-  running, it is queued behind that turn (the same queue a typed message uses),
-  so no tool call is interrupted. Settings' *Threads can start and message other
-  threads* turns the whole thing off with the rest of orchestration.
-- **In the transcript** the wake is a quiet divider row ("2 children finished ·
-  1 needs you"), not a message that reads as the user's own.
+- **Delivery.** If the parent is idle the wake starts a turn at once. While it
+  is running, a child that **needs the user** (an approval or a question) is
+  steered into that running turn when its harness takes a live steer that leaves
+  its tools running — Codex, and an ACP agent that advertised
+  `_session/steering` — by the same rule a typed ⌘⏎ message follows
+  (`sendDecision` / `wakeDelivery` in `apps/desktop/src/state/queue.ts`, read in
+  `state/host.ts` `sendWake`): the parent sees the request now, no tool call is
+  interrupted and no turn is stopped. Its links are marked heard once the engine
+  takes the steer, exactly as a queued row's marks are written when its turn
+  starts. Where the harness takes no live steer, a steer would have to stop the
+  turn (`interrupt_restart`) or there is none (`queue`), the wake is **queued**
+  behind the turn as a typed message is — a child's notice never takes a
+  parent's tool calls down. A turn that waits on the user reads no steer on the
+  built-in harness (`while_awaiting_user`), and it stays queued there too. A
+  **completion** still waits for the next turn, so a busy parent is not steered
+  by every finished grandchild.
+- **Across a restart.** A queue is the app's memory, so what waits in one is
+  kept in app storage per thread id (`state/queues.ts`, `state/host.ts`): the
+  id, text, attachments, kind (`user` or `wake`), order and `created_at` of
+  every row, written as the queue changes and read back when a thread is opened
+  again. A thread that kept a queue is opened at start-up and, once idle, its
+  head starts a turn (`resumeQueue`), so a message or a child's result queued
+  before a quit, a crash or an update is not left sitting in storage. An id that
+  left a loaded thread's queue was sent or dropped, and is recorded as spent: a
+  restart never delivers it twice. A wake row whose links the parent already
+  heard — the marks were written and the queue was not — is dropped when the
+  queue is read back (`wakeStillOwed`), and one whose links another waiting row
+  already reports is not added beside it. Edit, remove and send now work on a
+  restored row as on any other. Settings' *Threads can start and message other
+  threads* turns the waking half off with the rest of orchestration; the queue
+  itself is kept either way.
+- **In the transcript** a wake turn is a quiet divider row ("2 children finished ·
+  1 needs you"), not a message that reads as the user's own; a wake steered into
+  a running turn is a steer row there, which says the turn reads it after its
+  current step.
 
 ## Orchestration tools v3
 

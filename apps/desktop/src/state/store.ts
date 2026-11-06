@@ -107,6 +107,7 @@ import {
   orchestrationCallDropped,
   queuedLinkDropped,
   resetWaits,
+  restoreQueuedThreads,
   stopLinksFrom,
   syncLinkBook,
   threadTurnEnded,
@@ -915,6 +916,9 @@ async function handshake(): Promise<void> {
     // The composer's meter is ready before the first thread opens.
     void refreshPlanCache();
     if (connection === conn) await syncPinsAndSettled(conn);
+    // Queued messages and wakes come back from app storage, and the threads that kept one open, so a
+    // row's own turn marks what it reports before any wake is worked out below.
+    restoreQueuedThreads();
     // The link book now lives in the data store; local storage is the first paint only. Once the
     // store's copy is in, a child result nobody was told about (a window closed with its wake still
     // queued) is due: the queue is memory, the book is not, so the wake is read back from it here.
@@ -2202,7 +2206,12 @@ export function sendDecisionFor(
   return sendDecision(extras, steeringOf(thread), turnState(thread));
 }
 
-async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
+/**
+ * Hands the running turn a message to read after its current step (`_rustcode/steer`). False when the
+ * engine will not take one now. Exported for the wake a busy parent gets for a child's question
+ * (state/host.ts `sendWake`), which is sent by the same rule as a typed message.
+ */
+export async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
   const thread = get().threads[id];
   const conditions = {
     images: acceptsImages(thread),

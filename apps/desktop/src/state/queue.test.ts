@@ -13,6 +13,7 @@ import {
   type SteeringCapabilities,
   sendDecision,
   type TurnState,
+  wakeDelivery,
 } from "./queue";
 import type { QueuedPrompt } from "./thread";
 
@@ -304,5 +305,59 @@ describe("the one send rule", () => {
       refused: "The turn can't take it now: it goes with the next one",
       harness: "This harness can't take a message mid-turn: it waits for the next one",
     });
+  });
+});
+
+describe("how a wake reaches a parent that is mid-turn", () => {
+  const steering = (over: Partial<SteeringCapabilities> = {}): SteeringCapabilities => ({
+    live: true,
+    attachments: true,
+    while_awaiting_user: true,
+    interrupt_restart: true,
+    queue: true,
+    ...over,
+  });
+  const turn = (over: Partial<TurnState> = {}): TurnState => ({
+    running: true,
+    awaitingUser: false,
+    ...over,
+  });
+
+  test("a child's question is steered into a running turn the harness reads steers in", () => {
+    expect(wakeDelivery(steering(), turn(), 1)).toBe("steer");
+    // A parent that steers with the card up: the question goes in anyway.
+    expect(wakeDelivery(steering(), turn({ awaitingUser: true }), 1)).toBe("steer");
+  });
+
+  test("a harness that takes no live steer keeps the wake queued", () => {
+    expect(wakeDelivery(steering({ live: false }), turn(), 1)).toBe("queue");
+    expect(wakeDelivery(steering({ live: false }), turn({ awaitingUser: true }), 1)).toBe("queue");
+  });
+
+  test("a wake never stops a parent's turn, whatever the harness can do", () => {
+    // A harness that would have to restart the turn to take a message: its tool calls come first.
+    expect(wakeDelivery(steering({ live: false, queue: false }), turn(), 1)).toBe("queue");
+    expect(wakeDelivery(steering({ live: false, queue: false, interrupt_restart: true }), turn(), 1)).toBe(
+      "queue",
+    );
+    // One that cannot take a message at all waits beside it.
+    expect(wakeDelivery(steering({ live: false, queue: false, interrupt_restart: false }), turn(), 1)).toBe(
+      "queue",
+    );
+  });
+
+  test("a turn that reads no steer while an approval waits takes the question after it", () => {
+    // The built-in turn reads a steer between steps only: the card is the user's to answer first.
+    expect(wakeDelivery(steering({ while_awaiting_user: false }), turn({ awaitingUser: true }), 1)).toBe(
+      "queue",
+    );
+    // With no card waiting, the same harness steers.
+    expect(wakeDelivery(steering({ while_awaiting_user: false }), turn(), 1)).toBe("steer");
+  });
+
+  test("a completion waits its turn, and so does anything for a parent with no turn running", () => {
+    expect(wakeDelivery(steering(), turn(), 0)).toBe("queue");
+    expect(wakeDelivery(steering(), turn({ running: false }), 1)).toBe("queue");
+    expect(wakeDelivery(steering({ live: false }), turn({ running: false }), 0)).toBe("queue");
   });
 });

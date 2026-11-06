@@ -421,7 +421,15 @@ composer's keys stay outside the table.
   queues whole for the next turn, as does a picture on the built-in harness
   (its steer is text) and anything sent while an approval or question waits
   there. The row shows a paperclip count, its text stays editable (the images
-  stay), and its send-now arrow is greyed with the reason on hover.
+  stay), and its send-now arrow is greyed with the reason on hover. The queue
+  outlives the window: each thread's rows are kept in app storage as they change
+  (`state/queues.ts`, `state/host.ts`) and read back when the thread is opened
+  again, a thread that kept one is opened at start-up and its head starts a turn
+  once it is idle, and an id that was already sent is never run twice. That is
+  also what makes a busy parent's wake durable: a child that needs the user is
+  steered into the parent's running turn where its harness takes a live steer
+  that keeps its tools running, and queued — never a stopped turn — everywhere
+  else ([orchestrator.md](orchestrator.md) › Waking a parent thread).
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.
