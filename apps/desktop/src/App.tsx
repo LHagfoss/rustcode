@@ -10,7 +10,6 @@ import { CommandPalette } from "./ui/CommandPalette";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
 import { Pill } from "./ui/primitives";
-import { RightPanel } from "./ui/RightPanel";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
 import { Settings } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
@@ -160,6 +159,11 @@ export function App() {
         <div className="flex h-full w-full overflow-hidden bg-sidebar" inert={settings}>
           <Sidebar />
           <div className="relative flex min-w-0 flex-1 bg-bg">
+            {/*
+              The view and the terminal under it. The right panel is docked inside
+              the chat view's own row (ui/ChatView.tsx), so it is never drawn over
+              the board, the review or the compare view.
+            */}
             <div className="flex min-w-0 flex-1 flex-col">
               {view.kind === "chat" ? (
                 <ChatView />
@@ -173,9 +177,6 @@ export function App() {
               <Suspense fallback={null}>
                 <TerminalPanel />
               </Suspense>
-            </div>
-            <div className="flex">
-              <RightPanel />
             </div>
           </div>
         </div>

@@ -914,6 +914,14 @@ What held the app below 120 fps, and what changed:
   narrower than its 1,036 px maximum, so each frame rewrapped the
   transcript. It now slides out on `translate` and its slot collapses
   after 200 ms (and opens before it slides in).
+
+  The panel was later docked beside the chat rather than floating over it, and
+  that one open and close animates the dock's width again (200 ms, a product
+  decision: the panel is a column now, so it takes a column's room). What keeps
+  it cheap is that nothing else moves: its content is pinned to the card's right
+  edge and clipped, a drag writes one custom property per frame with React state
+  committed on release, and every other width change (a tab, a window resize, the
+  end of a drag) is committed with the transition off in the same frame.
 - **Glass costs nothing measurable.** With `--rc-glass-filter: none` and
   the header glass off, frames, WebContent, GPU-process and WindowServer
   CPU stayed within run-to-run noise in every phase, so the blur stays.
