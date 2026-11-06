@@ -20,12 +20,14 @@ import {
   rememberedHeight,
   rememberHeight,
   SendGate,
+  StreamPump,
 } from "../smartui/host";
-import { buildPage, pageTheme, usesChart, varsCss } from "../smartui/page";
+import { buildPage, buildStreamPage, pageTheme, usesChart, varsCss } from "../smartui/page";
 import {
   blockProblem,
   blockTitle,
   clampHeight,
+  closeOpenTags,
   MAX_ELEMENTS,
   MIN_HEIGHT,
   viewMessage,
@@ -98,7 +100,13 @@ export function SmartUIView({
   const [height, setHeight] = useState(() => rememberedHeight(source) ?? MIN_HEIGHT);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [page, setPage] = useState<{ token: string; src?: string; srcdoc?: string } | null>(null);
+  const [page, setPage] = useState<{
+    token: string;
+    src?: string;
+    srcdoc?: string;
+    /** The fragment is still arriving: this page takes `stream` messages and runs no script. */
+    stream?: boolean;
+  } | null>(null);
   const [inView, setInView] = useState(false);
   const [, haltChanged] = useReducer((n: number) => n + 1, 0);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -113,10 +121,17 @@ export function SmartUIView({
   const haltKey = `${threadId ?? ""}\n${source}`;
   const halt = complete ? haltOf(haltKey) : undefined;
   const runnable = enabled && complete && !problem;
+  // A view whose fence is still open, being read now: it is drawn as it arrives.
+  const streamable = enabled && !complete && streaming && source.trim().length > 0;
+  const latest = useRef(source);
+  const pump = useRef<StreamPump | null>(null);
+  // A preview that could not start waits for the finished view instead of retrying on every byte.
+  const streamFailed = useRef(false);
 
   const tearDown = useCallback(() => {
     attempt.current++;
     starting.current = false;
+    pump.current = null;
     releaseLive(instance.current);
     setPage(null);
   }, []);
@@ -171,10 +186,47 @@ export function SmartUIView({
     void run();
   };
 
-  // What is in sight, for the whole life of a finished block, running or not.
+  /** The page a still-streaming block is drawn in; the fragment arrives over `stream` messages. */
+  const startStream = useCallback(async () => {
+    if (!threadId || streamFailed.current) return;
+    const mine = ++attempt.current;
+    starting.current = true;
+    const token = frameToken();
+    const html = buildStreamPage(token, currentTheme());
+    const start = (next: NonNullable<typeof page>) => {
+      starting.current = false;
+      pump.current = new StreamPump((fragment) => {
+        frame.current?.contentWindow?.postMessage({ rc: token, type: "stream", html: fragment }, "*");
+      });
+      setPage(next);
+    };
+    claimLive(
+      instance.current,
+      () => {
+        autoRun.current.evicted();
+        tearDown();
+      },
+      () => autoRun.current.inView,
+    );
+    try {
+      if (isTauri()) {
+        const id = await shellCall<string>("smartui_page", { html });
+        if (mine === attempt.current) start({ token, src: frameUrl(id), stream: true });
+      } else {
+        start({ token, srcdoc: html, stream: true });
+      }
+    } catch {
+      // The finished view still lands normally; drawing nothing until then beats halting.
+      streamFailed.current = true;
+      starting.current = false;
+      releaseLive(instance.current);
+    }
+  }, [threadId, tearDown]);
+
+  // What is in sight, for the whole life of the block, running or not.
   useEffect(() => {
     const el = box.current;
-    if (!runnable || !el) return;
+    if (!(runnable || streamable) || !el) return;
     const gate = autoRun.current;
     const observer = new IntersectionObserver(
       (entries) => {
@@ -190,12 +242,31 @@ export function SmartUIView({
       gate.see(false);
       setInView(false);
     };
-  }, [runnable]);
+  }, [runnable, streamable]);
 
   // In sight it runs by itself, unless stopped, failed or just evicted (`AutoRun`).
   useEffect(() => {
     if (runnable && inView && !halt && !page && !starting.current && autoRun.current.ready) void run();
   }, [runnable, inView, halt, page, run]);
+
+  // A block still streaming in front of the reader is drawn as it arrives.
+  useEffect(() => {
+    if (streamable && inView && !page && !starting.current && autoRun.current.ready) void startStream();
+  }, [streamable, inView, page, startStream]);
+
+  // Each new fragment goes to the streaming frame, the last one winning (throttled by `StreamPump`).
+  useEffect(() => {
+    latest.current = source;
+    if (page?.stream) pump.current?.push(closeOpenTags(source));
+  }, [source, page]);
+
+  // The fence closed: the finished page replaces the preview, and its script runs once.
+  useEffect(() => {
+    if (page?.stream && (complete || !streaming)) {
+      latest.current = source;
+      tearDown();
+    }
+  }, [complete, streaming, page, source, tearDown]);
 
   // Smart UI turned off: nothing draws the frame, so its watchdog must not call it a failure.
   useEffect(() => {
@@ -222,12 +293,19 @@ export function SmartUIView({
       loaded = true;
       lastSign = Date.now();
       switch (data.type) {
+        case "stream-ready":
+          // The preview frame can take the fragment now, including the part it was built after.
+          pump.current?.push(closeOpenTags(latest.current));
+          break;
         case "size": {
           const elements = Number(data.elements);
-          if (elements > MAX_ELEMENTS)
+          const measured = clampHeight(Number(data.height) || MIN_HEIGHT);
+          if (page.stream) {
+            // Never shrink while streaming, so the chat does not jump as the fragment grows.
+            setHeight((now) => Math.max(now, measured));
+          } else if (elements > MAX_ELEMENTS)
             haltWith(`The view built more than ${MAX_ELEMENTS.toLocaleString()} elements.`);
           else {
-            const measured = clampHeight(Number(data.height) || MIN_HEIGHT);
             rememberHeight(source, measured);
             setHeight(measured);
           }
@@ -295,12 +373,27 @@ export function SmartUIView({
   }, [copied]);
 
   if (!complete) {
-    return streaming ? (
-      <div className="flex h-[48px] items-center text-callout">
-        <span className="rc-shimmer">Building an interactive view…</span>
+    if (!streaming) return <Fallback source={source} reason="The view is unfinished." />;
+    // The fragment is drawn as it arrives; when the fence closes the finished page replaces it.
+    return (
+      <div ref={box} className="group/ui relative" aria-label={title} role="group">
+        {page?.stream ? (
+          <iframe
+            ref={frame}
+            title={title}
+            sandbox="allow-scripts"
+            referrerPolicy="no-referrer"
+            src={page.src}
+            srcDoc={page.srcdoc}
+            className="block w-full border-0 bg-transparent"
+            style={{ height, colorScheme: "normal" }}
+          />
+        ) : (
+          <div className="flex h-[48px] items-center text-callout">
+            <span className="rc-shimmer">Building an interactive view…</span>
+          </div>
+        )}
       </div>
-    ) : (
-      <Fallback source={source} reason="The view is unfinished." />
     );
   }
   if (problem) return <Fallback source={source} reason={problem} />;

@@ -852,9 +852,12 @@ export const Composer = memo(function Composer({
               </Tooltip>
             )}
             {extras.links.map((url) => (
+              // The field's own 6px of top padding: the chip takes the first line box's height
+              // (`variant="token"`), so it sits on that line rather than above it.
               <LinkChip
                 key={url}
                 url={url}
+                variant="token"
                 className="mt-1.5 rc-in"
                 onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
               />

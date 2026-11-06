@@ -60,7 +60,7 @@ import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
 import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
-import { replyActions, turnFooterHidden } from "./replyActions";
+import { turnActions, turnFooterHidden } from "./replyActions";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 
@@ -168,7 +168,7 @@ export const UserRow = memo(function UserRow({
         className={cx(
           // A card a step off the pane, not a fill that moves with the text colour. Messages sent
           // one after another soften the corners they share, so they read as one run.
-          "relative max-w-[80%] rounded-2xl bg-message p-3",
+          "relative max-w-[80%] selectable rounded-2xl bg-message p-3",
           // A message after this one continues the run: the bottom-right corner joins it.
           after && "rounded-br-md",
           before && "rounded-tr-md",
@@ -197,7 +197,7 @@ export const UserRow = memo(function UserRow({
       </div>
       {/* Time and actions show on hover, clipped to the bubble's width; `.rc-meta-reveal` is the
           same reveal the queued row's foot uses. */}
-      <div className="rc-meta-reveal mt-0.5 flex h-[22px] max-w-[80%] min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular">
+      <div className="rc-meta-reveal mt-0.5 flex h-[22px] max-w-[80%] min-w-0 select-none items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular">
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
@@ -256,13 +256,13 @@ export const QuestionRow = memo(function QuestionRow({
       <div className="selectable line-clamp-3 text-body text-fg-muted">{item.text}</div>
       <div className="flex min-w-0 items-start gap-1.5 text-body text-fg">
         <CornerDownRight size={13} className="mt-[3px] shrink-0 text-success" />
-        <span className="min-w-0 break-words">{item.answer}</span>
+        <span className="selectable min-w-0 break-words">{item.answer}</span>
       </div>
     </div>
   );
 });
 
-/** The fork action in a reply's row and in a finished turn's footer. */
+/** The fork action of a finished turn's one action row. */
 function ReplyForkButton({ threadId }: { threadId: string }) {
   return (
     <Tooltip label="Fork the chat: a new thread gets this conversation">
@@ -270,7 +270,7 @@ function ReplyForkButton({ threadId }: { threadId: string }) {
         type="button"
         aria-label="Fork chat"
         onClick={() => void forkThread(threadId)}
-        className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+        className="inline-flex size-5 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg"
       >
         <GitFork size={12} />
       </button>
@@ -282,39 +282,18 @@ export const AssistantRow = memo(function AssistantRow({
   item,
   streaming = false,
   threadId,
-  inTurnFoot = false,
 }: {
   item: Item<"assistant">;
   streaming?: boolean;
   threadId?: string;
-  /** The turn footer draws this reply's copy and fork: the row under it stays clean. */
-  inTurnFoot?: boolean;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
   const reveal = useApp((s) => s.animateStreaming);
-  // Under the reply, on hover: copy, fork and the time, 12px, in that order.
-  const row = replyActions({
-    where: "reply",
-    text: item.text,
-    at: item.at,
-    threadId,
-    streaming,
-    lastInTurn: inTurnFoot,
-  });
-  const actions = row.row ? (
-    <div className="mt-0.5 flex h-[22px] items-center gap-1 text-sub text-fg-faint tabular opacity-0 transition-opacity focus-within:opacity-100 group-hover/reply:opacity-100 [@media(pointer:coarse)]:opacity-100">
-      {row.copy && <CopyButton text={row.copy} iconOnly label="Copy this reply" />}
-      {row.fork && <ReplyForkButton threadId={threadId!} />}
-      {row.time && (
-        <Tooltip label={new Date(item.at!).toLocaleString()}>
-          <span className="truncate">{messageTime(item.at)}</span>
-        </Tooltip>
-      )}
-    </div>
-  ) : null;
+  // A reply draws no actions of its own: a finished turn keeps one row for the
+  // turn, at the foot of its last reply (`TurnEndRow`), and nothing else has any.
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <div className="group/reply px-1">
+      <div className="selectable px-1">
         <Markdown
           text={item.text}
           streaming={streaming}
@@ -324,11 +303,10 @@ export const AssistantRow = memo(function AssistantRow({
           // again as it stops being the last one, so the reveal covers it instead.
           className={streaming && !reveal ? "rc-stream" : undefined}
         />
-        {actions}
       </div>
     );
   return (
-    <div className="group/reply flex flex-col gap-2.5 px-1">
+    <div className="flex flex-col gap-2.5 selectable px-1">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown
@@ -350,7 +328,6 @@ export const AssistantRow = memo(function AssistantRow({
           <VizView key={`viz${segment.index}`} source={segment.source} complete={segment.complete} />
         ),
       )}
-      {actions}
     </div>
   );
 });
@@ -799,7 +776,7 @@ export const TurnFoldRow = memo(function TurnFoldRow({
         fold.open ? "Hide the work" : `Show the work: ${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`
       }
       className={cx(
-        "group flex w-full items-center gap-1.5 pt-1 pb-2 text-left text-body text-fg-muted hover:text-fg",
+        "group flex w-full items-center gap-1.5 pt-0 pb-2 text-left text-body text-fg-muted hover:text-fg",
         rule && "border-border/60 border-b",
       )}
     >
@@ -831,8 +808,9 @@ export const ToolGroupRow = memo(function ToolGroupRow({
 }) {
   return (
     // Two or more finished calls read as one step of the turn, closed by a hairline so the run
-    // below it is told apart from the answer that follows.
-    <div className="border-border/60 border-b pt-1 pb-2">
+    // below it is told apart from the answer that follows. Its own air is the row gap's alone:
+    // the transcript sets the spacing between items, so a row adds none above it.
+    <div className="border-border/60 border-b pt-0 pb-2">
       <button
         type="button"
         aria-expanded={group.open}
@@ -874,7 +852,6 @@ export function TurnEndRow({
   folded,
   timeInFold,
   threadId,
-  lastTurn,
 }: {
   item: Item<"turnEnd">;
   /** The turn's work is folded into a summary row that already says how long it took. */
@@ -889,11 +866,11 @@ export function TurnEndRow({
   changes?: ReactNode;
   /** The thread, so the footer's fork can copy its conversation. */
   threadId?: string;
-  /** The newest finished turn: its actions stay in view, the older ones wait for a hover. */
-  lastTurn?: boolean;
 }) {
-  // One row for the turn: its outcome and time, then copy and fork, then the changes chip.
-  const row = replyActions({ where: "turnEnd", text: reply, at: item.at, threadId });
+  // One row for the turn, always in view: its outcome and time, copy and fork, then the changes
+  // chip. It is the turn's only action row (nothing hovers in, nothing holds room): the reply
+  // above it draws none, and a turn still running has no footer yet.
+  const row = turnActions({ text: reply, at: item.at, threadId });
   // An empty turn that folded its work: its header already says the time, and there is no reply
   // to copy or fork, so a footer row of icons would sit over nothing.
   if (
@@ -909,27 +886,18 @@ export function TurnEndRow({
         : undefined,
     ...(timeInFold ? [] : [messageTime(item.at)]),
   ].filter(Boolean);
-  const actions = (
-    <>
-      {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
-      {row.fork && <ReplyForkButton threadId={threadId!} />}
-    </>
-  );
   return (
     <div className="-mt-2">
       {completion && <CompletionCard completion={completion} />}
-      <div className="group/turn flex h-[22px] items-center gap-1.5 text-caption text-fg-faint">
+      <div className="mt-1 flex h-5 items-center gap-2 text-caption text-fg-faint">
         {item.outcome === "cancelled" && !folded && <SquareStop size={11} />}
         {parts.length > 0 && <span className="tabular">{parts.join(" · ")}</span>}
-        {/* Time first, so the actions appearing on a hover never shift it. */}
-        {(row.copy || row.fork) &&
-          (lastTurn ? (
-            actions
-          ) : (
-            <span className="flex items-center gap-1.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/turn:opacity-100 [@media(pointer:coarse)]:opacity-100">
-              {actions}
-            </span>
-          ))}
+        {(row.copy || row.fork) && (
+          <span className="flex items-center gap-1 [&>button]:size-5 [&>button]:text-fg-faint">
+            {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
+            {row.fork && <ReplyForkButton threadId={threadId!} />}
+          </span>
+        )}
         {changes}
       </div>
     </div>

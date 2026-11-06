@@ -116,6 +116,7 @@ import {
 } from "./host";
 import { LIMIT_RESUME_TEXT, type LimitWait, limitReset, nextWait, waitDue, waitHolds } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
+import { notifyThread, startNotifications } from "./notify";
 import {
   CAPABILITY_VERSION,
   forget,
@@ -358,6 +359,10 @@ export interface AppState {
   readAcrossProjects: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
+  /** A system notification when a thread needs you or finishes (Settings › General). */
+  systemNotifications: boolean;
+  /** Those notifications only while the app is in the background (Settings › General). */
+  notificationsBackgroundOnly: boolean;
   /** A thread stopped by its plan's limit continues when the limit resets. */
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
@@ -439,6 +444,8 @@ const STORAGE = {
   threadLimit: "rustcode.threadLimit",
   readAcrossProjects: "rustcode.readAcrossProjects",
   resumeAfterRestart: "rustcode.resumeAfterRestart",
+  systemNotifications: "rustcode.systemNotifications",
+  notificationsBackgroundOnly: "rustcode.notificationsBackgroundOnly",
   continueAfterLimit: "rustcode.continueAfterLimit",
   limitWaits: "rustcode.limitWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
@@ -478,6 +485,8 @@ export const SETTINGS_DEFAULTS = {
   chatWidth: CHAT_WIDTH_DEFAULT,
   headerButtons: DEFAULT_HEADER_BUTTONS,
   resumeAfterRestart: true,
+  systemNotifications: true,
+  notificationsBackgroundOnly: true,
   continueAfterLimit: true,
   orchestration: true,
   threadLimit: MAX_ACTIVE_LINKS,
@@ -545,6 +554,11 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
+  systemNotifications: storedFlag(STORAGE.systemNotifications, SETTINGS_DEFAULTS.systemNotifications),
+  notificationsBackgroundOnly: storedFlag(
+    STORAGE.notificationsBackgroundOnly,
+    SETTINGS_DEFAULTS.notificationsBackgroundOnly,
+  ),
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
@@ -1175,6 +1189,17 @@ async function handleInbound(message: Inbound) {
         if (request.sessionId !== get().selectedId) {
           toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
+        // The system says the same, so a thread waiting behind another window is not forgotten.
+        notifyThread(
+          {
+            threadId: request.sessionId,
+            kind: request.question ? "question" : "approval",
+            key: String(request.rpcId),
+            title: threadName(request.sessionId),
+            detail: request.question?.text,
+          },
+          get(),
+        );
         // A child that now waits on the user: its parent hears about it once.
         wakeTick();
         return;
@@ -1279,6 +1304,19 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
       ? { failed: { ...s.failed, [id]: now } }
       : { finished: { ...s.finished, [id]: now }, failed: without(s.failed, id) },
   );
+  // A limit already said what stopped it, in the words the composer's notice uses.
+  if (!failed || !get().limitWaits[id]) {
+    notifyThread(
+      { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: threadName(id) },
+      get(),
+    );
+  }
+}
+
+/** A thread's title, for what the system shows of it. */
+function threadName(id: string): string {
+  const s = get();
+  return sessionById(s, id)?.title || s.threads[id]?.title || "A thread";
 }
 
 /**
@@ -2466,9 +2504,10 @@ export async function runPrompt(
     failure = errorText(error);
   }
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
+  // The limit is settled first: a turn it stopped is reported as the limit, not twice.
+  const waiting = settleLimitWait(id, outcome, failure, startIndex);
   if (outcome === "completed") markFinished(id);
   else if (outcome === "failed") markFinished(id, Date.now(), true);
-  const waiting = settleLimitWait(id, outcome, failure, startIndex);
   // A report command that answered in the panel leaves no turn behind: its message and footer go.
   const reported = get().report?.threadId === id;
   if (reported && outcome === "completed" && isReportCommand(id, text, extras)) {
@@ -2961,6 +3000,16 @@ export async function switchThreadHarness(id: string, harness: string): Promise<
 export function setResumeAfterRestart(on: boolean) {
   set({ resumeAfterRestart: on });
   store(STORAGE.resumeAfterRestart, on ? "1" : "0");
+}
+
+export function setSystemNotifications(on: boolean) {
+  set({ systemNotifications: on });
+  store(STORAGE.systemNotifications, on ? "1" : "0");
+}
+
+export function setNotificationsBackgroundOnly(on: boolean) {
+  set({ notificationsBackgroundOnly: on });
+  store(STORAGE.notificationsBackgroundOnly, on ? "1" : "0");
 }
 
 export function setRoundedFont(on: boolean) {
@@ -4070,6 +4119,7 @@ function settleLimitWait(
     return null;
   }
   storeLimitWaits({ ...get().limitWaits, [id]: wait });
+  notifyThread({ threadId: id, kind: "limit", key: String(wait.until), title: threadName(id) }, get());
   return wait;
 }
 
@@ -4154,6 +4204,10 @@ useApp.subscribe((s) => {
   lastRunning = ids;
   store(STORAGE.runningThreads, JSON.stringify(ids ? ids.split("\n") : []));
 });
+
+// What follows the app rather than a moment in it: the Dock badge, and a click on a notification
+// opening its thread (state/notify.ts).
+startNotifications({ get: () => useApp.getState(), subscribe: useApp.subscribe, open: selectThread });
 
 /** The threads a restart cut off: the saved list, plus any this app still showed running. */
 function interruptedThreads(): string[] {

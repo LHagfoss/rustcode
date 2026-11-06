@@ -71,6 +71,22 @@ describe("the icons a stack draws", () => {
     expect(agentStack(mixed, { idle: "show" }).order.map((a) => a.id)).toEqual(["work"]);
   });
 
+  test("the whole stack answers with one state, for the one badge it draws", () => {
+    // What needs you outranks work under way, which outranks what has finished.
+    expect(agentStack([agent("w", "working"), agent("n", "needs")]).state).toBe("needs");
+    expect(agentStack(running(2)).state).toBe("working");
+    // A finished stack is `done`, so no badge is drawn: the text beside it already says so.
+    expect(agentStack([agent("d", "done")], { idle: "show" }).state).toBe("done");
+    expect(agentStack([]).state).toBe("done");
+  });
+
+  test("a failed mark shows on its own once nothing runs, under what needs you", () => {
+    expect(agentStack([agent("f", "failed"), agent("d", "done")], { idle: "show" }).state).toBe("failed");
+    // A live mark wins over a failed one that sits beside it: the stack only badges one state.
+    expect(agentStack([agent("f", "failed"), agent("w", "working")]).state).toBe("working");
+    expect(agentStack([agent("f", "failed"), agent("n", "needs")]).state).toBe("needs");
+  });
+
   test("threads and subagents are counted apart, so the tip can say which is which", () => {
     const view = agentStack([
       { id: "t", state: "working", kind: "thread", label: "Child" },
