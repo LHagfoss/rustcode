@@ -53,10 +53,11 @@ sessions to an execution graph:
 [architecture/execution-graph.md](architecture/execution-graph.md) records that
 decision, the current → target mapping and the migration order (#2879).
 
-Checking UI: the mock (`bun run dev:mock`) driven by headless Chrome over
-CDP at 1512×945 @2x, never a browser pane in the user's terminal; WebKit
-(the app) can differ from Chrome, so check alignment-sensitive changes in
-the app. Releases: `scripts/release-notes.sh > notes.md`, edit, then
+Checking UI: `bun run mock-window open` in `apps/desktop`, one shared, visible
+Chrome window on the mock at native scale (`eval`, `screenshot`, `close`),
+never a browser pane in the user's terminal; WebKit (the app) can differ from
+Chrome, so check alignment-sensitive changes in the app. Releases:
+`scripts/release-notes.sh > notes.md`, edit, then
 `scripts/release.sh --version X --notes-file notes.md --yes`.
 
 How to continue: run the app with `bun tauri dev` in `apps/desktop` (it uses

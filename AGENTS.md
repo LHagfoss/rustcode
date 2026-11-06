@@ -148,8 +148,9 @@ instructions for work in this repository.
 - To stage a state the mock does not reach (a finished thread, an update in
   progress, a Settings page), evaluate `await import("/src/state/store.ts")`
   (or `updates.ts`) in the page and set state on it. The window is long-lived,
-  so restart the server first (`bun run mock-window close`, then `open`): after
-  an edit, HMR serves the module under a `?t=` URL and the import returns a
+  so the thread driving it restarts the server for its own check (`bun run
+  mock-window close`, then `open`), and no other thread closes it. After an
+  edit, HMR serves the module under a `?t=` URL and the import returns a
   second, empty copy. `?updatePreview` stages the update row.
 - To test an engine change in the app, build the engine binary with
   `cargo build -p rustcode-tui --bin rustcode`, then `bun tauri dev`. A
