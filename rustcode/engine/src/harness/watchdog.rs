@@ -153,6 +153,22 @@ impl Progress {
         self.lock().waiting
     }
 
+    /// Whether a permission request or a question still waits on the user. The
+    /// idle reaper (`session.rs`) never stops a process that is waiting for an
+    /// answer, however long the answer takes.
+    pub(crate) fn awaiting_user(&self) -> bool {
+        self.lock().waiting > 0
+    }
+
+    /// Whether the harness reported background work that is not idle: the idle
+    /// reaper leaves a thread alone while its own tasks run.
+    pub(crate) fn background_running(&self) -> bool {
+        self.lock()
+            .background
+            .as_ref()
+            .is_some_and(|activity| activity.state != "idle")
+    }
+
     /// Whether silence is expected right now because something is running.
     pub(crate) fn blocked(&self) -> bool {
         let state = self.lock();

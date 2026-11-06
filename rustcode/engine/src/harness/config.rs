@@ -21,8 +21,52 @@ pub struct HarnessDefaults {
     /// off; left out, it is [`super::watchdog::DEFAULT_TIMEOUT`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silence_timeout_minutes: Option<u64>,
+    /// How long a thread on an external harness keeps its process with no
+    /// turn, no request waiting on the user and no client activity before the
+    /// engine stops it (`session`, the idle reaper). 0 keeps every process
+    /// running; left out, it is [`super::session::DEFAULT_IDLE_TIMEOUT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_minutes: Option<u64>,
+    /// The most harness processes the engine keeps running; above it the least
+    /// recently used are stopped first. 0 turns the cap off; left out, it is
+    /// [`super::session::DEFAULT_MAX_LIVE`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_live_harnesses: Option<usize>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub onboarded: bool,
+}
+
+/// How long a thread on an external harness may keep its process with nothing
+/// to do before the engine stops it ([`super::session`]). `None` keeps every
+/// process running; an unreadable config keeps the default.
+pub(crate) fn idle_timeout() -> Option<Duration> {
+    let minutes = config_dir()
+        .ok()
+        .and_then(|dir| load_in(&dir).0.idle_timeout_minutes);
+    idle_from(minutes)
+}
+
+/// What `[harness_defaults].idle_timeout_minutes` means: left out is the
+/// default, 0 keeps every process, anything else is that many minutes.
+fn idle_from(minutes: Option<u64>) -> Option<Duration> {
+    match minutes {
+        None => Some(super::session::DEFAULT_IDLE_TIMEOUT),
+        Some(0) => None,
+        Some(minutes) => Some(Duration::from_secs(minutes.saturating_mul(60))),
+    }
+}
+
+/// How many harness processes the engine keeps running
+/// (`[harness_defaults].max_live_harnesses`). `None` turns the cap off.
+pub(crate) fn max_live_harnesses() -> Option<usize> {
+    let cap = config_dir()
+        .ok()
+        .and_then(|dir| load_in(&dir).0.max_live_harnesses);
+    match cap {
+        None => Some(super::session::DEFAULT_MAX_LIVE),
+        Some(0) => None,
+        Some(cap) => Some(cap),
+    }
 }
 
 /// How long a turn on an external harness may send nothing with nothing
@@ -567,6 +611,41 @@ mod tests {
         assert!(
             !text.contains("silence_timeout_minutes"),
             "an unset deadline is left out: {text}"
+        );
+    }
+
+    #[test]
+    fn the_idle_timeout_and_the_live_cap_parse_and_off_is_zero() {
+        assert_eq!(
+            idle_from(None),
+            Some(super::super::session::DEFAULT_IDLE_TIMEOUT)
+        );
+        assert_eq!(idle_from(Some(0)), None, "0 keeps every process running");
+        assert_eq!(idle_from(Some(45)), Some(Duration::from_secs(45 * 60)));
+        assert_eq!(
+            idle_from(Some(u64::MAX)),
+            Some(Duration::from_secs(u64::MAX.saturating_mul(60))),
+            "a silly value saturates instead of overflowing"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[harness_defaults]\nidle_timeout_minutes = 5\nmax_live_harnesses = 3\n",
+        )
+        .unwrap();
+        let defaults = load_in(dir.path()).0;
+        assert_eq!(defaults.idle_timeout_minutes, Some(5));
+        assert_eq!(defaults.max_live_harnesses, Some(3));
+        edit_in(dir.path(), |defaults, _| {
+            defaults.idle_timeout_minutes = None;
+            defaults.max_live_harnesses = None;
+            Ok(())
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(
+            !text.contains("idle_timeout_minutes") && !text.contains("max_live_harnesses"),
+            "settings left out of the config are never written back: {text}"
         );
     }
 

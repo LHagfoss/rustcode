@@ -144,6 +144,11 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
     (portable-pty) in an existing folder; at most 8; killed on quit.
   - `smartui.rs`: `smartui_page` and the `rcui://` scheme that serves a
     Smart UI page once, with its own CSP header (see Smart UI below).
+  - `notify.rs`: `notify_show`, `notify_permission` and `notify_badge`, the
+    system notifications and the Dock badge (Features, Notifications); a
+    click on one brings the window forward and emits `notify:open` with the
+    thread's id. The page never touches the notification plugin, so
+    capabilities stay as they are.
 
   Capabilities allow only core APIs, window dragging and the folder picker.
   The app's CSP allows no remote content; `frame-src` allows only `rcui:`.
@@ -438,7 +443,15 @@ composer's keys stay outside the table.
   queues whole for the next turn, as does a picture on the built-in harness
   (its steer is text) and anything sent while an approval or question waits
   there. The row shows a paperclip count, its text stays editable (the images
-  stay), and its send-now arrow is greyed with the reason on hover.
+  stay), and its send-now arrow is greyed with the reason on hover. The queue
+  outlives the window: each thread's rows are kept in app storage as they change
+  (`state/queues.ts`, `state/host.ts`) and read back when the thread is opened
+  again, a thread that kept one is opened at start-up and its head starts a turn
+  once it is idle, and an id that was already sent is never run twice. That is
+  also what makes a busy parent's wake durable: a child that needs the user is
+  steered into the parent's running turn where its harness takes a live steer
+  that keeps its tools running, and queued — never a stopped turn — everywhere
+  else ([orchestrator.md](orchestrator.md) › Waking a parent thread).
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
   any harness, or in a worktree), board, review, mark review/done,
   compare a fan-out, panels, every Settings page, appearance, restart.
@@ -543,6 +556,24 @@ composer's keys stay outside the table.
   the shown toast, and an `id` replaces one in place (the engine's). Use
   them for copying, errors not tied to a message, and engine events, not
   for what the screen already shows.
+- **Notifications** (`state/notify.ts` decides, `src-tauri/src/notify.rs`
+  shows). A thread that needs the user (an approval, a question), hits a
+  usage limit, fails or finishes its turn gets one system notification: the
+  thread's title, then one line (`Needs your approval`, the question's first
+  line, `Finished`). One gate decides all of it: nothing for the thread on
+  screen while the window is in front, nothing at all while the window is in
+  front under Settings › General › *Only when RustCode is in the background*
+  (on by default; a toast says it there instead), and each event once — an
+  approval by its request id, a turn's end by its time — so a state seen twice
+  says nothing twice and a launch says nothing about the past. A click brings
+  the window forward and opens that thread. Settings › General › *System
+  notifications* (on by default) turns them off; the system's own permission
+  is asked the first time one is due, from the shell, so nothing on startup
+  prompts. The Dock badge counts the threads that need the user, the unread
+  finished ones and the failed ones, and clears as they are opened. The
+  shell shows them: the page calls `notify_show`, `notify_permission` and
+  `notify_badge`, and the webview's capabilities gain no notification
+  permission.
 - **Settings › Capabilities.** Skills and MCP servers in one page, through
   `_rustcode/capabilities*`: servers with their state, tool count and
   names, errors and the engine log lines that name them, on/off (servers
@@ -1113,7 +1144,7 @@ From the SwiftUI app, still missing or partial:
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, remote pairing, notifications.
+  keybinding editor, Discord presence, remote pairing.
 - Terminal tabs (one terminal per folder).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
