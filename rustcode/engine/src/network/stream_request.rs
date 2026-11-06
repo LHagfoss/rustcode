@@ -1552,6 +1552,7 @@ fn request_workspace_root(state: &crate::app::AppState) -> Option<std::path::Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_store::ProviderRequestRow;
 
     #[test]
     fn request_workspace_uses_session_boundary_without_process_cwd_fallback() {
@@ -2570,6 +2571,515 @@ mod tests {
         assert_eq!(finish.as_deref(), Some("stop"));
         assert_eq!(buffer.lock().await.content, "retried");
         server.await.unwrap();
+    }
+
+    // ------------------------------------------------ provider attempt rows
+
+    /// The rows the data store holds for one thread, read the way
+    /// `docs/data-store.md` documents them.
+    fn provider_request_rows(thread_id: &str) -> Vec<serde_json::Value> {
+        let sql = format!(
+            "SELECT attempt, status_code, error_kind, provider, model, method, endpoint_host, \
+             endpoint_path, round, turn_id, request_bytes, response_bytes, stream_event_count, \
+             input_tokens, output_tokens, cached_tokens, headers_at, finished_at, latency_ms, \
+             request_payload_json, response_summary_json, payload_truncated \
+             FROM provider_requests WHERE thread_id = '{thread_id}' ORDER BY attempt"
+        );
+        crate::data_store::query(&sql, 100)
+            .map(|result| result.rows)
+            .unwrap_or_default()
+    }
+
+    /// A row is written off the async runtime, so wait for the write instead
+    /// of assuming it landed with the request.
+    async fn wait_for_provider_request_rows(
+        thread_id: &str,
+        expected: usize,
+    ) -> Vec<serde_json::Value> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let rows = provider_request_rows(thread_id);
+            if rows.len() >= expected || tokio::time::Instant::now() >= deadline {
+                return rows;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    fn attempt_context(thread_id: &str, capture_payloads: bool) -> ProviderAttemptContext {
+        ProviderAttemptContext {
+            thread_id: thread_id.to_owned(),
+            turn_id: Some("turn-unit".to_owned()),
+            round: Some(2),
+            provider: Some("openai".to_owned()),
+            model: "stream-test".to_owned(),
+            endpoint_host: Some("api.example.com".to_owned()),
+            endpoint_path: Some("/v1/chat/completions".to_owned()),
+            capture_payloads,
+            payload: capture_payloads.then(|| {
+                serde_json::json!({
+                    "model": "stream-test",
+                    "messages": [{"role": "user", "content": "hi"},
+                                 {"role": "user", "content": "Authorization: Bearer sk-live-4f9"}],
+                })
+            }),
+        }
+    }
+
+    #[test]
+    fn provider_endpoint_parts_keep_the_host_and_drop_the_query() {
+        let (host, path) = endpoint_parts(
+            "https://gateway.example.com/v1/chat/completions?api-key=sk-live-4f9#frag",
+        );
+        assert_eq!(host.as_deref(), Some("gateway.example.com"));
+        assert_eq!(path.as_deref(), Some("/v1/chat/completions"));
+
+        let (host, path) = endpoint_parts("not a url");
+        assert_eq!(host, None);
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn provider_label_prefers_the_credential_then_the_engine_then_the_name() {
+        let credential = crate::config::ModelProfile {
+            name: "chatgpt".to_owned(),
+            url: "https://chatgpt.com/backend-api/codex/responses".to_owned(),
+            model: "gpt-5".to_owned(),
+            engine: Some("openai".to_owned()),
+            credential: Some(crate::provider_auth::CredentialRef {
+                provider: "openai".to_owned(),
+                account: "default".to_owned(),
+                method: crate::provider_auth::AuthMethod::ChatGpt,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(provider_label(Some(&credential)).as_deref(), Some("openai"));
+
+        let local = crate::config::ModelProfile {
+            engine: Some("ollama".to_owned()),
+            ..credential.clone()
+        };
+        let local = crate::config::ModelProfile {
+            credential: None,
+            ..local
+        };
+        assert_eq!(provider_label(Some(&local)).as_deref(), Some("ollama"));
+
+        let bare = crate::config::ModelProfile {
+            credential: None,
+            engine: None,
+            ..credential
+        };
+        assert_eq!(provider_label(Some(&bare)).as_deref(), Some("chatgpt"));
+        assert_eq!(provider_label(None), None);
+    }
+
+    #[test]
+    fn provider_attempt_error_kind_names_the_short_cause() {
+        let token = tokio_util::sync::CancellationToken::new();
+        let context = attempt_context("thread-kind", false);
+
+        let unanswered = ProviderAttempt::start(&context, 1, 0, &token);
+        assert_eq!(
+            unanswered.derived_error_kind().as_deref(),
+            Some("connect"),
+            "a send that never reached the provider"
+        );
+
+        let mut rejected = ProviderAttempt::start(&context, 1, 0, &token);
+        rejected.headers(500);
+        assert_eq!(rejected.derived_error_kind().as_deref(), Some("http_500"));
+
+        let mut interrupted = ProviderAttempt::start(&context, 1, 0, &token);
+        interrupted.headers(200);
+        assert_eq!(
+            interrupted.derived_error_kind().as_deref(),
+            Some("stream"),
+            "headers arrived but the stream did not finish"
+        );
+
+        let mut timed_out = ProviderAttempt::start(&context, 1, 0, &token);
+        timed_out.fail("timeout");
+        assert_eq!(
+            timed_out.derived_error_kind().as_deref(),
+            Some("timeout"),
+            "an exit that knows why keeps its own kind"
+        );
+
+        let cancelling = tokio_util::sync::CancellationToken::new();
+        let mut cancelled = ProviderAttempt::start(&context, 1, 0, &cancelling);
+        cancelled.headers(200);
+        cancelling.cancel();
+        assert_eq!(cancelled.derived_error_kind().as_deref(), Some("cancelled"));
+    }
+
+    #[test]
+    fn attempt_summary_is_small_redacted_and_clipped() {
+        let row = crate::data_store::ProviderRequestRow {
+            status_code: Some(401),
+            stream_event_count: Some(7),
+            ..ProviderRequestRow::default()
+        };
+        let (summary, clipped) = attempt_summary_json(
+            &row,
+            Some("stop".to_owned()),
+            Some("  rejected: Authorization: Bearer sk-live-4f9  "),
+        );
+        let summary: serde_json::Value = serde_json::from_str(&summary).expect("valid JSON");
+        assert_eq!(summary["status"], 401);
+        assert_eq!(summary["finish_reason"], "stop");
+        assert_eq!(summary["events"], 7);
+        assert!(
+            !summary["error"].as_str().unwrap().contains("sk-live-4f9"),
+            "a bearer token never reaches the store"
+        );
+        assert!(!clipped);
+
+        let long = "x".repeat(MAX_ATTEMPT_ERROR_BYTES * 2);
+        let (summary, clipped) = attempt_summary_json(&row, None, Some(&long));
+        let summary: serde_json::Value = serde_json::from_str(&summary).expect("valid JSON");
+        assert!(clipped);
+        assert_eq!(
+            summary["error"].as_str().unwrap().len(),
+            MAX_ATTEMPT_ERROR_BYTES
+        );
+
+        let (empty, _) = attempt_summary_json(&ProviderRequestRow::default(), None, Some("   "));
+        assert_eq!(empty, "{}");
+    }
+
+    #[test]
+    fn provider_attempt_without_capture_stores_metadata_only() {
+        let thread = format!("attempt-metadata-{}", crate::controller::next_turn_id());
+        let context = attempt_context(&thread, false);
+        {
+            let mut attempt = ProviderAttempt::start(
+                &context,
+                3,
+                4_096,
+                &tokio_util::sync::CancellationToken::new(),
+            );
+            attempt.headers(200);
+            attempt.progress(5, 8_192);
+            attempt.usage(1_200, 300, Some(64));
+            attempt.completed(Some("stop".to_owned()));
+        }
+        let rows = provider_request_rows(&thread);
+        assert_eq!(rows.len(), 1, "one row per attempt: {rows:?}");
+        let row = &rows[0];
+        assert_eq!(row["attempt"], 3);
+        assert_eq!(row["status_code"], 200);
+        assert_eq!(row["error_kind"], serde_json::Value::Null);
+        assert_eq!(row["provider"], "openai");
+        assert_eq!(row["model"], "stream-test");
+        assert_eq!(row["method"], "POST");
+        assert_eq!(row["endpoint_host"], "api.example.com");
+        assert_eq!(row["endpoint_path"], "/v1/chat/completions");
+        assert_eq!(row["round"], 2);
+        assert_eq!(row["turn_id"], "turn-unit");
+        assert_eq!(row["request_bytes"], 4_096);
+        assert_eq!(row["response_bytes"], 8_192);
+        assert_eq!(row["stream_event_count"], 5);
+        assert_eq!(row["input_tokens"], 1_200);
+        assert_eq!(row["output_tokens"], 300);
+        assert_eq!(row["cached_tokens"], 64);
+        assert!(row["headers_at"].as_str().is_some());
+        assert!(row["finished_at"].as_str().is_some());
+        assert!(row["latency_ms"].as_i64().is_some());
+        assert_eq!(row["request_payload_json"], serde_json::Value::Null);
+        assert_eq!(row["response_summary_json"], serde_json::Value::Null);
+        assert_eq!(row["payload_truncated"], 0);
+    }
+
+    #[test]
+    fn provider_attempt_with_capture_stores_a_redacted_payload_and_summary() {
+        let thread = format!("attempt-capture-{}", crate::controller::next_turn_id());
+        let context = attempt_context(&thread, true);
+        {
+            let mut attempt = ProviderAttempt::start(
+                &context,
+                1,
+                128,
+                &tokio_util::sync::CancellationToken::new(),
+            );
+            attempt.headers(401);
+            attempt.progress(0, 96);
+            attempt.provider_message("rejected: Authorization: Bearer sk-live-4f9");
+        }
+        let rows = provider_request_rows(&thread);
+        assert_eq!(rows.len(), 1, "one row per attempt: {rows:?}");
+        let row = &rows[0];
+        assert_eq!(row["error_kind"], "http_401");
+        let stored = row["request_payload_json"]
+            .as_str()
+            .expect("the request is captured");
+        let payload: serde_json::Value = serde_json::from_str(stored).expect("valid JSON");
+        assert!(payload["messages"].is_array());
+        assert!(
+            !stored.contains("sk-live-4f9"),
+            "a bearer token in the captured request is redacted"
+        );
+        let summary = row["response_summary_json"]
+            .as_str()
+            .expect("the summary is captured");
+        let summary: serde_json::Value = serde_json::from_str(summary).expect("valid JSON");
+        assert_eq!(summary["status"], 401);
+        assert!(!summary["error"].as_str().unwrap().contains("sk-live-4f9"));
+        assert_eq!(row["payload_truncated"], 0);
+    }
+
+    #[tokio::test]
+    async fn provider_request_rows_record_a_retry_and_the_stream_after_it() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        // A query string is where a gateway key travels: the row must not
+        // keep it.
+        let endpoint = format!(
+            "http://{}/v1/chat/completions?api-key=sk-live-4f9",
+            listener.local_addr().unwrap()
+        );
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"retried\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5,\"total_tokens\":16}}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let body_len = body.len() as i64;
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            read_http_request(&mut first).await;
+            write_sse_response(&mut first, "503 Service Unavailable", b"busy").await;
+            first.shutdown().await.unwrap();
+
+            let (mut second, _) = listener.accept().await.unwrap();
+            read_http_request(&mut second).await;
+            write_sse_response(&mut second, "200 OK", &body).await;
+            second.shutdown().await.unwrap();
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new()));
+        let finish = stream_request(
+            &reqwest::Client::new(),
+            state,
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role": "user", "content": "hello"})],
+            buffer.clone(),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect("retry should reach the successful stream");
+        assert_eq!(finish.as_deref(), Some("stop"));
+        assert_eq!(buffer.lock().await.content, "retried");
+        server.await.unwrap();
+
+        let rows = wait_for_provider_request_rows(&session_id, 2).await;
+        assert_eq!(rows.len(), 2, "a retry is its own row: {rows:?}");
+        let retried = &rows[0];
+        assert_eq!(retried["attempt"], 1);
+        assert_eq!(retried["status_code"], 503);
+        assert_eq!(retried["error_kind"], "http_503");
+        assert_eq!(retried["response_bytes"], 4, "the rejected body was read");
+        assert_eq!(retried["method"], "POST");
+        assert_eq!(retried["model"], "stream-test");
+        assert_eq!(retried["endpoint_host"], "127.0.0.1");
+        assert_eq!(retried["endpoint_path"], "/v1/chat/completions");
+        assert!(
+            retried["request_bytes"].as_i64().unwrap() > 0,
+            "the serialized body length is recorded"
+        );
+        assert!(retried["headers_at"].as_str().is_some());
+        assert!(retried["finished_at"].as_str().is_some());
+        assert!(
+            retried["latency_ms"].as_i64().unwrap() >= 0,
+            "the attempt's own latency, not the backoff after it"
+        );
+        assert_eq!(
+            retried["request_payload_json"],
+            serde_json::Value::Null,
+            "payload capture is off by default"
+        );
+
+        let streamed = &rows[1];
+        assert_eq!(streamed["attempt"], 2);
+        assert_eq!(streamed["status_code"], 200);
+        assert_eq!(streamed["error_kind"], serde_json::Value::Null);
+        assert_eq!(streamed["input_tokens"], 11);
+        assert_eq!(streamed["output_tokens"], 5);
+        assert!(
+            streamed["stream_event_count"].as_i64().unwrap() >= 2,
+            "the events that carried the answer and its usage"
+        );
+        assert!(
+            streamed["response_bytes"].as_i64().unwrap() >= body_len - 1,
+            "the bytes read are recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_request_row_captures_a_rejected_response_only_when_asked() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let rejection =
+            br#"{"error":{"message":"bad key: Authorization: Bearer sk-live-4f9"}}"#.to_vec();
+        let server_rejection = rejection.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            write_sse_response(&mut socket, "401 Unauthorized", &server_rejection).await;
+            socket.shutdown().await.unwrap();
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        state.lock().await.config.capture_provider_payloads = true;
+        let error = stream_request(
+            &reqwest::Client::new(),
+            state,
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role": "user", "content": "hello"})],
+            std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new())),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect_err("a 401 is not retried");
+        assert_eq!(error.status, Some(401));
+        server.await.unwrap();
+
+        let rows = wait_for_provider_request_rows(&session_id, 1).await;
+        assert_eq!(rows.len(), 1, "one rejected attempt is one row: {rows:?}");
+        let row = &rows[0];
+        assert_eq!(row["status_code"], 401);
+        assert_eq!(row["error_kind"], "http_401");
+        assert_eq!(row["response_bytes"], rejection.len());
+        let payload = row["request_payload_json"]
+            .as_str()
+            .expect("capture is on, so the request is stored");
+        serde_json::from_str::<serde_json::Value>(payload).expect("the captured request is JSON");
+        let summary = row["response_summary_json"]
+            .as_str()
+            .expect("capture is on, so the summary is stored");
+        assert!(
+            !summary.contains("sk-live-4f9"),
+            "the provider's error text is redacted: {summary}"
+        );
+        assert!(
+            summary.contains("bad key"),
+            "the summary keeps the provider's message: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_request_row_records_a_cancelled_stream() {
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let event_line = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n";
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\n",
+                )
+                .await
+                .expect("write streaming headers");
+            socket
+                .write_all(event_line.as_bytes())
+                .await
+                .expect("write model event");
+            socket.flush().await.expect("flush SSE progress");
+            let _ = release_rx.await;
+            let _ = socket.shutdown().await;
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        let recorded_thread = session_id.clone();
+        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new()));
+        let task_buffer = buffer.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let task = tokio::spawn(async move {
+            stream_request(
+                &reqwest::Client::new(),
+                state,
+                task_cancel,
+                &endpoint,
+                "stream-test",
+                vec![serde_json::json!({"role": "user", "content": "hello"})],
+                task_buffer,
+                false,
+                false,
+                ThinkingMode::Normal,
+                crate::tools::ToolSchemaPolicy::read_only_inspection(),
+                Some(&session_id),
+                None,
+            )
+            .await
+        });
+        let observed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if buffer.lock().await.content.contains("hi") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(observed.is_ok(), "the model event must arrive first");
+        cancel.cancel();
+        let error = task
+            .await
+            .expect("stream task must not panic")
+            .expect_err("a cancelled stream errors");
+        assert_eq!(error.kind, StreamFailureKind::Cancelled);
+        release_tx.send(()).unwrap();
+        server.await.unwrap();
+
+        let rows = wait_for_provider_request_rows(&recorded_thread, 1).await;
+        assert_eq!(
+            rows.len(),
+            1,
+            "a cancelled attempt is still a row: {rows:?}"
+        );
+        let row = &rows[0];
+        assert_eq!(row["status_code"], 200);
+        assert_eq!(row["error_kind"], "cancelled");
+        assert!(
+            row["stream_event_count"].as_i64().unwrap() >= 1,
+            "the events read before the cancel are recorded"
+        );
+        assert!(row["response_bytes"].as_i64().unwrap() > 0);
+        assert!(row["finished_at"].as_str().is_some());
     }
 
     #[test]
@@ -4827,6 +5337,265 @@ fn prompt_estimation_delta_percent(estimated: u32, observed: u64) -> Option<i64>
     })
 }
 
+// --------------------------------------------------------- attempt telemetry
+//
+// One row per actual send (`crate::data_store::ProviderRequestRow`) so a slow
+// or failing turn can be read back instead of guessed at. Metadata is always
+// recorded; the payloads are opt-in (`capture_provider_payloads`) and
+// redacted, clipped and never a copy of an authorization header. See
+// `docs/data-store.md`.
+
+/// The most of a provider's own error text a row keeps (`response_summary_json`
+/// is clipped to this before it reaches the store).
+const MAX_ATTEMPT_ERROR_BYTES: usize = 512;
+
+/// What every attempt of one provider request shares.
+struct ProviderAttemptContext {
+    thread_id: String,
+    turn_id: Option<String>,
+    round: Option<i64>,
+    provider: Option<String>,
+    model: String,
+    endpoint_host: Option<String>,
+    endpoint_path: Option<String>,
+    capture_payloads: bool,
+    /// The request body as it is sent, kept only when payload capture is on:
+    /// otherwise a turn must not hold a second copy of it.
+    payload: Option<serde_json::Value>,
+}
+
+/// One built-in provider HTTP attempt.
+///
+/// Created right before a send, updated as the attempt progresses, and
+/// recorded by its `Drop`: a success, a retry, a provider error and a
+/// cancellation therefore write exactly one row each, and no exit can skip
+/// the write. The retry paths end the attempt before backing off, so the
+/// recorded latency is the attempt's own and not the wait after it.
+struct ProviderAttempt {
+    row: crate::data_store::ProviderRequestRow,
+    cancel_token: tokio_util::sync::CancellationToken,
+    started: std::time::Instant,
+    capture_payloads: bool,
+    payload: Option<serde_json::Value>,
+    finish_reason: Option<String>,
+    error_message: Option<String>,
+    /// Set when the attempt reached a clean end, so an interrupted one is
+    /// classified by what was left behind instead of looking successful.
+    reported_completion: bool,
+}
+
+impl ProviderAttempt {
+    fn start(
+        context: &ProviderAttemptContext,
+        attempt: usize,
+        request_bytes: usize,
+        cancel_token: &tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self {
+            row: crate::data_store::ProviderRequestRow {
+                thread_id: context.thread_id.clone(),
+                turn_id: context.turn_id.clone(),
+                round: context.round,
+                provider: context.provider.clone(),
+                model: Some(context.model.clone()),
+                endpoint_host: context.endpoint_host.clone(),
+                endpoint_path: context.endpoint_path.clone(),
+                method: Some("POST".to_owned()),
+                attempt: i64::try_from(attempt).ok(),
+                started_at: now_rfc3339(),
+                request_bytes: i64::try_from(request_bytes).ok(),
+                ..Default::default()
+            },
+            cancel_token: cancel_token.clone(),
+            started: std::time::Instant::now(),
+            capture_payloads: context.capture_payloads,
+            payload: context.payload.clone(),
+            finish_reason: None,
+            error_message: None,
+            reported_completion: false,
+        }
+    }
+
+    /// The response headers arrived, so the attempt is a response.
+    fn headers(&mut self, status: u16) {
+        self.row.headers_at = Some(now_rfc3339());
+        self.row.status_code = Some(i64::from(status));
+    }
+
+    /// How much of the stream was read so far. Called as the stream is read
+    /// so a timeout or a cancellation still reports its progress.
+    fn progress(&mut self, events: usize, bytes: usize) {
+        self.row.stream_event_count = i64::try_from(events).ok();
+        self.row.response_bytes = i64::try_from(bytes).ok();
+    }
+
+    fn usage(&mut self, input: u64, output: u64, cached: Option<u64>) {
+        self.row.input_tokens = i64::try_from(input).ok();
+        self.row.output_tokens = i64::try_from(output).ok();
+        self.row.cached_tokens = cached.and_then(|cached| i64::try_from(cached).ok());
+    }
+
+    /// The exit that knows why: `timeout`, `connect`, `stream`.
+    ///
+    /// A provider's own text never becomes the kind: it goes to
+    /// `response_summary_json`, clipped.
+    fn fail(&mut self, kind: &str) {
+        if self.row.error_kind.is_none() {
+            self.row.error_kind = Some(kind.to_owned());
+        }
+    }
+
+    fn provider_message(&mut self, message: &str) {
+        self.error_message = Some(message.to_owned());
+    }
+
+    /// The stream reached its end, so the attempt itself succeeded.
+    fn completed(&mut self, finish_reason: Option<String>) {
+        self.reported_completion = true;
+        self.finish_reason = finish_reason;
+        self.row.error_kind = None;
+    }
+
+    /// The short kind of the attempt: what its exit said, else cancelled, a
+    /// non-2xx status, a stream that stopped early, or a send that never
+    /// reached the provider. `None` is a row that ended cleanly.
+    fn derived_error_kind(&self) -> Option<String> {
+        if self.reported_completion {
+            return None;
+        }
+        if let Some(kind) = &self.row.error_kind {
+            return Some(kind.clone());
+        }
+        if self.cancel_token.is_cancelled() {
+            return Some("cancelled".to_owned());
+        }
+        match self.row.status_code {
+            Some(code) if !(200..300).contains(&code) => Some(format!("http_{code}")),
+            Some(_) => Some("stream".to_owned()),
+            None => Some("connect".to_owned()),
+        }
+    }
+}
+
+impl Drop for ProviderAttempt {
+    fn drop(&mut self) {
+        let finished_at = now_rfc3339();
+        let latency_ms = i64::try_from(self.started.elapsed().as_millis()).unwrap_or(i64::MAX);
+        let error_kind = self.derived_error_kind();
+        let mut row = std::mem::take(&mut self.row);
+        row.finished_at = Some(finished_at);
+        row.latency_ms = Some(latency_ms);
+        row.error_kind = error_kind;
+        if self.capture_payloads {
+            if let Some(payload) = self.payload.as_ref() {
+                let (prepared, clipped) = crate::data_store::redact::prepare_payload(
+                    payload,
+                    crate::data_store::MAX_PROVIDER_PAYLOAD_BYTES,
+                );
+                row.request_payload_json = Some(prepared);
+                row.payload_truncated |= clipped;
+            }
+            let (summary, clipped) = attempt_summary_json(
+                &row,
+                self.finish_reason.take(),
+                self.error_message.as_deref(),
+            );
+            row.response_summary_json = Some(summary);
+            row.payload_truncated |= clipped;
+        }
+        record_provider_attempt(row);
+    }
+}
+
+/// Records one attempt off the turn's thread: opening the store, migrating it
+/// and inserting must not stall a stream. Outside a runtime (a unit test or a
+/// one-shot CLI path) it writes in place.
+fn record_provider_attempt(row: crate::data_store::ProviderRequestRow) {
+    let Some(path) = crate::data_store::data_path() else {
+        return;
+    };
+    let write = move || {
+        if let Err(error) = crate::data_store::record_provider_request_at(&path, &row) {
+            crate::dbg_log!(
+                "data store: provider request of {} not recorded: {error}",
+                row.thread_id
+            );
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let _ = handle.spawn_blocking(write);
+        }
+        Err(_) => write(),
+    }
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// The host and path of an endpoint, with the query and fragment dropped: a
+/// gateway key or a signed URL can carry a credential there.
+fn endpoint_parts(url: &str) -> (Option<String>, Option<String>) {
+    match reqwest::Url::parse(url) {
+        Ok(parsed) => (
+            parsed.host_str().map(str::to_owned),
+            Some(parsed.path().to_owned()),
+        ),
+        Err(_) => (None, None),
+    }
+}
+
+/// The provider a row names: the stored credential's provider
+/// (`openai`, `claude`, `github-copilot`), else the profile's engine, else the
+/// profile's own name.
+fn provider_label(profile: Option<&crate::config::ModelProfile>) -> Option<String> {
+    let profile = profile?;
+    profile
+        .credential
+        .as_ref()
+        .map(|credential| credential.provider.clone())
+        .or_else(|| {
+            profile
+                .engine
+                .clone()
+                .filter(|engine| !engine.trim().is_empty())
+        })
+        .or_else(|| Some(profile.name.clone()).filter(|name| !name.trim().is_empty()))
+}
+
+/// A small summary of what an attempt's response was: its status, the finish
+/// reason of a stream that ended, how many events it carried, and — clipped
+/// and with any bearer token removed — the provider's own error message.
+///
+/// Never the body: a successful SSE stream is megabytes of model output, and
+/// an error body can echo the request. The second value says the error text
+/// was clipped.
+fn attempt_summary_json(
+    row: &crate::data_store::ProviderRequestRow,
+    finish_reason: Option<String>,
+    error_message: Option<&str>,
+) -> (String, bool) {
+    let mut summary = serde_json::Map::new();
+    if let Some(code) = row.status_code {
+        summary.insert("status".to_owned(), serde_json::json!(code));
+    }
+    if let Some(reason) = finish_reason.filter(|reason| !reason.trim().is_empty()) {
+        summary.insert("finish_reason".to_owned(), serde_json::json!(reason));
+    }
+    if let Some(events) = row.stream_event_count {
+        summary.insert("events".to_owned(), serde_json::json!(events));
+    }
+    let mut clipped = false;
+    if let Some(message) = error_message.map(str::trim).filter(|text| !text.is_empty()) {
+        let redacted = crate::data_store::redact::redact_bearer(message);
+        let end = redacted.floor_char_boundary(redacted.len().min(MAX_ATTEMPT_ERROR_BYTES));
+        clipped = end < redacted.len();
+        summary.insert("error".to_owned(), serde_json::json!(&redacted[..end]));
+    }
+    (serde_json::Value::Object(summary).to_string(), clipped)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn stream_request(
     client: &reqwest::Client,
@@ -5368,7 +6137,15 @@ async fn stream_request_with_timeouts(
     buffer.lock().await.performance.serialization_us =
         crate::benchmark::elapsed_us(serialization_started);
     let payload_byte_count = payload_bytes.len();
-    let verbose_network_logging = { state.lock().await.config.debug_verbose_network_logging };
+    let (verbose_network_logging, capture_provider_payloads, attempt_turn_id, attempt_round) = {
+        let app = state.lock().await;
+        (
+            app.config.debug_verbose_network_logging,
+            app.config.capture_provider_payloads,
+            app.active_turn_id.clone(),
+            app.provider_request_round,
+        )
+    };
     crate::dbg_log_for_session!(
         request_session_id,
         "{}",
@@ -5416,6 +6193,9 @@ async fn stream_request_with_timeouts(
         request_prefix_report(&request_session_id, &payload),
     );
 
+    // Captured only on request: a turn must not hold a second copy of a
+    // multi-megabyte payload that nobody asked to keep.
+    let captured_request_payload = capture_provider_payloads.then(|| payload.clone());
     drop(payload);
     let tool_schema_tokens = tool_schema_tokens_for_protocol(
         tool_protocol,
@@ -5656,6 +6436,23 @@ async fn stream_request_with_timeouts(
     };
     let mut parallel_tool_calls_fallback_attempted = false;
     let mut attempt = 0usize;
+    // The endpoint without its query: that is where a key travels, and the
+    // row must be readable.
+    let (attempt_endpoint_host, attempt_endpoint_path) = endpoint_parts(&resolved_url);
+    let mut attempt_context = ProviderAttemptContext {
+        thread_id: request_session_id.clone(),
+        turn_id: attempt_turn_id,
+        round: attempt_round,
+        provider: provider_label(profile.as_ref()),
+        model: model.to_owned(),
+        endpoint_host: attempt_endpoint_host,
+        endpoint_path: attempt_endpoint_path,
+        capture_payloads: capture_provider_payloads,
+        payload: captured_request_payload,
+    };
+    // The attempt in flight: a row is written when the guard is dropped, so
+    // every exit from the loop below records exactly one attempt.
+    let mut attempt_recorder: Option<ProviderAttempt>;
     let stream = loop {
         if cancel_token.is_cancelled() {
             return Err(StreamFailure::new(StreamFailureKind::Cancelled));
@@ -5689,6 +6486,13 @@ async fn stream_request_with_timeouts(
                     && profile.as_ref().is_some_and(|p| p.send_x_api_key_header()),
             );
         }
+        // One row per actual send, retries included.
+        attempt_recorder = Some(ProviderAttempt::start(
+            &attempt_context,
+            attempt + 1,
+            request_payload_bytes.len(),
+            &cancel_token,
+        ));
         let send_result = retry::race_cancellable(
             tokio::time::timeout(retry::header_timeout_for_attempt(attempt), req.send()),
             &cancel_token,
@@ -5697,6 +6501,9 @@ async fn stream_request_with_timeouts(
         let send_result = match send_result {
             None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
             Some(Err(_elapsed)) => {
+                if let Some(recorder) = attempt_recorder.as_mut() {
+                    recorder.fail("timeout");
+                }
                 // Nothing was received, so replaying is safe on every
                 // profile, plan logins included; the next attempt waits
                 // longer for a slow cold prompt (#2669).
@@ -5709,6 +6516,9 @@ async fn stream_request_with_timeouts(
                         retry::MAX_RETRIES,
                         delay.as_millis()
                     );
+                    // End the attempt before the backoff: its latency is the
+                    // attempt's own, not the wait that follows it.
+                    drop(attempt_recorder.take());
                     if retry::race_cancellable(tokio::time::sleep(delay), &cancel_token)
                         .await
                         .is_none()
@@ -5724,6 +6534,9 @@ async fn stream_request_with_timeouts(
         };
         match send_result {
             Ok(resp) if resp.status().is_success() => {
+                if let Some(recorder) = attempt_recorder.as_mut() {
+                    recorder.headers(resp.status().as_u16());
+                }
                 stream_trace.response_headers(resp.status().as_u16());
                 crate::dbg_log_for_session!(
                     request_session_id,
@@ -5775,11 +6588,18 @@ async fn stream_request_with_timeouts(
             Ok(resp) => {
                 let status = resp.status();
                 let code = status.as_u16();
+                if let Some(recorder) = attempt_recorder.as_mut() {
+                    recorder.headers(code);
+                }
                 stream_trace.response_headers(code);
                 let err_body = match retry::race_cancellable(resp.text(), &cancel_token).await {
                     None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
                     Some(body) => body.unwrap_or_default(),
                 };
+                if let Some(recorder) = attempt_recorder.as_mut() {
+                    recorder.progress(0, err_body.len());
+                    recorder.provider_message(&err_body);
+                }
                 if !parallel_tool_calls_fallback_attempted
                     && let Some(fallback_payload_bytes) =
                         parallel_tool_calls_fallback_payload_bytes.as_ref()
@@ -5798,7 +6618,16 @@ async fn stream_request_with_timeouts(
                         }),
                     );
                     request_payload_bytes = fallback_payload_bytes.clone();
+                    // The captured body must be the one actually sent.
+                    if let Some(object) = attempt_context
+                        .payload
+                        .as_mut()
+                        .and_then(serde_json::Value::as_object_mut)
+                    {
+                        object.remove("parallel_tool_calls");
+                    }
                     parallel_tool_calls_fallback_attempted = true;
+                    drop(attempt_recorder.take());
                     continue;
                 }
                 if !chatgpt_plan && retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES
@@ -5812,6 +6641,7 @@ async fn stream_request_with_timeouts(
                         retry::MAX_RETRIES,
                         delay.as_millis()
                     );
+                    drop(attempt_recorder.take());
                     if retry::race_cancellable(tokio::time::sleep(delay), &cancel_token)
                         .await
                         .is_none()
@@ -5841,6 +6671,16 @@ async fn stream_request_with_timeouts(
                 });
             }
             Err(e) => {
+                if let Some(recorder) = attempt_recorder.as_mut() {
+                    recorder.fail(if e.is_timeout() {
+                        "timeout"
+                    } else if e.is_connect() {
+                        "connect"
+                    } else {
+                        "stream"
+                    });
+                    recorder.provider_message(&format!("{e}"));
+                }
                 // Also for ChatGPT plans: no response arrived, so nothing ran,
                 // and one reset connection ended the whole turn (session
                 // 01a16b37, "Connection reset by peer" after 16 rounds).
@@ -5854,6 +6694,7 @@ async fn stream_request_with_timeouts(
                         delay.as_millis(),
                         e
                     );
+                    drop(attempt_recorder.take());
                     if retry::race_cancellable(tokio::time::sleep(delay), &cancel_token)
                         .await
                         .is_none()
@@ -6016,6 +6857,9 @@ async fn stream_request_with_timeouts(
                     }
                     Ok(_) => {
                         stream_bytes_received += line_buf.len();
+                        if let Some(recorder) = attempt_recorder.as_mut() {
+                            recorder.progress(stream_events_received, stream_bytes_received);
+                        }
                         let trimmed = line_buf.trim();
                         if trimmed == "data: [DONE]" {
                             if (responses_api && !responses_completed) || (messages_api && !messages_stream.completed) {
@@ -6039,6 +6883,9 @@ async fn stream_request_with_timeouts(
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 stream_events_received += 1;
+                                if let Some(recorder) = attempt_recorder.as_mut() {
+                                    recorder.progress(stream_events_received, stream_bytes_received);
+                                }
                                 let generated_delta = value.pointer("/choices/0/delta").is_some_and(|delta| {
                                     ["content", "reasoning_content", "reasoning"].iter().any(|key| delta.get(key).and_then(serde_json::Value::as_str).is_some_and(|text| !text.is_empty()))
                                         || delta.get("tool_calls").and_then(serde_json::Value::as_array).is_some_and(|calls| !calls.is_empty())
@@ -6385,6 +7232,11 @@ async fn stream_request_with_timeouts(
                                     ) {
                                         let (cached, cache_write_tokens, cache_discount) =
                                             cache_usage_metrics(usage);
+                                        // The tokens this response reported, kept
+                                        // on the attempt's row.
+                                        if let Some(recorder) = attempt_recorder.as_mut() {
+                                            recorder.usage(p, c, cached.map(u64::from));
+                                        }
                                         let (provider_cache_status, provider_cache_reason) =
                                             provider_cache_observation(
                                                 is_openrouter_endpoint(url),
@@ -6621,6 +7473,11 @@ async fn stream_request_with_timeouts(
         "stream_request: Stream request loop ended. Total content: {} chars",
         buf.content.len()
     );
+    // The attempt that carried this stream ends here; a stream that stops
+    // early has already been classified by its guard.
+    if let Some(mut recorder) = attempt_recorder.take() {
+        recorder.completed(finish_reason.clone());
+    }
     Ok(finish_reason)
 }
 
