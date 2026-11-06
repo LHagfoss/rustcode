@@ -496,6 +496,8 @@ harness = "codex"
 model = "gpt-6-luna"
 effort = "low"
 silence_timeout_minutes = 10   # optional; 0 turns the silence deadline off
+idle_timeout_minutes = 30      # optional; 0 keeps every harness process running
+max_live_harnesses = 12        # optional; 0 turns the live-process cap off
 onboarded = true
 
 [[harnesses]]
@@ -534,6 +536,15 @@ project's `.rustcode/config.toml` cannot add a harness or change a command.
 default, `0` turns it off. It is read when a turn starts, so it applies to
 the next message of a thread already open.
 
+`idle_timeout_minutes` is the idle timeout of a harness process, 30 minutes by
+default: a thread that has had no turn, no request waiting on the user and no
+client activity for that long has its process stopped, and its next turn starts
+a new one that resumes the harness's own session (see *Process and safety
+rules*). `0` keeps every process running. `max_live_harnesses` caps how many
+harness processes run at once, 12 by default; above it the least recently used
+idle ones are stopped in the same way, `0` turns the cap off. Both are read on
+every reaper pass, a minute apart, so a change applies without a restart.
+
 Named accounts are chosen by hand. There is no pooling or rotation: a
 thread uses the account it was given until the user picks another, and
 limits are that account's own.
@@ -561,6 +572,21 @@ choices in its own storage instead.
   harness sends — a thought or a usage update included — restarts it. It is
   reported as a `harness.turn_silent` `[op]` event in the thread's
   `logs/debug.log`. `[harness_defaults].silence_timeout_minutes` tunes it.
+- An idle process is stopped and resumed later, so many open threads do not
+  keep many processes: a thread with no turn running, no approval or question
+  waiting on the user and no background work, and nothing from the client or
+  the harness for 30 minutes, has its harness stopped the way closing the
+  thread stops it. A prompt, a load, every update the harness sends and an
+  answer to a card all restart the timer, and nothing is reaped during a turn
+  or while the user is being asked. The thread is asleep, not crashed: the
+  transcript, the harness's own session id, its account, model and effort
+  stay in `harness.json`, the client is told nothing, and the next message
+  starts a new process that resumes that session exactly as one restarts
+  after a dead harness. `max_live_harnesses` (12 by default) also stops the
+  least recently used idle processes when more than that run. It is reported
+  as `harness.reaped` and, on the next start, `harness.resumed` `[op]` events
+  in the thread's `logs/debug.log`; `[harness_defaults].idle_timeout_minutes`
+  and `max_live_harnesses` tune it, each `0` turning its half off.
 - The child's stderr goes to the thread's `logs/debug.log` (lines prefixed
   `[harness <id>]`), never to the transcript.
 - The engine passes no RustCode credentials, provider keys or tokens to a

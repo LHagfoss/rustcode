@@ -58,6 +58,109 @@ export function splitReply(text: string): Segment[] {
   return out;
 }
 
+/** Elements that never hold content, so they never need closing. */
+const VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+/** Elements whose content is text until their own closing tag. */
+const RAW_TAGS = new Set(["script", "style", "textarea", "title", "xmp", "noembed", "noframes"]);
+
+const TAG_NAME = /^[a-zA-Z][^\s/>]*/;
+
+/** Where a tag's `>` is, skipping quoted attribute values; -1 until it has arrived. */
+function tagEnd(html: string, from: number): number {
+  let quote = "";
+  for (let i = from; i < html.length; i++) {
+    const char = html[i];
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === ">") return i;
+  }
+  return -1;
+}
+
+/**
+ * A fragment that has only partly arrived, with the tags it still has open
+ * closed, so a streaming block can be drawn before its fence does
+ * (docs/smart-ui.md). A tag that is still being written is dropped rather than
+ * shown as text. Its `<script>` content is inert: the app injects this HTML,
+ * and injected HTML never runs a script.
+ */
+export function closeOpenTags(html: string): string {
+  const open: string[] = [];
+  const finish = (upto: number) =>
+    html.slice(0, upto) +
+    open
+      .reverse()
+      .map((name) => `</${name}>`)
+      .join("");
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) break;
+    if (html.startsWith("<!--", lt)) {
+      const end = html.indexOf("-->", lt + 4);
+      if (end < 0) return finish(lt);
+      i = end + 3;
+      continue;
+    }
+    if (html.startsWith("<!", lt) || html.startsWith("<?", lt)) {
+      const end = tagEnd(html, lt + 2);
+      if (end < 0) return finish(lt);
+      i = end + 1;
+      continue;
+    }
+    const closing = html[lt + 1] === "/";
+    const nameAt = lt + (closing ? 2 : 1);
+    const name = TAG_NAME.exec(html.slice(nameAt, nameAt + 48))?.[0]?.toLowerCase();
+    if (!name) {
+      // A `<` in the text ("a < b"), not a tag.
+      i = lt + 1;
+      continue;
+    }
+    const end = tagEnd(html, nameAt + name.length);
+    if (end < 0) return finish(lt);
+    const selfClosing = html[end - 1] === "/";
+    i = end + 1;
+    if (closing) {
+      const at = open.lastIndexOf(name);
+      if (at >= 0) open.length = at;
+    } else if (VOID_TAGS.has(name) || selfClosing) {
+    } else if (RAW_TAGS.has(name)) {
+      // Raw text runs to its closing tag, or to the end of what has arrived.
+      const close = new RegExp(`</${name}\\s*>`, "i").exec(html.slice(i));
+      if (!close) {
+        open.push(name);
+        return finish(html.length);
+      }
+      i += close.index + close[0].length;
+    } else {
+      open.push(name);
+    }
+  }
+  return finish(html.length);
+}
+
+const EMPTY_TAG = /<(style|script)\b[^>]*>\s*<\/\1\s*>/gi;
+
+/** An empty `<style></style>` or `<script></script>` does nothing; agents emit them by habit. */
+export const stripEmptyTags = (source: string) => source.replace(EMPTY_TAG, "");
+
 /** Why a finished block can't run, or null. */
 export function blockProblem(source: string): string | null {
   if (!source.trim()) return "The view is empty.";

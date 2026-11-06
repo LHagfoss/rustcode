@@ -128,6 +128,27 @@ export function sendDecision(
   return { action: "queue", reason: "harness" };
 }
 
+/**
+ * How a wake reaches a parent that is mid-turn: steered into the running turn when the harness takes
+ * a live steer that leaves its tools running, else queued behind the turn. A steer may be read while
+ * an approval or a question waits when the harness says so; a harness that would have to stop the
+ * turn to take the message (`interrupt_restart` with no live steer) keeps the wake queued — a
+ * child's notice is never worth taking a parent's tool calls down. Only a child that needs the user
+ * steers: a completion waits its turn, as it always has, so a busy parent is not interrupted by
+ * every finished grandchild.
+ *
+ * One rule with {@link sendDecision}, read by state/host.ts `sendWake`, so a wake is delivered the way
+ * a message typed meanwhile would be.
+ */
+export function wakeDelivery(
+  steering: SteeringCapabilities,
+  turn: TurnState,
+  asking: number,
+): "steer" | "queue" {
+  if (!asking) return "queue";
+  return sendDecision(undefined, steering, turn).action === "steer" ? "steer" : "queue";
+}
+
 /** What the live region says when the queue changes: what is waiting, and whether it is held. */
 export function queuedAnnouncement(view: QueueView, editing: boolean): string {
   const count = view.messages.length;

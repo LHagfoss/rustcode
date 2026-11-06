@@ -45,6 +45,12 @@ export interface AgentStackView {
   order: StackAgent[];
   needs: number;
   working: number;
+  /**
+   * The stack's state as one thing, for the single badge it draws: what needs you
+   * outranks what failed, which outranks work under way, and a stack whose marks
+   * all finished is `done` (its text says so, and it draws no badge).
+   */
+  state: StackState;
   /** The delegated threads the stack holds (`kind: "thread"`). */
   threads: number;
   /** The subagents the stack holds (`kind: "subagent"`). */
@@ -109,12 +115,14 @@ export function agentStack(
   const visible = order.slice(0, STACK_VISIBLE);
   const needs = order.filter((agent) => agent.state === "needs").length;
   const working = order.filter((agent) => agent.state === "working").length;
+  const failed = order.filter((agent) => agent.state === "failed").length;
   return {
     visible,
     extra: order.length - visible.length,
     order,
     needs,
     working,
+    state: needs ? "needs" : failed ? "failed" : working ? "working" : "done",
     ...stackKinds(order),
     running: needs + working > 0,
     label: stackLabel(needs, working, order.length),

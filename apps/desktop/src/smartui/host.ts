@@ -104,3 +104,39 @@ export class SendGate {
     return true;
   }
 }
+
+/**
+ * A streaming block's partial source, handed to its frame at most once per
+ * animation frame and once per `gapMs` (docs/smart-ui.md, "Streaming"). The
+ * last fragment wins: an intermediate one that was overtaken is dropped.
+ */
+export class StreamPump {
+  private pending: string | null = null;
+  private scheduled = false;
+  private last = Number.NEGATIVE_INFINITY;
+
+  constructor(
+    private readonly send: (html: string) => void,
+    private readonly gapMs = 100,
+    private readonly now: () => number = () => performance.now(),
+    private readonly schedule: (run: () => void, ms: number) => void = (run, ms) => {
+      if (ms > 0) setTimeout(run, ms);
+      else requestAnimationFrame(() => run());
+    },
+  ) {}
+
+  push(html: string) {
+    this.pending = html;
+    if (this.scheduled) return;
+    this.scheduled = true;
+    const wait = Math.max(0, this.gapMs - (this.now() - this.last));
+    this.schedule(() => {
+      this.scheduled = false;
+      const next = this.pending;
+      this.pending = null;
+      if (next === null) return;
+      this.last = this.now();
+      this.send(next);
+    }, wait);
+  }
+}
