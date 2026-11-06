@@ -1393,6 +1393,25 @@ export function markDelivered(book: LinkBook, reported: WakeReport, ctx: WakeCon
   return changed ? { ...book, links } : book;
 }
 
+/**
+ * Whether a queued wake row still has something to tell its parent: its turn starting now would mark
+ * at least one of the links it names. A row whose children the parent already heard about — the app
+ * wrote the mark and then died before the queue was written back — is nothing to run, and it is
+ * dropped when the queue is read back (`state/host.ts`), so a restart cannot report the same finish
+ * twice. It judges a row exactly as its turn would ({@link markDelivered}), so the two cannot
+ * disagree about what the row promised.
+ */
+export function wakeStillOwed(
+  book: LinkBook,
+  row: { links: readonly string[]; asking: readonly string[] },
+  ctx: WakeContext,
+): boolean {
+  if (!row.links.length) return false;
+  const asking = new Set(row.asking);
+  const reported: WakeReport = { settled: row.links.filter((id) => !asking.has(id)), asking };
+  return markDelivered(book, reported, ctx, ctx.now) !== book;
+}
+
 /** Settled links whose parent thread is gone: nothing will ever deliver them. */
 export function orphanedLinks(book: LinkBook, ctx: WakeContext): Link[] {
   return book.links.filter(

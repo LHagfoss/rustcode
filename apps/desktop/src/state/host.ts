@@ -76,9 +76,20 @@ import {
   type WakeReport,
   wakeIds,
   wakeMessage,
+  wakeStillOwed,
   wakesDue,
 } from "./orchestration";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
+import { wakeDelivery } from "./queue";
+import {
+  parseQueueBook,
+  pendingRows,
+  persistable,
+  QUEUES_KEY,
+  type QueueBook,
+  queueOf,
+  withQueue,
+} from "./queues";
 import {
   type AppState,
   cancel,
@@ -90,6 +101,7 @@ import {
   permissionModeOf,
   renameThread,
   request,
+  resumeQueue,
   runPrompt,
   searchThreads,
   setConfigOption,
@@ -97,8 +109,11 @@ import {
   setThreadStatus,
   snoozeThread,
   statusOf,
+  steer,
+  steeringOf,
   switchThreadHarness,
   togglePin,
+  turnState,
   updateThread,
   useApp,
 } from "./store";
@@ -107,6 +122,7 @@ import {
   attachAutoAllowed,
   autoAllowedNoticeNeeded,
   localId,
+  type QueuedPrompt,
   type TranscriptItem,
   turnCompletion,
 } from "./thread";
@@ -1530,6 +1546,169 @@ export function orchestrationCallDropped(params: JsonObject): void {
   wakeTick();
 }
 
+// ---------------------------------------------------------------- the queue across restarts
+
+/**
+ * A thread's queue is the app's memory, so a restart used to lose it: the messages a stopped turn
+ * held, the follow-ups behind a running one, and a child's wake waiting for the parent's turn to
+ * end. It is kept in app storage per thread id while the app runs and read back when a thread is
+ * opened again (state/queues.ts), so a quit, a crash or an update does not take an instruction or a
+ * child's result with it.
+ *
+ * Nothing is written for a thread the app has not finished loading: opening a thread starts it
+ * empty, and those empty frames are not the user deleting their queue.
+ */
+
+/** The book as it is in memory: read once, on the first change after start-up. */
+let queueBook: QueueBook | undefined;
+/** The book as storage last took it: a change that serialises the same is not written again. */
+let keptQueues: string | undefined;
+/** Putting a saved queue back changes the store, which notifies again: the nested pass is skipped. */
+let restoring = false;
+/** Whether this window is watching the store for queue changes: installed once, whatever reconnects. */
+let watchingQueues = false;
+/** At most this many threads are opened at start-up for the queue each kept. */
+const RESTORE_MAX = 8;
+
+const storedQueues = (): string | null => {
+  try {
+    return localStorage.getItem(QUEUES_KEY);
+  } catch {
+    // No storage (a private window): the queue is this window's only, as before.
+    return null;
+  }
+};
+
+const keepQueues = (text: string): void => {
+  try {
+    localStorage.setItem(QUEUES_KEY, text);
+  } catch {
+    // A web view whose storage is full keeps the queue in memory instead.
+  }
+};
+
+/**
+ * Takes the queues the last run left, and watches this one: called once at start-up, after the
+ * thread list is in (state/store.ts `connect`). A thread that kept a queue is opened, so its rows
+ * are put back as it loads and, when the thread is idle, start running again — an instruction the
+ * user queued before the restart is not left sitting in storage until they think to look.
+ */
+export function restoreQueuedThreads(): void {
+  if (!queueBook) queueBook = parseQueueBook(storedQueues());
+  if (!watchingQueues) {
+    watchingQueues = true;
+    // The state is read from the store, never diffed against a `previous` one: the store folds a run
+    // of engine lines into one notification, so the pair it is given can already hold the change.
+    useApp.subscribe((state) => queuesChanged(state));
+  }
+  const s = useApp.getState();
+  const known = new Set(s.sessions.map((session) => session.id));
+  const waiting = Object.keys(queueBook.threads).filter(
+    (id) => known.has(id) && !s.threads[id]?.loaded && pendingRows(queueBook!, id).length > 0,
+  );
+  for (const id of waiting.slice(0, RESTORE_MAX)) void openThread(id);
+}
+
+/** Between tests: the queues are read again from storage, as a window that just started would. */
+export function resetQueues(): void {
+  queueBook = undefined;
+  keptQueues = undefined;
+  restoring = false;
+  restoredQueues.clear();
+  watchedQueues.clear();
+  steeredLinks.clear();
+}
+
+/** The threads whose saved queue this window has already put back. */
+const restoredQueues = new Set<string>();
+/** The queue array each thread had when it was last written, to notice a change without a diff. */
+const watchedQueues = new Map<string, readonly QueuedPrompt[]>();
+
+/**
+ * One state change: a thread that has just finished loading gets its queue back, and a queue that
+ * changed is written down. A thread that is loading is forgotten again, so a thread opened twice in
+ * one run (a repair) reads its queue back the second time too.
+ *
+ * Only a loaded thread's queue is written — the empty frames a thread passes through while it loads
+ * are not rows the user removed — and a row that left a loaded thread's queue was sent, so its id is
+ * recorded and a restart cannot send it again.
+ */
+function queuesChanged(state: AppState): void {
+  if (restoring) return;
+  const loaded = queueBook;
+  if (!loaded) return;
+  const now = Date.now();
+  let next = loaded;
+  const drain: string[] = [];
+  for (const [id, thread] of Object.entries(state.threads)) {
+    if (!thread.loaded || thread.loading) {
+      restoredQueues.delete(id);
+      watchedQueues.delete(id);
+      continue;
+    }
+    if (!restoredQueues.has(id)) {
+      // First sight of it since it loaded: what it kept is put back beside anything queued meanwhile.
+      restoredQueues.add(id);
+      const rows = restorable(id, thread.queue);
+      if (rows.length) {
+        restoring = true;
+        try {
+          updateThread(id, (t) => ({ ...t, queue: [...t.queue, ...rows] }));
+        } finally {
+          restoring = false;
+        }
+        drain.push(id);
+      }
+      watchedQueues.set(id, useApp.getState().threads[id]?.queue ?? thread.queue);
+      continue;
+    }
+    if (watchedQueues.get(id) === thread.queue) continue;
+    watchedQueues.set(id, thread.queue);
+    next = withQueue(next, id, thread.queue, now);
+  }
+  if (next !== loaded) {
+    queueBook = next;
+    const text = JSON.stringify(persistable(next));
+    if (text !== keptQueues) {
+      keptQueues = text;
+      keepQueues(text);
+    }
+  }
+  // Started after this pass, not inside it: a turn changes the store, and that change is a new pass.
+  for (const id of drain) queueMicrotask(() => drainQueue(id));
+}
+
+/** The head of a restored queue starts a turn, once the thread is idle. */
+function drainQueue(id: string): void {
+  const thread = useApp.getState().threads[id];
+  if (thread && !thread.running && !thread.queueHeld) void resumeQueue(id);
+}
+
+/**
+ * The rows a thread's saved queue still owes, less anything it already has: the same id is never
+ * twice, a wake whose links another waiting row already reports is the copy that was lost, and a
+ * wake whose children the parent has heard about is nothing to run (`wakeStillOwed`).
+ */
+function restorable(id: string, queue: readonly QueuedPrompt[]): QueuedPrompt[] {
+  const saved = queueBook;
+  if (!saved) return [];
+  const here = new Set(queue.map((item) => item.id));
+  const carried = new Set(queue.flatMap((item) => (item.wake ? (item.wakeLinks ?? []) : [])));
+  const ctx = wakeContext(Date.now());
+  const out: QueuedPrompt[] = [];
+  for (const item of queueOf(pendingRows(saved, id))) {
+    if (here.has(item.id)) continue;
+    const links = item.wakeLinks ?? [];
+    if (item.wake) {
+      if (links.length && links.every((link) => carried.has(link))) continue;
+      if (!wakeStillOwed(book(), { links, asking: item.wakeAsking ?? [] }, ctx)) continue;
+    }
+    out.push(item);
+    for (const link of links) carried.add(link);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- waking a parent
 
 /** What the wake rules need of the app, read once: no polling, no engine calls. */
@@ -1661,14 +1840,19 @@ function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
     return;
   }
   wakeWaits.delete(wake.parent);
+  // A steer for one of these questions is on its way to the running turn: this tick's copy would
+  // repeat it, and the steer's own answer decides whether the row is still owed.
+  if (wake.asking.length && wake.asking.every((link) => steeredLinks.has(link.id))) return;
   const wakeLinks = wakeIds(wake);
   const wakeAsking = askingIds(wake);
   if (parent.running) {
-    // One row, one turn: folded into the wake already waiting, or queued on its own.
-    updateThread(wake.parent, (t) => ({
-      ...t,
-      queue: queueWake(t.queue, wake, book(), ctx, now, localId("queued")),
-    }));
+    // A child that needs the user is read by the running turn when the harness takes a live steer
+    // that leaves its tools running (queue.ts `wakeDelivery`); otherwise it waits in the queue.
+    if (wakeDelivery(steeringOf(parent), turnState(parent), wake.asking.length) === "steer") {
+      void steerWake(wake, ctx, now);
+      return;
+    }
+    queueWakeRow(wake, ctx, now);
     return;
   }
   void runPrompt(wake.parent, wakeMessage(wake, now), undefined, {
@@ -1676,6 +1860,38 @@ function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
     wakeLinks,
     wakeAsking,
   });
+}
+
+/** A wake as a row in its parent's queue: folded into the wake already waiting, or a row of its own. */
+function queueWakeRow(wake: Wake, ctx: WakeContext, now: number): void {
+  updateThread(wake.parent, (t) => ({
+    ...t,
+    queue: queueWake(t.queue, wake, book(), ctx, now, localId("queued")),
+  }));
+}
+
+/** The links a wake being steered names, so a second tick in that moment cannot steer them again. */
+const steeredLinks = new Set<string>();
+
+/**
+ * A child's request, read by the parent's running turn: the wake goes in as a steer, so the parent
+ * hears it now and no tool call is interrupted, no turn is stopped and no second turn is queued. Its
+ * links are marked heard once the engine has taken it — the same marks a queued row writes when its
+ * turn starts — so nothing reports them again. A steer the engine refuses (the turn ended, or began
+ * waiting on the user, meanwhile) leaves the wake in the queue, which delivers it as before.
+ */
+async function steerWake(wake: Wake, ctx: WakeContext, now: number): Promise<void> {
+  const links = wakeIds(wake);
+  for (const link of links) steeredLinks.add(link);
+  try {
+    if (await steer(wake.parent, wakeMessage(wake, now))) {
+      wakeDelivered(links, askingIds(wake));
+      return;
+    }
+  } finally {
+    for (const link of links) steeredLinks.delete(link);
+  }
+  queueWakeRow(wake, ctx, now);
 }
 
 /**

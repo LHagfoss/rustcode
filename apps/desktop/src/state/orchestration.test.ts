@@ -65,6 +65,7 @@ import {
   wakeFor,
   wakeIds,
   wakeMessage,
+  wakeStillOwed,
   wakeSummary,
   wakesDue,
 } from "./orchestration";
@@ -629,6 +630,33 @@ describe("waking a parent", () => {
     expect(unheard(asked, [{ id: "a/b", askedRequest: "6" }])).toBe(asked);
     // Nothing listed: the same book, unchanged.
     expect(unheard(b, [])).toBe(b);
+  });
+
+  test("a queue read back after a restart only runs what the parent has not heard", () => {
+    const b = book([done("a", "b"), done("a", "c")]);
+    const wake = wakesDue(b, ctx())[0]!;
+    const row = { links: wakeIds(wake), asking: askingIds(wake) };
+    // Nothing was delivered before the app died: the row still has something to say.
+    expect(wakeStillOwed(b, row, ctx())).toBe(true);
+    // Its turn started (the marks are written) and the queue was not written back: nothing is left
+    // to run, so a restart cannot report the same finishes twice.
+    const heard = read(b, wake, ctx(), 10_000);
+    expect(wakeStillOwed(heard, row, ctx())).toBe(false);
+    // A row that names no links is not something to start a turn for.
+    expect(wakeStillOwed(b, { links: [], asking: [] }, ctx())).toBe(false);
+  });
+
+  test("a question is owed until the request the row names is answered", () => {
+    const asking = book([done("a", "b", 1_000, "needs_user")]);
+    const pending = ctx({ pending: { "a/b": "42" } });
+    const row = { links: ["a/b"], asking: ["a/b"] };
+    expect(wakeStillOwed(asking, row, pending)).toBe(true);
+    // Told already: the same request is not something to say again after a restart.
+    const told = book([{ ...done("a", "b", 1_000, "needs_user"), askedRequest: "42" }]);
+    expect(wakeStillOwed(told, row, pending)).toBe(false);
+    // The child finished since: its finish comes as the ordinary wake, not from this row.
+    const finished = book([done("a", "b")]);
+    expect(wakeStillOwed(finished, row, ctx())).toBe(false);
   });
 
   test("a parent already blocked in wait_session gets no duplicate", () => {
