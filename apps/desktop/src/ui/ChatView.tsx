@@ -63,7 +63,7 @@ import {
   Tooltip,
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
-import { DETAILS_CARD } from "./RightPanel";
+import { DETAILS_CARD, usePanelCardWidth } from "./RightPanel";
 import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
@@ -450,19 +450,37 @@ function releaseComposer(e: React.MouseEvent) {
 
 /** The chat lane's cap at its default setting: `--rc-chat-content-max-width` (52rem). */
 const LANE_MAX = 52 * 16;
+/** The narrowest lane a card may leave beside it: below that the card floats over the chat. */
+const LANE_FLOOR = 320;
 
 /**
- * How far the lane moves left to clear the details card, and no further than
- * the room beside it: the card floats over the pane's end, so a lane that
- * would run under it is shifted, never narrowed. When the pane has no room to
- * give, the lane stays put and the card overlays it.
+ * Where the chat lane sits while a right-hand card is open: centred in the room
+ * the card leaves (`pane - cardWidth - the card's two gaps`), narrowed to that
+ * room only when it is below the lane's own cap, so it never runs under the
+ * card. A column too narrow to keep a lane that reads beside the card has the
+ * card float over the chat, and the lane steps clear of it as far as its slack
+ * allows.
+ *
+ * `shift` moves the lane left of centre (`--rc-lane-inset-end`) and `cap` is the
+ * lane's width then, or null when its own cap already fits and the CSS one stands.
  */
-export function laneShift(pane: number, card = DETAILS_CARD, laneMax = LANE_MAX): number {
-  if (pane <= 0) return 0;
-  const lane = Math.min(laneMax, pane);
-  const needed = (lane - pane) / 2 + card.width + card.gap * 2;
-  const slack = Math.max(0, (pane - lane) / 2);
-  return Math.round(Math.max(0, Math.min(needed, slack)));
+export function laneLayout(
+  pane: number,
+  cardWidth: number,
+  laneMax = LANE_MAX,
+  card = DETAILS_CARD,
+): { shift: number; cap: number | null } {
+  if (pane <= 0 || cardWidth <= 0) return { shift: 0, cap: null };
+  const room = pane - cardWidth - card.gap * 2;
+  if (room < LANE_FLOOR) {
+    const slack = Math.max(0, (pane - Math.min(laneMax, pane)) / 2);
+    return { shift: Math.round(Math.max(0, Math.min(cardWidth + card.gap * 2, slack))), cap: null };
+  }
+  const lane = Math.min(laneMax, room);
+  return {
+    shift: Math.round((pane - lane) / 2 - (room - lane) / 2),
+    cap: lane < laneMax ? lane : null,
+  };
 }
 
 /** The setup's clock, ticking on its own so the chat does not re-render every second. */
@@ -538,12 +556,14 @@ export function ChatView() {
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(800);
   const banner = useBanner();
-  const detailsOpen = useApp((s) => s.panel === "details");
+  // The card the right panel floats over this chat, if any (ui/RightPanel.tsx):
+  // the lane centres in the room it leaves, narrowed when that room is small.
+  const panelCard = usePanelCardWidth();
   // The transcript's rows and the composer both read this in ui/Transcript.tsx and below.
   const chatWidth = useApp((s) => s.chatWidth);
-  // "Full" hands the lane the pane and the details card overlays it, as it does on a narrow one.
+  // "Full" hands the lane the pane, so the card narrows it to the room beside it.
   const laneRem = CHAT_WIDTH_REM[chatWidth];
-  const laneInset = detailsOpen ? laneShift(width, DETAILS_CARD, laneRem === null ? width : laneRem * 16) : 0;
+  const lane = laneLayout(width, panelCard, laneRem === null ? width : laneRem * 16);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -584,10 +604,10 @@ export function ChatView() {
 
   // How far the composer (its box and tray) reaches up from the foot of the pane: the right panel
   // floats over the transcript and stops above it (ui/RightPanel.tsx). Measured on the composer
-  // rather than the stack, whose hero fills an empty thread, and from the foot of the column the
-  // panel is placed in — not this chat's own, which the terminal shortens from below. Its own size
-  // covers a drawer opening; the stack's `bottom` transition, an empty thread settling into a
-  // thread, republishes at its end, and so does the chat column resizing.
+  // rather than the stack, which holds cards and the strip of linked threads too, and from the foot
+  // of the column the panel is placed in — not this chat's own, which the terminal shortens from
+  // below. Its own size covers a drawer opening; the stack's `bottom` transition, an empty thread
+  // settling into a thread, republishes at its end, and so does the chat column resizing.
   useEffect(() => {
     const root = rootRef.current;
     const stack = stackRef.current;
@@ -595,6 +615,14 @@ export function ChatView() {
     if (!root || !stack || !composer) return;
     const doc = document.documentElement.style;
     const publish = () => {
+      // A new thread's hero and composer are centred rather than at the foot of the pane, and the
+      // card clears them on the left anyway: there it takes the pane's full height instead of
+      // stopping half-way down.
+      const state = useApp.getState();
+      if (!state.selectedId && !state.pendingSetup) {
+        doc.setProperty("--rc-composer-top", "0px");
+        return;
+      }
       // The chat is `relative`, so its offset parent is the column that holds it and the terminal:
       // the same box the floating panel is positioned against, whose foot the terminal moves.
       const host = root.offsetParent instanceof HTMLElement ? root.offsetParent : root;
@@ -624,7 +652,14 @@ export function ChatView() {
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
       aria-label="Chat"
       onMouseDown={releaseComposer}
-      style={{ "--rc-lane-inset-end": `${laneInset}px` } as React.CSSProperties}
+      style={
+        {
+          "--rc-lane-inset-end": `${lane.shift}px`,
+          // The lane's own cap, narrowed to the room beside an open card. Left
+          // unset while it fits, so the setting's own rem cap (Settings › Chat) stands.
+          ...(lane.cap === null ? {} : { "--rc-chat-content-max-width": `${lane.cap}px` }),
+        } as React.CSSProperties
+      }
     >
       {showsBanner && (
         <NewThreadBanner
@@ -646,13 +681,16 @@ export function ChatView() {
       ) : (
         <div className="flex-1" />
       )}
-      {/* The transcript scrolls the whole pane height and passes under the composer's glass.
-          The strip the tray sits on is scrimmed, so small footer labels never fight the text
-          behind them; the box above it keeps the text coming through. */}
+      {/* The whole stack sits on one surface, as tall as the stack and the gap above it, so a
+          queued message or the strip of linked threads is never half-hidden under the composer's
+          glass; the transcript's text fades into it at the top. */}
       {!isNew && (
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-[72px]"
-          style={{ background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 16px)" }}
+          className="pointer-events-none absolute inset-x-0 bottom-0"
+          style={{
+            height: stackHeight + 24,
+            background: "linear-gradient(to bottom, transparent 0, var(--rc-bg) 16px)",
+          }}
         />
       )}
       <div

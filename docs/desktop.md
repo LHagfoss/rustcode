@@ -597,20 +597,22 @@ composer's keys stay outside the table.
   open the file in the editor at that line, resolved against the thread's
   folder (`open_in_editor`: VS Code, Cursor or Zed when installed, else
   the default text editor).
-- **Right panel.** Changes, Agents and Pull requests share one docked,
-  full-height pane at the window's right edge (`src/ui/RightPanel.tsx`),
-  the sidebar's twin: tabs between them, a close button, a draggable left
-  edge (kept, and moved with ←/→ or Home/End), Escape to close, and ⌘⌥B
-  to toggle it. A thread opens with the panel on the view it last showed
+- **Right panel.** Changes, Agents and Pull requests share one floating card at
+  the window's right edge (`src/ui/RightPanel.tsx`): the thread details card's
+  surface, full height, inset from the window's edges by the same gap, with
+  tabs between them, a close button, a draggable left edge (kept, and moved
+  with ←/→ or Home/End), Escape to close, and ⌘⌥B to toggle it. A thread opens
+  with the panel on the view it last showed
   (Changes when that view has nothing to show here), unless the user closed it
   on that thread; the new-thread screen opens without a panel (⌘⌥B still
   opens one), and settling the selected thread while the chat is showing
   closes it and leaves that thread. Its Changes read belongs to the thread's
   folder: an answer for the last thread's folder is dropped and never drawn
   with this thread's name, and while the turn runs the panel says the changes
-  are read when it ends. It narrows to leave the chat its room; when the
-  column beside the sidebar cannot hold both, it floats over the transcript
-  and stops above the composer.
+  are read when it ends. It takes no slot, so the chat keeps the pane and the
+  lane centres in the room the card leaves, narrowing only when that room is
+  too small to read; under 320px of room the card floats over the lane, which
+  steps clear as far as it can. The card stops above the composer.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
