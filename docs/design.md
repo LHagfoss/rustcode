@@ -695,6 +695,22 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`
   (or `warning` for notices), text `text-fg-muted`, actions at the right
   as secondary pills. No coloured border or tinted background.
+- **Markdown in a reply** (`ui/Markdown.tsx`): 14px at 1.625 in `fg` at 90%,
+  the blocks in one column with a 10px gap and no block margins of their own.
+  A heading takes one more step above it than the gap gives it (h1/h2 12px,
+  h3 8px, h4 6px) so it groups with the text it heads; bold is semibold 600,
+  never the browser's 700. A fenced block is one `rounded-lg bg-code-bg`
+  surface — the one the terminal and a reply's own diagrams use, so two fences
+  in one reply do not read as two materials — with a `text-caption
+  text-fg-muted` language in its head, a Copy pill, and the code in
+  `font-mono text-callout leading-[18px]`, scrolling sideways rather than
+  wrapping. Inline code is `rounded-sm bg-fill` at 0.85em; a task item's
+  checkbox is its marker (no bullet beside it, the box in the marker's place);
+  nested lists step their marker (disc, circle, square; decimal, letters,
+  roman) rather than only indenting; a table sits on its own `bg-fill-subtle`
+  card with a hairline under every row but the last; a quote is that same card
+  with a 3px bar in the gutter. Pictures, `hr`, links and formulas follow the
+  radius and token rules above.
 
 ## Do / Don't
 
