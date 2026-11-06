@@ -1,3 +1,16 @@
+## [v1.16.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.16.1) - 2026-11-06
+
+### Features
+- Agent marks are solid circles without a border, so overlapping marks no longer show through each other. (#3097)
+- The composer is rounder with even padding and a larger `+` button, header button groups sit on a track, and the side-panel toggle is always rightmost. (#3098)
+- The chat has more room between steps and turns, and tool rows sit quieter under the prose without a line under each. (#3099)
+- The data store gains provider request, harness message and operational event tables, with opt-in payload capture, redaction and bounded retention. (#3100)
+- The built-in harness records each provider request attempt (timing, status, bytes, tokens) in the data store for `query_data`. (#3101)
+- RustCode records every message it exchanges with ACP and Codex harnesses (method, size, latency) in the data store for `query_data`. (#3102)
+- Agents can page through a thread's recorded activity (events, provider requests, harness messages) with the new `read_activity` tool. (#3103)
+- Settings › Advanced can turn on recording of provider request bodies and harness messages (redacted, kept 7 days) for agents to query. (#3104)
+- Agents can pass `client_request_id` to start, message and fan-out calls so a retry after a timeout never duplicates the work. (#3105)
+- Agents can list, edit, cancel or steer the messages they queued to a busy thread with `manage_queue`. (#3106)
 ## [v1.16.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.16.0) - 2026-11-06
 
 ### Features
