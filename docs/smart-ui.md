@@ -39,9 +39,13 @@ self-contained HTML fragment:
 - `<title>` labels the view (the macOS card's heading, default "Interactive
   view"), and `<meta name="description">` is the line under it. The body
   does not repeat the title.
-- Styles and scripts are inline. No framework, package or build step. Colors
-  come from the runtime's variables (below), with system colors as the
-  fallback for clients without the runtime.
+- Styles and scripts are inline, and both are optional: most views need no
+  `<script>`, and one that only uses the kit needs no `<style>` either. An
+  empty `<style></style>` or `<script></script>` is dropped from the page before
+  it runs (`stripEmptyTags`), since agents that write one by habit pay for the
+  bytes. No framework, package or build step. Colors come from the runtime's
+  variables (below), with system colors as the fallback for clients without the
+  runtime.
 - Bundled libraries: `<script src="rustcode-lib:chart.js"></script>` is
   replaced with Chart.js 4.4.7 inline before the page loads
   (`SmartUI.expandingLibraries`). The code ships in the app
@@ -56,8 +60,41 @@ self-contained HTML fragment:
 Only assistant replies run blocks, and only while Smart UI is on. User
 messages, tool output, `html` fences, a fence without `v1`, and a fence
 with another version all show as text. A malformed, oversized, empty or
-unfinished block shows its source with the reason. Copy and Show Source are
+unfinished block shows its source with the reason, except that an unfinished
+block whose reply is still streaming in front of the reader is drawn as it
+arrives (see Streaming below). Copy and Show Source are
 on every card.
+
+## Streaming
+
+The desktop app draws a view while its fence is still arriving, so a long view
+is not a blank "Building an interactive view…" for a whole turn.
+
+- The fragment the app has so far is closed before it is drawn
+  (`closeOpenTags`, `apps/desktop/src/smartui/parse.ts`): a closing tag for each
+  element still open, a half-written tag dropped rather than shown as text, an
+  unfinished `<style>` closed after its partial rules, an unfinished comment
+  cut. One pass over at most 64 KB, so it costs nothing worth measuring.
+- The app starts one frame per streaming block from `buildStreamPage`: the same
+  policy, variables, stylesheet and runtime as a finished page, plus an empty
+  `#rc-stream` that `stream` messages fill. Injected HTML never runs a script,
+  so the view's own script waits for the fence to close, and a half-written
+  view cannot loop. The delegated kit behaviour (tabs, sends) does work, since
+  it comes from the runtime.
+- Updates are coalesced to at most one per animation frame and one per 100 ms
+  (`StreamPump`), and the last fragment wins: a fast stream costs a few paints
+  a second, not one per token.
+- The frame reports its content height like any page, but the app only ever
+  grows it while streaming, so what follows in the transcript does not jump as
+  a table fills in. Nothing is remembered for a partial source; the height is
+  remembered for the finished one.
+- The element limit is enforced on the finished page, not on the preview.
+- When the fence closes, the finished page replaces the preview in the same
+  frame slot: Chart.js inlined, the script run once, the height kept. Anything
+  typed into the preview is lost with it, since a preview runs no script.
+
+The limits and the sandbox are the same for both: 64 KB, 5,000 elements, an
+opaque origin, and the policy in [Security model](#security-model).
 
 ## Runtime
 
@@ -75,10 +112,46 @@ in both.
 | Kit: bars, tables, lists | `.rc-bars` of `<div class="rc-bar"><span>Name</span><i style="width:40%"></i><b>40</b></div>`, a bar chart with no canvas; `table.rc-table` (its header sticks inside `.rc-scroll`; elsewhere the runtime wraps it in a box that scrolls sideways on a narrow window); `.rc-list` of `.rc-item`. |
 | Kit: traces and folding | `.rc-steps` of `li.rc-step` with `.rc-done`, `.rc-active`, `.rc-failed` or `.rc-todo`; `details.rc-details` with a chevron drawn in CSS, `.rc-tree` for nested ones, `.rc-file` rows; `.rc-term`, a terminal block. |
 | Kit: actions and citations | `.rc-chip`, a pill follow-up button; `.rc-tabs`; `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`, opening on hover and focus inside the page's width. |
-| Kit: behaviour, no script | One delegated listener: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check. `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
+| Kit: behaviour, no script | One delegated listener: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check; on a `<form data-rc-send="text">`, or on a control inside one, the form's named fields are sent after the text as `name: value` lines (a form sends when submitted, never on a click into it, and never navigates). `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
 | Height | The page reports its content, not the document: the body's height or its `scrollHeight`, plus its margins. The body is `position: relative`, so that also counts what is absolutely placed in it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
 | Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colors), so agents set no colors. A page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. System color keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
-| `window.rustcode` | `send(text)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X". It works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
+| `window.rustcode` | `send(text, context?)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X"; `context`, a JSON-serialisable object, follows the text as a fenced `json` block, so a view sends values back structured rather than in prose. The whole message is capped at 2,000 characters, and it works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
+
+### Sending values back
+
+The controls a view draws are only worth something if their state can reach the
+thread. Two ways, and both go through `send`, so both carry the user's gesture,
+the rate limit and the thread's own message list:
+
+```html
+<form data-rc-send="Apply these filters">
+  <select name="range"><option>7d</option><option>30d</option></select>
+  <button>Apply</button>
+</form>
+```
+
+Submitting the form (its button, or Enter in a field) sends "Apply these filters", an empty line, then `range: 7d`: the
+prompt the view wrote, then one `name: value` line per named, non-empty field
+(unchecked boxes and unnamed controls are left out). A control with
+its own `data-rc-send` inside a form sends its text with that form's fields;
+a click anywhere else in the form sends nothing; a `data-rc-send` on a plain control outside a form
+sends its text alone, as before. The form never
+navigates: the runtime prevents it, and the policy would cancel it.
+
+From a script, the second argument of `send` is the structured form of the same
+thing:
+
+```html
+<script>
+  document.querySelector("#range").onchange = (e) =>
+    window.rustcode?.send("Compare these ranges", { range: e.target.value });
+</script>
+```
+
+That sends the text, then `{ "range": "30d" }` as a fenced `json` block, which
+the agent reads as easily as prose and parses as easily as JSON. A context that
+cannot be serialised is dropped and the text still goes; the whole message is
+capped at 2,000 characters.
 
 Which client has what:
 
@@ -115,11 +188,12 @@ root prompt these decide goes from 1,738 bytes / 436 tokens to 1,078 / 243.
 With it off or unsupported the text is exactly what it was;
 `smart_ui_off_and_unsupported_prompts_keep_their_exact_text` holds it byte for
 byte against `rustcode/engine/src/tools/testdata/smart_ui_off_prompts.txt`. The
-skill's `description` is listed in every client's prompt, so it did not change
-either.
+skill's `description` is listed in every client's prompt, so it stays short: it
+gained forms and lost a much longer sentence about when to reach for a view
+(250 bytes before, 204 now).
 
 The `smart-ui` skill is built into the engine
-(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,097 estimated tokens
+(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,096 estimated tokens
 with its front matter; a test keeps it under 1,100) and is
 listed with the other skills as `<built-in>/smart-ui`. It holds the rule, the
 format, limits, the kit with one short example per family and design guidance:
@@ -153,9 +227,11 @@ While the setting is off it carries the same off note as
 the root prompt, so the agent points at Settings › Chat instead of inventing a
 fence. A client that never advertised `smartUi` hears nothing about it.
 
-The block is 1,597 bytes (1,180 before), and a test caps it under 1,600. Dropping
+The block is 1,589 bytes, and a test caps it under 1,600. It was 1,597: saying
+style and script are optional, and that a form sends its fields, cost a few
+bytes and trimming the kit list paid for them. Dropping
 the `rustcode-viz` types pays for it: at visualization level 2 the whole
-`harness_instructions` text goes from 3,386 bytes / 849 tokens to 3,144 / 827 with
+`harness_instructions` text goes from 3,386 bytes / 849 tokens to 3,136 / 826 with
 Smart UI on, against 2,206 / 547 with no Smart UI and no viz taught. It is paid
 on every turn of every external thread, so the test in
 `rustcode/engine/src/tools/tests.rs` caps the whole text at 4 KB.

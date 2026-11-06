@@ -138,6 +138,12 @@ function useNow(active: boolean) {
  * nothing) take no room: nothing mounts to measure them, so an estimate above zero would push every
  * row below it down and leave a blank strip at the end of the scroll.
  */
+/** Whether the reader has text marked: following the stream would scroll it away. */
+function selecting(): boolean {
+  const s = window.getSelection();
+  return !!s && s.rangeCount > 0 && !s.isCollapsed;
+}
+
 export function estimatedRowHeight(row: Row | undefined, hidden = false): number {
   if (hidden) return 0;
   if (!row) return 24;
@@ -203,6 +209,15 @@ function paintMatches(root: HTMLElement | null, query: string, current: HTMLElem
  * animates `transform`, and the two must not overwrite each other.
  */
 const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
+
+/**
+ * The transcript's vertical rhythm, in two values: one between the items of a
+ * turn (narration, a tool row, a group, the answer) and one between turns, which
+ * is where a message starts and a footer ends. A row draws no air of its own, so
+ * these two decide every gap in the lane and nothing reserves room for a hover.
+ */
+const ITEM_GAP = 8;
+const TURN_GAP = 16;
 
 /** A turn's change line, wherever it draws: the completion card, else the checkpoint chip. */
 function ChangeLine({ threadId, line }: { threadId: string; line: TurnChangeLine }) {
@@ -410,21 +425,17 @@ export function Transcript({
     return set;
   }, [rows]);
 
-  // The reply each turn footer takes over: the last reply before it, whose own row then
-  // stays clean, so a finished turn shows one action row under its last reply, not two.
+  // The reply each turn footer copies and forks: the last reply before it. Nothing under that
+  // reply draws actions, so a finished turn shows one action row, at its foot.
   const turnReply = useMemo(() => {
     const byEnd: Record<string, { id: string; text: string }> = {};
-    const terminal = new Set<string>();
     let last: { id: string; text: string } | undefined;
     for (const item of thread.items) {
       if (item.kind === "assistant") last = { id: item.id, text: item.text };
       else if (item.kind === "user") last = undefined;
-      else if (item.kind === "turnEnd" && last) {
-        byEnd[item.id] = last;
-        terminal.add(last.id);
-      }
+      else if (item.kind === "turnEnd" && last) byEnd[item.id] = last;
     }
-    return { byEnd, terminal };
+    return { byEnd };
   }, [thread.items]);
 
   const completions = useMemo(() => {
@@ -602,12 +613,13 @@ export function Transcript({
     requestAnimationFrame(toBottom);
   }, [thread.id]);
 
-  // Whatever grows (a streamed chunk, a measured row, the composer) keeps a pinned view at the bottom.
+  // Whatever grows (a streamed chunk, a measured row, the composer) keeps a pinned view at the bottom,
+  // unless the reader is marking text: a selection must not scroll out from under them mid-stream.
   useEffect(() => {
     const inner = innerRef.current;
     if (!inner) return;
     const observer = new ResizeObserver(() => {
-      if (pinned.current) toBottom();
+      if (pinned.current && !selecting()) toBottom();
     });
     observer.observe(inner);
     return () => observer.disconnect();
@@ -615,7 +627,7 @@ export function Transcript({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: new rows and new text re-pin
   useLayoutEffect(() => {
-    if (pinned.current) toBottom();
+    if (pinned.current && !selecting()) toBottom();
   }, [rows, toBottom, bottomInset]);
 
   // The timeline's turns: one per user message. Kept as the same array while they do not change,
@@ -874,41 +886,28 @@ export function Transcript({
               const afterDivider =
                 (prev?.item?.kind === "notice" && prev.item.tone === "info") ||
                 (prev?.item?.kind === "user" && !!prev.item.wake);
-              // A wake divider is the turn's own first line: the work under it sits on it, and the
-              // next turn starts a full gap below, the same one a message gets.
-              const dividerGap = afterDivider ? 6 : 16;
+              // A message starts a turn and a footer ends it, so those two rows take the wider gap;
+              // everything inside a turn sits on the one value.
+              const gap =
+                v.index === 0
+                  ? 0
+                  : item?.kind === "user" || prev?.item?.kind === "user"
+                    ? TURN_GAP
+                    : ITEM_GAP;
+              // A wake divider is the turn's own first line: the work under it sits on it.
+              const turnGap = afterDivider ? ITEM_GAP : gap;
               if (row.fold) {
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                     <div
                       className={cx("mx-auto w-full max-w-[var(--rc-chat-content-max-width)]", LANE_MOTION)}
-                      style={{ paddingTop: v.index === 0 ? 0 : dividerGap }}
+                      style={{ paddingTop: v.index === 0 ? 0 : turnGap }}
                     >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} rule={!afterDivider} />
                     </div>
                   </div>
                 );
               }
-              // 16 between messages, 6 around work, one run of work tight.
-              const workLike = (r?: Row) =>
-                !!r?.group ||
-                !!r?.agents ||
-                !!r?.threads ||
-                !!r?.activity ||
-                !!r?.approval ||
-                r?.item?.kind === "tool" ||
-                r?.item?.kind === "thought";
-              const gap =
-                v.index === 0
-                  ? 0
-                  : workLike(row) && workLike(prev)
-                    ? 0
-                    : prev?.working || prev?.fold || workLike(row) || workLike(prev)
-                      ? 6
-                      : 16;
-              // A wake divider is the turn's own first line: the work under it sits on it, and the
-              // next turn starts a full gap below, the same one a message gets.
-              const turnGap = afterDivider ? 6 : gap;
               // A turn whose footer has nothing to add leaves no row, and no gap for one.
               if (item?.kind === "turnEnd" && footerless.has(item.id)) return null;
               return (
@@ -989,7 +988,6 @@ export function Transcript({
                         item={item}
                         threadId={thread.id}
                         streaming={thread.running && v.index === lastIndex}
-                        inTurnFoot={turnReply.terminal.has(item.id)}
                       />
                     ) : item?.kind === "thought" ? (
                       <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
@@ -1014,7 +1012,6 @@ export function Transcript({
                         item={item}
                         folded={foldedEnds.has(item.id)}
                         timeInFold={timeInFold.has(item.id)}
-                        lastTurn={item.id === lastEnd}
                         threadId={thread.id}
                         reply={turnReply.byEnd[item.id]?.text}
                         completion={footerChanges[item.id]?.completion}

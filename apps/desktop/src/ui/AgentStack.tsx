@@ -1,9 +1,9 @@
 // The overlapping marks a parent shows for the threads it started, in place of
-// child rows: at most three icons, then `+N`, what needs you first, and one
+// child rows: at most three circles, then `+N`, what needs you first, and one
 // quiet sign that work is under way. The same stack in the sidebar's rows and in
 // the chat's group cards, at two sizes (state/agentStack.ts).
 
-import { Bot, Check, X } from "lucide-react";
+import { Bot } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   type AgentStackView,
@@ -73,7 +73,25 @@ function StackTip({ view }: { view: AgentStackView }) {
   );
 }
 
-/** The icons alone, for a trigger that has its own card: at most three, `+N`, one sign of work. */
+/** The circle every mark draws in: one size in a sidebar row, one on a group card. */
+const MARK_SIZE = { sidebar: 16, chat: 20 } as const;
+/** The glyph fills this much of the circle, so a π is legible at 16px. */
+const GLYPH = 0.6;
+/** Icons overlap by this much of the diameter; the ring between them is what keeps them apart. */
+const OVERLAP = 0.3;
+/** The one badge a stack draws, on the last of its icons. */
+const BADGE = 8;
+
+/**
+ * The icons alone, for a trigger that has its own card: at most three, `+N`, one
+ * sign of work.
+ *
+ * Each icon is one clean circle with a hairline ring in the surface it sits on,
+ * so overlapping marks read as separate instead of merging into a grey blob,
+ * and the state is ONE badge on the stack rather than a badge per icon: what
+ * needs you, else what failed. A stack whose marks all finished shows none of
+ * it; the text beside it already says `done`.
+ */
 export function AgentMarks({
   agents,
   size = "sidebar",
@@ -86,50 +104,52 @@ export function AgentMarks({
   const harnesses = useApp((s) => s.harnesses?.harnesses);
   const view = agentStack(agents, { idle: size === "chat" ? "show" : "hide" });
   const chat = size === "chat";
+  // The ring takes the colour of what the stack sits on: that is the whole separation.
   const ring = tone === "sidebar" ? "ring-sidebar" : "ring-surface";
-  const icon = chat ? 24 : 18;
+  const icon = MARK_SIZE[size];
+  const glyph = Math.round(icon * GLYPH);
+  const overlap = Math.round(icon * OVERLAP);
+  // One badge for the stack as a whole, on its last icon.
+  const badge = view.state === "needs" ? "bg-warning" : view.state === "failed" ? "bg-danger" : undefined;
+  const last = view.visible.at(-1)?.id;
   return (
     <span className="flex items-center">
       {view.visible.map((agent, i) => (
         <span
           key={agent.id}
           className={cx(
-            "relative flex shrink-0 items-center justify-center rounded-full bg-fill ring-2",
-            // What needs you keeps a warning ring: the one mark that has to be seen at a glance.
-            agent.state === "needs" ? "ring-warning" : ring,
-            i > 0 && (chat ? "-ml-2" : "-ml-1.5"),
+            "relative flex shrink-0 items-center justify-center rounded-full bg-fill text-fg-muted ring-[1.5px]",
+            ring,
           )}
-          style={{ width: icon, height: icon }}
+          style={{
+            width: icon,
+            height: icon,
+            marginLeft: i > 0 ? -overlap : undefined,
+          }}
         >
           {agent.harness ? (
             <HarnessIcon
               id={agent.harness}
               name={harnesses?.find((h) => h.id === agent.harness)?.name}
-              size={chat ? 13 : 11}
+              size={glyph}
+              plain
             />
           ) : (
-            <Bot size={chat ? 13 : 10} className="text-fg-muted" />
+            <Bot size={glyph} className="text-fg-muted" />
           )}
-          {chat && (agent.state === "done" || agent.state === "failed") && (
-            // The group card keeps the avatar's own badge once its agents are done.
+          {badge && agent.id === last && (
             <span
               aria-hidden
-              className={cx(
-                "-right-1 -bottom-1 absolute flex size-3 items-center justify-center rounded-full bg-bg ring-2",
-                ring,
-              )}
-            >
-              {agent.state === "failed" ? (
-                <X size={9} strokeWidth={3} className="text-danger" />
-              ) : (
-                <Check size={9} strokeWidth={3} className="text-success" />
-              )}
-            </span>
+              className={cx("-right-px -bottom-px absolute rounded-full ring-[1.5px] rc-dot-in", ring, badge)}
+              style={{ width: BADGE, height: BADGE }}
+            />
           )}
         </span>
       ))}
       {view.extra > 0 && (
-        <span className={cx("ml-1 shrink-0 text-fg-muted tabular", chat ? "text-caption" : "text-[10px]")}>
+        <span
+          className={cx("shrink-0 text-fg-muted tabular", chat ? "ml-1 text-caption" : "ml-0.5 text-[10px]")}
+        >
           +{view.extra}
         </span>
       )}

@@ -251,6 +251,9 @@ const components: Components = {
     ) : (
       <a
         href={href}
+        // A press-and-drag over a link picks the words up; without this the engine starts a
+        // link drag instead, and the words in the reply cannot be selected through it.
+        draggable={false}
         onClick={(e) => {
           e.preventDefault();
           if (!href) return;

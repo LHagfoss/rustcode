@@ -380,25 +380,30 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   by the row `session/new` adds), so a thread being spawned never shows as a
   row of its own in between. The tree is resolved against every session, so a
   project filter or a search never turns a delegate into a top-level row. Its
-  parent's second line ends with a stack of at most three 18px round marks
-  (`ui/AgentStack.tsx`), overlapping by 6px with a 2px ring in the sidebar's
-  surface, then `+N` past the third and one quiet accent spinner while anything
-  works. What needs you comes first, with a small `warning` dot; finished
-  delegates show nothing, no dot and no count. The slot is a fixed 74px, so a
-  count going from one to three never moves the title's start, the age or the
-  status. Hovering lists the running threads and their state, and the row opens
-  the parent. The open delegate itself is drawn as an indented row, with a
-  subtle tree line, directly under its parent's row, unfolding in with the
-  list's fold motion and folding away when the user opens another thread or goes
-  back; the threads between it and its nearest row of its own come with it, and
-  a parent in the Settled shelf opens the shelf and its slice far enough to be
-  reached. A delegated thread whose parent is gone from the app entirely keeps a
-  row of its own: with no parent row to sit under, nesting it would take it out
-  of the app altogether. A search lists every match, delegates included, each
-  row saying `in <parent title>` rather than un-nesting the tree. In the
-  chat's group cards the same stack reads at 24px with a `surface` ring; once
-  all are done it shows the finished marks instead, with no spinner. Logic:
-  `state/agentStack.ts`, `state/topLevel.ts`.
+  parent's second line ends with a stack of at most three 16px circles
+  (`ui/AgentStack.tsx`), each with a 1.5px ring in the sidebar's surface so the
+  overlapping marks stay apart, the harness glyph filling 60% of the circle,
+  the circles overlapping by 30% of the diameter, then `+N` past the third and
+  one quiet accent spinner while anything works. What needs you comes first,
+  and the stack's state is one badge for the whole stack rather than one per
+  mark: an 8px ringed dot on the last circle, in `warning` when something needs
+  you, in `danger` when something failed; finished delegates draw neither a
+  badge nor a count. The slot is a fixed 74px, so a count going from one to
+  three never moves the title's start, the age or the status. Hovering lists
+  the running threads and their state, and the row opens the parent. The open
+  delegate itself is drawn as an indented row, with a subtle tree line, directly
+  under its parent's row, unfolding in with the list's fold motion and folding
+  away when the user opens another thread or goes back; the threads between it
+  and its nearest row of its own come with it, and a parent in the Settled shelf
+  opens the shelf and its slice far enough to be reached. A delegated thread
+  whose parent is gone from the app entirely keeps a row of its own: with no
+  parent row to sit under, nesting it would take it out of the app altogether.
+  A search lists every match, delegates included, each row saying
+  `in <parent title>` rather than un-nesting the tree. In the
+  chat's group cards the same stack reads at 20px with a `surface` ring; once
+  all are done it shows the finished marks instead, with no spinner and no badge
+  (the text beside it says `done`). Logic: `state/agentStack.ts`,
+  `state/topLevel.ts`.
 - **Thread details:** the right panel's first view (`ui/ThreadDetails.tsx`), the
   one a thread opens on: what the thread is and where it works first (folder,
   terminal, branch, changes, pull requests), then what it is as facts. The
@@ -572,10 +577,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   column, then a sentence of the two most frequent actions,
   `Read 4 files and ran 2 commands`, the rest as `performed N other
   actions`, in `text-body text-fg-muted`, the failed count in `danger`,
-  and the fold chevron. It sits 2px from neighbouring tool rows, like they
-  do. A tool row itself is quiet: 24px high (`min-h-6`), a 16px icon in
-  the 18px column, its title in `text-body text-fg-muted`, the summary in
-  `text-body text-fg-faint`, the chevron only on hover.
+  and the fold chevron. The transcript's gap sets its air, not the row: 8px
+  (`ITEM_GAP`) from a neighbouring tool row, from a narration paragraph or from
+  a group, the same value everywhere inside a turn, and 16px (`TURN_GAP`) where
+  a message starts a turn and a footer ends it. A tool row itself is quiet:
+  24px high (`min-h-6`), a 16px icon in the 18px column, its title in
+  `text-body text-fg-muted`, the summary in `text-body text-fg-faint`, the
+  chevron only on hover.
 - **Subagent row:** a subagent (Claude Code's `Agent`/`Task` call,
   RustCode's `spawn_agent`) is one row in the tool rows' grammar: the `Orb`
   (a 3×3 dot ring whose light travels clockwise) while it works, else a
@@ -608,8 +616,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   most 80% wide, `p-3`; consecutive messages soften the corners they share,
   `rounded-tr-md` / `rounded-br-md`; its time and actions on hover, 12px,
   clipped to the bubble), the final answer (the replies after the last
-  step), warnings and errors, and the footer (time, copy, Changes), which
-  says only the time: no duration, so a folded turn never states it twice.
+  step), warnings and errors, and the footer, which says only the time: no
+  duration, so a folded turn never states it twice.
+  Nothing else in a turn draws actions: an intermediate reply, a thought and a
+  tool row only narrate what the turn does, and none of them holds room for a
+  hover it would answer. A finished turn's footer is its one action row, always
+  in view and never waiting for a hover: 20px high (`h-5`), copy and fork at
+  12px beside the time, then the Changes chip.
   A turn's changes are one line, never two: the completion card
   (`N files changed +A −R ›`, with the checks and the files it opens)
   where the harness reported one, else the checkpoint's `Changes +A −R`
@@ -620,8 +633,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   there when the turn is opened and out of the way when scrolling past
   (and its Restore goes with it). The right panel's Changes view is the
   thread's own and stays as it is.
-  Copy and fork wait for a hover or keyboard focus on the footer, and stay in
-  view on the newest finished turn. Opening it shows the steps in order,
+  Opening the fold shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
   under a transition; Reduce motion makes it instant). A `<button
   aria-expanded>`, so ⏎ and Space toggle it. Opened turns are kept per
