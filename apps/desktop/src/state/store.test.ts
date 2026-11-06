@@ -24,6 +24,7 @@ import {
   completeOnboarding,
   connect,
   createSession,
+  DEFAULT_PANEL,
   editMessage,
   ensureHarnessModels,
   errorText,
@@ -1298,8 +1299,13 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
 
+    // The panel's own default is the thread's overview, not a view it may have nothing for.
+    expect(DEFAULT_PANEL).toBe("details");
+    // A thread opens with the panel, on the view it last showed.
+    showPanel(DEFAULT_PANEL);
+    setPanel(null);
     selectThread(a!.id);
-    expect(useApp.getState().panel).toBe("changes");
+    expect(useApp.getState().panel).toBe("details");
     // Closed by hand, then opened again from the sidebar: it stays closed on this thread.
     setPanel(null);
     expect(useApp.getState().panel).toBeNull();
@@ -1307,9 +1313,9 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().panel).toBeNull();
     // The keyboard toggle closes it the same way, and opens it again.
     toggleRightPanel();
-    expect(useApp.getState().panel).toBe("changes");
+    expect(useApp.getState().panel).toBe("details");
     selectThread(a!.id);
-    expect(useApp.getState().panel).toBe("changes");
+    expect(useApp.getState().panel).toBe("details");
 
     // Another thread opens the panel, with the view it last showed; the close
     // a thread was given does not follow the user to the next one.
@@ -1321,11 +1327,11 @@ describe("engine controller with the mock engine", () => {
     selectThread(a!.id);
     expect(useApp.getState().panel).toBe("pulls");
 
-    // A view with nothing to show falls back to Changes: the Thread tab needs
-    // a thread to peek, and a project without pull requests has no tab for one.
+    // A view with nothing to show falls back to the overview: the Thread tab
+    // needs a thread to peek, and a project without pull requests has no tab.
     showPanel("peek");
     selectThread(b!.id);
-    expect(useApp.getState().panel).toBe("changes");
+    expect(useApp.getState().panel).toBe("details");
 
     // Opening the thread the Thread tab shows ends the peek, so the panel is
     // not left showing the thread that is now the one on screen.
@@ -1333,7 +1339,7 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().panel).toBe("peek");
     selectThread(b!.id);
     expect(useApp.getState().peekId).toBeNull();
-    expect(useApp.getState().panel).toBe("changes");
+    expect(useApp.getState().panel).toBe("details");
 
     // A new thread has nothing beside it to show in the Thread tab.
     peekThread(a!.id);

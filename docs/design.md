@@ -193,10 +193,9 @@ groups), 24 (between sections). The chat lane is **832px**
 (`--rc-chat-content-max-width`, 52rem) for the transcript's rows and the
 composer alike, inset by a 12px gutter, 20px from the `sm` breakpoint.
 Settings › Chat › Chat width moves that one cap and nothing else: Wide is
-72rem, Full is the pane's own width. While a right-hand card is open the
-lane centres in the room the card leaves (`pane - card - its two 12px
-gaps`), narrowed to that room when it is below the cap, so the conversation
-reads centred beside the card instead of off-centre under it.
+72rem, Full is the pane's own width. A right-hand card does not move the lane:
+it floats over the chat, which keeps its place and its width while the
+transcript scrolls under the card (Right panel below).
 
 ## Type
 
@@ -607,9 +606,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   width on screen (Shift 96px), Home/End to the ends, ⏎ the default. Escape
   inside either surface closes the panel (unless a field in it is being edited),
   focus goes into it when a shortcut opens it with nothing focused, and closing
-  hands focus back. The lane centres in the room the card leaves, narrowed to it
-  when that room is under its cap, and a column too narrow for a lane that
-  reads has the card float over the chat instead. Every control under the
+  hands focus back. The card floats **over** the chat: the lane keeps its place
+  and its width, the transcript scrolls under the card, and every card ends
+  above the composer so a field being typed in is never covered. A thread opens
+  the panel on its own overview (Details), and a view that has nothing to show
+  in this project — a Pull requests tab without pull requests, a Thread tab
+  with nothing peeked — falls back to it. Every control under the
   transcript — composer, its slash drawer, approvals, linked threads, a report —
   paints above the card, so none of it is ever out of reach; a new thread's hero
   is not a control, and on a narrow column the card floats over it. Each stack

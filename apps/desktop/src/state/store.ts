@@ -3232,7 +3232,13 @@ export function setTerminalOpen(open: boolean) {
 }
 
 /** The panel last shown, so ⌘⌥B brings it back. */
-let lastPanel: NonNullable<AppState["panel"]> = "changes";
+/**
+ * The view the panel opens with: the thread's own overview. Changes, Pull
+ * requests and the Thread tab are a tab away, and whichever was last shown
+ * opens again on the next thread.
+ */
+export const DEFAULT_PANEL: NonNullable<AppState["panel"]> = "details";
+let lastPanel: NonNullable<AppState["panel"]> = DEFAULT_PANEL;
 
 /**
  * The view to show: the one last shown, when this project or thread offers it
@@ -3240,8 +3246,8 @@ let lastPanel: NonNullable<AppState["panel"]> = "changes";
  * tab needs a thread to show).
  */
 function rememberedPanel(s: AppState): NonNullable<AppState["panel"]> {
-  if (lastPanel === "pulls" && !s.agent?.pullRequests) return "changes";
-  if (lastPanel === "peek" && !s.peekId) return "changes";
+  if (lastPanel === "pulls" && !s.agent?.pullRequests) return DEFAULT_PANEL;
+  if (lastPanel === "peek" && !s.peekId) return DEFAULT_PANEL;
   return lastPanel;
 }
 

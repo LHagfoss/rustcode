@@ -203,7 +203,6 @@ function paintMatches(root: HTMLElement | null, query: string, current: HTMLElem
  * The `translate` property, not `transform`: a row's own rise-in animation
  * animates `transform`, and the two must not overwrite each other.
  */
-const LANE_SHIFT = { translate: "calc(-1 * var(--rc-lane-inset-end, 0px))" } as const;
 const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
 
 /** A turn's change line, wherever it draws: the completion card, else the checkpoint chip. */
@@ -887,7 +886,7 @@ export function Transcript({
                         "mx-auto w-full max-w-[var(--rc-chat-content-max-width)] px-3 sm:px-5",
                         LANE_MOTION,
                       )}
-                      style={{ paddingTop: v.index === 0 ? 0 : dividerGap, ...LANE_SHIFT }}
+                      style={{ paddingTop: v.index === 0 ? 0 : dividerGap }}
                     >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} rule={!afterDivider} />
                     </div>
@@ -924,7 +923,7 @@ export function Transcript({
                       LANE_MOTION,
                       row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
                     )}
-                    style={{ paddingTop: turnGap, ...LANE_SHIFT }}
+                    style={{ paddingTop: turnGap }}
                   >
                     {row.approval ? (
                       <ApprovalRow request={row.approval} pending={approvals} number={row.approvalNumber} />
@@ -1036,7 +1035,6 @@ export function Transcript({
                         LANE_MOTION,
                         "rc-expand",
                       )}
-                      style={LANE_SHIFT}
                     >
                       {foldChanges.get(v.index)}
                     </div>
@@ -1076,7 +1074,7 @@ export function Transcript({
         )}
         style={{
           bottom: `max(${bottomInset - 8}px, calc(var(--rc-composer-float, 0px) + 8px))`,
-          left: "calc(50% - var(--rc-lane-inset-end, 0px))",
+          left: "50%",
         }}
       >
         <ArrowDown size={13} />
