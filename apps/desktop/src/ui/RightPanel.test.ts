@@ -1,12 +1,15 @@
-// The right panel's card width is fitted, not fixed (ui/RightPanel.tsx): it
-// keeps the width it was given, but never draws past the column's edges, and the
-// edge it drags or arrows also answer on the keyboard.
+// The right panel's card is fitted, not fixed (ui/RightPanel.tsx): its width
+// keeps what it was given but never draws past the column's edges (and the edge
+// it drags or arrows also answer on the keyboard), and a list view sizes its
+// height to what it holds instead of the room it has.
 
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_WIDTH, MAX, MIN, panelWidth, resizedWidth } from "./RightPanel";
+import { HEADER_HEIGHT } from "./MainHeader";
+import { DEFAULT_WIDTH, MAX, MIN, panelWidth, paneSizing, resizedWidth } from "./RightPanel";
 
-/** The card's gap from the window's edges, on both sides (see RightPanel.tsx). */
-const GAPS = 24;
+/** The gap a card keeps from the window's edges, on one side and on two (see RightPanel.tsx). */
+const GAP = 12;
+const GAPS = GAP * 2;
 
 describe("panel width", () => {
   test("keeps the width it was given when the column has room", () => {
@@ -36,6 +39,26 @@ describe("panel width", () => {
   test("a narrow window does not overwrite the width it was given", () => {
     expect(panelWidth(620, 600)).toBe(600 - GAPS);
     expect(panelWidth(620, 1600)).toBe(620);
+  });
+});
+
+describe("the card's height", () => {
+  test("a list view sizes to its content, capped above the composer", () => {
+    for (const kind of ["changes", "pulls"] as const) {
+      const style = paneSizing(kind);
+      // No foot, so the card takes the height of what it draws.
+      expect(style.bottom).toBeUndefined();
+      // And no more room than it has once the composer is measured in.
+      expect(style.maxHeight).toBe(
+        `calc(100% - ${HEADER_HEIGHT + GAP}px - calc(var(--rc-composer-top, 0px) + ${GAP}px))`,
+      );
+    }
+  });
+
+  test("a transcript keeps the room it has, since it has no height of its own", () => {
+    const style = paneSizing("peek");
+    expect(style.maxHeight).toBeUndefined();
+    expect(style.bottom).toBe(`calc(var(--rc-composer-top, 0px) + ${GAP}px)`);
   });
 });
 

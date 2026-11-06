@@ -590,18 +590,21 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   row's top right, so stacked controls share one left edge.
 - **Right panel:** one `RightPanel` for every side view (Details, Changes,
   Pull requests): a floating card at the window's right edge, inset 12px from
-  its top, right and foot, `rounded-2xl` in the same glass and elevation as
+  its top and right, `rounded-2xl` in the same glass and elevation as
   every other floating surface (`.rc-glass` + `-strong` + `shadow-2`, the
   details card's own surface), so the transcript scrolls under it and the chat
   keeps its full width. The details card is that surface, small (280px) and at
   the top right. A pane's header row is a `HEADER_HEIGHT` band inside the card
   with a segmented switch between the views and a close button, divided from the
   view by a hairline; views add a slim toolbar (`h-9`) under it. It never draws
-  past the column's edges (320–760px, kept as asked, fitted when drawn), and its
-  foot stops above the composer (its top measured into `--rc-composer-top` by
-  `ui/ChatView.tsx`), so the composer stays usable; a new thread's centred hero
-  and composer leave it the pane's full height. The left edge drags and
-  answers the keyboard too: ←/→ 24px from the
+  past the column's edges (320–760px, kept as asked, fitted when drawn). A list
+  view sizes the card to what it holds — one file makes a short card, whose
+  foot sits just under its last row — and caps it above the composer (its top
+  measured into `--rc-composer-top` by `ui/ChatView.tsx`), where the view
+  scrolls inside it, so the composer stays usable; the Thread view is a
+  transcript, which has no height of its own, and takes the room it has. A new
+  thread's centred hero and composer leave the card the pane's full height. The
+  left edge drags and answers the keyboard too: ←/→ 24px from the
   width on screen (Shift 96px), Home/End to the ends, ⏎ the default. Escape
   inside either surface closes the panel (unless a field in it is being edited),
   focus goes into it when a shortcut opens it with nothing focused, and closing
