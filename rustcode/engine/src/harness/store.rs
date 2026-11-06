@@ -2,6 +2,11 @@
 //! `harness.json` in the thread's directory names the harness, the
 //! harness's own session id, the working directory, title, model and
 //! effort, and when it started and last changed.
+//!
+//! This file is what a thread resumes from, so it survives everything that
+//! stops a process: a harness that died, a turn torn down for silence, or the
+//! idle reaper stopping a process nobody is using (`session.rs`). Reaping
+//! changes nothing here — the next start resumes exactly what the thread had.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -104,6 +109,24 @@ mod tests {
             load(&session_id).is_none(),
             "built-in threads have no record"
         );
+    }
+
+    #[test]
+    fn a_record_keeps_everything_a_resume_needs() {
+        let session_id = crate::config::create_detached_session();
+        let mut record = HarnessRecord::new("claude-code", PathBuf::from("/tmp/project"));
+        record.account = Some("paral-2".into());
+        record.native_session_id = Some("native-7".into());
+        record.model = Some("claude-sonnet-5".into());
+        record.effort = Some("high".into());
+        save(&session_id, &record);
+        // A process stopped by the idle reaper writes nothing: reading the
+        // record back is what the next start resumes from.
+        let loaded = load(&session_id).expect("an external thread has a record");
+        assert_eq!(loaded.account, Some("paral-2".into()));
+        assert_eq!(loaded.native_session_id, Some("native-7".into()));
+        assert_eq!(loaded.model, Some("claude-sonnet-5".into()));
+        assert_eq!(loaded.effort, Some("high".into()));
     }
 
     #[test]

@@ -14,7 +14,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
@@ -28,6 +28,17 @@ pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(120);
 /// gauge (`follow_live_usage`). A poll that finds an unchanged log costs one
 /// `stat`.
 pub(crate) const LIVE_USAGE_INTERVAL: Duration = Duration::from_secs(3);
+/// How long a thread keeps its harness process with no turn, no request
+/// waiting on the user and no client activity before the engine stops it:
+/// `[harness_defaults].idle_timeout_minutes`, 0 turning the reaper off.
+pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// The most harness processes the engine keeps running
+/// (`[harness_defaults].max_live_harnesses`); above it the least recently used
+/// are stopped first.
+pub(crate) const DEFAULT_MAX_LIVE: usize = 12;
+/// How often the idle reaper looks. A pass costs one `try_lock` per open
+/// thread and starts no work.
+const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// What an adapter hands the client side.
 pub(crate) enum Output {
@@ -444,6 +455,154 @@ fn note_output(progress: &watchdog::Progress, output: &Output) {
     }
 }
 
+/// The clock the idle reaper reads: when the thread last did anything, whether
+/// a turn is in flight, and whether its process was stopped to be resumed
+/// later. Shared with the output pump, which sees every update, permission
+/// request and answer.
+#[derive(Debug)]
+struct IdleState {
+    last: StdMutex<tokio::time::Instant>,
+    turn: AtomicBool,
+    sleeping: AtomicBool,
+}
+
+/// One turn, as the idle reaper sees it: dropping it ends the turn, whichever
+/// way the turn leaves (a cancel, a failure, or an unwind).
+struct TurnMark(Arc<IdleState>);
+
+impl Drop for TurnMark {
+    fn drop(&mut self) {
+        self.0.turn.store(false, Ordering::Release);
+        self.0.touch();
+    }
+}
+
+impl IdleState {
+    fn share() -> Arc<Self> {
+        Arc::new(Self {
+            last: StdMutex::new(tokio::time::Instant::now()),
+            turn: AtomicBool::new(false),
+            sleeping: AtomicBool::new(false),
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, tokio::time::Instant> {
+        self.last.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// The thread did something: a prompt, a load, an update, an answer.
+    fn touch(&self) {
+        *self.lock() = tokio::time::Instant::now();
+    }
+
+    /// When the thread last did anything; the reaper measures its idle time
+    /// from here.
+    fn last(&self) -> tokio::time::Instant {
+        *self.lock()
+    }
+
+    fn begin_turn(self: &Arc<Self>) -> TurnMark {
+        self.turn.store(true, Ordering::Release);
+        self.touch();
+        TurnMark(Arc::clone(self))
+    }
+
+    /// Back from a reaped process; whether it was asleep.
+    fn wake(&self) -> bool {
+        self.sleeping.swap(false, Ordering::Acquire)
+    }
+}
+
+/// Every external thread this engine has open, so the idle reaper can find one
+/// no client is using. Weak: a closed thread drops out by itself.
+fn open_threads() -> &'static StdMutex<Vec<Weak<ExternalSession>>> {
+    static OPEN: OnceLock<StdMutex<Vec<Weak<ExternalSession>>>> = OnceLock::new();
+    OPEN.get_or_init(Default::default)
+}
+
+/// Note a thread for the idle reaper, and start the reaper the first time a
+/// thread is opened.
+fn register(session: &Arc<ExternalSession>) {
+    let mut open = open_threads()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    open.retain(|known| known.strong_count() > 0);
+    open.push(Arc::downgrade(session));
+    drop(open);
+    start_reaper();
+}
+
+/// The reaper itself: one pass a minute for as long as the engine runs. It is
+/// started once and reads the user's settings on every pass, so turning it off
+/// and on again needs no restart.
+fn start_reaper() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    // Threads are opened from async request handlers; a thread opened outside a
+    // runtime (a test) simply has no reaper.
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    handle.spawn(async {
+        loop {
+            tokio::time::sleep(REAP_INTERVAL).await;
+            reap_pass();
+        }
+    });
+}
+
+/// One pass with the user's settings (`[harness_defaults]`, `config.rs`).
+fn reap_pass() {
+    let timeout = super::config::idle_timeout();
+    let cap = super::config::max_live_harnesses();
+    if timeout.is_none() && cap.is_none() {
+        return;
+    }
+    let sessions = {
+        let mut open = open_threads()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        open.retain(|known| known.strong_count() > 0);
+        open.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
+    };
+    reap_once(&sessions, timeout, cap);
+}
+
+/// Stop the processes that have been idle for `timeout`, then — while more than
+/// `cap` run — the least recently used ones. Answers the threads whose process
+/// was stopped, so a caller (or a test) can say which.
+pub(crate) fn reap_once(
+    sessions: &[Arc<ExternalSession>],
+    timeout: Option<Duration>,
+    cap: Option<usize>,
+) -> Vec<String> {
+    let now = tokio::time::Instant::now();
+    let mut idle = sessions
+        .iter()
+        .filter_map(|session| session.idle_since().map(|since| (since, session)))
+        .collect::<Vec<_>>();
+    // Least recently used first, so the cap takes the oldest of them.
+    idle.sort_by_key(|(since, _)| *since);
+    let mut running = sessions.iter().filter(|session| session.running()).count();
+    let mut reaped = Vec::new();
+    for (since, session) in idle {
+        let quiet = now.saturating_duration_since(since);
+        let too_idle = timeout.is_some_and(|timeout| quiet >= timeout);
+        let over_cap = cap.is_some_and(|cap| running > cap);
+        if !too_idle && !over_cap {
+            continue;
+        }
+        let reason = if too_idle { "idle" } else { "cap" };
+        if session.reap(reason, quiet) {
+            running = running.saturating_sub(1);
+            reaped.push(session.id.clone());
+        }
+    }
+    reaped
+}
+
 pub(crate) struct ExternalSession {
     pub id: String,
     pub harness: ResolvedHarness,
@@ -463,6 +622,9 @@ pub(crate) struct ExternalSession {
     /// `[harness_defaults].silence_timeout_minutes`; `Some(Duration::ZERO)`
     /// turns the deadline off (tests, which cannot rely on the user's config).
     silence: StdMutex<Option<Duration>>,
+    /// When the thread last did anything, whether a turn runs, and whether the
+    /// idle reaper stopped its process (`IdleState`).
+    idle: Arc<IdleState>,
 }
 
 impl ExternalSession {
@@ -479,11 +641,16 @@ impl ExternalSession {
         let (out, mut outputs) = mpsc::unbounded_channel::<Output>();
         let transcript = Arc::new(StdMutex::new(Transcript::new(history)));
         let progress = watchdog::Progress::new();
+        let idle = IdleState::share();
         {
             let transcript = Arc::clone(&transcript);
             let progress = Arc::clone(&progress);
+            let idle = Arc::clone(&idle);
             tokio::spawn(async move {
                 while let Some(output) = outputs.recv().await {
+                    // Anything the thread does renews the idle timer: an update,
+                    // a question, a heartbeat (`reap_once`).
+                    idle.touch();
                     note_output(&progress, &output);
                     match output {
                         Output::Update(update) => {
@@ -497,8 +664,11 @@ impl ExternalSession {
                         Output::Permission { request, reply } => {
                             let waiting = progress.waiting();
                             let asked = sink.request_permission(request);
+                            let answered = Arc::clone(&idle);
                             tokio::spawn(async move {
                                 let _ = reply.send(asked.await);
+                                // The user answered: the thread is in use again.
+                                answered.touch();
                                 drop(waiting);
                             });
                         }
@@ -511,7 +681,7 @@ impl ExternalSession {
                 }
             });
         }
-        Arc::new(Self {
+        let session = Arc::new(Self {
             id,
             cwd: record.cwd.clone(),
             harness,
@@ -526,7 +696,14 @@ impl ExternalSession {
             orchestrator: StdMutex::new(None),
             progress,
             silence: StdMutex::new(None),
-        })
+            idle,
+        });
+        // Only a thread the engine keeps on disk is reaped: tests and scratch
+        // threads have no record to resume.
+        if persist {
+            register(&session);
+        }
+        session
     }
 
     /// Give the harness the orchestration tools from its next start.
@@ -643,6 +820,51 @@ impl ExternalSession {
             dead.kill();
         }
         let record = self.record();
+        let mut options = self.resume_options(&record)?;
+        // The workspace's own servers, with the user config under them: the same list the built-in
+        // harness runs, so Settings › MCP is one place for every harness.
+        let mcp = crate::config::get_config_dir()
+            .map(|dir| crate::config::workspace_mcp_servers_in(&dir, &self.cwd))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|server| server.enabled)
+            .collect();
+        // Signed in to in RustCode (Settings › MCP, `rustcode mcp login`): the harness gets the token.
+        options.mcp = crate::mcp::with_saved_logins(mcp).await;
+        let adapter = Adapter::start(&self.harness, &self.cwd, options, self.out.clone()).await?;
+        let native = adapter.native_session_id();
+        let (model, effort) = adapter.model_and_effort();
+        self.save_record(|record| {
+            record.native_session_id = Some(native);
+            record.model = model.or(record.model.take());
+            record.effort = effort.or(record.effort.take());
+        });
+        let adapter = Arc::new(adapter);
+        // A fresh process: nothing the old one left open still runs.
+        self.progress.reset();
+        self.idle.touch();
+        if self.idle.wake() {
+            // Woken from the idle reaper: the thread resumes the harness's own
+            // session exactly as it was, so nothing went wrong while it slept.
+            crate::logger::operational_event(
+                "harness.resumed",
+                serde_json::json!({
+                    "session_id": self.id,
+                    "harness": self.harness.id,
+                    "native_session_id": self.record().native_session_id,
+                }),
+            );
+        }
+        *slot = Some(Arc::clone(&adapter));
+        Ok(adapter)
+    }
+
+    /// What starting (or restarting) this thread's harness is asked for: the
+    /// harness's own session to resume, the account it ran on, the model and
+    /// effort it ran with (`harness.json`). Nothing is started here, and the
+    /// record is the only source, so a process the idle reaper stopped resumes
+    /// exactly where the thread left off.
+    fn resume_options(&self, record: &HarnessRecord) -> Result<StartOptions, String> {
         // The record names the account; a removed one is an error, never a
         // quiet fall back to the default login.
         let account = match record.account.as_deref() {
@@ -662,43 +884,103 @@ impl ExternalSession {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
-        // The workspace's own servers, with the user config under them: the same list the built-in
-        // harness runs, so Settings › MCP is one place for every harness.
-        let mcp = crate::config::get_config_dir()
-            .map(|dir| crate::config::workspace_mcp_servers_in(&dir, &self.cwd))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|server| server.enabled)
-            .collect();
-        // Signed in to in RustCode (Settings › MCP, `rustcode mcp login`): the harness gets the token.
-        let mcp = crate::mcp::with_saved_logins(mcp).await;
-        let adapter = Adapter::start(
-            &self.harness,
-            &self.cwd,
-            StartOptions {
-                resume: record.native_session_id.clone(),
-                account,
-                model: record.model.clone(),
-                effort: record.effort.clone(),
-                log_session: self.persist.then(|| self.id.clone()),
-                orchestrator,
-                mcp,
-            },
-            self.out.clone(),
-        )
-        .await?;
-        let native = adapter.native_session_id();
-        let (model, effort) = adapter.model_and_effort();
-        self.save_record(|record| {
-            record.native_session_id = Some(native);
-            record.model = model.or(record.model.take());
-            record.effort = effort.or(record.effort.take());
-        });
-        let adapter = Arc::new(adapter);
-        // A fresh process: nothing the old one left open still runs.
+        Ok(StartOptions {
+            resume: record.native_session_id.clone(),
+            account,
+            model: record.model.clone(),
+            effort: record.effort.clone(),
+            log_session: self.persist.then(|| self.id.clone()),
+            orchestrator,
+            // The caller adds the workspace's servers; a test wants none.
+            mcp: Vec::new(),
+        })
+    }
+
+    /// Whether a harness process is running for this thread. A start in
+    /// progress holds the slot, and is counted as running: the reaper never
+    /// races one.
+    pub(crate) fn running(&self) -> bool {
+        match self.adapter.try_lock() {
+            Ok(slot) => slot.as_ref().is_some_and(|adapter| adapter.is_alive()),
+            Err(_) => true,
+        }
+    }
+
+    /// Since when nothing happened on this thread, when the idle reaper may stop
+    /// its process: no turn and no request waiting on the user, no background
+    /// work, and a process there is to stop.
+    ///
+    /// A tool call the last turn left open is not counted: the turn ended, so
+    /// nothing of it runs any more, and a harness's own work reports itself as
+    /// background activity instead.
+    fn idle_since(&self) -> Option<tokio::time::Instant> {
+        if self.closed.load(Ordering::Acquire) || self.idle.turn.load(Ordering::Acquire) {
+            return None;
+        }
+        if self.progress.awaiting_user() || self.progress.background_running() {
+            return None;
+        }
+        self.running().then(|| self.idle.last())
+    }
+
+    /// Whether the idle reaper stopped this thread's process and the next
+    /// prompt starts a new one (`ensure_started`).
+    #[cfg(test)]
+    pub(crate) fn sleeping(&self) -> bool {
+        self.idle.sleeping.load(Ordering::Acquire)
+    }
+
+    /// Stop this thread's harness process the way closing the thread does, and
+    /// keep everything the next prompt needs to resume the harness's own
+    /// session: `harness.json` still names its native session id, account,
+    /// model and effort. The thread is asleep, not crashed — nothing is sent to
+    /// the client and no turn fails.
+    fn reap(&self, reason: &str, quiet: Duration) -> bool {
+        // A running turn holds `turn` for as long as it runs, so this can never
+        // cut one off; a turn that starts now simply gets a new process.
+        let Ok(_turn) = self.turn.try_lock() else {
+            return false;
+        };
+        if self.closed.load(Ordering::Acquire) || self.idle.turn.load(Ordering::Acquire) {
+            return false;
+        }
+        if self.progress.awaiting_user() || self.progress.background_running() {
+            return false;
+        }
+        let Some(adapter) = self
+            .adapter
+            .try_lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+        else {
+            return false;
+        };
+        // A process that had already gone needs no reaping; the next prompt
+        // restarts it anyway.
+        let alive = adapter.is_alive();
+        adapter.kill();
         self.progress.reset();
-        *slot = Some(Arc::clone(&adapter));
-        Ok(adapter)
+        if !alive {
+            return false;
+        }
+        self.idle.sleeping.store(true, Ordering::Release);
+        crate::logger::operational_event(
+            "harness.reaped",
+            serde_json::json!({
+                "session_id": self.id,
+                "harness": self.harness.id,
+                "native_session_id": self.record().native_session_id,
+                "reason": reason,
+                "idle_ms": quiet.as_millis() as u64,
+            }),
+        );
+        crate::dbg_log_for_session!(
+            self.id,
+            "harness {} idle for {}; process stopped, the next message resumes its session",
+            self.harness.id,
+            waited(quiet)
+        );
+        true
     }
 
     /// The running harness's options, or for a thread whose harness has not
@@ -782,6 +1064,8 @@ impl ExternalSession {
         prompt: Vec<ContentBlock>,
     ) -> Result<StopReason, String> {
         let _turn = self.turn.lock().await;
+        // Seen by the idle reaper: no process goes while a turn runs.
+        let _mark = self.idle.begin_turn();
         let _status = crate::thread_status::turn(&self.id);
         if self.persist {
             crate::checkpoints::before_turn(&self.id, &self.cwd, &prompt_text(&prompt), None).await;
@@ -1374,6 +1658,10 @@ mod removed_account_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "reap_tests.rs"]
+mod reap_tests;
 
 #[cfg(test)]
 mod live_usage_tests {
