@@ -268,6 +268,13 @@ export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   changes: { label: "Changes", icon: FileDiff, kind: "cluster", Button: ChangesHeaderButton },
 };
 
+/**
+ * The buttons that toggle the side panel. They always draw after the rest of
+ * the header's buttons, in their kept order, so the panel's control stays the
+ * last, rightmost one the user can reach.
+ */
+const PANEL_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["details", "changes"]);
+
 function Header({
   thread,
   pending,
@@ -284,8 +291,10 @@ function Header({
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
   const title = pending?.title ?? (thread ? (thread.title ?? listed ?? "New thread") : "New thread");
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
-  // The buttons the user keeps, in their order. Each one decides whether this
-  // thread shows it, and the icon buttons share one cluster wherever they land.
+  // The buttons the user keeps, in their order, with the panel's toggles last:
+  // the panel is the last thing beside the chat, so its controls are the last
+  // controls too. Each one decides whether this thread shows it, and the icon
+  // buttons share one cluster wherever they land.
   const right: ReactNode[] = [];
   let cluster: ReactNode[] = [];
   const closeCluster = () => {
@@ -293,7 +302,11 @@ function Header({
     right.push(<Cluster key={`cluster-${right.length}`}>{cluster}</Cluster>);
     cluster = [];
   };
-  for (const id of shown) {
+  const kept = [
+    ...shown.filter((id) => !PANEL_BUTTONS.has(id)),
+    ...shown.filter((id) => PANEL_BUTTONS.has(id)),
+  ];
+  for (const id of kept) {
     const entry = HEADER_BUTTONS[id];
     const node = <entry.Button key={id} thread={thread} />;
     if (entry.kind === "cluster") cluster.push(node);

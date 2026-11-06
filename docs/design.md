@@ -651,17 +651,20 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   in it is being edited), focus goes into it when a shortcut opens it with
   nothing focused, and closing hands focus back to whatever had it, else to the
   header's toggle. While it is closed or closing it is `inert` and takes no
-  pointer, so nothing it draws can be reached. A thread opens
-  the panel on its own overview (Details), and a view that has nothing to show
-  in this project — a Pull requests tab without pull requests, a Thread tab
-  with nothing peeked — falls back to it. ⌘⌥B toggles it with the last
-  view. A thread opens with the panel on the view it last showed (Changes
-  when that view has nothing to show here; `state/store.ts`
-  `panelForThread`); closing it by hand is kept for the thread on screen, so
-  picking that thread again leaves it closed, and viewing another thread opens
-  it again. Opening the thread its Thread tab shows ends the peek and returns
-  the panel to Changes, and a new thread ends it too. The new-thread screen
-  opens without a panel, though ⌘⌥B still opens one there. Settling the selected
+  pointer, so nothing it draws can be reached. The panel belongs to the
+  thread: each thread keeps the view it was last showing, and opening a thread
+  restores exactly that (`state/store.ts` `panelByThread`, next to the width it
+  keeps in `ui/RightPanel.tsx`). A thread never seen opens closed, and nothing
+  ever opens the panel on its own — the header's buttons, the palette, a link
+  that peeks a thread and ⌘⌥B do. A view the thread cannot show when it comes
+  back (Pull requests in a project without them, the Thread tab with nothing
+  peeked) opens nothing rather than a view the user did not pick. ⌘⌥B toggles
+  it, opening the thread's own view when it has one, else its overview
+  (Details); closing it by hand is kept on that thread alone, so picking it
+  again leaves it closed and another thread comes back to its own. Opening the
+  thread its Thread tab shows ends the peek and returns the panel to that
+  thread's own view, and a new thread ends it too. The new-thread screen opens
+  without a panel, though ⌘⌥B still opens one there. Settling the selected
   thread while the chat is showing (its menu, the palette, the sidebar) closes
   the panel and leaves it for the new-thread screen in the same folder, with
   the same Undo the sidebar offers; settling from the board, review or compare

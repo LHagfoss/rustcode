@@ -29,12 +29,14 @@ import {
   errorText,
   fetchHarnessModels,
   forgetPlans,
+  MAX_PANELS,
   mergePlans,
   moveThread,
   onlyCachedPlan,
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
+  parsePanels,
   peekThread,
   permissionModeOf,
   pickNewThreadChoice,
@@ -43,6 +45,7 @@ import {
   planKeyFor,
   planNow,
   plansToCache,
+  prunePanels,
   prunePlans,
   refreshAgents,
   refreshHarnesses,
@@ -1365,58 +1368,126 @@ describe("engine controller with the mock engine", () => {
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
   });
 
-  test("a thread opens with the panel, and a close by hand stands on it", async () => {
+  test("the panel is remembered per thread and never opens on its own", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
 
-    // The panel's own default is the thread's overview, not a view it may have nothing for.
+    // The view ⌘⌥B opens with when a thread has none is the thread's own overview.
     expect(DEFAULT_PANEL).toBe("details");
-    // A thread opens with the panel, on the view it last showed.
-    showPanel(DEFAULT_PANEL);
-    setPanel(null);
-    selectThread(a!.id);
-    expect(useApp.getState().panel).toBe("details");
-    // Closed by hand, then opened again from the sidebar: it stays closed on this thread.
-    setPanel(null);
-    expect(useApp.getState().panel).toBeNull();
-    selectThread(a!.id);
-    expect(useApp.getState().panel).toBeNull();
-    // The keyboard toggle closes it the same way, and opens it again.
-    toggleRightPanel();
-    expect(useApp.getState().panel).toBe("details");
-    selectThread(a!.id);
-    expect(useApp.getState().panel).toBe("details");
 
-    // Another thread opens the panel, with the view it last showed; the close
-    // a thread was given does not follow the user to the next one.
-    showPanel("changes");
+    // A thread never seen opens closed, and picking it again does not change that.
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBeNull();
     setPanel(null);
+    expect(useApp.getState().panel).toBeNull();
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBeNull();
+
+    // Changes opened on A is kept on A alone: B was never seen, so it opens closed.
+    setPanel("changes");
+    expect(useApp.getState().panel).toBe("changes");
+    selectThread(b!.id);
+    expect(useApp.getState().panel).toBeNull();
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBe("changes");
+
+    // A close by hand is kept on that thread too: it survives leaving and returning.
+    setPanel(null);
+    expect(useApp.getState().panel).toBeNull();
+    selectThread(b!.id);
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBeNull();
+
+    // ⌘⌥B opens the thread's own view; closing it with the key is kept on that
+    // thread, and the other thread keeps the view it had.
+    setPanel("changes");
+    selectThread(b!.id);
+    expect(useApp.getState().panel).toBeNull();
+    toggleRightPanel();
+    expect(useApp.getState().panel).toBe(DEFAULT_PANEL);
+    toggleRightPanel();
+    expect(useApp.getState().panel).toBeNull();
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBe("changes");
+    selectThread(b!.id);
+    expect(useApp.getState().panel).toBeNull();
+
+    // Each thread keeps its own view, and a view the user closed opens nothing
+    // by itself when the thread comes back.
+    showPanel("changes");
+    selectThread(a!.id);
+    showPanel("details");
     selectThread(b!.id);
     expect(useApp.getState().panel).toBe("changes");
-    showPanel("pulls");
     selectThread(a!.id);
-    expect(useApp.getState().panel).toBe("pulls");
-
-    // A view with nothing to show falls back to the overview: the Thread tab
-    // needs a thread to peek, and a project without pull requests has no tab.
-    showPanel("peek");
-    selectThread(b!.id);
     expect(useApp.getState().panel).toBe("details");
 
+    // A stored view this project or thread cannot show opens nothing: once the
+    // peek is over, the Thread tab has nothing to show on A.
+    peekThread(b!.id);
+    expect(useApp.getState().panel).toBe("peek");
+    selectThread(b!.id);
+    selectThread(a!.id);
+    expect(useApp.getState().panel).toBeNull();
+
     // Opening the thread the Thread tab shows ends the peek, so the panel is
-    // not left showing the thread that is now the one on screen.
+    // not left showing the thread that is now the one on screen, and B opens
+    // on the view B had.
+    showPanel("changes");
     peekThread(b!.id);
     expect(useApp.getState().panel).toBe("peek");
     selectThread(b!.id);
     expect(useApp.getState().peekId).toBeNull();
-    expect(useApp.getState().panel).toBe("details");
+    expect(useApp.getState().panel).toBe("changes");
 
     // A new thread has nothing beside it to show in the Thread tab.
     peekThread(a!.id);
     startNewThread();
     expect(useApp.getState().peekId).toBeNull();
     expect(useApp.getState().panel).toBeNull();
+  });
+
+  test("the per-thread panel is kept in storage, bounded to the newest entries", async () => {
+    // The app keeps it through `store()`; a test has no window, so it gets one map.
+    const data = new Map<string, string>();
+    const scope = globalThis as unknown as Record<string, unknown>;
+    scope.localStorage = {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => void data.set(key, value),
+    } as unknown as Storage;
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      const [a, b] = useApp.getState().sessions;
+
+      selectThread(a!.id);
+      setPanel("changes");
+      selectThread(b!.id);
+      // The close is kept as well, so a thread that was closed does not come back open.
+      setPanel(null);
+      const kept = JSON.parse(data.get("rustcode.panelByThread") ?? "{}");
+      expect(kept[a!.id]).toBe("changes");
+      expect(kept[b!.id]).toBeNull();
+      // A storage it cannot write to changes nothing: the memory is still in the store.
+      expect(parsePanels(kept)).toEqual(useApp.getState().panelByThread);
+
+      // Junk from another build is dropped, and the oldest entries go past the bound.
+      expect(parsePanels({ [a!.id]: "changes", junk: "nope", [b!.id]: null })).toEqual({
+        [a!.id]: "changes",
+        [b!.id]: null,
+      });
+      expect(parsePanels(null)).toEqual({});
+      const many = Object.fromEntries(
+        Array.from({ length: MAX_PANELS + 3 }, (_, i) => [`t${i}`, i % 2 ? "changes" : null]),
+      );
+      const pruned = parsePanels(many);
+      expect(Object.keys(pruned)).toHaveLength(MAX_PANELS);
+      expect(Object.keys(pruned)[0]).toBe("t3");
+      expect(prunePanels(pruned)).toBe(pruned);
+    } finally {
+      delete scope.localStorage;
+    }
   });
 
   test("trashing the thread in the Thread tab closes that view, and only that view", async () => {
@@ -1446,6 +1517,7 @@ describe("engine controller with the mock engine", () => {
     const [a, b, c] = useApp.getState().sessions;
     selectThread(a!.id);
     await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    setPanel("changes");
     expect(useApp.getState().panel).toBe("changes");
 
     settleThread(a!.id);
@@ -1465,6 +1537,7 @@ describe("engine controller with the mock engine", () => {
 
     // An agent or the engine settling the thread on screen does not move it.
     selectThread(b!.id);
+    setPanel("changes");
     await setThreadStatus(b!.id, "done");
     s = useApp.getState();
     expect(s.selectedId).toBe(b!.id);
@@ -1526,7 +1599,7 @@ describe("engine controller with the mock engine", () => {
     expect(s.threads[a.id]?.running).toBe(true);
   });
 
-  test("the new-thread screen has no panel, and starting a thread opens it", async () => {
+  test("the new-thread screen has no panel, and neither does the thread it starts", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     selectThread(useApp.getState().sessions[0]!.id);
@@ -1535,7 +1608,8 @@ describe("engine controller with the mock engine", () => {
 
     await submit("hello there");
     await until(() => !!selected());
-    expect(useApp.getState().panel).toBe("changes");
+    // A thread never seen opens closed: nothing opens the panel on its own.
+    expect(useApp.getState().panel).toBeNull();
   });
 });
 
