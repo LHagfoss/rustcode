@@ -218,6 +218,21 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { section: "advanced", title: "Engine log", keywords: "log stderr debug errors" },
   {
     section: "advanced",
+    title: "Record request bodies",
+    keywords: "capture payload telemetry privacy redact clip query_data store request body response",
+  },
+  {
+    section: "advanced",
+    title: "Provider requests (built-in harness)",
+    keywords: "capture payload provider request body response redact privacy built-in",
+  },
+  {
+    section: "advanced",
+    title: "Harness messages",
+    keywords: "capture payload harness acp jsonrpc protocol message redact privacy",
+  },
+  {
+    section: "advanced",
     title: "Set up your agents again",
     keywords: "setup onboarding install sign in harness start over",
   },

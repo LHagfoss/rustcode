@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
+import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import {
   BANNER_NAME_DEFAULT,
@@ -1015,6 +1016,88 @@ function AppVersion() {
   );
 }
 
+/**
+ * Payload capture (`docs/data-store.md` › Captured payloads): the engine's own
+ * `capture_provider_payloads` and `capture_harness_rpc_payloads`, which are
+ * global and off by default, so nobody has to hand-edit `config.toml`. The
+ * engine reads both from the config it started with, so a change offers the
+ * restart right below it.
+ */
+function RecordRequestBodiesGroup() {
+  const status = useApp((s) => s.status);
+  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const [capture, setCapture] = useState<PayloadCapture | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const load = useCallback(async () => {
+    try {
+      setCapture(parsePayloadCapture(await request(Method.telemetry)));
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, []);
+  useEffect(() => {
+    if (status === "ready") void load();
+  }, [status, load]);
+  // Both keys are saved together, so a switch turns one on and leaves the other as it was.
+  const save = (next: PayloadCapture) => {
+    void request(Method.telemetrySet, { ...next }).then(
+      (value) => {
+        setCapture(parsePayloadCapture(value));
+        setPending(true);
+        setError(null);
+      },
+      (e) => setError(errorText(e)),
+    );
+  };
+  if (!capture) return <Loading error={error} />;
+  return (
+    <Group
+      title="Record request bodies"
+      footer="Each body is redacted and clipped before it is stored, and dropped after 7 days. Agents query what was kept with query_data (docs/data-store.md). Off, only timing, sizes and status are recorded."
+    >
+      <Row
+        title="Provider requests (built-in harness)"
+        reset={capture.providerPayloads ? () => save({ ...capture, providerPayloads: false }) : undefined}
+        subtitle="Saves each request the built-in harness sends a provider, and a summary of the response, so a slow or failed turn can be read back instead of guessed at."
+      >
+        <Switch
+          label="Provider requests (built-in harness)"
+          checked={capture.providerPayloads}
+          onChange={(providerPayloads) => save({ ...capture, providerPayloads })}
+        />
+      </Row>
+      <Row
+        title="Harness messages"
+        reset={capture.harnessRpcPayloads ? () => save({ ...capture, harnessRpcPayloads: false }) : undefined}
+        subtitle="Saves each message exchanged with a harness (ACP or Codex JSON-RPC), so a failed handshake or tool call can be read back."
+      >
+        <Switch
+          label="Harness messages"
+          checked={capture.harnessRpcPayloads}
+          onChange={(harnessRpcPayloads) => save({ ...capture, harnessRpcPayloads })}
+        />
+      </Row>
+      {error && <Row title="Could not save" subtitle={error} />}
+      {pending && (
+        <Row title="Restart the engine to apply" subtitle="The engine reads these when it starts.">
+          <Action
+            prominent
+            disabled={anyRunning}
+            onClick={() => {
+              setPending(false);
+              void restartEngine();
+            }}
+          >
+            Restart Engine
+          </Action>
+        </Row>
+      )}
+    </Group>
+  );
+}
+
 function AdvancedPage() {
   const status = useApp((s) => s.status);
   const detail = useApp((s) => s.statusDetail);
@@ -1038,6 +1121,7 @@ function AdvancedPage() {
           <Action onClick={() => void restartEngine()}>Restart</Action>
         </Row>
       </Group>
+      <RecordRequestBodiesGroup />
       <Group title="Engine log" footer="The engine's stderr; turns log to each thread's logs/debug.log.">
         <pre className="selectable m-0 max-h-[320px] overflow-auto p-3 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
           {log.length ? log.slice(-200).join("\n") : "Nothing yet."}

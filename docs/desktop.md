@@ -377,6 +377,17 @@ composer's keys stay outside the table.
   a missing count the split needs shows `—` (never `0`) and is counted as a
   turn not estimated in the table's foot. The CLI's `rustcode usage` has no
   Estimated column yet; it comes in a later change, from the same table.
+- **Settings › Advanced › Record request bodies.** The two payload-capture
+  switches (`docs/data-store.md` › Captured payloads), off by default:
+  *Provider requests (built-in harness)* for the built-in harness's request
+  bodies, *Harness messages* for each ACP or Codex JSON-RPC message. They are
+  the engine's own global config keys, read and written with
+  `_rustcode/config/telemetry` / `_rustcode/config/telemetry/set`
+  (`engine/src/acp/telemetry.rs`), so a terminal and this page change one
+  setting; a project file still cannot turn either on. The engine reads them
+  from the config it started with, so changing one shows *Restart the engine
+  to apply* right under the switches, the same row the Smart UI and
+  orchestration settings use.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
   and `PlanUsageMeter`: a ring filling with the context window in use, and
   the plan's shortest window from `_rustcode/usage/limits` as a short bar
