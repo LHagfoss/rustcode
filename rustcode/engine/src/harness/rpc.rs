@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
+use super::rpc_capture::RpcRecorder;
+
 /// A message the other side started.
 #[derive(Debug)]
 pub(crate) enum Incoming {
@@ -71,15 +73,22 @@ pub(crate) struct RpcPeer {
     next_id: AtomicU64,
     closed: Arc<AtomicBool>,
     incoming: mpsc::WeakUnboundedSender<Incoming>,
+    /// Where the frames of this peer are recorded (`harness/rpc_capture.rs`),
+    /// when the peer was started for a thread.
+    recorder: Option<Arc<RpcRecorder>>,
 }
 
 impl RpcPeer {
     /// Start reading `reader` and writing `writer`. Messages the other side
     /// starts arrive on the returned channel, in order; it closes when the
     /// other side does.
+    ///
+    /// With a `recorder`, every frame in both directions is recorded against
+    /// the thread the recorder belongs to (`harness/rpc_capture.rs`).
     pub(crate) fn start<R, W>(
         reader: R,
         writer: W,
+        recorder: Option<Arc<RpcRecorder>>,
     ) -> (Arc<Self>, mpsc::UnboundedReceiver<Incoming>)
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -104,12 +113,17 @@ impl RpcPeer {
         {
             let pending = Arc::clone(&pending);
             let closed = Arc::clone(&closed);
+            let recorder = recorder.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(reader).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let Ok(message) = serde_json::from_str::<Value>(line.trim()) else {
+                    let frame = line.trim();
+                    let Ok(message) = serde_json::from_str::<Value>(frame) else {
                         continue;
                     };
+                    if let Some(recorder) = &recorder {
+                        recorder.record_inbound(&message, frame.len());
+                    }
                     route(message, &pending, &incoming_tx);
                 }
                 closed.store(true, Ordering::Release);
@@ -127,6 +141,7 @@ impl RpcPeer {
                 next_id: AtomicU64::new(1),
                 closed,
                 incoming: weak_incoming,
+                recorder,
             }),
             incoming_rx,
         )
@@ -170,7 +185,9 @@ impl RpcPeer {
             return Err(RpcError::closed());
         }
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        if self.outgoing.send(message.to_string()).is_err() {
+        let text = message.to_string();
+        self.record(&message, &text);
+        if self.outgoing.send(text).is_err() {
             self.pending
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
@@ -204,7 +221,9 @@ impl RpcPeer {
         } else {
             json!({"jsonrpc": "2.0", "method": method, "params": params})
         };
-        let _ = self.outgoing.send(message.to_string());
+        let text = message.to_string();
+        self.record(&message, &text);
+        let _ = self.outgoing.send(text);
     }
 
     pub(crate) fn respond(&self, id: Value, result: Result<Value, RpcError>) {
@@ -218,7 +237,17 @@ impl RpcPeer {
                 json!({"jsonrpc": "2.0", "id": id, "error": body})
             }
         };
-        let _ = self.outgoing.send(message.to_string());
+        let text = message.to_string();
+        self.record(&message, &text);
+        let _ = self.outgoing.send(text);
+    }
+
+    /// Hand one frame to the recorder, before it goes out, so a fast answer
+    /// still finds its request when it comes back.
+    fn record(&self, message: &Value, text: &str) {
+        if let Some(recorder) = &self.recorder {
+            recorder.record_outbound(message, text.len());
+        }
     }
 }
 
@@ -273,8 +302,8 @@ mod tests {
         let (ours, theirs) = tokio::io::duplex(4096);
         let (our_read, our_write) = tokio::io::split(ours);
         let (their_read, their_write) = tokio::io::split(theirs);
-        let (peer, _incoming) = RpcPeer::start(our_read, our_write);
-        let (other, mut other_incoming) = RpcPeer::start(their_read, their_write);
+        let (peer, _incoming) = RpcPeer::start(our_read, our_write, None);
+        let (other, mut other_incoming) = RpcPeer::start(their_read, their_write, None);
 
         let asked = tokio::spawn({
             let peer = Arc::clone(&peer);
@@ -309,7 +338,7 @@ mod tests {
     async fn pending_requests_fail_when_the_other_side_closes() {
         let (ours, theirs) = tokio::io::duplex(4096);
         let (our_read, our_write) = tokio::io::split(ours);
-        let (peer, _incoming) = RpcPeer::start(our_read, our_write);
+        let (peer, _incoming) = RpcPeer::start(our_read, our_write, None);
         let asked = tokio::spawn({
             let peer = Arc::clone(&peer);
             async move { peer.request("never", Value::Null).await }
