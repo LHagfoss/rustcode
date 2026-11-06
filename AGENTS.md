@@ -134,16 +134,24 @@ instructions for work in this repository.
 
 ## Checking desktop app behavior
 
-- Look at UI changes in the mock (`bun run dev:mock` in `apps/desktop`, or
-  `?transport=mock`): it needs no engine and no model turns. Drive it with
-  headless Chrome over the DevTools protocol, as `scripts/perf.ts` does, at
-  a MacBook-sized 1512×945 viewport with `deviceScaleFactor` 2, and read the
-  screenshots. Do not open browser panes in the user's terminal.
+- Look at UI changes in the mock: it needs no engine and no model turns. Run
+  `bun run mock-window open` in `apps/desktop`: it starts the mock dev server
+  (`VITE_TRANSPORT=mock`) and one visible Chrome window at 1512×945 and native
+  scale, and reuses both on the next call, so there is one shared window rather
+  than one browser per agent. Then `bun run mock-window eval "<js>"` evaluates
+  in the page, `bun run mock-window screenshot <file.png>` saves a PNG of it,
+  and `bun run mock-window close` stops only that window and server. Agents
+  must not launch their own Chrome for UI checks; when several threads work
+  concurrently, only the orchestrating thread drives the window, and the others
+  gate on `bun run check` and unit tests. Do not open browser panes in the
+  user's terminal.
 - To stage a state the mock does not reach (a finished thread, an update in
   progress, a Settings page), evaluate `await import("/src/state/store.ts")`
-  (or `updates.ts`) in the page and set state on it. Start the dev server
-  fresh first: after an edit, HMR serves the module under a `?t=` URL and the
-  import returns a second, empty copy. `?updatePreview` stages the update row.
+  (or `updates.ts`) in the page and set state on it. The window is long-lived,
+  so the thread driving it restarts the server for its own check (`bun run
+  mock-window close`, then `open`), and no other thread closes it. After an
+  edit, HMR serves the module under a `?t=` URL and the import returns a
+  second, empty copy. `?updatePreview` stages the update row.
 - To test an engine change in the app, build the engine binary with
   `cargo build -p rustcode-tui --bin rustcode`, then `bun tauri dev`. A
   plain `cargo build` does not rebuild that binary, and the app then talks
