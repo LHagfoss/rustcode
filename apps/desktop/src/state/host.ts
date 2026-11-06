@@ -49,6 +49,7 @@ import {
   MAX_ACTIVE_LINKS,
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
+  MAX_QUEUE_ITEMS,
   markDelivered,
   mergeBooks,
   nextId,
@@ -60,6 +61,7 @@ import {
   parseCall,
   projectOf,
   prune,
+  QUEUE_PREVIEW_CHARS,
   queueWake,
   quietTree,
   type RuleThread,
@@ -80,7 +82,7 @@ import {
   wakesDue,
 } from "./orchestration";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
-import { wakeDelivery } from "./queue";
+import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
   parseQueueBook,
   pendingRows,
@@ -99,11 +101,14 @@ import {
   markUnread,
   openThread,
   permissionModeOf,
+  removeQueued,
   renameThread,
   request,
   resumeQueue,
   runPrompt,
   searchThreads,
+  sendDecisionFor,
+  sendQueuedNow,
   setConfigOption,
   setPermissionMode,
   setThreadStatus,
@@ -114,6 +119,7 @@ import {
   switchThreadHarness,
   togglePin,
   turnState,
+  updateQueued,
   updateThread,
   useApp,
 } from "./store";
@@ -578,6 +584,8 @@ async function perform(
       return read(caller, call.target, call.lastTurns, call.offset);
     case "message_session":
       return message(caller, call.target, call.text);
+    case "manage_queue":
+      return manageQueue(caller, call);
     case "wait_session":
       return wait(caller.id, call.links, call.timeoutMs, call.callId);
     case "start_session":
@@ -1059,7 +1067,7 @@ async function message(caller: RuleThread, targetId: string, text: string): Prom
     message: text,
     state: busy ? "queued" : "working",
   });
-  deliver(target.id, delivered(text, caller.title), id);
+  deliver(target.id, delivered(text, caller.title), id, caller.id);
   return { link_id: id, receipt: busy ? "queued" : "started", session_id: target.id, title: target.title };
 }
 
@@ -1074,12 +1082,154 @@ function addLink(link: Omit<Link, "id" | "createdAt">): string {
 }
 
 /** After the turn the target runs, never into it: the same queue a typed message uses. */
-function deliver(target: string, text: string, link: string) {
+function deliver(target: string, text: string, link: string, from: string) {
   const thread = useApp.getState().threads[target];
   if (thread?.running) {
-    updateThread(target, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text, link }] }));
+    // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
+    updateThread(target, (t) => ({
+      ...t,
+      queue: [...t.queue, { id: localId("queued"), text, link, from, queuedAt: Date.now() }],
+    }));
   } else {
     void runPrompt(target, text, undefined, { link });
+  }
+}
+
+/** The ids of messages that left a queue in this window: they started, or a person took them out. */
+function sentQueueIds(): readonly string[] {
+  // The book that records them is read the way start-up reads it, and kept once read (state/host.ts
+  // `restoreQueuedThreads`); a window that never restored a queue reads storage here instead.
+  return (queueBook ?? parseQueueBook(storedQueues())).acked;
+}
+
+/** A queued message that is no longer waiting: it started, or nothing ever had its id. */
+function goneFromQueue(queueId: string | undefined): Failure {
+  return sentQueueIds().includes(queueId ?? "")
+    ? failure("conflict", "that message has already started, so it cannot be changed")
+    : failure("not_found", "no queued message of that thread has that queue_id; list them again");
+}
+
+/**
+ * What a queued message says, without the `delivered` attribution: that line is the app's, so an
+ * agent reads its own text back and an edit says only what it says (`manageQueue`).
+ */
+function bodyOf(item: QueuedPrompt, from: string): string {
+  const said = delivered("", from);
+  return item.text.startsWith(said) ? item.text.slice(said.length) : item.text;
+}
+
+/** One queued message as `manage_queue` lists it: which one, what it says, and when it waits. */
+function listedQueueItem(item: QueuedPrompt, caller: RuleThread): JsonObject {
+  return {
+    queue_id: item.id,
+    preview: bodyOf(item, caller.title).slice(0, QUEUE_PREVIEW_CHARS),
+    ...(item.queuedAt ? { queued_at: new Date(item.queuedAt).toISOString() } : {}),
+  };
+}
+
+type ManageQueueCall = Extract<ReturnType<typeof parseCall>, { tool: "manage_queue" }>;
+
+/**
+ * `manage_queue`: what this thread queued on another one while it was busy, and the three things it
+ * may still do to those messages. Only a message this thread queued (`from`) is its own; anything
+ * else in that queue belongs to the user or to another thread and is reported as a count. A message
+ * that has started left the queue and cannot be touched. `steer` delivers one now, by the same rule
+ * ⌘⏎ follows (`sendDecisionFor`), so a harness that takes no message mid-turn is refused rather
+ * than quietly queued again.
+ */
+async function manageQueue(caller: RuleThread, call: ManageQueueCall): Promise<JsonObject> {
+  const target = ruleThread(useApp.getState(), call.target);
+  // The reach is `message_session`'s project rule; the slot, mailbox and chain rules were answered
+  // when the message queued, and re-asking them here could refuse an edit that breaks none of them.
+  const refused = checkMessage(caller, target, book(), true, useApp.getState().readAcrossProjects);
+  if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
+  const waiting = () => useApp.getState().threads[target.id]?.queue ?? [];
+  const mine = (id: string | undefined) => waiting().find((q) => q.id === id);
+
+  if (call.action === "list") {
+    const thread = useApp.getState().threads[target.id];
+    const own = waiting()
+      .filter((q) => !q.wake && q.from === caller.id)
+      .slice(0, MAX_QUEUE_ITEMS);
+    const others = waiting().filter((q) => !q.wake && q.from !== caller.id).length;
+    return {
+      session_id: target.id,
+      title: target.title,
+      running: !!thread?.running,
+      ...(thread?.queueHeld ? { held: true } : {}),
+      queued: own.map((item) => listedQueueItem(item, caller)),
+      // What waits there that this thread may not touch: the user's own messages, or another
+      // thread's. Count only: their text is not this thread's to read.
+      ...(others ? { others } : {}),
+    };
+  }
+
+  const item = mine(call.queueId);
+  if (!item) return failureJson(goneFromQueue(call.queueId));
+  if (item.from !== caller.id) {
+    return failureJson(failure("not_allowed", "that message was not queued by this thread"));
+  }
+  const verb =
+    call.action === "edit"
+      ? "Change a queued message to"
+      : call.action === "cancel"
+        ? "Drop a queued message from"
+        : "Send a queued message now to";
+  const no = await permitted(caller, target.id, {
+    kind: "message",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail: `${verb}: ${call.action === "edit" ? (call.text ?? "").trim() : bodyOf(item, caller.title).slice(0, QUEUE_PREVIEW_CHARS)}`,
+  });
+  if (no) return failureJson(no);
+  // The user took their time: the message may have started meanwhile.
+  const again = mine(call.queueId);
+  if (!again) return failureJson(goneFromQueue(call.queueId));
+  if (again.from !== caller.id) {
+    return failureJson(failure("not_allowed", "that message was not queued by this thread"));
+  }
+
+  switch (call.action) {
+    case "edit": {
+      const text = (call.text ?? "").trim();
+      // Delivered the way `message` delivered it, so the target still reads who asked.
+      updateQueued(target.id, again.id, delivered(text, caller.title));
+      // The link card says what was sent, so it says the new text now.
+      const link = again.link;
+      if (link) setBook((b) => updateLink(b, link, { message: text }));
+      return { session_id: target.id, queue_id: again.id, preview: text.slice(0, QUEUE_PREVIEW_CHARS) };
+    }
+    case "cancel": {
+      // The same removal the row's own ✕ makes: its link never answers, and it cannot come back.
+      removeQueued(target.id, again.id);
+      return { session_id: target.id, queue_id: again.id, cancelled: true };
+    }
+    case "steer": {
+      const thread = useApp.getState().threads[target.id];
+      if (!thread?.running) {
+        return failureJson(failure("conflict", "no turn is running in that thread to steer into"));
+      }
+      const verdict = sendDecisionFor(thread, again.extras);
+      if (verdict.action === "interruptRestart") {
+        // Stopping the turn to take it is not steering: this call only steers.
+        return failureJson(failure("not_allowed", "this harness cannot steer"));
+      }
+      if (verdict.action === "queue") {
+        return failureJson(
+          failure(
+            "not_allowed",
+            verdict.reason === "harness"
+              ? "this harness cannot steer"
+              : `it cannot go into the turn now: ${QUEUE_REASON[verdict.reason].toLowerCase()}`,
+          ),
+        );
+      }
+      if (!(await sendQueuedNow(target.id, again.id))) {
+        return failureJson(failure("conflict", "the turn would not take it now, so it is still queued"));
+      }
+      return { session_id: target.id, queue_id: again.id, steered: true };
+    }
   }
 }
 
@@ -1355,7 +1505,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     harness: harness.id,
     account: account ?? undefined,
   });
-  deliver(id, delivered(call.prompt, caller.title), link);
+  deliver(id, delivered(call.prompt, caller.title), link, caller.id);
   return {
     session_id: id,
     link_id: link,
@@ -1450,7 +1600,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
         access: accessOf(id),
         ...ranWith(id),
       });
-      deliver(id, delivered(call.prompt, caller.title), link);
+      deliver(id, delivered(call.prompt, caller.title), link, caller.id);
     } catch (error) {
       // The reason, not the name of the error class: the harness says why it could not start.
       out.push({ harness: h.harness.id, ...failureJson(failure("failed", errorText(error))) });

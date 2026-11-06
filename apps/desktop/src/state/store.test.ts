@@ -2131,6 +2131,199 @@ describe("retrying a call that starts or messages a thread", () => {
   });
 });
 
+describe("what an agent may do with the messages it queued", () => {
+  const ready = async (delayMs = 0) => {
+    await connect(new MockTransport({ delayMs }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const caller = useApp.getState().sessions[0]!.id;
+    // Full access answers for the user, so the tests see the queue and nothing else.
+    setPermissionMode(caller, "full");
+    return caller;
+  };
+  /** Another thread of the same project, held busy so what arrives waits on it. */
+  const elsewhere = (caller: string) =>
+    useApp.getState().sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
+  const busy = async (caller: string) => {
+    const target = elsewhere(caller);
+    await openThread(target);
+    updateThread(target, (t) => ({ ...t, running: true }));
+    return target;
+  };
+  const queueOn = async (caller: string, target: string, message: string) => {
+    const answer = await answerOrchestration({
+      sessionId: caller,
+      tool: "message_session",
+      args: { session_id: target, message },
+    });
+    expect(answer.error).toBeUndefined();
+    return String(answer.link_id);
+  };
+  const manage = (caller: string, target: string, args: JsonObject) =>
+    answerOrchestration({ sessionId: caller, tool: "manage_queue", args: { session_id: target, ...args } });
+  const said = (answer: JsonObject) => (answer.error as { message: string } | undefined)?.message ?? "";
+  const queue = (target: string) => useApp.getState().threads[target]!.queue;
+
+  test("a list shows this thread's own messages in send order, and counts the rest", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    await queueOn(caller, target, "first thing");
+    await queueOn(caller, target, "second thing");
+    // The user's own message, and one another thread queued: neither is this thread's to read.
+    updateThread(target, (t) => ({
+      ...t,
+      queue: [
+        ...t.queue,
+        { id: "user-1", text: "mine, not the agent's", queuedAt: Date.now() },
+        { id: "theirs-1", text: "another thread's", from: "someone-else", queuedAt: Date.now() },
+      ],
+    }));
+    const list = await manage(caller, target, { action: "list" });
+    expect(list.error).toBeUndefined();
+    expect(list.running).toBe(true);
+    const items = list.queued as unknown as { queue_id: string; preview: string; queued_at: string }[];
+    expect(items.map((item) => item.preview)).toEqual(["first thing", "second thing"]);
+    expect(items[0]!.queue_id).not.toBe(items[1]!.queue_id);
+    expect(new Date(items[0]!.queued_at).getTime()).toBeGreaterThan(0);
+    // Only a count: what waits there that this thread did not queue.
+    expect(list.others).toBe(2);
+  });
+
+  test("an edit changes the text where it waits, and nothing else", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    const first = await queueOn(caller, target, "first thing");
+    await queueOn(caller, target, "second thing");
+    const listed = await manage(caller, target, { action: "list" });
+    const second = (listed.queued as unknown as { queue_id: string }[])[1]!.queue_id;
+    const edited = await manage(caller, target, {
+      action: "edit",
+      queue_id: second,
+      text: "  what I meant  ",
+    });
+    expect(edited.error).toBeUndefined();
+    expect(edited.preview).toBe("what I meant");
+    // It still says who asked; the edit replaced what was said, not the attribution.
+    expect(queue(target).map((q) => q.text)).toEqual([
+      expect.stringContaining("first thing"),
+      expect.stringContaining("what I meant"),
+    ]);
+    // The link card says what was sent, so it says what it says now.
+    const link = useApp.getState().links.links.find((l) => l.id === first);
+    expect(link?.message).toContain("first thing");
+    const changed = useApp
+      .getState()
+      .links.links.find((l) => l.target === target && l.message !== link?.message);
+    expect(changed?.message).toBe("what I meant");
+    // It is still the message it was: the same id, still waiting.
+    expect(queue(target).find((q) => q.text.includes("what I meant"))?.id).toBe(second);
+  });
+
+  test("a cancel drops it from the queue, and its link never answers", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    const link = await queueOn(caller, target, "never mind");
+    const id = queue(target)[0]!.id;
+    const cancelled = await manage(caller, target, { action: "cancel", queue_id: id });
+    expect(cancelled.error).toBeUndefined();
+    expect(cancelled.cancelled).toBe(true);
+    expect(queue(target)).toHaveLength(0);
+    expect(useApp.getState().links.links.find((l) => l.id === link)?.state).toBe("cancelled");
+    const remaining = await manage(caller, target, { action: "list" });
+    expect(remaining.queued).toEqual([]);
+  });
+
+  test("a message that has started is no longer anyone's to change", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    await queueOn(caller, target, "gone ahead");
+    const id = queue(target)[0]!.id;
+    // What a turn starting does: the row leaves the queue.
+    updateThread(target, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== id) }));
+    for (const action of ["edit", "cancel", "steer"]) {
+      const refused = await manage(caller, target, { action, queue_id: id, text: "changed" });
+      expect(said(refused)).toContain("already started");
+    }
+    // An id that never was a message of that thread is not found instead.
+    const unknown = await manage(caller, target, { action: "cancel", queue_id: "never-was" });
+    expect((unknown.error as { code: string }).code).toBe("not_found");
+  });
+
+  test("another thread's message is not this one's to touch", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    updateThread(target, (t) => ({
+      ...t,
+      queue: [...t.queue, { id: "theirs-1", text: "another thread's", from: "someone-else" }],
+    }));
+    for (const action of ["edit", "cancel", "steer"]) {
+      const refused = await manage(caller, target, { action, queue_id: "theirs-1", text: "changed" });
+      expect(said(refused)).toContain("was not queued by this thread");
+    }
+    expect(queue(target).map((q) => q.text)).toEqual(["another thread's"]);
+  });
+
+  test("a harness that takes no message mid-turn cannot steer, and the message stays", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    await queueOn(caller, target, "go in now");
+    // A harness that says a message waits for the next turn, in the thread's own record and in the
+    // snapshot both: the fresher of the two is what the send rule reads.
+    const only = {
+      live: false,
+      attachments: false,
+      while_awaiting_user: true,
+      interrupt_restart: false,
+      queue: true,
+    };
+    updateThread(target, (t) => ({
+      ...t,
+      harness: t.harness
+        ? {
+            ...t.harness,
+            capabilities: { ...t.harness.capabilities, steer: "none" as const, steering: only },
+          }
+        : t.harness,
+    }));
+    useApp.setState((s) => ({
+      harnesses: s.harnesses && {
+        ...s.harnesses,
+        harnesses: s.harnesses.harnesses.map((h) =>
+          h.id === (useApp.getState().threads[target]?.harness?.id ?? "rustcode")
+            ? { ...h, capabilities: { ...h.capabilities, steering: only } }
+            : h,
+        ),
+      },
+    }));
+    const id = queue(target)[0]!.id;
+    const refused = await manage(caller, target, { action: "steer", queue_id: id });
+    expect(said(refused)).toBe("this harness cannot steer");
+    expect(queue(target).map((q) => q.text)).toEqual([expect.stringContaining("go in now")]);
+  });
+
+  test("a steer goes into the running turn now, and leaves the queue", async () => {
+    const caller = await ready(200);
+    const target = elsewhere(caller);
+    await openThread(target);
+    selectThread(target);
+    const turning = submit("do the thing");
+    await until(() => useApp.getState().threads[target]?.running === true);
+    await queueOn(caller, target, "instead, do this");
+    const id = queue(target)[0]!.id;
+    const steered = await manage(caller, target, { action: "steer", queue_id: id });
+    expect(steered.error).toBeUndefined();
+    expect(steered.steered).toBe(true);
+    expect(queue(target).find((q) => q.id === id)).toBeUndefined();
+    await turning;
+  });
+
+  test("a thread of another project's queue is refused", async () => {
+    const caller = await ready();
+    const other = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!;
+    const refused = await manage(caller, other.id, { action: "list" });
+    expect((refused.error as { code: string }).code).toBe("not_allowed");
+  });
+});
+
 describe("a delegated thread's place in the sidebar", () => {
   const ready = async () => {
     await connect(new MockTransport({ delayMs: 0 }));

@@ -525,9 +525,9 @@ Built. Clients advertising `_meta.rustcode.orchestration >= 6` also get
 `read_activity`, a page over what the store recorded about one thread. The
 version is bumped rather than the tool added to v5 for the same reason as v4:
 the *client* carries it out, and a v5 app has no `_rustcode/data/activity` to
-ask. The app advertises 6 from `CAPABILITY_VERSION`
-(`state/orchestration.ts`), and a v5 client keeps exactly the v5 set and
-`PROMPT_HINT_V5`.
+ask. The app advertised 6 from `CAPABILITY_VERSION`
+(`state/orchestration.ts`; v7 raised it to 7), and a v5 client keeps exactly the
+v5 set and `PROMPT_HINT_V5`.
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
@@ -541,6 +541,39 @@ reads metadata and never a prompt or payload. It asks the engine
 same read-only connection as `query` with at most 200 items and no payload
 column selected. The allowlist of projected events is in `docs/data-store.md`
 (§ Request and protocol telemetry).
+
+## Orchestration tools v7
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 7` also get
+`manage_queue`: the messages this thread queued on another one with
+`message_session`, and the three things it may still do to them. Until v7 a
+message to a busy thread waited unread and uncorrectable: the agent that sent it
+could neither see nor change what it had queued. The version is bumped rather
+than the tool added to v6 for the same reason as v4 and v6 — the *client* holds
+the queue (`state/queues.ts`, delivered by `state/host.ts`). The app advertises
+7 from `CAPABILITY_VERSION` (`state/orchestration.ts`), and a v6 app keeps
+exactly the v6 set and `PROMPT_HINT_V6`.
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `manage_queue` | `{ session_id, action, queue_id?, text? }` — `action` is `list`, `edit`, `cancel` or `steer`; `queue_id` is required but for `list`; `text` is required by `edit`, at most 32 KiB, the same limit as `message_session` | `list`: `{ session_id, title, running, held?, queued: [{ queue_id, preview, queued_at? }], others? }` — this thread's own messages in send order, at most 50, `preview` the first 200 characters, `others` how many wait there that a person or another thread queued (a count only: their text is not this thread's to read). `edit`, `cancel`, `steer`: `{ session_id, queue_id, preview \| cancelled: true \| steered: true }` | `list` none, like `read_session`. The three that change something: asked, allowed by Full access, with the grant `message_session` keeps for that thread |
+
+A queued row carries the thread that queued it (`from` on
+`QueuedPrompt`/`QueueRow`, written by `deliver`), so only that thread's own
+messages are listed in full and only those can be edited, cancelled or steered;
+a row queued before this change, or by a person, has no `from` and belongs to no
+caller. Anything that has left the queue — because it started, or because a
+person removed it — answers `conflict: that message has already started`;
+an id that was never in that queue answers `not_found`. `edit` replaces the text
+and keeps the `delivered` attribution line (`From thread “…” (agent):`) and the
+link, so the target still knows who asked and the answer still goes back;
+`cancel` is the row's own ✕, so its link settles as cancelled; `steer` delivers
+it into the running turn by the same rule ⌘⏎ follows (`sendDecision`,
+`state/queue.ts`) and refuses with `not_allowed: this harness cannot steer`
+where the harness takes no message mid-turn — including a harness that would
+have to stop the turn (`interrupt_restart`), which is not steering. The queue
+lives in the app, so the engine only validates the call
+(`orchestration.rs` `validate`, `QUEUE_ACTIONS`).
 
 ## External harnesses as orchestrators
 
@@ -559,7 +592,8 @@ process list. `--token` still works for manual testing.
 The same environment carries `RUSTCODE_ORCHESTRATION_VERSION` (the client's
 version), so the server lists exactly that version's tools and prompt hint — a
 v3 app is never offered `thread_usage` or `query_data`, which it could not
-answer, and a v5 app is never offered `read_activity`.
+answer, a v5 app is never offered `read_activity`, and a v6 app is never
+offered `manage_queue`.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -616,6 +650,6 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 6` while threads may orchestrate
+`_meta.rustcode.orchestration = 7` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
-v4 data-store tools and the v6 activity read.
+v4 data-store tools, the v6 activity read and the v7 queue control.

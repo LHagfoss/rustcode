@@ -137,6 +137,14 @@ export interface QueuedPrompt {
   /** Delivered for another thread (orchestration link id): its answer goes back there. */
   link?: string;
   /**
+   * The thread that queued it for this one (`message_session`), so that thread can list, edit,
+   * cancel or steer it while it waits (`manage_queue`, state/host.ts). A row with no `from` is the
+   * user's own, or one an older build queued: no caller may touch it.
+   */
+  from?: string;
+  /** When it was queued, for the row that says what is still waiting. */
+  queuedAt?: number;
+  /**
    * It stops the turn it waits behind instead of waiting for the next one (`store.ts`
    * `restartWith`): a stopped turn leaves the queue for Resume otherwise, but this message starts
    * as soon as the stop lands.

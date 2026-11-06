@@ -12,7 +12,7 @@ import { snoozeAt } from "./snooze";
 import { type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 6;
+export const CAPABILITY_VERSION = 7;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -220,7 +220,16 @@ export type Call =
   | { tool: "list_pull_requests"; state: PullStateChoice }
   | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
   | { tool: "query_data"; sql: string; limit: number }
-  | { tool: "read_activity"; target: string; after?: string; limit: number };
+  | { tool: "read_activity"; target: string; after?: string; limit: number }
+  | {
+      tool: "manage_queue";
+      target: string;
+      action: QueueAction;
+      /** One of this thread's own queued messages, from `list`. */
+      queueId?: string;
+      /** What it says instead, for `edit`. */
+      text?: string;
+    };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -237,6 +246,14 @@ export const MAX_DATA_ROWS = 1000;
 /** Items `read_activity` returns by default, and at most. */
 export const DEFAULT_ACTIVITY_ITEMS = 50;
 export const MAX_ACTIVITY_ITEMS = 200;
+
+/** What `manage_queue` may do to a message this thread queued on another one. */
+export type QueueAction = "list" | "edit" | "cancel" | "steer";
+const QUEUE_ACTIONS: readonly string[] = ["list", "edit", "cancel", "steer"];
+/** Queued messages one `manage_queue` list carries: a queue holds a handful. */
+export const MAX_QUEUE_ITEMS = 50;
+/** How much of a queued message a list shows: enough to know which one it is. */
+export const QUEUE_PREVIEW_CHARS = 200;
 
 /** Pull requests listed, and projects: an agent's context pays for each. */
 export const MAX_PULL_REQUESTS = 30;
@@ -319,6 +336,24 @@ export function parseCall(params: JsonObject): Call | Failure {
         after,
         limit: Math.min(Math.max(asked, 1), MAX_ACTIVITY_ITEMS),
       };
+    }
+    case "manage_queue": {
+      const target = s(args.session_id) ?? "";
+      if (!target) return failure("invalid", "session_id is required");
+      const action = s(args.action) ?? "";
+      if (!QUEUE_ACTIONS.includes(action)) {
+        return failure("invalid", `action must be one of ${QUEUE_ACTIONS.join(", ")}`);
+      }
+      if (action === "list") return { tool: "manage_queue", target, action: action as QueueAction };
+      const queueId = (s(args.queue_id) ?? "").trim();
+      if (!queueId) return failure("invalid", `queue_id is required to ${action}`);
+      const text = s(args.text) ?? "";
+      if (action === "edit") {
+        if (!text.trim()) return failure("invalid", "text is required to edit");
+        if (bytes(text) > MAX_MESSAGE_BYTES) return failure("invalid", "the message is over 32 KiB");
+        return { tool: "manage_queue", target, action: action as QueueAction, queueId, text };
+      }
+      return { tool: "manage_queue", target, action: action as QueueAction, queueId };
     }
     case "configure_session":
       return {
