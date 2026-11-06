@@ -3600,8 +3600,8 @@ mod tests {
         assert_eq!(stored["redaction_version"], redact::REDACTION_VERSION);
         let parsed: Value = serde_json::from_str(kept).unwrap();
         assert_eq!(parsed["headers"]["Authorization"], redact::REDACTED);
-        // The rule is deliberately broad: a token limit is redacted too.
-        assert_eq!(parsed["max_tokens"], redact::REDACTED);
+        // A token limit is a number, not a secret, so it is kept.
+        assert_eq!(parsed["max_tokens"], 64);
     }
 
     #[test]

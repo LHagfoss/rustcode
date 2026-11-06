@@ -58,7 +58,11 @@ pub fn redact(value: &Value) -> Value {
             for (key, value) in map {
                 out.insert(
                     key.clone(),
-                    if is_sensitive_key(key) {
+                    // A number, flag or null under a sensitive-looking key is a count or a
+                    // setting (`max_tokens`, `input_tokens`), never a secret: keep it.
+                    if is_sensitive_key(key)
+                        && !matches!(value, Value::Number(_) | Value::Bool(_) | Value::Null)
+                    {
                         Value::String(REDACTED.to_owned())
                     } else {
                         redact(value)
@@ -300,6 +304,8 @@ mod tests {
             "auth": {"refresh_token": "rt-1", "scope": "openid"},
             "messages": [{"role": "user", "content": "hi", "password": "hunter2"}],
             "nested": [[{"client_secret": "shh"}]],
+            "max_tokens": 4096,
+            "usage": {"input_tokens": 12, "output_tokens": 3},
         });
         let redacted = redact(&payload);
         assert_eq!(redacted["model"], "gpt-6-luna");
@@ -311,6 +317,9 @@ mod tests {
         assert_eq!(redacted["messages"][0]["content"], "hi");
         assert_eq!(redacted["messages"][0]["password"], REDACTED);
         assert_eq!(redacted["nested"][0][0]["client_secret"], REDACTED);
+        // A count under a token-shaped key is not a secret.
+        assert_eq!(redacted["max_tokens"], 4096);
+        assert_eq!(redacted["usage"]["input_tokens"], 12);
         let text = redacted.to_string();
         assert!(!text.contains("sk-live"), "{text}");
         assert!(!text.contains("hunter2"), "{text}");

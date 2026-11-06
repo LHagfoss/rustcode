@@ -119,9 +119,9 @@ Every payload is redacted and clipped before it is written
 - A value under a key naming a credential — case-insensitive, separators
   ignored, matching `authorization`, `api_key`, `apikey`, `token`, `secret`,
   `credential`, `password`, `cookie` — is replaced with `[redacted]` at any
-depth. The match is deliberately broad: a key such as `max_tokens` is redacted
-  too, because guessing which `token` is a limit is one guess away from writing
-  a secret to disk.
+  depth. The match is deliberately broad, except that a number, `true`/`false`
+  or `null` under such a key is kept: `max_tokens` and `input_tokens` are counts,
+  and a secret is never a bare number.
 - Any `Bearer <token>` inside a string is replaced.
 - The result is clipped to the cap below while staying valid JSON: long
   strings are cut, array items and object entries are dropped, and the drop is
