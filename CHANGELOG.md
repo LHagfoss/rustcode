@@ -1,3 +1,10 @@
+## [v1.12.1-beta.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.1-beta.1) - 2026-11-06
+
+### Fixes
+### Chat and layout
+
+- The composer is one card with a single row of controls: the attach button, folder, worktree and access on the left, the meters, model and send on the right, a rounder corner and less height at rest. The model reads as its own name rather than a filled pill. (#3064)
+- Changes, Pull requests and the thread peek size the side panel to what it holds instead of drawing it full height, and a long list still stops above the composer and scrolls inside the card. (#3063)
 ## [v1.12.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.0) - 2026-11-06
 
 ### Features
