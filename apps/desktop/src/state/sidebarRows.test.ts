@@ -154,8 +154,8 @@ describe("the keys the list answers", () => {
 });
 
 describe("a thread's diff totals", () => {
-  const diff = (added: number, removed: number): FileDiff => ({
-    path: "a.ts",
+  const diff = (added: number, removed: number, path = "a.ts"): FileDiff => ({
+    path,
     oldText: Array.from({ length: removed }, (_, i) => `old ${i}`).join("\n"),
     newText: Array.from({ length: added }, (_, i) => `new ${i}`).join("\n"),
     oldStart: 1,
@@ -164,12 +164,22 @@ describe("a thread's diff totals", () => {
   const tool = (id: string, diffs: FileDiff[] = []): TranscriptItem =>
     ({ id, kind: "tool", title: "Edit", status: "completed", diffs }) as unknown as TranscriptItem;
 
-  test("adds up every call that changed a file", () => {
-    expect(threadDiff([tool("1", [diff(3, 1)]), tool("2", [diff(0, 2)])])).toEqual({ added: 3, removed: 3 });
-    expect(threadDiff([tool("1", [diff(3, 1)]), tool("2", [diff(2, 0)])])).toEqual({
+  test("a file counts once, by the widest edit it was given", () => {
+    // Going back to the same file never adds its lines again: a row read +12404.
+    expect(threadDiff([tool("1", [diff(3, 1)]), tool("2", [diff(0, 2)])])).toEqual({ added: 3, removed: 2 });
+    expect(threadDiff([tool("1", [diff(3, 1)]), tool("2", [diff(2, 0)])])).toEqual({ added: 3, removed: 1 });
+    const many = Array.from({ length: 40 }, (_, i) => tool(String(i), [diff(10, 10)]));
+    expect(threadDiff(many)).toEqual({ added: 10, removed: 10 });
+  });
+
+  test("different files add up", () => {
+    expect(threadDiff([tool("1", [diff(3, 1, "a.ts")]), tool("2", [diff(2, 4, "b.ts")])])).toEqual({
       added: 5,
-      removed: 1,
+      removed: 5,
     });
+    expect(
+      threadDiff([tool("1", [diff(3, 1, "a.ts")]), tool("2", [diff(9, 0, "a.ts"), diff(2, 4, "b.ts")])]),
+    ).toEqual({ added: 11, removed: 5 });
   });
 
   test("a thread with nothing read yet has no totals", () => {
