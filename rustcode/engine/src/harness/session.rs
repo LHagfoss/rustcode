@@ -3,6 +3,7 @@
 //! transcript recorded with the thread.
 
 use super::rpc::RpcPeer;
+use super::rpc_capture::RpcRecorder;
 use super::store::{self, HarnessRecord};
 use super::transcript::Transcript;
 use super::{HarnessKind, HarnessModel, ResolvedHarness, acp_child, codex, process, watchdog};
@@ -89,6 +90,9 @@ pub(crate) struct StartOptions {
     /// The MCP servers the user configured for this workspace, so a thread on any harness has the
     /// same servers as a RustCode thread (docs/configuration.md).
     pub mcp: Vec<crate::config::McpServerConfig>,
+    /// The thread this harness runs for, so the JSON-RPC traffic it speaks can
+    /// be recorded against it (`harness_rpc_messages`).
+    pub thread_id: Option<String>,
 }
 
 pub(crate) enum Adapter {
@@ -147,7 +151,18 @@ impl Adapter {
             &env,
             &remove,
         )?;
-        let (peer, incoming) = RpcPeer::start(stdout, stdin);
+        let recorder = options.thread_id.as_ref().map(|thread_id| {
+            let protocol = match harness.kind {
+                HarnessKind::Codex => "codex-app-server",
+                _ => "acp",
+            };
+            RpcRecorder::new(
+                thread_id.clone(),
+                Some(harness.id.clone()),
+                Some(protocol.to_owned()),
+            )
+        });
+        let (peer, incoming) = RpcPeer::start(stdout, stdin, recorder);
         let started = tokio::time::timeout(
             START_TIMEOUT,
             Self::connect(harness, peer, incoming, Some(child), cwd, options, out),
@@ -893,6 +908,7 @@ impl ExternalSession {
             orchestrator,
             // The caller adds the workspace's servers; a test wants none.
             mcp: Vec::new(),
+            thread_id: Some(self.id.clone()),
         })
     }
 
@@ -1525,8 +1541,8 @@ pub(crate) mod test_support {
         let (our_read, our_write) = tokio::io::split(ours);
         let (their_read, their_write) = tokio::io::split(theirs);
         (
-            RpcPeer::start(our_read, our_write),
-            RpcPeer::start(their_read, their_write),
+            RpcPeer::start(our_read, our_write, None),
+            RpcPeer::start(their_read, their_write, None),
         )
     }
 

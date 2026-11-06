@@ -18,6 +18,7 @@ pub(crate) mod handoff;
 pub(crate) mod pi_mcp;
 pub(crate) mod process;
 pub(crate) mod rpc;
+pub(crate) mod rpc_capture;
 pub(crate) mod session;
 pub(crate) mod store;
 pub(crate) mod switch;
