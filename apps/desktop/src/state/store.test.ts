@@ -23,6 +23,7 @@ import {
   commitPlansAnswer,
   completeOnboarding,
   connect,
+  createSession,
   editMessage,
   ensureHarnessModels,
   errorText,
@@ -88,6 +89,7 @@ import {
   windowNow,
 } from "./store";
 import { turnCompletion } from "./thread";
+import { topLevel } from "./topLevel";
 
 const until = async (check: () => boolean, ms = 2000) => {
   const start = Date.now();
@@ -1859,6 +1861,41 @@ describe("what a delegated thread may do without asking", () => {
     const no = (signedOut.error as { message: string } | undefined)?.message ?? "";
     expect(no).toContain("is signed out");
     expect(useApp.getState().grant).toBeNull();
+  });
+});
+
+describe("a delegated thread's place in the sidebar", () => {
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    return useApp.getState().sessions[0]!.id;
+  };
+
+  test("a thread an agent starts is nested from its first frame, with no link in the book yet", async () => {
+    const parent = await ready();
+    // The window the flash lived in: `session/new` has answered, the link is not recorded yet, and
+    // the engine has not listed the thread (`refreshSessions` keeps this very summary until it does).
+    const id = await createSession({
+      cwd: useApp.getState().projectCwd,
+      harness: "rustcode",
+      parent,
+      title: "Child",
+    });
+    const summary = useApp.getState().sessions.find((x) => x.id === id)!;
+    expect(summary.parent).toEqual({ id: parent });
+    const listed = new Set(useApp.getState().sessions.map((x) => x.id));
+    expect(useApp.getState().links.links).toHaveLength(0);
+    expect(topLevel(summary, [], listed)).toBe("nested");
+    // The same summary without the record — what the app inserted before — is a row of its own.
+    expect(topLevel({ ...summary, parent: undefined }, [], listed)).toBe("shown");
+  });
+
+  test("a thread a person starts has no parent, and keeps its row", async () => {
+    await ready();
+    const id = await createSession({ cwd: useApp.getState().projectCwd, harness: "rustcode" });
+    const summary = useApp.getState().sessions.find((x) => x.id === id)!;
+    expect(summary.parent).toBeUndefined();
+    expect(topLevel(summary, [], new Set([id]))).toBe("shown");
   });
 });
 

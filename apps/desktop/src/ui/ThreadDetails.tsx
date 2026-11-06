@@ -25,12 +25,13 @@ import { contextPercent, planProgress, type SubagentLine, subagentLines } from "
 import { stateOf } from "../state/host";
 import { threadLineage } from "../state/lineage";
 import { isActive, LINK_LABEL, type Link } from "../state/orchestration";
-import { selectThread, showPanel, toast, useApp, worktreeOf } from "../state/store";
-import { formatDuration, formatTokens } from "../state/thread";
+import { selectThread, showPanel, statusOf, toast, useApp, worktreeOf } from "../state/store";
+import { formatDuration, formatTokens, shortAge } from "../state/thread";
 import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
 import { HarnessIcon } from "./HarnessIcon";
 import { copyText, cx } from "./primitives";
 import { DiffCount } from "./Rows";
+import { StatusChip } from "./Status";
 
 const NO_AGENTS: SubagentInfo[] = [];
 
@@ -82,12 +83,33 @@ function Fact({ label, value, title }: { label: ReactNode; value: ReactNode; tit
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <section aria-label={title} className="pt-1 pb-0.5">
       <h3 className="px-2.5 pt-1.5 pb-1 font-medium text-caption text-fg-faint">{title}</h3>
+      {hint && <p className="px-2.5 pb-1 text-caption text-fg-faint">{hint}</p>}
       {children}
     </section>
+  );
+}
+
+/**
+ * What a group of the card's threads holds, in the words the app settles on
+ * (docs/terminology.md): a thread this one *started* had a task handed to it, a
+ * thread it *messaged* was already running. The hint says which, once per group,
+ * so the heading stays short at 280px.
+ */
+function GroupHeading({ label, count, hint }: { label: string; count: number; hint: string }) {
+  return (
+    <div className="px-2.5 pt-1.5 pb-1">
+      <div className="flex items-baseline gap-1.5 text-caption">
+        <span className="font-medium text-fg-muted">{label}</span>
+        <span className="text-fg-faint tabular">
+          {count} {count === 1 ? "thread" : "threads"}
+        </span>
+      </div>
+      <p className="text-caption text-fg-faint">{hint}</p>
+    </div>
   );
 }
 
@@ -111,6 +133,7 @@ function LinkRow({
 }) {
   const state = useApp((s) => stateOf(s, link));
   const opened = useApp((s) => s.sessions.find((x) => x.id === id));
+  const threadStatus = useApp((s) => statusOf(s, id));
   // A deleted parent or target is a fact with a tip, not a dead click.
   const openable = useApp((s) => s.sessions.some((x) => x.id === id));
   const harness = id === link.target ? (link.harness ?? opened?.harness) : opened?.harness;
@@ -125,6 +148,10 @@ function LinkRow({
   const elapsedMs =
     started && end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
   const elapsed = elapsedMs === undefined ? undefined : formatDuration(elapsedMs);
+  // The row ends the way the sidebar's row for that thread ends: a review mark when it waits for
+  // one, then its age in the same short form. How long the link has run is in the hover tip.
+  const age = shortAge(opened?.updatedAt, now);
+  const review = threadStatus === "review";
   const meta = [harnessName, modelName(opened?.model), count > 1 ? `${count} messages` : undefined]
     .filter(Boolean)
     .join(" · ");
@@ -140,7 +167,14 @@ function LinkRow({
       status={status}
       description={description}
       title={title}
-      elapsed={elapsed}
+      elapsed={
+        (review || age) && (
+          <span className="flex items-center gap-1.5">
+            {review && <StatusChip status={threadStatus} compact />}
+            {age && <span className="tabular">{age}</span>}
+          </span>
+        )
+      }
       label={`Open ${title}`}
       tooltip={
         <AgentTip
@@ -332,7 +366,7 @@ export function ThreadDetails() {
           <Section title="Threads">
             {lineage.parent && (
               <>
-                <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
+                <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-caption text-fg-faint">
                   <CornerDownRight size={11} /> {lineage.parent.live ? "Working for" : "Started from"}
                 </div>
                 {lineage.parent.link ? (
@@ -360,7 +394,7 @@ export function ThreadDetails() {
             )}
             {lineage.messagedBy?.link && (
               <>
-                <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
+                <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-caption text-fg-faint">
                   <CornerDownRight size={11} /> Messaged by
                 </div>
                 <LinkRow
@@ -373,9 +407,11 @@ export function ThreadDetails() {
             )}
             {lineage.started.length > 0 && (
               <>
-                <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
-                  Started · {lineage.started.length}
-                </div>
+                <GroupHeading
+                  label="Started"
+                  count={lineage.started.length}
+                  hint="New threads it handed a task to."
+                />
                 {lineage.started.map((group) => (
                   <LinkRow
                     key={group.links[0]!.id}
@@ -390,9 +426,11 @@ export function ThreadDetails() {
             )}
             {lineage.messaged.length > 0 && (
               <>
-                <div className="px-2.5 pt-0.5 pb-1 text-caption text-fg-faint">
-                  Messaged · {lineage.messaged.length}
-                </div>
+                <GroupHeading
+                  label="Messaged"
+                  count={lineage.messaged.length}
+                  hint="A message to a thread already running."
+                />
                 {lineage.messaged.map((group) => (
                   <LinkRow
                     key={group.links[0]!.id}
@@ -412,7 +450,7 @@ export function ThreadDetails() {
       {subagents.length > 0 && (
         <>
           {hairline}
-          <Section title={`Subagents · ${subagents.length}`}>
+          <Section title={`Subagents · ${subagents.length}`} hint="Helpers inside this thread, not threads.">
             {subagents.map((line) => (
               <SubagentRow key={line.key} line={line} now={now} harness={thread.harness?.id} />
             ))}

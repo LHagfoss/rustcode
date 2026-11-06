@@ -117,7 +117,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
-import { type Placement, parentOf as parentOfThread, topLevel } from "../state/topLevel";
+import { parentOf as parentOfThread, topLevel } from "../state/topLevel";
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
@@ -448,6 +448,15 @@ function RowAction({
 }
 
 /**
+ * The room a row's top line keeps clear of its hover actions, by whether the row still offers
+ * Settle: the actions are 22px each and sit 6px in from the row's end.
+ */
+const ACTIONS_CLEAR = {
+  open: "group-hover:pr-[72px] group-has-[:focus-visible]:pr-[72px] group-has-[[data-state=open]]:pr-[72px]",
+  done: "group-hover:pr-[50px] group-has-[:focus-visible]:pr-[50px] group-has-[[data-state=open]]:pr-[50px]",
+} as const;
+
+/**
  * A row's fill, drawn as its own child under the row's content.
  *
  * The row is a `<button>`, and a fill set on one (a `bg-fill` from a `color-mix` token, under the
@@ -633,8 +642,16 @@ const ThreadRow = memo(function ThreadRow({
             className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2.5 pl-2.5 text-left"
           >
             <RowFill selected={lit} picked={picked} radius="rounded-xl" />
-            {/* Where it runs, what its branch carries, and what it is doing. */}
-            <span className="relative flex h-[17px] w-full min-w-0 items-center gap-1 group-hover:pr-11 group-has-[:focus-visible]:pr-11 group-has-[[data-state=open]]:pr-11">
+            {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
+                actions take the right slot's place, so this line keeps exactly their room clear:
+                22px each, plus the 6px they sit in from the row's edge. Settle is the third one,
+                and a done thread has no Settle. */}
+            <span
+              className={cx(
+                "relative flex h-[17px] w-full min-w-0 items-center gap-1",
+                ACTIONS_CLEAR[done ? "done" : "open"],
+              )}
+            >
               {!grouped && (
                 <>
                   <ProjectMark name={project} />
@@ -1347,18 +1364,18 @@ export function Sidebar() {
 
   const links = useApp((s) => s.links.links);
   const messaged = useApp((s) => s.messaged);
-  // Where a thread an agent started goes: under the thread that started it, or
-  // in Settled when that parent is gone. Never a stray top-level row
-  // (state/topLevel.ts); the parent survives link pruning in the thread's own
-  // metadata.
-  const { place, parentOf } = useMemo(() => {
+  // Where a thread an agent started goes: under the thread that started it, and
+  // nowhere else (state/topLevel.ts) — the parent survives link pruning in the
+  // thread's own metadata, and a thread with no parent in the list keeps a row
+  // of its own rather than going nowhere.
+  const parentOf = useMemo(() => {
     const listed = new Set(filtered.map((s) => s.id));
     const flagged = new Set(flags.split(" "));
     // A search lists every match as a row of its own, delegated or not: the thread you are
     // looking for is not hidden under a parent that also matched.
     const searching = !!query.trim();
-    const place = new Map<string, Placement>();
     const parentOf = new Map<string, string>();
+    if (searching) return parentOf;
     for (const s of filtered) {
       const placement = topLevel(
         {
@@ -1375,11 +1392,10 @@ export function Sidebar() {
         links,
         listed,
       );
-      place.set(s.id, placement);
       const parent = parentOfThread(s, links);
-      if (placement === "nested" && parent && !searching) parentOf.set(s.id, parent);
+      if (placement === "nested" && parent) parentOf.set(s.id, parent);
     }
-    return { place, parentOf };
+    return parentOf;
   }, [filtered, links, flags, pinned, messaged, query]);
   const childrenByParent = useMemo(() => {
     const map: Record<string, SessionSummary[]> = {};
@@ -1433,10 +1449,6 @@ export function Sidebar() {
       // threads untouched for three days unless they wait for review.
       const status = marks[s.id] ?? listed;
       const done = status === "done" || (status !== "review" && idleSettled(s.updatedAt, now));
-      // A child whose parent is gone has no row of its own: finished, it goes to
-      // Settled at once, however fresh, as if it left with its parent
-      // (state/topLevel.ts). A review mark keeps it where the user put it.
-      const gone = place.get(s.id) === "settled" && status !== "review";
       // A pinned thread always shows, whatever it is doing.
       // One list, each row saying what it does; only settled threads leave it.
       if (pinned.includes(s.id)) pins.push(s);
@@ -1444,7 +1456,6 @@ export function Sidebar() {
       else if (snoozed[s.id] && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`)) sleeping.push(s);
       // Folders already separate the work, so grouping by project has no Working section.
       else if (showWorking && !byProject && flagged.has(`${s.id}:w`)) working.push(s);
-      else if (gone) settled.push(s);
       else if (done && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`) && !isFresh(s.id))
         settled.push(s);
       else active.push(s);
@@ -1489,7 +1500,6 @@ export function Sidebar() {
     marks,
     finished,
     pinned,
-    place,
     parentOf,
     byProject,
     now,

@@ -242,15 +242,17 @@ A thread an agent started is never a stray top-level row. The parent is kept in
 the child's own `metadata.json` (`parent` in `rustcode-session`, written at
 `session/new` from `_meta.rustcode.parent`), so pruning the link book's oldest
 finished links (`prune` in `state/orchestration.ts`) cannot forget it.
-`topLevel` (`apps/desktop/src/state/topLevel.ts`) picks one of three places:
+`topLevel` (`apps/desktop/src/state/topLevel.ts`) picks one of two places:
 *nested* under a parent that is in the list, with no row of its own (the
 parent's row shows the ones still working or waiting on you as a stack of
-marks, `ui/AgentStack.tsx`); *settled*, joining Settled by itself, when the
-parent is gone, filtered out or in another project and the child is finished;
-or *shown* where it would be anyway. The user's own actions win: a
+marks, `ui/AgentStack.tsx`); or *shown* where it would be anyway, which is what
+a child whose parent is gone, filtered out or in another project gets — with no
+parent row to sit under, hiding it would take it out of the app. The same
+record is on the row `session/new` adds to the list, so a thread being spawned
+is nested from its first frame instead of showing as a row of its own until the
+engine lists it. The user's own actions win: a
 pinned child stays in Pinned, and one the user sent a message to is a row of its
-own. A child that is working or waits on the user is never hidden, whatever
-became of its parent. Search still finds all of them, and opening one does not
+own. Search still finds all of them, and opening one does not
 move it. Threads started before the record existed are classified once, before
 the first session list, from the first message's `From thread “…” (agent):`
 heading, with a surviving `thread_links` row for the parent's id when there is

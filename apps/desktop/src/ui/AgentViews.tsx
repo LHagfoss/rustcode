@@ -257,7 +257,8 @@ export function AgentRow({
   status?: string;
   /** What an informational row says in words, for the group it exposes to assistive tech. */
   description?: string;
-  elapsed?: string;
+  /** The row's trailing slot: how long it has run, or a thread's status mark and age. */
+  elapsed?: ReactNode;
   tooltip?: ReactNode;
   label?: string;
   onClick?: () => void;

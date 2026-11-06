@@ -272,8 +272,8 @@ const mockParent = (parent: { id?: string; title?: string }): Json => ({
 /**
  * `?scenario=delegated`: a parent with a child whose link is long pruned, and a
  * thread an older release started whose parent is gone. The child is nested
- * under its parent; the orphan has no row of its own and sits in Settled
- * (`state/topLevel.ts`).
+ * under its parent; the orphan has no parent to sit under, so it keeps a row of
+ * its own (`state/topLevel.ts`).
  */
 function seedDelegatedThreads(): MockThread[] {
   const turn = (id: string, ask: string, say: string): JsonObject[] => [
