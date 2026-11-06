@@ -1,3 +1,13 @@
+## [v1.15.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.15.0) - 2026-11-06
+
+### Features
+- Show the RustCode version and recorded token total in Discord Rich Presence. (#3077)
+- Delegated threads stay under their parent when the sidebar is filtered or searched, and the open one shows as an indented sub-row. (#3078)
+- Threads whose worktree is removed still open, in the repository the worktree came from, and threads already broken this way reopen there. (#3079)
+- The right panel docks beside the chat at full height instead of floating over it and following the composer, with a per-thread width, a sheet in a narrow window, and the details view as one of its tabs. (#3080)
+- The chat and the composer share one 736px lane and one left edge, the composer card is rounder with evenly inset rows, it grows and shrinks with its lines instead of jumping, and ↑/↓ walk your sent messages. (#3081)
+- Steering is decided per harness: the composer says whether a message will steer, queue or restart the turn, and a queued message no longer hides why it waits. (#3082)
+- Menus and the model picker open above the composer card, with one searchable list that steps the effort in place, and a single usage meter. (#3083)
 ## [v1.14.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.14.0) - 2026-11-06
 
 ### Features
