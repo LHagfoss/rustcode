@@ -26,7 +26,7 @@
 // what a thread is, so reading it never moves the lane.
 
 import { X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
 import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
 import { HEADER_HEIGHT } from "./MainHeader";
@@ -103,28 +103,6 @@ export function panelWidth(wanted: number, available: number): number {
 }
 
 /**
- * The card over the chat, for the lane to centre in the room beside it
- * (ui/ChatView.tsx): its width, 0 while no card is open.
- */
-const cardListeners = new Set<() => void>();
-let cardWidth = 0;
-
-function subscribeCard(listener: () => void): () => void {
-  cardListeners.add(listener);
-  return () => cardListeners.delete(listener);
-}
-
-function publishCardWidth(width: number) {
-  if (width === cardWidth) return;
-  cardWidth = width;
-  for (const listener of cardListeners) listener();
-}
-
-export function usePanelCardWidth(): number {
-  return useSyncExternalStore(subscribeCard, () => cardWidth);
-}
-
-/**
  * The width after a resize key moves the edge; null for a key that does not.
  * `current` is the width on screen and `max` the widest it may draw, so a key
  * never promises a width the pane cannot show (a narrow window fits it down).
@@ -190,11 +168,6 @@ export function RightPanel() {
   const pane = kind && !card ? kind : null;
   const fitted = panelWidth(width, available);
   const widest = panelWidth(MAX, available);
-  // The lane centres in the room beside the card, so it reads the width on
-  // screen here and moves with the edge while it is dragged.
-  const shownWidth = !panel ? 0 : card ? DETAILS_CARD.width : fitted;
-  useEffect(() => publishCardWidth(shownWidth), [shownWidth]);
-
   // Keyboard focus follows the panel, and never sits where it cannot be seen:
   // a shortcut opens it with nothing focused, a surface closing takes the focus
   // with it. The composer is never covered, so a field being typed in keeps the
@@ -288,7 +261,9 @@ export function RightPanel() {
             top: HEADER_HEIGHT + DETAILS_CARD.gap,
             right: DETAILS_CARD.gap,
             width: DETAILS_CARD.width,
-            maxHeight: `calc(100% - ${HEADER_HEIGHT + DETAILS_CARD.gap * 2}px)`,
+            // It floats over the chat, so it ends above the composer: the field keeps its room
+            // and its own glass never sits under a card.
+            bottom: `calc(var(--rc-composer-top, 0px) + ${DETAILS_CARD.gap}px)`,
           }}
         >
           <Suspense fallback={<div className="h-24" />}>

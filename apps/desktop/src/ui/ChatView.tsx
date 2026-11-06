@@ -21,7 +21,6 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
-import { CHAT_WIDTH_REM } from "../lib/chatWidth";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { chooseFolder } from "../state/folders";
@@ -63,7 +62,6 @@ import {
   Tooltip,
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
-import { DETAILS_CARD, usePanelCardWidth } from "./RightPanel";
 import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
 import { Transcript } from "./Transcript";
@@ -448,41 +446,6 @@ function releaseComposer(e: React.MouseEvent) {
   active.blur();
 }
 
-/** The chat lane's cap at its default setting: `--rc-chat-content-max-width` (52rem). */
-const LANE_MAX = 52 * 16;
-/** The narrowest lane a card may leave beside it: below that the card floats over the chat. */
-const LANE_FLOOR = 320;
-
-/**
- * Where the chat lane sits while a right-hand card is open: centred in the room
- * the card leaves (`pane - cardWidth - the card's two gaps`), narrowed to that
- * room only when it is below the lane's own cap, so it never runs under the
- * card. A column too narrow to keep a lane that reads beside the card has the
- * card float over the chat, and the lane steps clear of it as far as its slack
- * allows.
- *
- * `shift` moves the lane left of centre (`--rc-lane-inset-end`) and `cap` is the
- * lane's width then, or null when its own cap already fits and the CSS one stands.
- */
-export function laneLayout(
-  pane: number,
-  cardWidth: number,
-  laneMax = LANE_MAX,
-  card = DETAILS_CARD,
-): { shift: number; cap: number | null } {
-  if (pane <= 0 || cardWidth <= 0) return { shift: 0, cap: null };
-  const room = pane - cardWidth - card.gap * 2;
-  if (room < LANE_FLOOR) {
-    const slack = Math.max(0, (pane - Math.min(laneMax, pane)) / 2);
-    return { shift: Math.round(Math.max(0, Math.min(cardWidth + card.gap * 2, slack))), cap: null };
-  }
-  const lane = Math.min(laneMax, room);
-  return {
-    shift: Math.round((pane - lane) / 2 - (room - lane) / 2),
-    cap: lane < laneMax ? lane : null,
-  };
-}
-
 /** The setup's clock, ticking on its own so the chat does not re-render every second. */
 function PendingClock({ since }: { since: number }) {
   const [now, setNow] = useState(Date.now());
@@ -524,11 +487,11 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
 }
 
 /**
- * A stack child that rides the lane's shift clear of the details card (`--rc-lane-inset-end`). It
- * is per child, not on the stack, because a transform would make one stacking context of the hero
- * and the footer: the composer's slash drawer has to paint above a floating right panel (z-20)
- * while a new thread's hero stays under it. `over` lifts a footer control — the composer with the
- * drawer over it, an approval card, an error's actions — above that panel.
+ * A stack child of the composer's column. It is per child, not on the stack, because a transform
+ * would make one stacking context of the hero and the footer: the composer's slash drawer has to
+ * paint above a floating right panel (z-20) while a new thread's hero stays under it. `over` lifts a
+ * footer control — the composer with the drawer over it, an approval card, an error's actions —
+ * above that panel.
  */
 function LaneItem({ over = false, children }: { over?: boolean; children: ReactNode }) {
   return (
@@ -536,10 +499,6 @@ function LaneItem({ over = false, children }: { over?: boolean; children: ReactN
       // `empty:hidden`: a child that renders nothing (no linked threads, no report, no approval)
       // leaves no flex item behind, so the stack's gap does not turn into a phantom one.
       className={cx("empty:hidden", over && "relative z-30")}
-      style={{
-        translate: "calc(var(--rc-lane-inset-end, 0px) * -1)",
-        transition: "translate 200ms var(--ease-snappy)",
-      }}
     >
       {children}
     </div>
@@ -556,14 +515,6 @@ export function ChatView() {
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(800);
   const banner = useBanner();
-  // The card the right panel floats over this chat, if any (ui/RightPanel.tsx):
-  // the lane centres in the room it leaves, narrowed when that room is small.
-  const panelCard = usePanelCardWidth();
-  // The transcript's rows and the composer both read this in ui/Transcript.tsx and below.
-  const chatWidth = useApp((s) => s.chatWidth);
-  // "Full" hands the lane the pane, so the card narrows it to the room beside it.
-  const laneRem = CHAT_WIDTH_REM[chatWidth];
-  const lane = laneLayout(width, panelCard, laneRem === null ? width : laneRem * 16);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -652,14 +603,6 @@ export function ChatView() {
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
       aria-label="Chat"
       onMouseDown={releaseComposer}
-      style={
-        {
-          "--rc-lane-inset-end": `${lane.shift}px`,
-          // The lane's own cap, narrowed to the room beside an open card. Left
-          // unset while it fits, so the setting's own rem cap (Settings › Chat) stands.
-          ...(lane.cap === null ? {} : { "--rc-chat-content-max-width": `${lane.cap}px` }),
-        } as React.CSSProperties
-      }
     >
       {showsBanner && (
         <NewThreadBanner
