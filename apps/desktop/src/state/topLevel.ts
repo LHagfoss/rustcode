@@ -1,9 +1,9 @@
 // Where a thread the list may draw goes: under the thread that started it (with
-// no row of its own, its parent's stack of marks holds it), in Settled by
-// itself when its parent is gone, or where every other thread goes. A thread an
-// agent started is never a top-level row while its parent is in the list; the
-// rule is one pure function so the sidebar and its tests agree on it
-// (ui/Sidebar.tsx, docs/orchestrator.md).
+// no row of its own, its parent's stack of marks holds it), or a row where
+// every other thread goes. A thread an agent started is never a top-level row
+// while its parent is in the list, and never loses its row because the parent
+// is not: the rule is one pure function so the sidebar and its tests agree on
+// it (ui/Sidebar.tsx, docs/orchestrator.md).
 
 import type { Link } from "./orchestration";
 
@@ -11,9 +11,7 @@ import type { Link } from "./orchestration";
 export type Placement =
   /** Under the thread that started it, with no row of its own: its parent's stack shows it. */
   | "nested"
-  /** Its parent is not in the list: finished, it joins Settled by itself. */
-  | "settled"
-  /** A row where it would be anyway: it has no parent, or it is the user's, or it is live. */
+  /** A row where it would be anyway: it has no listed parent, or it is the user's, or it is live. */
   | "shown";
 
 /** What the rule needs to know about one thread. */
@@ -55,9 +53,9 @@ export function parentOf(thread: DelegatedThread, links: readonly Link[]): strin
  *   stays where they put it.
  * - A parent in the list: nested under it, with no row of its own (the parent's
  *   row shows its live delegates as a stack).
- * - A parent that is gone, filtered out or in another project: a finished
- *   thread joins Settled by itself; one that is working or waits on the user
- *   is shown, so nothing that needs them is hidden.
+ * - A parent that is gone, filtered out or in another project: shown. Its row
+ *   is the only place it can be seen, so it keeps one; with no parent drawn to
+ *   put it under, hiding it would make the thread vanish from the app.
  */
 export function topLevel(
   thread: DelegatedThread,
@@ -70,5 +68,5 @@ export function topLevel(
   if (!parent && !thread.parent) return "shown";
   if (thread.pinned || thread.messaged) return "shown";
   if (parent && listed.has(parent)) return "nested";
-  return thread.live ? "shown" : "settled";
+  return "shown";
 }

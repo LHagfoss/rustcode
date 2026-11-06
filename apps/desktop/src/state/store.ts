@@ -1551,6 +1551,10 @@ export async function createSession(options: NewSession): Promise<string> {
     account: thread.harness?.account ?? options.account ?? undefined,
     worktree,
     title: options.title,
+    // A thread an agent started is nested from its first frame: without the parent here the
+    // sidebar draws it as a row of its own until the engine lists it with the same record, then
+    // moves it under its parent (`state/topLevel.ts`).
+    parent: options.parent ? { id: options.parent } : undefined,
   };
   // A pending setup keeps its row and its message until the thread is listed below, so nothing it
   // shows goes away and comes back between the session and its model. Any other session is listed
