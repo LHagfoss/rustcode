@@ -196,9 +196,9 @@
   --rc-radius-xl: 16px;
   --rc-radius-2xl: 20px;
   --rc-radius-3xl: 26px;
-  /* The composer's box and tray take a step of their own, one size above the largest cards:
+  /* The composer's box and tray take a step of their own, two sizes above the largest cards:
      they are the one surface the chat floats in, and the rounder corner reads as one piece. */
-  --rc-composer-radius: calc(var(--rc-radius-2xl) + 4px);
+  --rc-composer-radius: calc(var(--rc-radius-2xl) + 8px);
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md).
