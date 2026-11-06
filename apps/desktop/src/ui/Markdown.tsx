@@ -1,6 +1,6 @@
 // Reply Markdown, styled after MarkdownText.swift: body text, bold headings,
-// mono inline code on a quiet rounded fill, code blocks on a quiet fill with a Copy
-// button and Xcode colours, tables and quotes on rounded-xs fills.
+// mono inline code on a quiet rounded fill, code blocks on the `code-bg` surface
+// with a Copy button and Xcode colours, tables and quotes on rounded-xs fills.
 
 import { Check, Copy } from "lucide-react";
 import {
@@ -99,7 +99,9 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
     };
   }, [code, lang]);
   return (
-    <div className="my-0.5 overflow-hidden rounded-lg bg-fill-subtle">
+    // The code surface is `code-bg`, the same one diffs, terminals and diagrams use, so a
+    // fenced block reads as code rather than as a lighter card in the prose.
+    <div className="my-0.5 overflow-hidden rounded-lg bg-code-bg">
       <div className="flex items-center justify-between pt-1.5 pr-1.5 pl-3">
         <span className="font-mono text-caption text-fg-muted">{lang || "code"}</span>
         <CopyButton text={code} />
@@ -206,22 +208,42 @@ const Formula = memo(function Formula({ tex, display }: { tex: string; display: 
 });
 
 const components: Components = {
-  h1: ({ children }) => (
-    <h1 className="mt-2.5 font-semibold text-[20px] text-fg leading-[1.3]">{children}</h1>
-  ),
-  h2: ({ children }) => (
-    <h2 className="mt-2.5 font-semibold text-title2 text-fg leading-[1.3]">{children}</h2>
-  ),
-  h3: ({ children }) => (
-    <h3 className="mt-1.5 font-semibold text-title3 text-fg leading-[1.3]">{children}</h3>
-  ),
-  h4: ({ children }) => <h4 className="mt-1 font-semibold text-body text-fg leading-[1.3]">{children}</h4>,
+  // A heading takes more air above it than the blocks' own gap gives it, so it groups with
+  // the text it heads rather than floating between two paragraphs.
+  h1: ({ children }) => <h1 className="mt-3 font-semibold text-[20px] text-fg leading-[1.3]">{children}</h1>,
+  h2: ({ children }) => <h2 className="mt-3 font-semibold text-title2 text-fg leading-[1.3]">{children}</h2>,
+  h3: ({ children }) => <h3 className="mt-2 font-semibold text-title3 text-fg leading-[1.3]">{children}</h3>,
+  h4: ({ children }) => <h4 className="mt-1.5 font-semibold text-body text-fg leading-[1.3]">{children}</h4>,
   p: ({ children }) => <p className="leading-[1.625]">{children}</p>,
-  ul: ({ children }) => <ul className="ml-[1.1em] list-disc space-y-0.5 marker:text-fg-muted">{children}</ul>,
-  ol: ({ children }) => (
-    <ol className="ml-[1.4em] list-decimal space-y-0.5 marker:text-fg-muted">{children}</ol>
+  // 600, not the browser's 700: the app's heaviest weight is the semibold of titles.
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  // A nested list steps its marker (disc, circle, square) instead of only indenting.
+  ul: ({ children }) => (
+    <ul className="ml-[1.1em] list-disc space-y-1 marker:text-fg-muted [&_ul]:list-[circle] [&_ul_ul]:list-[square]">
+      {children}
+    </ul>
   ),
-  li: ({ children }) => <li className="pl-0.5 leading-[1.625] [&>ol]:mt-0.5 [&>ul]:mt-0.5">{children}</li>,
+  ol: ({ children }) => (
+    <ol className="ml-[1.4em] list-decimal space-y-1 tabular marker:text-fg-muted [&_ol]:list-[lower-alpha] [&_ol_ol]:list-[lower-roman]">
+      {children}
+    </ol>
+  ),
+  li: ({ children, className }) => {
+    // A task item's box is its marker: no disc beside it, and the box takes the marker's place
+    // in the gutter so its text lines up with the text of the items around it.
+    const task = typeof className === "string" && className.includes("task-list-item");
+    return (
+      <li
+        className={cx(
+          "pl-0.5 leading-[1.625] [&>ol]:mt-0.5 [&>ul]:mt-0.5",
+          task &&
+            "list-none [&>input]:-ml-[1.1em] [&>input]:mr-1.5 [&>input]:align-middle [&>input]:accent-accent",
+        )}
+      >
+        {children}
+      </li>
+    );
+  },
   a: ({ href, children }) =>
     // A bare link (autolinked, or `<url>`) reads as a chip; a link with its own words stays a link.
     href && /^https?:\/\//i.test(href) && typeof children === "string" && children === href ? (
@@ -254,8 +276,10 @@ const components: Components = {
       <table className="w-full border-collapse text-left">{children}</table>
     </div>
   ),
+  // Rows inside the table's card are parted by a hairline, the way a card's rows are.
+  tr: ({ children }) => <tr className="border-b border-border/60 last:border-0">{children}</tr>,
   th: ({ children }) => <th className="border-b border-border px-2.5 py-1.5 font-semibold">{children}</th>,
-  td: ({ children }) => <td className="px-2.5 py-1.5 align-top">{children}</td>,
+  td: ({ children }) => <td className="px-2.5 py-1.5 align-top text-pretty">{children}</td>,
   pre: ({ children }) => <>{children}</>,
   code: ({ className, children, node }: ComponentProps<"code"> & { node?: { position?: unknown } }) => {
     const text = String(children ?? "");
