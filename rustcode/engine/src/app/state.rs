@@ -135,6 +135,10 @@ pub struct AppState {
     pub token_usage_in_flight: bool,
     /// True only while one provider request is streaming inside a runner round.
     pub provider_request_in_flight: bool,
+    /// The round of the current turn a provider request belongs to
+    /// (`TurnContext::budget::tool_rounds`, zero-based), recorded on the data
+    /// store's `provider_requests.round`. Cleared when the turn ends.
+    pub provider_request_round: Option<i64>,
     pub current_thought_time_ms: u64,
     pub current_thought_tokens: u32,
     pub current_thought_started_at: Option<std::time::Instant>,
@@ -593,6 +597,7 @@ impl AppState {
         self.orchestrator_running = false;
         self.finish_unwound_turn(TurnOutcome::Failed);
         self.active_turn_id = None;
+        self.provider_request_round = None;
         true
     }
 
@@ -605,6 +610,7 @@ impl AppState {
         self.orchestrator_running = false;
         self.finish_unwound_turn(TurnOutcome::Cancelled);
         self.active_turn_id = None;
+        self.provider_request_round = None;
     }
 
     pub fn fail_orchestrator(&mut self) {
@@ -636,6 +642,7 @@ impl AppState {
     pub(crate) fn end_turn_identity(&mut self, turn_id: &str) {
         if self.active_turn_id.as_deref() == Some(turn_id) {
             self.active_turn_id = None;
+            self.provider_request_round = None;
         }
         if self
             .active_turn_timing
@@ -1697,6 +1704,7 @@ impl AppState {
             current_turn_token_usage_is_estimated: false,
             token_usage_in_flight: false,
             provider_request_in_flight: false,
+            provider_request_round: None,
             current_thought_time_ms: 0,
             current_thought_tokens: 0,
             current_thought_started_at: None,
