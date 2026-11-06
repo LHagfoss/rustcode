@@ -16,6 +16,7 @@ import {
   Clock,
   Command,
   Copy,
+  Ellipsis,
   FileText,
   Folder,
   FolderOpen,
@@ -32,8 +33,8 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { DropdownMenu } from "radix-ui";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { DropdownMenu, Popover } from "radix-ui";
+import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
@@ -55,11 +56,12 @@ import {
   type ComposeExtras,
   emptyExtras,
   hasExtras,
+  hasTokens,
   IMAGE_TYPES,
   imageMime,
   MAX_IMAGE_BYTES,
   MAX_INLINE_FILE_BYTES,
-  splitUrls,
+  splitTokens,
 } from "../state/compose";
 import { atToken, insertRef, rankFiles } from "../state/fileRefs";
 import { controlDisabledReason } from "../state/harness";
@@ -288,9 +290,17 @@ export const Composer = memo(function Composer({
   const cwd = thread?.cwd ?? projectCwd;
   const canSend = !!draft.trim() || hasExtras(extras);
   const mirror = useRef<HTMLDivElement>(null);
+  // The control row and the meters it may have to give up: measured, not stepped by a container
+  // query (docs/design.md › Composer). `groupWidth` keeps the meters' own width from when they
+  // last drew, so the row knows what would have to fit again before they come back.
+  const row = useRef<HTMLDivElement>(null);
+  const meters = useRef<HTMLDivElement>(null);
+  const groupWidth = useRef(0);
+  const [tight, setTight] = useState(false);
   const shell = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
-  const hasUrl = useMemo(() => /\bhttps?:\/\//i.test(draft), [draft]);
+  // Anything the mirror has to draw: a URL, or a `@file` reference (state/compose.ts `splitTokens`).
+  const tokenized = useMemo(() => hasTokens(draft), [draft]);
   // Which edges of the scrolled field fade (lib/fade.ts); nothing to fade while the draft fits.
   const [fade, setFade] = useState<FieldFade>("none");
   // Carried by the field and the mirror alike: the mask (`.rc-field-fade`) takes its two depths.
@@ -319,6 +329,30 @@ export const Composer = memo(function Composer({
       el.scrollTop = el.scrollHeight;
     }
   };
+
+  // The row's controls fit or they do not: measured, so a narrow window moves the meters into one
+  // menu instead of squeezing them, and a wide one puts them back. The meters keep their size (a
+  // ring under 30px is unreadable), which is why they overflow rather than shrink.
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const measure = () => {
+      const line = row.current;
+      if (!line) return;
+      if (meters.current) groupWidth.current = meters.current.offsetWidth;
+      if (!tight) {
+        // Everything drawn: a row wider than its box is one control past its edge.
+        if (line.scrollWidth > line.clientWidth + 1) setTight(true);
+        return;
+      }
+      // Tight: the meters come back when what is drawn leaves room for what they measured.
+      const used = [...line.children].reduce((sum, c) => sum + (c as HTMLElement).offsetWidth, 0);
+      const gaps = 8 * Math.max(0, line.children.length - 1);
+      if (used + gaps + groupWidth.current + 8 <= line.clientWidth) setTight(false);
+    };
+    measure();
+    return observeSize(el, measure);
+  }, [tight]);
 
   // Ready to type on entering a thread, and again on coming back to the chat from Settings or
   // another view (the draft is kept either way).
@@ -787,25 +821,34 @@ export const Composer = memo(function Composer({
                 onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
               />
             ))}
-            {/* Links in the draft read as links: a mirror under the field draws the same text with
-                  each URL on an accent pill, and the field's own text is transparent so the mirror shows
-                  through while the caret, selection and editing stay the field's. The two take the same
-                  padding, the same scroll offset and the same mask, so neither drifts from the other. */}
+            {/* Tokens in the draft read as tokens: a mirror under the field draws the same text with
+                  each URL on an accent pill and each `@file` reference on a quiet one, and the field's
+                  own text is transparent so the mirror shows through while the caret, selection and
+                  editing stay the field's. The two take the same padding, the same scroll offset and
+                  the same mask, so neither drifts from the other; a token's span adds no horizontal
+                  padding, which is what keeps the caret on its character. */}
             <div className="relative min-w-[160px] flex-1 basis-[160px]">
-              {hasUrl && (
+              {tokenized && (
                 <div
                   ref={mirror}
                   aria-hidden
                   className="rc-field-fade pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-1.5 text-body text-fg leading-relaxed"
                   style={fadeStyle}
                 >
-                  {splitUrls(draft).map((part, i) =>
+                  {splitTokens(draft).map((part, i) =>
                     part.url ? (
                       <span
                         key={i}
                         className="rounded-xs bg-accent/15 text-accent [box-decoration-break:clone]"
                       >
                         {part.url}
+                      </span>
+                    ) : part.ref ? (
+                      <span
+                        key={i}
+                        className="rounded-xs bg-fill-strong font-medium text-fg [box-decoration-break:clone]"
+                      >
+                        @{part.ref}
                       </span>
                     ) : (
                       part.text
@@ -836,7 +879,7 @@ export const Composer = memo(function Composer({
                 style={fadeStyle}
                 className={cx(
                   "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-relaxed outline-none placeholder:text-fg-faint",
-                  hasUrl && "text-transparent caret-fg selection:bg-accent/30",
+                  tokenized && "text-transparent caret-fg selection:bg-accent/30",
                 )}
               />
             </div>
@@ -848,7 +891,7 @@ export const Composer = memo(function Composer({
               pill and the agent pill. Labels drop out with the card's width (the folder falls back
               to its icon); the controls do not, and the two that can still be long (the folder and
               the model) shrink and ellipsize before the row overflows. */}
-          <div className="rc-composer-tray flex items-center gap-2 px-4 pt-1 pb-3.5">
+          <div ref={row} className="rc-composer-tray flex items-center gap-2 px-4 pt-1 pb-3.5">
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
@@ -880,22 +923,26 @@ export const Composer = memo(function Composer({
             </div>
             <span className="flex-1" />
             <div className="flex shrink-0 items-center gap-1.5">
-              <span className="flex h-7 shrink-0 items-center">
-                <PlanMeter threadId={thread?.id} />
-              </span>
-              {/* The meters keep their size: a ring squeezed under 30px is unreadable. */}
-              {thread && (
-                <span className="flex h-7 shrink-0 items-center empty:hidden">
-                  <ContextRing threadId={thread.id} />
-                </span>
+              {/* The meters keep their size: a ring squeezed under 30px is unreadable. A row too
+                  narrow for them draws them in one menu instead, measured rather than stepped. */}
+              {!tight ? (
+                <div ref={meters} className="flex items-center gap-1.5">
+                  <span className="flex h-7 shrink-0 items-center">
+                    <PlanMeter threadId={thread?.id} />
+                  </span>
+                  {thread && (
+                    <span className="flex h-7 shrink-0 items-center empty:hidden">
+                      <ContextRing threadId={thread.id} />
+                    </span>
+                  )}
+                  <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
+                    <AgentPill threadId={thread?.id} />
+                  </span>
+                </div>
+              ) : (
+                <MetersMenu thread={thread} />
               )}
               <ModelPicker thread={thread} compact={compact} />
-              {/* The marks keep their size; the card drops the whole pill below 24rem, the same step
-                  at which the folder falls back to its icon, and the thread's own agent card says the
-                  same. */}
-              <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
-                <AgentPill threadId={thread?.id} />
-              </span>
               {queuedEdit ? (
                 <Tooltip label="Save in the queue (⏎)">
                   <button
@@ -961,6 +1008,60 @@ export const Composer = memo(function Composer({
     </div>
   );
 }, sameComposer);
+
+/**
+ * The meters a control row too narrow to hold them: one button, and the same three inside it, in
+ * the order they would have stood. Borrowed in kind from T3 Code's composer footer, which moves
+ * controls into a menu by measured width rather than by a breakpoint
+ * (`apps/web/src/components/composerFooterLayout.ts`).
+ */
+function MetersMenu({ thread }: { thread?: ThreadState }) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Plan, context and agents"
+          className="flex size-[28px] shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
+        >
+          <Ellipsis size={14} />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="top"
+          align="end"
+          sideOffset={8}
+          collisionPadding={10}
+          className="elevated z-40 w-[min(260px,calc(100vw-40px))] p-1.5"
+        >
+          <MeterRow label="Plan">
+            <PlanMeter threadId={thread?.id} />
+          </MeterRow>
+          {thread && (
+            <MeterRow label="Context">
+              <ContextRing threadId={thread.id} />
+            </MeterRow>
+          )}
+          <MeterRow label="Agents">
+            <AgentPill threadId={thread?.id} />
+          </MeterRow>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+/** One meter in `MetersMenu`: its name on the left, the control itself on the right. A meter with
+ * nothing to say hides its row rather than drawing a label over an empty slot. */
+function MeterRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-h-8 items-center justify-between gap-3 rounded-sm px-1.5 py-1 empty:hidden has-[>div:empty]:hidden">
+      <span className="text-callout text-fg-muted">{label}</span>
+      <span className="flex h-7 shrink-0 items-center">{children}</span>
+    </div>
+  );
+}
 
 /** The thread stopped on its plan's limit and carries on by itself when it resets. */
 function LimitWaitRow({ threadId }: { threadId: string }) {

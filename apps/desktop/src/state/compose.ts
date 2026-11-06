@@ -136,6 +136,53 @@ export function splitImageMarkers(text: string): { text: string; images: number 
 }
 
 const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]}]/gi;
+/** A file reference the `@` menu wrote: `@src/main.ts` or, with a space in the path, `@"my file.ts"`. */
+const REF_IN_TEXT = /(^|[\s(])@("[^"\n]+"|[\w./@+-]+)/g;
+
+/**
+ * What the composer draws as a token inside the draft: a URL, or a `@file` reference.
+ *
+ * T3 Code's composer keeps references and citations as tokens in the text itself. RustCode has no
+ * editor, so the field's mirror does it: the textarea's text is transparent and the mirror under it
+ * draws the same string with each token on a quiet pill. The spans take **no** horizontal padding,
+ * since the mirror and the field share one line box and any padding would move the caret off its
+ * character.
+ */
+export interface DraftToken {
+  text?: string;
+  url?: string;
+  ref?: string;
+}
+
+function refRuns(text: string): DraftToken[] {
+  const out: DraftToken[] = [];
+  let last = 0;
+  for (const m of text.matchAll(REF_IN_TEXT)) {
+    const ref = m[2];
+    if (!ref) continue;
+    const at = (m.index ?? 0) + (m[1]?.length ?? 0);
+    if (at > last) out.push({ text: text.slice(last, at) });
+    out.push({ ref });
+    // `at` is the `@`; the pill draws it back in front of the reference.
+    last = at + 1 + ref.length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last) });
+  return out;
+}
+
+/** The draft split into text and tokens, URLs first and references inside the text between them. */
+export function splitTokens(text: string): DraftToken[] {
+  return splitUrls(text).flatMap((part) =>
+    part.url ? [part] : part.text === undefined ? [] : refRuns(part.text),
+  );
+}
+
+/** Whether the draft has anything the mirror draws as a token. */
+export function hasTokens(text: string): boolean {
+  const urls = new RegExp(URL_IN_TEXT.source, "i");
+  const refs = new RegExp(REF_IN_TEXT.source);
+  return urls.test(text) || refs.test(text);
+}
 
 /** Plain text split into text runs and URLs, for link chips in user messages. */
 export function splitUrls(text: string): { text?: string; url?: string }[] {
