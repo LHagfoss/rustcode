@@ -69,6 +69,7 @@ export function HarnessIcon({
   icon,
   size = 14,
   mono = false,
+  plain = false,
   className,
 }: {
   id: string;
@@ -78,6 +79,12 @@ export function HarnessIcon({
   size?: number;
   /** Draw a coloured mark (Claude, Gemini) in currentColor too, e.g. for an unavailable row. */
   mono?: boolean;
+  /**
+   * A harness with no mark of its own keeps its letter alone, with no square
+   * behind it: it is drawn inside a circle (the agent stack), where a square
+   * would read as a badge within a badge.
+   */
+  plain?: boolean;
   className?: string;
 }) {
   if (icon && /^(https?:|data:image\/)/.test(icon)) {
@@ -132,6 +139,19 @@ export function HarnessIcon({
           .replace(/[^a-z0-9]/gi, "")
           .charAt(0)
           .toUpperCase() || "?";
+  if (plain)
+    return (
+      <span
+        aria-hidden
+        className={cx(
+          "inline-flex shrink-0 items-center justify-center font-semibold leading-none",
+          className,
+        )}
+        style={{ width: size, height: size, fontSize: Math.round(size * 1.05) }}
+      >
+        {letter}
+      </span>
+    );
   return (
     <span
       aria-hidden
