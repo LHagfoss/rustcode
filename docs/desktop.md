@@ -1026,8 +1026,13 @@ off (`rustcode.haptics`).
 
 ### Updater
 
-The app checks for an update 5 s after launch, every 30 minutes, when its window comes back after 10 minutes away, and a minute after a failed check
-(`src/state/updates.ts`). When a newer release is out, an *Update to X* row
+The app checks for an update 5 s after launch, every 30 seconds while its
+window is in front (every 30 minutes behind it), when its window comes back,
+and 30 s after a failed check, doubling to 5 minutes (`src/state/updates.ts`).
+A check is a HEAD request to the release page, not the GitHub API. A release
+counts as out only once its macOS app is uploaded and its `SHA256SUMS` lists
+it: the release goes public minutes before the other platforms and the sums
+land, and an install verifies against them. When a newer release is out, an *Update to X* row
 sits at the foot of the sidebar: it installs in place where the app can
 (below), else opens the release page; while it installs, the row shows a
 progress bar (`Downloading · 39% of 58.2 MB`, then Verifying and Installing)

@@ -121,6 +121,18 @@ async fn exists(client: &reqwest::Client, url: &str) -> bool {
         .is_ok_and(|r| r.status().is_success())
 }
 
+/// Whether the release can be installed now: its app is uploaded and its
+/// `SHA256SUMS` lists it.
+async fn ready(client: &reqwest::Client, tag: &str, asset: &str) -> bool {
+    if !exists(client, &download_url(tag, asset)).await {
+        return false;
+    }
+    match fetch(client, &download_url(tag, "SHA256SUMS")).await {
+        Ok(sums) => checksum(&String::from_utf8_lossy(&sums), asset).is_some(),
+        Err(_) => false,
+    }
+}
+
 /// The `.app` this process runs from, when it runs from one.
 fn bundle_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -155,8 +167,11 @@ async fn check(app: &AppHandle) -> Result<(UpdateInfo, String), String> {
     // links to the release.
     let mut available = development || newer(&latest, &current);
     if available && cfg!(target_os = "macos") {
-        // Tagged, but its macOS app is not uploaded yet.
-        available = exists(&client, &download_url(&tag, &asset_name(&latest))).await;
+        // Tagged, but not finished: the release goes public with the macOS
+        // app minutes before the other platforms and `SHA256SUMS` land, and
+        // an install needs the sums to verify the download. Offer it only
+        // once both are there.
+        available = ready(&client, &tag, &asset_name(&latest)).await;
     }
     let info = UpdateInfo {
         current,
