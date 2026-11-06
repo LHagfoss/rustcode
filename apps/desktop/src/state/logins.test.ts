@@ -44,6 +44,13 @@ const claude = (accounts: HarnessAccount[] = []): Harness => ({
   auth: "unknown",
   capabilities: {
     steer: "none",
+    steering: {
+      live: false,
+      attachments: false,
+      while_awaiting_user: true,
+      interrupt_restart: true,
+      queue: true,
+    },
     cancel: true,
     resume: true,
     rewind: false,

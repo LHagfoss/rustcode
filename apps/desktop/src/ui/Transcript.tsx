@@ -21,8 +21,8 @@ import {
 } from "../state/fold";
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
-import { queueView } from "../state/queue";
-import { RESUME_TEXT, shortcutFor, steerConditions, useApp } from "../state/store";
+import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
+import { RESUME_TEXT, shortcutFor, steeringOf, turnState, useApp } from "../state/store";
 import {
   type QueuedPrompt,
   splitSubagentSteps,
@@ -92,10 +92,9 @@ export type Row = {
     index: number;
     count: number;
     held: boolean;
-    steerable: boolean;
-    /** The same thread's `acceptsImages` and built-in flag: the rest of the steer rule. */
-    images: boolean;
-    builtin: boolean;
+    /** The harness's steering record and the turn's state: the rest of the send rule. */
+    steering: SteeringCapabilities;
+    turn: TurnState;
     from?: string;
   };
   /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
@@ -373,7 +372,8 @@ export function Transcript({
     const waking = thread.queue.find((q) => q.wake);
     if (queue.wake && waking)
       out.push({ key: "queue-wake", queueWake: { line: queue.wake, text: waking.text } });
-    const steer = steerConditions(thread);
+    const steering = steeringOf(thread);
+    const turn = turnState(thread);
     queue.messages.forEach((q, i) => {
       out.push({
         key: `queued-${q.id}`,
@@ -382,9 +382,8 @@ export function Transcript({
           index: i,
           count: queue.messages.length,
           held: queue.held,
-          steerable: steer.live,
-          images: steer.images,
-          builtin: steer.builtin,
+          steering,
+          turn,
           from: q.link ? links.find((l) => l.id === q.link)?.orchestratorTitle : undefined,
         },
       });

@@ -8,7 +8,7 @@ import { type ComposeExtras, emptyExtras } from "./compose";
 import { answerOrchestration, linkFinished, orchestrationCallDropped, resolveGrant, wakeTick } from "./host";
 import { emptyBook, type Link } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
-import { steerability } from "./queue";
+import { QUEUE_REASON } from "./queue";
 import {
   addHarnessAccount,
   agentHistory,
@@ -17,7 +17,6 @@ import {
   type CachedPlan,
   cancel,
   cancelQueuedEdit,
-  canSteer,
   closeReport,
   commandsFor,
   commitPlansAnswer,
@@ -55,6 +54,7 @@ import {
   resumeQueue,
   saveQueuedEdit,
   selectThread,
+  sendDecisionFor,
   sendQueuedNow,
   setActiveTheme,
   setArchived,
@@ -77,7 +77,7 @@ import {
   startNewThread,
   startQueuedEdit,
   statusOf,
-  steerConditions,
+  steeringOf,
   steerOrSubmit,
   submit,
   switchNewThreadHarness,
@@ -100,12 +100,19 @@ const until = async (check: () => boolean, ms = 2000) => {
   }
 };
 
-/** A running thread that still reads `steer: "none"`: the harness learned it can steer after it started. */
+/** A running thread whose own record still reads no steering: the harness learned it after the thread started. */
 const setStaleSteer = (id: string) =>
   updateThread(id, (t) => ({
     ...t,
     harness: t.harness
-      ? { ...t.harness, capabilities: { ...t.harness.capabilities, steer: "none" as const } }
+      ? {
+          ...t.harness,
+          capabilities: {
+            ...t.harness.capabilities,
+            steer: "none" as const,
+            steering: { ...t.harness.capabilities.steering, live: false, attachments: false },
+          },
+        }
       : t.harness,
   }));
 
@@ -292,9 +299,7 @@ describe("engine controller with the mock engine", () => {
     // and it stays queued with them, saying why.
     expect(await sendQueuedNow(id, queue[0]!.id)).toBe(false);
     expect(useApp.getState().threads[id]!.queue.length).toBe(3);
-    expect(useApp.getState().toasts.at(-1)?.text).toBe(
-      "This harness can't take a message mid-turn: it waits for the next one",
-    );
+    expect(useApp.getState().toasts.at(-1)?.text).toBe(QUEUE_REASON.awaiting);
     // Its text can be edited or emptied; the images stay.
     updateQueued(id, queue[0]!.id, "look at these two");
     updateQueued(id, queue[1]!.id, "");
@@ -391,34 +396,34 @@ describe("engine controller with the mock engine", () => {
     ];
     const run = async (threadId: string, why: string, extras: ComposeExtras) => {
       const text = `steer ${why}`;
-      const conditions = steerConditions(selected()!);
-      // ⌘⏎ reads what the message holds and leaves `live` to the engine's answer, so a thread
-      // still reading "none" is tried anyway; Send now follows the row, which can be dimmed.
-      const composer = steerability(extras, { ...conditions, live: true });
-      const row = steerability(extras, conditions);
+      // The one rule, read here exactly as ⌘⏎ and the row read it.
+      const composer = sendDecisionFor(selected()!, extras).action === "steer";
       const steeredBefore = selected()!.items.filter((i) => i.kind === "user" && i.steered).length;
       expect(await steerOrSubmit(text, extras)).toBe(true);
       const steered = selected()!.items.filter((i) => i.kind === "user" && i.steered).length;
       const queued = selected()!.queue.find((q) => q.text === text);
-      expect([why, steered - steeredBefore, !!queued]).toEqual([why, composer.ok ? 1 : 0, !composer.ok]);
+      expect([why, steered - steeredBefore, !!queued]).toEqual([why, composer ? 1 : 0, !composer]);
       if (!queued) return;
-      // The row on that same message does exactly what the real harness says.
-      expect([why, await sendQueuedNow(threadId, queued.id)]).toEqual([why, row.ok]);
+      // The row on that same message says the same thing.
+      const row = sendDecisionFor(selected()!, extras).action === "steer";
+      expect([why, row]).toEqual([why, composer]);
+      expect([why, await sendQueuedNow(threadId, queued.id)]).toEqual([why, row]);
       const still = selected()!.queue.some((q) => q.id === queued.id);
-      expect([why, still]).toEqual([why, !row.ok]);
+      expect([why, still]).toEqual([why, !row]);
       if (still) removeQueued(threadId, queued.id);
     };
     for (const { why, extras } of cases) await run(id, why, extras);
-    // A thread started before its harness learned it can steer still reads "none", though the
-    // engine can steer it now: ⌘⏎ tries, the row's arrow is dimmed. The one intended difference.
+    // A thread started before its harness learned it can steer still reads "none" in its own
+    // record, and the snapshot knows better: ⌘⏎ and the row both read the fresh one.
     setStaleSteer(id);
-    expect(canSteer(selected()!)).toBe(false);
-    for (const { why, extras } of cases) await run(id, `${why} (stale harness)`, extras);
+    expect(selected()!.harness?.capabilities.steering.live).toBe(false);
+    expect(steeringOf(selected()!).live).toBe(true);
+    for (const { why, extras } of cases) await run(id, `${why} (stale thread)`, extras);
     await cancel();
     await done;
   });
 
-  test("⌘⏎ tries a thread that reads not-live, and its Send now stays dimmed", async () => {
+  test("⌘⏎ and Send now read the harness's freshest steering record", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready");
     setProjectCwd("/tmp/project");
@@ -426,23 +431,20 @@ describe("engine controller with the mock engine", () => {
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
     const id = selected()!.id;
-    // The harness learned to steer after this thread started, so the thread still reads "none".
+    // The harness learned to steer after this thread started, so the thread's own record still
+    // reads "none"; the snapshot does not, and both the composer and the row read the snapshot.
     setStaleSteer(id);
-    expect(canSteer(selected()!)).toBe(false);
-    expect(steerability(emptyExtras, steerConditions(selected()!))).toEqual({ ok: false, reason: "harness" });
-    // ⌘⏎ hands plain text to the engine anyway, it takes it, and nothing queues.
+    expect(selected()!.harness?.capabilities.steering.live).toBe(false);
+    expect(sendDecisionFor(selected()!, emptyExtras)).toEqual({ action: "steer" });
     expect(await steerOrSubmit("try it anyway")).toBe(true);
     expect(selected()!.queue).toEqual([]);
     expect(selected()!.items.flatMap((i) => (i.kind === "user" && i.steered ? [i.text] : []))).toEqual([
       "try it anyway",
     ]);
-    // Send now is the one that does not try: a message that is already queued stays there.
+    // Send now agrees: a queued message the rule steers goes into the turn too.
     updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: "queued-stale", text: "still waiting" }] }));
-    expect(await sendQueuedNow(id, "queued-stale")).toBe(false);
-    expect(selected()!.queue.map((q) => q.text)).toEqual(["still waiting"]);
-    expect(useApp.getState().toasts.at(-1)?.text).toBe(
-      "This harness can't take a message mid-turn: it waits for the next one",
-    );
+    expect(await sendQueuedNow(id, "queued-stale")).toBe(true);
+    expect(selected()!.queue).toEqual([]);
     await cancel();
     await done;
   });
@@ -476,6 +478,53 @@ describe("engine controller with the mock engine", () => {
     expect(selected()!.queueHeld).toBeUndefined();
     await until(() => !selected()!.running && selected()!.queue.length === 0, 5000);
     expect(sent().slice(-2)).toEqual(["yolo second", "yolo third"]);
+  });
+
+  test("a harness that can neither steer nor queue stops the turn, and the message runs next", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    // A harness of that shape: it takes no message mid-turn and has no queue of its own, so the
+    // rule's third answer is to stop the turn and send the message in its place.
+    const only = {
+      live: false,
+      attachments: false,
+      while_awaiting_user: true,
+      interrupt_restart: true,
+      queue: false,
+    };
+    updateThread(id, (t) => ({
+      ...t,
+      harness: t.harness
+        ? {
+            ...t.harness,
+            capabilities: { ...t.harness.capabilities, steer: "none" as const, steering: only },
+          }
+        : t.harness,
+    }));
+    useApp.setState((s) => ({
+      harnesses: s.harnesses && {
+        ...s.harnesses,
+        harnesses: s.harnesses.harnesses.map((h) =>
+          h.id === (selected()!.harness?.id ?? "rustcode")
+            ? { ...h, capabilities: { ...h.capabilities, steering: only } }
+            : h,
+        ),
+      },
+    }));
+    expect(sendDecisionFor(selected()!, emptyExtras)).toEqual({ action: "interruptRestart" });
+    expect(await steerOrSubmit("do this instead")).toBe(true);
+    expect(selected()!.queue.map((q) => [q.text, !!q.restart])).toEqual([["do this instead", true]]);
+    // A stopped turn holds the queue for Resume; this message started the stop, so it runs on.
+    await done;
+    await until(() =>
+      selected()!.items.some((i) => i.kind === "user" && (i as { text: string }).text === "do this instead"),
+    );
+    expect(selected()!.queue.map((q) => q.text)).toEqual([]);
+    await cancel();
   });
 
   test("a message sent while idle goes behind a held queue and resumes it", async () => {

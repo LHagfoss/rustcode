@@ -67,11 +67,36 @@ pub enum HarnessKind {
     Codex,
 }
 
+/// How a harness takes a message the user sends while a turn runs, so a
+/// client decides once for every harness instead of branching on its id
+/// (`docs/harnesses.md`). The client's policy (`state/queue.ts` in the
+/// desktop app) turns this and the turn's state into steer, queue or
+/// interrupt-and-restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Steering {
+    /// A message goes into the running turn: `_rustcode/steer` accepts it.
+    pub live: bool,
+    /// A live steer carries the message's pictures and files, not only its text.
+    pub attachments: bool,
+    /// A live steer goes in even while an approval or a question waits on the
+    /// user; the built-in turn reads its steers between steps only, so it
+    /// waits, where Codex and an ACP agent take one at any point of the turn.
+    pub while_awaiting_user: bool,
+    /// The turn can be stopped and the message sent as a new turn in its place.
+    pub interrupt_restart: bool,
+    /// A message that does not steer can wait for the next turn.
+    pub queue: bool,
+}
+
 /// What a harness supports. Clients read these flags and never branch on
 /// the harness id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Capabilities {
+    /// The [`Steering`] summary older clients read (`live` or `none`);
+    /// `steering` is the same fact with the detail. Both are written by
+    /// [`Capabilities::take_steers`], so they cannot disagree.
     pub steer: &'static str,
+    pub steering: Steering,
     pub cancel: bool,
     pub resume: bool,
     pub rewind: bool,
@@ -96,9 +121,27 @@ pub(crate) struct Capabilities {
 }
 
 impl Capabilities {
+    /// Record that the harness takes a message mid-turn or not, and whether
+    /// such a steer carries more than its text, keeping `steer` in step.
+    fn take_steers(&mut self, live: bool, attachments: bool) {
+        self.steer = if live { "live" } else { "none" };
+        self.steering.live = live;
+        self.steering.attachments = live && attachments;
+    }
+
     fn builtin() -> Self {
         Self {
             steer: "live",
+            // The built-in turn reads a steer as text, between steps, and
+            // only while nothing waits on the user; a message that carries
+            // more waits for the next turn.
+            steering: Steering {
+                live: true,
+                attachments: false,
+                while_awaiting_user: false,
+                interrupt_restart: true,
+                queue: true,
+            },
             cancel: true,
             resume: true,
             rewind: true,
@@ -125,6 +168,16 @@ impl Capabilities {
                 "live"
             } else {
                 "none"
+            },
+            // `turn/steer` takes the message's input items, images included.
+            // An ACP agent is asked at `initialize` (`capabilities()`), so
+            // one that advertised nothing steers never.
+            steering: Steering {
+                live: kind == HarnessKind::Codex,
+                attachments: kind == HarnessKind::Codex,
+                while_awaiting_user: true,
+                interrupt_restart: true,
+                queue: true,
             },
             cancel: true,
             resume: true,
@@ -412,8 +465,11 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
     if let Some(images) = learned.images {
         capabilities.images = images;
     }
-    if harness.kind == HarnessKind::Acp && learned.steer == Some(true) {
-        capabilities.steer = "live";
+    if harness.kind == HarnessKind::Acp {
+        // `_session/steering` takes the message as prompt content, pictures
+        // included, when the agent takes pictures at all.
+        let live = learned.steer == Some(true);
+        capabilities.take_steers(live, capabilities.images);
     }
     if let Some(effort) = learned.effort {
         capabilities.effort = effort;
@@ -942,6 +998,8 @@ mod tests {
             builtin,
             json!({
                 "steer": "live", "cancel": true, "resume": true, "rewind": true,
+                "steering": {"live": true, "attachments": false, "while_awaiting_user": false,
+                    "interrupt_restart": true, "queue": true},
                 "images": true, "models": "static", "effort": true,
                 "permission_modes": ["default", "auto_edit", "full_access"],
                 "subagents": true, "slash_commands": true, "smart_ui": true,
@@ -954,6 +1012,8 @@ mod tests {
             codex,
             json!({
                 "steer": "live", "cancel": true, "resume": true, "rewind": false,
+                "steering": {"live": true, "attachments": true, "while_awaiting_user": true,
+                    "interrupt_restart": true, "queue": true},
                 "images": true, "models": "dynamic", "effort": true,
                 "permission_modes": [], "subagents": false, "slash_commands": false,
                 "smart_ui": false, "rustcode_extensions": false, "orchestration": cfg!(unix),
@@ -962,8 +1022,87 @@ mod tests {
         );
         let acp = serde_json::to_value(Capabilities::external(HarnessKind::Acp)).unwrap();
         assert_eq!(acp["steer"], "none");
+        assert_eq!(
+            acp["steering"],
+            json!({"live": false, "attachments": false, "while_awaiting_user": true,
+                "interrupt_restart": true, "queue": true})
+        );
         assert_eq!(acp["effort"], false);
         assert_eq!(acp["slash_commands"], true);
+    }
+
+    /// Every harness says how it takes a message sent mid-turn, and an ACP
+    /// agent only says `live` once it advertised `_session/steering`.
+    /// Ids are unique to the test: learning is cached in the real config
+    /// directory (its `harness-models.json`).
+    #[test]
+    fn every_harness_says_how_it_takes_a_message_mid_turn() {
+        let queueing = Steering {
+            live: false,
+            attachments: false,
+            while_awaiting_user: true,
+            interrupt_restart: true,
+            queue: true,
+        };
+        let builtin = capabilities(&builtin_resolved());
+        assert_eq!(builtin.steer, "live");
+        assert_eq!(
+            builtin.steering,
+            Steering {
+                live: true,
+                attachments: false,
+                while_awaiting_user: false,
+                interrupt_restart: true,
+                queue: true,
+            },
+            "the built-in turn takes text, between steps, and waits on the user"
+        );
+
+        let codex = session::test_support::harness("test-steer-codex", HarnessKind::Codex);
+        assert_eq!(capabilities(&codex).steer, "live");
+        assert!(
+            capabilities(&codex).steering.attachments,
+            "images ride a steer"
+        );
+
+        for id in [
+            "test-steer-claude",
+            "test-steer-gemini",
+            "test-steer-opencode",
+            "test-steer-pi",
+        ] {
+            forget_learned(id);
+            let harness = session::test_support::harness(id, HarnessKind::Acp);
+            let quiet = capabilities(&harness);
+            assert_eq!(
+                (quiet.steer, quiet.steering),
+                ("none", queueing.clone()),
+                "{id} before it runs"
+            );
+            learn(id, |learned| {
+                learned.steer = Some(true);
+                learned.images = Some(true);
+            });
+            let told = capabilities(&harness);
+            assert_eq!(
+                (told.steer, told.steering.clone()),
+                (
+                    "live",
+                    Steering {
+                        live: true,
+                        attachments: true,
+                        ..queueing.clone()
+                    }
+                ),
+                "{id} after it advertised `_session/steering`"
+            );
+            learn(id, |learned| learned.images = Some(false));
+            assert!(
+                !capabilities(&harness).steering.attachments,
+                "{id} takes text only when it takes no pictures"
+            );
+            forget_learned(id);
+        }
     }
 
     #[test]

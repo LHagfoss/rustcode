@@ -117,6 +117,14 @@ const EFFORTS = ["low", "medium", "high", "xhigh"];
 const CODEX_CAPS: HarnessCapabilities = {
   ...BUILTIN_CAPABILITIES,
   steer: "live",
+  // `turn/steer` takes the message's input items, pictures included.
+  steering: {
+    live: true,
+    attachments: true,
+    while_awaiting_user: true,
+    interrupt_restart: true,
+    queue: true,
+  },
   rewind: false,
   permission_modes: [],
   subagents: false,
@@ -126,10 +134,31 @@ const CODEX_CAPS: HarnessCapabilities = {
 const ACP_CAPS: HarnessCapabilities = {
   ...CODEX_CAPS,
   steer: "none",
+  // An ACP agent that advertised no `_session/steering`: the message waits for the next turn.
+  steering: {
+    live: false,
+    attachments: false,
+    while_awaiting_user: true,
+    interrupt_restart: true,
+    queue: true,
+  },
   models: "static",
   effort: false,
   resume: false,
   permission_modes: [],
+};
+
+/** Claude Code's adapter advertises `_session/steering`: a message goes into the running turn. */
+const CLAUDE_CAPS: HarnessCapabilities = {
+  ...ACP_CAPS,
+  steer: "live",
+  steering: {
+    live: true,
+    attachments: true,
+    while_awaiting_user: true,
+    interrupt_restart: true,
+    queue: true,
+  },
 };
 
 function initialHarnesses(onboarded: boolean): HarnessSnapshot {
@@ -183,7 +212,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         auth: "needs_login",
         login_command: ["claude", "/login"],
         install_hint: "npm install -g @zed-industries/claude-agent-acp",
-        capabilities: ACP_CAPS,
+        capabilities: CLAUDE_CAPS,
         accounts: [
           {
             id: "paral-2",

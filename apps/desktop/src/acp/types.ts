@@ -723,8 +723,31 @@ export function questionTextAnswer(text: string, carrier: PermissionOption): Jso
 
 // ---------------------------------------------------------------- harnesses (docs/harnesses.md)
 
+/**
+ * How a harness takes a message sent while a turn runs. The engine reports one record per harness,
+ * and `state/queue.ts` (`sendDecision`) turns it and the turn's state into steer, queue or
+ * interrupt-and-restart, so no client branches on the harness id.
+ */
+export interface HarnessSteering {
+  /** A message goes into the running turn (`_rustcode/steer` accepts it). */
+  live: boolean;
+  /** A live steer carries the message's pictures and files, not only its text. */
+  attachments: boolean;
+  /**
+   * A live steer goes in even while an approval or a question waits on the user. The built-in turn
+   * reads its steers between steps only, so it waits instead.
+   */
+  while_awaiting_user: boolean;
+  /** The turn can be stopped and the message sent as a new turn in its place. */
+  interrupt_restart: boolean;
+  /** A message that does not steer can wait for the next turn. */
+  queue: boolean;
+}
+
 export interface HarnessCapabilities {
+  /** `live` or `none`, for a client that predates `steering` (the same fact, without the detail). */
   steer: "live" | "next_turn" | "none";
+  steering: HarnessSteering;
   cancel: boolean;
   resume: boolean;
   rewind: boolean;
@@ -798,6 +821,15 @@ export interface HarnessSnapshot {
 
 export const BUILTIN_CAPABILITIES: HarnessCapabilities = {
   steer: "live",
+  // The built-in turn reads a steer as text, between steps, and only while nothing waits on the
+  // user; anything more waits for the next turn.
+  steering: {
+    live: true,
+    attachments: false,
+    while_awaiting_user: false,
+    interrupt_restart: true,
+    queue: true,
+  },
   cancel: true,
   resume: true,
   rewind: true,
@@ -811,16 +843,29 @@ export const BUILTIN_CAPABILITIES: HarnessCapabilities = {
   rustcode_extensions: true,
 };
 
-function parseCapabilities(value: Json | undefined): HarnessCapabilities {
+function parseCapabilities(value: Json | undefined, builtin = false): HarnessCapabilities {
   const c = obj(value) ?? {};
   const steer = str(c.steer);
   const models = str(c.models);
+  const live = steer === "live" || steer === "next_turn";
+  const images = bool(c.images) ?? false;
+  // An engine from before `steering` reported the same facts apart: `steer` and `images`, with the
+  // built-in harness taking a steer as text only.
+  const steering = obj(c.steering);
   return {
-    steer: steer === "live" || steer === "next_turn" ? steer : "none",
+    steer: live ? (steer as "live" | "next_turn") : "none",
+    steering: {
+      live: bool(steering?.live) ?? live,
+      attachments: bool(steering?.attachments) ?? (live && images && !builtin),
+      // An engine from before this record steered a Codex or an ACP turn whenever it ran.
+      while_awaiting_user: bool(steering?.while_awaiting_user) ?? (live && !builtin),
+      interrupt_restart: bool(steering?.interrupt_restart) ?? true,
+      queue: bool(steering?.queue) ?? true,
+    },
     cancel: bool(c.cancel) ?? false,
     resume: bool(c.resume) ?? false,
     rewind: bool(c.rewind) ?? false,
-    images: bool(c.images) ?? false,
+    images,
     models: models === "dynamic" || models === "static" ? models : "none",
     effort: bool(c.effort) ?? false,
     permission_modes: arr(c.permission_modes).flatMap((m) => (typeof m === "string" ? [m] : [])),
@@ -881,6 +926,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
     if (!o || !id) return [];
     const kind = str(o.kind);
     const auth = str(o.auth);
+    const builtin = bool(o.builtin) ?? false;
     // An engine that remembers choices sends `last` on every row, null when there is none.
     if ("last" in o) remembers = true;
     return [
@@ -888,7 +934,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         id,
         name: str(o.name) ?? id,
         kind: kind === "builtin" || kind === "codex" ? kind : "acp",
-        builtin: bool(o.builtin) ?? false,
+        builtin,
         enabled: bool(o.enabled) ?? false,
         command: arr(o.command).flatMap((c) => (typeof c === "string" ? [c] : [])),
         installed: bool(o.installed) ?? false,
@@ -898,7 +944,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
           ? arr(o.login_command).flatMap((c) => (typeof c === "string" ? [c] : []))
           : undefined,
         install_hint: str(o.install_hint),
-        capabilities: parseCapabilities(o.capabilities),
+        capabilities: parseCapabilities(o.capabilities, builtin),
         models: parseHarnessModels(o.models),
         last: parseHarnessLast(o.last),
         accounts: parseHarnessAccounts(o.accounts),
@@ -958,5 +1004,9 @@ export function parseSessionHarness(result: Json): SessionHarness | undefined {
   const id = str(h?.id);
   if (!id) return undefined;
   const account = str(obj(meta?.account)?.id);
-  return { id, capabilities: parseCapabilities(h?.capabilities), ...(account ? { account } : {}) };
+  return {
+    id,
+    capabilities: parseCapabilities(h?.capabilities, id === "rustcode"),
+    ...(account ? { account } : {}),
+  };
 }

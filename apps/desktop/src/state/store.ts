@@ -127,7 +127,15 @@ import {
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
-import { nextQueued, STEER_REFUSAL, type SteerConditions, steerability } from "./queue";
+import {
+  nextQueued,
+  QUEUE_REASON,
+  type QueueReason,
+  type SendDecision,
+  type SteeringCapabilities,
+  sendDecision,
+  type TurnState,
+} from "./queue";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
@@ -2086,17 +2094,14 @@ export async function forkThread(id: string): Promise<void> {
 }
 
 /**
- * ⌘⏎: hand the running turn a message to read after its current step, else
- * send. It follows `steerability`, the one rule the queued row's Send now
- * uses too: plain text steers, pictures steer where the harness takes them
- * mid-turn, and a command, links or a file queue whole for the next turn.
+ * ⌘⏎: hand the running turn a message to read after its current step, else send. What it does is
+ * `sendDecision`'s answer for this message, the same one the composer's hint and the queued row's
+ * Send now read, so nothing here disagrees with what the app says it will do.
  */
 export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
   const id = get().selectedId;
   const thread = id ? get().threads[id] : undefined;
   const trimmed = text.trim();
-  // ⌘⏎ always tries: a harness learns it can steer when its first thread starts, so a thread
-  // started before that still reads "none" though the engine can steer it now.
   if (!id || !thread?.running || !get().agent?.steer) return submit(text, extras);
   // Nothing typed and nothing attached: take what waits first, by the row's own rule.
   if (!trimmed && !hasExtras(extras)) {
@@ -2104,50 +2109,101 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     if (next) return sendQueuedNow(id, next.id);
     return submit(text, extras);
   }
-  // ⌘⏎ reads what the message holds, not what the thread says about steering: a harness learns it
-  // can steer when its first thread starts, so a thread started before that still reads "none"
-  // though the engine can steer it now. The engine's answer decides. Pictures keep the harness
-  // check, because the built-in engine refuses a steer that carries an image block and `images` is
-  // the agent's own capability; a command, a link or a file waits either way.
-  const verdict = steerability(extras, { ...steerConditions(thread), live: true });
-  if (verdict.ok && (await steer(id, trimmed, extras))) return true;
+  const verdict = sendDecisionFor(thread, extras);
+  if (verdict.action === "steer" && (await steer(id, trimmed, extras))) return true;
+  if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
+  // A steer the engine refused (the turn ended or began waiting on the user meanwhile) waits too.
+  return queueMessage(id, text, extras, verdict.action === "queue" ? verdict.reason : "refused");
+}
+
+/** A message that does not steer waits for the next turn, saying why it waits. */
+async function queueMessage(
+  id: string,
+  text: string,
+  extras: ComposeExtras,
+  reason: QueueReason,
+): Promise<boolean> {
   if (hasExtras(extras)) {
     const sent = await submit(text, extras);
-    // It waits for the next turn with the reason the row's arrow would give.
-    if (sent) toast(verdict.ok ? "Queued: the turn can't take it now" : STEER_REFUSAL[verdict.reason]);
+    if (sent) toast(QUEUE_REASON[reason]);
     return sent;
   }
-  updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text: trimmed }] }));
-  // The real harness decides the words: a live one refused this time, a non-live one cannot.
-  toast(
-    canSteer(thread)
-      ? "Queued: the turn is waiting for you"
-      : `Queued: ${threadHarness(thread)?.name ?? "this harness"} can’t take a message mid-turn`,
-  );
+  updateThread(id, (t) => ({
+    ...t,
+    queue: [...t.queue, { id: localId("queued"), text: text.trim() }],
+  }));
+  toast(QUEUE_REASON[reason]);
   return true;
 }
 
-export function canSteer(thread: ThreadState): boolean {
-  if (!get().agent?.steer) return false;
-  return !thread.harness || thread.harness.capabilities.steer === "live";
+/**
+ * Stop the running turn and send this message in its place: what `sendDecision` answers for a
+ * harness that takes neither a steer nor the queue. The message goes to the head of the queue for
+ * the stop to land, and a turn this stopped runs it on (`thread.ts` `finishTurn` keeps the queue
+ * for Resume otherwise).
+ */
+async function restartWith(id: string, text: string, extras: ComposeExtras): Promise<boolean> {
+  updateThread(id, (t) => ({
+    ...t,
+    queue: [
+      {
+        id: localId("queued"),
+        text: text.trim(),
+        extras: hasExtras(extras) ? extras : undefined,
+        restart: true,
+      },
+      ...t.queue,
+    ],
+  }));
+  await cancel(id);
+  return true;
 }
 
-/**
- * The harness-level half of the steer rule (`canSteer`, `acceptsImages`, the built-in harness), read
- * once for ⌘⏎, Send now and the queued row. `ui/Transcript.tsx` passes the same three down to a row,
- * so the row never decides anything the store does not.
- */
-export function steerConditions(thread?: ThreadState): SteerConditions {
+/** The steering record of the harness a thread runs on: the snapshot's is the fresher of the two. */
+export function steeringOf(thread?: ThreadState): SteeringCapabilities {
+  const own = thread?.harness?.capabilities.steering;
+  const fresh = threadHarness(thread)?.capabilities.steering;
+  if (!own)
+    return (
+      fresh ?? {
+        live: false,
+        attachments: false,
+        while_awaiting_user: true,
+        interrupt_restart: true,
+        queue: true,
+      }
+    );
+  if (!fresh) return own;
+  // A harness that learned to steer after this thread started is `live` in the snapshot only.
   return {
-    live: !!thread && canSteer(thread),
-    images: acceptsImages(thread),
-    builtin: threadHarness(thread)?.builtin ?? true,
+    ...own,
+    live: own.live || fresh.live,
+    attachments: own.attachments || fresh.attachments,
   };
+}
+
+/** What the thread's turn is doing, for the one send rule. */
+export function turnState(thread?: ThreadState): TurnState {
+  return {
+    running: thread?.running ?? false,
+    awaitingUser: (thread?.permissions.length ?? 0) > 0,
+  };
+}
+
+/** What sending `extras` to this thread now would do: steer, queue (with the reason), or restart. */
+export function sendDecisionFor(
+  thread: ThreadState | undefined,
+  extras: ComposeExtras | undefined,
+): SendDecision {
+  return sendDecision(extras, steeringOf(thread), turnState(thread));
 }
 
 async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
   const thread = get().threads[id];
-  const conditions = steerConditions(thread);
+  const conditions = {
+    images: acceptsImages(thread),
+    builtin: threadHarness(thread)?.builtin ?? true,
+  };
   const prompt = extras?.attachments.length
     ? promptBlocks(text, extras, {
         images: conditions.images,
@@ -2178,16 +2234,20 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   const thread = get().threads[id];
   const item = thread?.queue.find((q) => q.id === queuedId);
   if (!item || !thread) return false;
-  const verdict = steerability(item.extras, steerConditions(thread));
-  if (!verdict.ok) {
-    toast(STEER_REFUSAL[verdict.reason]);
+  const verdict = sendDecisionFor(thread, item.extras);
+  if (verdict.action === "queue") {
+    toast(QUEUE_REASON[verdict.reason]);
     return false;
+  }
+  if (verdict.action === "interruptRestart") {
+    removeQueued(id, queuedId);
+    return restartWith(id, item.text, item.extras ?? emptyExtras);
   }
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
     return true;
   }
-  toast("The turn can't take it now. It stays queued");
+  toast(QUEUE_REASON.refused);
   return false;
 }
 

@@ -73,7 +73,6 @@ import {
   cancel,
   cancelEdit,
   cancelQueuedEdit,
-  canSteer,
   commandsFor,
   dropLimitWait,
   endQueuedEdit,
@@ -82,6 +81,7 @@ import {
   newThreadChoice,
   permissionModeOf,
   saveQueuedEdit,
+  sendDecisionFor,
   setDraft,
   setExtras,
   setNewWorktree,
@@ -253,7 +253,9 @@ export const Composer = memo(function Composer({
   const [dropping, setDropping] = useState(false);
 
   const running = thread?.running ?? false;
-  const steerable = thread ? canSteer(thread) : false;
+  // What ⌘⏎ would do with what is in the field now, by the same rule the queued row uses: the
+  // placeholder says it, so a message that will wait does not read as one that steers.
+  const decision = thread ? sendDecisionFor(thread, extras) : undefined;
   // The queued message the composer is editing (its pencil, or ↑): ⏎ saves it where it waits, and
   // never sends it. What the composer held before comes back when the edit ends.
   const queuedEdit = useApp((s) => (s.queuedEdit?.threadId === key ? s.queuedEdit : null));
@@ -659,9 +661,11 @@ export const Composer = memo(function Composer({
       : approval
         ? "Send a message to decline and redirect the agent…"
         : running
-          ? steerable
+          ? decision?.action === "steer"
             ? "⏎ queues it for the next turn, ⌘⏎ steers this one…"
-            : "⏎ queues it for the next turn…"
+            : decision?.action === "interruptRestart"
+              ? "⏎ stops this turn and starts a new one…"
+              : "⏎ queues it for the next turn…"
           : `Message ${speakingTo}…`;
 
   // The drawer over the box: the commands `/` is looking for, or the files `@` is. A slash that
