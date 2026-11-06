@@ -138,6 +138,12 @@ function useNow(active: boolean) {
  * nothing) take no room: nothing mounts to measure them, so an estimate above zero would push every
  * row below it down and leave a blank strip at the end of the scroll.
  */
+/** Whether the reader has text marked: following the stream would scroll it away. */
+function selecting(): boolean {
+  const s = window.getSelection();
+  return !!s && s.rangeCount > 0 && !s.isCollapsed;
+}
+
 export function estimatedRowHeight(row: Row | undefined, hidden = false): number {
   if (hidden) return 0;
   if (!row) return 24;
@@ -607,12 +613,13 @@ export function Transcript({
     requestAnimationFrame(toBottom);
   }, [thread.id]);
 
-  // Whatever grows (a streamed chunk, a measured row, the composer) keeps a pinned view at the bottom.
+  // Whatever grows (a streamed chunk, a measured row, the composer) keeps a pinned view at the bottom,
+  // unless the reader is marking text: a selection must not scroll out from under them mid-stream.
   useEffect(() => {
     const inner = innerRef.current;
     if (!inner) return;
     const observer = new ResizeObserver(() => {
-      if (pinned.current) toBottom();
+      if (pinned.current && !selecting()) toBottom();
     });
     observer.observe(inner);
     return () => observer.disconnect();
@@ -620,7 +627,7 @@ export function Transcript({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: new rows and new text re-pin
   useLayoutEffect(() => {
-    if (pinned.current) toBottom();
+    if (pinned.current && !selecting()) toBottom();
   }, [rows, toBottom, bottomInset]);
 
   // The timeline's turns: one per user message. Kept as the same array while they do not change,

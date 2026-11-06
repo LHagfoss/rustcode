@@ -328,6 +328,24 @@
     cursor: default;
   }
 
+  /*
+   * Selection starts where the words are and carries on through what sits in them: a link or a
+   * picture in a reply is no drag source (a link drag would cancel the selection), and a control
+   * inside prose (an inline file reference, a link chip) hands its words to the selection like
+   * text does, so a drag across a reply copies the whole sentence. Chrome outside `.selectable`
+   * still inherits the document's `none`, so a selection never picks up a label or an icon.
+   */
+  .selectable a[href],
+  .selectable img,
+  .selectable svg {
+    -webkit-user-drag: none;
+  }
+
+  .selectable :where(button, [role="button"]) {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
   /* Keyboard focus only: a 2px ring at 40%, never on a click. */
   :focus {
     outline: none;
