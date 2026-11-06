@@ -840,9 +840,9 @@ const ThreadRow = memo(function ThreadRow({
 });
 
 /**
- * A thread sent with a worktree, before the engine has its session (state/setup.ts): the message's
- * title, where it will run, and Setting up with its own clock. Failed, it keeps the error and the
- * one action it has, Dismiss; there is no session yet for a menu to act on.
+ * A thread sent before the engine has its session (state/setup.ts): the message's title, where it
+ * will run, and what it is doing with its own clock. Failed, it keeps the error and the one action
+ * it has, Dismiss; there is no session yet for a menu to act on.
  */
 const PendingRow = memo(function PendingRow({
   pending,
@@ -853,8 +853,8 @@ const PendingRow = memo(function PendingRow({
   selected: boolean;
   navActive?: boolean;
 }) {
-  const project = projectName(pending.worktree.repo || pending.cwd);
-  const branch = pending.worktree.branch;
+  const project = projectName(pending.worktree?.repo || pending.cwd);
+  const branch = pending.worktree?.branch;
   const failure = pending.failure;
   return (
     <div className="group relative">
@@ -892,7 +892,7 @@ const PendingRow = memo(function PendingRow({
               <>
                 <Spinner size={11} />
                 <span className="text-accent">
-                  Setting up <Elapsed since={pending.startedAt} />
+                  {pending.worktree ? "Setting up" : "Starting"} <Elapsed since={pending.startedAt} />
                 </span>
               </>
             )}
@@ -1500,7 +1500,7 @@ export function Sidebar() {
     const pendingRow =
       pending &&
       (!q || `${pending.title} ${pending.cwd}`.toLowerCase().includes(q)) &&
-      (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree.repo === projectCwd)
+      (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree?.repo === projectCwd)
         ? pendingSummary(pending)
         : null;
     for (const s of filtered) {

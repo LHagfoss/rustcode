@@ -1639,62 +1639,73 @@ export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): N
 
 /**
  * Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and
- * selects it. A worktree takes a while, so the thread appears while `session/new` runs; its message
- * comes back to the composer if the worktree or the harness cannot start.
+ * selects it. `session/new` starts a harness there (and a worktree, when the toggle is on), which
+ * takes a moment: the setup, with the message and its attachments, is shown before it is asked for,
+ * so ⏎ on the new-thread screen is answered at once. A second send while it runs starts nothing; a
+ * setup that failed is sent again with `retryPendingSetup`.
  */
-async function createThread(firstMessage = ""): Promise<string | null> {
+async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtras): Promise<string | null> {
   const s = get();
-  const cwd = s.projectCwd;
-  if (!cwd) throw new Error("Choose a project folder for this thread first.");
+  if (!s.projectCwd) throw new Error("Choose a project folder for this thread first.");
+  const setup = beginSetup(get().pendingSetup, {
+    id: localId("setup"),
+    text: firstMessage,
+    extras: hasExtras(extras) ? extras : undefined,
+    title: titleFrom(firstMessage, 80) || (hasExtras(extras) ? "Image" : "New thread"),
+    cwd: s.projectCwd,
+    worktree: newWorktreeFor(s, s.projectCwd, firstMessage),
+  });
+  if (!setup) {
+    const failed = get().pendingSetup?.failure;
+    if (failed) toast(failed.text, "error");
+    else toast("Starting the thread: it appears here when it is ready.");
+    return null;
+  }
+  // One update switches the screen and shows the message: nothing waits for the engine.
+  set({ pendingSetup: setup });
+  return await startSetup(setup);
+}
+
+/** The worktree the new-thread composer asked for, or none. */
+function newWorktreeFor(
+  s: Pick<AppState, "newWorktree" | "features">,
+  cwd: string,
+  firstMessage: string,
+): PendingSetup["worktree"] {
+  const wt = s.newWorktree;
+  if (!wt.on || !s.features.worktrees) return undefined;
+  return { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) };
+}
+
+/**
+ * `session/new` for a setup, with the choices the new-thread screen holds. Its title is the one the
+ * row already shows, so nothing blinks back to "New thread" when the row becomes real. On failure
+ * the setup keeps the message, its attachments and the reason, for a retry.
+ */
+async function startSetup(setup: PendingSetup): Promise<string | null> {
+  const s = get();
   const choice = newThreadChoice(s);
   const harness = s.harnesses?.harnesses.find((h) => h.id === harnessOf(s));
-  const wt = s.newWorktree;
-  const worktree =
-    wt.on && s.features.worktrees
-      ? { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) }
-      : undefined;
-  const options = {
-    cwd,
-    harness: choice?.harness,
-    // The account shown for the new thread: a signed-out default login is not one.
-    account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
-    model: choice?.model,
-    effort: choice?.effort,
-    worktree,
-    select: true,
-  };
   let id: string;
-  if (!worktree) {
-    id = await createSession(options);
-  } else {
-    // The user sent a message: the row and the chat show it while the worktree is made. A second
-    // send finds this one and starts nothing; only a failed setup can be sent again (the retry).
-    const setup = beginSetup(get().pendingSetup, {
-      id: localId("setup"),
-      text: firstMessage,
-      title: titleFrom(firstMessage, 80) || "New thread",
-      cwd,
-      worktree,
+  try {
+    id = await createSession({
+      cwd: setup.cwd,
+      harness: choice?.harness,
+      // The account shown for the new thread: a signed-out default login is not one.
+      account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
+      model: choice?.model,
+      effort: choice?.effort,
+      worktree: setup.worktree,
+      select: true,
+      pendingId: setup.id,
+      title: setup.title,
     });
-    if (!setup) {
-      const failed = get().pendingSetup?.failure;
-      if (failed) toast(failed.text, "error");
-      else toast("Setting up the worktree: the thread appears when it is ready.");
-      return null;
-    }
-    set({ pendingSetup: setup });
-    try {
-      // The title the row already shows is the title the thread starts with, so it does not blink
-      // back to "New thread" when the row becomes real.
-      id = await createSession({ ...options, pendingId: setup.id, title: setup.title });
-    } catch (error) {
-      const text = errorText(error);
-      // The setup stays, failed, with the message it holds; the composer gets the text back.
-      set((st) =>
-        st.pendingSetup?.id === setup.id ? { pendingSetup: setupFailed(st.pendingSetup, text) } : {},
-      );
-      return null;
-    }
+  } catch (error) {
+    const text = errorText(error);
+    set((st) =>
+      st.pendingSetup?.id === setup.id ? { pendingSetup: setupFailed(st.pendingSetup, text) } : {},
+    );
+    return null;
   }
   // The access level chosen on the new-thread composer belongs to the thread it started.
   const pendingMode = get().newThreadPermissionMode;
@@ -1702,13 +1713,44 @@ async function createThread(firstMessage = ""): Promise<string | null> {
     setPermissionMode(id, pendingMode);
     set({ newThreadPermissionMode: null });
   }
-  set({ newWorktree: { on: wt.on, branch: "", edited: false } });
+  set({ newWorktree: { on: get().newWorktree.on, branch: "", edited: false } });
   return id;
 }
 
-/** Gives up a failed setup: its row and its error leave, and the new-thread screen stays. */
+/**
+ * Retry: a failed setup sends its message again, with the attachments and the place it held, and the
+ * prompt goes out the moment the session exists. Its own row stays where it is while it runs.
+ */
+export async function retryPendingSetup(): Promise<boolean> {
+  const failed = get().pendingSetup;
+  if (!failed?.failure) return false;
+  const setup = beginSetup(failed, {
+    id: localId("setup"),
+    text: failed.text,
+    extras: failed.extras,
+    title: failed.title,
+    cwd: failed.cwd,
+    worktree: failed.worktree,
+  });
+  if (!setup) return false;
+  set({ pendingSetup: setup });
+  const id = await startSetup(setup);
+  if (!id) return false;
+  void runPrompt(id, setup.text, setup.extras ?? emptyExtras);
+  return true;
+}
+
+/**
+ * Gives up a failed setup: its row and its error leave, and its message goes back to the field it
+ * was typed in, with the pictures and files that went with it, so nothing that was written is lost.
+ */
 export function dismissPendingSetup() {
+  const pending = get().pendingSetup;
   set({ pendingSetup: dismissSetup() });
+  if (!pending?.failure) return;
+  if (pending.text.trim()) setDraft("new", pending.text);
+  const extras = pending.extras;
+  if (extras) setExtras("new", () => ({ ...extras, attachments: [...extras.attachments] }));
 }
 
 // ---------------------------------------------------------------- thread actions
@@ -2018,8 +2060,11 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   let id = get().selectedId;
   try {
     if (!id) {
-      const started = await createThread(trimmed);
-      if (!started) return false;
+      const started = await createThread(trimmed, extras);
+      // A setup that failed keeps the message and its attachments on the thread's own bubble, with
+      // Retry: the field stays clear rather than holding a second copy. One that could not start at
+      // all (another is still going) leaves the draft in the composer, as it was.
+      if (!started) return !!get().pendingSetup?.failure;
       id = started;
     }
   } catch (error) {
@@ -2418,16 +2463,18 @@ export async function runPrompt(
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
   if (id in get().snoozed) snoozeThread(id, null);
+  const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
+  // The message is on screen before its blocks are built: a long paste or a 20 MB picture is copied
+  // into the prompt's JSON after the bubble lands, not before it.
+  updateThread(id, (t) =>
+    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake),
+  );
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
     images: acceptsImages(thread),
     builtin: harness?.builtin ?? true,
     cwd: thread?.cwd ?? "",
   });
-  const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
-  updateThread(id, (t) =>
-    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake),
-  );
   // A new prompt starts a new report, if it is one.
   if (get().report?.threadId === id) set({ report: null });
   set((s) => ({

@@ -268,6 +268,17 @@ that change use `tabular`.
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
   selection slides (`transform`) to the new segment.
+- A message sent from the composer flies instead of rising: it starts a
+  little inside the field's card (at 96%) and lands in its row in 220ms
+  `--ease-snappy`, `transform` and `opacity` only, so nothing around it moves
+  (`lib/sendFlight.ts`). The composer is found by the marker on its card, and
+  the row travels at most 220px. Only a message typed here flies: a wake, a
+  resume, one another thread or a view sent, and the history a thread opens
+  with keep the plain row rise. The field it left fades back in empty over
+  160ms rather than blinking. `prefers-reduced-motion` gets the fade alone.
+  A message sent from the new-thread screen fades where it lands instead,
+  because the composer itself is on its way to the foot of the chat: the
+  stack's own 500ms move is that send's motion.
 - A streaming reply's new words fade in once each (`rc-reveal`, 280ms, from
   `opacity: 0` and a 4px blur, 18ms apart, no word waiting past 180ms).
   `lib/reveal.ts` wraps only the words that arrived in the chunk, and only in

@@ -8,6 +8,7 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
+import { flyInFromComposer } from "../lib/sendFlight";
 import {
   foldEnds,
   foldTurns,
@@ -806,6 +807,22 @@ export function Transcript({
     if (!at.has(key)) at.set(key, nowMs);
     return nowMs - at.get(key)! < 300;
   };
+  // The message just sent, when the row that holds it is new: it rises out of the composer instead
+  // of only rising in (lib/sendFlight.ts). A wake, a resume and a message another thread or a view
+  // sent are not messages typed here, so they keep the plain row rise.
+  const sentRow = rows.findLast((r) => {
+    const item = r.item;
+    return item?.kind === "user" && !item.wake && !item.fromView && item.text !== RESUME_TEXT && fresh(r.key);
+  });
+  const sent = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    const key = sentRow?.key;
+    if (!key || sent.current === key) return;
+    sent.current = key;
+    flyInFromComposer(
+      innerRef.current?.querySelector<HTMLElement>(`[data-rc-row="${CSS.escape(key)}"]`) ?? null,
+    );
+  }, [sentRow?.key]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -913,10 +930,11 @@ export function Transcript({
               return (
                 <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                   <div
+                    data-rc-row={row.key === sentRow?.key ? row.key : undefined}
                     className={cx(
                       "mx-auto w-full max-w-[var(--rc-chat-content-max-width)]",
                       LANE_MOTION,
-                      row.inFold ? "rc-expand" : fresh(row.key) && "rc-row-in",
+                      row.inFold ? "rc-expand" : fresh(row.key) && row.key !== sentRow?.key && "rc-row-in",
                     )}
                     style={{ paddingTop: turnGap }}
                   >
