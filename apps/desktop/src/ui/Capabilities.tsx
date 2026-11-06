@@ -19,7 +19,7 @@ import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { askConfirm, request, toast, useApp } from "../state/store";
-import { cx, Switch, Tooltip } from "./primitives";
+import { cx, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, fieldClass, Group, Loading, Row, SectionTitle, useEngineData } from "./settingsKit";
 
 interface Skill {
@@ -241,6 +241,19 @@ function McpRow({
     [engineLog, s.name],
   );
   const toggleable = s.scope === "user";
+  // A server that failed, or dropped its connection, comes back in place:
+  // no toggle off and on, and no change to the config file. A disabled or
+  // unconfigured server has nothing to reconnect to.
+  const canRetry = s.enabled && s.scope !== "session";
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await run(Method.mcpRestart, { name: s.name }, 45_000);
+    } finally {
+      setRetrying(false);
+    }
+  };
   return (
     <div>
       <div className="flex min-h-11 items-center gap-3 px-3.5 py-2">
@@ -259,23 +272,51 @@ function McpRow({
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium text-body">{s.name}</span>
             <span className={cx("block truncate text-caption", s.error ? "text-danger" : "text-fg-muted")}>
-              {s.error ??
-                `${CONNECTION[s.connection] ?? s.connection} · ${s.transport}${
-                  s.connection === "connected" ? ` · ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}` : ""
-                }`}
+              {retrying
+                ? "Reconnecting…"
+                : (s.error ??
+                  `${CONNECTION[s.connection] ?? s.connection} · ${s.transport}${
+                    s.connection === "connected"
+                      ? ` · ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}`
+                      : ""
+                  }`)}
             </span>
           </span>
         </button>
-        <Tooltip label={toggleable ? undefined : `Set in a ${s.scope} config; edit it there`}>
-          <span>
-            <Switch
-              label={`Use ${s.name}`}
-              checked={s.enabled}
-              disabled={!toggleable}
-              onChange={(v) => void run(Method.capabilitiesSet, { kind: "mcp", name: s.name, enabled: v })}
-            />
-          </span>
-        </Tooltip>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Tooltip
+            label={
+              !s.enabled
+                ? "Turn the server on to reconnect"
+                : s.scope === "session"
+                  ? "This server is no longer in a config file"
+                  : retrying
+                    ? "Reconnecting…"
+                    : "Reconnect"
+            }
+          >
+            <button
+              type="button"
+              aria-label={`Reconnect ${s.name}`}
+              aria-busy={retrying}
+              disabled={!canRetry || retrying}
+              onClick={() => void retry()}
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong disabled:opacity-40"
+            >
+              {retrying ? <Spinner size={13} /> : <RefreshCw size={13} />}
+            </button>
+          </Tooltip>
+          <Tooltip label={toggleable ? undefined : `Set in a ${s.scope} config; edit it there`}>
+            <span>
+              <Switch
+                label={`Use ${s.name}`}
+                checked={s.enabled}
+                disabled={!toggleable}
+                onChange={(v) => void run(Method.capabilitiesSet, { kind: "mcp", name: s.name, enabled: v })}
+              />
+            </span>
+          </Tooltip>
+        </div>
       </div>
       {open && (
         <div className="rc-expand flex flex-col gap-3 px-3.5 pb-3.5 pl-10">

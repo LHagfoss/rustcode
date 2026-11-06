@@ -52,6 +52,17 @@ pub(crate) struct RemoveMcpServerRequest {
     pub name: String,
 }
 
+/// Reconnect one configured MCP server without touching the user config;
+/// answers with the fresh snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[request(
+    method = "_rustcode/capabilities/mcp/restart",
+    response = serde_json::Value
+)]
+pub(crate) struct RestartMcpServerRequest {
+    pub name: String,
+}
+
 pub(crate) async fn add_mcp_server(
     request: AddMcpServerRequest,
 ) -> Result<serde_json::Value, agent_client_protocol::Error> {
@@ -82,6 +93,15 @@ pub(crate) async fn remove_mcp_server(
     request: RemoveMcpServerRequest,
 ) -> Result<serde_json::Value, agent_client_protocol::Error> {
     crate::capabilities::remove_mcp_server(&request.name)
+        .await
+        .map_err(|message| agent_client_protocol::Error::invalid_params().data(message))?;
+    snapshot_value()
+}
+
+pub(crate) async fn restart_mcp_server(
+    request: RestartMcpServerRequest,
+) -> Result<serde_json::Value, agent_client_protocol::Error> {
+    crate::capabilities::restart_mcp_server(&request.name)
         .await
         .map_err(|message| agent_client_protocol::Error::invalid_params().data(message))?;
     snapshot_value()
@@ -136,6 +156,12 @@ mod tests {
         assert!(RemoveMcpServerRequest::matches_method(
             "_rustcode/capabilities/mcp/remove"
         ));
+        assert!(RestartMcpServerRequest::matches_method(
+            "_rustcode/capabilities/mcp/restart"
+        ));
+        let restart: RestartMcpServerRequest =
+            serde_json::from_value(serde_json::json!({"name": "fagbrev"})).unwrap();
+        assert_eq!(restart.name, "fagbrev");
         let add: AddMcpServerRequest = serde_json::from_value(
             serde_json::json!({"name": "files", "target": ["npx", "-y", "files-mcp"]}),
         )

@@ -1980,6 +1980,20 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async move |request: capabilities::RestartMcpServerRequest, responder, connection| {
+                // Connecting a server again can take the same seconds a start
+                // does; keep the dispatch loop free while it does.
+                connection.spawn(async move {
+                    match capabilities::restart_mcp_server(request).await {
+                        Ok(snapshot) => responder.respond(snapshot)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         // Orchestrator v2 (`docs/orchestrator.md`): worktrees, thread status
         // and checkpoints. Each runs git, so none holds the dispatch loop.
         .on_receive_request(

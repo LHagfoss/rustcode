@@ -1007,9 +1007,59 @@ export class MockEngine {
     },
   ];
   private activeTheme = "rustcode";
+  /** MCP servers the mock restarted through `_rustcode/capabilities/mcp/restart`. */
+  private mcpRestarted = new Set<string>();
 
   private themesSnapshot(): JsonObject {
     return { active: this.activeTheme, themes: this.themes as unknown as Json };
+  }
+
+  /** The MCP rows `_rustcode/capabilities` lists; `fagbrev` starts failed until it is restarted. */
+  private mcpServers(): JsonObject[] {
+    const up = this.mcpRestarted.has("fagbrev");
+    return [
+      {
+        name: "github",
+        transport: "http",
+        target: "https://api.githubcopilot.com/mcp/",
+        enabled: true,
+        scope: "user",
+        connection: "connected",
+        tools: 41,
+        error: null,
+      },
+      {
+        name: "sqlite",
+        transport: "stdio",
+        target: "uvx mcp-server-sqlite",
+        enabled: false,
+        scope: "user",
+        connection: "disabled",
+        tools: 0,
+        error: null,
+      },
+      up
+        ? {
+            name: "fagbrev",
+            transport: "stdio",
+            target: "npx -y fagbrev-mcp",
+            enabled: true,
+            scope: "user",
+            connection: "connected",
+            tools: 3,
+            error: null,
+          }
+        : {
+            name: "fagbrev",
+            transport: "stdio",
+            target: "npx -y fagbrev-mcp",
+            enabled: true,
+            scope: "user",
+            connection: "failed",
+            tools: 0,
+            error: "MCP server 'fagbrev' failed to start: spawn npx ENOENT",
+          },
+    ];
   }
 
   constructor(
@@ -1831,28 +1881,7 @@ export class MockEngine {
               enabled: false,
             },
           ],
-          mcpServers: [
-            {
-              name: "github",
-              transport: "http",
-              target: "https://api.githubcopilot.com/mcp/",
-              enabled: true,
-              scope: "user",
-              connection: "connected",
-              tools: 41,
-              error: null,
-            },
-            {
-              name: "sqlite",
-              transport: "stdio",
-              target: "uvx mcp-server-sqlite",
-              enabled: false,
-              scope: "user",
-              connection: "disabled",
-              tools: 0,
-              error: null,
-            },
-          ],
+          mcpServers: this.mcpServers(),
         };
       case "_rustcode/themes":
         return this.themesSnapshot();
@@ -1883,6 +1912,16 @@ export class MockEngine {
       }
       case "_rustcode/capabilities/set":
         return this.handle("_rustcode/capabilities", {});
+      case "_rustcode/capabilities/mcp/restart": {
+        const name = str(params.name) ?? "";
+        if (name !== "github" && name !== "sqlite" && name !== "fagbrev")
+          throw Object.assign(new Error(`MCP server '${name}' is no longer configured`), {
+            code: -32602,
+          });
+        await this.sleep(400);
+        this.mcpRestarted.add(name);
+        return this.handle("_rustcode/capabilities", {});
+      }
       case "_rustcode/connections":
         return {
           github: {

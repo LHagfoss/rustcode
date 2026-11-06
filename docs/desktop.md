@@ -521,8 +521,10 @@ composer's keys stay outside the table.
 - **Settings › Capabilities.** Skills and MCP servers in one page, through
   `_rustcode/capabilities*`: servers with their state, tool count and
   names, errors and the engine log lines that name them, on/off (servers
-  from a project config are read-only), add (command or URL, with
-  environment or headers), remove, and Edit config; skills by where they
+  from a project config are read-only), Retry (reconnects a failed or dropped
+  server in place, through `_rustcode/capabilities/mcp/restart`, without
+  rewriting the config), add (command or URL, with environment or headers),
+  remove, and Edit config; skills by where they
   were found (project, user, shared, configured) with their path, on/off,
   Edit (opens SKILL.md), Show in Finder, and New skill (the shell writes
   `SKILL.md` from a template under `~/.config/rustcode/skills` or the
