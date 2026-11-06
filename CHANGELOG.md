@@ -1,3 +1,21 @@
+## [v1.12.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.12.0) - 2026-11-06
+
+### Features
+### Usage
+
+- Settings › Statistics estimates what each row would have cost at API list prices, in a column of its own beside the cost each harness reported. Cached input is priced as cached input, each harness's token counts are normalized first, and a model with no list price stays blank instead of guessing. (#3055)
+- The context ring in the composer follows a turn while it runs on Pi and Claude Code, instead of only updating when the turn ends. (#3061)
+
+### Chat and layout
+
+- Changes, Pull requests and the thread peek now float as the same card as thread details, and the chat is centred in the room they leave instead of being shifted off-centre. (#3056)
+- The message box is one floating card with its footer inside it, opens two lines tall, and a line typed with Shift+Enter no longer hides in the field's bottom fade. (#3057)
+- The thread details card's Started and Messaged groups say what each holds, a delegated thread no longer flashes into the sidebar as a row of its own, and one whose parent is not listed keeps its row instead of disappearing. (#3058)
+- A finished turn shows its changed files once instead of twice, and older turns keep that line inside their fold instead of repeating it up the thread. (#3060)
+
+### Reliability
+
+- Settings › Capabilities reconnects an MCP server in place with a button, instead of turning it off and on again. (#3059)
 ## [v1.11.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.11.0) - 2026-11-06
 
 ### Features
