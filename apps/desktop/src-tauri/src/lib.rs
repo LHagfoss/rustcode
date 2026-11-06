@@ -7,6 +7,7 @@ mod banner;
 mod engine;
 mod links;
 mod native;
+mod notify;
 mod pty;
 mod smartui;
 mod threads;
@@ -44,6 +45,8 @@ fn engine_stop(engine: State<'_, EngineState>) {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Notifications for a thread that needs the user (src/notify.rs).
+        .plugin(tauri_plugin_notification::init())
         .manage(Arc::new(Engine::default()) as EngineState)
         .manage(links::LinkCache::default())
         .manage(pty::Ptys::default())
@@ -69,6 +72,9 @@ pub fn run() {
             native::skill_create,
             native::open_in_editor,
             native::haptic,
+            notify::notify_show,
+            notify::notify_permission,
+            notify::notify_badge,
             banner::banner_save,
             banner::banner_read,
             banner::banner_remove,
@@ -90,6 +96,8 @@ pub fn run() {
             app.state::<EngineState>().prestart();
             // Built here, not from the config, so it renders at 120 Hz where the display does.
             webview::build_main_window(app)?;
+            // A click on a notification is only reported while something listens for it.
+            notify::register(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

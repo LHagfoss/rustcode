@@ -45,6 +45,16 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "System notifications",
+    keywords: "notify notification alert badge dock attention approval question finished system",
+  },
+  {
+    section: "general",
+    title: "Only when RustCode is in the background",
+    keywords: "notify notification background window focused in front quiet",
+  },
+  {
+    section: "general",
     title: "Discord Rich Presence",
     keywords: "rich presence status shared project",
   },
