@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   composedText,
   emptyExtras,
+  hasTokens,
   messageCollapses,
   promptBlocks,
   splitImageMarkers,
   splitSlashCommand,
+  splitTokens,
   splitUrls,
 } from "./compose";
 
@@ -65,6 +67,41 @@ describe("compose", () => {
       { url: "https://a.dev/x" },
       { text: ". ok" },
     ]);
+  });
+});
+
+describe("tokens in the draft", () => {
+  test("a file reference reads as a token, its `@` outside the pill", () => {
+    expect(splitTokens("see @src/main.ts please")).toEqual([
+      { text: "see " },
+      { ref: "src/main.ts" },
+      { text: " please" },
+    ]);
+    // A path with a space is written quoted, and the quotes stay in the pill.
+    expect(splitTokens('@"a b.ts"')).toEqual([{ ref: '"a b.ts"' }]);
+  });
+
+  test("a URL and a reference split apart, in the order they were typed", () => {
+    expect(splitTokens("look @src/a.ts then https://x.dev/b ok")).toEqual([
+      { text: "look " },
+      { ref: "src/a.ts" },
+      { text: " then " },
+      { url: "https://x.dev/b" },
+      { text: " ok" },
+    ]);
+  });
+
+  test("an email address is not a reference", () => {
+    expect(splitTokens("mail a@b.com")).toEqual([{ text: "mail a@b.com" }]);
+    expect(hasTokens("mail a@b.com")).toBe(false);
+  });
+
+  test("a draft with nothing to draw has no tokens", () => {
+    expect(hasTokens("plain words")).toBe(false);
+    expect(hasTokens("@src/a.ts")).toBe(true);
+    expect(hasTokens("https://x.dev")).toBe(true);
+    // Two calls in a row on the same draft: the mirrors' patterns carry no `lastIndex` state.
+    expect(hasTokens("@src/a.ts")).toBe(true);
   });
 });
 

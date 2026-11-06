@@ -466,13 +466,22 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   at the end of a draft that scrolls takes the field to its very end, so
   the line the caret is on is never inside a faded band. A
   slash-command chip in front of it
-  is that same line box, so it keeps the field's baseline. Under the field is the card's
+  is that same line box, so it keeps the field's baseline. **Tokens in the draft**
+  are drawn by a mirror under the field, not by an editor (the way T3 Code's
+  composer keeps references in the text): the field's text is transparent over a
+  copy that sets each URL on an accent pill and each `@file` reference on a quiet
+  one (`state/compose.ts` `splitTokens`). The two take the same padding, scroll
+  and mask, and a token's span adds **no** horizontal padding — that is what
+  keeps the caret on its character. Under the field is the card's
   one control row (`28px` controls, `.rc-composer-tray` sets their height), in
   two groups on one baseline with no divider above it: the air between the
   field and the row, and the row's own `pt-1`, separate them — the attach
   button (**+**), the folder, the worktree or branch and the permissions mode
   on the left, the plan meter, the context ring, the model and the working
-  agents on the right, then send/queue/stop at the row's end. The model reads
+  agents on the right, then send/queue/stop at the row's end. The meters are
+  the row's overflow: measured rather than stepped by a breakpoint, they move
+  into one `…` menu (`MetersMenu`) when the row is too narrow to hold them and
+  come back when their measured width fits again. The model reads
   as its own name and effort, plain on the card, `bg-fill-strong` only while
   its popover is open; the **+** rests on `bg-fill-subtle` (`bg-fill` on
   hover). The
