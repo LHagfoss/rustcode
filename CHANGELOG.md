@@ -1,3 +1,8 @@
+## [v1.14.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.14.0) - 2026-11-06
+
+### Features
+- The chat composer now floats over the conversation in a tighter 16px card, with a soft bottom fade, and its pickers open clear of the card instead of over it. (#3075)
+- Reply Markdown is quieter and easier to scan: code blocks sit on the code surface, task lists show one box instead of a box and a bullet, nested lists step their markers, table rows are parted, and bold is semibold. (#3074)
 ## [v1.13.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.13.0) - 2026-11-06
 
 ### Features
