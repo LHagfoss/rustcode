@@ -979,6 +979,15 @@ function LimitWaitRow({ threadId }: { threadId: string }) {
   );
 }
 
+/**
+ * How many thumbnails a draft shows before the rest become one count.
+ *
+ * Past two or three pictures the band is a wall of thumbnails that pushes the field down for
+ * nothing: the count says `+3` and opens the whole set, the way a full attachment row collapses in
+ * T3 Code (`getRestingComposerImagePreviewCounts`). Files keep their own chips, after them.
+ */
+const IMAGE_PREVIEW_LIMIT = 3;
+
 function AttachmentStrip({
   attachments,
   onRemove,
@@ -989,11 +998,14 @@ function AttachmentStrip({
   const pictures = attachments.flatMap((a) =>
     a.kind === "image" ? [{ src: `data:${a.mimeType};base64,${a.data}`, alt: a.name }] : [],
   );
+  const images = attachments.filter((a) => a.kind === "image");
+  const shown = images.slice(0, IMAGE_PREVIEW_LIMIT);
+  const more = images.slice(IMAGE_PREVIEW_LIMIT);
   return (
     // Its own band above the field, inset from the box's rounder corner and never shrinking, so the
     // thumbnails clear the curve and only the field below scrolls.
     <div className="flex shrink-0 gap-1.5 overflow-x-auto px-3.5 pt-2.5 pb-1">
-      {attachments.map((a) =>
+      {shown.map((a) =>
         a.kind === "image" ? (
           <div key={a.id} className="group relative shrink-0">
             <button
@@ -1024,7 +1036,23 @@ function AttachmentStrip({
               <X size={11} strokeWidth={2.5} />
             </button>
           </div>
-        ) : (
+        ) : null,
+      )}
+      {more.length > 0 && (
+        // The count is a way in, not a dead label: it opens the whole set at the first one it hides.
+        <button
+          key="more"
+          type="button"
+          aria-label={`Show all ${images.length} images`}
+          onClick={() => openLightbox(pictures, IMAGE_PREVIEW_LIMIT)}
+          className="group relative size-[76px] shrink-0 rounded-xl bg-fill-strong text-callout text-fg-muted shadow-1 hover:text-fg"
+        >
+          +{more.length}
+        </button>
+      )}
+      {attachments
+        .filter((a) => a.kind !== "image")
+        .map((a) => (
           <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
             <span className="flex h-[28px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2.5 text-callout">
               <FileText size={12} className="text-fg-muted" />
@@ -1039,8 +1067,7 @@ function AttachmentStrip({
               </button>
             </span>
           </Tooltip>
-        ),
-      )}
+        ))}
     </div>
   );
 }
