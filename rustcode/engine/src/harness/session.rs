@@ -920,6 +920,16 @@ impl ExternalSession {
         if self.progress.awaiting_user() || self.progress.background_running() {
             return None;
         }
+        // Only a thread the next prompt can resume: without the harness's own
+        // session id, stopping the process would lose the conversation.
+        if self
+            .record()
+            .native_session_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            return None;
+        }
         self.running().then(|| self.idle.last())
     }
 
