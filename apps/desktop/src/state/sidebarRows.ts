@@ -122,27 +122,47 @@ export function rowKeyAction(e: {
  * What a thread's calls changed, from the diffs the app already read (`_rustcode/rewind`
  * history, replayed when the thread is opened). Null when it has none to count: a thread never
  * opened in this run has no items, and shows no totals.
+ *
+ * A file counts once, by the widest edit it was given: a thread that goes back to the same file
+ * forty times has not added forty times the file's lines, and summing the calls is what turned a
+ * row's `+12` into `+12404`. Only a path's own line counts bound the number now, so it reads as
+ * the size of what the thread touched rather than as churn.
  */
-const counts = new WeakMap<object, { added: number; removed: number }>();
+const counts = new WeakMap<object, Map<string, { added: number; removed: number }>>();
 
 export function threadDiff(
   items: readonly TranscriptItem[] | undefined,
 ): { added: number; removed: number } | null {
   if (!items?.length) return null;
-  let added = 0;
-  let removed = 0;
-  let any = false;
+  const perFile = new Map<string, { added: number; removed: number }>();
   for (const item of items) {
     if (item.kind !== "tool" || !item.diffs?.length) continue;
-    // A held item's diffs do not change: counted once, however often a reply streams past.
-    let sum = counts.get(item);
-    if (!sum) {
-      sum = diffCounts(item.diffs);
-      counts.set(item, sum);
+    // A held item's diffs do not change: read once, however often a reply streams past.
+    let files = counts.get(item);
+    if (!files) {
+      files = new Map();
+      for (const diff of item.diffs) {
+        const n = diffCounts([diff]);
+        files.set(diff.path, { added: n.added, removed: n.removed });
+      }
+      counts.set(item, files);
     }
-    added += sum.added;
-    removed += sum.removed;
-    any = true;
+    for (const [path, n] of files) {
+      const seen = perFile.get(path);
+      perFile.set(
+        path,
+        seen
+          ? { added: Math.max(seen.added, n.added), removed: Math.max(seen.removed, n.removed) }
+          : { added: n.added, removed: n.removed },
+      );
+    }
   }
-  return any ? { added, removed } : null;
+  if (!perFile.size) return null;
+  let added = 0;
+  let removed = 0;
+  for (const n of perFile.values()) {
+    added += n.added;
+    removed += n.removed;
+  }
+  return { added, removed };
 }
