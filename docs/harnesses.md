@@ -384,7 +384,12 @@ What each part does for an external thread:
   content), `turn/plan/updated` a `plan`, `thread/tokenUsage/updated` a
   `usage_update` (`used` = the latest request's input tokens, `size` = the
   model's context window or 0 when Codex does not say, thread totals in
-  `_meta.rustcode` as the built-in harness sends them). Command and file
+  `_meta.rustcode` as the built-in harness sends them). Codex's own
+  subagents (`collabAgentToolCall`) become one agent row per receiver thread,
+  the same shape as other harnesses' subagents (`_meta.claudeCode.toolName =
+  "Agent"`), updated by wait, message, resume and close calls and ended by the
+  subagent's own `turn/completed`, which no longer ends the parent turn; a
+  subagent's text, plan and usage stay out of the thread. Command and file
   approvals are `session/request_permission` with Allow / Allow for this
   thread / Deny (`accept`, `acceptForSession`, `decline`); a cancelled
   request answers `cancel`. `item/tool/requestUserInput` asks each question
