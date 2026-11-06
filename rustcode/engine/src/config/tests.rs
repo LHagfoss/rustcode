@@ -183,6 +183,58 @@ fn project_config_cannot_widen_skill_discovery() {
 }
 
 #[test]
+fn payload_capture_defaults_off_and_round_trips() {
+    let default = AppConfig::default();
+    assert!(!default.capture_provider_payloads);
+    assert!(!default.capture_harness_rpc_payloads);
+
+    // A file that names one key turns on only that one.
+    let dir = temp_dir("payload-capture-file");
+    fs::write(
+        dir.join(CONFIG_TOML_FILE),
+        "version = 1\ncapture_provider_payloads = true\n",
+    )
+    .unwrap();
+    let (_, _, config) = load_config_from(&dir);
+    assert!(config.is_valid);
+    assert!(config.capture_provider_payloads);
+    assert!(!config.capture_harness_rpc_payloads);
+
+    // Saving writes both back, so a reload sees the same choice.
+    let dir = temp_dir("payload-capture-save");
+    let mut config = AppConfig::default();
+    config.capture_provider_payloads = true;
+    config.capture_harness_rpc_payloads = true;
+    save_config_to_result(&dir, &config).unwrap();
+    let saved = fs::read_to_string(dir.join(CONFIG_TOML_FILE)).unwrap();
+    assert!(
+        saved.contains("capture_provider_payloads = true"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains("capture_harness_rpc_payloads = true"),
+        "{saved}"
+    );
+    let (_, _, reloaded) = load_config_from(&dir);
+    assert!(reloaded.capture_provider_payloads);
+    assert!(reloaded.capture_harness_rpc_payloads);
+}
+
+#[test]
+fn project_config_cannot_capture_payloads() {
+    let mut config = AppConfig::default();
+    let file: TomlConfig =
+        toml::from_str("capture_provider_payloads = true\ncapture_harness_rpc_payloads = true")
+            .unwrap();
+    assert_eq!(file.capture_provider_payloads, Some(true));
+
+    apply_project_toml_config(&mut config, file);
+
+    assert!(!config.capture_provider_payloads);
+    assert!(!config.capture_harness_rpc_payloads);
+}
+
+#[test]
 fn project_config_cannot_enable_any_sandbox_mode() {
     let mut config = AppConfig::default();
     let file: TomlConfig = toml::from_str("sandbox_mode = \"trusted\"").unwrap();
