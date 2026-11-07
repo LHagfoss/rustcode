@@ -186,9 +186,12 @@ export function RemoteAccessPage() {
     if (failed) throw failed.reason;
   };
 
+  // `_rustcode/remote/stop` is machine-wide; the session id is only the
+  // answer's own label, so a saved thread is enough when none is shared.
+  const stopId = target ?? ids[0];
   const stop = () => {
-    if (!target) return;
-    void run("stop", () => request(RemoteMethod.stop, { sessionId: target }, 30_000));
+    if (!stopId) return;
+    void run("stop", () => request(RemoteMethod.stop, { sessionId: stopId }, 30_000));
     setPaired(null);
   };
 
@@ -258,6 +261,16 @@ export function RemoteAccessPage() {
             onChange={toggle}
           />
         </Row>
+        {enabled && !on && (
+          <Row
+            title="Remote access is on for this Mac"
+            subtitle="A terminal turned it on and still shares there. Turning it off stops the gateway for the whole machine."
+          >
+            <Action disabled={busy !== null || !stopId} onClick={stop}>
+              Turn off
+            </Action>
+          </Row>
+        )}
         <Row
           title="Gateway address"
           subtitle="The address a phone on this network dials. The terminal's `/remote status` shows the same one."
