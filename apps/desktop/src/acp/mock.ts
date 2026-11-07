@@ -86,6 +86,8 @@ interface MockCheckpoint {
   prompt: string;
   created_at: string;
   files: { path: string; status: string; insertions: number; deletions: number; patch: string }[];
+  /** The state a rewind abandoned, kept for "go back to this attempt": no turn of its own. */
+  attempt?: boolean;
 }
 
 const COMPOSER_PATCH = `@@ -40,2 +40,3 @@
@@ -113,6 +115,55 @@ const LOGIN_PATCH = `@@ -0,0 +1,14 @@
 +}
 +
 +export default LoginForm;`;
+
+const SETTINGS_SEARCH_PATCH = `@@ -18,6 +18,17 @@
+ export function SettingsPanel({ groups }: { groups: SettingsGroup[] }) {
++  const [query, setQuery] = useState("");
++  const shown = query.trim() ? groups.filter((group) => matches(group, query)) : groups;
+   return (
+     <div className="flex flex-col gap-4">
++      <input
++        type="search"
++        value={query}
++        placeholder="Search settings"
++        onChange={(e) => setQuery(e.target.value)}
++        onKeyDown={(e) => e.key === "Escape" && setQuery("")}
++      />
+-      {groups.map((group) => (
++      {shown.map((group) => (
+         <SettingsGroup key={group.id} group={group} />
+       ))}`;
+
+const SETTINGS_FILTER_PATCH = `@@ -1,4 +1,4 @@
+-export function matches(group: SettingsGroup, query: string) {
+-  return group.title.toLowerCase().includes(query.toLowerCase());
++export function matches(group: SettingsGroup, query: string) {
++  const needle = query.trim().toLowerCase();
++  if (!needle) return true;
++  if (group.title.toLowerCase().includes(needle)) return true;
++  return group.rows.some((row) => isOpen(group, row) && matchesRow(row, needle));`;
+
+const SETTINGS_HELPER_PATCH = `@@ -0,0 +1,10 @@
++import type { SettingsGroup, SettingsRow } from "./Settings";
++
++export function matchesRow(row: SettingsRow, needle: string): boolean {
++  return row.label.toLowerCase().includes(needle) || row.description.toLowerCase().includes(needle);
++}
++
++/** A group whose title answered keeps its rows: the reader is looking for the group itself. */
++export function isOpen(group: SettingsGroup, _row: SettingsRow): boolean {
++  return group.rows.length > 0;
++}`;
+
+const SETTINGS_KEYWORDS_PATCH = `@@ -2,2 +2,7 @@
+ export function matchesRow(row: SettingsRow, needle: string): boolean {
+-  return row.label.toLowerCase().includes(needle) || row.description.toLowerCase().includes(needle);
++  const words = [row.label, row.description, ...(row.keywords ?? [])].join(" ").toLowerCase();
++  return words.includes(needle);
+ }
++
++/** Keywords a row answers to besides its own words, such as "dark" for Appearance. */
++export const KEYWORDS: Record<string, string[]> = { appearance: ["dark", "theme"] };`;
 
 function slug(text: string): string {
   return (
@@ -800,6 +851,130 @@ function seedThreads(): MockThread[] {
           sessionUpdate: "agent_message_chunk",
           content: text("Rewrote the three tier blurbs; each is two lines now."),
           ...turn(22_000),
+        }),
+      ],
+    },
+    {
+      // Three turns, one checkpoint each: rewinding to one of them keeps the later turns as an
+      // earlier attempt (state/attempts.ts), so the mock can show the whole of it.
+      id: "mock-thread-attempts",
+      cwd: "/Users/you/code/rustcode",
+      title: "Give the settings panel a search field",
+      updatedAt: minutes(18),
+      harness: "rustcode",
+      model: "chatgpt/gpt-6-luna",
+      effort: "medium",
+      checkpoints: [
+        {
+          turn: 1,
+          prompt: "Add a search field to the settings panel",
+          created_at: new Date(minutes(24)).toISOString(),
+          files: [
+            {
+              path: "src/ui/Settings.tsx",
+              status: "modified",
+              insertions: 12,
+              deletions: 1,
+              patch: SETTINGS_SEARCH_PATCH,
+            },
+          ],
+        },
+        {
+          turn: 2,
+          prompt: "Match the section names too, and keep the list open",
+          created_at: new Date(minutes(22)).toISOString(),
+          files: [
+            {
+              path: "src/ui/Settings.tsx",
+              status: "modified",
+              insertions: 6,
+              deletions: 4,
+              patch: SETTINGS_FILTER_PATCH,
+            },
+            {
+              path: "src/ui/SettingsSearch.ts",
+              status: "added",
+              insertions: 34,
+              deletions: 0,
+              patch: SETTINGS_HELPER_PATCH,
+            },
+          ],
+        },
+        {
+          turn: 3,
+          prompt: "Also search what each setting does, not only its name",
+          created_at: new Date(minutes(20)).toISOString(),
+          files: [
+            {
+              path: "src/ui/SettingsSearch.ts",
+              status: "modified",
+              insertions: 9,
+              deletions: 2,
+              patch: SETTINGS_KEYWORDS_PATCH,
+            },
+          ],
+        },
+      ],
+      history: [
+        update("mock-thread-attempts", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Add a search field to the settings panel"),
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "Added a field above the panel that filters the sections as you type, and clears with Escape.",
+          ),
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t1",
+                elapsedMs: 41_000,
+                outcome: "completed",
+                endedAt: new Date(minutes(23)).toISOString(),
+              },
+            },
+          },
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Match the section names too, and keep the list open"),
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "It now matches section headings as well, and a group stays open when one of its rows answers the query.",
+          ),
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t2",
+                elapsedMs: 63_000,
+                outcome: "completed",
+                endedAt: new Date(minutes(21)).toISOString(),
+              },
+            },
+          },
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Also search what each setting does, not only its name"),
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "Each setting carries a few keywords now, so `dark`, `notify` and `token` all find their row.",
+          ),
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t3",
+                elapsedMs: 28_000,
+                outcome: "completed",
+                endedAt: new Date(minutes(19)).toISOString(),
+              },
+            },
+          },
         }),
       ],
     },
@@ -1864,7 +2039,15 @@ export class MockEngine {
             promptCapabilities: { image: true, audio: false, embeddedContext: false },
             sessionCapabilities: { list: {}, close: {} },
             _meta: {
-              rustcode: { steer: 1, agents: 2, rewind: 1, pullRequests: 3, sessionMove: 1, sessionRepair: 1 },
+              rustcode: {
+                steer: 1,
+                agents: 2,
+                rewind: 1,
+                pullRequests: 3,
+                sessionMove: 1,
+                sessionRepair: 1,
+                checkpoints: 2,
+              },
             },
           },
           authMethods: [],
@@ -2425,6 +2608,7 @@ export class MockEngine {
             files_changed: c.files.length,
             insertions: c.files.reduce((n, f) => n + f.insertions, 0),
             deletions: c.files.reduce((n, f) => n + f.deletions, 0),
+            ...(c.attempt ? { attempt: true } : {}),
           })),
         };
       }
@@ -2436,18 +2620,41 @@ export class MockEngine {
       }
       case "_rustcode/checkpoints/restore": {
         const thread = this.thread(params.session_id);
-        const at = thread.checkpoints.findIndex((x) => x.turn === params.turn);
+        const turn = Number(params.turn);
+        const at = thread.checkpoints.findIndex((x) => x.turn === turn);
         if (at < 0) throw Object.assign(new Error("No such checkpoint"), { code: -32602 });
-        const canRewind = thread.harness === "rustcode";
+        // A kept attempt can be gone back to as well: it restores the state it left, and the
+        // conversation stays where it is (the engine has no rewind forward either).
+        const attempt = thread.checkpoints[at]!.attempt === true;
+        // The engine keeps every checkpoint: a rewind never deletes the turns it leaves.
+        let kept: { turn: number; ref: string } | undefined;
+        if (params.keep === true) {
+          const next = (thread.checkpoints.at(-1)?.turn ?? 0) + 1;
+          const abandoned = thread.checkpoints.filter((c) => c.turn >= turn && !c.attempt);
+          thread.checkpoints.push({
+            turn: next,
+            prompt: "",
+            created_at: new Date().toISOString(),
+            files: abandoned.flatMap((c) => c.files),
+            attempt: true,
+          });
+          kept = { turn: next, ref: `refs/rustcode/checkpoints/${thread.id}/${next}` };
+        }
+        const canRewind = thread.harness === "rustcode" && !attempt;
         if (params.rewind === true && canRewind) {
+          // Its own turn's message, in the history the conversation still has.
+          const own = thread.checkpoints.filter((c) => !c.attempt).findIndex((c) => c.turn === turn);
           let n = 0;
           const cut = thread.history.findIndex(
-            (u) => str(obj(u.update)?.sessionUpdate) === "user_message_chunk" && ++n === at + 1,
+            (u) => str(obj(u.update)?.sessionUpdate) === "user_message_chunk" && ++n === own + 1,
           );
           if (cut >= 0) thread.history.splice(cut);
         }
-        thread.checkpoints.splice(at);
-        return { restored: true, conversation: params.rewind === true && canRewind ? "rewound" : "kept" };
+        return {
+          restored: true,
+          conversation: params.rewind === true && canRewind ? "rewound" : "kept",
+          ...(kept ? { kept } : {}),
+        };
       }
       case "_rustcode/config/telemetry":
         // The same shape `_rustcode/config/telemetry` answers with (engine/src/acp/telemetry.rs).

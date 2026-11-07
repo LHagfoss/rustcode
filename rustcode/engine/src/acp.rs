@@ -128,7 +128,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "sessionActivity": 1,
                 "pullRequests": 3,
                 "worktrees": 1,
-                "checkpoints": 1,
+                "checkpoints": 2,
                 "threadStatus": 1,
             }),
         )]))

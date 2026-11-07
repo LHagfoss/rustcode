@@ -3,6 +3,7 @@ import {
   foldEnds,
   foldLabel,
   foldTurns,
+  footerChangeTurns,
   groupTools,
   inferToolKind,
   newestTurnEnd,
@@ -403,6 +404,31 @@ describe("changes once a newer turn exists", () => {
       const next = opened.findIndex((r) => "fold" in r && r.fold.key === turnFoldKey(`e${n + 1}`));
       if (next >= 0) expect(at).toBeLessThan(next);
     }
+  });
+
+  test("a turn with nothing folded keeps its line in its footer", () => {
+    // Two turns that only wrote an answer: no `Worked for …` row to hold a change line, so the
+    // older one would lose its changes entirely if it were left to the fold (the chip that
+    // disappeared after a rewind).
+    const items: TranscriptItem[] = [
+      { kind: "user", id: "u1", text: "go 1" },
+      reply("a1"),
+      end("e1"),
+      { kind: "user", id: "u2", text: "go 2" },
+      reply("a2"),
+      end("e2"),
+    ];
+    const rows = foldTurns(items, false, new Set());
+    expect(rows.some((r) => "fold" in r)).toBe(false);
+    const ends = items.flatMap((item) => (item.kind === "turnEnd" ? [item.id] : []));
+    expect(footerChangeTurns(ends, { last: newestTurnEnd(rows), folded: new Set() })).toEqual(["e1", "e2"]);
+  });
+
+  test("an older turn with steps keeps its line inside its fold, the newest in its footer", () => {
+    const rows = foldTurns([...turn(1), ...turn(2)], false, new Set());
+    const folded = new Set(rows.flatMap((r) => ("fold" in r ? [r.fold.key.slice("fold-".length)] : [])));
+    const ends = ["e1", "e2"];
+    expect(footerChangeTurns(ends, { last: newestTurnEnd(rows), folded })).toEqual(["e2"]);
   });
 
   test("a run of calls folded into a group still ends the fold on its last step", () => {

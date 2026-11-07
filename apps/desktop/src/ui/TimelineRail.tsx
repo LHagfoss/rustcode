@@ -4,6 +4,12 @@
 // around the pointer and shows that turn's message and how it was answered;
 // clicking goes there, and the chevrons step a turn at a time. It renders only
 // when the turns or the ones on screen change, never per scroll frame.
+//
+// A thinner lane beside the strips holds the thread's checkpoints: one node per
+// turn a rewind can go back to, joined by a hairline, its head (the newest, the
+// turn the thread is at) marked current. The lane is the strips' grammar in one
+// colour and no hover of its own: pointing at a node's height picks that turn,
+// as pointing anywhere on the strip does, and the card says its checkpoint.
 
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { type MouseEvent, memo, type ReactNode, useRef, useState } from "react";
@@ -13,7 +19,16 @@ import { cx, Tooltip } from "./primitives";
 export interface Turn {
   /** The user message's row in the transcript. */
   row: number;
+  /** That message's id, which its checkpoint is paired with. */
+  id: string;
   title: string;
+}
+
+/** A turn with a checkpoint, by its index in `turns`: a node on the checkpoint lane. */
+export interface RailNode {
+  at: number;
+  /** The checkpoint's turn number, as the engine numbers them. */
+  turn: number;
 }
 
 /** Between strips, while they fit. */
@@ -22,6 +37,8 @@ const STEP = 8;
 const MARGIN = 40;
 /** Where the strip starts in the gutter. */
 const LEFT = 12;
+/** The checkpoint lane: a hairline with a node per checkpoint, left of the strips, off the chat. */
+const LANE = -6;
 /** From this much gutter the minimap stays visible; with less it shows on hover. */
 const PERSISTENT_GUTTER = 48;
 /** The chat's column; the gutter is what is left beside it. */
@@ -110,6 +127,7 @@ export const TimelineRail = memo(function TimelineRail({
   offset = 0,
   onJump,
   replyOf,
+  nodes = [],
 }: {
   turns: Turn[];
   /** Index into `turns`: the turn being read. */
@@ -124,6 +142,8 @@ export const TimelineRail = memo(function TimelineRail({
   onJump: (row: number) => void;
   /** How a turn was answered, read only for the one hovered. */
   replyOf: (row: number) => string | undefined;
+  /** The turns that have a checkpoint, for the lane: the last one is the head, marked current. */
+  nodes?: RailNode[];
 }) {
   const [active, setActive] = useState<number | null>(null);
   const strip = useRef<HTMLButtonElement>(null);
@@ -190,6 +210,28 @@ export const TimelineRail = memo(function TimelineRail({
             }
           }}
         >
+          {nodes.length > 0 && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-1 bottom-1 w-px bg-fg/12"
+              style={{ left: LANE }}
+            />
+          )}
+          {nodes.map((node, index) => {
+            const head = index === nodes.length - 1;
+            return (
+              <span
+                key={`node-${node.turn}`}
+                aria-hidden
+                data-current={head}
+                className={cx(
+                  "-translate-x-1/2 -translate-y-1/2 pointer-events-none absolute rounded-full",
+                  head ? "size-[7px] bg-accent" : "size-[5px] bg-fg/35",
+                )}
+                style={{ left: LANE, top: `${percent(node.at)}%` }}
+              />
+            );
+          })}
           {turns.map((turn, index) => {
             const inView = index >= current && index <= last;
             return (
@@ -217,6 +259,12 @@ export const TimelineRail = memo(function TimelineRail({
               }}
             >
               <span className="block truncate font-medium text-callout leading-5">{hovered.title}</span>
+              {hovered && nodes.some((node) => node.at === shown) && (
+                <span className="mt-1 block text-caption text-fg-faint tabular">
+                  Checkpoint {nodes.find((node) => node.at === shown)!.turn}
+                  {nodes.at(-1)?.at === shown ? " · current" : ""}
+                </span>
+              )}
               {reply && (
                 <span className="mt-1 line-clamp-3 text-callout text-fg-muted leading-5">{reply}</span>
               )}

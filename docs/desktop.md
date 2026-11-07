@@ -653,8 +653,10 @@ composer's keys stay outside the table.
   read brighter. Hovering widens the strips around the pointer and previews
   the message and its answer; clicking jumps there, chevrons step a turn, and
   arrows, Home and End move it from the keyboard. With under 48px of gutter it
-  shows on hover. It reads the virtualizer's row offsets on scroll and
-  re-renders only when the turns on screen change (`src/ui/TimelineRail.tsx`).
+  shows on hover. Its checkpoint lane marks each turn whose checkpoint a rewind
+  can return to, the head current, and the hover card names it. It reads the
+  virtualizer's row offsets on scroll and re-renders only when the turns on
+  screen change (`src/ui/TimelineRail.tsx`).
 - **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
   (no fetch, no dependency), in the model pill, the harness picker and list
   (onboarding, Settings), the composer's footer, the sidebar's rows and the thread's
@@ -774,8 +776,15 @@ composer's keys stay outside the table.
   branch, its answer, Open and Review. *Keep this* marks the others done
   and the kept one for review.
 - **Checkpoints and Review.** A finished turn has a *Changes* chip from its
-  checkpoint (`_rustcode/checkpoints/list|diff`) with *Restore…* (files only,
-  or files and conversation when the harness rewinds). The Review screen
+  checkpoint (`_rustcode/checkpoints/list|diff`) with *Rewind to before turn N*:
+  the files go back to before that turn and, when the harness rewinds, the
+  conversation with them; the turns it leaves stay below as a faded earlier
+  attempt whose *Go back to this attempt* restores the state the rewind
+  abandoned (`_rustcode/checkpoints/restore` with `keep`). A turn with nothing
+  folded keeps its chip in its footer, so every turn that has a checkpoint can
+  say what it changed. The minimap's checkpoint lane marks each turn that has
+  one, its head current. A harness that cannot rewind the conversation gets the
+  files only, after a confirm that says so. The Review screen
   (thread menu, header menu or ⌘K) shows the uncommitted changes, the
   worktree branch since its base (the base named beside the file count, as
   `vs main`, with the full ref on hover), one turn, or the branch's open pull

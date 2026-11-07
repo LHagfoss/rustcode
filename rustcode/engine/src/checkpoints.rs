@@ -28,7 +28,11 @@ const REQUEST_BUDGET: Duration = Duration::from_secs(60);
 const PROMPT_BYTES: usize = 4096;
 const PATCH_BYTES: usize = 256 * 1024;
 const PATCH_TOTAL_BYTES: usize = 2 * 1024 * 1024;
+/// How long keeping the state a rewind abandons may take: the user asked for it.
+const KEEP_BUDGET: Duration = Duration::from_secs(20);
 const USER_INDEX_KEY: &str = "rustcode-user-index: ";
+/// Marks a checkpoint that holds the state a rewind abandoned, not the state before a turn.
+const ATTEMPT_KEY: &str = "rustcode-attempt: ";
 
 /// One checkpoint, as `_rustcode/checkpoints/list` answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,11 +45,19 @@ pub(crate) struct Checkpoint {
     pub files_changed: u64,
     pub insertions: u64,
     pub deletions: u64,
+    /// Kept when a rewind abandoned the state this holds, rather than taken before a turn; it
+    /// belongs to no turn of the chat, so nothing pairs a turn's changes with it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub attempt: bool,
     /// Which user message of the chat the turn's prompt became, for rewind.
     #[serde(skip)]
     pub user_index: Option<usize>,
     #[serde(skip)]
     pub full_prompt: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// The repository a thread's cwd belongs to.
@@ -167,6 +179,24 @@ pub(crate) fn snapshot(
     user_index: Option<usize>,
     budget: Duration,
 ) -> Result<Option<u64>, String> {
+    snapshot_with(cwd, session_id, prompt, user_index, false, budget)
+}
+
+/// Keep the work tree as the state a rewind is about to abandon, so the attempt it leaves can be
+/// returned to (`_rustcode/checkpoints/restore` with `keep`). `Ok(None)` outside a repository.
+pub(crate) fn keep(cwd: &Path, session_id: &str, budget: Duration) -> Result<Option<u64>, String> {
+    snapshot_with(cwd, session_id, "", None, true, budget)
+}
+
+/// [`snapshot`], with whether it holds an abandoned attempt rather than the start of a turn.
+fn snapshot_with(
+    cwd: &Path,
+    session_id: &str,
+    prompt: &str,
+    user_index: Option<usize>,
+    attempt: bool,
+    budget: Duration,
+) -> Result<Option<u64>, String> {
     if !rustcode_session::valid_session_id(session_id) {
         return Ok(None);
     }
@@ -181,6 +211,9 @@ pub(crate) fn snapshot(
     let existing = turns(&repo.top, session_id, deadline);
     let turn = existing.last().map_or(1, |last| last + 1);
     let mut message = format!("rustcode checkpoint {turn}\n\n");
+    if attempt {
+        message.push_str(&format!("{ATTEMPT_KEY}1\n"));
+    }
     let prompt = clean_prompt(prompt);
     if !prompt.is_empty() {
         message.push_str(&prompt);
@@ -334,17 +367,20 @@ fn numstat(out: &str) -> Vec<(u64, u64)> {
     rows
 }
 
-fn parse_body(body: &str) -> (String, Option<usize>) {
+fn parse_body(body: &str) -> (String, Option<usize>, bool) {
     let mut prompt = Vec::new();
     let mut user_index = None;
+    let mut attempt = false;
     for line in body.lines() {
         if let Some(index) = line.strip_prefix(USER_INDEX_KEY) {
             user_index = index.trim().parse().ok();
+        } else if line.strip_prefix(ATTEMPT_KEY).is_some() {
+            attempt = true;
         } else {
             prompt.push(line);
         }
     }
-    (prompt.join("\n").trim().to_owned(), user_index)
+    (prompt.join("\n").trim().to_owned(), user_index, attempt)
 }
 
 fn first_chars(text: &str, count: usize) -> String {
@@ -374,7 +410,7 @@ pub(crate) fn list(cwd: &Path, session_id: &str) -> Result<Vec<Checkpoint>, Stri
             let turn = fields.next()?.trim().parse().ok()?;
             let reference = fields.next()?.to_owned();
             let created_at = fields.next()?.to_owned();
-            let (full_prompt, user_index) = parse_body(fields.next().unwrap_or_default());
+            let (full_prompt, user_index, attempt) = parse_body(fields.next().unwrap_or_default());
             Some(Checkpoint {
                 turn,
                 reference,
@@ -383,6 +419,7 @@ pub(crate) fn list(cwd: &Path, session_id: &str) -> Result<Vec<Checkpoint>, Stri
                 files_changed: 0,
                 insertions: 0,
                 deletions: 0,
+                attempt,
                 user_index,
                 full_prompt,
             })
@@ -639,6 +676,10 @@ pub(crate) struct RestoreRequest {
     pub turn: u64,
     #[serde(default)]
     pub rewind: bool,
+    /// Keep the work tree as an attempt checkpoint before restoring, so the state this abandons
+    /// can be returned to; the answer names it in `kept`.
+    #[serde(default)]
+    pub keep: bool,
 }
 
 fn invalid(message: impl Into<String>) -> agent_client_protocol::Error {
@@ -662,7 +703,8 @@ pub(crate) fn answer_diff(request: &DiffRequest) -> Result<Value, agent_client_p
 
 /// Restore the files, then rewind the chat when asked and `rewind` can:
 /// it is given the open built-in thread's state, `None` for an external or
-/// closed thread, whose conversation is kept.
+/// closed thread, whose conversation is kept. With `keep`, the state it is about to abandon is
+/// checkpointed first, and answered as `kept`.
 pub(crate) async fn answer_restore(
     request: &RestoreRequest,
     state: Option<std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>>,
@@ -676,6 +718,26 @@ pub(crate) async fn answer_restore(
         .into_iter()
         .find(|checkpoint| checkpoint.turn == request.turn)
         .ok_or_else(|| invalid(format!("no checkpoint for turn {}", request.turn)))?;
+    // Kept before anything changes: a failure here leaves the work tree and the chat as they are,
+    // so the app can ask before restoring without a way back.
+    let kept = if request.keep {
+        let (cwd, session_id) = (cwd.clone(), request.session_id.clone());
+        match tokio::task::spawn_blocking(move || keep(&cwd, &session_id, KEEP_BUDGET)).await {
+            Ok(Ok(turn)) => turn,
+            Ok(Err(message)) => {
+                return Err(invalid(format!(
+                    "the state this would abandon could not be kept: {message}"
+                )));
+            }
+            Err(error) => {
+                return Err(invalid(format!(
+                    "the state this would abandon could not be kept: {error}"
+                )));
+            }
+        }
+    } else {
+        None
+    };
     let mut conversation = "kept";
     let mut rewind_error = None;
     if request.rewind
@@ -695,6 +757,9 @@ pub(crate) async fn answer_restore(
         .map_err(|error| invalid(error.to_string()))?
         .map_err(invalid)?;
     let mut answer = json!({ "restored": true, "conversation": conversation });
+    if let Some(turn) = kept {
+        answer["kept"] = json!({ "turn": turn, "ref": ref_name(&request.session_id, turn) });
+    }
     if let Some(error) = rewind_error {
         answer["rewind_error"] = json!(error);
     }
@@ -836,6 +901,42 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_abandoned_state_and_restores_both_ways() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("README.md"), "v1\n").unwrap();
+        assert_eq!(take(&repo, "cp-g", "one"), 1);
+        std::fs::write(repo.join("README.md"), "v2\n").unwrap();
+        assert_eq!(take(&repo, "cp-g", "two"), 2);
+        std::fs::write(repo.join("README.md"), "v3\n").unwrap();
+
+        // A rewind that keeps the state it leaves: the work tree as it is now.
+        let kept = keep(&repo, "cp-g", Duration::from_secs(30))
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept, 3);
+        // Back to before the first turn, which abandons both of them.
+        restore(&repo, "cp-g", 1).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(repo.join("README.md")).unwrap(),
+            "v1\n"
+        );
+
+        // The kept state is listed, but belongs to no turn: it is the attempt's head.
+        let listed = list(&repo, "cp-g").unwrap();
+        let attempt = listed.iter().find(|c| c.turn == kept).unwrap();
+        assert!(attempt.attempt);
+        assert!(attempt.prompt.is_empty());
+        assert!(listed.iter().filter(|c| c.turn < kept).all(|c| !c.attempt));
+
+        // Going back to the attempt puts the files where the rewind left them.
+        restore(&repo, "cp-g", kept).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(repo.join("README.md")).unwrap(),
+            "v3\n"
+        );
+    }
+
+    #[test]
     fn a_spent_budget_skips_instead_of_waiting() {
         let (_dir, repo) = repo();
         let result = snapshot(&repo, "cp-e", "x", None, Duration::from_nanos(1));
@@ -854,7 +955,11 @@ mod tests {
         assert_eq!(numstat("3\t0\t\0old\0new\0"), vec![(3, 0)]);
         assert_eq!(
             parse_body("hello\nthere\n\nrustcode-user-index: 4\n"),
-            ("hello\nthere".into(), Some(4))
+            ("hello\nthere".into(), Some(4), false)
+        );
+        assert_eq!(
+            parse_body("rustcode-attempt: 1\n"),
+            (String::new(), None, true)
         );
     }
 }
