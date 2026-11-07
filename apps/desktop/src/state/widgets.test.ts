@@ -110,3 +110,26 @@ describe("a project's threads", () => {
     expect(projectThreads([session()], "")).toEqual([]);
   });
 });
+
+test("the overview defaults closed and persists its choice", async () => {
+  const { overviewExpanded, setOverviewExpanded } = await import("./widgets");
+  const scope = globalThis as typeof globalThis & { localStorage: Storage };
+  const previous = scope.localStorage;
+  const values = new Map<string, string>();
+  scope.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  } as Storage;
+  try {
+    expect(overviewExpanded()).toBe(false);
+    setOverviewExpanded(true);
+    expect(overviewExpanded()).toBe(true);
+    setOverviewExpanded(false);
+    expect(overviewExpanded()).toBe(false);
+  } finally {
+    if (previous) scope.localStorage = previous;
+    else Reflect.deleteProperty(scope, "localStorage");
+  }
+});

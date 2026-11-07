@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { installProgress, newerVersion, shouldShowWhatsNew } from "./updates";
+import {
+  compareVersions,
+  installProgress,
+  isPrerelease,
+  newerVersion,
+  readChannel,
+  shouldShowWhatsNew,
+} from "./updates";
 
 describe("updates", () => {
   test("versions compare by number, not text", () => {
@@ -8,6 +15,41 @@ describe("updates", () => {
     expect(newerVersion("v1.0.0", "0.115.0")).toBe(true);
     expect(newerVersion("0.115.0", "0.115.0")).toBe(false);
     expect(newerVersion("0.114.9", "0.115.0")).toBe(false);
+  });
+
+  test("a beta is older than its release, and later betas are newer", () => {
+    expect(newerVersion("1.21.0-beta.2", "1.21.0-beta.1")).toBe(true);
+    expect(newerVersion("1.21.0-beta.10", "1.21.0-beta.9")).toBe(true);
+    expect(newerVersion("1.21.0", "1.21.0-beta.2")).toBe(true);
+    expect(newerVersion("1.21.0-beta.2", "1.21.0")).toBe(false);
+    expect(newerVersion("1.21.0-beta.1", "1.20.9")).toBe(true);
+    expect(compareVersions("1.21.0-beta.2", "1.21.0-beta.2")).toBe(0);
+    expect(isPrerelease("1.21.0-beta.2")).toBe(true);
+    expect(isPrerelease("1.21.0")).toBe(false);
+  });
+
+  test("a longer prerelease suffix is newer, in both directions", () => {
+    expect(compareVersions("1.0.0-alpha", "1.0.0-alpha.1")).toBe(-1);
+    expect(compareVersions("1.0.0-alpha.1", "1.0.0-alpha")).toBe(1);
+    expect(compareVersions("1.0.0-alpha.1", "1.0.0-alpha.2")).toBe(-1);
+    expect(compareVersions("1.0.0-alpha.2", "1.0.0-alpha.1")).toBe(1);
+    expect(compareVersions("1.0.0-1", "1.0.0-alpha")).toBe(-1);
+    expect(compareVersions("1.0.0-alpha", "1.0.0-1")).toBe(1);
+  });
+
+  test("build metadata takes no part in ordering", () => {
+    expect(compareVersions("1.21.0+build.7", "1.21.0")).toBe(0);
+    expect(newerVersion("v1.21.0+build.7", "1.20.0")).toBe(true);
+    expect(newerVersion("1.21.0-beta.2+sha.abc", "1.21.0-beta.1")).toBe(true);
+    expect(isPrerelease("1.21.0+build.7")).toBe(false);
+    expect(isPrerelease("1.21.0-beta.2+build.7")).toBe(true);
+  });
+
+  test("a stored channel reads back, and anything unknown is Stable", () => {
+    expect(readChannel("beta")).toBe("beta");
+    expect(readChannel("stable")).toBe("stable");
+    expect(readChannel(null)).toBe("stable");
+    expect(readChannel("prerelease")).toBe("stable");
   });
 
   test("What's New shows only after an update, not on a first install or in a dev build", () => {
