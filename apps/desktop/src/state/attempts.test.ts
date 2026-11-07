@@ -88,17 +88,17 @@ describe("an attempt as the transcript reads it", () => {
   });
 });
 
-describe("the minimap's checkpoint lane", () => {
+describe("the minimap's checkpoints", () => {
   const byEnd = { e1: checkpoint(1, "u1"), e2: checkpoint(2, "u2") };
 
-  test("one node per turn a rewind can go back to, hung on the message that started it", () => {
+  test("one entry per turn a rewind can go back to, hung on the message that started it", () => {
     const nodes = checkpointsByMessage(thread(), byEnd);
     expect(Object.keys(nodes)).toEqual(["u1", "u2"]);
     expect(nodes.u1!.turn).toBe(1);
     expect(nodes.u2!.turn).toBe(2);
   });
 
-  test("a message that started no paired turn gets no node", () => {
+  test("a message that started no paired turn gets no entry", () => {
     const nodes = checkpointsByMessage(thread(), { e3: checkpoint(3, "u3") });
     expect(Object.keys(nodes)).toEqual(["u3"]);
   });
