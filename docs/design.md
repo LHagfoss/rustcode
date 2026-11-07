@@ -435,7 +435,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Switch:** the track is `bg-accent` on and `bg-fill-strong` off, its thumb
   the white knob: `bg-knob shadow-knob`.
 - **Slider:** `Slider` (settingsKit) for a whole number in a short range, such
-  as the threads one thread may run at once: the native range (so arrows, Home
+  as the delegates one thread may run at once: the native range (so arrows, Home
   and End work), the value beside it and the ends of the range under the rail.
   The native thumb is the knob too (`.rc-range` in index.css): the browser would
   draw it in the accent colour. Its focus ring is the global one, drawn by the

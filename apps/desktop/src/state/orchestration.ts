@@ -21,23 +21,40 @@ export const MAX_MESSAGE_BYTES = 32 * 1024;
 export const READ_BYTES = 16 * 1024;
 export const MAILBOX = 32;
 /**
- * The default number of distinct threads one thread may have working for it at
- * once (Settings › Agents); the tree below it holds twice as many. A message
- * to a thread it already has a link to is a follow-up, not another slot.
+ * The default number of delegates one thread may have working for it at once
+ * (Settings › Agents). A message to a thread it already has a link to is a
+ * follow-up, not another slot.
  */
-export const MAX_ACTIVE_LINKS = 8;
-export const MIN_ACTIVE_LINKS = 2;
-export const MAX_ACTIVE_LIMIT = 16;
+export const DEFAULT_DELEGATES_PER_THREAD = 8;
+export const MIN_DELEGATES_PER_THREAD = 2;
+export const MAX_DELEGATES_PER_THREAD = 32;
+/**
+ * The default number of delegates that may run at once across the app
+ * (Settings › Agents), whichever thread started them. A delegate takes one
+ * slot whether it is a child this thread started or a thread it messaged.
+ */
+export const DEFAULT_DELEGATES_TOTAL = 16;
+export const MIN_DELEGATES_TOTAL = 2;
+export const MAX_DELEGATES_TOTAL = 64;
+/**
+ * The two settings the slot rules read: one thread's own limit and the
+ * machine-wide total. Both count live delegates only, so a finished one frees
+ * its slot.
+ */
+export interface DelegateLimits {
+  perThread: number;
+  total: number;
+}
+export const DEFAULT_DELEGATE_LIMITS: DelegateLimits = {
+  perThread: DEFAULT_DELEGATES_PER_THREAD,
+  total: DEFAULT_DELEGATES_TOTAL,
+};
 /**
  * How deep delegation goes: a top-level thread (0) may start children (1), and
  * they may start grandchildren (2). A thread at the limit is told so, with the
  * limit in the reason, instead of being told it cannot delegate at all.
  */
 export const MAX_DEPTH = 2;
-/** Active threads one delegation tree may hold, whatever their depth: twice a thread's limit. */
-export const MAX_TREE_LINKS = MAX_ACTIVE_LINKS * 2;
-/** How many distinct target threads a whole tree may hold, from one thread's limit. */
-export const treeLimit = (limit: number) => limit * 2;
 export const DEFAULT_WAIT_MS = 60_000;
 export const MAX_WAIT_MS = 3_600_000;
 export const MAX_LAST_TURNS = 10;
@@ -645,7 +662,7 @@ export function checkMessage(
   book: LinkBook,
   read = false,
   acrossProjects = false,
-  limit = MAX_ACTIVE_LINKS,
+  limits: DelegateLimits = DEFAULT_DELEGATE_LIMITS,
 ): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
@@ -664,9 +681,9 @@ export function checkMessage(
   }
   // A message to a thread this caller already has a live link to is a follow-up:
   // it queues on that thread, so it never counts against a slot, this thread's
-  // limit or its tree's.
+  // limit or the machine-wide total.
   if (!hasActiveTo(book, caller.id, target.id)) {
-    const slots = slotRefusal(book, caller, 1, limit);
+    const slots = slotRefusal(book, caller, 1, limits);
     if (slots) return slots;
   }
   if (book.links.filter((l) => l.target === target.id && l.state === "queued").length >= MAILBOX) {
@@ -715,11 +732,11 @@ export function checkStart(
   caller: RuleThread,
   book: LinkBook,
   count: number,
-  limit = MAX_ACTIVE_LINKS,
+  limits: DelegateLimits = DEFAULT_DELEGATE_LIMITS,
 ): Failure | null {
   const chain = chainRefusal(book, caller);
   if (chain) return chain;
-  return slotRefusal(book, caller, count, limit);
+  return slotRefusal(book, caller, count, limits);
 }
 
 /** The message as the other thread receives it: who it is from, then the text. */
@@ -952,13 +969,50 @@ const activeFrom = (book: LinkBook, id: string) =>
 export const activeTargets = (book: LinkBook, id: string): Set<string> =>
   new Set(activeFrom(book, id).map((l) => l.target));
 
+/**
+ * The live delegates across every thread: one per target, however many links
+ * point at it. This is what the machine-wide total counts.
+ */
+export const activeDelegates = (book: LinkBook): number =>
+  new Set(book.links.filter((l) => isActive(l.state)).map((l) => l.target)).size;
+
+/** The most live delegates one thread has right now, for Settings' usage line. */
+export function busiestThreadDelegates(book: LinkBook): number {
+  let most = 0;
+  for (const targets of threadTargets(book).values()) most = Math.max(most, targets.size);
+  return most;
+}
+
+/** The live targets of every thread, by orchestrator id. */
+function threadTargets(book: LinkBook): Map<string, Set<string>> {
+  const byThread = new Map<string, Set<string>>();
+  for (const link of book.links) {
+    if (!isActive(link.state)) continue;
+    const targets = byThread.get(link.orchestrator) ?? new Set<string>();
+    targets.add(link.target);
+    byThread.set(link.orchestrator, targets);
+  }
+  return byThread;
+}
+
 /** Whether `orchestrator` already has a live link to `target`. */
 const hasActiveTo = (book: LinkBook, orchestrator: string, target: string) =>
   book.links.some((l) => l.orchestrator === orchestrator && l.target === target && isActive(l.state));
 
-/** How many more threads a thread may open at once, for an answer to say. */
-export const linksLeft = (book: LinkBook, id: string, limit = MAX_ACTIVE_LINKS): number =>
-  Math.max(0, limit - activeTargets(book, id).size);
+/**
+ * How many more delegates fit, for an answer to say: the smaller of what this
+ * thread may open (its own limit) and what the machine has room for (the
+ * total), so a retry with fewer never trips the other cap instead.
+ */
+export const linksLeft = (
+  book: LinkBook,
+  id: string,
+  limits: DelegateLimits = DEFAULT_DELEGATE_LIMITS,
+): number =>
+  Math.min(
+    Math.max(0, limits.perThread - activeTargets(book, id).size),
+    Math.max(0, limits.total - activeDelegates(book)),
+  );
 
 /** The thread working for `id` right now, if any (a target has at most one). */
 const parentLink = (book: LinkBook, id: string) =>
@@ -1003,31 +1057,6 @@ export function rootOf(book: LinkBook, id: string): string {
 }
 
 /**
- * The threads of `id`'s delegation tree, its root included: the whole tree is
- * capped ({@link MAX_TREE_LINKS}) so one thread cannot fill the machine with
- * grandchildren.
- */
-export function treeOf(book: LinkBook, id: string): Set<string> {
-  const ids = new Set([rootOf(book, id)]);
-  for (let added = true; added; ) {
-    added = false;
-    for (const link of book.links) {
-      if (!isActive(link.state) || ids.has(link.target) || !ids.has(link.orchestrator)) continue;
-      ids.add(link.target);
-      added = true;
-    }
-  }
-  return ids;
-}
-
-/** Active threads in `id`'s tree, which the tree cap counts: one per target, not one per link. */
-export function activeInTree(book: LinkBook, id: string): number {
-  const ids = treeOf(book, id);
-  return new Set(book.links.filter((l) => isActive(l.state) && ids.has(l.orchestrator)).map((l) => l.target))
-    .size;
-}
-
-/**
  * Every active link under `id`, in tree order: what stopping `id` takes down
  * with it. Safe against a cycle: a thread is walked once.
  */
@@ -1050,33 +1079,34 @@ export function activeDescendants(book: LinkBook, id: string): Link[] {
 }
 
 /**
- * The `busy` refusal when `count` more threads would not fit: this thread's
- * limit at once, or its tree's twice that. A follow-up to a thread it already
- * works with passes `count: 0`, so it never takes a slot. `links_left` says
- * what does fit, so the agent can retry with fewer instead of guessing.
+ * The `busy` refusal when `count` more delegates would not fit: this thread's
+ * own limit, or the machine-wide total. A follow-up to a thread it already
+ * works with passes `count: 0`, so it never takes a slot. The reason names the
+ * limit that refused it and the current count; `links_left` is the smaller of
+ * the two rooms, so the agent can retry with fewer instead of guessing.
  */
 function slotRefusal(
   book: LinkBook,
   caller: RuleThread,
   count: number,
-  limit = MAX_ACTIVE_LINKS,
+  limits: DelegateLimits = DEFAULT_DELEGATE_LIMITS,
 ): Failure | null {
+  const left = linksLeft(book, caller.id, limits);
   const active = activeTargets(book, caller.id).size;
-  if (active + count > limit) {
-    const left = Math.max(0, limit - active);
+  if (active + count > limits.perThread) {
+    const room = Math.max(0, limits.perThread - active);
     return failure(
       "busy",
-      `at most ${limit} threads at once; wait_session on one first (this thread has ${active}, so ${count} would not fit, and ${left} ${left === 1 ? "slot is" : "slots are"} left)`,
+      `at most ${limits.perThread} delegates per thread at once, and this thread has ${active}: ${count} more would not fit (${room} ${room === 1 ? "slot is" : "slots are"} left); wait_session on one first`,
       left,
     );
   }
-  const tree = activeInTree(book, caller.id);
-  const most = treeLimit(limit);
-  if (tree + count > most) {
-    const left = Math.max(0, most - tree);
+  const running = activeDelegates(book);
+  if (running + count > limits.total) {
+    const room = Math.max(0, limits.total - running);
     return failure(
       "busy",
-      `this thread's tree holds at most ${most} active threads and has ${tree}: ${left} ${left === 1 ? "slot is" : "slots are"} left, so ${count} would not fit`,
+      `at most ${limits.total} delegates at once across the app, and ${running} are running: ${count} more would not fit (${room} ${room === 1 ? "slot is" : "slots are"} left); wait_session on one first`,
       left,
     );
   }

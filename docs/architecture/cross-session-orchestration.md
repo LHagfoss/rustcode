@@ -28,8 +28,9 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
 - Enforced: same project only; a thread cannot message itself; no chains (a
   thread working for another cannot message others — v2 relaxes this to two
   levels, [orchestrator.md](../orchestrator.md)); one orchestrator per
-  target; 8 active threads per thread by default (2–16 in Settings › Agents,
-  and twice that per tree); a 32-message mailbox; 32 KiB messages and prompts;
+  target; 8 delegates working for one thread by default (2–32 in Settings ›
+  Agents) and 16 running across the app (2–64); a 32-message mailbox; 32 KiB
+  messages and prompts;
   8 KiB answers, paged by `read_session`; `wait_session` waits at most 1 h. It
   returns `needs_user` while the target waits on an approval or a question.
 - Links and *Allow for This Thread* grants are kept in Application Support
@@ -208,8 +209,9 @@ Decisions:
 - `interrupt: true` is allowed only for a turn the same link started, as with
   `followup_task`.
 - The orchestrator may have at most 8 distinct target threads active by
-  default (2–16 in Settings › Agents; a follow-up takes no slot) and the
-  engine at most 8 orchestrated turns running at once; further turns queue, and
+  default (2–32 in Settings › Agents; a follow-up takes no slot), with at most
+  16 running across the app (2–64), and the engine at most 8 orchestrated
+  turns running at once; further turns queue, and
   waiting yields the orchestrator's slot as `wait_agent` does.
 - `wait_session` accepts one `link_id` or several (first to finish wins),
   default timeout 60 s, maximum 1 h, and wakes on completion, a question or an

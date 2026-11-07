@@ -785,8 +785,8 @@ composer's keys stay outside the table.
   always reachable (another project only
   for `start_session`, one the user has opened, with approval), two levels of
   delegation (a top-level thread, its children and their children — no
-  deeper, and no message that would close a loop), 4 active links per thread,
-  8 per delegation tree, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
+  deeper, and no message that would close a loop), 8 delegates per thread and
+  16 across the app, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
   waits up to 1 h. Each needs the user's *Allow for This Thread*,
   *Allow Once* or *Don't Allow*; a grant is per calling thread and kind of
   change, not per harness, model or named login, so an already-granted start

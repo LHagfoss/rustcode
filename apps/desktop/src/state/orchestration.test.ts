@@ -8,10 +8,11 @@ import {
   validBranch,
 } from "../acp/v2";
 import {
+  activeDelegates,
   activeDescendants,
-  activeInTree,
   activityOf,
   askingIds,
+  busiestThreadDelegates,
   CAPABILITY_VERSION,
   capped,
   checkManage,
@@ -19,6 +20,9 @@ import {
   checkQueryData,
   checkStart,
   DEFAULT_ACTIVITY_ITEMS,
+  DEFAULT_DELEGATE_LIMITS,
+  DEFAULT_DELEGATES_PER_THREAD,
+  DEFAULT_DELEGATES_TOTAL,
   depthOf,
   doneLinks,
   emptyBook,
@@ -37,12 +41,10 @@ import {
   linkResult,
   linksLeft,
   listSessions,
-  MAX_ACTIVE_LINKS,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
   MAX_DEPTH,
   MAX_MESSAGE_BYTES,
-  MAX_TREE_LINKS,
   markDelivered,
   mergeBooks,
   nextWakeAt,
@@ -217,7 +219,7 @@ describe("orchestration rules", () => {
     });
   });
 
-  test("same project, the thread limit, one orchestrator per target", () => {
+  test("same project, a thread's delegate limit, one orchestrator per target", () => {
     const a = thread("a");
     expect(checkMessage(a, thread("b", "/other"), emptyBook())?.code).toBe("not_allowed");
     expect(checkMessage(a, a, emptyBook())?.code).toBe("not_allowed");
@@ -227,22 +229,26 @@ describe("orchestration rules", () => {
     expect(checkMessage(a, wt, emptyBook())).toBeNull();
     expect(checkMessage(a, thread("b"), book([link("z", "b")]))?.code).toBe("target_linked");
     const full = ["c", "d", "e", "f"].map((t) => link("a", t));
-    expect(checkMessage(a, thread("b"), book(full), false, false, 4)?.code).toBe("busy");
-    expect(checkStart(a, book(full.slice(0, 2)), 3, 4)?.code).toBe("busy");
-    expect(checkStart(a, book(full.slice(0, 2)), 2, 4)).toBeNull();
-    // The default is eight now, and the setting's own ends are two and sixteen.
+    expect(checkMessage(a, thread("b"), book(full), false, false, { perThread: 4, total: 16 })?.code).toBe(
+      "busy",
+    );
+    expect(checkStart(a, book(full.slice(0, 2)), 3, { perThread: 4, total: 16 })?.code).toBe("busy");
+    expect(checkStart(a, book(full.slice(0, 2)), 2, { perThread: 4, total: 16 })).toBeNull();
+    // The default is eight per thread and sixteen in all.
     expect(checkStart(a, book(full.slice(0, 2)), 2)).toBeNull();
     const eight = ["c", "d", "e", "f", "g", "h", "i", "j"].map((t) => link("a", t));
     expect(checkStart(a, book(eight.slice(0, 7)), 1)).toBeNull();
     expect(checkStart(a, book(eight), 1)?.code).toBe("busy");
-    expect(checkStart(a, book(eight.slice(0, 2)), 7, 2)?.code).toBe("busy");
-    expect(checkStart(a, book(eight.slice(0, 1)), 1, 2)).toBeNull();
-    expect(checkStart(a, book(eight), 1, 16)).toBeNull();
+    expect(checkStart(a, book(eight.slice(0, 2)), 7, { perThread: 2, total: 16 })?.code).toBe("busy");
+    expect(checkStart(a, book(eight.slice(0, 1)), 1, { perThread: 2, total: 16 })).toBeNull();
+    expect(checkStart(a, book(eight), 1, { perThread: 16, total: 16 })).toBeNull();
+    // The machine-wide total refuses even when this thread has room of its own.
+    expect(checkStart(a, book(eight), 1, { perThread: 16, total: 8 })?.code).toBe("busy");
   });
 
   test("a follow-up to a thread the caller already runs takes no slot", () => {
     // The live shape: a thread at the limit messaging a thread it is already running.
-    const targets = Array.from({ length: MAX_ACTIVE_LINKS }, (_, i) => `t${i}`);
+    const targets = Array.from({ length: DEFAULT_DELEGATES_PER_THREAD }, (_, i) => `t${i}`);
     const full = book(targets.map((t) => link("a", t)));
     expect(checkStart(thread("a"), full, 1)?.code).toBe("busy");
     expect(checkMessage(thread("a"), thread(targets[0]!), full)).toBeNull();
@@ -252,15 +258,17 @@ describe("orchestration rules", () => {
     expect(again.links.filter((l) => l.target === targets[0])).toHaveLength(2);
     // Slots count distinct threads, not links: two links to one thread take one.
     const pair = book([link("a", "b"), link("a", "b"), link("a", "c")]);
-    expect(linksLeft(pair, "a", 4)).toBe(2);
+    expect(linksLeft(pair, "a", { perThread: 4, total: 16 })).toBe(2);
     expect(linksLeft(full, "a")).toBe(0);
-    // A full tree does not refuse a follow-up either.
-    const tree = book([
-      ...targets.map((t) => link("a", t)),
-      ...Array.from({ length: MAX_ACTIVE_LINKS }, (_, i) => link(targets[0]!, `k${i}`)),
+    // A machine-wide total filled by other threads does not refuse a follow-up either.
+    const shared = book([
+      ...full.links,
+      ...Array.from({ length: DEFAULT_DELEGATES_TOTAL - targets.length }, (_, i) => link("other", `o${i}`)),
     ]);
-    expect(activeInTree(tree, "a")).toBe(MAX_TREE_LINKS);
-    expect(checkMessage(thread("a"), thread(targets[0]!), tree, false, false, 2)).toBeNull();
+    expect(activeDelegates(shared)).toBe(DEFAULT_DELEGATES_TOTAL);
+    expect(
+      checkMessage(thread("a"), thread(targets[0]!), shared, false, false, { perThread: 2, total: 16 }),
+    ).toBeNull();
     // A thread it does not already run is still one more.
     expect(checkMessage(thread("a"), thread("new"), full)?.code).toBe("busy");
   });
@@ -299,26 +307,28 @@ describe("orchestration rules", () => {
     expect(checkMessage(thread("b"), thread("c"), sibling)?.code).toBe("target_linked");
   });
 
-  test("a whole tree holds twice the thread limit in active threads", () => {
-    // Two levels: eight threads under a, eight under b (b is a's child).
+  test("the machine-wide total caps every thread's delegates at once", () => {
+    // Two threads fill the total between them: one thread's own room is not the whole story.
     const under = (parent: string, n: number) =>
       Array.from({ length: n }, (_, i) => link(parent, `${parent}-${i}`));
-    const tree = book([link("a", "b"), ...under("a", MAX_ACTIVE_LINKS - 1), ...under("b", MAX_ACTIVE_LINKS)]);
-    expect(activeInTree(tree, "b")).toBe(MAX_TREE_LINKS);
-    const refused = checkStart(thread("a-0"), tree, 1)!;
+    const filled = book([...under("a", 8), ...under("b", 8)]);
+    expect(activeDelegates(filled)).toBe(DEFAULT_DELEGATES_TOTAL);
+    expect(busiestThreadDelegates(filled)).toBe(8);
+    const refused = checkStart(thread("c"), filled, 1)!;
     expect(refused.code).toBe("busy");
-    expect(refused.message).toContain(`tree holds at most ${MAX_TREE_LINKS}`);
+    expect(refused.message).toContain(`at most ${DEFAULT_DELEGATES_TOTAL} delegates at once across the app`);
+    expect(refused.message).toContain("16 are running");
     expect(refused.linksLeft).toBe(0);
-    // A message to another thread opens a link too, so the tree cap holds for it as well.
-    expect(checkMessage(thread("a-0"), thread("j"), tree)?.code).toBe("busy");
-    // One less in the tree: the last slot is there, and a fan-out of two is not.
-    const room = book([
-      link("a", "b"),
-      ...under("a", MAX_ACTIVE_LINKS - 1),
-      ...under("b", MAX_ACTIVE_LINKS - 1),
-    ]);
-    expect(checkStart(thread("a-0"), room, 1)).toBeNull();
-    expect(checkStart(thread("a-0"), room, 2)?.code).toBe("busy");
+    // A message to another thread opens a link too, so the total holds for it as well.
+    expect(checkMessage(thread("c"), thread("j"), filled)?.code).toBe("busy");
+    // One less in the total: the last slot is there, and a fan-out of two is not.
+    const room = book([...under("a", 8), ...under("b", 7)]);
+    expect(checkStart(thread("c"), room, 1)).toBeNull();
+    expect(checkStart(thread("c"), room, 2)?.code).toBe("busy");
+    // A finished link frees its slot at once.
+    const freed = book([...under("a", 8), ...under("b", 7), link("b", "done", "done")]);
+    expect(activeDelegates(freed)).toBe(15);
+    expect(checkStart(thread("c"), freed, 1, DEFAULT_DELEGATE_LIMITS)).toBeNull();
   });
 
   test("stopping a thread takes its active descendants, and nothing on a finish", () => {
@@ -1558,26 +1568,29 @@ describe("a group of threads", () => {
 });
 
 describe("answering with the slots and the child's activity", () => {
-  test("a busy refusal says how many threads are left", () => {
-    const full = book(Array.from({ length: MAX_ACTIVE_LINKS }, (_, i) => link("a", `t${i}`)));
+  test("a busy refusal says which limit and how many are left", () => {
+    const full = book(Array.from({ length: DEFAULT_DELEGATES_PER_THREAD }, (_, i) => link("a", `t${i}`)));
     const refused = checkStart(thread("a"), full, 2)!;
     expect(refused.code).toBe("busy");
     expect(refused.linksLeft).toBe(0);
-    expect(refused.message).toContain(
-      `at most ${MAX_ACTIVE_LINKS} threads at once; wait_session on one first`,
-    );
+    expect(refused.message).toContain(`at most ${DEFAULT_DELEGATES_PER_THREAD} delegates per thread at once`);
+    expect(refused.message).toContain("this thread has 8");
     const json = failureJson(refused);
     expect(json.error).toMatchObject({ code: "busy", links_left: 0 });
     // One slot open: a single start fits, two do not.
-    const room = book(Array.from({ length: MAX_ACTIVE_LINKS - 1 }, (_, i) => link("a", `t${i}`)));
+    const room = book(Array.from({ length: DEFAULT_DELEGATES_PER_THREAD - 1 }, (_, i) => link("a", `t${i}`)));
     expect(checkStart(thread("a"), room, 1)).toBeNull();
     expect(checkStart(thread("a"), room, 2)?.linksLeft).toBe(1);
-    // A thread limit of two says two, and its tree says four.
+    // A thread limit of two says two; the machine-wide total names its own count.
     const two = book([link("a", "b"), link("a", "c")]);
-    const small = checkStart(thread("a"), two, 1, 2)!;
-    expect(small.message).toContain("at most 2 threads at once");
-    const tiny = book([link("a", "b"), link("b", "c"), link("b", "d"), link("b", "e")]);
-    expect(checkStart(thread("a"), tiny, 1, 2)?.message).toContain("tree holds at most 4");
+    const small = checkStart(thread("a"), two, 1, { perThread: 2, total: 16 })!;
+    expect(small.message).toContain("at most 2 delegates per thread at once");
+    const tiny = book([link("a", "b"), link("a", "c"), link("other", "d"), link("other", "e")]);
+    const total = checkStart(thread("a"), tiny, 1, { perThread: 8, total: 4 })!;
+    expect(total.message).toContain("at most 4 delegates at once across the app");
+    expect(total.message).toContain("4 are running");
+    // links_left is the smaller of the two rooms, whichever cap refused.
+    expect(linksLeft(two, "a", { perThread: 4, total: 2 })).toBe(0);
   });
 
   test("a timeout's link says how long it has been idle and what it did last", () => {

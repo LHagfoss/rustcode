@@ -139,12 +139,15 @@ import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./login
 import { notifyThread, startNotifications } from "./notify";
 import {
   CAPABILITY_VERSION,
+  DEFAULT_DELEGATES_PER_THREAD,
+  DEFAULT_DELEGATES_TOTAL,
   forget,
   type GrantAsk,
   type LinkBook,
-  MAX_ACTIVE_LIMIT,
-  MAX_ACTIVE_LINKS,
-  MIN_ACTIVE_LINKS,
+  MAX_DELEGATES_PER_THREAD,
+  MAX_DELEGATES_TOTAL,
+  MIN_DELEGATES_PER_THREAD,
+  MIN_DELEGATES_TOTAL,
 } from "./orchestration";
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
@@ -381,8 +384,10 @@ export interface AppState {
   } | null;
   /** Threads can start and message other threads (Settings › Agents); the engine learns it at initialize. */
   orchestration: boolean;
-  /** How many distinct threads one thread may run at once (Settings › Agents); a tree holds twice as many. */
+  /** How many delegates one thread may run at once (Settings › Agents). */
   threadLimit: number;
+  /** How many delegates may run at once across the app (Settings › Agents). */
+  totalLimit: number;
   /** Agents may read threads of every project, not only the calling thread's (Settings › Agents). */
   readAcrossProjects: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
@@ -498,6 +503,7 @@ const STORAGE = {
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
   threadLimit: "rustcode.threadLimit",
+  totalLimit: "rustcode.totalLimit",
   readAcrossProjects: "rustcode.readAcrossProjects",
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
@@ -551,7 +557,8 @@ export const SETTINGS_DEFAULTS = {
   recapHours: RECAP_HOURS_DEFAULT,
   continueAfterLimit: true,
   orchestration: true,
-  threadLimit: MAX_ACTIVE_LINKS,
+  threadLimit: DEFAULT_DELEGATES_PER_THREAD,
+  totalLimit: DEFAULT_DELEGATES_TOTAL,
   readAcrossProjects: true,
   smartUi: true,
   defaultPermissionMode: parsePermissionMode(null),
@@ -572,11 +579,45 @@ function storedFlag(key: string, fallback: boolean): boolean {
 }
 
 /** A whole number kept as text, kept to the setting's own range. */
-function storedThreadLimit(key: string, fallback: number): number {
+function storedNumber(key: string, fallback: number, min: number, max: number): number {
   const raw = stored(key);
   const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
   if (!Number.isFinite(n)) return fallback;
-  return Math.min(MAX_ACTIVE_LIMIT, Math.max(MIN_ACTIVE_LINKS, n));
+  return Math.min(max, Math.max(min, n));
+}
+
+/** A thread's own delegate limit, kept to 2..32. */
+function storedThreadLimit(key: string, fallback: number): number {
+  return storedNumber(key, fallback, MIN_DELEGATES_PER_THREAD, MAX_DELEGATES_PER_THREAD);
+}
+
+/**
+ * The machine-wide delegate total, kept to 2..64. Before it existed the one
+ * limit was a thread's own, and its whole delegation tree could hold twice
+ * that; a stored old value raises the total to the same ceiling, so a custom
+ * limit does not quietly get smaller. A fresh install starts at the default.
+ */
+function storedTotalLimit(): number {
+  if (stored(STORAGE.totalLimit) !== null) {
+    return storedNumber(
+      STORAGE.totalLimit,
+      DEFAULT_DELEGATES_TOTAL,
+      MIN_DELEGATES_TOTAL,
+      MAX_DELEGATES_TOTAL,
+    );
+  }
+  return Math.min(
+    MAX_DELEGATES_TOTAL,
+    Math.max(
+      DEFAULT_DELEGATES_TOTAL,
+      storedNumber(
+        STORAGE.threadLimit,
+        DEFAULT_DELEGATES_PER_THREAD,
+        MIN_DELEGATES_PER_THREAD,
+        MAX_DELEGATES_PER_THREAD,
+      ) * 2,
+    ),
+  );
 }
 
 export function store(key: string, value: string) {
@@ -612,6 +653,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // delegating is there to use without first finding the setting.
   orchestration: storedFlag(STORAGE.orchestration, SETTINGS_DEFAULTS.orchestration),
   threadLimit: storedThreadLimit(STORAGE.threadLimit, SETTINGS_DEFAULTS.threadLimit),
+  totalLimit: storedTotalLimit(),
   // On unless turned off: reading knows no project boundary, so an agent asked
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
@@ -3580,11 +3622,18 @@ export function setOrchestration(on: boolean) {
   store(STORAGE.orchestration, on ? "1" : "0");
 }
 
-/** The number of distinct threads one thread may run at once, kept to 2..16. */
+/** A thread's own delegate limit, kept to 2..32. */
 export function setThreadLimit(limit: number) {
-  const n = Math.min(MAX_ACTIVE_LIMIT, Math.max(MIN_ACTIVE_LINKS, Math.round(limit)));
+  const n = Math.min(MAX_DELEGATES_PER_THREAD, Math.max(MIN_DELEGATES_PER_THREAD, Math.round(limit)));
   set({ threadLimit: n });
   store(STORAGE.threadLimit, String(n));
+}
+
+/** The machine-wide delegate total, kept to 2..64. */
+export function setTotalLimit(limit: number) {
+  const n = Math.min(MAX_DELEGATES_TOTAL, Math.max(MIN_DELEGATES_TOTAL, Math.round(limit)));
+  set({ totalLimit: n });
+  store(STORAGE.totalLimit, String(n));
 }
 
 // ---------------------------------------------------------------- status and views
