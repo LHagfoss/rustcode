@@ -19,7 +19,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
 import { assessApproval, grantAllowed, optionScope } from "../lib/approval";
-import { type DecidedItem, foldDecided, groupInbox, type InboxGroup, type InboxItem } from "../state/inbox";
+import {
+  type DecidedItem,
+  foldDecided,
+  groupInbox,
+  type InboxGroup,
+  type InboxItem,
+  showsNeedsYou,
+} from "../state/inbox";
 import { useInboxItems } from "../state/inboxRead";
 import {
   answerPermission,
@@ -276,38 +283,34 @@ function DecidedRow({ item }: { item: DecidedItem }) {
 
 /**
  * The sidebar's destination row: "Needs you", with the count, near the top of
- * the list. Its badge rolls when the number changes (`rc-count-roll`).
+ * the list. Its badge rolls when the number changes (`rc-count-roll`). Drawn only
+ * while something waits on the user (`showsNeedsYou`), so an empty row never
+ * stands over the threads as if it headed them.
  */
 export function NeedsYouRow() {
   const items = useInboxItems();
   const here = useApp((s) => s.view.kind === "inbox");
+  if (!showsNeedsYou(items)) return null;
   const count = items.length;
   return (
-    <button
-      type="button"
-      onClick={() => setView({ kind: "inbox" })}
-      aria-current={here ? "page" : undefined}
-      title="Approvals, questions, failed turns and delegates across every thread"
-      className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-body hover:bg-fill"
-    >
-      <Hand
-        size={14}
-        className={cx("shrink-0", count ? "text-warning" : "text-fg-muted")}
-        fill="currentColor"
-        fillOpacity={count ? 0.2 : 0}
-      />
-      <span className={cx("min-w-0 flex-1 truncate", count ? "font-medium text-fg" : "text-fg-muted")}>
-        Needs you
-      </span>
-      {count > 0 && (
+    <div className="shrink-0 px-2 pb-1">
+      <button
+        type="button"
+        onClick={() => setView({ kind: "inbox" })}
+        aria-current={here ? "page" : undefined}
+        title="Approvals, questions, failed turns and delegates across every thread"
+        className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-body hover:bg-fill"
+      >
+        <Hand size={14} className="shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
+        <span className="min-w-0 flex-1 truncate font-medium text-fg">Needs you</span>
         <span
           key={count}
           className="rc-count-roll shrink-0 rounded-full bg-warning/14 px-1.5 font-medium text-caption text-warning tabular"
         >
           {count > 99 ? "99+" : count}
         </span>
-      )}
-    </button>
+      </button>
+    </div>
   );
 }
 

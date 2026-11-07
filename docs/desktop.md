@@ -527,7 +527,13 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Sidebar.** One list: pinned threads first, then every
+- **Sidebar.** A *Needs you* row above the list opens the inbox
+  (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits
+  on the user: an approval, a question, a failed turn, or a delegate asking.
+  A thread merely marked for review does not count, and the row's count is the
+  inbox's own list. With nothing waiting there is no row at all, so no empty
+  heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
+  and the palette. One list: pinned threads first, then every
   active thread, and Settled as a shelf at the foot: threads marked Settled
   and threads untouched for three days unless they wait
   for review (`idleSettled`), folded by default, 10 at a time then *Show

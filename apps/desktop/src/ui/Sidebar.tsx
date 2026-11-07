@@ -2086,9 +2086,7 @@ export function Sidebar() {
             <SquarePen size={14} />
           </ClusterButton>
         </div>
-        <div className="shrink-0 px-2 pb-1">
-          <NeedsYouRow />
-        </div>
+        <NeedsYouRow />
         <nav
           ref={list}
           // One tab stop for the whole list (the row the keyboard is on), ↑ ↓ through its rows,
