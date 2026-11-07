@@ -93,6 +93,11 @@ pub(crate) struct StartOptions {
     /// The thread this harness runs for, so the JSON-RPC traffic it speaks can
     /// be recorded against it (`harness_rpc_messages`).
     pub thread_id: Option<String>,
+    /// Where this machine's skills are and which ones are turned off, for a
+    /// harness with no `use_skill` (`crate::skills::harness_skills_note`).
+    /// Computed when the process is started and handed in here, so a test
+    /// never reads the real home directory.
+    pub skills_note: Option<String>,
 }
 
 pub(crate) enum Adapter {
@@ -963,6 +968,10 @@ impl ExternalSession {
             // The caller adds the workspace's servers; a test wants none.
             mcp: Vec::new(),
             thread_id: Some(self.id.clone()),
+            // Read when the process starts, so a thread the idle reaper stopped
+            // picks up a toggle made in the meantime; a running process keeps
+            // the note it got (`docs/harnesses.md`).
+            skills_note: crate::skills::harness_skills_note(&self.harness.id),
         })
     }
 

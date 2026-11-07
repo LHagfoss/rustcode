@@ -104,11 +104,14 @@ These extension requests back the app's Settings pages:
 
 - `_rustcode/capabilities` (`{}`) answers with `{"skills": [...],
   "mcpServers": [...], "configPath"}`. A skill has `name`, `description`,
-  `path`, `source` (`workspace`, `universal`, `rustcode` or `configured`) and
-  `enabled`. A server has `name`, `transport` (`stdio` or `http`), `target`
-  (credentials masked), `enabled`, `scope` (`user`, `project` or `session`),
-  `connection` (`connected`, `not_connected`, `disabled` or `failed`), `tools`
-  and `error`. Header and environment values are never sent.
+  `path`, `source` (`workspace`, `universal`, `rustcode`, `configured`,
+  `claude-project` or `claude-user`; the last two are a harness's own read-only
+  roots), `readOnly` (true for exactly those two sources, so a client hides its
+  Edit action) and `enabled`. A server has `name`, `transport` (`stdio` or
+  `http`),
+  `target` (credentials masked), `enabled`, `scope` (`user`, `project` or
+  `session`), `connection` (`connected`, `not_connected`, `disabled` or
+  `failed`), `tools` and `error`. Header and environment values are never sent.
 - `_rustcode/capabilities/set` (`{"kind": "skill" | "mcp", "name", "enabled"}`)
   saves the toggle to the user config, starts or stops an MCP server in this
   engine, and answers with the fresh snapshot. An unknown skill or a server the

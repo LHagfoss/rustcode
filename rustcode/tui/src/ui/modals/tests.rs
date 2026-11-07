@@ -941,6 +941,7 @@ fn skills_panel() -> rustcode::controller::SkillsPanel {
         description: format!("What {name} does"),
         path: format!("/skills/{name}"),
         source: "universal",
+        read_only: false,
         enabled,
     };
     rustcode::controller::SkillsPanel {

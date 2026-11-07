@@ -2614,12 +2614,14 @@ pub(crate) fn harness_output_style(smart_ui: crate::app::SmartUi) -> String {
 /// What an external harness adds to its own system prompt: where it runs, so it can say so when asked and
 /// link what it makes so the app opens it, that RustCode is what owns its threads and projects, then
 /// either Smart UI when the user has it on or the `rustcode-viz` types the connected client draws (none
-/// at level 0), then [`harness_output_style`]. Codex takes this as `developerInstructions` and Claude Code's adapter
+/// at level 0), then `skills` ([`crate::skills::harness_skills_note`], because this harness has no
+/// `use_skill`), then [`harness_output_style`]. Codex takes this as `developerInstructions` and Claude Code's adapter
 /// as its `systemPrompt`: it goes in every prompt, so every byte here is paid on every turn.
 pub(crate) fn harness_instructions(
     harness: &str,
     visualization_level: u8,
     smart_ui: crate::app::SmartUi,
+    skills: Option<&str>,
 ) -> String {
     let harness = harness.split_whitespace().collect::<Vec<_>>().join(" ");
     format!(
@@ -2632,9 +2634,10 @@ pub(crate) fn harness_instructions(
          the same from a shell. Thread data lives in `~/.config/rustcode/threads`, not in another tool's \
          database. Tokens and reported cost are `thread_usage` (or `rustcode usage`), and what the \
          harnesses recorded of turns and tool calls is `query_data` (or `rustcode data query \"<sql>\"`); \
-         its description lists the tables.</runtime_info>\n\n{}{}{}",
+         its description lists the tables.</runtime_info>\n\n{}{}{}{}",
         taught_visualization_hint(visualization_level, smart_ui),
         harness_smart_ui_hint(smart_ui),
+        skills.unwrap_or_default(),
         harness_output_style(smart_ui)
     )
 }

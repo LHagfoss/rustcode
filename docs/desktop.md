@@ -665,8 +665,11 @@ composer's keys stay outside the table.
   server in place, through `_rustcode/capabilities/mcp/restart`, without
   rewriting the config), add (command or URL, with environment or headers),
   remove, and Edit config; skills by where they
-  were found (project, user, shared, configured) with their path, on/off,
-  Edit (opens SKILL.md), Show in Finder, and New skill (the shell writes
+  were found (project, user, shared, configured, and a harness's own
+  `Claude Code (project)` / `Claude Code (~/.claude)` groups, whose rows carry
+  `readOnly` and so have no Edit action) with their path, on/off,
+  Edit (opens SKILL.md; never for a read-only row), Show in Finder, and New
+  skill (the shell writes
   `SKILL.md` from a template under `~/.config/rustcode/skills` or the
   project's `.rustcode/skills`, `skill_create`, and opens it).
 - **Themes.** Settings › Appearance lists the engine's themes
