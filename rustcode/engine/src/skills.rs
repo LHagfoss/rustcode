@@ -892,7 +892,11 @@ mod tests {
         assert!(content.contains("```rustcode-ui v1"));
         assert!(content.len() < MAX_SKILL_CONTENT_BYTES);
         let tokens = crate::network::compaction::estimate_tokens(&content);
-        assert!(tokens < 1_100, "the smart-ui skill is {tokens} tokens");
+        // 1,552 tokens: the pick-by-question rule and the Chart.js section (the
+        // presets, hover, and what a canvas cannot do) cost about 450 over the
+        // 1,096 it was. The skill is read once, when a view is written, not on
+        // every turn like the harness hint, so it stays under 1,600.
+        assert!(tokens < 1_600, "the smart-ui skill is {tokens} tokens");
         // The runtime the clients inject (docs/smart-ui.md), named exactly.
         for name in [
             "--rc-series-8",

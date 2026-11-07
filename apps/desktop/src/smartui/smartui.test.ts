@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MOCK_KIT } from "../acp/mock";
+import { MOCK_CHARTS, MOCK_KIT } from "../acp/mock";
 import {
   AutoRun,
   claimLive,
@@ -13,7 +13,18 @@ import {
   SendGate,
   StreamPump,
 } from "./host";
-import { BASE_CSS, buildPage, buildStreamPage, PAGE_CSP, pageTheme, runtimeScript, usesChart } from "./page";
+import { kitHelpers } from "./kit";
+import {
+  BASE_CSS,
+  buildPage,
+  buildStreamPage,
+  CHART_THEME_SCRIPT,
+  PAGE_CSP,
+  pageTheme,
+  previewable,
+  runtimeScript,
+  usesChart,
+} from "./page";
 import {
   blockProblem,
   blockTitle,
@@ -207,6 +218,16 @@ describe("smart ui", () => {
     expect(viewMessage(42)).toBeNull();
   });
 
+  test("a view that names the library is not previewed, and a plain one is", () => {
+    const chart =
+      '<title>C</title><div class="rc-chart"><canvas></canvas></div>\n<script src="rustcode-lib:chart.js"></script>';
+    expect(previewable(chart)).toBe(false);
+    expect(previewable('<title>T</title><table class="rc-table">…</table>')).toBe(true);
+    // A tag that is not the bundled name is not the library, and does not stop a preview.
+    expect(previewable('<script src="rustcode-lib:other.js"></script>')).toBe(true);
+    expect(previewable("```js\nnew Chart(c)\n```")).toBe(true);
+  });
+
   test("the page carries the policy, the variables, the runtime and Chart.js once", () => {
     const theme = pageTheme("dark", (name) => (name === "--rc-text" ? "rgb(255 255 255 / 0.88)" : "#123456"));
     const source =
@@ -268,6 +289,13 @@ describe("smart ui", () => {
       ".rc-chip",
       ".rc-tabs",
       ".rc-tip",
+      ".rc-chart",
+      ".rc-donut-total",
+      ".rc-spark",
+      ".rc-spark-line",
+      "data-rc-sort",
+      "data-rc-tip",
+      "aria-sort",
     ]) {
       expect(BASE_CSS).toContain(name);
     }
@@ -292,6 +320,12 @@ describe("smart ui", () => {
       "[data-rc-tab]",
       "[data-rc-panel]",
       '"Copied"',
+      "sortTable",
+      "data-rc-sort",
+      "rcSparkValues",
+      "rcSparkPoints",
+      ".rc-spark[data-values]",
+      "aria-sort",
     ]) {
       expect(script).toContain(part);
     }
@@ -325,6 +359,8 @@ describe("smart ui", () => {
     const page = buildStreamPage("tok", theme);
     expect(page).toContain(`content="${PAGE_CSP}"`);
     expect(page).toContain('<div id="rc-stream"></div>');
+    // A streamed fragment runs no script, so a canvas there can never draw.
+    expect(page).toContain("#rc-stream .rc-chart > canvas");
     expect(page).toContain('"stream"');
     expect(page).toContain("innerHTML = html");
     expect(page).toContain('type: "stream-ready"');
@@ -350,6 +386,427 @@ describe("smart ui", () => {
     expect(part?.complete).toBe(true);
     expect(blockProblem(part?.source ?? "")).toBeNull();
     expect(new TextEncoder().encode(part?.source).length).toBeLessThan(64 * 1024);
+  });
+
+  test("the mock's chart and hover view fits a block", () => {
+    const [part] = splitReply(MOCK_CHARTS.join("")).filter((p) => p.kind === "ui");
+    expect(part?.complete).toBe(true);
+    expect(blockProblem(part?.source ?? "")).toBeNull();
+    // It uses the pieces this change adds, and nothing the page has not got.
+    for (const name of ["rc-chart", "rc-donut-total", "rc-spark", "data-rc-sort", "data-rc-tip"]) {
+      expect(part?.source).toContain(name);
+    }
+    expect(new TextEncoder().encode(part?.source).length).toBeLessThan(64 * 1024);
+  });
+
+  test("a page that names the library gets it inlined, before the view's script", async () => {
+    const theme = pageTheme("dark", () => "#000");
+    const library = "window.Chart = function Chart() {}; // the bundled library";
+    const view = 'new Chart(c, { type: "line" });';
+    const source = `<title>C</title><div class="rc-chart"><canvas></canvas></div>\n<script src="rustcode-lib:chart.js"></script>\n<script>${view}</script>`;
+    const page = buildPage(source, "tok", theme, library);
+    // The tag is replaced by the library itself, once, and never left to be fetched.
+    expect(page).not.toContain("rustcode-lib:chart.js");
+    expect(page.split(library)).toHaveLength(2);
+    // Library, then the theme, then the block's own script: the order Chart needs.
+    expect(page.indexOf(library)).toBeLessThan(page.indexOf("rcSeries"));
+    expect(page.indexOf("rcSeries")).toBeLessThan(page.indexOf(view));
+    // Without the library the tag is dropped rather than left as a request the CSP blocks.
+    const bare = buildPage(source, "tok", theme);
+    expect(bare).not.toContain("rustcode-lib:chart.js");
+    expect(bare).not.toContain(library);
+    expect(() => new Function(CHART_THEME_SCRIPT)).not.toThrow();
+  });
+
+  /** `CHART_THEME_SCRIPT` against a stub Chart, with a canvas that rejects bad colours. */
+  function runChartTheme(options: { vars?: (name: string) => string; reduced?: boolean } = {}) {
+    const stops: string[] = [];
+    const defaults: Record<string, any> = {
+      color: "",
+      borderColor: "#ffffff0f",
+      font: { family: "", size: 0 },
+      responsive: false,
+      maintainAspectRatio: true,
+      resizeDelay: 100,
+      animation: { duration: 1000, easing: "easeOutQuart" },
+      plugins: {
+        colors: { enabled: true },
+        tooltip: {},
+        legend: { labels: {}, onHover: null, onLeave: null },
+      },
+      scale: { grid: { color: "" } },
+      elements: { line: {}, point: {}, bar: {} },
+    };
+    const registered: any[] = [];
+    const Chart = {
+      defaults,
+      instances: {} as Record<string, unknown>,
+      register: (plugin: unknown) => registered.push(plugin),
+    };
+    const gradient = {
+      addColorStop: (_at: number, colour: string) => {
+        // A canvas throws on a colour it cannot parse, which aborts the whole draw.
+        expect(colour).toMatch(/^(rgba?\(|transparent$)/);
+        stops.push(colour);
+      },
+    };
+    const vars = options.vars ?? (() => "");
+    // The page has Chart as a global; so does this.
+    new Function(
+      "window",
+      "document",
+      "getComputedStyle",
+      "matchMedia",
+      "requestAnimationFrame",
+      "Chart",
+      CHART_THEME_SCRIPT,
+    )(
+      { Chart },
+      { documentElement: {} },
+      () => ({ colorScheme: "dark", getPropertyValue: vars }),
+      () => ({ matches: options.reduced ?? false }),
+      undefined,
+      Chart,
+    );
+    const chart = (type: string, labels: string[], datasets: any[]) => ({
+      config: { type, options: {} as Record<string, any> },
+      data: { labels, datasets },
+      chartArea: { top: 0, bottom: 100 },
+      ctx: { createLinearGradient: () => gradient },
+      width: 100,
+      height: 100,
+      options: {} as Record<string, any>,
+    });
+    return { defaults, stops, gradient, chart, plugin: registered.find((p) => p.id === "rcSeries") };
+  }
+
+  test("the chart theme runs against Chart, and fills a line and a donut", () => {
+    const { defaults, stops, gradient, chart, plugin } = runChartTheme({
+      vars: (name) => (name === "--rc-series-1" ? "#0a84ff" : name === "--rc-series-2" ? "#ff9f0a" : ""),
+    });
+    // Themed defaults, not the library's own.
+    expect(defaults.responsive).toBe(true);
+    expect(defaults.maintainAspectRatio).toBe(false);
+    expect(defaults.resizeDelay).toBe(0);
+    expect(defaults.animation.duration).toBe(180);
+    expect(defaults.plugins.tooltip.usePointStyle).toBe(true);
+    expect(defaults.plugins.legend.labels.usePointStyle).toBe(true);
+    expect(defaults.elements.point.hitRadius).toBe(10);
+    expect(typeof defaults.plugins.legend.onHover).toBe("function");
+
+    expect(plugin).toBeDefined();
+    expect(typeof plugin.beforeUpdate).toBe("function");
+    // A chart created while its box is still 0 x 0 is measured again on a later frame.
+    expect(typeof plugin.afterRender).toBe("function");
+    expect(() => plugin.afterRender({ width: 0, height: 0, resize: () => undefined })).not.toThrow();
+
+    // A line is filled with a gradient of its own colour, from colour to nothing.
+    const line = chart("line", ["Mon", "Tue"], [{ label: "Runs", data: [1, 2] }]);
+    plugin.beforeUpdate(line);
+    const lineSet = line.data.datasets[0] as any;
+    expect(lineSet.borderColor).toBe("#0a84ff");
+    expect(lineSet.fill).toBe(true);
+    expect(typeof lineSet.backgroundColor).toBe("function");
+    expect(lineSet.backgroundColor({ chart: line, dataset: lineSet })).toBe(gradient);
+    expect(stops).toEqual(["rgba(10, 132, 255, 0.3)", "rgba(10, 132, 255, 0)"]);
+    // The view's own interaction wins; otherwise ours answers along the axis.
+    expect(line.config.options.interaction).toEqual({ mode: "index", intersect: false });
+
+    // A donut gets one series colour per slice, and answers to the pointer.
+    const donut = chart("doughnut", ["a", "b"], [{ data: [1, 2] }]);
+    plugin.beforeUpdate(donut);
+    expect((donut.data.datasets[0] as any).backgroundColor).toEqual(["#0a84ff", "#ff9f0a"]);
+    expect(donut.config.options.interaction).toEqual({ mode: "nearest", intersect: true });
+
+    // A dataset the view coloured itself is left exactly as it is.
+    const own = chart("bar", ["a"], [{ data: [1], backgroundColor: "red", borderColor: "blue" }]);
+    plugin.beforeUpdate(own);
+    expect((own.data.datasets[0] as any).backgroundColor).toBe("red");
+    expect((own.data.datasets[0] as any).borderColor).toBe("blue");
+  });
+
+  test("a missing series variable never hands a canvas an unparseable colour", () => {
+    const { stops, chart, plugin } = runChartTheme();
+    const line = chart("line", ["a"], [{ data: [1] }]);
+    expect(() => plugin.beforeUpdate(line)).not.toThrow();
+    const dataset = line.data.datasets[0] as any;
+    // Falls back to the themed border, so the line is still there rather than invisible.
+    expect(dataset.borderColor).toBe("#8e8e93");
+    expect(() => dataset.backgroundColor({ chart: line, dataset })).not.toThrow();
+    // Still a real colour, so the chart is drawn rather than aborting the frame.
+    expect(stops).toEqual(["rgba(142, 142, 147, 0.3)", "rgba(142, 142, 147, 0)"]);
+  });
+
+  test("reduce motion turns the chart's animation off", () => {
+    const { defaults } = runChartTheme({ reduced: true });
+    expect(defaults.animation).toBe(false);
+  });
+
+  test("the presets draw with the real Chart.js, animation on", async () => {
+    // The page's own globals, borrowed for one test: the library is the bundled
+    // build, a canvas is a stub, and the animation frames are pumped by hand.
+    const g = globalThis as any;
+    const saved = new Map<string, unknown>();
+    for (const key of [
+      "window",
+      "document",
+      "getComputedStyle",
+      "matchMedia",
+      "navigator",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+      "devicePixelRatio",
+      "MutationObserver",
+      "ResizeObserver",
+      "Chart",
+    ])
+      saved.set(key, g[key]);
+    const realNow = Date.now;
+    let clock = realNow();
+
+    const frames: ((at: number) => void)[] = [];
+    const stops: string[] = [];
+    const vars: Record<string, string> = {
+      "--rc-text": "#ededed",
+      "--rc-separator": "#ffffff0f",
+      "--rc-muted": "#a1a1a1",
+      "--rc-font": "sans-serif",
+      ...Object.fromEntries(
+        [1, 2, 3, 4, 5, 6, 7, 8].map((i) => [
+          `--rc-series-${i}`,
+          ["#0a84ff", "#ff9f0a", "#30d158", "#ff453a", "#bf5af2", "#40c8e0", "#ffd60a", "#ff375f"][i - 1]!,
+        ]),
+      ),
+    };
+    const makeCanvas = () => {
+      const ctx: any = {
+        canvas: null,
+        createLinearGradient: () => ({
+          addColorStop: (_at: number, colour: string) => {
+            // A canvas rejects a colour it cannot parse, so the preset must not hint one.
+            expect(colour).toMatch(/^(rgba?\()/);
+            stops.push(colour);
+          },
+        }),
+        measureText: (text: string) => ({ width: String(text).length * 6 }),
+        lineWidth: 1,
+      };
+      for (const method of [
+        "save",
+        "restore",
+        "beginPath",
+        "closePath",
+        "moveTo",
+        "lineTo",
+        "bezierCurveTo",
+        "quadraticCurveTo",
+        "arc",
+        "rect",
+        "roundRect",
+        "clip",
+        "fill",
+        "stroke",
+        "fillRect",
+        "strokeRect",
+        "clearRect",
+        "translate",
+        "rotate",
+        "scale",
+        "setTransform",
+        "resetTransform",
+        "setLineDash",
+        "fillText",
+        "strokeText",
+        "drawImage",
+        "putImageData",
+      ])
+        ctx[method] = () => undefined;
+      ctx.isPointInPath = () => false;
+      ctx.isPointInStroke = () => false;
+      ctx.getImageData = () => ({ data: [] });
+      ctx.createPattern = () => null;
+      const parent = {
+        style: {},
+        ownerDocument: { defaultView: g },
+        getBoundingClientRect: () => ({ width: 720, height: 180, top: 0, left: 0, right: 720, bottom: 180 }),
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      const canvas: any = {
+        width: 300,
+        height: 150,
+        style: {},
+        clientWidth: 720,
+        clientHeight: 180,
+        getAttribute: () => null,
+        setAttribute: () => undefined,
+        removeAttribute: () => undefined,
+        hasAttribute: () => false,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        getContext: () => ctx,
+        parentNode: parent,
+        ownerDocument: { defaultView: g },
+      };
+      ctx.canvas = canvas;
+      return canvas;
+    };
+    const canvases = [makeCanvas(), makeCanvas()];
+    const empty = () => ({
+      style: {},
+      appendChild: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      setAttribute: () => undefined,
+    });
+
+    try {
+      g.window = g;
+      g.document = {
+        documentElement: {},
+        createElement: (name: string) => (name === "canvas" ? makeCanvas() : empty()),
+        createElementNS: empty,
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      g.navigator = { userAgent: "bun" };
+      g.getComputedStyle = () => ({
+        colorScheme: "dark",
+        display: "block",
+        boxSizing: "border-box",
+        position: "relative",
+        maxWidth: "none",
+        maxHeight: "none",
+        getPropertyValue: (name: string) => vars[name] ?? (name.includes("max") ? "none" : "0px"),
+      });
+      g.matchMedia = () => ({ matches: false, addEventListener: () => undefined });
+      g.requestAnimationFrame = (fn: (at: number) => void) => frames.push(fn);
+      g.cancelAnimationFrame = () => undefined;
+      g.devicePixelRatio = 1;
+      g.MutationObserver = class {
+        observe() {}
+        disconnect() {}
+      };
+      g.ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      };
+      // The animator reads the clock, so a pumped frame has to move it on.
+      Date.now = () => clock;
+
+      const library = await Bun.file(
+        new URL("../../node_modules/chart.js/dist/chart.umd.js", import.meta.url),
+      ).text();
+      new Function(library)();
+      const Chart = g.Chart;
+      expect(typeof Chart).toBe("function");
+
+      new Function(
+        "window",
+        "document",
+        "getComputedStyle",
+        "matchMedia",
+        "requestAnimationFrame",
+        "Chart",
+        CHART_THEME_SCRIPT,
+      )(g, g.document, g.getComputedStyle, g.matchMedia, g.requestAnimationFrame, Chart);
+
+      const line: any = new Chart(canvases[0], {
+        type: "line",
+        data: { labels: ["Mon", "Tue", "Wed"], datasets: [{ label: "Runs", data: [1, 2, 3] }] },
+      });
+      const donut: any = new Chart(canvases[1], {
+        type: "doughnut",
+        data: { labels: ["a", "b"], datasets: [{ data: [1, 2] }] },
+      });
+
+      // A stub canvas is not in a document, so tell Chart.js it has a size and is
+      // attached; from here the pipeline is the page's own.
+      for (const chart of [line, donut]) {
+        chart.attached = true;
+        chart.resize(720, 180);
+        chart.update();
+      }
+
+      // Pump the first frames: a colour tween with no interpolator throws right here.
+      for (let at = 0; at < 40 && frames.length; at++) {
+        clock += 20;
+        frames.shift()?.(clock);
+      }
+
+      // Both charts laid out and animated rather than stopping on their first frame.
+      expect(line.chartArea?.width ?? 0).toBeGreaterThan(100);
+      expect(donut.chartArea?.width ?? 0).toBeGreaterThan(100);
+      // The line was filled with a gradient of its own colour.
+      expect(stops.length).toBeGreaterThan(0);
+      expect(stops[0]).toBe("rgba(10, 132, 255, 0.3)");
+      line.destroy();
+      donut.destroy();
+    } finally {
+      Date.now = realNow;
+      for (const [key, value] of saved) {
+        if (value === undefined) delete g[key];
+        else g[key] = value;
+      }
+    }
+  });
+
+  test("the chart theme follows the variables, in both themes", () => {
+    expect(CHART_THEME_SCRIPT).toContain("--rc-series-");
+    expect(CHART_THEME_SCRIPT).toContain("prefers-reduced-motion");
+    expect(CHART_THEME_SCRIPT).toContain("usePointStyle");
+    expect(CHART_THEME_SCRIPT).toContain("hoverBackgroundColor");
+    expect(CHART_THEME_SCRIPT).toContain("createLinearGradient");
+    expect(CHART_THEME_SCRIPT).toContain("__rcThemeCharts");
+    // No raw colour but the tooltip's ink over --rc-text and the neutral a chart
+    // falls back to when a variable is missing: everything else is a variable.
+    expect(CHART_THEME_SCRIPT.replace(/"#000"|"#fff"|"#8e8e93"/g, "")).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(() => new Function(CHART_THEME_SCRIPT)).not.toThrow();
+  });
+
+  test("a cell is a measurement only when it is one", () => {
+    const { rcMeasure } = kitHelpers();
+    expect(rcMeasure("1,234")).toEqual({ value: 1234, unit: "" });
+    expect(rcMeasure("41 s")).toEqual({ value: 41, unit: "s" });
+    expect(rcMeasure("12.5%")).toEqual({ value: 12.5, unit: "%" });
+    expect(rcMeasure("\u22123")).toEqual({ value: -3, unit: "" });
+    for (const not of ["n/a", "", "2026-11-02", "beta", "1 m 4 s"]) expect(rcMeasure(not)).toBeNull();
+  });
+
+  test("a sortable column compares numbers, then text, and falls back by column", () => {
+    const { rcCompare } = kitHelpers();
+    expect(rcCompare("9 s", "10 s", "number")).toBeLessThan(0);
+    expect(rcCompare("1,234", "999", "number")).toBeGreaterThan(0);
+    // A column with a non-measurement in it still sorts, by the locale's order.
+    expect(rcCompare("v1.9", "v1.10", "number")).toBeLessThan(0);
+    expect(rcCompare("Beta", "alpha", "text")).toBeGreaterThan(0);
+    expect(rcCompare("7 s", "alpha", "number")).toBeLessThan(0);
+    expect(rcCompare("same", "same", "number")).toBe(0);
+  });
+
+  test("a sparkline reads its numbers from the attribute, commas or spaces", () => {
+    const { rcSparkValues } = kitHelpers();
+    expect(rcSparkValues("1,4,2,8")).toEqual([1, 4, 2, 8]);
+    expect(rcSparkValues("1 4 2")).toEqual([1, 4, 2]);
+    expect(rcSparkValues("3, n/a, 5")).toEqual([3, 5]);
+    expect(rcSparkValues("")).toEqual([]);
+  });
+
+  test("a sparkline spans its box, flat when every value matches", () => {
+    const { rcSparkPoints } = kitHelpers();
+    const points = rcSparkPoints([0, 5, 10], 100, 30);
+    const [first, middle, last] = points.split(" ").map((p) => p.split(",").map(Number));
+    expect(first?.[0]).toBe(2);
+    expect(last?.[0]).toBe(98);
+    // The lowest value is at the bottom, the highest at the top, y grows down.
+    expect(first?.[1]).toBe(28);
+    expect(last?.[1]).toBe(2);
+    expect(middle?.[1]).toBe(15);
+    expect(rcSparkPoints([3, 3], 100, 30)).toBe("2,15 98,15");
   });
 
   test("a view sends at most one message every 2 seconds", () => {

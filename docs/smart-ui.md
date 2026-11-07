@@ -92,6 +92,11 @@ is not a blank "Building an interactive view…" for a whole turn.
 - When the fence closes, the finished page replaces the preview in the same
   frame slot: Chart.js inlined, the script run once, the height kept. Anything
   typed into the preview is lost with it, since a preview runs no script.
+- A block that names `rustcode-lib:chart.js` is **not** previewed: a preview
+  runs no script and carries no library, so its canvases could only be empty
+  boxes where the chart is the content. It shows the one-line "Building an
+  interactive view…" until its finished page is ready (`previewable`). A
+  canvas in any other preview is a quiet box of the same size, not a blank one.
 
 The limits and the sandbox are the same for both: 64 KB, 5,000 elements, an
 opaque origin, and the policy in [Security model](#security-model).
@@ -109,13 +114,35 @@ in both.
 | Layout classes | `.rc-row` and `.rc-col` (flex row / column, wrapping), `.rc-grid` (auto-fit grid), `.rc-gap-1` … `.rc-gap-4`, `.rc-muted`, `.rc-mono`, `.rc-num` (tabular figures, right-aligned in tables), `.rc-card` (a quiet inner group, not an outer frame), `.rc-scroll` (bounded, scrolls inside). |
 | Kit: text and numbers | `.rc-title`, `.rc-lead` (the finding, muted), `.rc-label`; `.rc-stats` (auto-fit grid) of `.rc-stat` with `.rc-stat-value`, `.rc-stat-label`, `.rc-stat-note`. |
 | Kit: status | `.rc-badge`, `.rc-callout`, tinted by `.rc-ok`, `.rc-warn`, `.rc-bad`, `.rc-info` (also on a stat, a bar, a progress bar or a line in `.rc-term`); `.rc-progress` around `<span style="width:72%">`. |
-| Kit: bars, tables, lists | `.rc-bars` of `<div class="rc-bar"><span>Name</span><i style="width:40%"></i><b>40</b></div>`, a bar chart with no canvas; `table.rc-table` (its header sticks inside `.rc-scroll`; elsewhere the runtime wraps it in a box that scrolls sideways on a narrow window); `.rc-list` of `.rc-item`. |
+| Kit: bars, tables, lists | `.rc-bars` of `<div class="rc-bar" data-rc-tip="7 failed"><span>Name</span><i style="width:40%"></i><b>40</b></div>`, a bar chart with no canvas; each bar highlights on hover and shows its `data-rc-tip`, and `table.rc-table[data-rc-sort]` sorts on a heading (below); `table.rc-table` keeps its header when it is inside `.rc-scroll`, and elsewhere the runtime wraps it in a box that scrolls sideways on a narrow window; `.rc-list` of `.rc-item`. |
 | Kit: traces and folding | `.rc-steps` of `li.rc-step` with `.rc-done`, `.rc-active`, `.rc-failed` or `.rc-todo`; `details.rc-details` with a chevron drawn in CSS, `.rc-tree` for nested ones, `.rc-file` rows; `.rc-term`, a terminal block. |
 | Kit: actions and citations | `.rc-chip`, a pill follow-up button; `.rc-tabs`; `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`, opening on hover and focus inside the page's width. |
-| Kit: behaviour, no script | One delegated listener: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check; on a `<form data-rc-send="text">`, or on a control inside one, the form's named fields are sent after the text as `name: value` lines (a form sends when submitted, never on a click into it, and never navigates). `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
+| Kit: behaviour, no script | One delegated listener: click, Enter or Space on a `th` of `table.rc-table[data-rc-sort]` sorts that column in place (numbers by value, otherwise the locale's collation; `data-rc-sort="text"` on a `th` forces text), `aria-sort` marks the column and its direction, and the rows are moved, not rebuilt, so ids and controls in them survive. Every `.rc-spark[data-values="1,4,2,8"]` gets an inline SVG line from its numbers (`.rc-spark-line`, `.rc-spark-area`), once, and again after a streamed update. Then: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check; on a `<form data-rc-send="text">`, or on a control inside one, the form's named fields are sent after the text as `name: value` lines (a form sends when submitted, never on a click into it, and never navigates). `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
 | Height | The page reports its content, not the document: the body's height or its `scrollHeight`, plus its margins. The body is `position: relative`, so that also counts what is absolutely placed in it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
-| Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colors), so agents set no colors. A page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. System color keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
+| Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colours), so agents set no colours; a page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. Tooltips appear on hover with a dot in each series' own colour, a bar under the pointer is a step lighter, the legend toggles a series on click, and the chart sizes to its box. A line is filled from its colour down (`.rc-chart`); under `prefers-reduced-motion` animation is off. Colour changes are applied at once rather than tweened: Chart.js tweens colours through interpolators keyed by type, and a canvas gradient is an object with none, so the animator threw `this._fn is not a function` on its first tick and the chart never drew. System colour keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
 | `window.rustcode` | `send(text, context?)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X"; `context`, a JSON-serialisable object, follows the text as a fenced `json` block, so a view sends values back structured rather than in prose. The whole message is capped at 2,000 characters, and it works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
+
+### Charts, presets
+
+Chart.js draws on a canvas, so the DOM's figures are tabular (`.rc-num`,
+`.rc-table`, `.rc-stat-value`) and a canvas's are not; a number the user scans
+belongs in text beside the chart. The four shapes agents ask for, all themed
+without a line of CSS:
+
+- **Line with an area fill** is the default: `type: "line"`, a dataset per
+  series, and the runtime fills it with a gradient of its own colour.
+- **Stacked bar**: `type: "bar"` with
+  `options: { scales: { x: { stacked: true }, y: { stacked: true } } }`.
+- **Donut with a centre total**: `type: "doughnut"`, and inside the same
+  `.rc-chart` a `<div class="rc-donut-total"><b>128</b><span>runs</span></div>`,
+  positioned over the middle and drawn in the app's type (no script).
+- **Sparkline**: `<span class="rc-spark" data-values="1,4,2,8"></span>`, no
+  Chart.js at all, sized 64 x 20 px unless the span sets `width` and `height`.
+
+Interaction follows the pointer without a script, and is never the only way to
+read a value: the table row under the pointer is filled, a bar shows its
+`data-rc-tip`, a sparkline is a picture of the numbers in its attribute, and a
+sortable table keeps every row's text in place.
 
 ### Sending values back
 
@@ -189,21 +216,26 @@ With it off or unsupported the text is exactly what it was;
 `smart_ui_off_and_unsupported_prompts_keep_their_exact_text` holds it byte for
 byte against `rustcode/engine/src/tools/testdata/smart_ui_off_prompts.txt`. The
 skill's `description` is listed in every client's prompt, so it stays short: it
-gained forms and lost a much longer sentence about when to reach for a view
-(250 bytes before, 204 now).
+gained forms and charts, and lost a longer sentence about when to reach for a
+view (250 bytes before, 197 now).
 
 The `smart-ui` skill is built into the engine
-(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,096 estimated tokens
-with its front matter; a test keeps it under 1,100) and is
+(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,552 estimated tokens
+with its front matter; a test keeps it under 1,600) and is
 listed with the other skills as `<built-in>/smart-ui`. It holds the rule, the
-format, limits, the kit with one short example per family and design guidance:
-one view per question, no outer card,
+pick-by-question table (a trend is a line chart, parts of a whole a stacked bar
+or donut, a ranking `.rc-bars`, exact values a table, a headline number
+`.rc-stats`, and comparisons stay a table), the format, limits, the kit with
+one short example per family, a Chart.js section with the four presets and what
+a canvas cannot do, and design guidance: one view per question, no outer card,
 border, background or repeated title, sized for a 320 px column, accessible
-controls. A thread that built a weather chart (2026-11-02, 7 rounds, 143 s)
-spent 3 of its 4 previews on a blank Chart.js canvas because the skill then
-said to use system colors; the themed `Chart.defaults` remove that step. A skill named
-`smart-ui` in any skill root overrides it, and `disabled_skills` can turn it
-off.
+controls. It grew from 1,096 tokens when the pick rule and the chart section
+were added; it is read once per view, not on every turn. A thread that built a
+weather chart (2026-11-02, 7 rounds, 143 s) spent 3 of its 4 previews on a
+blank Chart.js canvas because the skill then said to use system colors; the
+themed `Chart.defaults` remove that step, and the presets say what a canvas
+cannot do. A skill named `smart-ui` in any skill root overrides it, and
+`disabled_skills` can turn it off.
 
 While the setting is off the app sends `smartUi = 0`. The root prompt then
 carries a one-line note instead (under 80 tokens): Smart UI exists but is off,
@@ -227,13 +259,15 @@ While the setting is off it carries the same off note as
 the root prompt, so the agent points at Settings › Chat instead of inventing a
 fence. A client that never advertised `smartUi` hears nothing about it.
 
-The block is 1,589 bytes, and a test caps it under 1,600. It was 1,597: saying
-style and script are optional, and that a form sends its fields, cost a few
-bytes and trimming the kit list paid for them. Dropping
-the `rustcode-viz` types pays for it: at visualization level 2 the whole
-`harness_instructions` text goes from 3,386 bytes / 849 tokens to 3,136 / 826 with
-Smart UI on, against 2,206 / 547 with no Smart UI and no viz taught. It is paid
-on every turn of every external thread, so the test in
+The block is 1,982 bytes, and a test caps it under 2,000. It was 1,589; the
+pick-by-question rule and the kit's chart, sparkline, sortable-table and hover
+pieces cost about 390, paid on every turn of every external thread, so it is
+written as tightly as the rule allows and the cap is a guard against drift.
+Dropping the `rustcode-viz` types paid for the earlier growth: at
+visualization level 2 the whole `harness_instructions` text goes from 3,386
+bytes / 849 tokens to 3,529 / 935 with Smart UI on (the pick rule is here
+because an external harness has no `use_skill` to read it from), against
+2,206 / 547 with no Smart UI and no viz taught. The test in
 `rustcode/engine/src/tools/tests.rs` caps the whole text at 4 KB.
 
 ## Agent preview (`smart_ui_preview`)
@@ -285,6 +319,9 @@ all. It reports:
   not a DOM);
 - a missing `<title>`, an unclosed `<script>` or `<style>`;
 - a `rustcode-lib:` name the app does not bundle (only `chart.js` is);
+- kit markup that does nothing as written: a `.rc-spark` without a
+  `data-values` of at least two numbers, or `data-rc-sort` on something that is
+  neither a table nor a heading;
 - what the page cannot do, with the line: network loads, `fetch`,
   `XMLHttpRequest`, sockets, storage, `document.write`, `@import`, `vh` units,
   and `CanvasText`/`AccentColor` inside a script (a canvas draws nothing with a
@@ -320,6 +357,11 @@ The host (`apps/desktop/src/ui/SmartUIView.tsx`, `src/smartui/host.ts`) runs
   frame per run lets the old one go.
 - A page out of sight for 30 s is torn down, and runs again when it comes back.
   The Stop button tears it down at once.
+- A page whose script throws is stopped with the reason in place of the view,
+  like any failure, so a broken view never sits on screen as blank space. The
+  runtime posts `error` for a `window.onerror` or an unhandled rejection, and
+  the app shows what it said alongside the source. If the bundled library
+  itself cannot be loaded, the view says so instead of guessing.
 - While the page fits the card, wheel events pass to the transcript, so
   scrolling over a card scrolls the chat.
 

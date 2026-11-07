@@ -22,7 +22,7 @@ import {
   SendGate,
   StreamPump,
 } from "../smartui/host";
-import { buildPage, buildStreamPage, pageTheme, usesChart, varsCss } from "../smartui/page";
+import { buildPage, buildStreamPage, pageTheme, previewable, usesChart, varsCss } from "../smartui/page";
 import {
   blockProblem,
   blockTitle,
@@ -122,7 +122,9 @@ export function SmartUIView({
   const halt = complete ? haltOf(haltKey) : undefined;
   const runnable = enabled && complete && !problem;
   // A view whose fence is still open, being read now: it is drawn as it arrives.
-  const streamable = enabled && !complete && streaming && source.trim().length > 0;
+  // One that names the chart library is not: a preview runs no script, so its
+  // canvases would be empty boxes, and the chart is the content (see `previewable`).
+  const streamable = enabled && !complete && streaming && source.trim().length > 0 && previewable(source);
   const latest = useRef(source);
   const pump = useRef<StreamPump | null>(null);
   // A preview that could not start waits for the finished view instead of retrying on every byte.
@@ -155,7 +157,19 @@ export function SmartUIView({
       setPage(next);
     };
     const token = frameToken();
-    const chart = usesChart(source) ? await chartSource() : undefined;
+    let chart: string | undefined;
+    if (usesChart(source)) {
+      try {
+        chart = await chartSource();
+      } catch (error) {
+        // Without the library every canvas stays blank with no reason on screen.
+        if (mine === attempt.current)
+          haltWith(
+            `The chart library could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        return;
+      }
+    }
     if (mine !== attempt.current) return;
     const html = buildPage(source, token, currentTheme(), chart);
     claimLive(
@@ -332,6 +346,13 @@ export function SmartUIView({
             void copyText(data.text);
           }
           break;
+        case "error": {
+          // A page that threw used to be left on screen, blank where its content should be.
+          const reason =
+            typeof data.message === "string" && data.message ? data.message : "its script failed";
+          haltWith(`The view's script failed: ${reason}`);
+          break;
+        }
       }
     };
     window.addEventListener("message", onMessage);
