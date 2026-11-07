@@ -209,7 +209,7 @@ function PlansSkeleton() {
           <div className="mb-2.5 flex min-h-7 items-center px-3 sm:px-4">
             <Skeleton className="h-3 w-24" />
           </div>
-          <div className="flex flex-col gap-4 rounded-xl border border-border-strong bg-surface-2/40 px-4 py-4">
+          <div className="flex flex-col gap-4 rounded-xl bg-surface px-4 py-4">
             {[0, 1].map((row) => (
               <div key={row} className="flex flex-col gap-1.5 px-0.5">
                 <div className="flex items-baseline justify-between gap-3">

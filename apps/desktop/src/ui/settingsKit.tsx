@@ -3,15 +3,16 @@
 // controls a row holds, and engine data loaded once the engine is ready.
 //
 // A page is a column of sections. A section is its name in `fg`, then one
-// card: `rounded-xl`, a 1px `border-strong` edge and a soft step over the page,
-// its rows divided by a hairline. A row is a title, a description, an optional
+// card: `rounded-xl` on a step of the page's own fill (`bg-surface`), its rows
+// divided by a hairline. A row is a title, a description, an optional
 // status line and a control at the right; its own container query stacks the
 // control under the text when the window is narrow, whatever the nav takes. A
 // row whose value differs from its default shows a reset button before the
 // control, on hover or keyboard focus.
 //
-// The controls are one shape — 32px high, `rounded-lg`, a thin border — so a
-// row of buttons, selects and choices reads as one family, not as pills.
+// The controls are one shape — 32px high, `rounded-lg`, a step of their own
+// over the card — so a row of buttons, selects and choices reads as one
+// family, not as pills.
 //
 // Groups and rows carry `data-setting` with their title, so the panel's search
 // can scroll to the row it found (Settings.tsx) and light it once.
@@ -84,9 +85,7 @@ export function Group({
   return (
     <section className="mb-8 scroll-mt-5" data-setting={typeof title === "string" ? title : undefined}>
       <SectionTitle title={title} action={action} />
-      <div className="divide-y divide-border overflow-hidden rounded-xl border border-border-strong bg-surface-2/40">
-        {children}
-      </div>
+      <div className="divide-y divide-border overflow-hidden rounded-xl bg-surface">{children}</div>
       {footer && <div className="mt-2 max-w-[70ch] px-3 text-caption text-fg-faint sm:px-4">{footer}</div>}
     </section>
   );
@@ -228,16 +227,16 @@ export function Row({
 // ---------------------------------------------------------------- controls
 
 /**
- * The field shape a row's control takes: 32px high, `rounded-lg`, a thin edge
- * and a soft step over the card, so it reads as a control and not as a block.
+ * The field shape a row's control takes: 32px high, `rounded-lg` and a step of
+ * its own over the card, so it reads as a control and not as a block.
  */
 export const fieldClass =
-  "h-8 rounded-lg border border-border-strong bg-surface-2/60 px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-surface-2 focus:bg-surface-2";
+  "h-8 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 
 /**
- * A labelled action in a row: the bordered default, `prominent` for the one
+ * A labelled action in a row: the filled default, `prominent` for the one
  * primary action, `danger` for a destructive one, `quiet` for one that rests
- * without an edge (a section header's "Add").
+ * without a fill (a section header's "Add").
  */
 export function Action({
   prominent,
@@ -262,10 +261,10 @@ export function Action({
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
           : danger
-            ? "border border-danger/30 text-danger enabled:hover:bg-danger/12"
+            ? "bg-danger/12 text-danger enabled:hover:bg-danger/18"
             : quiet
               ? "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg"
-              : "border border-border-strong bg-surface-2/60 text-fg enabled:hover:bg-surface-2 enabled:active:bg-surface-3",
+              : "bg-fill text-fg enabled:hover:bg-fill-strong enabled:active:bg-fill-strong",
         className,
       )}
       {...rest}
@@ -311,7 +310,7 @@ export function Select({
         aria-label={label}
         className={cx(
           fieldClass,
-          "inline-flex max-w-[260px] min-w-0 items-center gap-1.5 font-medium outline-none enabled:hover:bg-surface-2 disabled:opacity-40",
+          "inline-flex max-w-[260px] min-w-0 items-center gap-1.5 font-medium outline-none disabled:opacity-40",
           className,
         )}
       >
@@ -352,7 +351,7 @@ export function Select({
 }
 
 /**
- * Two to four exclusive choices: a track with a thin edge and the picked
+ * Two to four exclusive choices: a track one step over the card and the picked
  * segment on a step of its own, sliding there rather than jumping.
  */
 export function Choice<T extends string>({
@@ -386,7 +385,7 @@ export function Choice<T extends string>({
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex shrink-0 rounded-lg border border-border-strong p-1"
+      className="relative inline-flex shrink-0 rounded-lg bg-fill p-1"
     >
       {thumb && (
         <span
@@ -501,7 +500,7 @@ export function Loading({ error }: { error: string | null }) {
     // Where the page's list will be: a group card of rows, title and subtitle each.
     <section className="mb-8" role="status" aria-label="Loading">
       <Skeleton className="mx-3 mb-3 h-3 w-24 sm:mx-4" />
-      <div className="divide-y divide-border overflow-hidden rounded-xl border border-border-strong bg-surface-2/40">
+      <div className="divide-y divide-border overflow-hidden rounded-xl bg-surface">
         {[46, 62, 38, 54].map((w, i) => (
           <div key={i} className="flex min-h-12 items-center gap-4 px-4 py-3">
             <div className="flex flex-1 flex-col gap-1.5">
