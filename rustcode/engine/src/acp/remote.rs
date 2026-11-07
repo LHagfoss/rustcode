@@ -25,9 +25,9 @@ use super::session::{KnownTaskIds, SessionTurnState};
 use crate::app::AppState;
 use crate::controller::AgentUiEvent;
 #[cfg(unix)]
-use crate::harness::session::{ClientSink, ExternalSession, PermissionFuture};
+use crate::harness::session::PermissionFuture;
+use crate::harness::session::{ClientSink, ExternalSession};
 use crate::remote::SessionCloseReason;
-#[cfg(unix)]
 use crate::remote::harness::HarnessMirror;
 use rustcode_tasks::TaskEvent;
 
