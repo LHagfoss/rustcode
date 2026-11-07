@@ -28,7 +28,7 @@ import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
-import { type PendingSetup, pendingStatus } from "../state/setup";
+import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   dismissPendingSetup,
   refreshSessions,
@@ -623,26 +623,38 @@ export function ChatView() {
   // one frame that reads as no motion at all. The screen it keeps is the same picture — the same row,
   // in the same place, at rest — so the hand-over itself moves nothing; a harness slower than the
   // entry is already past it and takes the screen the moment its session exists.
-  const [arrived, setArrived] = useState(false);
+  const [arrived, setArrived] = useState(true);
   const shownSetup = useRef<PendingSetup | null>(null);
+  // The entry's clock belongs to the setup, not to its lifetime: it must not be stopped when the
+  // session exists, because that is the moment the hold begins. (Stopping it there — a cleanup on a
+  // `pending` dependency — is what left the chat on `Starting…` for good: the session, the sidebar
+  // row and the turn all arrived, and the screen that was waiting for the entry never let go.) A new
+  // setup, a retry or the view going away is what ends a clock.
+  const entryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   if (pending) shownSetup.current = pending;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new setup (a retry) starts its own entry
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the setup's id; its clock runs on after it
   useEffect(() => {
     if (!pending) return;
     setArrived(false);
+    clearTimeout(entryTimer.current);
     // Nothing to wait for where motion is off: the entry is instant, so the thread may be too.
-    const timer = setTimeout(() => setArrived(true), motionAllowed() ? PENDING_ENTRY_MS : 0);
-    return () => clearTimeout(timer);
+    entryTimer.current = setTimeout(() => setArrived(true), motionAllowed() ? PENDING_ENTRY_MS : 0);
   }, [pending?.id]);
+  useEffect(() => () => clearTimeout(entryTimer.current), []);
   // Which thread the setup became: the one selected as the setup went. A later selection (the reader
   // picking another thread in the sidebar) ends any hold at once, so the screen never keeps a thread
   // the reader has left.
   const became = useRef<string | null>(null);
   if (pending && !selectedId) became.current = null;
   if (!pending && selectedId && !became.current && shownSetup.current) became.current = selectedId;
-  // Held after its thread exists, until the entry has played. No thread, no hold: a dismissed or
-  // failed setup leaves nothing behind.
-  const held = !pending && thread && !arrived && became.current === selectedId ? shownSetup.current : null;
+  const held = heldSetup({
+    pending,
+    last: shownSetup.current,
+    became: became.current,
+    selectedId,
+    hasThread: !!thread,
+    arrived,
+  });
   const setup = pending ?? held;
   // A thread setting up owns the new-thread screen until its session exists: the chat keeps its
   // message and the composer sits at the foot, where the thread's own will be.

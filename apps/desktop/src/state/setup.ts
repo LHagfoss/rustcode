@@ -75,6 +75,32 @@ export function dismissSetup(): null {
   return null;
 }
 
+/**
+ * The setup whose screen still owns the chat after its own thread exists. A new-thread message arrives
+ * over `entryMs` (`rc-send-in`), and a session can exist in a single frame, so the thread may not take
+ * the screen over before that entry has played; the screen it keeps draws the same row, in the same
+ * place, at rest, so the hand-over moves nothing. Nothing is held without a thread (a failed or
+ * dismissed setup leaves nothing behind), after the entry has played, or for a thread the reader
+ * picked instead of the one the setup became — a hold that outlived those would leave the chat on the
+ * starting screen with the thread running behind it. Pure, so the tests drive every one of them.
+ */
+export function heldSetup(args: {
+  /** The setup that is still being made, if any: it owns the screen itself. */
+  pending: PendingSetup | null;
+  /** The last setup the screen drew. */
+  last: PendingSetup | null;
+  /** The thread the setup became, once its session existed. */
+  became: string | null;
+  selectedId: string | null;
+  /** Whether the selected thread exists at all. */
+  hasThread: boolean;
+  /** Whether the message's entry has played. */
+  arrived: boolean;
+}): PendingSetup | null {
+  if (args.pending || !args.last || !args.hasThread || args.arrived) return null;
+  return args.became === args.selectedId ? args.last : null;
+}
+
 /** The row a setup takes in the list, in the shape the list places rows by. */
 export function pendingSummary(pending: PendingSetup): SessionSummary {
   return {
