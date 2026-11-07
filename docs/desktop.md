@@ -358,13 +358,17 @@ composer's keys stay outside the table.
 - **Settings › Statistics.** What the local data store recorded of every
   turn, by harness and model and by thread: `_rustcode/data/usage`
   (`engine/src/acp/data.rs`) read three times, once `group_by=model`, once
-  `group_by=thread` and once `group_by=day`. A thread's total includes the
-  threads it started, from the parent recorded in its metadata or the link
-  book, so delegated work is counted once; a parent known only by title is
-  listed on its own and says so. Parents ride on the usage rows from the
-  store, along with each thread's model so its row can be priced; when a row
-  has no parent id, the link book that started it is the fallback, and an
-  older engine also falls back to the session list, which the page marks as
+  `group_by=thread` and once `group_by=day`, the last for the 30 UTC days it
+  charts (via `since`, so the store's row cap cannot hide recent days). A
+  thread's total includes the threads it started, from the parent recorded in
+  its metadata or the link book, so delegated work is counted once; a parent
+  known only by title is listed on its own and says so. Parents ride on the
+  usage rows from the store, along with the harness and model its turns share
+  (`model_harness`/`model`, present only when every turn ran the same pair) so
+  its row can be priced; a thread that switched harness or model is not
+  estimated, since one rate would be wrong for the other turns. When a row has
+  no parent id, the link book that started it is the fallback, and an older
+  engine also falls back to the session list, which the page marks as
   incomplete if it was capped or missing threads. Tokens stay blank where a
   harness reported none, and each token column marks the turns that reported
   no value for it rather than treating them as zero. A read truncated at the
@@ -378,10 +382,11 @@ composer's keys stay outside the table.
   reported number always wins and is never altered; the headline total adds
   each row's reported cost or its estimate, never both, and shows the
   reported and estimated parts beneath it, with `≈` marking anything partly
-  estimated and `unknown` (never `$0`) where neither number exists. Estimates
-  are list prices, not necessarily what a subscription bills. **Cost by
-  model** draws the same numbers as bars, and **Last 30 days** charts turns
-  per day. The CLI's `rustcode usage` stays reported-only.
+  estimated and `unknown` (never `$0`) where neither number exists. A reported
+  row still counts the turns that reported no cost as unknown. Estimates are
+  list prices, not necessarily what a subscription bills. **Cost by model**
+  draws the same numbers as bars, and **Last 30 days** charts turns per day.
+  The CLI's `rustcode usage` stays reported-only.
 - **Settings › Advanced › Record request bodies.** The two payload-capture
   switches (`docs/data-store.md` › Captured payloads), off by default:
   *Provider requests (built-in harness)* for the built-in harness's request

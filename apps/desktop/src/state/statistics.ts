@@ -5,7 +5,10 @@
 // threads it started and every thread is counted once. Tokens and cost a
 // harness never reported stay absent; a thread's cost is the USD its harness
 // reported or, where it reported none, the list-price estimate
-// (`state/pricing.ts`), with the reported and estimated parts kept apart.
+// (`state/pricing.ts`), with the reported and estimated parts kept apart. A
+// thread is estimated only when all its turns ran one harness and model
+// (`model_harness`/`model` on the row); otherwise one row's cache convention
+// and rate would be applied to turns that never used them.
 //
 // Pure (no React, no store at runtime), so the page and its tests share one
 // answer.
@@ -166,6 +169,15 @@ export function threadReport(
 ): ThreadReport {
   const rows = new Map<string, UsageRow>();
   for (const row of report.rows) if (row.thread) rows.set(row.thread, row);
+  // A thread row is priceable only when all its turns agreed on one harness
+  // and model; `model_harness` is the store's answer to that, and its absence
+  // leaves the row unestimated rather than guessing from the display harness.
+  const costOfThread = (row: UsageRow, totals: UsageTotals): CostTotals =>
+    costOf({
+      harness: row.modelHarness ?? "",
+      model: row.modelHarness ? row.model : undefined,
+      totals,
+    });
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const parentsFromStore = report.parentsReported;
 
@@ -225,7 +237,7 @@ export function threadReport(
     const own = totalsOf(row);
     let total = own;
     let delegates = 0;
-    let cost = costOf({ harness: row.harness, model: row.model, totals: own });
+    let cost = costOfThread(row, own);
     for (const child of children.get(id) ?? []) {
       const below = visit(child);
       total = addTotals(total, below.total);
@@ -251,7 +263,7 @@ export function threadReport(
         project: row.project || session?.cwd,
         own,
         total: answer.total,
-        ownCost: costOf({ harness: row.harness, model: row.model, totals: own }),
+        ownCost: costOfThread(row, own),
         cost: answer.cost,
         delegateCount: answer.delegates,
         unlinked: titleOnly.has(id),

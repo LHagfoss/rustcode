@@ -856,6 +856,8 @@ function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
           project: thread.cwd,
           harness: thread.harness,
           model: thread.model,
+          // The mock's turns all run the thread's own harness and model.
+          model_harness: thread.harness,
           parent_id: thread.parent?.id ?? null,
           parent_title: thread.parent?.title ?? null,
         };

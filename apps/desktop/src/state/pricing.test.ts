@@ -9,9 +9,11 @@ import {
   addCost,
   bestCost,
   type CostInput,
+  costLine,
   costOf,
   emptyCost,
   estimateUsd,
+  formatCost,
   normalize,
   PRICE_DATE,
   priceOf,
@@ -162,7 +164,7 @@ describe("an estimate never prices raw input_tokens", () => {
 
 describe("a row's best known cost", () => {
   const spent = (
-    over: Partial<UsageCounts> & { cost?: number; turns?: number },
+    over: Partial<UsageCounts> & { cost?: number; turns?: number; turnsWithoutCost?: number },
     harness = "codex",
     model: string | undefined = "gpt-6-luna",
   ): CostInput => ({
@@ -198,6 +200,46 @@ describe("a row's best known cost", () => {
 
   test("a thread row with no model falls back to unknown", () => {
     expect(bestCost(spent({ input: 1_000, output: 10 }, "codex", undefined)).source).toBe("unknown");
+  });
+
+  test("a reported row still counts the turns that reported no cost", () => {
+    const row = spent({
+      input: 1_000,
+      output: 100,
+      cost: 11.55,
+      turns: 192,
+      turnsWithoutCost: 31,
+    });
+    expect(costOf(row)).toEqual({ usd: 11.55, reportedUsd: 11.55, unknownTurns: 31 });
+    // The headline, the table tooltip and a thread row all read this.
+    expect(costLine(costOf(row))).toBe("$11.55 reported, 31 turns unknown");
+  });
+
+  test("an estimated row prices every turn it has, so none is unknown", () => {
+    const row = spent({
+      input: 1_000_000,
+      cached: 0,
+      output: 0,
+      turns: 5,
+      turnsWithoutCost: 5,
+    });
+    const cost = costOf(row);
+    expect(cost.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(cost.unknownTurns).toBe(0);
+  });
+
+  test("a thread's cost line says which number it is", () => {
+    expect(costLine({ usd: 2.5, reportedUsd: 2.5, unknownTurns: 0 })).toBe("$2.50 reported");
+    expect(costLine({ usd: 0.1, estimatedUsd: 0.1, unknownTurns: 0 })).toBe("≈$0.10 estimated");
+    expect(costLine({ usd: 2.6, reportedUsd: 2.5, estimatedUsd: 0.1, unknownTurns: 0 })).toBe(
+      "≈$2.60, part estimated",
+    );
+    expect(costLine({ unknownTurns: 4 })).toBe("cost unknown");
+    expect(costLine({ usd: 1.2, estimatedUsd: 1.2, unknownTurns: 3 })).toBe(
+      "≈$1.20 estimated, 3 turns unknown",
+    );
+    expect(formatCost(0.001)).toBe("<$0.01");
+    expect(formatCost(undefined)).toBe("unknown");
   });
 
   test("the roll-up splits the parts and adds each row only once", () => {

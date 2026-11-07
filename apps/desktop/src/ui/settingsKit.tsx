@@ -87,7 +87,7 @@ export function Group({
       <div className="divide-y divide-border overflow-hidden rounded-xl border border-border-strong bg-surface-2/40">
         {children}
       </div>
-      {footer && <p className="mt-2 max-w-[70ch] px-3 text-caption text-fg-faint sm:px-4">{footer}</p>}
+      {footer && <div className="mt-2 max-w-[70ch] px-3 text-caption text-fg-faint sm:px-4">{footer}</div>}
     </section>
   );
 }

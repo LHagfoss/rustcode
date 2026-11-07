@@ -17,7 +17,9 @@ import {
   bestCost,
   type CostInput,
   type CostTotals,
+  costLine,
   costOf,
+  formatCost,
   PRICE_DATE,
   priceOf,
   rollUpCosts,
@@ -33,19 +35,33 @@ import {
 import { useApp } from "../state/store";
 import { formatTokens as compactTokens } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
-import { Spinner } from "./primitives";
+import { cx, Spinner } from "./primitives";
 import { Action, Group, Loading, Row, useEngineData } from "./settingsKit";
 
 /** How many top-level threads the page draws before Show all. */
 const THREAD_LIMIT = 10;
 
+/** The daily chart's window, today and the 29 days before it. */
+const DAY_WINDOW = 30;
+
 /** The cost table's token columns that step out when its card is narrow. */
 const NARROW_COLUMN = "@max-[36rem]/usage:hidden";
 
+const DAY_MS = 86_400_000;
+
+/** `days` UTC days before today, as the store's `date(started_at)` writes it. */
+function utcDaysAgo(days: number): string {
+  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  return new Date(today - days * DAY_MS).toISOString().slice(0, 10);
+}
+
 export function StatisticsPage() {
+  const since = utcDaysAgo(DAY_WINDOW - 1);
   const models = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "model" });
   const threads = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "thread" });
-  const days = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day" });
+  // The window is asked for, not sliced from the store's 1,000-row cap: without
+  // `since`, a store with more than 1,000 days could lose the recent ones.
+  const days = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day", since });
   const sessions = useApp((s) => s.sessions);
   const sessionsCapped = useApp((s) => s.sessionsCapped);
   const links = useApp((s) => s.links.links);
@@ -86,7 +102,7 @@ export function StatisticsPage() {
     () => (threads.data ? threadReport(threads.data, sessions, links, sessionsCapped) : null),
     [threads.data, sessions, links, sessionsCapped],
   );
-  const columns = useMemo(() => lastDays(days.data?.rows ?? []), [days.data?.rows]);
+  const columns = useMemo(() => lastDays(days.data?.rows ?? [], since), [days.data?.rows, since]);
   const names = useMemo(() => harnessNames(harnesses), [harnesses]);
 
   if (!models.data || !threads.data || !rolled) return <Loading error={models.error ?? threads.error} />;
@@ -115,6 +131,15 @@ export function StatisticsPage() {
             {refreshing ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
           </Action>
         }
+        footer={
+          <UsageFootnote
+            totals={totals}
+            cost={cost}
+            truncated={models.data.truncated}
+            error={error}
+            dayError={days.error}
+          />
+        }
       >
         <div className="grid grid-cols-2 gap-x-6 gap-y-4 px-4 py-4">
           <Stat label="Cost" value={costValue(cost)} exact={costExact(cost)} note={costNote(cost)} />
@@ -140,45 +165,40 @@ export function StatisticsPage() {
           />
         </div>
       </Group>
-      <PageNote>
-        <UsageFootnote
-          totals={totals}
-          cost={cost}
-          truncated={models.data.truncated}
-          error={error}
-          dayError={days.error}
-        />
-      </PageNote>
 
       {groups.length > 0 && (
-        <Group title="Cost by model">
+        <Group
+          title="Cost by model"
+          footer={
+            <span className="block">
+              Bars compare each model's best known cost, relative to the costliest; ≈ marks an estimate at API
+              list prices on {PRICE_DATE}, and a row with neither number has no bar.
+            </span>
+          }
+        >
           <ModelCosts rows={modelCosts(groups)} names={names} />
         </Group>
       )}
-      {groups.length > 0 && (
-        <PageNote>
-          <span className="block">
-            Bars compare each model's best known cost, relative to the costliest; ≈ marks an estimate at API
-            list prices on {PRICE_DATE}, and a row with neither number has no bar.
-          </span>
-        </PageNote>
-      )}
 
       {turns > 0 && (
-        <Group title="Last 30 days">
+        <Group
+          title="Last 30 days"
+          footer={
+            days.data?.truncated ? (
+              <span className="block text-warning">
+                The day read stopped at its row cap; some days may be missing.
+              </span>
+            ) : undefined
+          }
+        >
           <TurnsChart columns={columns} />
         </Group>
       )}
 
       {groups.length > 0 && (
-        <Group title="By harness and model">
+        <Group title="By harness and model" footer={<UsageTableFootnote cost={cost} />}>
           <UsageTable groups={groups} names={names} costs={costsByHarness} />
         </Group>
-      )}
-      {groups.length > 0 && (
-        <PageNote>
-          <UsageTableFootnote cost={cost} />
-        </PageNote>
       )}
 
       {rolled.threads.length > 0 && (
@@ -189,6 +209,7 @@ export function StatisticsPage() {
               <Action onClick={() => setAll(!all)}>{all ? "Show fewer" : "Show all"}</Action>
             ) : undefined
           }
+          footer={<ThreadFootnote report={rolled} />}
         >
           {(all ? rolled.threads : rolled.threads.slice(0, THREAD_LIMIT)).map((thread) => (
             <ThreadRow
@@ -198,11 +219,6 @@ export function StatisticsPage() {
             />
           ))}
         </Group>
-      )}
-      {rolled.threads.length > 0 && (
-        <PageNote>
-          <ThreadFootnote report={rolled} />
-        </PageNote>
       )}
     </>
   );
@@ -249,12 +265,6 @@ function tokensLabel(count: number | undefined): string {
   return count === undefined ? "—" : compactTokens(count);
 }
 
-function formatCost(cost: number | undefined): string {
-  if (cost === undefined) return "unknown";
-  if (cost > 0 && cost < 0.01) return "<$0.01";
-  return `$${cost.toFixed(2)}`;
-}
-
 const exactUsd = (usd: number): string => `$${usd.toFixed(4)}`;
 
 /** A total's headline: ≈ when any part is estimated, `unknown` when nothing is. */
@@ -283,10 +293,7 @@ function costExact(cost: CostTotals): string {
     cost.reportedUsd !== undefined ? `${exactUsd(cost.reportedUsd)} reported` : "",
     cost.estimatedUsd !== undefined ? `${exactUsd(cost.estimatedUsd)} estimated` : "",
   ].filter(Boolean);
-  const left =
-    cost.unknownTurns > 0
-      ? `; ${cost.unknownTurns} turns with neither a reported cost nor a list price are left out`
-      : "";
+  const left = cost.unknownTurns > 0 ? `; ${cost.unknownTurns} turns reported no cost of their own` : "";
   return `${exactUsd(cost.usd)} USD: ${parts.join(" + ")}${left}. Estimates use API list prices on ${PRICE_DATE}, which is not necessarily what a subscription bills`;
 }
 
@@ -356,18 +363,23 @@ function ModelCosts({ rows, names }: { rows: ModelCost[]; names: Map<string, str
             <span className="w-2/5 min-w-0 truncate text-callout text-fg-muted">
               {row.model || "Unknown model"}
             </span>
-            <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-fill-subtle">
-              {row.usd !== undefined && (
+            {row.usd !== undefined ? (
+              <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-fill-subtle">
                 <span
-                  className={
-                    estimated
-                      ? "block h-full rounded-full bg-accent/45"
-                      : "block h-full rounded-full bg-accent"
-                  }
+                  className={cx(
+                    "block h-full rounded-full",
+                    estimated ? "bg-accent/45" : "bg-accent",
+                    // A tiny share still draws: a 4px minimum keeps it from
+                    // looking like an empty slot.
+                    row.usd > 0 && "min-w-[4px]",
+                  )}
                   style={{ width: `${width}%` }}
                 />
-              )}
-            </span>
+              </span>
+            ) : (
+              // No track for an unknown row: an empty bar would read as $0.
+              <span className="min-w-0 flex-1" />
+            )}
             <span
               className={
                 row.usd === undefined
@@ -588,7 +600,7 @@ function costTotalsTitle(cost: CostTotals): string {
     cost.reportedUsd !== undefined ? `${exactUsd(cost.reportedUsd)} reported` : "",
     cost.estimatedUsd !== undefined ? `${exactUsd(cost.estimatedUsd)} estimated` : "",
   ].filter(Boolean);
-  const left = cost.unknownTurns > 0 ? `; ${cost.unknownTurns} turns in rows with no price are left out` : "";
+  const left = cost.unknownTurns > 0 ? `; ${cost.unknownTurns} turns reported no cost` : "";
   return `${exactUsd(cost.usd)} USD: ${parts.join(" + ")}${left}`;
 }
 
@@ -601,23 +613,21 @@ function MissingMark({ label }: { label: string }) {
   );
 }
 
-const DAY_MS = 86_400_000;
-
 /** One column of Last 30 days: a UTC day the store grouped by, and its turns. */
 interface DayColumn {
   day: string;
   turns: number;
 }
 
-/** The last 30 UTC days, from the store's `date(started_at)`; a missing day is an empty slot. */
-function lastDays(rows: UsageRow[], count = 30): DayColumn[] {
+/** The queried window's UTC days, from the store's `date(started_at)`; a missing day is an empty slot. */
+function lastDays(rows: UsageRow[], since: string, count = DAY_WINDOW): DayColumn[] {
   const turnsByDay = new Map<string, number>();
   for (const row of rows) {
     if (row.day) turnsByDay.set(row.day, (turnsByDay.get(row.day) ?? 0) + row.turns);
   }
-  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  const start = Date.parse(`${since}T00:00:00Z`);
   return Array.from({ length: count }, (_, index) => {
-    const day = new Date(today - (count - 1 - index) * DAY_MS).toISOString().slice(0, 10);
+    const day = new Date(start + index * DAY_MS).toISOString().slice(0, 10);
     return { day, turns: turnsByDay.get(day) ?? 0 };
   });
 }
@@ -646,7 +656,7 @@ function TurnsChart({ columns }: { columns: DayColumn[] }) {
           <div
             key={column.day}
             className="flex h-full min-w-0 flex-1 items-end"
-            title={`${column.day}: ${column.turns} ${column.turns === 1 ? "turn" : "turns"}`}
+            title={`${shortDay(column.day)} (UTC): ${column.turns} ${column.turns === 1 ? "turn" : "turns"}`}
           >
             {column.turns > 0 && (
               <span
@@ -676,7 +686,6 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
     thread.total.turnsWithoutAnyTokens > 0
       ? `${thread.total.turnsWithoutAnyTokens} turns with missing counts`
       : "",
-    thread.cost.unknownTurns > 0 ? `${thread.cost.unknownTurns} turns with no cost known` : "",
     thread.unlinked ? "Parent recorded by title only; counted on its own" : "",
   ].filter(Boolean);
   return (
@@ -698,23 +707,11 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
           {tokensLabel(total)}
         </div>
         <div className="text-caption text-fg-faint tabular" title={costExact(thread.cost)}>
-          {threadCostLine(thread.cost)}
+          {costLine(thread.cost)}
         </div>
       </div>
     </Row>
   );
-}
-
-/** A thread's second line: which number it is, or that nothing is known. */
-function threadCostLine(cost: CostTotals): string {
-  if (cost.reportedUsd !== undefined && cost.estimatedUsd === undefined) {
-    return `${formatCost(cost.reportedUsd)} reported`;
-  }
-  if (cost.estimatedUsd !== undefined && cost.reportedUsd === undefined) {
-    return `≈${formatCost(cost.estimatedUsd)} estimated`;
-  }
-  if (cost.usd !== undefined) return `≈${formatCost(cost.usd)}, part estimated`;
-  return "cost unknown";
 }
 
 /** Which token columns are missing on some turns, with how many turns each. */
@@ -726,13 +723,6 @@ function missingColumns(totals: UsageTotals): string {
     [totals.turnsWithoutCacheWriteTokens, "cache write"],
   ].flatMap(([count, name]) => (Number(count) > 0 ? [`${name} on ${Number(count)}`] : []));
   return missing.length ? `: ${missing.join(", ")} turns` : "";
-}
-
-/** A group's foot, in the card's inset, so it can hold a disclosure (not a `p`). */
-function PageNote({ children }: { children: ReactNode }) {
-  return (
-    <div className="mt-2 max-w-[70ch] space-y-1 px-3 text-caption text-fg-faint sm:px-4">{children}</div>
-  );
 }
 
 /** The method behind a number, folded away: one sentence shows, the rest on demand. */
@@ -762,7 +752,7 @@ function UsageFootnote({
   dayError: string | null;
 }) {
   return (
-    <>
+    <div className="space-y-1">
       <span className="block">
         Every turn in this Mac's local data store; a blank count means no turn in that row reported it.
       </span>
@@ -784,7 +774,7 @@ function UsageFootnote({
         {totals.turnsWithoutCost > 0 && (
           <span className="block">
             {totals.turnsWithoutCost} of {totals.turns} turns reported no cost
-            {cost.unknownTurns > 0 ? `; ${cost.unknownTurns} of them could not be priced` : ""}.
+            {cost.unknownTurns > 0 ? `; ${cost.unknownTurns} have no cost we can show` : ""}.
           </span>
         )}
       </HowThisIsCounted>
@@ -795,14 +785,14 @@ function UsageFootnote({
       )}
       {error && <span className="block text-warning">Could not refresh: {error}</span>}
       {dayError && <span className="block text-warning">Could not read turns per day: {dayError}</span>}
-    </>
+    </div>
   );
 }
 
 /** How the cost column is priced, and what its marks mean. */
 function UsageTableFootnote({ cost }: { cost: CostTotals }) {
   return (
-    <>
+    <div className="space-y-1">
       <span className="block">
         A harness row totals its models; a * means not every turn in that row reported a count.
       </span>
@@ -817,19 +807,19 @@ function UsageTableFootnote({ cost }: { cost: CostTotals }) {
         </span>
         {cost.unknownTurns > 0 && (
           <span className="block">
-            {cost.unknownTurns} turns are unknown: their model has no list price here, or their harness's
-            token counts cannot be split.
+            {cost.unknownTurns} turns have no cost we can show: no turn-level cost was reported for them, or
+            their model has no list price here, or their harness's token counts cannot be split.
           </span>
         )}
         {cost.usd === undefined && <span className="block">No row here could be priced.</span>}
       </HowThisIsCounted>
-    </>
+    </div>
   );
 }
 
 function ThreadFootnote({ report }: { report: ThreadReport }) {
   return (
-    <>
+    <div className="space-y-1">
       <span className="block">
         Each thread is counted once: under the thread that started it, or on its own when that thread has no
         recorded turns.
@@ -837,8 +827,9 @@ function ThreadFootnote({ report }: { report: ThreadReport }) {
       <HowThisIsCounted>
         <span className="block">
           A parent's total includes its delegates at any depth; the number on the right is input and output
-          tokens, and cached tokens are not added to it. A thread's cost is its reported cost or its estimate,
-          rolled up the same way, so a parent can mix reported and estimated parts.
+          tokens, and cached tokens are not added to it. A thread's cost is its reported cost or, when every
+          turn ran one harness and model, its estimate, rolled up the same way; a thread that switched is
+          estimated only where a reported cost exists, so a parent can mix reported and estimated parts.
         </span>
         {report.unlinked > 0 && (
           <span className="block">
@@ -865,7 +856,7 @@ function ThreadFootnote({ report }: { report: ThreadReport }) {
           The thread read stopped at 1,000 groups; these totals cover only the threads it returned.
         </span>
       )}
-    </>
+    </div>
   );
 }
 

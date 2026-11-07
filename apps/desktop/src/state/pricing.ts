@@ -220,7 +220,7 @@ export interface CostTotals {
   reportedUsd?: number;
   /** The estimated part of `usd`. */
   estimatedUsd?: number;
-  /** Turns in rows with neither a reported cost nor a price, which `usd` leaves out. */
+  /** Turns with no cost known: a row with neither a reported cost nor a price, and the turns of a reported row that reported no cost. */
   unknownTurns: number;
 }
 
@@ -246,9 +246,13 @@ export function addCost(one: CostTotals, other: CostTotals): CostTotals {
 export function costOf(row: CostInput): CostTotals {
   const best = bestCost(row);
   if (best.source === "reported") {
-    return { usd: best.usd, reportedUsd: best.usd, unknownTurns: 0 };
+    // The row's total is the harness's number, but a turn that reported none
+    // of its own is still not known individually: count it rather than call it
+    // zero, or drop it from the headline.
+    return { usd: best.usd, reportedUsd: best.usd, unknownTurns: row.totals.turnsWithoutCost ?? 0 };
   }
   if (best.source === "estimated") {
+    // The estimate prices every turn in the row, so none is left unknown.
     return { usd: best.usd, estimatedUsd: best.usd, unknownTurns: 0 };
   }
   return { unknownTurns: row.totals.turns };
@@ -256,11 +260,34 @@ export function costOf(row: CostInput): CostTotals {
 
 /**
  * A report's cost, model row by model row: each row contributes its reported
- * cost or its estimate, never both, and the turns of rows with neither are
- * counted instead of being shown as $0.
+ * cost or its estimate, never both, and the turns a row cannot put a number on
+ * are counted instead of being shown as $0.
  */
 export function rollUpCosts(rows: readonly CostInput[]): CostTotals {
   let total = emptyCost();
   for (const row of rows) total = addCost(total, costOf(row));
   return total;
+}
+
+/** A USD amount as the page shows it; `<$0.01` for a tiny nonzero cost. */
+export function formatCost(cost: number | undefined): string {
+  if (cost === undefined) return "unknown";
+  if (cost > 0 && cost < 0.01) return "<$0.01";
+  return `$${cost.toFixed(2)}`;
+}
+
+/** A thread row's second line: which number its cost is, and the turns it leaves unknown. */
+export function costLine(cost: CostTotals): string {
+  const unknown =
+    cost.unknownTurns > 0
+      ? `, ${cost.unknownTurns} ${cost.unknownTurns === 1 ? "turn" : "turns"} unknown`
+      : "";
+  if (cost.reportedUsd !== undefined && cost.estimatedUsd === undefined) {
+    return `${formatCost(cost.reportedUsd)} reported${unknown}`;
+  }
+  if (cost.estimatedUsd !== undefined && cost.reportedUsd === undefined) {
+    return `≈${formatCost(cost.estimatedUsd)} estimated${unknown}`;
+  }
+  if (cost.usd !== undefined) return `≈${formatCost(cost.usd)}, part estimated${unknown}`;
+  return "cost unknown";
 }

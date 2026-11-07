@@ -487,6 +487,13 @@ export interface UsageTotals extends UsageCounts {
 export interface UsageRow extends UsageTotals {
   harness: string;
   model?: string;
+  /**
+   * A thread row's turns, when every one of them ran the same harness and
+   * model: the pair this row can be priced with. Absent when they disagree,
+   * because one model's rate and one harness's cache convention would then be
+   * applied to turns that did not use them.
+   */
+  modelHarness?: string;
   thread?: string;
   title?: string;
   project?: string;
@@ -550,6 +557,7 @@ export function parseUsageReport(result: Json | undefined): UsageReport {
         {
           harness: str(o.harness) ?? "unknown",
           model: str(o.model) || undefined,
+          modelHarness: str(o.model_harness) || undefined,
           thread: str(o.thread) || undefined,
           title: str(o.title) || undefined,
           project: str(o.project) || undefined,

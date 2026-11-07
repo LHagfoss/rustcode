@@ -475,12 +475,19 @@ pub fn usage_at(
         ),
         GroupBy::Day => ("date(t.started_at) AS day", "1"),
         GroupBy::Project => ("COALESCE(th.project, th.cwd, '') AS project", "1"),
-        // `threads` is joined on its primary key, so `th.model` is one value
-        // per group even though the group is only the thread id.
+        // A thread's display harness may be its latest one, but pricing needs
+        // the pair its turns actually ran. `model`/`model_harness` are present
+        // only when every turn shared one harness and model; otherwise a row
+        // with no reported cost stays unpriced rather than applying one rate
+        // to another model's turns.
         GroupBy::Thread => (
             "t.thread_id AS thread, th.title AS title, \
              COALESCE(th.project, th.cwd, '') AS project, COALESCE(th.harness, t.harness) AS harness, \
-             th.model AS model, th.parent_id AS parent_id, th.parent_title AS parent_title",
+             CASE WHEN COUNT(DISTINCT COALESCE(t.harness, '') || '/' || COALESCE(t.model, '')) = 1 \
+                  THEN MAX(t.model) END AS model, \
+             CASE WHEN COUNT(DISTINCT COALESCE(t.harness, '') || '/' || COALESCE(t.model, '')) = 1 \
+                  THEN MAX(t.harness) END AS model_harness, \
+             th.parent_id AS parent_id, th.parent_title AS parent_title",
             "1",
         ),
     };
@@ -2868,12 +2875,42 @@ mod tests {
         assert_eq!(first["thread"], "b");
         assert_eq!(first["title"], "Thread b");
         assert_eq!(first["project"], "/repo/b");
-        // The thread's model, so Settings › Statistics can price the row. The
-        // last turn written for it is claude-code's sonnet; `write_turn` keeps
-        // `threads.model` at the model the thread last ran.
-        assert_eq!(first["model"], "sonnet");
+        // The thread ran two harness/model pairs (codex/gpt-6-luna and
+        // claude-code/sonnet), so it has no single pair to price and the key
+        // stays NULL rather than naming the latest one.
+        assert!(first["model"].is_null(), "{first}");
+        assert!(first["model_harness"].is_null(), "{first}");
         assert_eq!(first["parent_id"], "a");
         assert_eq!(first["parent_title"], "Thread a");
+    }
+
+    #[test]
+    fn a_thread_is_priced_only_when_its_turns_share_one_harness_and_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = usage_store(dir.path());
+        let answer = usage_at(&path, None, GroupBy::Thread, None).unwrap();
+        let listed = rows(&answer);
+        let row = |id: &str| {
+            listed
+                .iter()
+                .find(|row| row["thread"] == id)
+                .unwrap_or_else(|| panic!("no row for {id} in {answer}"))
+        };
+
+        // "a" ran one turn, so its harness and model are the pair to price.
+        let single = row("a");
+        assert_eq!(single["model"], "gpt-6-luna", "{single}");
+        assert_eq!(single["model_harness"], "codex", "{single}");
+        // Its display harness still comes from `threads`/the latest turn.
+        assert_eq!(single["harness"], "codex", "{single}");
+
+        // "b" mixes codex/gpt-6-luna with claude-code/sonnet, so neither key
+        // is named: one rate would be wrong for the other harness's turns.
+        let mixed = row("b");
+        assert!(mixed["model"].is_null(), "{mixed}");
+        assert!(mixed["model_harness"].is_null(), "{mixed}");
+        // The display harness is unchanged (the store's latest one).
+        assert_eq!(mixed["harness"], "claude-code", "{mixed}");
     }
 
     #[test]
