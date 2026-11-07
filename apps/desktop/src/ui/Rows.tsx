@@ -51,9 +51,11 @@ import {
   type TranscriptItem,
   type TurnCompletion,
   thoughtHeadings,
+  wakeLine,
 } from "../state/thread";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
 import { type Waiting, waitingLabel, waitingTitle } from "../state/waiting";
+import { harnessId, wakeNotice } from "../state/wakeNotice";
 import { DiffView } from "./DiffView";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
@@ -91,9 +93,6 @@ export const UserRow = memo(function UserRow({
   const [open, setOpen] = useState(false);
   const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
   const markdown = useMemo(() => messageMarkdown(text), [text]);
-  // A turn the app woke the thread for (children finished, a child asks): a
-  // divider row like a compaction, never a message that reads as the user's.
-  const wakeLine = item.wake ? (item.text.split("\n")[0] ?? item.text) : null;
   const body = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
   useLayoutEffect(() => {
@@ -105,13 +104,9 @@ export const UserRow = memo(function UserRow({
   }, []);
   const attachments = item.attachments ?? [];
   const placeholders = attachments.some((a) => a.kind === "image") ? 0 : markers;
-  if (wakeLine) {
-    return (
-      <div title={item.text}>
-        <NoticeRow flat item={{ kind: "notice", id: item.id, text: wakeLine, tone: "info" }} />
-      </div>
-    );
-  }
+  // A turn the app woke the thread for (a delegate finished, or asks): a
+  // divider row like a compaction, never a message that reads as the user's.
+  if (item.wake) return <WakeRow text={item.text} flat />;
   return (
     <div className="group flex flex-col items-end">
       {(attachments.length > 0 || placeholders > 0) && (
@@ -646,6 +641,73 @@ export function HandoffRow({ item }: { item: Item<"handoff"> }) {
       <Tooltip label="The new harness gets the conversation so far with your next message">
         <span className="text-fg-faint">context handed over</span>
       </Tooltip>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+/**
+ * A turn the app woke the thread for: a delegate finished (or a few did), which
+ * ones, on which harness and for how long. The same flat divider as a notice, one
+ * line that never wraps: the title gives way, the harness and the time stay.
+ * The whole wake message is the hover title, so the rest of it is a tip away.
+ * Its words come from the text alone (`state/wakeNotice.ts`), so a thread
+ * reloaded from history shows the row it showed live.
+ */
+export function WakeRow({ text, flat }: { text: string; flat?: boolean }) {
+  const notice = useMemo(() => wakeNotice(text), [text]);
+  if (!notice) {
+    return (
+      <NoticeRow flat={flat} item={{ kind: "notice", id: "wake", text: wakeLine(text), tone: "info" }} />
+    );
+  }
+  const marks = notice.finished.filter((d) => d.harness).slice(0, 3);
+  const askingMarks = notice.asking.filter((d) => d.harness).slice(0, 3);
+  const icons = marks.length ? marks : askingMarks;
+  return (
+    <div
+      title={text}
+      role="separator"
+      className={cx("flex items-center gap-3 text-caption text-fg-muted", flat ? "py-0" : "py-1")}
+    >
+      <span className="h-px flex-1 bg-border" />
+      <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+        {icons.length ? (
+          icons.map((d, i) => (
+            <HarnessIcon key={d.linkId ?? i} id={harnessId(d.harness ?? "")} name={d.harness} size={13} />
+          ))
+        ) : notice.asking.length && !notice.finished.length ? (
+          <MessageCircleQuestion size={11} className="shrink-0 text-fg-faint" aria-hidden />
+        ) : (
+          <Layers size={11} className="shrink-0 text-fg-faint" aria-hidden />
+        )}
+        {notice.failed && <CircleX size={12} className="shrink-0 text-danger" aria-hidden />}
+        <span className="shrink-0">{notice.label}</span>
+        {notice.titles && (
+          <>
+            <span aria-hidden className="text-fg-faint">
+              ·
+            </span>
+            <span className="min-w-0 truncate">{notice.titles}</span>
+          </>
+        )}
+        {notice.harness && (
+          <>
+            <span aria-hidden className="text-fg-faint">
+              ·
+            </span>
+            <span className="shrink-0">{notice.harness}</span>
+          </>
+        )}
+        {notice.worked && (
+          <>
+            <span aria-hidden className="text-fg-faint">
+              ·
+            </span>
+            <span className="shrink-0 tabular">{notice.worked}</span>
+          </>
+        )}
+      </span>
       <span className="h-px flex-1 bg-border" />
     </div>
   );

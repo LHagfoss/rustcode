@@ -2057,7 +2057,7 @@ export function subtreeQuiet(id: string): boolean {
 /**
  * Delivers what each parent should hear — children settling, children waiting
  * on the user — once per child, and schedules the re-check a coalescing window
- * needs. Called when a link settles, when a child asks the user, when a wait
+ * needs. Called when a link settles, when a delegate asks the user, when a wait
  * returns, and once at start-up after the book is read from the data store
  * (state/store.ts `connect`); nothing here polls.
  */
@@ -2107,7 +2107,7 @@ function scheduleWake(ms: number): void {
  * A busy parent gets one wake turn for everything that finished, however many ticks
  * report it: a wake already waiting in its queue takes the new one in (the links it
  * carried are kept on the row), rather than queueing another turn that repeats
- * "1 child finished". A wake for an idle parent still starts at once.
+ * "Delegate finished". A wake for an idle parent still starts at once.
  *
  * Nothing is marked here. A queued row marks its links when its turn starts (`wakeDelivered`,
  * called by `runPrompt`): the queue is this window's memory, and a mark written at queue time would
@@ -2223,7 +2223,16 @@ function markHeard(link: Link, state: LinkState, now: number): HeardMark {
 // ---------------------------------------------------------------- link turns
 
 export function linkStarted(id: string) {
-  setBook((b) => updateLink(b, id, { state: "working" }));
+  // The turn starts as this link's turn: its notice reports the time from here.
+  setBook((b) => updateLink(b, id, { state: "working", startedAt: Date.now() }));
+}
+
+/** The harness a settled link ran on, as the notice names it: its id and display name. */
+function linkHarness(thread: string): { harness?: string; harnessName?: string } {
+  const s = useApp.getState();
+  const id = s.threads[thread]?.harness?.id ?? s.sessions.find((x) => x.id === thread)?.harness;
+  if (!id) return {};
+  return { harness: id, harnessName: s.harnesses?.harnesses.find((h) => h.id === id)?.name };
 }
 
 /**
@@ -2265,6 +2274,8 @@ export function linkFinished(
   const now = Date.now();
   // A stopped link is not an answer: it takes only what its own turn said.
   const says = answerFor(thread, items, failed, outcome !== "cancelled");
+  const link = book().links.find((l) => l.id === id);
+  const workedMs = link?.startedAt === undefined ? undefined : Math.max(0, now - link.startedAt);
   setBook((b) =>
     updateLink(b, id, {
       state: outcome === "cancelled" ? "cancelled" : outcome === "failed" ? "failed" : "done",
@@ -2272,6 +2283,8 @@ export function linkFinished(
       truncated: says.truncated,
       filesChanged: says.filesChanged,
       settledAt: now,
+      ...linkHarness(thread),
+      ...(workedMs ? { workedMs } : {}),
     }),
   );
   wakeTick();

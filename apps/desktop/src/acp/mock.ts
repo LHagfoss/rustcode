@@ -517,6 +517,8 @@ function seedThreads(): MockThread[] {
       harness: "codex",
       model: "gpt-6-luna",
       effort: "low",
+      // A delegate, so Statistics can show a parent's rolled-up tokens and cost.
+      parent: { id: a, title: "Fix the composer focus ring" },
       checkpoints: [],
       history: [
         update(b, {
@@ -538,7 +540,8 @@ function seedThreads(): MockThread[] {
       title: "Add a dark mode toggle",
       updatedAt: minutes(60 * 26),
       harness: "rustcode",
-      model: "claude-sonnet-5",
+      // Not in pricing.ts's table: Statistics shows this row as unknown, not $0.
+      model: "claude-sonnet-6",
       effort: "high",
       status: "done",
       checkpoints: [],
@@ -823,6 +826,12 @@ const sumKnown = (values: (number | null)[]): number | null => {
   return known.length ? known.reduce((sum, value) => sum + value, 0) : null;
 };
 
+/** A day in the last 30 for a mock thread, so the daily chart has gaps and variation. */
+function mockUsageDay(index: number): string {
+  const offset = [0, 1, 1, 3, 6, 11, 18, 24][index % 8] ?? 0;
+  return new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+}
+
 /** `_rustcode/data/usage`, grouped like the engine groups the store (`engine/src/acp/data.rs`). */
 function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
   const groups = new Map<string, { keys: JsonObject; spends: MockSpend[] }>();
@@ -835,10 +844,12 @@ function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
         key = `${thread.harness}\u0000${thread.model}`;
         keys = { harness: thread.harness, model: thread.model };
         break;
-      case "day":
-        key = new Date(thread.updatedAt).toISOString().slice(0, 10);
-        keys = { day: key };
+      case "day": {
+        const day = mockUsageDay(index);
+        key = day;
+        keys = { day };
         break;
+      }
       case "project":
         key = thread.cwd;
         keys = { project: thread.cwd };
@@ -850,6 +861,9 @@ function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
           title: thread.title ?? "",
           project: thread.cwd,
           harness: thread.harness,
+          model: thread.model,
+          // The mock's turns all run the thread's own harness and model.
+          model_harness: thread.harness,
           parent_id: thread.parent?.id ?? null,
           parent_title: thread.parent?.title ?? null,
         };

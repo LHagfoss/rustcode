@@ -47,7 +47,9 @@ export function stageQueuePreview(held: boolean): boolean {
           { id: "preview-1", text: "Then run the checks and tell me what failed." },
           {
             id: "preview-wake",
-            text: withWakeMark("2 children finished\n\nFinished:\n- link_id preview-link · done"),
+            text: withWakeMark(
+              "Delegate finished: Review the sidebar rows\n\nFinished:\n- link_id preview-link · done · “Review the sidebar rows” · Pi · worked 3m 49s · session mock-child · 4 files changed",
+            ),
             wake: true,
           },
           { id: "preview-link", text: link.message, link: link.id },

@@ -56,6 +56,7 @@ import {
   TurnFoldRow,
   UserRow,
   WaitingRow,
+  WakeRow,
   WorkingRow,
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
@@ -971,14 +972,10 @@ export function Transcript({
                     ) : row.queued ? (
                       <QueuedMessageRow threadId={thread.id} {...row.queued} />
                     ) : row.queueWake ? (
-                      // The same quiet line its turn leaves once it runs: the wake's first line, the
-                      // whole message in the title. Never a bubble that reads as the user's own.
-                      <div title={row.queueWake.text}>
-                        <NoticeRow
-                          flat
-                          item={{ kind: "notice", id: "queue-wake", text: row.queueWake.line, tone: "info" }}
-                        />
-                      </div>
+                      // The same quiet line its turn leaves once it runs: the delegates, their
+                      // harnesses and time, the whole message in the title. Never a bubble that
+                      // reads as the user's own.
+                      <WakeRow text={row.queueWake.text} flat />
                     ) : row.resume ? (
                       <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (

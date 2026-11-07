@@ -1,10 +1,12 @@
 // The menus and panels the composer hangs off itself: the model picker, the +, folder, permissions
-// and usage menus. Each one is anchored to the control that opened it, 8px above that control's own
-// top edge (`CARD_GAP`), so a panel reads as coming out of the button pressed and not out of the
-// card it happens to sit in. The side is pinned to `top`; only the alignment follows the control —
-// `start` on the card's left half, `end` on its right — so a panel opens inward and stays inside the
-// window. Collisions never move it down under its control; Radix still measures the room above as
-// `--radix-popper-available-height`, so a short window shrinks the panel instead of moving it.
+// and usage menus. Each one is anchored to the control that opened it, 8px off that control's own
+// edge (`CARD_GAP`), so a panel reads as coming out of the button pressed and not out of the card it
+// happens to sit in. A panel opens `top` unless a menu asks for a side; only the alignment follows
+// the control — `start` on the card's left half, `end` on its right — so a panel opens inward and
+// stays inside the window. Collisions never move it down under its control; Radix still measures the
+// room as `--radix-popper-available-height`, so a short window shrinks the panel instead of moving
+// it. When the panel closes it hands focus back to its control, unless the user pressed elsewhere:
+// that press already said where focus belongs (the field, another button).
 
 import { Popover } from "radix-ui";
 import {
@@ -20,6 +22,7 @@ import {
   type Ref,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -67,7 +70,7 @@ export function CardPopover({
   tooltip,
   children,
   align,
-  side = "top",
+  side,
   className,
   style,
   label,
@@ -85,6 +88,11 @@ export function CardPopover({
   children: ReactNode;
   /** Left unset, the panel opens on the side of its control: inward from the window's edge. */
   align?: "start" | "center" | "end";
+  /**
+   * Which side of the control the panel opens on. Set, it is pinned there; left unset, the composer
+   * strip's menus open downward when the window has room under them and upward when it does not,
+   * and every other panel opens `top`.
+   */
   side?: "top" | "bottom";
   className?: string;
   style?: CSSProperties;
@@ -114,7 +122,10 @@ export function CardPopover({
   const card = useRef<HTMLElement | null>(null);
   const pill = useRef<HTMLElement | null>(null);
   const [aligned, setAligned] = useState<"start" | "end">("start");
-  const [placed, setPlaced] = useState<"top" | "bottom">(side);
+  const [placed, setPlaced] = useState<"top" | "bottom">(side ?? "top");
+  // Whether the press that closed the panel landed outside it: that press chose where focus goes,
+  // and pulling it back to the pill would take the caret out of the field the user just clicked.
+  const closedOutside = useRef(false);
   const anchor = useRef<Measurable>({
     getBoundingClientRect: () => pill.current?.getBoundingClientRect() ?? new DOMRect(),
   });
@@ -139,11 +150,20 @@ export function CardPopover({
     const at = button.getBoundingClientRect();
     const inCard = box.getBoundingClientRect();
     setAligned(at.left + at.width / 2 > inCard.left + inCard.width / 2 ? "end" : "start");
+    // A side that was asked for is where the panel stays.
+    if (side) {
+      setPlaced(side);
+      return;
+    }
     // The strip under the card opens downward when the window has room there, so its menus
     // never cover the field above; at the bottom of a thread there is none, and they open up.
     const inStrip = button.closest(".rc-composer-footer");
-    setPlaced(inStrip && window.innerHeight - at.bottom >= FOOTER_ROOM ? "bottom" : side);
+    setPlaced(inStrip && window.innerHeight - at.bottom >= FOOTER_ROOM ? "bottom" : "top");
   }, [open, side]);
+  // Every panel opens fresh: the last one's outside press says nothing about this one.
+  useEffect(() => {
+    if (open) closedOutside.current = false;
+  }, [open]);
 
   const element = isValidElement(trigger)
     ? cloneElement(trigger, {
@@ -180,8 +200,24 @@ export function CardPopover({
           onEscapeKeyDown={onEscapeKeyDown}
           onKeyDown={onKeyDown}
           onOpenAutoFocus={onOpenAutoFocus}
+          onInteractOutside={(event) => {
+            // Pressing the pill itself is not an outside press: Radix leaves the panel open for it
+            // and the pill's own click closes it, focus landing where the press already went.
+            const target = event.target as Node | null;
+            if (target && pill.current?.contains(target)) return;
+            closedOutside.current = true;
+          }}
           onCloseAutoFocus={(event) => {
+            // Never hand focus to the panel's own closing budget; this decides where it goes.
             event.preventDefault();
+            if (closedOutside.current) {
+              closedOutside.current = false;
+              // The press that closed it usually focused what it landed on. A press that left
+              // nothing focused (a platform that does not focus a clicked button) still needs the
+              // pill, so the composer keeps a focus target.
+              const active = document.activeElement;
+              if (active && active !== document.body) return;
+            }
             pill.current?.focus();
           }}
           style={style}
