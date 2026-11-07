@@ -591,6 +591,14 @@ the engine's compaction card (`_meta.rustcode.kind = "compaction"`), which
 the desktop app shows as one quiet "Context compacted" row. The context
 panel has *Compact now*, which sends `/compact`.
 
+The desktop app can also decide to compact on its own (#3170): after a turn
+above its size threshold, and about 4.5 minutes after a turn when the context
+is above 60k and the prompt cache is about to expire. It sends the same
+`/compact`, so each harness compacts with its own command. Claude Code uses
+both rules, Codex only the cache rule (it already compacts inside a turn), and
+the built-in harness keeps its own pre-request compaction. An ACP agent that
+does not advertise `/compact` is skipped.
+
 ## Configuration
 
 `~/.config/rustcode/config.toml`:

@@ -45,6 +45,7 @@ import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
+import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
 import { validateDefault } from "../state/harness";
 import { MAX_ACTIVE_LIMIT, MIN_ACTIVE_LINKS } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
@@ -62,6 +63,8 @@ import {
   type SettingsSection,
   setActiveTheme,
   setAnimateStreaming,
+  setAutoCompactMode,
+  setAutoCompactThreshold,
   setChatWidth,
   setContinueAfterLimit,
   setDefaultCwd,
@@ -229,6 +232,7 @@ function PresenceRow() {
 
 function GeneralPage() {
   const defaultCwd = useApp((s) => s.defaultCwd);
+  const autoCompact = useApp((s) => s.autoCompact);
   const resume = useApp((s) => s.resumeAfterRestart);
   const afterLimit = useApp((s) => s.continueAfterLimit);
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
@@ -292,6 +296,43 @@ function GeneralPage() {
             onChange={setContinueAfterLimit}
           />
         </Row>
+        <Row
+          title="Auto-compact"
+          reset={
+            autoCompact.mode === SETTINGS_DEFAULTS.autoCompact.mode
+              ? undefined
+              : () => setAutoCompactMode(SETTINGS_DEFAULTS.autoCompact.mode)
+          }
+          subtitle="RustCode asks the harness to compact its own context when a turn ends above the threshold, and, for Claude Code and Codex, shortly before their prompt cache expires. Never while a turn runs, a message waits or an approval is open; turn it off for one thread in its menu."
+        >
+          <Choice
+            label="Auto-compact"
+            value={autoCompact.mode}
+            options={AUTO_COMPACT_MODES}
+            onChange={setAutoCompactMode}
+          />
+        </Row>
+        {autoCompact.mode !== "off" && (
+          <Row
+            title="Auto-compact threshold"
+            reset={
+              autoCompact.threshold === AUTO_COMPACT_DEFAULT_THRESHOLD
+                ? undefined
+                : () => setAutoCompactThreshold(AUTO_COMPACT_DEFAULT_THRESHOLD)
+            }
+            subtitle="Compact once the context passes this many tokens. The idle, pre-cache rule uses a smaller 60k threshold."
+          >
+            <Slider
+              label="Auto-compact threshold"
+              value={Math.round(autoCompact.threshold / 1_000)}
+              min={20}
+              max={500}
+              step={10}
+              onChange={(value) => setAutoCompactThreshold(value * 1_000)}
+              unit="k tokens"
+            />
+          </Row>
+        )}
       </Group>
       <Group title="Notifications">
         <Row

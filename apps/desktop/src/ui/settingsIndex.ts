@@ -45,6 +45,16 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "Auto-compact",
+    keywords: "compact compaction context tokens threshold cache prompt cache idle claude codex",
+  },
+  {
+    section: "general",
+    title: "Auto-compact threshold",
+    keywords: "compact compaction context tokens size limit threshold",
+  },
+  {
+    section: "general",
     title: "System notifications",
     keywords: "notify notification alert badge dock attention approval question finished system",
   },

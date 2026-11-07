@@ -40,6 +40,7 @@ import {
   PinOff,
   Search,
   ShieldQuestion,
+  Sparkles,
   SquarePen,
   SquareTerminal,
   Trash2,
@@ -93,6 +94,7 @@ import { snoozePresets, wakeLabel } from "../state/snooze";
 import {
   askConfirm,
   askCustomSnooze,
+  autoCompactOffFor,
   dismissPendingSetup,
   featureMissing,
   markUnread,
@@ -101,6 +103,7 @@ import {
   repairThread,
   searchThreads,
   selectThread,
+  setAutoCompactForThread,
   setPanel,
   setPinned,
   setThreadStatus,
@@ -242,6 +245,7 @@ function ThreadMenuItems({
   onClear?: () => void;
 }) {
   const pinned = useApp((s) => s.pinned.includes(session.id));
+  const autoCompactOff = useApp((s) => autoCompactOffFor(s, session.id));
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const statusMissing = useApp((s) => (s.features.status ? null : featureMissing("status")));
@@ -361,6 +365,9 @@ function ThreadMenuItems({
       )}
       <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
         <FileDiff size={13} /> Review Changes
+      </Item>
+      <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
+        <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
       </Item>
       <Item className={menuItem} onSelect={() => markUnread(session.id)}>
         <CircleCheck size={13} /> Mark Unread

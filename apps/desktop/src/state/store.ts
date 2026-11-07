@@ -46,6 +46,7 @@ import {
   questionOptionsAnswer,
   questionTextAnswer,
   type SessionSummary,
+  type SessionUsage,
   type SlashCommand,
 } from "../acp/types";
 import {
@@ -81,6 +82,17 @@ import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
 import { type Attempt, splitAtTurn, transcriptTurns } from "./attempts";
+import {
+  type AutoCompactMode,
+  type AutoCompactSettings,
+  autoCompactDecision,
+  autoCompactMark,
+  autoCompactPolicy,
+  automaticCompactionText,
+  clampAutoCompactThreshold,
+  DEFAULT_AUTO_COMPACT,
+  parseAutoCompactSettings,
+} from "./autoCompact";
 import { createBatcher, frameQueue } from "./batch";
 import {
   type HarnessCommands,
@@ -162,6 +174,7 @@ import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
+  appendNotice,
   appendSteer,
   applyUpdate,
   beginTurn,
@@ -428,6 +441,10 @@ export interface AppState {
   };
   /** Review / done marks kept by the app when the engine does not store them. */
   statusMarks: Record<string, ThreadStatus>;
+  /** How RustCode compacts a thread on its own (Settings › General › Threads). */
+  autoCompact: AutoCompactSettings;
+  /** Threads whose menu turned auto-compaction off, by thread id. */
+  autoCompactOff: Record<string, boolean>;
   /** Threads out of the list until a time (state/snooze.ts). */
   snoozed: Record<string, number>;
   /** The thread the custom snooze dialog is open for. */
@@ -524,6 +541,10 @@ const STORAGE = {
   harnessAccountChoices: "rustcode.harnessAccountChoices",
   /** Each harness's last advertised slash commands, so a new thread's drawer is filled in. */
   harnessCommands: "rustcode.harnessCommands",
+  /** Auto-compaction's mode and threshold (Settings › General › Threads). */
+  autoCompact: "rustcode.autoCompact",
+  /** Threads whose auto-compaction is off, by thread id. */
+  autoCompactOff: "rustcode.autoCompactOff",
   /** Each harness's plan windows, so the composer's meter is there on launch. */
   planCache: "rustcode.planCache",
   /** Bindings the user changed, by command id; the table in lib/keys.ts holds the rest. */
@@ -554,6 +575,7 @@ export const SETTINGS_DEFAULTS = {
   threadLimit: MAX_ACTIVE_LINKS,
   readAcrossProjects: true,
   smartUi: true,
+  autoCompact: DEFAULT_AUTO_COMPACT,
   defaultPermissionMode: parsePermissionMode(null),
 };
 
@@ -637,6 +659,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grant: null,
   features: {},
   statusMarks: storedJson<Record<string, ThreadStatus>>(STORAGE.statusMarks, {}),
+  autoCompact: parseAutoCompactSettings(stored(STORAGE.autoCompact)),
+  autoCompactOff: storedJson<Record<string, boolean>>(STORAGE.autoCompactOff, {}),
   snoozed: storedJson<Record<string, number>>(STORAGE.snoozed, {}),
   snoozeAsk: null,
   defaultPermissionMode: parsePermissionMode(stored(STORAGE.permissionMode)),
@@ -1212,6 +1236,7 @@ function onSessionActivity(params: unknown) {
     if (state === "waiting") return { ...ended, waiting: background || undefined };
     return { ...ended, waiting: undefined };
   });
+  if (state !== "running") scheduleAutoCompact(id);
 }
 
 async function handleInbound(message: Inbound) {
@@ -1298,7 +1323,14 @@ async function handleInbound(message: Inbound) {
 function onSessionUpdate(params: JsonObject) {
   const sessionId = str(params.sessionId);
   if (!sessionId) return;
-  const update = parseSessionUpdate(params);
+  let update = parseSessionUpdate(params);
+  // A compaction the app sent for the thread's own good says so, whichever
+  // harness produced the card. The card's before → after comes from the usage
+  // the meter keeps (`autoCompactBeforeUsage`).
+  if (update.kind === "compaction" && autoCompactInFlight.has(sessionId)) {
+    autoCompactCardSeen.add(sessionId);
+    update = { ...update, text: automaticCompactionText(update.text) };
+  }
   if (update.kind === "commands") {
     // The thread's own list, and the harness's last one for the next new thread on it.
     const harness = harnessOf(get(), sessionId);
@@ -1595,6 +1627,8 @@ export async function openThread(id: string): Promise<string | null> {
     if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
     void refreshPlanUsage(id);
     void refreshCheckpoints(id);
+    // A thread opened after it went idle can still be before its cache deadline.
+    scheduleAutoCompact(id);
     return null;
   } catch (error) {
     const message = `Could not open this thread: ${errorText(error)}`;
@@ -2139,6 +2173,7 @@ export async function trashThread(id: string): Promise<boolean> {
 export function setDraft(key: string, text: string) {
   const next = withDraft(get().drafts, key, text);
   if (next !== get().drafts) set({ drafts: next });
+  if (text.trim()) noteTyping(key);
   saveDrafts();
 }
 
@@ -2173,6 +2208,7 @@ export function flushDrafts() {
 
 export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExtras) {
   set((s) => ({ extras: { ...s.extras, [key]: fn(s.extras[key] ?? emptyExtras) } }));
+  if (hasExtras(get().extras[key])) noteTyping(key);
 }
 
 /** The harness a thread runs on, or a new thread would start on. */
@@ -2642,6 +2678,8 @@ export async function runPrompt(
     /** The links that row named as waiting on the user: a question, not a finish (host.ts). */
     wakeAsking?: string[];
     automatic?: boolean;
+    /** A `/compact` the app sent because the context or the cache said so. */
+    autoCompact?: boolean;
     /** The turn that continues after a limit: its wait is settled when it ends. */
     limitResume?: boolean;
     /**
@@ -2664,6 +2702,9 @@ export async function runPrompt(
   // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
   // message typed meanwhile, and starts when this turn ends.
   if (thread?.running) {
+    // An automatic compaction never waits in the queue: the next turn may run
+    // before it, and the guards will offer another one in a later idle period.
+    if (options.autoCompact) return;
     updateThread(id, (t) => ({
       ...t,
       queue: [
@@ -2683,6 +2724,8 @@ export async function runPrompt(
     }));
     return;
   }
+  // A user turn starts a new idle period, which may auto-compact once more.
+  if (!options.autoCompact) beginAutoCompactIdle(id);
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
   // The turn a restart resumes this thread with answers the links the quit severed: they work again
@@ -2725,10 +2768,9 @@ export async function runPrompt(
   let failure: string | undefined;
   let unused: string[] = [];
   try {
-    const result = (await conn.request(Method.sessionPrompt, {
-      sessionId: id,
-      prompt,
-    })) as JsonObject | null;
+    const request: JsonObject = { sessionId: id, prompt };
+    if (options.autoCompact) request._meta = { rustcode: { autoCompact: true } };
+    const result = (await conn.request(Method.sessionPrompt, request)) as JsonObject | null;
     if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
     const meta = (result?._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined;
     unused = Array.isArray(meta?.unusedSteers)
@@ -2741,8 +2783,12 @@ export async function runPrompt(
   updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
   // The limit is settled first: a turn it stopped is reported as the limit, not twice.
   const waiting = settleLimitWait(id, outcome, failure, startIndex);
-  if (outcome === "completed") markFinished(id);
-  else if (outcome === "failed") markFinished(id, Date.now(), true);
+  // An automatic compaction is not a turn the user waits for: it is not "Done"
+  // news, and it must not wake the thread's parent as if its work finished.
+  if (!options.autoCompact) {
+    if (outcome === "completed") markFinished(id);
+    else if (outcome === "failed") markFinished(id, Date.now(), true);
+  }
   // A report command that answered in the panel leaves no turn behind: its message and footer go.
   const reported = get().report?.threadId === id;
   if (reported && outcome === "completed" && isReportCommand(id, text, extras)) {
@@ -2761,7 +2807,9 @@ export async function runPrompt(
     );
   // Every finished turn of a thread matters to a parent waiting on it: a middle thread's real
   // answer is the one after the work it started (state/host.ts threadTurnEnded).
-  threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
+  if (!options.autoCompact) {
+    threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
+  }
   void refreshSessions();
   void refreshPlanUsage(id);
   // A window's numbers move with the turn, and so does the account's own row:
@@ -2769,7 +2817,7 @@ export async function runPrompt(
   if (id === get().selectedId) void refreshPlanCache();
   void refreshAgents(id);
   void refreshCheckpoints(id);
-  if ((outcome === "completed" || outcome === "failed") && id !== get().selectedId) {
+  if (!options.autoCompact && (outcome === "completed" || outcome === "failed") && id !== get().selectedId) {
     const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
     // A delegate finishing is already said twice: the wake message into its parent's transcript and
     // the strip above that composer. Only a failure, or the limit that stopped it, is news here.
@@ -2804,6 +2852,7 @@ export async function runPrompt(
       automatic: next.resume !== undefined,
     });
   }
+  scheduleAutoCompact(id);
 }
 
 export async function cancel(id = get().selectedId): Promise<void> {
@@ -3645,6 +3694,203 @@ export function clearStatusMark(id: string) {
   if (_gone) saveMarks(rest);
 }
 
+// ---------------------------------------------------------------- auto-compaction
+
+/** One timer per thread: the next cache deadline, or an immediate size rule. */
+const autoCompactTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Threads that already auto-compacted in this idle period, until the next turn starts. */
+const autoCompactedIdle = new Set<string>();
+/** The thread an auto-compaction runs in, so its card can say it ran on its own. */
+const autoCompactInFlight = new Set<string>();
+const autoCompactCardSeen = new Set<string>();
+/** The context before each automatic compaction, for the inspector's before → after. */
+const autoCompactBefore = new Map<string, SessionUsage>();
+
+function clearAutoCompactTimer(id: string): boolean {
+  const timer = autoCompactTimers.get(id);
+  if (timer === undefined) return false;
+  clearTimeout(timer);
+  autoCompactTimers.delete(id);
+  return true;
+}
+
+export function setAutoCompactMode(mode: AutoCompactMode) {
+  set((s) => ({ autoCompact: { ...s.autoCompact, mode } }));
+  store(STORAGE.autoCompact, JSON.stringify(get().autoCompact));
+  rescheduleAutoCompact();
+}
+
+export function setAutoCompactThreshold(tokens: number) {
+  const threshold = clampAutoCompactThreshold(tokens);
+  set((s) => ({ autoCompact: { ...s.autoCompact, threshold } }));
+  store(STORAGE.autoCompact, JSON.stringify(get().autoCompact));
+  rescheduleAutoCompact();
+}
+
+/** The thread's menu switch: true turns auto-compaction on for that thread again. */
+export function setAutoCompactForThread(id: string, on: boolean) {
+  set((s) => {
+    const next = { ...s.autoCompactOff };
+    if (on) delete next[id];
+    else next[id] = true;
+    return { autoCompactOff: next };
+  });
+  store(STORAGE.autoCompactOff, JSON.stringify(get().autoCompactOff));
+  if (on) {
+    autoCompactedIdle.delete(id);
+    scheduleAutoCompact(id);
+  } else {
+    clearAutoCompactTimer(id);
+  }
+}
+
+export function autoCompactOffFor(s: Pick<AppState, "autoCompactOff">, id: string): boolean {
+  return s.autoCompactOff[id] === true;
+}
+
+function autoCompactSettingsFor(s: AppState, id: string): AutoCompactSettings {
+  return autoCompactOffFor(s, id) ? { ...s.autoCompact, mode: "off" } : s.autoCompact;
+}
+
+function autoCompactPolicyFor(s: AppState, id: string) {
+  const harness = harnessOf(s, id);
+  const known = s.harnesses?.harnesses.find((h) => h.id === harness);
+  return autoCompactPolicy(harness ?? "", known?.kind);
+}
+
+/** The threshold the context bar marks for this thread, if rule 1 can run on it. */
+export function autoCompactThresholdFor(s: AppState, id: string): number | undefined {
+  return autoCompactMark(autoCompactSettingsFor(s, id), autoCompactPolicyFor(s, id));
+}
+
+/** Whether the harness runs its own compaction. An ACP agent says so by advertising `/compact`. */
+function canCompact(s: AppState, id: string): boolean {
+  const harness = harnessOf(s, id);
+  const known = s.harnesses?.harnesses.find((h) => h.id === harness);
+  if (!known) return false;
+  if (known.builtin || known.kind === "codex") return true;
+  // Claude Code takes `/compact` whether or not its agent lists it as a command.
+  if (known.id === "claude-code") return true;
+  return commandsFor(s, id).some((command) => command.name === "/compact");
+}
+
+/** When the thread's last turn ended: where its prompt cache clock starts. */
+function lastTurnEndedAt(thread: ThreadState | undefined): number | undefined {
+  for (let i = (thread?.items.length ?? 0) - 1; i >= 0; i -= 1) {
+    const item = thread!.items[i]!;
+    if (item.kind === "turnEnd" && item.at !== undefined) return item.at;
+  }
+  return undefined;
+}
+
+function autoCompactInput(s: AppState, id: string, now: number) {
+  const thread = s.threads[id];
+  const links = linksOf(s.links, id);
+  const parentId = sessionById(s, id)?.parent?.id;
+  const parent = parentId ? s.sessions.find((x) => x.id === parentId) : undefined;
+  const delegated = !!parentId || links.drivenBy !== undefined;
+  // A delegate is kept only while its orchestrator is still around: a parent
+  // waiting on it, or a parent thread that has not been settled.
+  const orchestratorTalking = links.drivenBy !== undefined || (!!parent && statusOf(s, parent.id) !== "done");
+  return {
+    settings: autoCompactSettingsFor(s, id),
+    policy: autoCompactPolicyFor(s, id),
+    canCompact: canCompact(s, id),
+    usedTokens: thread?.usage?.used,
+    now,
+    idleSince: lastTurnEndedAt(thread),
+    status: statusOf(s, id),
+    running: thread?.running ?? false,
+    queued: thread?.queue.length ?? 0,
+    approvals: thread?.permissions.length ?? 0,
+    typing: !!(s.drafts[id] ?? "").trim() || hasExtras(s.extras[id]),
+    compactedThisIdle: autoCompactedIdle.has(id),
+    delegated,
+    orchestratorTalking,
+  };
+}
+
+function runAutoCompact(id: string): void {
+  const s = get();
+  const decision = autoCompactDecision(autoCompactInput(s, id, Date.now()));
+  if (decision.action !== "compact") return;
+  autoCompactedIdle.add(id);
+  const before = s.threads[id]?.usage;
+  if (before) autoCompactBefore.set(id, before);
+  autoCompactInFlight.add(id);
+  autoCompactCardSeen.delete(id);
+  void runPrompt(id, "/compact", emptyExtras, { automatic: true, autoCompact: true })
+    .catch(() => undefined)
+    .finally(() => {
+      autoCompactInFlight.delete(id);
+      // A harness that compacts with no card of its own (Claude Code's plain
+      // reply) still leaves one quiet row, but only if the context really moved.
+      const after = get().threads[id]?.usage;
+      const compacted =
+        !before ||
+        (after !== undefined &&
+          (after.used < before.used ||
+            (after.context?.compactions ?? 0) > (before.context?.compactions ?? 0)));
+      if (!autoCompactCardSeen.has(id) && compacted) {
+        updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
+      }
+      autoCompactCardSeen.delete(id);
+    });
+}
+
+/**
+ * Look at one thread and set its next auto-compaction timer. Called when a
+ * turn ends, a thread opens, a draft changes or the setting does; the decision
+ * itself is pure (`state/autoCompact.ts`).
+ */
+export function scheduleAutoCompact(id: string): void {
+  clearAutoCompactTimer(id);
+  const s = get();
+  if (!s.threads[id]?.loaded) return;
+  const decision = autoCompactDecision(autoCompactInput(s, id, Date.now()));
+  if (decision.action === "compact") {
+    autoCompactTimers.set(
+      id,
+      setTimeout(() => {
+        autoCompactTimers.delete(id);
+        runAutoCompact(id);
+      }, 0),
+    );
+  } else if (decision.action === "wait") {
+    // Timers cap at a day; a longer wait is rescheduled by the next check.
+    const delay = Math.min(Math.max(0, decision.at - Date.now()), 24 * 60 * 60_000);
+    autoCompactTimers.set(
+      id,
+      setTimeout(() => {
+        autoCompactTimers.delete(id);
+        scheduleAutoCompact(id);
+      }, delay),
+    );
+  }
+}
+
+/** The user typing in a thread ends its idle period: give it back to them. */
+function noteTyping(id: string): void {
+  if (!get().threads[id]) return;
+  clearAutoCompactTimer(id);
+  autoCompactedIdle.add(id);
+}
+
+/** Start a fresh idle period: the next turn may auto-compact once more. */
+function beginAutoCompactIdle(id: string): void {
+  autoCompactedIdle.delete(id);
+  autoCompactBefore.delete(id);
+}
+
+function rescheduleAutoCompact(): void {
+  for (const id of Object.keys(get().threads)) scheduleAutoCompact(id);
+}
+
+/** The context an automatic compaction started from, for the inspector's comparison. */
+export function autoCompactBeforeUsage(id: string): SessionUsage | undefined {
+  return autoCompactBefore.get(id);
+}
+
 /** Mark a thread for review, done, or back to idle; stored by the engine when it can, else by the app. */
 export function setThreadStatus(id: string, status: "review" | "done" | "idle"): Promise<number> {
   return setThreadsStatus([id], status);
@@ -3659,6 +3905,7 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
   set((s) => ({ sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)) }));
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
+  for (const id of ids) scheduleAutoCompact(id);
   if (!get().features.status || !connection) return 0;
   const link = connection;
   const errors: unknown[] = [];
@@ -4683,6 +4930,8 @@ export function resetForTests() {
     themes: null,
     themeActive: "rustcode",
     statusMarks: {},
+    autoCompact: DEFAULT_AUTO_COMPACT,
+    autoCompactOff: {},
     snoozed: {},
     snoozeAsk: null,
     defaultPermissionMode: "ask",
