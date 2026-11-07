@@ -239,19 +239,20 @@ When an orchestrator thread hands work to other threads (`start_session`,
 `message_session`), and especially to Pi on DeepSeek Flash:
 
 - Give each thread its own worktree and disjoint files, with file:line
-  pointers and concrete target values. Tell it to read this file first: a
-  thread started from another project does not load it on its own.
-- Repeat the relevant repository rules in the prompt. For code work, require
-  the delegate to read this file before acting; a thread does not inherit the
-  caller's full conversation or local instructions automatically.
-- Keep delegated work noninteractive. Never rebase a task branch; merge
-  `origin/main` when it needs updating. Use `--no-edit` for merges and set
-  `GIT_EDITOR=true` for commits so Git cannot wait for an editor.
-- Wrap anything that can block (including Git operations, scripts, browsers,
-  dev servers and checks) in `timeout 120`, using a longer explicit limit for
-  a known long check. If a command times out or a turn is interrupted, report
-  the last command and inspect the worktree before resuming; do not blindly
-  rerun it.
+  pointers, concrete target values and the acceptance criteria. Repeat the
+  repository rules that apply in the prompt and tell it to read this file:
+  a delegate inherits none of this conversation, and a thread started from
+  another project does not load `AGENTS.md` on its own.
+- Never rebase a task branch; merge `origin/main` with `--no-edit` when it
+  needs updating, and pass `-m` to commits. A delegated shell has no TTY, so
+  anything that waits for an editor, a pager or input holds the turn until
+  someone interrupts it.
+- Wrap anything that can block (Git, scripts, browsers, dev servers, checks)
+  in `timeout 120`, with a longer explicit limit for a known long check. A
+  delegated shell has no default timeout, and a timer can keep a one-off
+  script alive after its work is done: make scripts exit and bound them. If a
+  command times out, report it and inspect the worktree before resuming; do
+  not blindly rerun it.
 - Gate on `bun run check` and unit tests. Ask for screenshots only when the
   change needs them; home-made CDP drivers were the main time sink.
 - Name a skill's `SKILL.md` path in the prompt if it matters. Listed skills

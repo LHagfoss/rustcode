@@ -208,11 +208,16 @@ it says what the tools make a thread: one started with `start_session` or
 whole task, while a quick read-only lookup belongs to the harness's own
 subagents.
 
-Delegates do not inherit the caller's full conversation. Include the relevant
-repository instructions and acceptance criteria in each coding prompt, and
-have the delegate read `AGENTS.md`. Keep commands noninteractive: merge branch
-updates instead of rebasing, use `GIT_EDITOR=true` for Git operations that may
-open an editor, and bound commands that can block with `timeout`.
+Delegates inherit neither the caller's conversation nor its local
+instructions. Repeat the repository rules that apply, the acceptance criteria
+and any file:line pointers in the prompt, and tell the delegate to read
+`AGENTS.md`. Never rebase a delegated branch: merge `origin/main` with
+`--no-edit`, and pass `-m` to commits rather than expecting an editor. A
+delegated shell has no TTY and no default timeout, so a command that waits for
+input, or a one-off script whose timers keep it alive, holds the turn until
+someone interrupts it: make scripts exit and bound anything that can block with
+`timeout`, using a longer explicit limit for a known long check. A command that
+timed out leaves the worktree mid-state, so inspect it before rerunning.
 
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
