@@ -195,20 +195,25 @@ function TracePanel({ end, items, model }: { end: TurnEnd; items: TranscriptItem
           ]}
         />
       </div>
-      <div className="flex items-center gap-2 px-1" aria-hidden>
-        <span className="shrink-0" style={{ width: TRACE_COLUMNS.label }} />
-        {/* The ticks sit on the same inner box the bars are drawn on, so `0s` is under the
-            bars' start and the turn's duration under its end. */}
-        <span
-          className="flex flex-1 justify-between text-caption text-fg-faint tabular"
-          style={{ paddingInline: TRACE_TRACK_INSET }}
-        >
-          <span>0s</span>
-          <span>{formatDuration(trace.durationMs)}</span>
-        </span>
-        <span className="shrink-0" style={{ width: TRACE_COLUMNS.value }} />
-      </div>
+      {/*
+       * The axis rides inside the scroller as its first row, so it keeps the rows' width when a
+       * classic scrollbar takes its gutter: an axis outside it was a scrollbar wider than the bars
+       * under it. Sticky over the dense glass, so the rows scroll under it.
+       */}
       <div className="flex min-h-0 flex-col overflow-y-auto pb-1.5">
+        <div className="rc-glass-strong sticky top-0 z-10 flex items-center gap-2 px-1 pb-2" aria-hidden>
+          <span className="shrink-0" style={{ width: TRACE_COLUMNS.label }} />
+          {/* The ticks sit on the same inner box the bars are drawn on, so `0s` is under the
+              bars' start and the turn's duration under its end. */}
+          <span
+            className="flex flex-1 justify-between text-caption text-fg-faint tabular"
+            style={{ paddingInline: TRACE_TRACK_INSET }}
+          >
+            <span>0s</span>
+            <span>{formatDuration(trace.durationMs)}</span>
+          </span>
+          <span className="shrink-0" style={{ width: TRACE_COLUMNS.value }} />
+        </div>
         {rows.map((row) => (
           <TraceRowView
             key={row.id}

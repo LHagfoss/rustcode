@@ -43,7 +43,7 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | `sidebar` | The sidebar | `#131315` | `#f7f7f8` |
 | `surface` | Resting cards: composer, settings groups, error cards | `#18181a` | `#f0f0f1` |
 | `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#1e1e21` | `#ffffff` |
-| `surface-3` | Raised over raised: a selected segment, kbd | `#232327` | `#e8e8ea` |
+| `surface-3` | Raised over raised: kbd, a hover label or a tooltip drawn on a popover | `#232327` | `#e8e8ea` |
 | `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0f` | `#0000000f` |
 | `border-strong` | Inputs, dividers that must read | `#ffffff1c` | `#0000001f` |
 | `text` | Primary text and icons | `#ededed` | `#171717` |
@@ -65,6 +65,12 @@ The surfaces step evenly in lightness (CIE L\*): dark `bg` 3.0, `sidebar`
 white (raised surfaces are lifted by their shadow there). A theme that
 changes them should keep the steps even.
 
+Two more values are the same in every theme, and no theme sets them: `knob`
+(`#ffffff`, `bg-knob`) is the part of an active control that moves or is
+picked, and `knob-fg` (`#171717`, `text-knob-fg`) is the label drawn on it. They
+are fixed literals rather than derived, so a theme cannot soften the white pill
+into a tint of its own (see Active controls).
+
 Derived values are computed from the tokens in `index.css` and are never
 set by a theme:
 
@@ -75,7 +81,7 @@ set by a theme:
 | `fill-strong` | `text` at 13% | Pressed, an "on" icon button, switch track off |
 | `message` | `text` at 8.5% over `bg` | A sent message's bubble: a step off the pane, so it is told apart from hover fills |
 | `--rc-diff-add` / `--rc-diff-del` | `success` / `danger` at 14% | Diff line backgrounds |
-| `knob` / `knob-fg` / `knob-shadow` | white, `#171717`, `0 1px 2px soft` + a `border-strong` ring | The moving part of an active control: a segmented control's selected pill, a switch's thumb, a slider's thumb (see Active controls) |
+| `knob-shadow` | `0 1px 2px soft` plus a hairline ring: `text` at 20% on the light theme, `border-strong` on the dark one | The ring and close shadow that keep the white knob apart from its track |
 | `--rc-shadow-1` / `--rc-shadow-2` | see Elevation | |
 
 Tailwind classes use the token names, except the text family, which is
@@ -124,13 +130,15 @@ inside a padded parent uses the step below the parent's.
 The part of a control that moves or is picked is **white** (`bg-knob`), not
 accent and not a dark pill: the selected segment of a `Segments`/`Choice`
 track, a switch's thumb, a slider's thumb. It is white in both modes, with
-`shadow-knob` (a close shadow and a `border-strong` hairline) so it still
-reads on the light theme's near-white track, and its label is `text-knob-fg`,
-dark in both modes. A track's own fill marks the range or the state the
-control is off in (`bg-fill-subtle`, or `accent` for a switch that is on);
-the accent never fills the knob. Left out of this: pressed icon buttons
-(`bg-fill-strong`), primary actions (`bg-fg text-bg`) and native checkboxes,
-whose check is the mark rather than a knob.
+`shadow-knob` (a close shadow and a hairline ring) so it still reads on the
+light theme's near-white track, and its label is `text-knob-fg`, dark in both
+modes. That ring is `border-strong` on the dark theme and `text` at 20% on the
+light one, where 12% black would leave a white pill nearly invisible. A track's
+own fill marks the range or the state the control is off in (`bg-fill`, or
+`accent` for a switch that is on); the accent never fills the knob. Left out of
+this: pressed icon buttons (`bg-fill-strong`), primary actions (`bg-fg
+text-bg`) and native checkboxes, whose check is the mark rather than a knob.
+The model picker's effort thumb is the last control to move onto `knob`.
 
 ## Focus
 
@@ -404,17 +412,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   no hover.
 - **Select:** `Select` for one choice from a list, native `<select>` never: a
   pill trigger with a chevron, opening a menu with a check on the current
-  option. `Segments` when two to four short options should all show: a track
-  with the picked segment on a white pill that slides to it (`bg-knob`,
-  `text-knob-fg`), the others muted; `Choice` (settingsKit) is the same at
-  the `sm` radius inside Settings' cards.
+  option. `Segments` when two to four short options should all show: a
+  `bg-fill` track with the picked segment on a white pill that slides to it
+  (`bg-knob`, `text-knob-fg`), the others muted; `Choice` (settingsKit) is the
+  same at the `sm` radius inside Settings' cards.
 - **Switch:** the track is `bg-accent` on and `bg-fill-strong` off, its thumb
-the white knob: `bg-knob shadow-knob`.
+  the white knob: `bg-knob shadow-knob`.
 - **Slider:** `Slider` (settingsKit) for a whole number in a short range, such
   as the threads one thread may run at once: the native range (so arrows, Home
-  and End work), the value beside it and the ends of the range under it. The
-  native thumb is the knob too (`.rc-range` in index.css): the browser would
-draw it in the accent colour.
+  and End work), the value beside it and the ends of the range under the rail.
+  The native thumb is the knob too (`.rc-range` in index.css): the browser would
+  draw it in the accent colour. Its focus ring is the global one, drawn by the
+  `.rc-range` rule because the base layer takes the outline off every field.
 - **Chip:** `Chip` for a row's short state — signed in, not signed in, active,
   stale — tinted 12% in its tone, never a coloured border.
 - **Input:** `h-8 rounded-md bg-fill-subtle px-3 text-callout`,
@@ -834,7 +843,9 @@ draw it in the accent colour.
   text a model call streamed. The label column, the track and the number
   column are one set of widths (`TRACE_COLUMNS` in `lib/trace.ts`) for the axis
   above the rows and for every row, so `0s` and the turn's duration sit exactly
-  on the bars' ends; the bars are drawn inside a 4px inset at each end of the
+  on the bars' ends; the axis is the scroller's first row and sticks to its top,
+  so a classic scrollbar's gutter cannot make it a scrollbar wider than the rows
+  under it. The bars are drawn inside a 4px inset at each end of the
   track (`TRACE_TRACK_INSET`), so one at the turn's first instant never touches
   the rounded edge, with `TRACE_MIN_BAR` as the floor that keeps a short call
   visible. The numbers are the engine's per-round usage

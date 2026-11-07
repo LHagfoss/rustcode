@@ -472,8 +472,11 @@ describe("ordering and layout", () => {
   test("the columns the axis and the rows share are on the design's grid", () => {
     // docs/design.md › Turn trace: the axis above the rows and every row use these, so a tick
     // sits on the end of the bar under it. They are spacing steps, so they stay on the 4px grid.
-    for (const width of [TRACE_COLUMNS.label, TRACE_COLUMNS.value]) expect(width % 4).toBe(0);
-    expect(TRACE_TRACK_INSET % 2).toBe(0);
+    expect(TRACE_COLUMNS.label).toBe(184);
+    expect(TRACE_COLUMNS.value).toBe(124);
+    expect(TRACE_TRACK_INSET).toBe(4);
+    for (const width of [TRACE_COLUMNS.label, TRACE_COLUMNS.value, TRACE_TRACK_INSET])
+      expect(width % 4).toBe(0);
   });
 
   test("a bar that took no time still has a place inside the track", () => {

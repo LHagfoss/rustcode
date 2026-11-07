@@ -205,6 +205,8 @@
      that keeps it apart from a light track, where white alone would not read. */
   --rc-knob: #ffffff;
   --rc-knob-fg: #171717;
+  /* Its hairline is `border-strong` on the dark theme; the light theme lifts it (below), where a
+     white pill sits on a near-white track. */
   --rc-knob-shadow: 0 1px 2px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border-strong);
   /* A sent message's surface: 8.5% of the text over the pane lands a step above the background in
      either mode, and follows whatever neutrals a theme brings. */
@@ -232,6 +234,16 @@
   /* The composer's box and tray take a step of their own: it is the one surface the chat floats
      in, and the rounder corner reads as one floating card over the transcript. */
   --rc-composer-radius: var(--rc-radius-3xl);
+}
+
+/*
+ * The knob's ring on the light theme, where its track is a near-white fill: `border-strong` at 12%
+ * black is too faint for a white pill to read as one, so the hairline goes to 20% of the text
+ * colour. The dark theme keeps the ring the token's own `border-strong` above gives it.
+ */
+:root[data-theme="light"] {
+  --rc-knob-shadow:
+    0 1px 2px var(--rc-shadow-soft), 0 0 0 1px color-mix(in srgb, var(--rc-text) 20%, transparent);
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md).
@@ -863,6 +875,14 @@
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
+}
+/*
+ * A range is an `input`, and the base layer takes the ring off every field whose container shows
+ * focus. This one has no container of its own, so it draws the ring like any other control does.
+ */
+.rc-range:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
+  outline-offset: 2px;
 }
 .rc-range::-webkit-slider-runnable-track {
   height: 4px;
