@@ -5,7 +5,7 @@
 // became, above its title and the mark of the harness that runs it. What it is
 // doing (Working, Approval, Input, Failed, Done until you open it) takes the
 // time's slot on the top line, the threads it started show as a stack of marks
-// on the second line, and Settled (threads marked Done) opens from the foot.
+// on the second line, and Settled (threads settled) opens from the foot.
 // The app's own pages (settings, pull requests) are buttons in the toolbar's
 // titlebar row.
 
@@ -102,7 +102,6 @@ import {
   setPanel,
   setPinned,
   setThreadStatus,
-  setThreadsStatus,
   settleThread,
   settleThreads,
   setView,
@@ -113,6 +112,7 @@ import {
   togglePin,
   toggleSidebar,
   trashThread,
+  unsettleThreads,
   useApp,
   useShortcutHint,
   wakeSnoozed,
@@ -247,6 +247,7 @@ function ThreadMenuItems({
   const allPinned = useApp((s) => (bulk ?? []).every((x) => s.pinned.includes(x.id)));
   // Settled threads in the selection get Unsettle beside Settle, the same as a single row.
   const bulkSettled = useApp((s) => (bulk ?? []).some((x) => statusOf(s, x.id) === "done"));
+  const bulkAllSettled = useApp((s) => !!bulk?.length && bulk.every((x) => statusOf(s, x.id) === "done"));
   const canFiles = hasShell();
   // The selection's menu: every hook is read above, so the early return keeps the hooks in order.
   if (bulk && bulk.length > 1) {
@@ -255,20 +256,22 @@ function ThreadMenuItems({
     return (
       <>
         <div className={menuLabel}>{n} threads selected</div>
-        <Item
-          className={menuItem}
-          onSelect={() => {
-            settleThreads(bulk.map((x) => x.id));
-            onClear?.();
-          }}
-        >
-          <CircleCheck size={13} /> Settle {n} Threads
-        </Item>
+        {!bulkAllSettled && (
+          <Item
+            className={menuItem}
+            onSelect={() => {
+              settleThreads(ids);
+              onClear?.();
+            }}
+          >
+            <CircleCheck size={13} /> Settle {n} Threads
+          </Item>
+        )}
         {bulkSettled && (
           <Item
             className={menuItem}
             onSelect={() => {
-              void setThreadsStatus(ids, "idle");
+              unsettleThreads(ids);
               onClear?.();
             }}
           >
@@ -483,13 +486,11 @@ function RowAction({
 }
 
 /**
- * The room a row's top line keeps clear of its hover actions, by whether the row still offers
- * Settle: the actions are 22px each and sit 6px in from the row's end.
+ * The room a row's top line keeps clear of its hover actions: Pin, Settle (or
+ * Unsettle) and the menu, three 22px buttons that sit 6px in from the row's end.
  */
-const ACTIONS_CLEAR = {
-  open: "group-hover:pr-[72px] group-has-[:focus-visible]:pr-[72px] group-has-[[data-state=open]]:pr-[72px]",
-  done: "group-hover:pr-[50px] group-has-[:focus-visible]:pr-[50px] group-has-[[data-state=open]]:pr-[50px]",
-} as const;
+const ACTIONS_CLEAR =
+  "group-hover:pr-[72px] group-has-[:focus-visible]:pr-[72px] group-has-[[data-state=open]]:pr-[72px]";
 
 /**
  * A row's fill, drawn as its own child under the row's content.
@@ -682,14 +683,9 @@ const ThreadRow = memo(function ThreadRow({
             <RowFill selected={lit} picked={picked} radius="rounded-xl" />
             {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
                 actions take the right slot's place, so this line keeps exactly their room clear:
-                22px each, plus the 6px they sit in from the row's edge. Settle is the third one,
-                and a done thread has no Settle. */}
-            <span
-              className={cx(
-                "relative flex h-[17px] w-full min-w-0 items-center gap-1",
-                ACTIONS_CLEAR[done ? "done" : "open"],
-              )}
-            >
+                Pin, Settle or Unsettle and the menu, 22px each plus the 6px they sit in from
+                the row's edge. */}
+            <span className={cx("relative flex h-[17px] w-full min-w-0 items-center gap-1", ACTIONS_CLEAR)}>
               {!grouped && (
                 <>
                   <ProjectMark name={project} />
@@ -1532,7 +1528,7 @@ export function Sidebar() {
       // open one with no row to hang under (`orphanOpen`).
       if (!searching && parentOf.has(s.id) && s.id !== orphanOpen) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
-      // Settled: threads marked Done (by the user, or the engine for a merged branch), and
+      // Settled: threads settled (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
       const status = marks[s.id] ?? listed;
       const done = status === "done" || (status !== "review" && idleSettled(s.updatedAt, now));
@@ -1743,7 +1739,15 @@ export function Sidebar() {
 
   const pickedSessions = useMemo(() => listedPicks(sessions, picked), [sessions, picked]);
   const allPickedPinned = pickedSessions.length > 0 && pickedSessions.every((s) => pinned.includes(s.id));
-  const pickedSettled = useApp((s) => [...picked].some((id) => statusOf(s, id) === "done"));
+  // Whether any or every picked thread is settled, read from the same list the bar acts on.
+  // Unsettle moves only the settled ones, so a Review mark on the rest of the selection stays.
+  const pickedSettled = useApp((s) =>
+    listedPicks(s.sessions, picked).some((x) => statusOf(s, x.id) === "done"),
+  );
+  const allPickedSettled = useApp((s) => {
+    const picks = listedPicks(s.sessions, picked);
+    return picks.length > 0 && picks.every((x) => statusOf(s, x.id) === "done");
+  });
   const clearSelection = useCallback(() => setPicked(NO_PICKS), []);
   const focusRow = (id: string) =>
     list.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`)?.focus();
@@ -2052,7 +2056,7 @@ export function Sidebar() {
                     )}
                     {section.id === "settled" && (
                       <p className="px-2.5 pt-1 pb-2 text-caption text-fg-faint">
-                        Done, or untouched for 3 days. A new message brings one back.
+                        Settled, or untouched for 3 days. A new message brings one back.
                       </p>
                     )}
                   </Fold>
@@ -2082,25 +2086,24 @@ export function Sidebar() {
             >
               {allPickedPinned ? "Unpin" : "Pin"}
             </Pill>
-            <Pill
-              size="sm"
-              quiet
-              onClick={() => {
-                settleThreads(pickedSessions.map((s) => s.id));
-                clearSelection();
-              }}
-            >
-              Settle
-            </Pill>
+            {!allPickedSettled && (
+              <Pill
+                size="sm"
+                quiet
+                onClick={() => {
+                  settleThreads(pickedSessions.map((s) => s.id));
+                  clearSelection();
+                }}
+              >
+                Settle
+              </Pill>
+            )}
             {pickedSettled && (
               <Pill
                 size="sm"
                 quiet
                 onClick={() => {
-                  void setThreadsStatus(
-                    pickedSessions.map((s) => s.id),
-                    "idle",
-                  );
+                  unsettleThreads(pickedSessions.map((s) => s.id));
                   clearSelection();
                 }}
               >

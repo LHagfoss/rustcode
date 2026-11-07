@@ -1,7 +1,7 @@
 // The Board: the threads as cards in four columns, Running, Needs input,
-// Review and Done, as an alternative to the list. Drag a card to Review or
-// Done (or use its buttons) to mark it; the engine moves merged worktree
-// threads to Done by itself. Idle threads stay in the list.
+// Review and Settled, as an alternative to the list. Drag a card to Review or
+// Settled (or use its buttons) to mark it; the engine moves merged worktree
+// threads to Settled by itself. Idle threads stay in the list.
 
 import { CircleCheck, Eye, GitBranch, PanelLeft, SquarePen, Undo2 } from "lucide-react";
 import { useMemo, useState } from "react";

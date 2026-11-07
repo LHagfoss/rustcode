@@ -589,16 +589,16 @@ function SettledBar({ threadId }: { threadId: string }) {
   const status = useThreadStatus(threadId);
   if (status !== "done") return null;
   return (
-    <section
-      aria-label="This thread is settled"
-      className="rc-glass-overlay relative flex h-[34px] items-center gap-2 rounded-full pr-1.5 pl-3 text-callout rc-in"
+    <div
+      role="status"
+      className="rc-glass-overlay relative flex h-[32px] items-center gap-2 rounded-full pr-1.5 pl-3 text-callout rc-in"
     >
       <CircleCheck size={12} className="shrink-0 text-success" />
       <span className="min-w-0 flex-1 truncate font-medium text-fg-muted">Settled</span>
       <Pill size="sm" quiet onClick={() => void setThreadStatus(threadId, "idle")}>
         <CircleDashed size={11} /> Unsettle
       </Pill>
-    </section>
+    </div>
   );
 }
 

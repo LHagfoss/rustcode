@@ -505,8 +505,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   picked rows are `bg-accent/12` + `font-medium`, which is not the open row's
   `bg-fill`, and a plain click opens the thread and lets the selection go. A
   thread that leaves the list leaves the selection. With more than one picked,
-  the row's menu and a bar under the list (`3 selected`, Pin, Settle,
-  Unsettle while one of them is settled, Clear)
+  the row's menu and a bar under the list (`3 selected`, Pin, Settle unless all
+  of them are settled, Unsettle while one of them is, Clear)
   act on all of them, with one toast and one failure message for the lot.
 - **Skeleton:** `Skeleton` (`.rc-skeleton`): `fill-subtle` blocks the shape
   of what will appear (a text line `h-3`, a meta line `h-2`, a pill

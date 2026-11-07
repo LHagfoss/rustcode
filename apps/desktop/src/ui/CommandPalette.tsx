@@ -124,7 +124,7 @@ function baseActions(): PaletteAction[] {
     {
       id: "board",
       label: s.view.kind === "board" ? "Show the chat" : "Show the board",
-      detail: "Running, Needs input, Review, Done",
+      detail: "Running, Needs input, Review, Settled",
       icon: Columns3,
       words: "kanban status view list",
       run: () => setView(s.view.kind === "board" ? { kind: "chat" } : { kind: "board" }),
@@ -145,13 +145,6 @@ function baseActions(): PaletteAction[] {
             words: "status",
             run: () => void setThreadStatus(s.selectedId!, "review"),
           },
-          {
-            id: "mark-done",
-            label: "Settle this thread",
-            icon: CircleCheck,
-            words: "status done settle",
-            run: () => settleThread(s.selectedId!),
-          },
           ...(statusOf(s, s.selectedId!) === "done"
             ? [
                 {
@@ -162,7 +155,15 @@ function baseActions(): PaletteAction[] {
                   run: () => void setThreadStatus(s.selectedId!, "idle"),
                 },
               ]
-            : []),
+            : [
+                {
+                  id: "mark-done",
+                  label: "Settle this thread",
+                  icon: CircleCheck,
+                  words: "status done settle",
+                  run: () => settleThread(s.selectedId!),
+                },
+              ]),
         ]
       : []),
     {
