@@ -379,7 +379,7 @@ function TraceRowView({
                 <ToolDetail item={tool} className="pl-1" />
               ) : (
                 <div className="flex items-start gap-2">
-                  <pre className="selectable m-0 max-h-[240px] min-w-0 flex-1 overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-words">
+                  <pre className="selectable m-0 max-h-[240px] min-w-0 flex-1 overflow-auto rounded-md bg-fill-subtle p-2 font-mono text-caption leading-[15px] whitespace-pre-wrap break-words">
                     {row.text}
                   </pre>
                   <CopyButton text={row.text ?? ""} iconOnly label="Copy the call's text" />

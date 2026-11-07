@@ -23,6 +23,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Smartphone,
   TerminalSquare,
   X,
 } from "lucide-react";
@@ -45,6 +46,7 @@ import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
+import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
 import { validateDefault } from "../state/harness";
 import { MAX_ACTIVE_LIMIT, MIN_ACTIVE_LINKS } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
@@ -62,6 +64,8 @@ import {
   type SettingsSection,
   setActiveTheme,
   setAnimateStreaming,
+  setAutoCompactMode,
+  setAutoCompactThreshold,
   setChatWidth,
   setContinueAfterLimit,
   setDefaultCwd,
@@ -98,6 +102,7 @@ import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
+import { RemoteAccessPage } from "./RemoteAccessPage";
 import { ShortcutsPage } from "./ShortcutSettings";
 import { StatisticsPage } from "./StatisticsPage";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
@@ -141,6 +146,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
       { id: "agents", label: "Agents", icon: Layers },
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
+      { id: "remote", label: "Remote access", icon: Smartphone },
     ],
   },
   {
@@ -229,6 +235,7 @@ function PresenceRow() {
 
 function GeneralPage() {
   const defaultCwd = useApp((s) => s.defaultCwd);
+  const autoCompact = useApp((s) => s.autoCompact);
   const resume = useApp((s) => s.resumeAfterRestart);
   const afterLimit = useApp((s) => s.continueAfterLimit);
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
@@ -292,6 +299,43 @@ function GeneralPage() {
             onChange={setContinueAfterLimit}
           />
         </Row>
+        <Row
+          title="Auto-compact"
+          reset={
+            autoCompact.mode === SETTINGS_DEFAULTS.autoCompact.mode
+              ? undefined
+              : () => setAutoCompactMode(SETTINGS_DEFAULTS.autoCompact.mode)
+          }
+          subtitle="RustCode asks the harness to compact its own context when a turn ends above the threshold, and, for Claude Code and Codex, shortly before their prompt cache expires. Never while a turn runs, a message waits or an approval is open; turn it off for one thread in its menu."
+        >
+          <Choice
+            label="Auto-compact"
+            value={autoCompact.mode}
+            options={AUTO_COMPACT_MODES}
+            onChange={setAutoCompactMode}
+          />
+        </Row>
+        {autoCompact.mode !== "off" && (
+          <Row
+            title="Auto-compact threshold"
+            reset={
+              autoCompact.threshold === AUTO_COMPACT_DEFAULT_THRESHOLD
+                ? undefined
+                : () => setAutoCompactThreshold(AUTO_COMPACT_DEFAULT_THRESHOLD)
+            }
+            subtitle="Compact once the context passes this many tokens. The idle, pre-cache rule uses a smaller 60k threshold."
+          >
+            <Slider
+              label="Auto-compact threshold"
+              value={Math.round(autoCompact.threshold / 1_000)}
+              min={20}
+              max={500}
+              step={10}
+              onChange={(value) => setAutoCompactThreshold(value * 1_000)}
+              unit="k tokens"
+            />
+          </Row>
+        )}
       </Group>
       <Group title="Notifications">
         <Row
@@ -473,7 +517,7 @@ function AgentsPage() {
   return (
     <>
       {snapshot.unsupported && (
-        <p className="mb-4 rounded-lg bg-warning/10 px-3.5 py-2.5 text-callout">
+        <p className="mb-4 rounded-lg bg-warning/10 px-3 py-2 text-callout">
           This engine does not run other harnesses yet (no{" "}
           <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's local engine. Update
           RustCode to add Claude Code, Codex, Gemini and others.
@@ -744,7 +788,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3.5">
+    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3">
       <div className="flex items-center gap-2">
         <input
           autoFocus
@@ -874,7 +918,7 @@ function AppearancePage() {
 function TokenList() {
   const [open, setOpen] = useState(false);
   return (
-    <section className="mb-8">
+    <section className="mb-6">
       <SectionTitle
         title="Tokens"
         action={
@@ -886,7 +930,7 @@ function TokenList() {
       {open && (
         <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 rounded-xl bg-surface p-3">
           {TOKENS.map((t) => (
-            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2.5 py-1.5">
+            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1.5">
               <span
                 className="size-4 shrink-0 rounded-xs shadow-1"
                 style={{ background: `var(${cssName(t)})` }}
@@ -1425,12 +1469,13 @@ export function Settings() {
             <div className="flex min-w-0 flex-1 flex-col">
               <PanelHeader label={current.label} />
               <main className="scroll-stable min-h-0 flex-1">
-                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-5 pb-24">
+                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
                   {section === "general" && <GeneralPage />}
                   {section === "chat" && <ChatPage />}
                   {section === "agents" && <AgentsPage />}
                   {section === "connections" && <ConnectionsPage />}
                   {section === "capabilities" && <CapabilitiesPage />}
+                  {section === "remote" && <RemoteAccessPage />}
                   {section === "appearance" && <AppearancePage />}
                   {section === "keyboard" && <ShortcutsPage />}
                   {section === "usage" && <UsagePage />}
@@ -1456,7 +1501,7 @@ export function Settings() {
 function PanelHeader({ label }: { label: string }) {
   const resets = useRowResets();
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-5 pe-2">
+    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-4 pe-2">
       <nav aria-label="Settings breadcrumb" className="min-w-0">
         <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
           <li className="shrink-0 font-medium text-fg-muted">Settings</li>

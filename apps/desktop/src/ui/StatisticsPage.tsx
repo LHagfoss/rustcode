@@ -223,7 +223,7 @@ export function StatisticsPage() {
 
   return (
     <>
-      <section className="mb-8 scroll-mt-5" data-setting="Totals">
+      <section className="mb-6 scroll-mt-5" data-setting="Totals">
         <SectionTitle
           title="Totals"
           action={
@@ -767,7 +767,7 @@ function PlanLimits({ names }: { names: Map<string, string> }) {
           return (
             <div
               key={`${plan.source}/${plan.harness ?? ""}/${plan.account ?? ""}`}
-              className="flex flex-col gap-2.5"
+              className="flex flex-col gap-2"
             >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 flex-1 truncate font-medium text-body">
@@ -966,7 +966,7 @@ function StatisticsSkeleton({
 }) {
   return (
     <>
-      <section className="mb-8">
+      <section className="mb-6">
         <SectionTitle
           title="Totals"
           action={
@@ -985,7 +985,7 @@ function StatisticsSkeleton({
         />
         <div role="status" aria-label="Loading" className="grid grid-cols-2 gap-3 @min-[44rem]:grid-cols-4">
           {[0, 1, 2, 3].map((tile) => (
-            <div key={tile} className="flex flex-col gap-2 rounded-xl bg-surface px-4 py-3.5">
+            <div key={tile} className="flex flex-col gap-2 rounded-xl bg-surface px-4 py-3">
               <Skeleton className="h-2 w-16" />
               <Skeleton className="h-6 w-24" />
               <Skeleton className="h-2 w-28" />
@@ -995,8 +995,8 @@ function StatisticsSkeleton({
         </div>
       </section>
       {[0, 1].map((card) => (
-        <section key={card} className="mb-8" role="status" aria-label="Loading">
-          <div className="mb-2.5 flex min-h-7 items-center px-3 sm:px-4">
+        <section key={card} className="mb-6" role="status" aria-label="Loading">
+          <div className="mb-2 flex min-h-7 items-center px-4">
             <Skeleton className="h-3 w-32" />
           </div>
           <div className="flex flex-col gap-3 rounded-xl bg-surface px-4 py-4">

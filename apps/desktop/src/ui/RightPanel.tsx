@@ -333,7 +333,7 @@ export function RightPanel() {
       <div
         data-tauri-drag-region
         style={{ height: HEADER_HEIGHT }}
-        className="flex shrink-0 items-center gap-2 border-border border-b pr-2 pl-2.5"
+        className="flex shrink-0 items-center gap-2 border-border border-b pr-2 pl-2"
       >
         {/* The views keep their labels and scroll before the close button leaves the row. */}
         <div className="flex min-w-0 items-center overflow-x-auto">

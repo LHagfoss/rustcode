@@ -150,7 +150,7 @@ pub const PROMPT_HINT_V7: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 
 /// [`PROMPT_HINT_V7`] for version 8 clients: delegation goes through RustCode's
 /// tools, as a Claude Code thread has no native subagent tool (#3176).
-pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and delegate through `start_session` or `fan_out`, even for a quick lookup: a Claude Code thread has no subagent tool. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`, while a harness with its own subagent tool may use it for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
@@ -1003,8 +1003,8 @@ mod tests {
         // It rides in the root prompt and in the MCP server's instructions, so
         // it is bounded: v4 adds the two data tools, v5 the account line and
         // the line that says a thread an agent starts is its delegate, v6 the
-        // activity read, v7 the queue control, v8 that delegation goes through
-        // RustCode's tools.
+        // activity read, v7 the queue control, v8 that native subagents go
+        // through RustCode's tools.
         let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V8);
         println!(
             "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v8 {tokens} tokens",
@@ -1013,7 +1013,7 @@ mod tests {
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V6)
         );
-        assert!(tokens < 370, "{tokens}");
+        assert!(tokens < 380, "{tokens}");
     }
 
     #[test]

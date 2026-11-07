@@ -178,7 +178,7 @@ export function Patch({
   const index = useMemo(() => new Map(lines.map((line, i) => [line, i])), [lines]);
   const width = String(Math.max(...lines.map((line) => line.new ?? line.old ?? 0), 1)).length;
   const hunkRow = (key: string, text: string) => (
-    <div key={key} className="px-2.5 text-fg-faint">
+    <div key={key} className="px-2 text-fg-faint">
       {text}
     </div>
   );

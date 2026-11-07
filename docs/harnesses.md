@@ -482,6 +482,17 @@ What each part does for an external thread:
   RustCode created — once, never after `session/load`. It never reaches the
   thread's history, title or search index, and the agent's own echo of it as
   `user_message_chunk` is stripped.
+- **Native subagents.** A `claude-code` session RustCode starts with the
+  orchestrator attached gets
+  `_meta.claudeCode.options.disallowedTools: ["Task", "Agent"]` on
+  `session/new` and `session/load` — the shape `claude-agent-acp` forwards to
+  the Claude Agent SDK and merges with its own list. The thread delegates
+  through `start_session` and `fan_out` instead, so every subagent is a
+  RustCode thread in the delegate UI. The rustcode MCP server is untouched.
+  Without the orchestrator (orchestration off in Settings, or a platform
+  where it has no socket) nothing is disallowed: the thread keeps its own
+  subagent tool rather than losing delegation entirely. Another harness's
+  session gets no `_meta` from RustCode.
 - **Codex events.** Message deltas are `agent_message_chunk`, reasoning
   summaries `agent_thought_chunk`, command, file-change, MCP and web-search
   items `tool_call`/`tool_call_update` (command output and diffs as text
@@ -585,15 +596,23 @@ the composer's model picker › Harness switches an open thread.
 
 ## Compaction
 
-Each harness compacts its own context; RustCode does not compact on a
-threshold of its own. `/compact` on its own asks for a
-compaction now: the Codex adapter calls Codex's `thread/compact/start`
+Each harness compacts its own context with its own command; the desktop app
+decides when to ask, but it never writes the summary itself. `/compact` on its
+own asks for a compaction now: the Codex adapter calls Codex's `thread/compact/start`
 instead of sending the text to the model, and an ACP harness (Claude Code,
 OpenCode) gets `/compact` as its prompt and runs its own command. Codex's
 `contextCompaction` item, whether asked for or automatic mid-turn, becomes
 the engine's compaction card (`_meta.rustcode.kind = "compaction"`), which
 the desktop app shows as one quiet "Context compacted" row. The context
 panel has *Compact now*, which sends `/compact`.
+
+The desktop app can also decide to compact on its own (#3170): after a turn
+above its size threshold, and in the minute after a prompt cache is due to
+expire (about 4.5 minutes after a turn) when the context is above 60k. It
+sends the same `/compact`, so each harness compacts with its own command.
+Claude Code uses both rules, Codex only the cache rule (it already compacts
+inside a turn), and the built-in harness keeps its own pre-request compaction.
+An ACP agent that does not advertise `/compact` is skipped.
 
 ## Configuration
 

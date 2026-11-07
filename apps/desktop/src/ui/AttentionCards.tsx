@@ -231,7 +231,7 @@ function RiskBadge({ risk }: { risk: RiskAssessment }) {
 /** The key–value facts of a request: command, folder, paths and an edit's size. */
 function Preview({ rows }: { rows: PreviewRow[] }) {
   return (
-    <div className="flex flex-col gap-1 rounded-md bg-fill-subtle p-2.5">
+    <div className="flex flex-col gap-1 rounded-md bg-fill-subtle p-2">
       {rows.map((row) => (
         <div key={`${row.label}:${row.value}`} className="flex gap-2">
           <span className="w-[58px] shrink-0 pt-px text-caption text-fg-muted">{row.label}</span>
@@ -309,7 +309,7 @@ export function ApprovalRow({
         <div className="ml-[26px] flex max-h-[160px] flex-col gap-2 overflow-y-auto">
           {rows.length > 0 && <Preview rows={rows} />}
           {showInput && (
-            <pre className="selectable m-0 rounded-md bg-fill-subtle p-2.5 font-mono text-caption">
+            <pre className="selectable m-0 rounded-md bg-fill-subtle p-2 font-mono text-caption">
               {JSON.stringify(request.input, null, 2)}
             </pre>
           )}
@@ -368,7 +368,7 @@ export function ApprovalNotice({
   return (
     <section
       aria-label="Approval needed"
-      className="elevated flex min-h-[34px] items-center gap-2 rounded-2xl px-2.5 py-1 rc-in"
+      className="elevated flex min-h-[34px] items-center gap-2 rounded-2xl px-2 py-1 rc-in"
     >
       <Tooltip label={`${risk.label}${risk.why ? `: ${risk.why}` : ""}`}>
         <Hand size={14} className={cx("ml-1 shrink-0", tone.icon)} fill="currentColor" fillOpacity={0.2} />
@@ -403,7 +403,7 @@ export function ResolvedApprovalBar({ approval }: { approval: ResolvedApproval }
   return (
     <section
       aria-label="Answer sent"
-      className="elevated rc-resolve flex min-h-[34px] items-center gap-2 rounded-2xl px-2.5 py-1"
+      className="elevated rc-resolve flex min-h-[34px] items-center gap-2 rounded-2xl px-2 py-1"
     >
       <span className="ml-1 flex w-[14px] shrink-0 justify-center">
         {approval.allowed ? (
@@ -513,7 +513,7 @@ export function QuestionCard({
           onChange={(e) => setText(e.target.value)}
           placeholder="Or write your own answer…"
           aria-label="Your own answer"
-          className="h-[30px] flex-1 rounded-full bg-fill-subtle px-3.5 text-body outline-none placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+          className="h-[30px] flex-1 rounded-full bg-fill-subtle px-3 text-body outline-none placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
         />
         <Pill prominent type="submit" disabled={!text.trim()}>
           Send

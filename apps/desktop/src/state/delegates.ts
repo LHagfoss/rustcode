@@ -16,6 +16,7 @@
 // Pure (no React, no store), so the tree, the Board card and their tests share
 // one answer.
 
+import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import type { ThreadStatus } from "../acp/v2";
 import { isActive, type Link, type LinkState, MAX_DEPTH } from "./orchestration";
 import { type CostTotals, emptyCost, formatCost } from "./pricing";
@@ -404,6 +405,17 @@ const working = (item: ToolItem) => item.status === "pending" || item.status ===
  * (`ui/Links.tsx`), never in a surface of their own. A finished one is
  * the transcript's row, not the strip's.
  */
+/**
+ * RustCode's own subagents still at work (`spawn_agent`, fed by
+ * `_rustcode/agents`). A `spawn_agent` call returns once it has started the
+ * agent, so the transcript's call is not where its work is: this list is,
+ * beside the harness's own agents and the delegates, in the strip above the
+ * composer (`ui/Links.tsx`).
+ */
+export function runningAgents(agents: readonly SubagentInfo[]): SubagentInfo[] {
+  return agents.filter(agentActive);
+}
+
 export function runningSubagents(items: readonly TranscriptItem[]): NativeAgent[] {
   const steps = new Map<string, ToolItem[]>();
   for (const item of items) {

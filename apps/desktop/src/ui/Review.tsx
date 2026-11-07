@@ -217,7 +217,7 @@ const FileDiffView = memo(function FileDiffView({
         {saved.map((c, i) => (
           <div
             key={i}
-            className="my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-lg bg-accent/10 px-2.5 py-1.5 font-sans text-callout rc-in"
+            className="my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-lg bg-accent/10 px-2 py-1.5 font-sans text-callout rc-in"
           >
             <span className="selectable flex-1 whitespace-pre-wrap">{c.body}</span>
             <button
@@ -663,7 +663,7 @@ export function Review({ threadId }: { threadId: string }) {
             )}
           </div>
           {(comments.length > 0 || note) && (
-            <div className="elevated mx-4 mb-4 flex flex-col gap-2 p-2.5 rc-in">
+            <div className="elevated mx-4 mb-4 flex flex-col gap-2 p-2 rc-in">
               <div className="flex items-center gap-2 px-1 text-callout">
                 <ChevronRight size={12} className="text-fg-faint" />
                 <b>
@@ -677,7 +677,7 @@ export function Review({ threadId }: { threadId: string }) {
                 onChange={(e) => setNote(e.target.value)}
                 placeholder="A note for the whole review (optional)"
                 aria-label="Review note"
-                className="resize-y rounded-lg bg-fill-subtle px-2.5 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
+                className="resize-y rounded-lg bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
               />
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Pill onClick={() => setComments([])}>Discard</Pill>

@@ -892,6 +892,7 @@ async fn a_claude_code_session_disallows_its_native_subagent_tool() {
         Fake::default(),
         None,
         StartOptions {
+            orchestrator: Some(orchestrator()),
             resume: Some("child-1".into()),
             ..StartOptions::default()
         },
@@ -906,6 +907,53 @@ async fn a_claude_code_session_disallows_its_native_subagent_tool() {
         load["_meta"]["claudeCode"]["options"]["disallowedTools"],
         json!(["Task", "Agent"]),
         "a resumed session is disallowed too"
+    );
+}
+
+#[tokio::test]
+async fn a_claude_code_thread_without_an_orchestrator_keeps_its_subagent_tool() {
+    // Orchestration off in Settings, or a platform with no orchestrator socket:
+    // there is nothing to delegate through, so its own agent tool stays.
+    let (_thread, mut seen) = start_named(
+        "claude-code",
+        Fake::default(),
+        None,
+        StartOptions::default(),
+    )
+    .await;
+    let new = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "session/new")
+        .expect("session/new was sent")
+        .1;
+    assert_eq!(new["mcpServers"], json!([]), "no orchestrator, no servers");
+    assert!(
+        new.get("_meta").is_none(),
+        "nothing to delegate through, so nothing is disallowed"
+    );
+}
+
+#[test]
+fn the_session_meta_keeps_every_other_key() {
+    let harness = harness("claude-code", HarnessKind::Acp);
+    let options = StartOptions {
+        orchestrator: Some(orchestrator()),
+        ..StartOptions::default()
+    };
+    let params = super::with_session_meta(
+        json!({"_meta": {
+            "claudeCode": {"emitRawSDKMessages": true, "options": {"disallowedTools": ["WebSearch"]}},
+            "other": {"kept": true},
+        }}),
+        &harness,
+        &options,
+    );
+    assert_eq!(params["_meta"]["other"]["kept"], true);
+    assert_eq!(params["_meta"]["claudeCode"]["emitRawSDKMessages"], true);
+    assert_eq!(
+        params["_meta"]["claudeCode"]["options"]["disallowedTools"],
+        json!(["WebSearch", "Task", "Agent"]),
+        "the list the adapter already had is extended, never replaced"
     );
 }
 
