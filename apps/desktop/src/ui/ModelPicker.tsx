@@ -101,6 +101,56 @@ export function clampEffort(
   return defaultEffort(model, efforts);
 }
 
+/** One write a model row makes on a thread: its config option and the value to set. */
+export interface ModelWrite {
+  configId: "model" | "effort";
+  value: string;
+}
+
+/**
+ * What a model row writes on an open thread, in order. The model comes first and the level it
+ * brings second: the harness keeps a level per model from what the thread runs when the write
+ * lands, so an effort sent beside its model would be filed under the model it replaced. A
+ * harness's model brings the level it was last left on (`remembered`), else its own default. The
+ * level is clamped from nothing after a switch to another harness, which never keeps this one's
+ * effort, and from `effort` inside one harness, where the level picked here may stay.
+ */
+export function modelThreadWrites(
+  model: HarnessModel | undefined,
+  value: string,
+  effort: string | null | undefined,
+  remembered: string | null | undefined,
+  sameHarness: boolean,
+): ModelWrite[] {
+  const next = clampEffort(
+    model,
+    orderEfforts(model?.efforts ?? []),
+    sameHarness ? effort : null,
+    remembered,
+  );
+  const writes: ModelWrite[] = [{ configId: "model", value }];
+  // A model that lists no levels keeps the effort the thread had.
+  if (next && (sameHarness ? next !== effort : true)) writes.push({ configId: "effort", value: next });
+  return writes;
+}
+
+/**
+ * Writes them one after another, so each lands on the thread the one before it left. `write` is
+ * the store's `setConfigOption` unless a test hands in its own.
+ */
+export function writeModelPick(
+  id: string,
+  writes: ModelWrite[],
+  write: (id: string, configId: string, value: string) => Promise<unknown> = setConfigOption,
+): Promise<void> {
+  return writes
+    .reduce<Promise<unknown>>(
+      (chain, next) => chain.then(() => write(id, next.configId, next.value)),
+      Promise.resolve(),
+    )
+    .then(() => undefined);
+}
+
 /** One login row in the card: a named account, or a thread's own state. */
 export interface AccountChip {
   /** The account to run on; `null` is the harness's own sign-in, `undefined` a login that is gone. */
@@ -242,10 +292,10 @@ function EffortSlider({
         </div>
         <span
           aria-hidden
-          // Always light, whatever the theme draws on the accent: a theme may set a dark
-          // `accent-text` (the RustCode theme does), and the thumb must still read as the grip.
-          // The shadow carries the hairline that keeps it apart from the light theme's track.
-          className="pointer-events-none absolute top-1/2 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-thumb shadow-2 transition-[left] duration-200 ease-snappy"
+          // The active control's knob (docs/design.md › Active controls): white in every theme,
+          // with the hairline that keeps it apart from a light track where white alone would not
+          // read. A theme may set a dark `accent-text`; the knob still reads as the grip.
+          className="pointer-events-none absolute top-1/2 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-knob shadow-knob transition-[left] duration-200 ease-snappy"
           style={{ left: alongTrack(pct) }}
         />
       </div>
@@ -829,32 +879,29 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     // The level the model was last left on, so picking it again returns to that level; a level
     // its list no longer offers is left to the model's default (`clampEffort`).
     const entry = group.harness.models.find((m) => m.id === value);
-    const levels = orderEfforts(entry?.efforts ?? []);
     const remembered = rememberedEffort(effortMemory(), group.harness.id, value);
-    const kept = remembered && levels.includes(remembered) ? remembered : null;
-    if (group.harness.id === providerId) {
-      const next = clampEffort(entry, levels, effort, remembered);
-      if (thread) {
-        void setConfigOption(thread.id, "model", value);
-        if (next && next !== effort) void setConfigOption(thread.id, "effort", next);
-      } else {
+    const same = group.harness.id === providerId;
+    if (same) {
+      if (thread) void writeModelPick(thread.id, modelThreadWrites(entry, value, effort, remembered, true));
+      else {
         // A harness that lists no levels for the model keeps the effort it had.
-        setChoice(levels.length ? { model: value, effort: next } : { model: value });
+        const next = clampEffort(entry, orderEfforts(entry?.efforts ?? []), effort, remembered);
+        setChoice(entry?.efforts.length ? { model: value, effort: next } : { model: value });
       }
     } else if (isNew) {
       // Another harness's model brings the level it was last left on, never this harness's
       // effort: the choice normalizes it, and its remembered account goes with it.
-      const next = levels.length ? clampEffort(entry, levels, null, remembered) : null;
+      const next = clampEffort(entry, orderEfforts(entry?.efforts ?? []), null, remembered);
       setChoice({ harness: group.harness.id, model: value, effort: next });
       pickNewThreadAccount(newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut));
     } else if (thread) {
       // The harness's remembered login goes with the model, as a login row would, and the model
-      // brings the level it was last left on once the switch lands.
+      // brings the level it was last left on once the switch lands. That harness never keeps
+      // this one's effort, so the level is clamped from nothing.
       const account = newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut);
+      const writes = modelThreadWrites(entry, value, null, remembered, false);
       void switchThreadHarness(thread.id, group.harness.id, account).then((switched) => {
-        if (!switched) return;
-        void setConfigOption(thread.id, "model", value);
-        if (kept) void setConfigOption(thread.id, "effort", kept);
+        if (switched) void writeModelPick(thread.id, writes);
       });
     }
     turnPage("effort");

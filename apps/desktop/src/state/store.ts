@@ -99,7 +99,14 @@ import {
 } from "./compose";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { parseGrants, type TimedGrant } from "./grants";
-import { type EffortMemory, restoreChoice, selectOption } from "./harness";
+import {
+  type EffortMemory,
+  normalizeDefault,
+  preferredDefault,
+  restoreChoice,
+  selectOption,
+  unavailableReason,
+} from "./harness";
 import {
   DEFAULT_HEADER_BUTTONS,
   HEADER_BUTTON_IDS,
@@ -1715,10 +1722,10 @@ export async function createSession(options: NewSession): Promise<string> {
   const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
   const has = (configId: string) => thread.configOptions.some((o) => o.id === configId);
   if (options.model && current("model") !== options.model && has("model")) {
-    await setConfigOption(id, "model", options.model);
+    await setConfigOption(id, "model", options.model, { remember: false });
   }
   if (options.effort && current("effort") !== options.effort && has("effort")) {
-    await setConfigOption(id, "effort", options.effort);
+    await setConfigOption(id, "effort", options.effort, { remember: false });
   }
   if (pending) {
     // Listed now, with the setup gone in the same update: the row the message was sent to becomes
@@ -1746,9 +1753,17 @@ export function lacksModels(thread: ThreadState): boolean {
 
 /** The new-thread choice: the picked one, else the default harness with its remembered model and effort. */
 export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): NewThreadChoice | null {
-  if (s.newThread) return s.newThread;
-  if (!s.harnesses) return null;
-  return restoreChoice(s.harnesses, s.harnesses.default.harness, appChoices(s.harnesses), effortMemory());
+  const snapshot = s.harnesses;
+  if (!snapshot) return null;
+  if (!s.newThread) {
+    return restoreChoice(snapshot, snapshot.default.harness, appChoices(snapshot), effortMemory());
+  }
+  // A kept draft can name a harness that is gone, or one that cannot run now (turned off, signed
+  // out in Settings): then the screen falls back to the harness a new thread would start on, never
+  // to this draft. One that can run is normalized as the picker normalizes it.
+  const harness = snapshot.harnesses.find((h) => h.id === s.newThread?.harness);
+  if (harness && !unavailableReason(harness)) return normalizeDefault(snapshot, s.newThread);
+  return preferredDefault(snapshot);
 }
 
 /**
@@ -1804,7 +1819,8 @@ function newWorktreeFor(
 async function startSetup(setup: PendingSetup): Promise<string | null> {
   const s = get();
   const choice = newThreadChoice(s);
-  const harness = s.harnesses?.harnesses.find((h) => h.id === harnessOf(s));
+  // The login follows the choice `session/new` is given, not a draft it fell back from.
+  const harness = s.harnesses?.harnesses.find((h) => h.id === choice?.harness);
   let id: string;
   try {
     id = await createSession({
@@ -2745,7 +2761,19 @@ export async function cancel(id = get().selectedId): Promise<void> {
   }
 }
 
-export async function setConfigOption(id: string, configId: string, value: string | boolean): Promise<void> {
+/**
+ * Sets a config option on a thread. `remember` (the default) mirrors a model or effort into the
+ * harness's next new-thread choice and the model's own effort memory: the user picked it here.
+ * A turn's own `configure_session`, and the apply after `session/new` (whose choice the picker
+ * already noted), write their options with `remember: false`, so an agent never rewrites the
+ * user's memory.
+ */
+export async function setConfigOption(
+  id: string,
+  configId: string,
+  value: string | boolean,
+  options: { remember?: boolean } = {},
+): Promise<void> {
   const params: JsonObject =
     typeof value === "boolean"
       ? { sessionId: id, configId, type: "boolean", value }
@@ -2763,7 +2791,7 @@ export async function setConfigOption(id: string, configId: string, value: strin
     // engine keeps it (docs/harnesses.md), the app only mirrors it, and the model keeps the
     // effort it was left on for the next time it is picked.
     const thread = get().threads[id];
-    if (thread && (configId === "model" || configId === "effort")) {
+    if (thread && options.remember !== false && (configId === "model" || configId === "effort")) {
       const current = (option: string) => thread.configOptions.find((o) => o.id === option)?.current ?? null;
       noteChoice(thread.harness?.id ?? "rustcode", { model: current("model"), effort: current("effort") });
       rememberModelEffort(thread.harness?.id ?? "rustcode", current("model"), current("effort"));
@@ -3067,8 +3095,20 @@ export async function checkHarnessAccounts(readPlans = true): Promise<HarnessSna
 export const addHarness = (id: string, name: string, command: string[]) =>
   harnessCall(Method.harnessSet, { id, name, kind: "acp", command, enabled: true });
 export const removeHarness = (id: string) => harnessCall(Method.harnessRemove, { id });
-export const setDefaultHarness = (choice: NewThreadChoice) =>
-  harnessCall(Method.harnessDefault, { harness: choice.harness, model: choice.model, effort: choice.effort });
+/**
+ * The Settings default: it is also where a new thread starts, so a draft the new-thread screen
+ * kept for the session is dropped once the engine took the change, or the new default would never
+ * reach that screen. A default the engine refused keeps the draft.
+ */
+export async function setDefaultHarness(choice: NewThreadChoice): Promise<HarnessSnapshot | null> {
+  const snapshot = await harnessCall(Method.harnessDefault, {
+    harness: choice.harness,
+    model: choice.model,
+    effort: choice.effort,
+  });
+  if (snapshot) set({ newThread: null });
+  return snapshot;
+}
 export const completeOnboarding = async () => {
   const snapshot = await harnessCall(Method.onboardingComplete, {});
   if (snapshot) set({ onboardingOpen: false });

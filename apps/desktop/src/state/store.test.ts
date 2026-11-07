@@ -5,7 +5,7 @@ import { harnessPlanKey, parsePlans } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
-import { rememberedEffort } from "./harness";
+import { preferredDefault, rememberedEffort } from "./harness";
 import {
   answerOrchestration,
   linkFinished,
@@ -79,6 +79,7 @@ import {
   sendQueuedNow,
   setActiveTheme,
   setArchived,
+  setConfigOption,
   setDefaultCwd,
   setDefaultHarness,
   setDefaultPermissionMode,
@@ -1981,6 +1982,91 @@ describe("effort memory per model", () => {
   });
 });
 
+describe("the choice a new thread starts on", () => {
+  test("a kept draft on a harness that cannot run falls back to the first-run default", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    const snapshot = useApp.getState().harnesses!;
+    // Gemini CLI is not installed in the mock; the draft the screen kept names it anyway.
+    setNewThreadChoice({ harness: "gemini", model: null, effort: null });
+    const choice = newThreadChoice(useApp.getState());
+    expect(choice).toEqual(preferredDefault(snapshot));
+    // Not Gemini, and not `restoreChoice`'s hardcoded built-in fallback either.
+    expect(choice?.harness).toBe("claude-code");
+  });
+
+  test("a kept draft on a harness that is gone falls back the same way", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    setNewThreadChoice({ harness: "ghost-harness", model: "m", effort: "high" });
+    expect(newThreadChoice(useApp.getState())).toEqual(preferredDefault(useApp.getState().harnesses!));
+  });
+
+  test("a draft on a harness that can run is normalized to the model and level it lists", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await ensureHarnessModels("codex");
+    // A model and a level the harness no longer lists: the picker's own normalization, on read.
+    setNewThreadChoice({ harness: "codex", model: "gpt-6-gone", effort: "turbo" });
+    expect(newThreadChoice(useApp.getState())).toEqual({
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "medium",
+    });
+    // A draft that still fits is left exactly as it was picked.
+    setNewThreadChoice({ harness: "codex", model: "gpt-6-astra", effort: "high" });
+    expect(newThreadChoice(useApp.getState())).toEqual({
+      harness: "codex",
+      model: "gpt-6-astra",
+      effort: "high",
+    });
+  });
+
+  test("a new Settings default drops the draft, so the screen shows the default", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await ensureHarnessModels("codex");
+    setNewThreadChoice({ harness: "rustcode", model: "chatgpt/gpt-6-luna", effort: "low" });
+    await setDefaultHarness({ harness: "codex", model: "gpt-6-astra", effort: "high" });
+    expect(useApp.getState().newThread).toBeNull();
+    expect(newThreadChoice(useApp.getState())).toEqual({
+      harness: "codex",
+      model: "gpt-6-astra",
+      effort: "high",
+    });
+  });
+
+  test("an agent's configure_session writes no effort memory, a person's pick does", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+      await ensureHarnessModels("codex");
+      // The user's own pick in the new-thread screen.
+      pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "low" });
+      expect(effortMemory()).toEqual({ codex: { "gpt-6-luna": "low" } });
+      // An agent reconfigures an open Codex thread's effort (the mock's second thread).
+      const id = "mock-thread-2";
+      selectThread(id);
+      await until(() => selected()?.loaded === true && !!selected()?.configOptions.length);
+      const answer = await answerOrchestration({
+        sessionId: id,
+        tool: "configure_session",
+        args: { effort: "high" },
+      });
+      expect(answer.error).toBeUndefined();
+      expect(selected()!.configOptions.find((o) => o.id === "effort")?.current).toBe("high");
+      // The agent's change is the thread's, never the memory the picker reads back.
+      expect(effortMemory()).toEqual({ codex: { "gpt-6-luna": "low" } });
+      // A level the user picks in the thread is remembered for that model, as before.
+      await setConfigOption(id, "effort", "medium");
+      expect(rememberedEffort(effortMemory(), "codex", "gpt-6-luna")).toBe("medium");
+    } finally {
+      storage.done();
+    }
+  });
+});
+
 describe("toasts", () => {
   test("the newest three show, a repeat refreshes one, an id replaces in place", async () => {
     const { toast, dismissToast, clearToasts } = await import("./store");
@@ -2622,10 +2708,31 @@ describe("a delegated thread's place in the sidebar", () => {
 });
 
 describe("a message sent from the new-thread screen", () => {
-  const ready = async () => {
-    await connect(new MockTransport({ delayMs: 0 }));
+  const ready = async (transport = new MockTransport({ delayMs: 0 })) => {
+    await connect(transport);
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     startNewThread();
+  };
+  /**
+   * A harness that will not start, once. The app no longer sends a draft on a harness that cannot
+   * run (state/store.ts `newThreadChoice` replaces it), so the refusal is the engine's: its first
+   * `session/new` names a harness it does not know, as a harness that cannot launch answers, and
+   * the retry after it starts normally.
+   */
+  const refusesOnce = () => {
+    const transport = new MockTransport({ delayMs: 0 });
+    const send = transport.send.bind(transport);
+    let refused = false;
+    transport.send = (line: string) => {
+      const message = JSON.parse(line) as { method?: string; params?: JsonObject };
+      const meta = message.params?._meta as JsonObject | undefined;
+      const rustcode = meta?.rustcode as JsonObject | undefined;
+      if (message.method !== "session/new" || !rustcode || refused) return send(line);
+      refused = true;
+      rustcode.harness = "no-such-harness";
+      return send(JSON.stringify(message));
+    };
+    return transport;
   };
   const picture = {
     id: "img1",
@@ -2696,9 +2803,8 @@ describe("a message sent from the new-thread screen", () => {
   });
 
   test("a failure keeps the message and its pictures, and Retry sends them again", async () => {
-    await ready();
+    await ready(refusesOnce());
     const before = useApp.getState().sessions.length;
-    useApp.setState({ newThread: { harness: "no-such-harness", model: null, effort: null } });
     // True: the field stays clear, because the failed bubble holds the message and it can be retried.
     expect(await submit("look at this", { ...emptyExtras, attachments: [picture] })).toBe(true);
     const failed = useApp.getState().pendingSetup;
@@ -2720,8 +2826,7 @@ describe("a message sent from the new-thread screen", () => {
   });
 
   test("Dismiss gives up the failed send and puts what it held back in the field", async () => {
-    await ready();
-    useApp.setState({ newThread: { harness: "no-such-harness", model: null, effort: null } });
+    await ready(refusesOnce());
     await submit("look at this", { ...emptyExtras, attachments: [picture] });
     dismissPendingSetup();
     expect(useApp.getState().pendingSetup).toBeNull();

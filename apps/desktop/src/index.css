@@ -55,9 +55,6 @@
   --color-selection: var(--rc-selection);
   --color-code-bg: var(--rc-code-bg);
   --color-message: var(--rc-message);
-  /* A grip that is always light, whatever a theme draws on the accent (the model picker's
-     slider thumb and its dots on the fill): a theme may set a dark `accent-text`. */
-  --color-thumb: var(--rc-thumb);
   /* Derived from the text colour, so they stay neutral on any surface. */
   --color-fill-subtle: var(--rc-fill-subtle);
   --color-fill: var(--rc-fill);
@@ -214,9 +211,6 @@
   /* A sent message's surface: 8.5% of the text over the pane lands a step above the background in
      either mode, and follows whatever neutrals a theme brings. */
   --rc-message: color-mix(in srgb, var(--rc-text) 8.5%, var(--rc-bg));
-  /* Not a theme token: the slider thumb is white in every theme, because it sits on the accent
-     fill, whose own text colour a theme may make dark. */
-  --rc-thumb: #ffffff;
   /* The composer's strip: the card's own glass with a 4% lift of the text colour, so it reads as
      attached to the floating card rather than as a slab beside it, in either mode. */
   --rc-composer-footer-bg: color-mix(in srgb, var(--rc-text) 4%, var(--rc-composer-bg));

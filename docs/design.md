@@ -138,7 +138,7 @@ own fill marks the range or the state the control is off in (`bg-fill`, or
 `accent` for a switch that is on); the accent never fills the knob. Left out of
 this: pressed icon buttons (`bg-fill-strong`), primary actions (`bg-fg
 text-bg`) and native checkboxes, whose check is the mark rather than a knob.
-The model picker's effort thumb is a knob too.
+The model picker's effort slider takes the same knob.
 
 ## Focus
 
