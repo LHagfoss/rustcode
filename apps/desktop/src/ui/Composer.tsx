@@ -850,7 +850,14 @@ export const Composer = memo(function Composer({
               starts at the same 20px (`px-5`), the bigger card's own inset; the tray is inset 12px
               (`px-3`) because its round controls carry a few px of their own, which puts their icons
               on the same edge. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-5 pt-4">
+          <div
+            className={cx(
+              "flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-5",
+              // Pictures above already carry their own band and padding: the field then sits close
+              // under them, while a field with nothing above it keeps the card's own air.
+              extras.attachments.length > 0 ? "pt-1.5" : "pt-4",
+            )}
+          >
             {extras.command && (
               // One line of the field's own height (22.75px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
@@ -1113,7 +1120,7 @@ function AttachmentStrip({
   return (
     // Its own band above the field, inset from the box's rounder corner and never shrinking, so the
     // thumbnails clear the curve and only the field below scrolls.
-    <div className="flex shrink-0 gap-2 overflow-x-auto px-5 pt-2.5 pb-1">
+    <div className="flex shrink-0 gap-2 overflow-x-auto px-5 pt-3 pb-1">
       {shown.map((a) =>
         a.kind === "image" ? (
           <div key={a.id} className="group relative shrink-0 rc-in">
@@ -1248,16 +1255,21 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
  * in; once the thread exists, what to do with its folder (Finder, Terminal,
  * copy the path, another thread there).
  *
- * The list is projects, not every folder a thread ever ran in: a folder that only holds other
- * projects (the root, the home folder, `~/code`) is not offered, and a worktree nests under the repo
- * it was cut from (lib/folderList.ts). One line per row — the name, then the end of its path,
- * faded — so a deep checkout never turns the list into a wall of wrapping text. "Choose Folder…"
- * is the last row, and the last thing the arrow keys reach.
+ * The list is projects, not every folder a thread ever ran in: the root, a home folder and a
+ * folder named like a container (`~/code`, `~/dev`) that holds another project are not offered, and
+ * a worktree nests under the repo it was cut from (lib/folderList.ts). Projects are ranked by how
+ * much they are used — how recently, and how many threads — so the ones worked in sit at the top.
+ * One line per row — the name, then the end of its path, faded — so a deep checkout never turns the
+ * list into a wall of wrapping text. "Choose Folder…" is the last row, and the last thing the
+ * arrow keys reach.
  */
 function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   const sessions = useApp((s) => s.sessions);
   const [filter, setFilter] = useState("");
-  const sources = useMemo(() => sessions.map((s) => ({ cwd: s.cwd, worktree: s.worktree })), [sessions]);
+  const sources = useMemo(
+    () => sessions.map((s) => ({ cwd: s.cwd, worktree: s.worktree, updatedAt: s.updatedAt })),
+    [sessions],
+  );
   const all = useMemo(() => folderRows(sources), [sources]);
   const rows = useMemo(() => folderRows(sources, { filter }), [sources, filter]);
   // The search appears once there is a list worth searching, and stays while it holds something.
@@ -1267,6 +1279,9 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
       label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
       onKeyDown={menuKeys}
       tooltip={cwd || "Choose a folder"}
+      // Always above the button, pinned: the list is what it is about, and the card above it has
+      // the room (docs/design.md › Composer strip).
+      side="top"
       className="flex w-[300px] flex-col gap-1"
       onOpenChange={(open) => {
         // A search is about the panel it was typed in, not a filter the next one inherits.

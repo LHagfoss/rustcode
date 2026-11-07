@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:web": "bun scripts/dev-web.ts",
     "dev:mock": "VITE_TRANSPORT=mock vite",
+    "mock-window": "bun scripts/mock-window.ts",
     "bridge": "bun scripts/engine-bridge.ts",
     "build": "vite build",
     "typecheck": "tsc --noEmit -p .",
