@@ -73,6 +73,7 @@ import { RightPanel } from "./RightPanel";
 import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
+import { WhileAwayCard } from "./WhileAway";
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -687,6 +688,12 @@ export function ChatView() {
       */}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            className="pointer-events-none absolute inset-x-3 z-20 mx-auto max-w-[var(--rc-chat-content-max-width)] sm:inset-x-12"
+            style={{ top: HEADER_HEIGHT + 8 }}
+          >
+            <WhileAwayCard className="pointer-events-auto" />
+          </div>
           {showsPending && setup ? (
             // Preferred over the thread: while its message is still arriving, the screen that has it
             // is this one, and the row it draws is the row the transcript draws (`FIRST_ROW_PAD`).

@@ -49,6 +49,7 @@ export const APP_COMMANDS: readonly AppCommand[] = [
     remappable: true,
   },
   { id: "settings", label: "Settings", binding: "mod+,", group: "App", remappable: true },
+  { id: "inbox", label: "Needs you inbox", binding: "mod+shift+i", group: "View", remappable: true },
   { id: "toggle-sidebar", label: "Toggle sidebar", binding: "mod+b", group: "View", remappable: true },
   {
     id: "toggle-panel",

@@ -11,6 +11,7 @@ import {
   FileDiff,
   Settings as Gear,
   GitBranch,
+  Hand,
   type LucideIcon,
   MessageSquare,
   Moon,
@@ -109,6 +110,15 @@ function baseActions(): PaletteAction[] {
           },
         }),
       ),
+    {
+      id: "inbox",
+      label: "Needs you",
+      detail: "Approvals, questions, failed turns and delegates",
+      icon: Hand,
+      keys: shortcutHint("inbox"),
+      words: "attention waiting inbox approve decline failed delegate",
+      run: () => setView({ kind: "inbox" }),
+    },
     {
       id: "board",
       label: s.view.kind === "board" ? "Show the chat" : "Show the board",

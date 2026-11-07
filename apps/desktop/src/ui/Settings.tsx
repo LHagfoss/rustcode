@@ -48,6 +48,7 @@ import { canUpdate } from "../lib/updater";
 import { validateDefault } from "../state/harness";
 import { MAX_ACTIVE_LIMIT, MIN_ACTIVE_LINKS } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
+import { RECAP_HOUR_OPTIONS } from "../state/recap";
 import {
   APP_VERSION,
   createTheme,
@@ -70,6 +71,8 @@ import {
   setOnboarding,
   setOrchestration,
   setReadAcrossProjects,
+  setRecapHours,
+  setRecapWhileAway,
   setResumeAfterRestart,
   setRoundedFont,
   setSmartUi,
@@ -227,6 +230,8 @@ function GeneralPage() {
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
   const notifications = useApp((s) => s.systemNotifications);
   const backgroundOnly = useApp((s) => s.notificationsBackgroundOnly);
+  const recap = useApp((s) => s.recapWhileAway);
+  const recapHours = useApp((s) => s.recapHours);
   const [haptics, setHapticsState] = useState(hapticsEnabled);
   return (
     <>
@@ -307,6 +312,29 @@ function GeneralPage() {
             label="Only when RustCode is in the background"
             checked={backgroundOnly}
             onChange={setNotificationsBackgroundOnly}
+          />
+        </Row>
+        <Row
+          title="While-you-were-away recap"
+          reset={recap ? undefined : () => setRecapWhileAway(SETTINGS_DEFAULTS.recapWhileAway)}
+          subtitle="A card at the top of the chat and the inbox after the app sat idle: what needs you, what failed and what finished. Dismissed, the inbox keeps a row that brings it back."
+        >
+          <Switch label="While-you-were-away recap" checked={recap} onChange={setRecapWhileAway} />
+        </Row>
+        <Row
+          title="Away for"
+          reset={
+            recapHours !== SETTINGS_DEFAULTS.recapHours
+              ? () => setRecapHours(SETTINGS_DEFAULTS.recapHours)
+              : undefined
+          }
+          subtitle="How long the app must sit idle before the recap is due."
+        >
+          <Choice
+            label="Away before the recap"
+            value={String(recapHours)}
+            options={RECAP_HOUR_OPTIONS.map((h) => ({ value: String(h), label: `${h}h` }))}
+            onChange={(value) => setRecapHours(Number(value))}
           />
         </Row>
       </Group>
