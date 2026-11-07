@@ -55,6 +55,7 @@ import {
   type RuleThread,
   renderRead,
   restateLinks,
+  STALL_NOTICE_MS,
   sameProject,
   stripLinks,
   supersededLinks,
@@ -705,6 +706,71 @@ describe("waking a parent", () => {
     threads: { a: { title: "Parent a", running: false } },
     now: 10_000,
     ...over,
+  });
+
+  test("a child that shows no progress is reported once per stall", () => {
+    const at = 1_000;
+    const child = { ...link("a", "b", "working"), startedAt: at };
+    const stallCtx = (now: number, over: Partial<WakeContext> = {}): WakeContext =>
+      ctx({
+        now,
+        threads: {
+          a: { title: "Parent a", running: false },
+          b: { title: "Thread b", running: true },
+        },
+        activity: {
+          b: { lastAt: at, lastTool: "bash", lastCommand: "sleep 600", turns: 0 },
+        },
+        ...over,
+      });
+    const due = at + STALL_NOTICE_MS;
+    // Just inside the window: nothing yet, but the next look is at the threshold.
+    expect(wakesDue(book([child]), stallCtx(due - 1))).toEqual([]);
+    expect(nextWakeAt(book([child]), stallCtx(due - 1))).toBe(due);
+    const [wake] = wakesDue(book([child]), stallCtx(due));
+    expect(wake!.stalled?.map((n) => n.link.target)).toEqual(["b"]);
+    expect(wakeSummary(wake!)).toBe("Delegate stalled: b");
+    // A child waiting on the user is not stuck, however long the answer takes.
+    expect(
+      wakesDue(book([child]), stallCtx(due, { states: { "a/b": "needs_user" } })).flatMap(
+        (w) => w.stalled ?? [],
+      ),
+    ).toEqual([]);
+    const text = wakeMessage(wake!, due);
+    expect(text).toContain("has made no progress for 10m");
+    expect(text).toContain("last tool: bash: sleep 600");
+    expect(text).toContain("interrupt_session it or message it");
+    // Sent: the same silence does not wake the parent again.
+    const heard = updateLink(book([child]), "a/b", { stallNotifiedFor: at });
+    expect(wakesDue(heard, stallCtx(due + 60_000))).toEqual([]);
+    // New activity arms another notice, only once that has been quiet for ten minutes too.
+    const resumed = stallCtx(due + 60_000, {
+      activity: { b: { lastAt: due, lastTool: "bash", turns: 0 } },
+    });
+    expect(wakesDue(heard, resumed)).toEqual([]);
+    const again = wakesDue(heard, { ...resumed, now: due + STALL_NOTICE_MS, activity: resumed.activity });
+    expect(again[0]!.stalled?.map((n) => n.link.target)).toEqual(["b"]);
+  });
+
+  test("a stall notice survives a wake folded around a finished sibling", () => {
+    const at = 1_000;
+    const child = { ...link("a", "b", "working"), startedAt: at };
+    const sibling = { ...done("a", "c"), settledAt: at + STALL_NOTICE_MS };
+    const now = at + STALL_NOTICE_MS;
+    const c = ctx({
+      now,
+      threads: {
+        a: { title: "Parent a", running: false },
+        b: { title: "Thread b", running: true },
+      },
+      activity: { b: { lastAt: at, lastTool: "bash", turns: 0 } },
+    });
+    const both = book([child, sibling]);
+    const stall = wakesDue(both, c)[0]!;
+    // A settled sibling arrives while the stall row waits: the rebuilt row keeps both lines.
+    const merged = wakeFor("a", "Parent a", [...wakeIds(stall), "a/c"], both, c)!;
+    expect(wakeIds(merged)).toEqual(["a/c", "a/b"]);
+    expect(wakeMessage(merged, now)).toContain("no progress");
   });
 
   test("coalesces parallel children into one message, once", () => {
@@ -1428,6 +1494,16 @@ describe("answering with the slots and the child's activity", () => {
       activity: activityOf(items),
     });
     expect(entry).toMatchObject({ idle_ms: 3_500, last_tool: "read_session", turns: 1 });
+    // A tool that names its command keeps it, and a long silence says the child looks stalled.
+    const running = activityOf([
+      { kind: "tool", title: "bash", toolName: "bash", input: { command: "sleep 600" }, startedAt: 12_000 },
+    ]);
+    expect(running).toMatchObject({ lastTool: "bash", lastCommand: "sleep 600" });
+    const stalled = linkResult(link("a", "b", "working"), "working", undefined, {
+      now: 12_000 + STALL_NOTICE_MS,
+      activity: running,
+    });
+    expect(stalled).toMatchObject({ stalled: true, idle_ms: STALL_NOTICE_MS });
   });
 
   test("a cut answer says so and names the thread whose read_session has the rest", () => {
