@@ -208,6 +208,48 @@ fn older_builtin_copies_are_upgraded_and_edited_ones_kept() {
 }
 
 #[test]
+fn a_previous_builtin_copy_is_upgraded_in_a_temp_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    // The copies `ensure_user_dir` wrote before the surfaces moved.
+    for (filename, old) in PREVIOUS_BUILTINS {
+        std::fs::write(dir.path().join(filename), old).unwrap();
+    }
+    sync_builtins(dir.path());
+    for (filename, content) in BUILTIN_THEMES {
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(filename)).unwrap(),
+            *content,
+            "{filename} was not upgraded"
+        );
+    }
+    let mut themes = std::collections::BTreeMap::new();
+    load_dir(dir.path(), ThemeSource::User, &mut themes);
+    assert_eq!(
+        themes["rustcode"].source,
+        ThemeSource::Builtin,
+        "an upgraded copy is the built-in, not a user theme"
+    );
+    assert_eq!(themes["rustcode"].desktop.tokens.surface, "#1d1d20");
+    // A copy the user edited at some point is theirs: it never byte-matched a
+    // built-in, so it is neither upgraded nor counted as one.
+    let (_, old) = PREVIOUS_BUILTINS
+        .iter()
+        .find(|(filename, _)| *filename == "light.toml")
+        .unwrap();
+    let edited = old.replace("#e8e8ea", "#e8e8eb");
+    assert_ne!(edited, *old);
+    std::fs::write(dir.path().join("light.toml"), &edited).unwrap();
+    sync_builtins(dir.path());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("light.toml")).unwrap(),
+        edited
+    );
+    let mut themes = std::collections::BTreeMap::new();
+    load_dir(dir.path(), ThemeSource::User, &mut themes);
+    assert_eq!(themes["light"].source, ThemeSource::User);
+}
+
+#[test]
 fn the_snapshot_has_the_acp_shape() {
     let value = serde_json::to_value(snapshot(None)).unwrap();
     assert_eq!(value["active"], DEFAULT_THEME_NAME);

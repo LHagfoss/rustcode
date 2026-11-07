@@ -501,7 +501,7 @@ export function SubagentRow({
         showWord={state !== "working"}
       />
       {open && (
-        <div className="rc-expand mt-0.5 mb-1 ml-[42px] flex flex-col rounded-xl bg-surface-2 px-3 py-2">
+        <div className="rc-expand mt-0.5 mb-1 ml-[42px] flex flex-col rounded-xl bg-fill-subtle px-3 py-2">
           {loadingSteps && <StepsSkeleton />}
           {steps.map((step) => (
             <div key={step.id} className="flex h-5 min-w-0 items-center gap-1.5 text-caption text-fg-muted">

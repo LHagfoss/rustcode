@@ -89,7 +89,7 @@
   color-scheme: light;
   --rc-bg: #ffffff;
   --rc-sidebar: #f7f7f8;
-  --rc-surface: #ececee;
+  --rc-surface: #eaeaea;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e4e4e6;
   /* The composer is glass on the raised surface (see `Glass` in index.css). */

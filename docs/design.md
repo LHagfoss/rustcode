@@ -41,7 +41,7 @@ files and the engine snapshot the names use underscores (`surface_2`,
 |---|---|---|---|
 | `bg` | The chat and main panes | `#0b0b0c` | `#ffffff` |
 | `sidebar` | The sidebar | `#151517` | `#f7f7f8` |
-| `surface` | Resting cards: composer, settings groups, error cards | `#1d1d20` | `#ececee` |
+| `surface` | Resting cards: composer, settings groups, error cards | `#1d1d20` | `#eaeaea` |
 | `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#242428` | `#ffffff` |
 | `surface-3` | Raised over raised: kbd, a hover label or a tooltip drawn on a popover | `#2a2a2e` | `#e4e4e6` |
 | `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0f` | `#0000000f` |
@@ -61,7 +61,7 @@ files and the engine snapshot the names use underscores (`surface_2`,
 
 The surfaces step evenly in lightness (CIE L\*): dark `bg` 3.0, `sidebar`
 6.8, `surface` 10.9, `surface-2` 14.3, `surface-3` 17.2; light `bg` 100,
-`sidebar` 97.3, `surface` 93.5, `surface-3` 90.6, with light `surface-2`
+`sidebar` 97.3, `surface` 92.7, `surface-3` 90.6, with light `surface-2`
 white (raised surfaces are lifted by their shadow there). A theme that
 changes them should keep the steps even, and the step from `bg` to `surface`
 is the one that carries every card: about 7–8 L\* of it, so a card reads as
@@ -445,7 +445,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Input:** `h-8 rounded-md bg-fill-subtle px-3 text-callout`,
   placeholder `text-fg-faint`, no ring until `:focus-visible`. A control in a
   Settings row takes `fieldClass` instead: `bg-fill`, hover and focus
-  `bg-fill-strong`, and still no edge.
+  `bg-fill-strong`, and still no edge. The row's `Action` rests on
+  `bg-fill-subtle`, hovers `bg-fill` and presses `bg-fill-strong`, so it never
+  reads as a second input.
 - **Chip:** `h-6 rounded-full bg-fill px-2 text-callout text-fg-muted`;
   status chips tint with their colour at 12–14%.
 - **Row (list):** `rounded-md px-2.5 py-1`, hover `bg-fill-subtle`,

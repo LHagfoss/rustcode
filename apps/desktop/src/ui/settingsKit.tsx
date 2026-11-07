@@ -234,9 +234,9 @@ export const fieldClass =
   "h-8 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 
 /**
- * A labelled action in a row: the filled default, `prominent` for the one
- * primary action, `danger` for a destructive one, `quiet` for one that rests
- * without a fill (a section header's "Add").
+ * A labelled action in a row: the quiet default (a translucent fill over the
+ * card), `prominent` for the one primary action, `danger` for a destructive
+ * one, `quiet` for one that rests without a fill (a section header's "Add").
  */
 export function Action({
   prominent,
@@ -264,7 +264,7 @@ export function Action({
             ? "bg-danger/12 text-danger enabled:hover:bg-danger/18"
             : quiet
               ? "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg"
-              : "bg-fill text-fg enabled:hover:bg-fill-strong enabled:active:bg-fill-strong",
+              : "bg-fill-subtle text-fg enabled:hover:bg-fill enabled:active:bg-fill-strong",
         className,
       )}
       {...rest}

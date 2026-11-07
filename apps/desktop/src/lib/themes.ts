@@ -86,7 +86,7 @@ const DARK: Record<Token, string> = {
 const LIGHT: Record<Token, string> = {
   bg: "#ffffff",
   sidebar: "#f7f7f8",
-  surface: "#ececee",
+  surface: "#eaeaea",
   surface_2: "#ffffff",
   surface_3: "#e4e4e6",
   border: "#0000000f",
