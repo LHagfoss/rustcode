@@ -2152,6 +2152,7 @@ export class MockEngine {
             sessionUpdate: "usage_update",
             used: 18_400,
             size: 272_000,
+            cost: { amount: 0.0123, currency: "USD" },
             _meta: {
               rustcode: {
                 estimated: true,
@@ -3344,7 +3345,31 @@ export class MockEngine {
           return done("cancelled");
         }
       }
-      const callId = `call-${++this.counter}`;
+      // One usage update per round, as the engine sends it: the session's
+      // running totals. The app's Trace subtracts them to price each call, so a
+      // mock turn shows where its money went too.
+      const round = (input: number, output: number, cost: number) => {
+        const used = 24_000 + Math.round((Date.now() - started) / 10);
+        push({
+          sessionUpdate: "usage_update",
+          used,
+          size: 272_000,
+          cost: { amount: cost, currency: "USD" },
+          _meta: {
+            rustcode: {
+              estimated: false,
+              inputTokens: input,
+              outputTokens: output,
+              cachedTokens: Math.round(input * 0.55),
+              context: mockContext(used),
+            },
+          },
+        });
+      };
+      round(120_000, 4_100, 0.0276);
+      // A live call's id never reuses one the replayed history already has: an
+      // update keyed the same would replace an old row instead of adding one.
+      const callId = `live-${++this.counter}`;
       push({
         sessionUpdate: "tool_call",
         toolCallId: callId,
@@ -3371,7 +3396,32 @@ export class MockEngine {
           exitCode: 0,
         },
       });
-      const editId = `call-${++this.counter}`;
+      round(147_000, 4_900, 0.0341);
+      // "trace" asks for the whole picture: a few more calls and one delegate,
+      // so the Trace chip under the turn draws every kind of row.
+      const forTrace = /\b(trace|waterfall|delegate)\b/i.test(prompt);
+      if (forTrace) {
+        const readId = `live-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: readId,
+          title: "read src/ui/Composer.tsx",
+          kind: "read",
+          status: "in_progress",
+          rawInput: { path: "src/ui/Composer.tsx", summary: "Read the composer" },
+        });
+        await this.sleep(this.delay * 3);
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: readId,
+          status: "completed",
+          rawOutput: {
+            content: "export function Composer() {\n  const [draft, setDraft] = useState('');\n  ...\n}\n",
+          },
+        });
+        round(166_000, 5_400, 0.0402);
+      }
+      const editId = `live-${++this.counter}`;
       const diff = {
         type: "diff",
         path: "src/app.ts",
@@ -3430,6 +3480,58 @@ export class MockEngine {
       } else {
         push({ sessionUpdate: "tool_call_update", toolCallId: editId, status: "completed", content: [diff] });
       }
+      if (forTrace) {
+        round(184_000, 6_100, 0.0493);
+        // A delegate: one call folded into the trace's single dotted row. Its
+        // agent is recorded like `spawnAgents` records one, so its row and its
+        // steps answer from the engine rather than from nothing.
+        const task = "Check the composer tests for the focus fix";
+        const agents = this.agents.get(sid) ?? [];
+        this.agents.set(sid, agents);
+        const agentId = agents.length + 1;
+        agents.push({
+          id: agentId,
+          name: `agent-${agentId}`,
+          task,
+          model: "gpt-6-luna",
+          agentType: "explorer",
+          status: "running",
+          activeTurn: true,
+          depth: 1,
+          startedAtMs: Date.now(),
+          lastActivityMs: Date.now(),
+          toolCalls: 1,
+          requests: 1,
+          inputTokens: 12_000,
+          outputTokens: 600,
+          cachedInputTokens: 8_000,
+        });
+        const delegateId = `spawn-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: delegateId,
+          title: "spawn_agent",
+          kind: "other",
+          status: "in_progress",
+          rawInput: { task, agent_type: "explorer" },
+        });
+        await this.sleep(this.delay * 10);
+        const agent = agents.find((a) => a.id === agentId);
+        if (agent) {
+          agent.status = "completed";
+          agent.activeTurn = false;
+          agent.finishedAtMs = Date.now();
+          agent.completion = "The composer tests pass; nothing to change.";
+        }
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: delegateId,
+          status: "completed",
+          rawOutput: {
+            content: JSON.stringify({ agent_id: agentId, name: `agent-${agentId}`, status: "completed" }),
+          },
+        });
+      }
       // A message the turn read mid-step (`_rustcode/steer`): it says so where it read it, and the
       // plan moves on, so the app has a step that was active when the note landed and a next step
       // whose clock starts (`state/steer.ts`). A steer that arrives after this is still answered at
@@ -3481,22 +3583,7 @@ export class MockEngine {
           { content: "Run the checks", status: "completed" },
         ],
       });
-      const used = 26_000 + Math.round((Date.now() - started) / 10);
-      this.notify(
-        update(sid, {
-          sessionUpdate: "usage_update",
-          used,
-          size: 272_000,
-          _meta: {
-            rustcode: {
-              estimated: false,
-              inputTokens: 120_000,
-              outputTokens: 4_100,
-              context: mockContext(used),
-            },
-          },
-        }),
-      );
+      round(214_000, 7_100, 0.0612);
       return done("end_turn");
     } finally {
       this.running.delete(sid);

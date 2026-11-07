@@ -52,6 +52,7 @@ export function turnFooterHidden({
   reply,
   completion,
   changes,
+  trace,
   outcome,
 }: {
   /** The turn's work is one summary row above. */
@@ -62,9 +63,17 @@ export function turnFooterHidden({
   completion?: boolean;
   /** The turn's checkpoint chip, when it changed files. */
   changes?: boolean;
+  /** The turn has a Trace chip, which is content of its own. */
+  trace?: boolean;
   outcome: TurnOutcome;
 }): boolean {
   return (
-    !!folded && !reply?.trim() && !completion && !changes && outcome !== "failed" && outcome !== "cancelled"
+    !!folded &&
+    !reply?.trim() &&
+    !completion &&
+    !changes &&
+    !trace &&
+    outcome !== "failed" &&
+    outcome !== "cancelled"
   );
 }

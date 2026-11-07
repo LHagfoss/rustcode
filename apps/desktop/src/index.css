@@ -811,6 +811,20 @@
 }
 
 /*
+ * The stretch of a tool call a turn spent waiting on the user's approval
+ * (docs/design.md › Turn trace). A faint fill under a hatch, so the call's own
+ * work and the wait are told apart without a second colour.
+ */
+.rc-wait-hatch {
+  background-color: var(--rc-fill-subtle);
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--rc-text) 20%, transparent) 0 1px,
+    transparent 1px 4px
+  );
+}
+
+/*
  * Landing on a setting from the panel's search (Settings.tsx): the row the
  * search found holds a `fill` that fades away, so the eye finds it. Colour
  * only, once; off under reduced motion.

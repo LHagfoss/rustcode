@@ -165,10 +165,13 @@ import {
   type QueuedPrompt,
   questionItem,
   requeueSteers,
+  settledWait,
+  settleEveryWait,
   type ThreadState,
   type TranscriptItem,
   truncateBefore,
   userIndexOf,
+  waitingOn,
   wakeTurn,
 } from "./thread";
 import {
@@ -1241,7 +1244,12 @@ async function handleInbound(message: Inbound) {
           connection?.respond(message.id, permissionSelected(auto.id));
           return;
         }
-        updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
+        updateThread(request.sessionId, (t) => {
+          // An approval holds its call: the turn's Trace draws that time apart
+          // from the call's work (state/thread.ts `waitingOn`).
+          const held = request.question ? t : waitingOn(t, request.toolCallId, request.at ?? Date.now());
+          return { ...held, permissions: [...held.permissions, request] };
+        });
         // Its links stop their work clock while the user decides (state/delegates.ts).
         linkWaitStarted(request.sessionId);
         // The inbox is the screen that lists this request already: a toast there would
@@ -2726,7 +2734,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
     connection.notify(Method.sessionCancel, { sessionId: id });
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
     for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
-    updateThread(id, (t) => ({ ...t, permissions: [] }));
+    updateThread(id, (t) => settleEveryWait({ ...t, permissions: [] }, Date.now()));
     if (thread.permissions.length) linkWaitEnded(id);
   } catch (error) {
     toast(errorText(error), "error");
@@ -2776,11 +2784,14 @@ export interface ResolvedApproval {
  * what was asked and what they said (state/thread.ts `questionItem`).
  */
 function reply(request: PermissionRequest, result: JsonObject, answer?: string) {
-  updateThread(request.sessionId, (t) => ({
-    ...t,
-    permissions: t.permissions.filter((p) => p.rpcId !== request.rpcId),
-    items: answer ? [...t.items, questionItem(request, answer)] : t.items,
-  }));
+  updateThread(request.sessionId, (t) => {
+    const settled = request.question ? t : settledWait(t, request.toolCallId, Date.now());
+    return {
+      ...settled,
+      permissions: settled.permissions.filter((p) => p.rpcId !== request.rpcId),
+      items: answer ? [...settled.items, questionItem(request, answer)] : settled.items,
+    };
+  });
   // Another request of the same thread keeps it waiting; the last one ends the wait.
   if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
   connection?.respond(request.rpcId, result);
