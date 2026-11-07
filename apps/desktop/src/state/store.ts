@@ -3874,6 +3874,9 @@ function noteTyping(id: string): void {
   if (!get().threads[id]) return;
   clearAutoCompactTimer(id);
   autoCompactedIdle.add(id);
+  // Typing in a thread whose automatic compaction already runs stops it, so
+  // the user gets the thread back rather than waiting for a summary.
+  if (autoCompactInFlight.has(id)) void cancel(id);
 }
 
 /** Start a fresh idle period: the next turn may auto-compact once more. */
