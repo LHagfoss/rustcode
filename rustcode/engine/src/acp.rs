@@ -943,6 +943,10 @@ struct AcpServer {
     presence: presence::Presence,
     /// `/remote` shares and their pairing offers.
     remote: remote::RemoteManager,
+    /// Not before this: the next attempt to share a thread by itself, after a
+    /// gateway that could not be reached. Without it a gateway that is down
+    /// would be retried, and logged, on every pass.
+    share_retry_at: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Threads running on an external harness (`docs/harnesses.md`).
     external: harnesses::ExternalSessions,
 }
@@ -1017,6 +1021,16 @@ impl AcpServer {
             }
             return;
         }
+        if self
+            .share_retry_at
+            .lock()
+            .ok()
+            .and_then(|at| *at)
+            .is_some_and(|at| std::time::Instant::now() < at)
+        {
+            return;
+        }
+        let mut failed = false;
         let builtin = {
             let sessions = self.sessions.lock().await;
             sessions
@@ -1038,6 +1052,7 @@ impl AcpServer {
         for session in builtin {
             if let Err(error) = self.remote.start(session, false).await {
                 crate::dbg_log!("could not share this thread with a device: {error:?}");
+                failed = true;
             }
         }
         let external = {
@@ -1051,7 +1066,12 @@ impl AcpServer {
         for (session_id, session) in external {
             if let Err(error) = self.remote.start_harness(session_id, session, false).await {
                 crate::dbg_log!("could not share this thread with a device: {error:?}");
+                failed = true;
             }
+        }
+        if let Ok(mut retry_at) = self.share_retry_at.lock() {
+            *retry_at =
+                failed.then(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
         }
     }
 
@@ -1100,6 +1120,7 @@ impl AcpServer {
             client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
+            share_retry_at: Arc::new(std::sync::Mutex::new(None)),
             external: harnesses::ExternalSessions::default(),
         })
     }
@@ -3104,6 +3125,7 @@ mod tests {
             client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
+            share_retry_at: Arc::new(std::sync::Mutex::new(None)),
             external: harnesses::ExternalSessions::default(),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
