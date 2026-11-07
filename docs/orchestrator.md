@@ -246,10 +246,11 @@ timed out leaves the worktree mid-state, so inspect it before rerunning.
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
 at most 8 delegates working for one thread at once by default, set to 2 to 32
-in Settings › Agents, and at most 16 delegates running at once across the app,
-set to 2 to 64 (a `busy` refusal names the limit it hit and the current count,
-says `links_left` and that `wait_session` on one comes first). A message to a
-thread it already works with is a follow-up: it queues on that thread and
+in Settings › Agents, and at most 16 delegates running at once across this app
+instance, set to 2 to 64 (a `busy` refusal names the limit it hit and the
+current count, says `links_left` and that `wait_session` on one comes first).
+The CLI and TUI start no delegates, so the total is one app's own. A message
+to a thread it already works with is a follow-up: it queues on that thread and
 takes no slot, though its link is still created and waitable. Delegation
 goes two levels deep — a top-level thread may start children, and they may
 start grandchildren, while a thread at that depth is refused with the limit in

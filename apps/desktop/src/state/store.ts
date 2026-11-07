@@ -402,7 +402,7 @@ export interface AppState {
   orchestration: boolean;
   /** How many delegates one thread may run at once (Settings › Agents). */
   threadLimit: number;
-  /** How many delegates may run at once across the app (Settings › Agents). */
+  /** How many delegates may run at once across this app (Settings › Agents). */
   totalLimit: number;
   /** Agents may read threads of every project, not only the calling thread's (Settings › Agents). */
   readAcrossProjects: boolean;
@@ -617,12 +617,14 @@ function storedThreadLimit(key: string, fallback: number): number {
 }
 
 /**
- * The machine-wide delegate total, kept to 2..64. Before it existed the one
+ * The app instance's delegate total, kept to 2..64. Before it existed the one
  * limit was a thread's own, and its whole delegation tree could hold twice
  * that; a stored old value raises the total to the same ceiling, so a custom
- * limit does not quietly get smaller. A fresh install starts at the default.
+ * limit does not quietly get smaller. The result is written back, so the
+ * migration happens once: moving the per-thread setting later does not move
+ * the total, and a fresh install starts at the default.
  */
-function storedTotalLimit(): number {
+export function loadTotalLimit(): number {
   if (stored(STORAGE.totalLimit) !== null) {
     return storedNumber(
       STORAGE.totalLimit,
@@ -631,7 +633,7 @@ function storedTotalLimit(): number {
       MAX_DELEGATES_TOTAL,
     );
   }
-  return Math.min(
+  const total = Math.min(
     MAX_DELEGATES_TOTAL,
     Math.max(
       DEFAULT_DELEGATES_TOTAL,
@@ -643,6 +645,8 @@ function storedTotalLimit(): number {
       ) * 2,
     ),
   );
+  store(STORAGE.totalLimit, String(total));
+  return total;
 }
 
 export function store(key: string, value: string) {
@@ -678,7 +682,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // delegating is there to use without first finding the setting.
   orchestration: storedFlag(STORAGE.orchestration, SETTINGS_DEFAULTS.orchestration),
   threadLimit: storedThreadLimit(STORAGE.threadLimit, SETTINGS_DEFAULTS.threadLimit),
-  totalLimit: storedTotalLimit(),
+  totalLimit: loadTotalLimit(),
   // On unless turned off: reading knows no project boundary, so an agent asked
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
@@ -2180,6 +2184,8 @@ export async function trashThread(id: string): Promise<boolean> {
     toast("Stop the running turn before moving this thread to the Trash.", "info");
     return false;
   }
+  // Its delegates stop with it: forgetting their links would free slots they still hold.
+  await stopLinksFrom(id);
   if (get().threads[id] && get().agent?.closeSession) await closeThread(id);
   try {
     await shellCall("thread_trash", { id });

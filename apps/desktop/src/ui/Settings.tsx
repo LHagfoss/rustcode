@@ -51,6 +51,7 @@ import { validateDefault } from "../state/harness";
 import {
   activeDelegates,
   busiestThreadDelegates,
+  effectivePerThreadLimit,
   MAX_DELEGATES_PER_THREAD,
   MAX_DELEGATES_TOTAL,
   MIN_DELEGATES_PER_THREAD,
@@ -574,6 +575,7 @@ function OrchestrationGroup() {
   const links = useApp((s) => s.links);
   const running = useMemo(() => activeDelegates(links), [links]);
   const busiest = useMemo(() => busiestThreadDelegates(links), [links]);
+  const possible = effectivePerThreadLimit({ perThread: threadLimit, total: totalLimit });
   return (
     <>
       <Group title="Orchestration">
@@ -611,7 +613,12 @@ function OrchestrationGroup() {
       </Group>
       <Group
         title="Delegation"
-        footer="Only live delegates take a slot; a finished one frees it at once. A message to a thread this one already runs is a follow-up and takes none."
+        disabled={!orchestration}
+        footer={
+          orchestration
+            ? "Only live delegates take a slot; a finished one frees it at once. A message to a thread this one already runs is a follow-up and takes none."
+            : "These limits have no effect while “Threads can start and message other threads” is off."
+        }
       >
         <Row
           title="Delegates across all threads"
@@ -620,7 +627,7 @@ function OrchestrationGroup() {
               ? undefined
               : () => setTotalLimit(SETTINGS_DEFAULTS.totalLimit)
           }
-          subtitle="How many delegates may run at once across the app, whichever thread started them."
+          subtitle="How many delegates may run at once across this app, whichever thread started them."
           status={
             running === 0
               ? "No delegates running now"
@@ -645,8 +652,14 @@ function OrchestrationGroup() {
               ? undefined
               : () => setThreadLimit(SETTINGS_DEFAULTS.threadLimit)
           }
-          subtitle="How many delegates one thread may have working at the same time."
-          status={busiest === 0 ? "No delegates on any thread now" : `The busiest thread has ${busiest} now`}
+          subtitle="How many delegates one thread may have working at the same time. The total above can make this lower."
+          status={
+            threadLimit > totalLimit
+              ? `${threadLimit} set, ${possible} possible while the total is ${totalLimit}`
+              : busiest === 0
+                ? "No delegates on any thread now"
+                : `The busiest thread has ${busiest} now`
+          }
         >
           <Slider
             label="Delegates one thread can run at once"

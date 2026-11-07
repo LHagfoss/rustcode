@@ -25,6 +25,7 @@ import {
   DEFAULT_DELEGATES_TOTAL,
   depthOf,
   doneLinks,
+  effectivePerThreadLimit,
   emptyBook,
   failureJson,
   fillAnswers,
@@ -316,7 +317,7 @@ describe("orchestration rules", () => {
     expect(busiestThreadDelegates(filled)).toBe(8);
     const refused = checkStart(thread("c"), filled, 1)!;
     expect(refused.code).toBe("busy");
-    expect(refused.message).toContain(`at most ${DEFAULT_DELEGATES_TOTAL} delegates at once across the app`);
+    expect(refused.message).toContain(`at most ${DEFAULT_DELEGATES_TOTAL} delegates at once across this app`);
     expect(refused.message).toContain("16 are running");
     expect(refused.linksLeft).toBe(0);
     // A message to another thread opens a link too, so the total holds for it as well.
@@ -1587,10 +1588,22 @@ describe("answering with the slots and the child's activity", () => {
     expect(small.message).toContain("at most 2 delegates per thread at once");
     const tiny = book([link("a", "b"), link("a", "c"), link("other", "d"), link("other", "e")]);
     const total = checkStart(thread("a"), tiny, 1, { perThread: 8, total: 4 })!;
-    expect(total.message).toContain("at most 4 delegates at once across the app");
+    expect(total.message).toContain("at most 4 delegates at once across this app");
     expect(total.message).toContain("4 are running");
-    // links_left is the smaller of the two rooms, whichever cap refused.
+    // links_left is the smaller of the two rooms, whichever cap refused, and the
+    // refusal says that number rather than the per-thread room it did not use.
     expect(linksLeft(two, "a", { perThread: 4, total: 2 })).toBe(0);
+    const capped = checkStart(thread("a"), two, 3, { perThread: 4, total: 2 })!;
+    expect(capped.message).toContain("at most 4 delegates per thread at once");
+    expect(capped.message).toContain("0 slots are left in all");
+    expect(capped.message).not.toContain("2 slots are left");
+    expect(capped.linksLeft).toBe(0);
+  });
+
+  test("a per-thread setting above the total is capped by it", () => {
+    expect(effectivePerThreadLimit({ perThread: 32, total: 16 })).toBe(16);
+    expect(effectivePerThreadLimit({ perThread: 8, total: 16 })).toBe(8);
+    expect(effectivePerThreadLimit({ perThread: 4, total: 4 })).toBe(4);
   });
 
   test("a timeout's link says how long it has been idle and what it did last", () => {

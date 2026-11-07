@@ -262,6 +262,22 @@ const delegateLimits = (): DelegateLimits => ({
   total: useApp.getState().totalLimit,
 });
 
+/**
+ * The calls that open a link run one at a time: each checks the book, asks the
+ * user and only then writes the link, so two calls arriving together would
+ * both see the same free slot and overshoot a limit. The queue is a promise
+ * chain, so a call starts when the one before it has finished, failed or not.
+ */
+let linkGate: Promise<unknown> = Promise.resolve();
+function withLinkGate<T>(run: () => Promise<T>): Promise<T> {
+  const next = linkGate.then(run, run);
+  linkGate = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
 // A tab or window closing mid-turn still leaves the store with what happened.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => void flushSave());
@@ -1055,7 +1071,11 @@ export function turnsOf(items: TranscriptItem[]): JsonObject[] {
   return out;
 }
 
-async function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+  return withLinkGate(() => messageNow(caller, targetId, text));
+}
+
+async function messageNow(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), targetId);
   const refused = checkMessage(caller, target, book(), false, false, delegateLimits());
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
@@ -1471,7 +1491,11 @@ async function createThreadFor(
   }
 }
 
-async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
+function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
+  return withLinkGate(() => startNow(caller, call));
+}
+
+async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   const refused = checkStart(caller, book(), 1, delegateLimits());
   if (refused) return failureJson(refused);
   const project = projectFor(caller, call.project);
@@ -1542,7 +1566,11 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
   };
 }
 
-async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
+function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
+  return withLinkGate(() => fanOutNow(caller, call));
+}
+
+async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
   const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
   if (refused) return failureJson(refused);
   const chosen: { harness: Harness; model?: string; effort?: string; account: string | null }[] = [];

@@ -75,17 +75,32 @@ export function Group({
   children,
   footer,
   action,
+  disabled,
 }: {
   title?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
   /** A control at the right of the title (a filter, "New…"). */
   action?: ReactNode;
+  /** The group has no effect right now: its controls are disabled and it reads as off. */
+  disabled?: boolean;
 }) {
   return (
-    <section className="mb-6 scroll-mt-5" data-setting={typeof title === "string" ? title : undefined}>
+    <section
+      className="mb-6 scroll-mt-5"
+      data-setting={typeof title === "string" ? title : undefined}
+      aria-disabled={disabled || undefined}
+    >
       <SectionTitle title={title} action={action} />
-      <div className="divide-y divide-border overflow-hidden rounded-xl bg-surface">{children}</div>
+      <fieldset
+        disabled={disabled}
+        className={cx(
+          "m-0 min-w-0 divide-y divide-border overflow-hidden rounded-xl border-0 bg-surface p-0",
+          disabled && "opacity-60",
+        )}
+      >
+        {children}
+      </fieldset>
       {footer && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-faint">{footer}</div>}
     </section>
   );

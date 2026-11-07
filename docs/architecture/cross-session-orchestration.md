@@ -29,9 +29,9 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
   thread working for another cannot message others — v2 relaxes this to two
   levels, [orchestrator.md](../orchestrator.md)); one orchestrator per
   target; 8 delegates working for one thread by default (2–32 in Settings ›
-  Agents) and 16 running across the app (2–64); a 32-message mailbox; 32 KiB
-  messages and prompts;
-  8 KiB answers, paged by `read_session`; `wait_session` waits at most 1 h. It
+  Agents) and 16 running across this app instance (2–64; the CLI and TUI start
+  no delegates); a 32-message mailbox; 32 KiB messages and prompts; 8 KiB
+  answers, paged by `read_session`; `wait_session` waits at most 1 h. It
   returns `needs_user` while the target waits on an approval or a question.
 - Links and *Allow for This Thread* grants are kept in Application Support
   (`RustCode/thread-links.json`). *Allow Once* is not kept. After a restart,
@@ -210,9 +210,10 @@ Decisions:
   `followup_task`.
 - The orchestrator may have at most 8 distinct target threads active by
   default (2–32 in Settings › Agents; a follow-up takes no slot), with at most
-  16 running across the app (2–64), and the engine at most 8 orchestrated
-  turns running at once; further turns queue, and
-  waiting yields the orchestrator's slot as `wait_agent` does.
+  16 running across this app instance (2–64; the CLI and TUI start no
+  delegates), and the engine at most 8 orchestrated turns running at once;
+  further turns queue, and waiting yields the orchestrator's slot as
+  `wait_agent` does.
 - `wait_session` accepts one `link_id` or several (first to finish wins),
   default timeout 60 s, maximum 1 h, and wakes on completion, a question or an
   approval waiting in the target.

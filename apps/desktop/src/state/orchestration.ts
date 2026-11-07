@@ -29,9 +29,10 @@ export const DEFAULT_DELEGATES_PER_THREAD = 8;
 export const MIN_DELEGATES_PER_THREAD = 2;
 export const MAX_DELEGATES_PER_THREAD = 32;
 /**
- * The default number of delegates that may run at once across the app
- * (Settings › Agents), whichever thread started them. A delegate takes one
- * slot whether it is a child this thread started or a thread it messaged.
+ * The default number of delegates that may run at once across this app
+ * instance (Settings › Agents), whichever thread started them. A delegate
+ * takes one slot whether it is a child this thread started or a thread it
+ * messaged.
  */
 export const DEFAULT_DELEGATES_TOTAL = 16;
 export const MIN_DELEGATES_TOTAL = 2;
@@ -49,6 +50,12 @@ export const DEFAULT_DELEGATE_LIMITS: DelegateLimits = {
   perThread: DEFAULT_DELEGATES_PER_THREAD,
   total: DEFAULT_DELEGATES_TOTAL,
 };
+/**
+ * The per-thread setting as it can actually run: the total may be the lower
+ * cap, so a row that shows only its own number would promise more than fits.
+ */
+export const effectivePerThreadLimit = (limits: DelegateLimits): number =>
+  Math.min(limits.perThread, limits.total);
 /**
  * How deep delegation goes: a top-level thread (0) may start children (1), and
  * they may start grandchildren (2). A thread at the limit is told so, with the
@@ -1094,19 +1101,17 @@ function slotRefusal(
   const left = linksLeft(book, caller.id, limits);
   const active = activeTargets(book, caller.id).size;
   if (active + count > limits.perThread) {
-    const room = Math.max(0, limits.perThread - active);
     return failure(
       "busy",
-      `at most ${limits.perThread} delegates per thread at once, and this thread has ${active}: ${count} more would not fit (${room} ${room === 1 ? "slot is" : "slots are"} left); wait_session on one first`,
+      `at most ${limits.perThread} delegates per thread at once, and this thread has ${active}: ${count} more would not fit (${left} ${left === 1 ? "slot is" : "slots are"} left in all); wait_session on one first`,
       left,
     );
   }
   const running = activeDelegates(book);
   if (running + count > limits.total) {
-    const room = Math.max(0, limits.total - running);
     return failure(
       "busy",
-      `at most ${limits.total} delegates at once across the app, and ${running} are running: ${count} more would not fit (${room} ${room === 1 ? "slot is" : "slots are"} left); wait_session on one first`,
+      `at most ${limits.total} delegates at once across this app, and ${running} are running: ${count} more would not fit (${left} ${left === 1 ? "slot is" : "slots are"} left in all); wait_session on one first`,
       left,
     );
   }
