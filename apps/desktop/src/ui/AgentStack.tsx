@@ -96,10 +96,17 @@ export function AgentMarks({
   agents,
   size = "sidebar",
   tone = "sidebar",
+  live = true,
 }: {
   agents: readonly StackAgent[];
   size?: "sidebar" | "chat";
   tone?: "sidebar" | "surface";
+  /**
+   * The accent spinner that says the stack works. A sidebar row leaves it out: its status chip
+   * already carries the row's one spinner and its clock, and two spinning marks on one row is
+   * what made it read as busy rather than as working.
+   */
+  live?: boolean;
 }) {
   const harnesses = useApp((s) => s.harnesses?.harnesses);
   const view = agentStack(agents, { idle: size === "chat" ? "show" : "hide" });
@@ -154,7 +161,7 @@ export function AgentMarks({
         </span>
       )}
       {/* One sign for the stack, not a spinner per icon. */}
-      {view.working > 0 && <Spinner size={chat ? 10 : 9} className="ml-1 text-accent" />}
+      {live && view.working > 0 && <Spinner size={chat ? 10 : 9} className="ml-1 text-accent" />}
     </span>
   );
 }
@@ -190,7 +197,7 @@ export function AgentStack({
           className,
         )}
       >
-        <AgentMarks agents={agents} size={size} tone={tone} />
+        <AgentMarks agents={agents} size={size} tone={tone} live={chat} />
       </span>
     </Tooltip>
   );

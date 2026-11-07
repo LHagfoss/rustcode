@@ -38,6 +38,7 @@ const claude = (accounts: HarnessAccount[] = []): Harness => ({
   name: "Claude Code",
   kind: "acp",
   builtin: false,
+  known: true,
   enabled: true,
   command: ["claude"],
   installed: true,

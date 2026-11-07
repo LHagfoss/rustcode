@@ -14,6 +14,7 @@ const harness = (efforts: string[]): Harness => ({
   name: "Codex",
   kind: "codex",
   builtin: false,
+  known: true,
   enabled: true,
   command: ["codex", "app-server"],
   installed: true,

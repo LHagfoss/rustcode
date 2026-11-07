@@ -350,15 +350,19 @@ export function branchWord(total: BranchTotal): string {
   return "done";
 }
 
+/** `2 need you`, `1 needs you`: how a wait on the user reads. */
+const needsWord = (needs: number) => `${needs} ${needs === 1 ? "needs" : "need"} you`;
+
 /** What the strip above the composer says of a branch, one header wide. */
 export interface DelegateBar {
   /** Threads working now; a queued one reads as working, as its own row does. */
   working: number;
   /** Threads waiting on the user. */
   needs: number;
+  /** Threads that failed: history here, so the header never names it (the inbox and details do). */
   failed: number;
-  /** Every thread in the branch, working and finished. */
-  threads: number;
+  /** Working and waiting: what the count and the marks of the header stand for. */
+  live: number;
   /**
    * How long the longest of the working threads has run, by the wall clock, so
    * it ticks up once a second. Absent when nothing works: a branch's summed
@@ -367,18 +371,25 @@ export interface DelegateBar {
   longestMs?: number;
   /** What the header's mark is tinted by. */
   state: AgentState;
-  /** The count itself: `34 threads`, or `34 delegates done` once nothing works. */
+  /** The count itself: `5 running`, `2 need you`; empty when quiet. */
   label: string;
-  /** What follows the count: `5 working · 2 need you`, `2 need you`, `1 failed`; empty when done. */
+  /** What follows the count after its `·`: `2 need you` beside `5 running`; empty otherwise. */
   status: string;
+  /**
+   * Whether the strip has anything to say now: work under way or a wait on the
+   * user. Anything settled is history, and history is not a status: a failure
+   * from hours ago pins nothing over the composer (the inbox and the details
+   * panel's Delegated and Messaged lists keep it).
+   */
+  show: boolean;
 }
 
 /**
- * A branch as the strip above the composer reads it: how many threads work now
- * and how long the longest has been at it (wall clock, never the branch's summed
- * work time), and once nothing works, one quiet count of what is done. The
- * branch's history is not a status: 34 threads that finished over a day are 34
- * done delegates, not `34 threads · 6h 34m`.
+ * A branch as the strip above the composer reads it: what runs now and how long
+ * the longest of it has been at it (wall clock, never the branch's summed work
+ * time). Nothing else is a status: a branch whose threads all settled leaves the
+ * strip empty, whether the last one finished, failed or was stopped, rather than
+ * reading `34 threads` or pinning an old failure over the composer.
  */
 export function branchBar(
   total: BranchTotal,
@@ -387,54 +398,38 @@ export function branchBar(
   now = Date.now(),
 ): DelegateBar {
   const { working, needs, failed } = total.counts;
+  const live = working + needs;
   const longestMs = working && runningSince.length ? now - Math.min(...runningSince) : undefined;
-  const state: AgentState = needs
-    ? "needs"
-    : working
-      ? "working"
-      : failed
-        ? "failed"
-        : total.counts.stopped
-          ? "stopped"
-          : "done";
-  const count = `${total.threads} ${total.threads === 1 ? "thread" : "threads"}`;
-  const parts: string[] = [];
-  if (working) parts.push(`${working} working`);
-  if (needs) parts.push(`${needs} ${needs === 1 ? "needs" : "need"} you`);
-  if (parts.length) {
+  // A branch that works says how many run, and how many of those wait on the user;
+  // a branch that only waits says that alone.
+  if (working) {
     return {
       working,
       needs,
       failed,
-      threads: total.threads,
+      live,
       longestMs,
-      state,
-      label: count,
-      status: parts.join(" · "),
+      state: needs ? "needs" : "working",
+      label: `${working} running`,
+      status: needs ? needsWord(needs) : "",
+      show: true,
     };
   }
-  // Nothing works and nothing waits: a failure is still news, but a finished branch only a count.
-  if (failed) {
+  if (needs) {
     return {
       working,
       needs,
       failed,
-      threads: total.threads,
-      state,
-      label: count,
-      status: `${failed} failed`,
+      live,
+      state: "needs",
+      label: needsWord(needs),
+      status: "",
+      show: true,
     };
   }
-  return {
-    working,
-    needs,
-    failed,
-    threads: total.threads,
-    state,
-    label: `${total.threads} ${total.threads === 1 ? "delegate" : "delegates"} done`,
-    // The label already says it: a finished branch has no second word in its header.
-    status: "",
-  };
+  // Nothing works and nothing waits: a finished, failed or stopped branch is history, and the
+  // strip draws nothing for it.
+  return { working, needs, failed, live, state: "done", label: "", status: "", show: false };
 }
 
 /**

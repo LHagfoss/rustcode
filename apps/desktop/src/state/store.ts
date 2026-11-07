@@ -212,6 +212,7 @@ export type SettingsSection =
   | "agents"
   | "connections"
   | "capabilities"
+  | "remote"
   | "appearance"
   | "keyboard"
   | "usage"
@@ -226,6 +227,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "agents",
   "connections",
   "capabilities",
+  "remote",
   "appearance",
   "keyboard",
   "usage",
