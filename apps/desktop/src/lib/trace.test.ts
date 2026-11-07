@@ -8,6 +8,9 @@ import {
   rowTokens,
   rowValue,
   sortTrace,
+  TRACE_COLUMNS,
+  TRACE_MIN_BAR,
+  TRACE_TRACK_INSET,
   type TraceCall,
   type TraceInput,
   usageDelta,
@@ -464,5 +467,27 @@ describe("ordering and layout", () => {
     // A call with no measured time still draws a hairline of a bar.
     expect(barLayout(at(4_000, 4_000), trace)).toEqual({ left: 40, width: 0 });
     expect(barLayout(at(4_000, 10_000), { start, end: start })).toEqual({ left: 0, width: 100 });
+  });
+
+  test("the columns the axis and the rows share are on the design's grid", () => {
+    // docs/design.md › Turn trace: the axis above the rows and every row use these, so a tick
+    // sits on the end of the bar under it. They are spacing steps, so they stay on the 4px grid.
+    expect(TRACE_COLUMNS.label).toBe(184);
+    expect(TRACE_COLUMNS.value).toBe(124);
+    expect(TRACE_TRACK_INSET).toBe(4);
+    for (const width of [TRACE_COLUMNS.label, TRACE_COLUMNS.value, TRACE_TRACK_INSET])
+      expect(width % 4).toBe(0);
+  });
+
+  test("a bar that took no time still has a place inside the track", () => {
+    // A call that began and ended at the turn's last instant sits on the track's end with no
+    // width; the panel draws it inside `TRACE_TRACK_INSET`, floors it at `TRACE_MIN_BAR` and
+    // pulls its start back by that floor, so it shows and stays clear of the rounded edge.
+    const trace = buildTrace(
+      input({ calls: [call({ id: "ping", startedAt: start + 10_000, endedAt: start + 10_000 })] }),
+    );
+    const row = trace.rows.find((r) => r.id === "ping")!;
+    expect(barLayout(row, trace)).toEqual({ left: 100, width: 0 });
+    expect(TRACE_MIN_BAR).toBeLessThan(TRACE_COLUMNS.value);
   });
 });

@@ -27,7 +27,7 @@ export const STATUS_LABEL: Record<ThreadStatus, string> = {
   running: "Running",
   needs_input: "Needs input",
   review: "Review",
-  done: "Done",
+  done: "Settled",
 };
 
 export function parseStatus(value: unknown): ThreadStatus | undefined {

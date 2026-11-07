@@ -3608,6 +3608,19 @@ export function settleThread(id: string): void {
   settleThreads([id]);
 }
 
+/**
+ * Unsettles the settled threads among `ids` (the sidebar's selection bar and
+ * the selection's menu): a Review mark on the others stays Review. Quiet on
+ * purpose — the toast confirms the change and offers no Undo.
+ */
+export function unsettleThreads(ids: string[]): void {
+  const state = get();
+  const settled = ids.filter((id) => statusOf(state, id) === "done");
+  if (!settled.length) return;
+  void setThreadsStatus(settled, "idle");
+  toast(settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`, "info");
+}
+
 export function setView(view: AppState["view"]) {
   dismissOverlays();
   set({ view, switcherOpen: false, settings: null });

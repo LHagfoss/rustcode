@@ -106,6 +106,7 @@ import {
   togglePin,
   toggleRightPanel,
   trashThread,
+  unsettleThreads,
   updateQueued,
   updateThread,
   useApp,
@@ -1508,6 +1509,30 @@ describe("engine controller with the mock engine", () => {
     await setThreadStatus(id, "idle");
     expect(statusOf(useApp.getState(), id)).toBe("idle");
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
+  });
+
+  test("unsettling a mixed selection leaves the reviewed threads in review", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    const [a, b, c] = useApp.getState().sessions;
+    await setThreadStatus(a!.id, "review");
+    await setThreadStatus(b!.id, "done");
+    await setThreadStatus(c!.id, "done");
+    expect(statusOf(useApp.getState(), a!.id)).toBe("review");
+
+    unsettleThreads([a!.id, b!.id, c!.id]);
+    let s = useApp.getState();
+    expect(statusOf(s, a!.id)).toBe("review");
+    expect(statusOf(s, b!.id)).toBe("idle");
+    expect(statusOf(s, c!.id)).toBe("idle");
+    expect(s.toasts.at(-1)?.text).toBe("Unsettled 2 threads");
+    expect(s.toasts.at(-1)?.tone).toBe("info");
+
+    // The single-thread route moves a settled thread back to idle as well.
+    await setThreadStatus(b!.id, "done");
+    await setThreadStatus(b!.id, "idle");
+    s = useApp.getState();
+    expect(statusOf(s, b!.id)).toBe("idle");
   });
 
   test("the panel is remembered per thread and never opens on its own", async () => {

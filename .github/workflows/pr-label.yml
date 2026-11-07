@@ -11,9 +11,13 @@ name: PR labels
 #
 # pull_request_target so fork PRs get a token that can write labels. Safe here:
 # the job never checks out or runs PR code, it only reads the title.
+#
+# No `synchronize`: labels come from the title, so a new push cannot change
+# them and the run was a no-op (about 20 of 34 weekly runs). `edited` still
+# covers a title change.
 on:
     pull_request_target:
-        types: [opened, edited, reopened, synchronize]
+        types: [opened, edited, reopened]
 
 permissions:
     contents: read

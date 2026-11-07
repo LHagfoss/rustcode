@@ -43,25 +43,40 @@ jobs:
     changes:
         name: detect shell changes
         runs-on: ubuntu-24.04
+        permissions:
+            # The changed paths come from the pull request's file list, so this
+            # job checks nothing out.
+            contents: read
+            pull-requests: read
+        defaults:
+            run:
+                # The workflow defaults the shell to apps/desktop, which a run
+                # with no checkout does not have.
+                working-directory: .
         outputs:
             shell: ${{ steps.filter.outputs.shell }}
         steps:
-            - uses: actions/checkout@v7
-              with:
-                  fetch-depth: 0
-
             - name: Check changed paths
               id: filter
               shell: bash
               env:
-                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+                  GH_TOKEN: ${{ github.token }}
               run: |
                   if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
                       echo "shell=true" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi
-                  if git diff --name-only "$BASE_SHA...HEAD" |
-                      grep -Eq '^(apps/desktop/src-tauri/|apps/desktop/package\.json$|apps/desktop/bun\.lock$|\.github/workflows/desktop-ci\.yml$)'; then
+                  # Grep a file rather than a pipe: `grep -q` exits at the first
+                  # match, and with `pipefail` the SIGPIPE that kills `gh api`
+                  # would fail the step and report shell=false for a PR with
+                  # more than one page of files.
+                  changed="$RUNNER_TEMP/changed-files"
+                  gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files \
+                      --paginate --jq '.[].filename' > "$changed"
+                  # The files API stops at 3000 entries, so a list that long is
+                  # not the whole change: run the shell job rather than skip it.
+                  if [[ "$(wc -l < "$changed")" -ge 3000 ]] ||
+                      grep -Eq '^(apps/desktop/src-tauri/|apps/desktop/package\.json$|apps/desktop/bun\.lock$|\.github/workflows/desktop-ci\.yml$)' "$changed"; then
                       echo "The shell crate or what it builds from changed"
                       echo "shell=true" >> "$GITHUB_OUTPUT"
                   else

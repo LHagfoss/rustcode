@@ -73,7 +73,7 @@ import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
-import { StatusChip } from "./Status";
+import { StatusChip, useThreadStatus } from "./Status";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
 import { WhileAwayCard } from "./WhileAway";
 
@@ -131,7 +131,7 @@ function PlanButton({ thread }: { thread: ThreadState }) {
   );
 }
 
-/** The thread's status chip; a click marks it for review, done, or clears it. */
+/** The thread's status chip; a click marks it for review, settles or unsettles it. */
 function ThreadStatusMenu({ threadId }: { threadId: string }) {
   const status = useApp((s) => statusOf(s, threadId));
   const wt = useApp((s) => worktreeOf(s, threadId));
@@ -162,15 +162,25 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
           <FileDiff size={13} /> Review Changes
         </DropdownMenu.Item>
         <DropdownMenu.Separator className={menuSeparator} />
-        <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
-          <Eye size={13} /> Mark for Review
-        </DropdownMenu.Item>
-        <DropdownMenu.Item className={menuItem} onSelect={() => settleThread(threadId)}>
-          <CircleCheck size={13} /> Mark Done
-        </DropdownMenu.Item>
-        <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
-          <CircleDashed size={13} /> Clear Status
-        </DropdownMenu.Item>
+        {status !== "review" && (
+          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
+            <Eye size={13} /> Mark for Review
+          </DropdownMenu.Item>
+        )}
+        {status === "done" ? (
+          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
+            <CircleDashed size={13} /> Unsettle
+          </DropdownMenu.Item>
+        ) : (
+          <DropdownMenu.Item className={menuItem} onSelect={() => settleThread(threadId)}>
+            <CircleCheck size={13} /> Settle
+          </DropdownMenu.Item>
+        )}
+        {status === "review" && (
+          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
+            <CircleDashed size={13} /> Clear Status
+          </DropdownMenu.Item>
+        )}
       </MenuContent>
     </DropdownMenu.Root>
   );
@@ -572,6 +582,27 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
 }
 
 /**
+ * A settled thread says so above the field, with the way out of it in reach: settling
+ * leaves the chat for a new thread, so a thread you are reading needs its own way back.
+ */
+function SettledBar({ threadId }: { threadId: string }) {
+  const status = useThreadStatus(threadId);
+  if (status !== "done") return null;
+  return (
+    <div
+      role="status"
+      className="rc-glass-overlay relative flex h-[32px] items-center gap-2 rounded-full pr-1.5 pl-3 text-callout rc-in"
+    >
+      <CircleCheck size={12} className="shrink-0 text-success" />
+      <span className="min-w-0 flex-1 truncate font-medium text-fg-muted">Settled</span>
+      <Pill size="sm" quiet onClick={() => void setThreadStatus(threadId, "idle")}>
+        <CircleDashed size={11} /> Unsettle
+      </Pill>
+    </div>
+  );
+}
+
+/**
  * A stack child of the composer's column. It is per child, not on the stack, so one of the
  * footer's controls can paint above the transcript while another stays under it. `over` lifts a
  * footer control — the composer with its drawer over it, an approval card, an error's actions —
@@ -789,6 +820,11 @@ export function ChatView() {
             {!ownRequest && resolved && (
               <LaneItem over>
                 <ResolvedApprovalBar approval={resolved} />
+              </LaneItem>
+            )}
+            {thread && (
+              <LaneItem over>
+                <SettledBar threadId={thread.id} />
               </LaneItem>
             )}
             <LaneItem over>
