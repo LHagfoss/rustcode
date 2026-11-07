@@ -1,3 +1,30 @@
+## [v1.17.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.17.1) - 2026-11-07
+
+### Features
+- New thread titles use the project folder name; long Windows paths show in full on hover, and new threads no longer show another thread's model or effort while their harness loads its models. (#3119)
+- A built-in thread whose config has `models = []` no longer sends its turns to a compiled private host: it stops with a message that says how to add a model or choose another harness. (#3123)
+- Windows: Codex and npm-installed harnesses are detected again without a PATH edit, reinstall or extensionless copy; the executable is found through `PATHEXT`. (#3117)
+- The model picker opens on an effort slider with the level in large type, the model under it and accounts below; picking a model returns to the slider with its effort clamped to that model's levels. (#3122)
+- Sending the first message of a new thread no longer skips its arrival, and a message sent in an open thread no longer jolts after it lands. (#3121)
+- Ease the hover and keyboard highlight in the composer's project picker. (#3120)
+- Offer every reasoning effort each Pi and OpenCode model really supports (`minimal`, `low`, `medium`, `xhigh`), learning a model's own levels when it is used. (#3124)
+- A needs-you inbox across all threads, and a while-you-were-away recap after a long break. (#3126)
+- Fix a fresh Windows profile failing to save its migration checkpoint, which repeated every migration and warned on each start. (#3118)
+- A steering note now shows on the plan step it landed on (or as a quiet line under its message), a queued bubble glides out of the stack when the turn reads it, and plan steps show a live clock and their duration. (#3125)
+- Fix a blank window on start when a thread's side panel was remembered open. (#3132)
+- Delegates now appear in a nested tree with live work time and rolled-up cost; finished branches fold, and Board cards summarize their delegates. (#3128)
+- The working line ends on a green check, counts roll, toasts stack and fan out with a timer hairline, and the composer's usage number shimmers while a turn runs. (#3130)
+- Claude Code is now reported signed in or signed out in Settings › Agents, read from its own `auth status`, instead of always showing "Installed". (#3127)
+- Fix sends and wakes holding at "Starting…" while the window is hidden. (#3134)
+- A new thread no longer stays on the Starting… screen with its turn running behind it: the chat hands over to the thread as soon as the message has landed. (#3137)
+- The composer's context card now shows what fills the window as a tile map with the biggest files and tool calls, marks the automatic compaction point, and compares before and after a compaction. (#3131)
+- Approvals show what they will run, how risky it is, and let you allow it once, for an hour, or always. (#3136)
+- A finished turn's Trace chip shows where its time and cost went: each model call, tool call and delegate on the turn's timeline, the slowest by work, with per-call tokens and cost and approval waits drawn apart. (#3129)
+- Rewind a thread to a turn's checkpoint as a new attempt: the turns it leaves stay below, faded under an earlier attempt you can go back to, and the minimap marks every checkpoint. (#3135)
+- Redesigned Settings (in-page section nav, slider, status chips, segmented effort) and Statistics (period switch, KPI tiles with deltas and sparklines, hoverable daily chart, linked cost breakdown, plan limits). (#3138)
+- Keep delegates from hanging on a git editor, pager or endless command: harness children run non-interactively, and a parent is told once when a delegate stops making progress. (#3140)
+- Smart UI views gain hover tooltips, legend toggles, filled line charts, a donut total, inline sparklines and tables that sort on a heading click, and agents are told which view answers which question. (#3133)
+- Delegated coding tasks now carry the repository rules and time bounds that help prevent commands from stalling. (#3139)
 ## [v1.17.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.17.0) - 2026-11-07
 
 ### Features
