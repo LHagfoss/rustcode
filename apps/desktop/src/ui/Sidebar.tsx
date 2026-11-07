@@ -102,6 +102,7 @@ import {
   setPanel,
   setPinned,
   setThreadStatus,
+  setThreadsStatus,
   settleThread,
   settleThreads,
   setView,
@@ -244,6 +245,8 @@ function ThreadMenuItems({
   const statusMissing = useApp((s) => (s.features.status ? null : featureMissing("status")));
   const snoozed = useApp((s) => session.id in s.snoozed);
   const allPinned = useApp((s) => (bulk ?? []).every((x) => s.pinned.includes(x.id)));
+  // Settled threads in the selection get Unsettle beside Settle, the same as a single row.
+  const bulkSettled = useApp((s) => (bulk ?? []).some((x) => statusOf(s, x.id) === "done"));
   const canFiles = hasShell();
   // The selection's menu: every hook is read above, so the early return keeps the hooks in order.
   if (bulk && bulk.length > 1) {
@@ -261,6 +264,17 @@ function ThreadMenuItems({
         >
           <CircleCheck size={13} /> Settle {n} Threads
         </Item>
+        {bulkSettled && (
+          <Item
+            className={menuItem}
+            onSelect={() => {
+              void setThreadsStatus(ids, "idle");
+              onClear?.();
+            }}
+          >
+            <CircleDashed size={13} /> Unsettle {n} Threads
+          </Item>
+        )}
         <Item
           className={menuItem}
           onSelect={() => {
@@ -290,12 +304,16 @@ function ThreadMenuItems({
           <Eye size={13} /> Mark for Review
         </Item>
       )}
-      {status !== "done" && (
+      {status === "done" ? (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
+          <CircleDashed size={13} /> Unsettle
+        </Item>
+      ) : (
         <Item className={menuItem} onSelect={() => settleThread(session.id)}>
           <CircleCheck size={13} /> Settle
         </Item>
       )}
-      {(status === "review" || status === "done") && (
+      {status === "review" && (
         <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
           <CircleDashed size={13} /> Clear Status
         </Item>
@@ -796,7 +814,11 @@ const ThreadRow = memo(function ThreadRow({
             <RowAction label={pinned ? "Unpin" : "Pin"} onClick={() => togglePin(session.id)}>
               {pinned ? <PinOff size={12} /> : <Pin size={12} />}
             </RowAction>
-            {!done && (
+            {done ? (
+              <RowAction label="Unsettle" onClick={() => void setThreadStatus(session.id, "idle")}>
+                <CircleDashed size={13} />
+              </RowAction>
+            ) : (
               <RowAction label="Settle" onClick={() => settleThread(session.id)}>
                 <Check size={13} />
               </RowAction>
@@ -1721,6 +1743,7 @@ export function Sidebar() {
 
   const pickedSessions = useMemo(() => listedPicks(sessions, picked), [sessions, picked]);
   const allPickedPinned = pickedSessions.length > 0 && pickedSessions.every((s) => pinned.includes(s.id));
+  const pickedSettled = useApp((s) => [...picked].some((id) => statusOf(s, id) === "done"));
   const clearSelection = useCallback(() => setPicked(NO_PICKS), []);
   const focusRow = (id: string) =>
     list.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`)?.focus();
@@ -2069,6 +2092,21 @@ export function Sidebar() {
             >
               Settle
             </Pill>
+            {pickedSettled && (
+              <Pill
+                size="sm"
+                quiet
+                onClick={() => {
+                  void setThreadsStatus(
+                    pickedSessions.map((s) => s.id),
+                    "idle",
+                  );
+                  clearSelection();
+                }}
+              >
+                Unsettle
+              </Pill>
+            )}
             <Pill size="sm" quiet onClick={clearSelection}>
               Clear
             </Pill>

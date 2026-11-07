@@ -324,7 +324,10 @@ composer's keys stay outside the table.
   tint of the page's `theme-color`, else neutral. The prompt still carries
   the plain URL. Settings › Chat › Link previews turns fetching off.
 - **Thread actions.** A row's ⋯ menu or right-click: Mark for Review,
-  Mark Done, Pin, Rename, Move to Trash. Pins go to the engine
+  Settle, Pin, Rename, Move to Trash. Settle is **Unsettle** once the thread
+  is settled, in the row's menu, on hover in the row, in the thread's status
+  menu and on a quiet line above its composer, so the way back out is one
+  click wherever you are. Pins go to the engine
   (`_rustcode/session/pin`, read back from `_meta.rustcode.pinned`) when it
   has the method; pins kept by an older build move there once, and
   without the method they stay in app storage. Archive is gone: Settled is
@@ -514,7 +517,8 @@ composer's keys stay outside the table.
   that keeps its tools running, and queued — never a stopped turn — everywhere
   else ([orchestrator.md](orchestrator.md) › Waking a parent thread).
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
-  any harness, or in a worktree), board, review, mark review/done,
+  any harness, or in a worktree), board, review, mark for review, settle the
+  open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
 - **Sidebar.** One list: pinned threads first, then every
   active thread, and Settled as a shelf at the foot: threads marked Done

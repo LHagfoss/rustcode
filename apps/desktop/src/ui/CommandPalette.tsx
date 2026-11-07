@@ -5,6 +5,7 @@
 
 import {
   CircleCheck,
+  CircleDashed,
   Columns3,
   CornerDownLeft,
   Eye,
@@ -45,6 +46,7 @@ import {
   shortcutHint,
   showPanel,
   startNewThread,
+  statusOf,
   toggleSidebar,
   useApp,
 } from "../state/store";
@@ -145,11 +147,22 @@ function baseActions(): PaletteAction[] {
           },
           {
             id: "mark-done",
-            label: "Mark this thread done",
+            label: "Settle this thread",
             icon: CircleCheck,
-            words: "status",
+            words: "status done settle",
             run: () => settleThread(s.selectedId!),
           },
+          ...(statusOf(s, s.selectedId!) === "done"
+            ? [
+                {
+                  id: "unsettle",
+                  label: "Unsettle this thread",
+                  icon: CircleDashed,
+                  words: "status done clear idle reopen",
+                  run: () => void setThreadStatus(s.selectedId!, "idle"),
+                },
+              ]
+            : []),
         ]
       : []),
     {
