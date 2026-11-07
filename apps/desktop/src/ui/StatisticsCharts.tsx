@@ -84,7 +84,7 @@ export function Tile({
   // full-width line as Turns; one day is a point, not a line, and draws nothing.
   const path = series.length > 1 ? sparklinePath(sparklineSeries(series), 100, 24) : "";
   return (
-    <div className="flex min-w-0 flex-col rounded-xl bg-surface px-4 py-3.5">
+    <div className="flex min-w-0 flex-col rounded-xl bg-surface px-4 py-3">
       <div className="flex min-h-5 items-center gap-2">
         <span className="shrink-0 text-caption text-fg-faint">{label}</span>
         <span className="flex min-w-0 flex-1 justify-end">
@@ -272,7 +272,7 @@ export function DailyChart({
         })}
         {active && shown && (
           <div
-            className="pointer-events-none absolute top-0 z-20 rounded-lg bg-surface-3 px-2.5 py-1 whitespace-nowrap text-caption shadow-2"
+            className="pointer-events-none absolute top-0 z-20 rounded-lg bg-surface-3 px-2 py-1 whitespace-nowrap text-caption shadow-2"
             style={{ left: active.x, transform: "translate(-50%, -100%)" }}
           >
             <span className="font-medium text-fg tabular">{shortDay(shown.day)}</span>

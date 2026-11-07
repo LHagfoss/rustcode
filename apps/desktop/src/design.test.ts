@@ -1,8 +1,8 @@
 // The design system's guard rails (docs/design.md): no raw colours or
 // palette classes outside the tokens, no retired class names, no arbitrary
 // radii, no native selects, hand-timed hover, hand-made blur or menu items,
-// no hand-styled labelled buttons, and index.css's built-in themes equal to
-// BUILTIN_THEMES.
+// no hand-styled labelled buttons, no spacing off the scale, and index.css's
+// built-in themes equal to BUILTIN_THEMES.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -44,7 +44,7 @@ const SHAPED = /(?<![\w-])rounded-(?:md|lg|full)(?![\w-])/;
 const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/AttentionCards.tsx", "answerQuestionOptions(request, [o])", "the answers are choice rows"],
   ["ui/Board.tsx", "Unsettle", "a 24px icon button"],
-  ["ui/ChatView.tsx", "px-2.5 font-medium", "the plan pill is a popover trigger"],
+  ["ui/ChatView.tsx", "px-2 font-medium", "the plan pill is a popover trigger"],
   ["ui/ChatView.tsx", "Thread status:", "the status pill is a menu trigger"],
   ["ui/Composer.tsx", 'role="option"', "a slash-command menu row"],
   ["ui/Composer.tsx", "aria-pressed={wt.on}", "a worktree toggle; its fill is its state"],
@@ -65,6 +65,17 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ],
   ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
 ];
+
+/**
+ * Spacing off the scale (docs/design.md › Spacing): 10px (`2.5`) and 14px (`3.5`) sit between two
+ * steps, so a row, a card and a popover that use them drift a few pixels apart. A line that truly
+ * needs one names itself here with why; a stale entry fails the test instead of quietly allowing
+ * the next one. The scale also names its insets as constants (`cardInset`, `rowInset`,
+ * `menuInset` in ui/primitives.tsx), which a screen should reuse before picking a number.
+ */
+const SPACING_ALLOWED: [file: string, part: string, why: string][] = [];
+const SPACING =
+  /(?<![\w-])(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|space-x|space-y)-(?:2|3)\.5(?![\w])/;
 
 /** Every `<button` opening tag in a file: tags span lines and hold `>` in expressions. */
 function buttonTags(text: string): string[] {
@@ -146,6 +157,24 @@ describe("design system", () => {
     }
     expect(found).toEqual([]);
     expect([...used].map(([, , why]) => `allowlist entry no longer matches a tag: ${why}`)).toEqual([]);
+  });
+
+  test("spacing comes from the scale, not half steps", () => {
+    const found: string[] = [];
+    const used = new Set(SPACING_ALLOWED);
+    for (const path of files(SRC)) {
+      const file = relative(SRC, path);
+      readFileSync(path, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (!SPACING.test(line)) return;
+          const allowed = SPACING_ALLOWED.find(([at, part]) => at === file && line.includes(part));
+          if (allowed) used.delete(allowed);
+          else found.push(`${file}:${i + 1} off-scale spacing: ${line.trim()}`);
+        });
+    }
+    expect(found).toEqual([]);
+    expect([...used].map(([, , why]) => `allowlist entry no longer matches a line: ${why}`)).toEqual([]);
   });
 
   test("the engine's built-in themes carry the same surfaces", () => {

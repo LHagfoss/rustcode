@@ -206,7 +206,7 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
+          className="group flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
           <AgentGroupHeader
             agents={marks.length ? marks : undefined}
@@ -225,7 +225,7 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
           align="start"
           sideOffset={8}
           aria-label="Linked threads"
-          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-y-auto p-1.5 rc-in"
+          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-y-auto p-2 rc-in"
         >
           {links.map((l) => (
             <LinkRow key={l.id} link={l} />

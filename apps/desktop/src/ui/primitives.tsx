@@ -103,7 +103,7 @@ export function Tooltip({
           side={side}
           sideOffset={8}
           collisionPadding={10}
-          className="elevated pointer-events-none z-50 max-w-80 rounded-lg px-2.5 py-1 text-callout text-fg"
+          className="elevated pointer-events-none z-50 max-w-80 rounded-lg px-2 py-1 text-callout text-fg"
         >
           {label}
         </RadixTooltip.Content>
@@ -189,7 +189,7 @@ export const Pill = forwardRef<
       type="button"
       className={cx(
         "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium text-callout whitespace-nowrap disabled:opacity-40",
-        size === "lg" ? "h-[30px] px-3.5" : size === "sm" ? "h-6 px-2.5" : "h-[26px] px-3",
+        size === "lg" ? "h-[30px] px-4" : size === "sm" ? "h-6 px-2" : "h-[26px] px-3",
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
           : danger
@@ -207,19 +207,28 @@ export const Pill = forwardRef<
 });
 
 /**
+ * The spacing scale (docs/design.md › Spacing), as the insets the surfaces share: a card's own
+ * padding, a list row inside one, and a menu's padding around its items. Text starts on the same
+ * 16px line in all three (`rowInset` is the card's inline inset plus its own), so a card, a settings
+ * row and a menu row line up; components name the inset rather than repeat the numbers.
+ */
+export const cardInset = "p-4";
+export const rowInset = "px-4 py-3";
+export const menuInset = "p-2";
+
+/**
  * A menu's surface and rows, for `DropdownMenu` and `ContextMenu` alike. The surface never runs
  * past the window (16px at every edge) and takes at most the room it has, scrolling instead of
  * landing half off-screen: Radix publishes that room as `--radix-popper-available-height`.
  * Opening and closing motion comes from the one rule for portal surfaces in `index.css`
  * (`rc-pop` from the transform origin), so the surface itself carries no animation class.
  */
-export const menuSurface =
-  "elevated z-50 max-h-[var(--radix-popper-available-height,80vh)] min-w-[200px] max-w-[calc(100vw-16px)] overflow-y-auto p-1.5";
+export const menuSurface = `elevated z-50 max-h-[var(--radix-popper-available-height,80vh)] min-w-[200px] max-w-[calc(100vw-16px)] overflow-y-auto ${menuInset}`;
 export const menuItem =
-  "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-[5px] text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
+  "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
 export const menuItemDanger = "text-danger data-[highlighted]:bg-danger/12";
-export const menuSeparator = "mx-1.5 my-1 h-px shrink-0 bg-border";
-export const menuLabel = "px-3 pt-1.5 pb-1 text-caption text-fg-faint";
+export const menuSeparator = "mx-2 my-1 h-px shrink-0 bg-border";
+export const menuLabel = "px-2 pt-1.5 pb-1 text-caption text-fg-faint";
 
 /** A popover's surface: width and anything else its content needs goes after it. */
 export const popoverSurface =
@@ -319,7 +328,7 @@ export function MenuSearchField({
   return (
     <div
       className={cx(
-        "flex min-w-0 items-center gap-1.5 rounded-md bg-fill-subtle px-2.5 focus-within:bg-fill",
+        "flex min-w-0 items-center gap-1.5 rounded-md bg-fill-subtle px-2 focus-within:bg-fill",
         size === "sm" ? "h-7" : "h-8",
         className,
       )}
@@ -399,7 +408,7 @@ export function Select({
         aria-label={label}
         className={cx(
           "inline-flex max-w-[260px] min-w-0 items-center gap-1.5 rounded-full bg-fill font-medium text-callout text-fg outline-none enabled:hover:bg-fill-strong disabled:opacity-40 data-[state=open]:bg-fill-strong",
-          size === "sm" ? "h-6 pr-2 pl-2.5" : "h-[26px] pr-2.5 pl-3",
+          size === "sm" ? "h-6 pr-2 pl-2" : "h-[26px] pr-2 pl-3",
           className,
         )}
       >
@@ -416,7 +425,7 @@ export function Select({
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          className="elevated z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-1.5 rc-in"
+          className="elevated z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
         >
           <RadixSelect.Viewport>
             {options.map((o) => (
@@ -533,7 +542,7 @@ export function Segments<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "relative h-5 whitespace-nowrap rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
+            "relative h-5 whitespace-nowrap rounded-full px-2 font-medium text-caption disabled:opacity-40",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
         >
@@ -575,7 +584,8 @@ export function Callout({
     <div
       role="alert"
       className={cx(
-        "flex items-start gap-2.5 rounded-lg bg-surface px-3.5 py-3",
+        "flex items-start gap-2 rounded-lg bg-surface",
+        rowInset,
         floating && "shadow-1 rc-in",
         className,
       )}

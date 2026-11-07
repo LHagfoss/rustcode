@@ -476,7 +476,7 @@ function AgentsPage() {
   return (
     <>
       {snapshot.unsupported && (
-        <p className="mb-4 rounded-lg bg-warning/10 px-3.5 py-2.5 text-callout">
+        <p className="mb-4 rounded-lg bg-warning/10 px-3 py-2 text-callout">
           This engine does not run other harnesses yet (no{" "}
           <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's local engine. Update
           RustCode to add Claude Code, Codex, Gemini and others.
@@ -747,7 +747,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3.5">
+    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3">
       <div className="flex items-center gap-2">
         <input
           autoFocus
@@ -877,7 +877,7 @@ function AppearancePage() {
 function TokenList() {
   const [open, setOpen] = useState(false);
   return (
-    <section className="mb-8">
+    <section className="mb-6">
       <SectionTitle
         title="Tokens"
         action={
@@ -889,7 +889,7 @@ function TokenList() {
       {open && (
         <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 rounded-xl bg-surface p-3">
           {TOKENS.map((t) => (
-            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2.5 py-1.5">
+            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1.5">
               <span
                 className="size-4 shrink-0 rounded-xs shadow-1"
                 style={{ background: `var(${cssName(t)})` }}
@@ -1428,7 +1428,7 @@ export function Settings() {
             <div className="flex min-w-0 flex-1 flex-col">
               <PanelHeader label={current.label} />
               <main className="scroll-stable min-h-0 flex-1">
-                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-5 pb-24">
+                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
                   {section === "general" && <GeneralPage />}
                   {section === "chat" && <ChatPage />}
                   {section === "agents" && <AgentsPage />}
@@ -1460,7 +1460,7 @@ export function Settings() {
 function PanelHeader({ label }: { label: string }) {
   const resets = useRowResets();
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-5 pe-2">
+    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-4 pe-2">
       <nav aria-label="Settings breadcrumb" className="min-w-0">
         <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
           <li className="shrink-0 font-medium text-fg-muted">Settings</li>

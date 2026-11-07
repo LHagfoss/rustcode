@@ -303,7 +303,7 @@ export function Lightbox() {
           <Plus size={14} />
         </button>
         {many && (
-          <span className="border-border border-l px-2.5 tabular">
+          <span className="border-border border-l px-2 tabular">
             {current.index + 1} / {current.images.length}
           </span>
         )}

@@ -139,7 +139,7 @@ export const UserRow = memo(function UserRow({
             ) : (
               <span
                 key={i}
-                className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout"
+                className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout"
               >
                 {a.kind === "image" ? (
                   <ImageIcon size={12} />
@@ -153,7 +153,7 @@ export const UserRow = memo(function UserRow({
           {Array.from({ length: placeholders }, (_, i) => (
             <span
               key={`m${i}`}
-              className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout text-fg-muted"
+              className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted"
             >
               <ImageIcon size={12} /> Image
             </span>
@@ -302,7 +302,7 @@ export const AssistantRow = memo(function AssistantRow({
       </div>
     );
   return (
-    <div className="flex flex-col gap-2.5 selectable px-1">
+    <div className="flex flex-col gap-2 selectable px-1">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown
@@ -431,7 +431,7 @@ function TextBox({ text, label }: { text: string; label: string }) {
         <span className="font-semibold text-caption text-fg-muted">{label}</span>
         {text.trim() && <CopyButton text={text} iconOnly label={`Copy ${label.toLowerCase()}`} />}
       </div>
-      <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
+      <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-md bg-fill-subtle p-2 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
         {shown.join("\n")}
       </pre>
       {folds && (
@@ -859,7 +859,7 @@ export const TurnFoldRow = memo(function TurnFoldRow({
         fold.open ? "Hide the work" : `Show the work: ${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`
       }
       className={cx(
-        "group flex w-full items-center gap-1.5 pt-0 pb-2.5 text-left text-body text-fg-muted hover:text-fg",
+        "group flex w-full items-center gap-1.5 pt-0 pb-2 text-left text-body text-fg-muted hover:text-fg",
         rule && "border-border/60 border-b",
       )}
     >
@@ -1044,7 +1044,7 @@ export function WorkingRow({
   const time = elapsed !== undefined ? formatDuration(Math.floor(elapsed / 1000) * 1000) : undefined;
   return (
     <div
-      className="flex h-[34px] items-center gap-2 border-border/60 border-b pt-1 pb-2.5 text-body text-fg-muted tabular"
+      className="flex h-[34px] items-center gap-2 border-border/60 border-b pt-1 pb-2 text-body text-fg-muted tabular"
       role="status"
     >
       {done && <CircleCheck size={13} className="shrink-0 text-success rc-dot-in" aria-hidden />}

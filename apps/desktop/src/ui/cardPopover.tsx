@@ -224,7 +224,7 @@ export function CardPopover({
           className={cx(
             // No panel scrolls sideways: the drill motion slides a page a few px, and the card
             // must not grow a horizontal scrollbar for those 220ms.
-            "elevated z-40 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-x-hidden overflow-y-auto p-1.5 outline-none",
+            "elevated z-40 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-x-hidden overflow-y-auto p-2 outline-none",
             className,
           )}
         >
