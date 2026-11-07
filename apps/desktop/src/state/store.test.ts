@@ -2478,6 +2478,27 @@ describe("a message sent from the new-thread screen", () => {
     expect(s.threads[id]!.queue).toHaveLength(0);
   });
 
+  test("the setup goes and its thread is selected in one update", async () => {
+    await ready();
+    // Every state the store passes through, from the press to the answer. The chat hands the screen
+    // from the setup to the thread, so it needs a state where the setup has gone and a thread is
+    // selected: a gap between those two is a screen with nothing to hand over to.
+    const seen: { pending: boolean; selected: string | null }[] = [];
+    const stop = useApp.subscribe((s) => seen.push({ pending: !!s.pendingSetup, selected: s.selectedId }));
+    expect(await submit("run the tests")).toBe(true);
+    stop();
+    const fromPress = seen.slice(seen.findIndex((s) => s.pending));
+    // It saw the setup appear and then go: a recording that caught one state could not tell.
+    expect(fromPress.length).toBeGreaterThan(1);
+    expect(fromPress.some((s) => !s.pending && !s.selected)).toBe(false);
+
+    const s = useApp.getState();
+    expect(s.pendingSetup).toBeNull();
+    const id = s.selectedId;
+    expect(id).not.toBeNull();
+    expect(s.threads[id!]!.items.some((i) => i.kind === "user" && i.text === "run the tests")).toBe(true);
+  });
+
   test("a second send while the first sets up starts no second thread", async () => {
     await ready();
     const before = useApp.getState().sessions.length;
