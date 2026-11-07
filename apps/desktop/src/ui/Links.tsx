@@ -199,7 +199,7 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
   const above = new Set(links.map((link) => link.target));
   const done = settled.shown.filter((link) => !above.has(link.target));
   const more = settled.more + (settled.shown.length - done.length);
-  // Nothing runs, waits or failed: a finished branch is history the details panel keeps, not a
+  // Nothing runs and nothing waits: a settled branch is history the details panel keeps, not a
   // header over the composer.
   if (!bar.show) return null;
   return (
@@ -267,11 +267,11 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   const inTree = useMemo(() => new Set(flattenViews(views).map((view) => view.id)), [views]);
   const strip = readStrip(views, inTree, live, states);
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
-  // Work under way, a wait on the user or a failure, with a row of its own to draw: a finished
-  // delegate is the details panel's row, so the strip stays out of the chat's way rather than
-  // counting a lifetime.
-  const { working, needs, failed } = strip.total.counts;
-  const news = live.length > 0 && working + needs + failed > 0;
+  // Work under way or a wait on the user, with a row of its own to draw: anything settled is the
+  // details panel's row (and a failure the inbox's), so the strip stays out of the chat's way
+  // rather than counting a lifetime or pinning an old failure.
+  const { working, needs } = strip.total.counts;
+  const news = live.length > 0 && working + needs > 0;
   if (!news && !drivenBy && !fanOuts.length) return null;
   return (
     // The one surface this strip shares with the jump-to-latest pill above it and its own group card

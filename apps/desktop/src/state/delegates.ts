@@ -359,7 +359,7 @@ export interface DelegateBar {
   working: number;
   /** Threads waiting on the user. */
   needs: number;
-  /** Threads that failed, the one thing the strip still names once nothing runs. */
+  /** Threads that failed: history here, so the header never names it (the inbox and details do). */
   failed: number;
   /** Working and waiting: what the count and the marks of the header stand for. */
   live: number;
@@ -371,14 +371,15 @@ export interface DelegateBar {
   longestMs?: number;
   /** What the header's mark is tinted by. */
   state: AgentState;
-  /** The count itself: `5 running`, `2 need you`, `1 failed`; empty when quiet. */
+  /** The count itself: `5 running`, `2 need you`; empty when quiet. */
   label: string;
   /** What follows the count after its `·`: `2 need you` beside `5 running`; empty otherwise. */
   status: string;
   /**
-   * Whether the strip has anything to say now: work under way, a wait on the
-   * user, or a failure. A branch that only finished is history, and history is
-   * not a status (the details panel's Delegated and Messaged lists keep it).
+   * Whether the strip has anything to say now: work under way or a wait on the
+   * user. Anything settled is history, and history is not a status: a failure
+   * from hours ago pins nothing over the composer (the inbox and the details
+   * panel's Delegated and Messaged lists keep it).
    */
   show: boolean;
 }
@@ -386,9 +387,9 @@ export interface DelegateBar {
 /**
  * A branch as the strip above the composer reads it: what runs now and how long
  * the longest of it has been at it (wall clock, never the branch's summed work
- * time), plus a failure once nothing does. The branch's history is not a status:
- * 34 threads that finished over a day leave the strip empty rather than reading
- * `34 threads`, because the reader only asks how many delegates run right now.
+ * time). Nothing else is a status: a branch whose threads all settled leaves the
+ * strip empty, whether the last one finished, failed or was stopped, rather than
+ * reading `34 threads` or pinning an old failure over the composer.
  */
 export function branchBar(
   total: BranchTotal,
@@ -426,19 +427,8 @@ export function branchBar(
       show: true,
     };
   }
-  // Nothing works and nothing waits: a failure is still news, a finished or stopped branch is not.
-  if (failed) {
-    return {
-      working,
-      needs,
-      failed,
-      live,
-      state: "failed",
-      label: `${failed} failed`,
-      status: "",
-      show: true,
-    };
-  }
+  // Nothing works and nothing waits: a finished, failed or stopped branch is history, and the
+  // strip draws nothing for it.
   return { working, needs, failed, live, state: "done", label: "", status: "", show: false };
 }
 

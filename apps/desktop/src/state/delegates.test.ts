@@ -314,18 +314,21 @@ describe("the strip above the composer", () => {
     expect(stopped.label).toBe("");
   });
 
-  test("a failure is still named when nothing works", () => {
+  test("a failure that settled stops naming itself", () => {
+    // A failed delegate from hours ago is history: the inbox and the details panel keep it, and it
+    // does not pin a header over the composer forever.
     const failed = [link("root", "broken", { state: "failed", settledAt: MINUTE })];
     const bar = branchBar(
       forestTotal(delegateViews(delegateTree("root", failed), read({ activity: () => undefined }))),
       [],
       2 * MINUTE,
     );
-    expect(bar.label).toBe("1 failed");
+    expect(bar.failed).toBe(1);
+    expect(bar.label).toBe("");
     expect(bar.status).toBe("");
-    expect(bar.state).toBe("failed");
+    expect(bar.state).toBe("done");
     expect(bar.longestMs).toBeUndefined();
-    expect(bar.show).toBe(true);
+    expect(bar.show).toBe(false);
   });
 });
 
