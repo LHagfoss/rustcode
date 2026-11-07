@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   beginSetup,
   dismissSetup,
+  heldSetup,
   type NewSetup,
   type PendingSetup,
   pendingStatus,
@@ -94,5 +95,40 @@ describe("a thread setting up", () => {
     expect(pending.extras).toBe(extras);
     // A failure keeps them with the message: a retry sends exactly what was written.
     expect(setupFailed(pending, "no git here").extras).toBe(extras);
+  });
+});
+
+describe("the screen that keeps the message while its thread arrives", () => {
+  const setup = started();
+  // The moment the session exists: the setup has gone and its thread is the one selected.
+  const handed = {
+    pending: null,
+    last: setup,
+    became: "thread-1",
+    selectedId: "thread-1",
+    hasThread: true,
+    arrived: false,
+  };
+
+  test("holds the setup's own screen until the message has arrived", () => {
+    expect(heldSetup(handed)).toBe(setup);
+    expect(heldSetup({ ...handed, arrived: true })).toBeNull();
+  });
+
+  test("the setup itself owns the screen while it is still being made", () => {
+    // Nothing is held on top of a setup that has not become a thread: that screen is already showing.
+    expect(
+      heldSetup({ ...handed, pending: setup, became: null, selectedId: null, hasThread: false }),
+    ).toBeNull();
+  });
+
+  test("a setup that never became a thread holds nothing", () => {
+    // A failure keeps its message on the screen that has the failure, not on a hold.
+    expect(heldSetup({ ...handed, hasThread: false, selectedId: null, became: null })).toBeNull();
+    expect(heldSetup({ ...handed, last: null })).toBeNull();
+  });
+
+  test("the reader picking another thread ends the hold at once", () => {
+    expect(heldSetup({ ...handed, selectedId: "thread-2" })).toBeNull();
   });
 });
