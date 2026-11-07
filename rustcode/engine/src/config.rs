@@ -1486,6 +1486,23 @@ impl AppConfig {
         self.session_model.efforts.insert(profile.to_owned());
     }
 
+    /// Why a turn cannot run on the built-in harness with this model
+    /// configuration, or `None` when one can. An explicitly empty `models`
+    /// list is a configuration error: resolving it to the compiled profiles
+    /// would send the turn to a host this install does not own, and the user
+    /// would see only an opaque connection failure.
+    pub fn model_configuration_error(&self) -> Option<String> {
+        self.models.is_empty().then(|| {
+            concat!(
+                "No model is configured for this harness, so the turn was not sent. ",
+                "Add a model profile (`[[models]]` in config.toml, or Settings › Agents ",
+                "in the app), choose it in the composer, then send the message again; ",
+                "or start this thread on another harness."
+            )
+            .to_string()
+        })
+    }
+
     /// Put the file's default profile and efforts back over the session's
     /// choices in `self`, which is about to be written.
     fn keep_file_model_defaults(&mut self, file: &AppConfig) {
@@ -1932,8 +1949,11 @@ fn test_config_dir() -> PathBuf {
 }
 
 fn default_endpoint(config: &AppConfig) -> (String, String) {
-    let profile = config.models[0].clone();
-    (profile.url, profile.model)
+    config
+        .models
+        .first()
+        .map(|profile| (profile.url.clone(), profile.model.clone()))
+        .unwrap_or_default()
 }
 
 pub fn load_config() -> (String, String, AppConfig) {
@@ -1987,6 +2007,10 @@ fn project_config_paths(workspace: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The endpoint of the profile `name`, else of the first configured profile.
+/// An empty `models` list has no endpoint: the compiled profiles are never a
+/// fallback, because they name a host this install does not own (see
+/// [`AppConfig::model_configuration_error`]).
 pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String) {
     config
         .models
@@ -1994,7 +2018,7 @@ pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String
         .find(|m| m.name == name)
         .or_else(|| config.models.first())
         .map(|p| (p.url.clone(), p.model.clone()))
-        .unwrap_or_else(|| default_endpoint(&AppConfig::default()))
+        .unwrap_or_default()
 }
 
 /// Ordered provider fallback chain for a primary profile name: the primary

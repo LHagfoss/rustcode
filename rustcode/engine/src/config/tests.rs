@@ -1621,7 +1621,7 @@ fn test_malformed_models_preserves_valid_runtime_config() {
 }
 
 #[test]
-fn test_empty_models_use_default_endpoint() {
+fn test_empty_models_do_not_fall_back_to_compiled_profiles() {
     let dir = TempDir::new().unwrap();
     fs::write(
         dir.path().join(MODELS_FILE),
@@ -1630,10 +1630,40 @@ fn test_empty_models_use_default_endpoint() {
     .unwrap();
 
     let (url, model, config) = load_config_from(dir.path());
-    let defaults = AppConfig::default();
+
     assert!(config.models.is_empty());
-    assert_eq!(url, defaults.models[0].url);
-    assert_eq!(model, defaults.models[0].model);
+    // The compiled profiles name a private host; an empty list is an error to
+    // report, not an endpoint to resolve.
+    assert!(url.is_empty());
+    assert!(model.is_empty());
+    assert!(config.model_configuration_error().is_some());
+}
+
+#[test]
+fn explicitly_empty_models_in_toml_report_a_configuration_error() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        "version = 1\nmodels = []\n\n[default]\nbig = \"\"\nsmall = \"\"\n",
+    )
+    .unwrap();
+
+    let (url, model, config) = load_config_from(dir.path());
+    let compiled = AppConfig::default();
+
+    assert!(config.models.is_empty());
+    assert!(url.is_empty());
+    assert!(model.is_empty());
+    assert!(
+        !compiled.models.iter().any(|profile| profile.url == url),
+        "no compiled profile is used as the endpoint"
+    );
+    let error = config
+        .model_configuration_error()
+        .expect("empty models are a configuration error");
+    assert!(error.contains("No model is configured"), "{error}");
+    // A model list that has profiles reports nothing.
+    assert_eq!(compiled.model_configuration_error(), None);
 }
 
 #[test]
