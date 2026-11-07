@@ -843,14 +843,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   kept") rather than offering a button that would pretend. The record is the
   app's, so it lasts while the thread is open (like a question's row): the
   engine's history no longer holds those turns.
-  The minimap wears the same idea at thread scale: a turn a rewind can go back
-  to carries a bead 3px in from its strip's left end, `fg/35` and 5px (the
-  head, the newest, `accent` at 7px), inside the strip's hit area, so the
-  strip stays the one target and the bead is never a hit area of its own.
-  Pointing at it picks that turn as any point on the strip does, and the card
-  beside the strip says `Checkpoint · turn N` (`· current` for the head) and
-  offers *Rewind here*: the same `rewindCheckpoint` the Changes chip runs, which
-  is one click with no confirm when the engine keeps the state it abandons (the
+  The minimap wears the same idea at thread scale, without drawing a mark of
+  its own on the strip: a turn a rewind can go back to is named in that turn's
+  hover card, which says `Checkpoint · turn N` (`· current` for the head, the
+  newest) and offers *Rewind here*. Pointing anywhere on the strip picks that
+  turn, so the strip stays the one target: the same `rewindCheckpoint` the
+  Changes chip runs, which is one click with no confirm when the engine keeps
+  the state it abandons (the
   button's title says so, as the chip's does) and behind its confirm when it
   cannot. The card sits clear of the strip rather than widening it, so the
   pointer only ever picks the turn it is over: it takes the pointer itself,

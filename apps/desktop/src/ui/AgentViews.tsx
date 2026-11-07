@@ -566,20 +566,23 @@ export function AgentGroupHeader({
       )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span className="shrink-0 font-medium text-fg text-sub">{label}</span>
-        <span
-          className={cx(
-            "min-w-0 truncate text-caption",
-            state === "working"
-              ? "text-accent"
-              : state === "needs"
-                ? "text-warning"
-                : state === "failed"
-                  ? "text-danger"
-                  : "text-fg-muted",
-          )}
-        >
-          · {status}
-        </span>
+        {/* A header whose label already says it (`34 delegates done`) has no second word. */}
+        {status && (
+          <span
+            className={cx(
+              "min-w-0 truncate text-caption",
+              state === "working"
+                ? "text-accent"
+                : state === "needs"
+                  ? "text-warning"
+                  : state === "failed"
+                    ? "text-danger"
+                    : "text-fg-muted",
+            )}
+          >
+            · {status}
+          </span>
+        )}
       </span>
       {elapsedMs !== undefined && elapsedMs >= 1000 && (
         <span className="shrink-0 text-caption text-fg-faint tabular">

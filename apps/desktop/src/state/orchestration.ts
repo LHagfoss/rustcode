@@ -104,6 +104,32 @@ export function stripLinks(links: Link[], shown: ReadonlySet<string>): Link[] {
   return links.filter((link) => isActive(link.state) || !shown.has(link.target));
 }
 
+/** How many settled delegates the strip's popover lists under "Done"; the rest are one count. */
+export const DONE_SHOWN = 10;
+
+/**
+ * The delegates of `orchestrator` that settled, one row per thread (a follow-up
+ * is the same delegate), newest first, and how many more there are than `cap`.
+ * The strip has one line for the live work; this is the history it unfolds
+ * under "Done", without a day of delegating turned into 34 rows.
+ */
+export function doneLinks(
+  links: readonly Link[],
+  orchestrator: string,
+  cap = DONE_SHOWN,
+): { shown: Link[]; more: number } {
+  const settledAt = (link: Link) => link.settledAt ?? link.createdAt;
+  const newest = new Map<string, Link>();
+  for (const link of links) {
+    if (link.orchestrator !== orchestrator || isActive(link.state)) continue;
+    const seen = newest.get(link.target);
+    if (!seen || settledAt(link) > settledAt(seen)) newest.set(link.target, link);
+  }
+  const all = [...newest.values()].sort((one, other) => settledAt(other) - settledAt(one));
+  const most = Math.max(0, cap);
+  return { shown: all.slice(0, most), more: Math.max(0, all.length - most) };
+}
+
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
   /** `<orchestrator>/<n>`. */

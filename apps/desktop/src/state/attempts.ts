@@ -75,8 +75,8 @@ export function transcriptTurns(items: readonly TranscriptItem[]): TranscriptTur
 
 /**
  * The checkpoint behind each message you sent, by that message's row id: the turns that have one.
- * The thread's minimap marks each of them with a bead on that turn's strip, so it holds the turns
- * a rewind can go back to and nothing else.
+ * The thread's minimap names each of them in that turn's hover card, so it holds the turns a rewind
+ * can go back to and nothing else.
  */
 export function checkpointsByMessage(
   items: readonly TranscriptItem[],
