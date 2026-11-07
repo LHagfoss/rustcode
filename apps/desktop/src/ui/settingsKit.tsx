@@ -383,7 +383,7 @@ export function Choice<T extends string>({
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0 left-0 h-6 rounded-sm bg-surface-2 shadow-1 transition-[transform,width] duration-200 ease-snappy"
+          className="absolute top-0 left-0 h-6 rounded-sm bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
           style={{ transform: `translate(${thumb.left}px, 4px)`, width: thumb.width }}
         />
       )}
@@ -398,7 +398,7 @@ export function Choice<T extends string>({
           className={cx(
             "relative h-6 rounded-sm px-2.5 font-medium text-caption whitespace-nowrap disabled:opacity-40",
             o.value === value
-              ? cx("text-fg", !thumb && "bg-surface-2 shadow-1")
+              ? cx("text-knob-fg", !thumb && "bg-knob shadow-knob")
               : "text-fg-muted hover:text-fg",
           )}
         >
@@ -473,7 +473,7 @@ export function Slider({
           step={step}
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="h-5 w-36 cursor-pointer accent-accent"
+          className="rc-range h-5 w-36 cursor-pointer"
         />
         <span className="min-w-14 text-right font-medium text-callout text-fg tabular">
           {value} {unit}

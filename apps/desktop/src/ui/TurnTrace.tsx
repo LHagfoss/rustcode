@@ -15,6 +15,9 @@ import {
   middleClip,
   rowValue,
   sortTrace,
+  TRACE_COLUMNS,
+  TRACE_MIN_BAR,
+  TRACE_TRACK_INSET,
   type Trace,
   type TraceCall,
   type TraceMeasure,
@@ -193,14 +196,19 @@ function TracePanel({ end, items, model }: { end: TurnEnd; items: TranscriptItem
         />
       </div>
       <div className="flex items-center gap-2 px-1" aria-hidden>
-        <span className="w-[136px] shrink-0" />
-        <span className="flex flex-1 justify-between text-caption text-fg-faint tabular">
+        <span className="shrink-0" style={{ width: TRACE_COLUMNS.label }} />
+        {/* The ticks sit on the same inner box the bars are drawn on, so `0s` is under the
+            bars' start and the turn's duration under its end. */}
+        <span
+          className="flex flex-1 justify-between text-caption text-fg-faint tabular"
+          style={{ paddingInline: TRACE_TRACK_INSET }}
+        >
           <span>0s</span>
           <span>{formatDuration(trace.durationMs)}</span>
         </span>
-        <span className="w-[92px] shrink-0" />
+        <span className="shrink-0" style={{ width: TRACE_COLUMNS.value }} />
       </div>
-      <div className="flex min-h-0 flex-col overflow-y-auto">
+      <div className="flex min-h-0 flex-col overflow-y-auto pb-1.5">
         {rows.map((row) => (
           <TraceRowView
             key={row.id}
@@ -257,7 +265,10 @@ function TraceRowView({
   const expandable = !!detail?.length || !!tool || !!row.text;
   const content = (
     <>
-      <span className="flex w-[184px] min-w-0 shrink-0 items-center gap-1.5">
+      <span
+        className={cx("flex min-w-0 shrink-0 items-center gap-1.5", nested && "pl-[22px]")}
+        style={{ width: TRACE_COLUMNS.label }}
+      >
         <span className="flex w-[14px] shrink-0 justify-center">
           {row.status === "failed" ? (
             <CircleX size={13} className="text-danger" />
@@ -280,26 +291,43 @@ function TraceRowView({
             wait on the user is hatched, so it is not read as the call's work. */}
         <Tooltip label={rowTip(row, trace, measure)}>
           <span className="absolute inset-0">
-            {bars.map((bar, i) => (
-              <span
-                key={i}
-                className={cx(
-                  "absolute inset-y-[4px] rounded-xs",
-                  bar.kind === "wait"
-                    ? "rc-wait-hatch"
-                    : row.kind === "model"
-                      ? "bg-accent/55 group-hover:bg-accent/80"
-                      : row.kind === "delegates"
-                        ? "border border-accent/50 border-dashed bg-accent/10"
-                        : "bg-fill-strong group-hover:bg-fg-faint",
-                )}
-                style={{ left: `${bar.left}%`, width: `${bar.width}%`, minWidth: 3 }}
-              />
-            ))}
+            {/* The bars live on the track's inner box: inset at each end, so one at the turn's
+                first instant never touches the rounded edge, and the floor a short bar gets is
+                clipped there instead of spilling past the track's end. */}
+            <span
+              className="absolute inset-y-0 overflow-hidden"
+              style={{ left: TRACE_TRACK_INSET, right: TRACE_TRACK_INSET }}
+            >
+              {bars.map((bar, i) => (
+                <span
+                  key={i}
+                  className={cx(
+                    "absolute inset-y-[4px] rounded-xs",
+                    bar.kind === "wait"
+                      ? "rc-wait-hatch"
+                      : row.kind === "model"
+                        ? "bg-accent/55 group-hover:bg-accent/80"
+                        : row.kind === "delegates"
+                          ? "border border-accent/50 border-dashed bg-accent/10"
+                          : "bg-fill-strong group-hover:bg-fg-faint",
+                  )}
+                  style={{
+                    // The floor a zero-width bar gets must fit inside the inner box, so the
+                    // start gives way by its own width at the track's far end.
+                    left: `min(calc(100% - ${TRACE_MIN_BAR}px), ${bar.left}%)`,
+                    width: `${bar.width}%`,
+                    minWidth: TRACE_MIN_BAR,
+                  }}
+                />
+              ))}
+            </span>
           </span>
         </Tooltip>
       </span>
-      <span className="flex w-[122px] shrink-0 items-center justify-end gap-1 whitespace-nowrap text-caption text-fg-muted tabular">
+      <span
+        className="flex shrink-0 items-center justify-end gap-1 whitespace-nowrap text-caption text-fg-muted tabular"
+        style={{ width: TRACE_COLUMNS.value }}
+      >
         {value !== undefined && <span>{measure === "cost" ? usd(value) : formatTokens(value)}</span>}
         {value !== undefined && <span className="text-fg-faint">·</span>}
         <span className={value === undefined ? "text-fg-faint" : undefined}>{formatDuration(duration)}</span>
@@ -310,7 +338,6 @@ function TraceRowView({
   const rowClass = cx(
     "group flex w-full items-center gap-2 rounded-md px-1 py-1 text-left",
     expandable && "hover:bg-fill-subtle",
-    nested && "pl-6",
   );
   return (
     <div>
@@ -322,29 +349,40 @@ function TraceRowView({
         <div className={rowClass}>{content}</div>
       )}
       {isOpen && (
-        <div className="rc-expand mt-1 mb-1.5 ml-[22px] flex flex-col gap-1">
-          {detail?.map((child) => (
-            <TraceRowView
-              key={child.id}
-              row={child}
-              trace={trace}
-              measure={measure}
-              tools={tools}
-              open={open}
-              onToggle={onToggle}
-              nested
-            />
-          ))}
-          {tool && <ToolDetail item={tool} className="pl-1" />}
-          {!tool && row.text && (
-            <div className="flex items-start gap-2">
-              <pre className="selectable m-0 max-h-[240px] min-w-0 flex-1 overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-words">
-                {row.text}
-              </pre>
-              <CopyButton text={row.text} iconOnly label="Copy the call's text" />
+        <>
+          {/* A delegate's own calls keep the panel's columns, indented in the label column, so
+              the track and the numbers stay on the same lines as the header's. */}
+          {!!detail?.length && (
+            <div className="rc-expand flex flex-col">
+              {detail.map((child) => (
+                <TraceRowView
+                  key={child.id}
+                  row={child}
+                  trace={trace}
+                  measure={measure}
+                  tools={tools}
+                  open={open}
+                  onToggle={onToggle}
+                  nested
+                />
+              ))}
             </div>
           )}
-        </div>
+          {(tool || row.text) && (
+            <div className="rc-expand mt-1 mb-1.5 ml-[22px] flex flex-col gap-1">
+              {tool ? (
+                <ToolDetail item={tool} className="pl-1" />
+              ) : (
+                <div className="flex items-start gap-2">
+                  <pre className="selectable m-0 max-h-[240px] min-w-0 flex-1 overflow-auto rounded-md bg-fill-subtle p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap break-words">
+                    {row.text}
+                  </pre>
+                  <CopyButton text={row.text ?? ""} iconOnly label="Copy the call's text" />
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

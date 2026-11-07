@@ -474,7 +474,7 @@ export function Switch({
     >
       <span
         className={cx(
-          "absolute top-[2px] size-[14px] rounded-full bg-accent-fg shadow-1 transition-transform duration-150 ease-snappy",
+          "absolute top-[2px] size-[14px] rounded-full bg-knob shadow-knob transition-transform duration-150 ease-snappy",
           checked ? "translate-x-[16px]" : "translate-x-[2px]",
         )}
       />
@@ -512,7 +512,7 @@ export function Segments<T extends string>({
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0 left-0 h-5 rounded-full bg-surface-3 shadow-1 transition-[transform,width] duration-200 ease-snappy"
+          className="absolute top-0 left-0 h-5 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
           style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
         />
       )}
@@ -527,7 +527,7 @@ export function Segments<T extends string>({
           className={cx(
             "relative h-5 whitespace-nowrap rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
             o.value === value
-              ? cx("text-fg", !thumb && "bg-surface-3 shadow-1")
+              ? cx("text-knob-fg", !thumb && "bg-knob shadow-knob")
               : "text-fg-muted hover:text-fg",
           )}
         >
