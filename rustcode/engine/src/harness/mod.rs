@@ -703,6 +703,9 @@ fn snapshot_entry(
         "name": harness.name,
         "kind": harness.kind,
         "builtin": builtin,
+        // One RustCode ships with: never removable, only turned off. A client
+        // groups by this instead of holding its own list of standard ids.
+        "known": builtin || harness.known.is_some(),
         "enabled": harness.enabled,
         "command": harness.command,
         "installed": detection.installed,
@@ -1364,6 +1367,15 @@ mod tests {
         assert!(all[3].enabled);
         assert_eq!(all[6].kind, HarnessKind::Acp);
         assert!(all[6].enabled);
+        assert!(all[1].known.is_some(), "Codex is a standard harness");
+        assert!(all[6].known.is_none(), "a hand-added command is custom");
+        // A known id written by hand is the standard harness, listed once, with
+        // the command and switch the user gave it.
+        assert_eq!(
+            all.iter().filter(|h| h.id == "gemini").count(),
+            1,
+            "no second row for a known id"
+        );
         assert_eq!(
             resolve(&entries, "claude-code").unwrap().command,
             ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
@@ -1424,6 +1436,7 @@ mod tests {
             "name",
             "kind",
             "builtin",
+            "known",
             "enabled",
             "command",
             "installed",
@@ -1439,6 +1452,8 @@ mod tests {
         }
         assert_eq!(codex["kind"], "codex");
         assert_eq!(codex["command"], json!(["codex", "app-server"]));
+        assert_eq!(codex["known"], true, "Codex is a standard harness");
+        assert_eq!(rows[0]["known"], true, "so is the built-in one");
         // How a client signs a named login in and runs it: the engine says, so
         // the app holds no per-harness copy of it.
         assert_eq!(codex["account_env"], "CODEX_HOME");
@@ -1457,6 +1472,44 @@ mod tests {
         assert_eq!(rustcode["account_env"], Value::Null);
         assert_eq!(rustcode["account_login_command"], Value::Null);
         assert_eq!(rustcode["discovered_accounts"], Value::Null);
+    }
+
+    /// #2881: a client tells a standard harness from one added by hand by the
+    /// snapshot's `known`, so it holds no list of ids of its own.
+    #[tokio::test]
+    async fn a_hand_added_entry_is_listed_once_as_known_or_as_custom() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            // Pi, added by hand before Settings offered it: the standard harness
+            // is listed once and still runs the command the user wrote.
+            "[[harnesses]]\nid = \"pi\"\ncommand = [\"pi\", \"--mode\", \"rpc\"]\nenabled = true\n\
+             \n[[harnesses]]\nid = \"my-agent\"\nname = \"My Agent\"\ncommand = [\"my-agent\", \"--acp\"]\n",
+        )
+        .unwrap();
+        let snapshot = snapshot_in(dir.path()).await.unwrap();
+        let rows = snapshot["harnesses"].as_array().unwrap();
+        let row = |id: &str| {
+            rows.iter()
+                .filter(|row| row["id"] == id)
+                .collect::<Vec<_>>()
+        };
+        let pi = row("pi");
+        assert_eq!(pi.len(), 1, "a known id written by hand is listed once");
+        assert_eq!(pi[0]["name"], "Pi");
+        assert_eq!(pi[0]["known"], true);
+        assert_eq!(pi[0]["enabled"], true);
+        assert_eq!(pi[0]["command"], json!(["pi", "--mode", "rpc"]));
+        assert_eq!(
+            pi[0]["install_hint"],
+            "npm install -g @earendil-works/pi-coding-agent"
+        );
+        let custom = row("my-agent");
+        assert_eq!(custom.len(), 1);
+        assert_eq!(custom[0]["name"], "My Agent");
+        assert_eq!(custom[0]["known"], false);
+        assert_eq!(custom[0]["command"], json!(["my-agent", "--acp"]));
+        assert_eq!(custom[0]["install_hint"], Value::Null);
     }
 
     fn listed(id: &str, efforts: &[&str], default_effort: Option<&str>) -> HarnessModel {

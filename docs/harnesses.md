@@ -89,6 +89,7 @@ All methods are on the client's existing `rustcode --acp` connection.
     "name": "Codex",
     "kind": "codex",
     "builtin": false,           // true only for "rustcode"
+    "known": true,              // one RustCode ships with: turn off, never remove
     "enabled": true,            // user turned it on (onboarding / Settings)
     "command": ["codex", "app-server"],
     "installed": true,          // command resolves on PATH
@@ -130,7 +131,10 @@ offers no choice) and `default_effort` (the profile's `reasoning_effort`, else
 have their own sign-in). `last` is what `_rustcode/harnesses/remember` kept
 (always present, `null` when nothing is kept, so a client can tell an engine
 that remembers from an older one). `login_command` and `install_hint` are `null` for custom
-harnesses. Detection is cached for a minute; `set` and `remove` refresh it.
+harnesses. `known` is true for `rustcode` and every harness in the table below,
+and false for one the user added by hand: a client shows "Remove" only for the
+latter, and groups those apart. Detection is cached for a minute; `set` and
+`remove` refresh it.
 
 | id | kind | command | version from | auth from |
 | --- | --- | --- | --- | --- |
@@ -631,11 +635,15 @@ name = "Paral 2"
 config_dir = "~/.claude-paral-2"
 ```
 
-Known harnesses (`rustcode`, `codex`, `claude-code`, `gemini`, `opencode`)
+Known harnesses (`rustcode`, `codex`, `claude-code`, `gemini`, `opencode`, `pi`)
 need only `id` and `enabled`; their commands are built in and can be
 overridden with `command`. An entry without `enabled` is on. `model` and
 `effort` are optional on any entry (older configs without them load
-unchanged). Both sections are optional and only read from the user config: a
+unchanged). An entry whose id is a known harness, such as a `pi` entry written
+by hand before Settings listed it, *is* that harness: it is listed once, with
+the user's `command` and `enabled`, never as a second, custom row. Any other id
+needs a `command` and is a custom harness, which Settings shows under "Added by
+hand". Both sections are optional and only read from the user config: a
 project's `.rustcode/config.toml` cannot add a harness or change a command.
 
 `silence_timeout_minutes` is the turn silence deadline below: 10 minutes by
