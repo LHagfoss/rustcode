@@ -649,6 +649,29 @@ pub fn list_sessions_in_scope(limit: usize, scope: &SessionScope) -> (Vec<Sessio
     )
 }
 
+/// Store a thread's status the way the desktop app's
+/// `_rustcode/session/status` does (`done` = Settled, `review`, or `idle` =
+/// Active), for a caller outside the engine such as `rustcode threads
+/// settle` (#3151). The app reads the same `status.json` from `session/list`,
+/// so it shows the change without a second writer.
+pub fn set_session_status(session_id: &str, status: &str) -> Result<(), String> {
+    get_active_session_dir(session_id)
+        .filter(|dir| dir.is_dir())
+        .ok_or_else(|| format!("no saved thread has id `{session_id}`"))?;
+    crate::thread_status::set(session_id, status)
+}
+
+/// Ids of every saved thread, in the store's stable order, without reading a
+/// transcript (`SessionStore::session_history_paths`). `rustcode threads`
+/// resolves an id prefix against these instead of scanning for a directory
+/// that a typo would create.
+pub fn session_ids() -> Vec<String> {
+    session_history_paths()
+        .iter()
+        .filter_map(|path| session_id_from_path(path))
+        .collect()
+}
+
 /// Sessions under `scope` whose user or assistant messages contain `query`
 /// (case-insensitive), newest first, at most `limit`.
 pub fn search_sessions(
