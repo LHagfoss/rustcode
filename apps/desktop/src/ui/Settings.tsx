@@ -23,6 +23,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Smartphone,
   TerminalSquare,
   X,
 } from "lucide-react";
@@ -98,6 +99,7 @@ import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
+import { RemoteAccessPage } from "./RemoteAccessPage";
 import { ShortcutsPage } from "./ShortcutSettings";
 import { StatisticsPage } from "./StatisticsPage";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
@@ -141,6 +143,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
       { id: "agents", label: "Agents", icon: Layers },
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
+      { id: "remote", label: "Remote access", icon: Smartphone },
     ],
   },
   {
@@ -1431,6 +1434,7 @@ export function Settings() {
                   {section === "agents" && <AgentsPage />}
                   {section === "connections" && <ConnectionsPage />}
                   {section === "capabilities" && <CapabilitiesPage />}
+                  {section === "remote" && <RemoteAccessPage />}
                   {section === "appearance" && <AppearancePage />}
                   {section === "keyboard" && <ShortcutsPage />}
                   {section === "usage" && <UsagePage />}

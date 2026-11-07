@@ -1,11 +1,12 @@
 # Mobile (remote only)
 
 Sharing a running terminal session with a paired device is implemented by the
-remote gateway and `/remote`; **[remote.md](remote.md) is the guide**: how to
-start the gateway, configure a NetBird or LAN address, pair, check status, stop
-sharing and revoke a device. The wire contract an iOS client is built against is
-[remote-protocol/README.md](remote-protocol/README.md), and the design behind
-both is
+remote gateway and `/remote`; the macOS app shares the threads it has open from
+Settings › Setup › Remote access, without a terminal. **[remote.md](remote.md)
+is the guide**: how to start the gateway, configure a NetBird or LAN address,
+pair, check status, stop sharing and revoke a device. The wire contract an iOS
+client is built against is [remote-protocol/README.md](remote-protocol/README.md),
+and the design behind both is
 [`Live terminal sessions from an iOS client`](architecture/mobile-remote-plan.md).
 
 The SwiftUI client in [`ios/`](../ios/README.md) is a reference now, not part of
