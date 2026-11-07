@@ -175,6 +175,7 @@ pub(crate) fn spawn(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_child_gets_no_editor_or_pager_on_stdin_and_env_wins() {
         use tokio::io::AsyncReadExt;
