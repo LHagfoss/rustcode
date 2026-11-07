@@ -44,6 +44,7 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `harness_rpc_messages` | one row per ACP or Codex JSON-RPC message: `thread_id`, `turn_id`, `harness`, `protocol`, `direction`, `message_kind`, `rpc_id`, `method`, `at`, `latency_ms`, `byte_size`, `payload_json`, `payload_truncated`, `redaction_version` |
 | `operational_events` | one row per allowlisted event: `thread_id`, `turn_id`, `sequence`, `event_type`, `at`, `fields_json`, `original_bytes`, `captured_bytes`, `payload_truncated`, `redaction_version` |
 | `command_receipts` | one row per orchestration call made with a retry key: `caller` (the calling thread), `client_request_id`, `action` (the tool), `args_hash`, `result_json`, `created_at`, keyed on `(caller, client_request_id)` |
+| `usage_cursors` | one row per thread and harness: the last cumulative session total it reported (`input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`) and `updated_at` |
 | `store_meta` | internal bookkeeping, such as whether the one-time backfill ran |
 
 Tokens and cost are `NULL` when a harness did not report them, and are never
@@ -262,11 +263,17 @@ Two hooks, both chosen so no new code sits in a turn's critical path:
   changes.
 - **An external harness** writes one turn when its prompt returns
   (`harness/session.rs`). Its `usage_update` is a session total, so the store
-  keeps the growth over what the thread already has for that harness — the
-  baseline includes a backfilled summary, so nothing is counted twice. A
-  counter that goes backwards means a new session (a harness switch or a
-  restarted harness): its whole total is that turn's, never a negative
-  number.
+  keeps the growth over the last total the same thread reported for that
+  harness (`usage_cursors`), written in the same transaction as the turn. The
+  summed rows are not the baseline: after a restarted harness that sum stays
+  above the running total, and every later turn would be recorded whole again
+  (#3169). A turn that reports the same total as the one before it records
+  zero, which is what a failed turn that changed nothing gets. A counter that
+  goes backwards means a new session (a harness switch or a restarted
+  harness): its whole total is that turn's, never a negative number, and the
+  cursor moves to it. A thread whose rows predate the cursor or came from a
+  backfill keeps their sum as the baseline for one turn, so nothing it already
+  counted is counted again.
 
   Not every harness reports tokens there: Claude Code and Pi send only the
   context gauge (`used`/`size`), which is not a token count and is never
