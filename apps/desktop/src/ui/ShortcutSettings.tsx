@@ -66,7 +66,7 @@ export function ShortcutsPage() {
     <>
       <Group
         title="Shortcuts"
-        footer="Click a key to change it, then press the new combination; Esc leaves it as it was. A shortcut needs ⌘ (or ⌥) unless it is a function key, and it may not take a key another command answers."
+        footer="Click a key to change it, then press the new combination; Esc leaves it as it was. A shortcut needs ⌘ (or ⌥) unless it is a function key or one of the thread list's marking keys, which only fire while a thread row has the keyboard, and it may not take a key another command answers."
       >
         {APP_COMMANDS.filter((command) => command.remappable).map((command) => (
           <ShortcutRow
@@ -134,10 +134,8 @@ function ShortcutRow({
         }
         onClick={onToggle}
         className={cx(
-          "flex h-8 min-w-16 items-center justify-center gap-1.5 rounded-lg border px-2.5",
-          recording
-            ? "border-accent bg-surface-3 text-fg"
-            : "border-border-strong bg-surface-2/60 text-fg-muted hover:bg-surface-2 hover:text-fg",
+          "flex h-8 min-w-16 items-center justify-center gap-1.5 rounded-lg px-2.5",
+          recording ? "bg-accent/16 text-fg" : "bg-fill text-fg-muted hover:bg-fill-strong hover:text-fg",
         )}
       >
         {recording ? (

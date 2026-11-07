@@ -661,17 +661,124 @@ fn legacy_builtin(content: &str) -> Option<&str> {
         .map(|index| &content[..index + 1])
 }
 
-/// Create the user themes directory and write each built-in that is not
-/// there. A copy an older release wrote (the terminal part alone, unedited)
-/// is upgraded to the current built-in; an edited one is never touched.
-pub fn ensure_user_dir() -> Option<PathBuf> {
-    let dir = user_themes_dir()?;
-    let _ = fs::create_dir_all(&dir);
+/// Built-ins as earlier releases shipped them.
+///
+/// `ensure_user_dir` copies `BUILTIN_THEMES` into the user directory on first
+/// run, so a release that later changes a built-in leaves a copy that no
+/// longer matches it: the copy would shadow the built-in as a user theme, and
+/// the app would keep painting the old fills. Keeping the earlier text here
+/// lets startup recognise a copy that is still exactly what that release wrote
+/// and replace it.
+const PREVIOUS_BUILTINS: &[(&str, &str)] = &[
+    (
+        "rustcode.toml",
+        r##"name = "rustcode"
+description = "Neutral graphite dark, the RustCode default"
+bg = "reset"
+panel = "#141416"
+element = "#212124"
+text = "#ededed"
+muted = "#a1a1a1"
+primary = "#93a3e8"
+secondary = "#8a8f98"
+green = "#5fbf8a"
+selection = "#ededed"
+tip = "#e0b25c"
+status_border = "#2c2c30"
+turn_separator = "#3a3a3f"
+notice_bg = "reset"
+hover_bg = "#1a1a1d"
+
+[desktop]
+mode = "dark"
+radius = "default"
+bg = "#0b0b0c"
+sidebar = "#131315"
+surface = "#18181a"
+surface_2 = "#1e1e21"
+surface_3 = "#232327"
+border = "#1f1f22"
+border_strong = "#2c2c30"
+text = "#ededed"
+text_muted = "#a1a1a1"
+text_faint = "#6b6b6b"
+accent = "#93a3e8"
+accent_text = "#0b0b0c"
+danger = "#f26d6d"
+success = "#5fbf8a"
+warning = "#e0b25c"
+focus = "#93a3e8"
+selection = "#252a3d"
+code_bg = "#101012"
+scrollbar = "#2a2a2e"
+"##,
+    ),
+    (
+        "light.toml",
+        r##"name = "light"
+description = "Clean light mode text and border palette"
+bg = "#f5f7fa"
+panel = "#e6eaf0"
+element = "#d7dde4"
+text = "#1e232a"
+muted = "#5e6872"
+primary = "#d74130"
+secondary = "#2d6e91"
+green = "#239b41"
+selection = "#1e1e1e"
+tip = "#be781e"
+status_border = "#aab3bc"
+turn_separator = "#b9bec3"
+notice_bg = "reset"
+hover_bg = "#d2d8e0"
+
+[desktop]
+mode = "light"
+radius = "default"
+bg = "#ffffff"
+sidebar = "#f7f7f8"
+surface = "#f0f0f1"
+surface_2 = "#ffffff"
+surface_3 = "#e8e8ea"
+border = "#f0f0f0"
+border_strong = "#e0e0e0"
+text = "#171717"
+text_muted = "#5c5c5c"
+text_faint = "#9a9a9a"
+accent = "#2f6fe4"
+accent_text = "#ffffff"
+danger = "#d93d3d"
+success = "#1f9d55"
+warning = "#b7791f"
+focus = "#2f6fe4"
+selection = "#d5e2fa"
+code_bg = "#f6f6f7"
+scrollbar = "#d9d9d9"
+"##,
+    ),
+];
+
+/// Whether `content` is the built-in `filename` as an older release shipped
+/// it: the whole file, unedited, with an older `[desktop]` table.
+fn previous_builtin(filename: &str, content: &str) -> bool {
+    PREVIOUS_BUILTINS
+        .iter()
+        .any(|(file, old)| *file == filename && *old == content)
+}
+
+/// Write each built-in into `dir` that is not there. A copy an older release
+/// wrote — the terminal part alone, or an earlier version of the whole file,
+/// both unedited — is upgraded to the current built-in; an edited one is
+/// never touched. The desktop surfaces move with the app, and a stale copy in
+/// the user directory would otherwise shadow the built-in it was copied from.
+fn sync_builtins(dir: &Path) {
     for (filename, content) in BUILTIN_THEMES {
         let path = dir.join(filename);
         match fs::read_to_string(&path) {
             Ok(existing) => {
-                if legacy_builtin(content) == Some(existing.as_str()) {
+                let stale = legacy_builtin(content) == Some(existing.as_str())
+                    || previous_builtin(filename, &existing);
+                if stale {
                     let _ = crate::worktrees::write_atomic(&path, content.as_bytes());
                 }
             }
@@ -682,6 +789,14 @@ pub fn ensure_user_dir() -> Option<PathBuf> {
             }
         }
     }
+}
+
+/// Create the user themes directory and keep the built-in copies in it
+/// current (see `sync_builtins`).
+pub fn ensure_user_dir() -> Option<PathBuf> {
+    let dir = user_themes_dir()?;
+    let _ = fs::create_dir_all(&dir);
+    sync_builtins(&dir);
     Some(dir)
 }
 

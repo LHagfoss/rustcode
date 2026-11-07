@@ -540,7 +540,12 @@ composer's keys stay outside the table.
   (red) until you open the thread (`finished`/`failed` in the store; *Mark
   Unread* in the menu brings Done back). What wants you reads in medium
   weight; what works, waits or is settled recedes. Hovering swaps the slot for
-  Pin, Settle (or Unsettle) and the menu, so nothing shifts.
+  Pin, Settle (or Unsettle) and the menu, so nothing shifts, each on a
+  26px target. ↑ ↓ move through the rows without opening them, ⏎ opens the
+  one the keyboard is on, and P pins (or unpins) it while D settles (or
+  unsettles) it — the picked rows when there are several — with the same
+  toast and Undo; Shift+F10 and the ContextMenu key open the row's menu, and
+  the keys are rebindable in Settings › Keyboard.
   Double-click or F2 renames. Settling is marking a thread Settled, with an
   Undo toast (the row, the selection bar, the chat's menu, the palette and the
   board all offer it); a new message brings it back. Settling the selected
