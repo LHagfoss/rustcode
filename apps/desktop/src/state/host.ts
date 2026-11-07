@@ -2343,7 +2343,12 @@ export function linkFinished(
  * reported yet takes this turn's answer instead of the one that ended first
  * (host.ts `wait` reads the same link). A link already reported is re-armed once
  * when this turn was started by the wake from the thread's own child, so the
- * real answer reaches the parent too.
+ * real answer reaches the parent too. A link a restart severed
+ * (`orchestration.ts` `interruptActive`) settles here as a link turn's would
+ * ({@link linkFinished}): the app resumed this thread after the restart
+ * (`store.ts` `resumeInterrupted`), so what it answered is that branch's result,
+ * and its parent reads it in a wake instead of waiting on a link nothing else
+ * can settle.
  */
 export function threadTurnEnded(
   thread: string,
@@ -2357,6 +2362,12 @@ export function threadTurnEnded(
   if (outcome !== "cancelled") {
     const now = Date.now();
     const says = answerFor(thread, items, outcome === "completed" ? undefined : failed);
+    // A severed link is settled first, and by the same rule a link's own turn uses, so its
+    // answer, harness and worked time read as they do for a child that never lost its turn.
+    for (const link of [...book().links]) {
+      if (link.target === thread && link.state === "interrupted")
+        linkFinished(link.id, thread, outcome, failed, items);
+    }
     setBook((b) => restateLinks(b, thread, says, now, woken));
   }
   wakeTick();

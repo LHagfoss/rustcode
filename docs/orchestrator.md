@@ -362,8 +362,13 @@ they finish or ask, instead of having to poll with sleeps.
   that answers nothing never erases an answer; it says
   the rest is in `read_session` on the child's session or `wait_session` on a
   `link_id`, and that the message is the notification. A child that was
-  stopped or interrupted is no result to wait for: nothing ever reports it, so
-  it does not hold its parent back.
+  stopped, or interrupted and left interrupted, is no result to wait for:
+  nothing ever reports it, so it does not hold its parent back. A restart
+  resumes the threads it cut off (`state/store.ts` `resumeInterrupted`), and the
+  turn such a thread runs then settles its interrupted link as a link turn's own
+  does (`host.ts` `threadTurnEnded` calls `linkFinished`), so the parent that
+  was waiting reads that answer in a wake. A resumed turn the user stops is a
+  stopped link, and reports nothing.
 - **Waiting on the user.** A child that goes `needs_user` (an approval or a
   question) is reported the same way, once per pending request (its rpc id):
   the parent is told to use `list_pending_requests` and that the user answers,

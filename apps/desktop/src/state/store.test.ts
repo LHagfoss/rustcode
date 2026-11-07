@@ -61,6 +61,7 @@ import {
   prunePanels,
   prunePlans,
   RESOLVED_APPROVAL_MS,
+  RESUME_TEXT,
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
@@ -1374,6 +1375,64 @@ describe("engine controller with the mock engine", () => {
     expect(wakeTurn()).toBe(true);
     expect(useApp.getState().links.links.find((l) => l.id === `${parent}/1`)?.notifiedAt).toBeDefined();
   }, 20_000);
+
+  test("a child a restart interrupted answers its parent once the app resumes it", async () => {
+    // The window was quit with the child mid-turn: the book it saved still says the link works, and
+    // app storage still lists the thread the quit cut off (state/store.ts `interruptedThreads`).
+    const parent = "mock-thread-1";
+    const target = "mock-thread-2";
+    const at = Date.now() - 60_000;
+    const link: Link = {
+      id: `${parent}/1`,
+      orchestrator: parent,
+      target,
+      orchestratorTitle: "Fix the composer focus ring",
+      targetTitle: "Explain the sidecar restart backoff",
+      message: "look into the backoff",
+      state: "working",
+      createdAt: at,
+      startedAt: at,
+    };
+    const book = { links: [link] as unknown as JsonObject[], grants: {}, counters: {}, fanOuts: [] };
+    const transport = new MockTransport({ delayMs: 0, links: book as unknown as JsonObject });
+    const storage = testStorage({
+      "rustcode.threadLinks": JSON.stringify({ ...book, counters: { [parent]: 1 } }),
+      "rustcode.runningThreads": JSON.stringify([target]),
+    });
+    try {
+      setOrchestration(true);
+      await connect(transport);
+      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      setOrchestration(true);
+      const linkOf = () => useApp.getState().links.links.find((l) => l.id === link.id);
+      // The link cannot reach its parent again by itself: the restart severed it on load.
+      await until(() => linkOf()?.state === "interrupted", 5000);
+      const resumed = () =>
+        (useApp.getState().threads[target]?.items ?? []).some(
+          (i) => i.kind === "user" && (i as { text?: string }).text === RESUME_TEXT,
+        );
+      await until(resumed, 8000);
+      // The resumed turn asks before it edits, as a real harness does: allow it, so the turn can
+      // end as the branch's answer rather than wait on the user.
+      for (let i = 0; i < 300 && linkOf()?.state === "interrupted"; i++) {
+        const request = useApp.getState().threads[target]?.permissions[0];
+        if (request) answerPermission(request, request.options[0]!);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      // Its continue turn ended as the child's answer, and the parent reads it in a wake.
+      await until(() => wakeTurns(parent).length > 0, 10_000);
+      expect(wakeTurns(parent).join("\n")).toContain("Delegate finished");
+      expect(wakeTurns(parent).join("\n")).toContain("Explain the sidecar restart backoff");
+      expect(linkOf()?.state).toBe("done");
+      expect(linkOf()?.notifiedAt).toBeDefined();
+      // Once. Nothing reports the same branch again on the next tick.
+      wakeTick();
+      await new Promise((r) => setTimeout(r, 500));
+      expect(wakeTurns(parent)).toHaveLength(1);
+    } finally {
+      storage.done();
+    }
+  }, 30_000);
 
   test("a wake the queue lost in a restart is delivered again, not dropped", async () => {
     const { parent, link, target, linkOf } = await stagedWait();

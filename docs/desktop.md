@@ -771,6 +771,10 @@ composer's keys stay outside the table.
   may name another login without another card. Grants and links are kept in the
   local data store (`data-store.md`), with local storage as the first paint and
   for an older engine, and after a restart active links are *interrupted*.
+  Threads the restart cut off are resumed with a *Continue* message (Settings ›
+  General, on by default), and the turn such a thread then runs settles its
+  interrupted link, so the parent that was waiting is woken with the answer
+  instead of waiting for good (`docs/orchestrator.md`).
   Started threads go through `session/new` with `_meta.rustcode.harness`,
   `.account` (orchestration v5) and `.worktree` and get the prompt as their
   first message, headed
