@@ -44,7 +44,7 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `harness_rpc_messages` | one row per ACP or Codex JSON-RPC message: `thread_id`, `turn_id`, `harness`, `protocol`, `direction`, `message_kind`, `rpc_id`, `method`, `at`, `latency_ms`, `byte_size`, `payload_json`, `payload_truncated`, `redaction_version` |
 | `operational_events` | one row per allowlisted event: `thread_id`, `turn_id`, `sequence`, `event_type`, `at`, `fields_json`, `original_bytes`, `captured_bytes`, `payload_truncated`, `redaction_version` |
 | `command_receipts` | one row per orchestration call made with a retry key: `caller` (the calling thread), `client_request_id`, `action` (the tool), `args_hash`, `result_json`, `created_at`, keyed on `(caller, client_request_id)` |
-| `usage_cursors` | one row per thread and harness: the last cumulative session total it reported (`input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`) and `updated_at` |
+| `usage_cursors` | one row per thread, harness and session series (the harness's native session id and its account): the last cumulative session total that series reported (`input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`) and `updated_at` |
 | `store_meta` | internal bookkeeping, such as whether the one-time backfill ran |
 
 Tokens and cost are `NULL` when a harness did not report them, and are never
@@ -263,17 +263,32 @@ Two hooks, both chosen so no new code sits in a turn's critical path:
   changes.
 - **An external harness** writes one turn when its prompt returns
   (`harness/session.rs`). Its `usage_update` is a session total, so the store
-  keeps the growth over the last total the same thread reported for that
-  harness (`usage_cursors`), written in the same transaction as the turn. The
-  summed rows are not the baseline: after a restarted harness that sum stays
-  above the running total, and every later turn would be recorded whole again
-  (#3169). A turn that reports the same total as the one before it records
-  zero, which is what a failed turn that changed nothing gets. A counter that
-  goes backwards means a new session (a harness switch or a restarted
-  harness): its whole total is that turn's, never a negative number, and the
-  cursor moves to it. A thread whose rows predate the cursor or came from a
-  backfill keeps their sum as the baseline for one turn, so nothing it already
-  counted is counted again.
+  keeps the growth over the last total the same *session series* reported — a
+  `usage_cursors` row keyed by thread, harness and series, where the series is
+  the harness's native session id and the account it ran as. It is written in
+  the same transaction as the turn, under `BEGIN IMMEDIATE` so a concurrent
+  writer cannot leave it with a read snapshot it may no longer upgrade.
+
+  The summed rows are not the baseline: after a restarted harness that sum
+  stays above the running total, and every later turn would be recorded whole
+  again (#3169). A turn that reports the same total as the one before it
+  records zero, which is what a failed turn that changed nothing gets. A
+  series the store has not seen (a restart, a harness switch, another account)
+  reports a whole session total, which is that turn's. Within one series only
+  every reported counter dropping together — or the series changing — is a
+  restart; a single counter that dipped (a rotated or truncated log, a missing
+  account directory) records zero and keeps the higher cursor, instead of
+  re-counting a session whose other counters say never restarted. No counter
+  ever records a negative number.
+
+  A thread recorded before cursors existed (an older release, or a backfill)
+  has no cursor to read. Its rows are summed, and the lower of that sum and the
+  current reading is used as the baseline, because the sum can already be
+  inflated: the first turn after the release counts nothing it had already
+  counted rather than adding one more whole total on top. The cost is a
+  restart that happened between those rows and this reading, which is not
+  counted; that undercounts one turn instead of double counting a session. The
+  rows themselves are left alone (see "What the store does not repair").
 
   Not every harness reports tokens there: Claude Code and Pi send only the
   context gauge (`used`/`size`), which is not a token count and is never
@@ -322,6 +337,18 @@ thread row and no turns. It also carries each thread's recorded parent
 (`metadata.json`) into `threads.parent_id`/`parent_title`, so a usage read can
 roll delegates up without the app's session list; bumping the backfill version
 refreshes those columns for existing rows.
+
+## What the store does not repair
+
+Rows written before migration 6 can hold a whole session total where one
+turn's growth belongs (#3169). No pass rewrites them. A row does not say
+whether it is a growth or a total, so recomputing each row as the difference
+from the previous one would undercount the rows that are already right, and
+the harness logs cannot stand in: `harness.json` keeps only the thread's
+*current* native session id, so the logs of earlier sessions cannot be found
+from the store, and a log's per-message usage carries no turn boundary. New
+turns are exact from the first turn after the upgrade, and `usage_cursors`
+keeps them exact from there.
 
 ## Reading
 
