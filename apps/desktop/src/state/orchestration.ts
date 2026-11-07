@@ -43,6 +43,13 @@ export const MAX_WAIT_MS = 3_600_000;
 export const MAX_LAST_TURNS = 10;
 /** How long a settled child waits for its siblings before the parent hears about them. */
 export const WAKE_COALESCE_MS = 3_000;
+/**
+ * How long a child's running turn may show no new activity before its parent is
+ * told it looks stuck. A command with no timeout (a git editor with no TTY, a
+ * script whose timers never end) can hold a turn for hours, so this is the
+ * point where an advisory notice is worth the interruption.
+ */
+export const STALL_NOTICE_MS = 10 * 60_000;
 /** The most of one child's answer a wake message carries, per child. */
 export const WAKE_ANSWER_CHARS = 1024;
 
@@ -141,6 +148,11 @@ export interface Link {
    * started: the parent is told once more, and never a third time.
    */
   answerChangedAt?: number;
+  /**
+   * The child's activity timestamp the parent's stall notice covered: the same
+   * silence is reported once, and a newer activity arms another notice.
+   */
+  stallNotifiedFor?: number;
 }
 
 /** One prompt run on several harnesses at once, compared side by side. */
@@ -832,6 +844,12 @@ function mergedLink(shared: Link, mine: Link): Link {
     ...(base.askedRequest === undefined && other.askedRequest !== undefined
       ? { askedRequest: other.askedRequest }
       : {}),
+    // A stall notice is a mark like the others: the later of the two copies stands.
+    ...(Math.max(base.stallNotifiedFor ?? -1, other.stallNotifiedFor ?? -1) >= 0
+      ? {
+          stallNotifiedFor: Math.max(base.stallNotifiedFor ?? -1, other.stallNotifiedFor ?? -1),
+        }
+      : {}),
   };
 }
 
@@ -1112,8 +1130,13 @@ export function linkResult(
   if (activity) {
     entry.turns = activity.turns;
     if (activity.lastTool) entry.last_tool = activity.lastTool;
+    if (activity.lastCommand) entry.last_command = activity.lastCommand;
     if (activity.lastAt !== undefined && extra?.now !== undefined) {
-      entry.idle_ms = Math.max(0, extra.now - activity.lastAt);
+      const idle = Math.max(0, extra.now - activity.lastAt);
+      entry.idle_ms = idle;
+      // The same silence the stall notice reports: a timed-out wait says so
+      // without the caller having to compare idle_ms with a threshold.
+      if ((state === "working" || state === "queued") && idle >= STALL_NOTICE_MS) entry.stalled = true;
     }
   }
   // The user answers it wherever they see the card: in that thread's chat, or in the transcript of
@@ -1134,27 +1157,52 @@ export interface ActivityItem {
   endedAt?: number;
   title?: string;
   toolName?: string;
+  /** The tool call's input, for the command a stall notice names. */
+  input?: Json;
 }
 
 /** What a child was last doing, and how many turns it finished (`wait_session` timeout). */
 export interface LinkActivity {
   lastAt?: number;
   lastTool?: string;
+  /** The last tool's command, when it reported one. */
+  lastCommand?: string;
   turns: number;
+}
+
+/** A tool call's command, when its input names one. */
+function commandOf(input: Json | undefined): string | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const command = input.command ?? input.cmd;
+  return typeof command === "string" && command.trim() ? command.trim() : undefined;
 }
 
 /** The last activity in a thread, from the items the app already holds: no polling. */
 export function activityOf(items: readonly ActivityItem[]): LinkActivity {
   let lastAt: number | undefined;
   let lastTool: string | undefined;
+  let lastCommand: string | undefined;
   let turns = 0;
   for (const item of items) {
     const at = item.endedAt ?? item.startedAt ?? item.at;
     if (at !== undefined && (lastAt === undefined || at > lastAt)) lastAt = at;
-    if (item.kind === "tool") lastTool = item.toolName ?? item.title ?? lastTool;
+    if (item.kind === "tool") {
+      lastTool = item.toolName ?? item.title ?? lastTool;
+      lastCommand = commandOf(item.input) ?? lastCommand;
+    }
     if (item.kind === "turnEnd") turns += 1;
   }
-  return { lastAt, lastTool, turns };
+  return { lastAt, lastTool, ...(lastCommand ? { lastCommand } : {}), turns };
+}
+
+/** One child that has shown no progress while its turn still runs, and what it last ran. */
+export interface StallNotice {
+  link: Link;
+  /** The activity timestamp this notice is about; the mark that stops a repeat. */
+  at: number;
+  idleMs: number;
+  lastTool?: string;
+  lastCommand?: string;
 }
 
 /** A parent that should hear about its children, and what about them. */
@@ -1165,6 +1213,8 @@ export interface Wake {
   settled: Link[];
   /** Children waiting on the user, whose request was not reported yet. */
   asking: Link[];
+  /** Children still running that have shown no progress for {@link STALL_NOTICE_MS}. */
+  stalled?: StallNotice[];
 }
 
 /** What the decision needs of the app: states, pending requests, waits, threads. */
@@ -1189,10 +1239,33 @@ export interface WakeContext {
   threads: Readonly<Record<string, { title: string; running: boolean }>>;
   /** Each link target's latest reply, for a finished link that holds no answer. */
   answers?: Readonly<Record<string, string>>;
+  /** Each link target's last activity, for the stall notice and `wait_session`'s idle time. */
+  activity?: Readonly<Record<string, LinkActivity>>;
   now: number;
 }
 
 const stateOfLink = (link: Link, ctx: WakeContext) => ctx.states[link.id] ?? link.state;
+
+/**
+ * A child that still runs but has shown nothing for {@link STALL_NOTICE_MS}.
+ * Only a working link whose target turn runs counts: a queued link has not
+ * started, a settled one has answered, and one waiting on the user is not stuck.
+ */
+function stallNotice(link: Link, ctx: WakeContext): StallNotice | undefined {
+  if (stateOfLink(link, ctx) !== "working" || !ctx.threads[link.target]?.running) return undefined;
+  const activity = ctx.activity?.[link.target];
+  const at = activity?.lastAt ?? link.startedAt;
+  if (at === undefined) return undefined;
+  const idleMs = Math.max(0, ctx.now - at);
+  if (idleMs < STALL_NOTICE_MS) return undefined;
+  return {
+    link,
+    at,
+    idleMs,
+    ...(activity?.lastTool ? { lastTool: activity.lastTool } : {}),
+    ...(activity?.lastCommand ? { lastCommand: activity.lastCommand } : {}),
+  };
+}
 
 /**
  * Whether `id` still owes its parent an answer: a child of its own is active,
@@ -1443,8 +1516,15 @@ export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
       const request = ctx.pending[link.id];
       return request !== undefined && link.askedRequest !== request;
     });
-    if (settled.length || asking.length) {
-      out.push({ parent, parentTitle: here.title, settled, asking });
+    // A child that has gone quiet with its turn still running: told once per
+    // activity timestamp, so a resumed child can go quiet again and be told again.
+    const stalled = links.flatMap((link) => {
+      const notice = stallNotice(link, ctx);
+      if (!notice || link.stallNotifiedFor === notice.at) return [];
+      return [notice];
+    });
+    if (settled.length || asking.length || stalled.length) {
+      out.push({ parent, parentTitle: here.title, settled, asking, stalled });
     }
   }
   return out;
@@ -1537,6 +1617,13 @@ export function nextWakeAt(book: LinkBook, ctx: WakeContext): number | null {
   const carried = new Set(Object.values(ctx.queued ?? {}).flat());
   for (const link of book.links) {
     const state = stateOfLink(link, ctx);
+    if (state === "working" && ctx.threads[link.target]?.running) {
+      const at = ctx.activity?.[link.target]?.lastAt ?? link.startedAt;
+      if (at === undefined || link.stallNotifiedFor === at) continue;
+      const due = at + STALL_NOTICE_MS;
+      if (due > ctx.now && (next === null || due < next)) next = due;
+      continue;
+    }
     if (state !== "done" && state !== "failed") continue;
     if (link.notifiedAt !== undefined || stale.has(link.id) || carried.has(link.id)) continue;
     if (!quietTree(book, ctx, link.target)) continue;
@@ -1549,7 +1636,9 @@ export function nextWakeAt(book: LinkBook, ctx: WakeContext): number | null {
 
 /** The link ids a wake reports: what a queued wake keeps, so a newer one can be folded into it. */
 export function wakeIds(wake: Wake): string[] {
-  return [...wake.settled, ...wake.asking].map((link) => link.id);
+  return [...wake.settled, ...wake.asking, ...(wake.stalled ?? []).map((notice) => notice.link)].map(
+    (link) => link.id,
+  );
 }
 
 /** The ids a wake names as waiting on the user, of {@link wakeIds}: what the row said it was. */
@@ -1587,6 +1676,7 @@ export function wakeFor(
   const waiting = new Set(ctx.waiting[parent] ?? []);
   const settled: Link[] = [];
   const asking: Link[] = [];
+  const stalled: StallNotice[] = [];
   for (const link of book.links) {
     if (link.orchestrator !== parent || !want.has(link.id)) continue;
     if (waiting.has(link.id)) continue;
@@ -1600,9 +1690,14 @@ export function wakeFor(
       settled.push(link);
     } else if (state === "needs_user") {
       asking.push(link);
+    } else {
+      const notice = stallNotice(link, ctx);
+      if (notice) stalled.push(notice);
     }
   }
-  return settled.length || asking.length ? { parent, parentTitle, settled, asking } : null;
+  return settled.length || asking.length || stalled.length
+    ? { parent, parentTitle, settled, asking, stalled }
+    : null;
 }
 
 /**
@@ -1708,8 +1803,17 @@ export function wakeSummary(wake: Wake): string {
   } else if (wake.asking.length > 1) {
     parts.push(`${wake.asking.length} delegates need you`);
   }
+  if (wake.stalled?.length === 1) {
+    parts.push(`Delegate stalled: ${wake.stalled[0]!.link.targetTitle}`);
+  } else if (wake.stalled && wake.stalled.length > 1) {
+    parts.push(`${wake.stalled.length} delegates stalled`);
+  }
   return parts.join(" · ");
 }
+
+/** One line of text cut at `max` characters, with an ellipsis when it was longer. */
+const preview = (text: string, max: number): string =>
+  text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
 
 /** One delegate, as the wake message names it: link id, status, title, harness, worked time, thread, changes. */
 const linkLine = (link: Link, state: LinkState, now: number) => {
@@ -1745,6 +1849,18 @@ export function wakeMessage(wake: Wake, now: number): string {
     lines.push("Waiting on you (the user answers these; you cannot):", "");
     for (const link of wake.asking) lines.push(linkLine(link, "needs_user", now));
     lines.push("", "list_pending_requests shows what it asks; ask the user if it is unclear.", "");
+  }
+  if (wake.stalled?.length) {
+    lines.push("No progress while the turn still runs:", "");
+    for (const { link, idleMs, lastTool, lastCommand } of wake.stalled) {
+      const tool = lastTool
+        ? `${lastTool}${lastCommand ? `: ${preview(lastCommand, 120)}` : ""}`
+        : "none reported";
+      lines.push(
+        `- Delegate “${link.targetTitle}” has made no progress for ${formatDuration(idleMs)}; last tool: ${tool}. It may be stuck on a command that does not exit; interrupt_session it or message it.`,
+      );
+    }
+    lines.push("");
   }
   lines.push(
     "The rest is in read_session on a child's session id, or wait_session on a link_id (a settled link answers at once). This message is the notification: do not poll with sleeps.",

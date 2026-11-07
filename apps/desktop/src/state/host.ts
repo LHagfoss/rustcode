@@ -46,6 +46,7 @@ import {
   isActive,
   isFailure,
   type Link,
+  type LinkActivity,
   type LinkBook,
   type LinkState,
   latestReply,
@@ -2021,6 +2022,7 @@ function wakeContext(now: number): WakeContext {
   const threads: Record<string, { title: string; running: boolean }> = {};
   /** Each finished link's target's latest reply, for a link that holds no answer. */
   const answers: Record<string, string> = {};
+  const activity: Record<string, LinkActivity> = {};
   const said: Record<string, readonly string[]> = {};
   // A parent and a child are both asked about: the parent hears, and the child's own subtree has
   // to be quiet before it does.
@@ -2037,6 +2039,7 @@ function wakeContext(now: number): WakeContext {
     remember(link.orchestrator);
     remember(link.target);
     if (!answers[link.target]) answers[link.target] = latestReply(target?.items ?? []);
+    if (!activity[link.target]) activity[link.target] = activityOf(target?.items ?? []);
   }
   for (const [id, ids] of waiting) said[id] = [...ids];
   // What each parent's queued wake rows already report: their turn delivers it, marked when it starts.
@@ -2049,7 +2052,7 @@ function wakeContext(now: number): WakeContext {
       list.push(...item.wakeLinks);
     }
   }
-  return { states, pending, waiting: said, queued, threads, now, answers };
+  return { states, pending, waiting: said, queued, threads, now, answers, activity };
 }
 
 /** A link with the target's last reply when it holds no answer of its own. */
@@ -2145,6 +2148,16 @@ function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
   // A steer for one of these questions is on its way to the running turn: this tick's copy would
   // repeat it, and the steer's own answer decides whether the row is still owed.
   if (wake.asking.length && wake.asking.every((link) => steeredLinks.has(link.id))) return;
+  // The same silence wakes the parent once: the notice is advisory, so its mark
+  // is written as it is sent or queued, unlike a settled answer's.
+  if (wake.stalled?.length) {
+    setBook((b) =>
+      wake.stalled!.reduce(
+        (acc, notice) => updateLink(acc, notice.link.id, { stallNotifiedFor: notice.at }),
+        b,
+      ),
+    );
+  }
   const wakeLinks = wakeIds(wake);
   const wakeAsking = askingIds(wake);
   if (parent.running) {

@@ -81,6 +81,19 @@ pub(crate) fn not_found_message(program: &str) -> String {
     format!("{program} not found on PATH")
 }
 
+/// How a harness child behaves with no terminal. It has no TTY, so a git
+/// editor (`rebase --continue`, a merge, a commit) or a pager waits for a
+/// person who will never answer: the child hangs until someone stops it.
+/// Explicit `env` still wins, so a harness that needs a value can set one.
+const NON_INTERACTIVE_ENV: [(&str, &str); 6] = [
+    ("GIT_EDITOR", "true"),
+    ("GIT_SEQUENCE_EDITOR", "true"),
+    ("GIT_PAGER", "cat"),
+    ("PAGER", "cat"),
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("GIT_MERGE_AUTOEDIT", "no"),
+];
+
 /// Start `command` in `cwd`. `log_session` names the thread whose debug log
 /// receives the child's stderr. `env` adds variables; `remove` drops ones the
 /// login shell brought in, so a chosen harness account is not overridden.
@@ -115,6 +128,9 @@ pub(crate) fn spawn(
     for name in remove {
         builder.env_remove(name);
     }
+    // No TTY: an editor or pager would wait forever. These first, so an
+    // explicit `env` below still wins.
+    builder.envs(NON_INTERACTIVE_ENV);
     builder.envs(env.iter().map(|(name, value)| (name, value)));
     #[cfg(unix)]
     builder.process_group(0);
@@ -158,6 +174,41 @@ pub(crate) fn spawn(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_gets_no_editor_or_pager_on_stdin_and_env_wins() {
+        use tokio::io::AsyncReadExt;
+
+        async fn read(dir: &Path, env: &[(String, String)]) -> String {
+            let (process, mut stdout, _stdin) = spawn(
+                "printer",
+                &[
+                    "sh".into(),
+                    "-c".into(),
+                    "printf '%s|%s|%s|%s|%s|%s' \"$GIT_EDITOR\" \"$GIT_SEQUENCE_EDITOR\" \"$GIT_PAGER\" \"$PAGER\" \"$GIT_TERMINAL_PROMPT\" \"$GIT_MERGE_AUTOEDIT\"".into(),
+                ],
+                dir,
+                None,
+                env,
+                &[],
+            )
+            .unwrap();
+            let mut text = String::new();
+            stdout.read_to_string(&mut text).await.unwrap();
+            process.kill();
+            text
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read(dir.path(), &[]).await,
+            "true|true|cat|cat|0|no",
+            "a harness child must not open an editor or pager"
+        );
+        let explicit = [(String::from("GIT_EDITOR"), String::from("vi"))];
+        assert_eq!(read(dir.path(), &explicit).await, "vi|true|cat|cat|0|no");
+    }
 
     #[tokio::test]
     async fn missing_programs_fail_clearly_and_kill_takes_the_group() {
