@@ -7,6 +7,7 @@ import { closeConfirm, openSettings, setOnboarding, setView, shortcutFor, useApp
 import { startUpdateChecks } from "./state/updates";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
+import { Inbox } from "./ui/Inbox";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
 import { Pill } from "./ui/primitives";
@@ -15,6 +16,7 @@ import { Settings } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
 import { Toaster } from "./ui/Toaster";
 import { WhatsNewDialog } from "./ui/Updates";
+import { useAwayWatch } from "./ui/WhileAway";
 
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
@@ -142,6 +144,7 @@ function ConfirmDialog() {
 export function App() {
   useTheme();
   useShortcuts();
+  useAwayWatch();
   useEffect(() => restoreZoom(), []);
   useEffect(() => startUpdateChecks(), []);
   const settings = useApp((s) => s.settings !== null);
@@ -167,6 +170,8 @@ export function App() {
             <div className="flex min-w-0 flex-1 flex-col">
               {view.kind === "chat" ? (
                 <ChatView />
+              ) : view.kind === "inbox" ? (
+                <Inbox />
               ) : (
                 <Suspense fallback={<div className="flex-1 bg-bg" />}>
                   {view.kind === "board" && <Board />}
