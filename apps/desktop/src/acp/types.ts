@@ -852,6 +852,11 @@ export interface Harness {
   name: string;
   kind: "builtin" | "acp" | "codex";
   builtin: boolean;
+  /**
+   * One RustCode ships with (`rustcode`, Codex, Claude Code, …): turn it off,
+   * never remove it. False for a harness the user added by hand.
+   */
+  known: boolean;
   enabled: boolean;
   command: string[];
   installed: boolean;
@@ -1006,6 +1011,13 @@ export function parseHarnessLast(value: Json | undefined): HarnessLast | null {
   return model || effort ? { model, effort } : null;
 }
 
+/**
+ * The standard harnesses of an engine that predates the snapshot's `known`
+ * (before issue 2881). Current engines say which are standard, so this only
+ * keeps an older engine's Codex from offering "Remove", which it refuses.
+ */
+const LEGACY_KNOWN_HARNESSES = ["codex", "claude-code", "gemini", "opencode", "pi"];
+
 export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
   const root = obj(value) ?? {};
   let remembers = false;
@@ -1024,6 +1036,9 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         name: str(o.name) ?? id,
         kind: kind === "builtin" || kind === "codex" ? kind : "acp",
         builtin,
+        // The engine says which harnesses are standard; an older one did not,
+        // so the ids it shipped with stand in until it does.
+        known: bool(o.known) ?? (builtin || LEGACY_KNOWN_HARNESSES.includes(id)),
         enabled: bool(o.enabled) ?? false,
         command: arr(o.command).flatMap((c) => (typeof c === "string" ? [c] : [])),
         installed: bool(o.installed) ?? false,
@@ -1068,6 +1083,7 @@ export function fallbackHarnessSnapshot(): HarnessSnapshot {
         name: "RustCode",
         kind: "builtin",
         builtin: true,
+        known: true,
         enabled: true,
         command: [],
         installed: true,

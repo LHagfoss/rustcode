@@ -87,6 +87,7 @@ pub fn run() {
             pty::pty_close,
             smartui::smartui_page,
             updater::update_check,
+            updater::update_channels,
             updater::update_install,
             updater::release_notes,
             webview::display_info,

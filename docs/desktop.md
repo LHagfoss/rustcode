@@ -316,9 +316,10 @@ composer's keys stay outside the table.
   spend against the last. One `_rustcode/data/usage` read grouped by day feeds
   the three figures cards, so the screen asks the engine once. Every card keeps
   one height from the first frame and says what it has in a line when it has
-  nothing, so the field above never moves as the reads land; below `lg` the
+  nothing. A persisted toggle opens the overview below the centred composer,
+  without moving it; the remaining space scrolls. Below `lg` the
   cards are one sideways-scrolling row, and a window shorter than 700px leaves
-  them out rather than push the field off the pane.
+  toggle and cards out.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries
@@ -1201,10 +1202,11 @@ off (`rustcode.haptics`).
 The app checks for an update 5 s after launch, every 30 seconds while its
 window is in front (every 30 minutes behind it), when its window comes back,
 and 30 s after a failed check, doubling to 5 minutes (`src/state/updates.ts`).
-A check is a HEAD request to the release page, not the GitHub API. A release
-counts as out only once its macOS app is uploaded and its `SHA256SUMS` lists
-it: the release goes public minutes before the other platforms and the sums
-land, and an install verifies against them. When a newer release is out, an *Update to X* row
+A check is a HEAD request to the release page on Stable, and the release feed
+on Beta: neither is the GitHub API, which a 30-second check would exhaust. A
+release counts as out only once its macOS app is uploaded and its
+`SHA256SUMS` lists it: the release goes public minutes before the other
+platforms and the sums land, and an install verifies against them. When a newer release is out, an *Update to X* row
 sits at the foot of the sidebar: it installs in place where the app can
 (below), else opens the release page; while it installs, the row shows a
 progress bar (`Downloading · 39% of 58.2 MB`, then Verifying and Installing)
@@ -1219,10 +1221,26 @@ it; Settings › Advanced opens it on demand and shows why the last background c
 shows both with sample data.
 
 `src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›
-Advanced shows the version with **Check for Updates**. It reads the tag that
-`github.com/LHagfoss/rustcode/releases/latest` redirects to (betas are
-prereleases, never latest) and offers the update when it is newer and its
-app zip is uploaded. On macOS **Update to X** downloads
+About shows the version with **Check for Updates**. **Update channel**
+(Stable, the default, or Beta) picks what a check looks for: Stable reads the
+tag that `github.com/LHagfoss/rustcode/releases/latest` redirects to, and Beta
+reads the release feed (`releases.atom`, which lists the prereleases
+`releases/latest` never points at) and offers the newest version of either
+kind, so `1.21.0-beta.3` is offered above `1.20.0` but `1.21.0` takes over
+when it ships. Both compare versions as semver does, prereleases included
+(`1.20.0-beta.2 < 1.20.0`) and with build metadata ignored, and only a release
+whose app zip and `SHA256SUMS` are uploaded is offered, so a tagged beta with
+nothing to install yet stays hidden. The picker asks the shell for the
+channels it offers (`update_channels`, no release check), so it is there
+before a check answers and when one fails offline; a change re-checks, and an
+answer for the previous channel is dropped rather than shown, which is why
+the row only draws an offer whose `channel` is the selected one. A beta ships
+the macOS app only, so the channel row is hidden on platforms without one,
+and switching back to Stable never offers a downgrade (a beta is already newer
+than the release before it). On Beta the row reads **Update to
+1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
+the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
+as usual. On macOS **Update to X** downloads
 `RustCode-<ver>-macos-<arch>.app.zip`, checks it against the release's
 `SHA256SUMS`, unpacks it with `ditto`, requires `codesign --verify --deep
 --strict` and this app's bundle id, then a detached shell waits for the app
@@ -1230,7 +1248,9 @@ to quit, swaps the bundle, re-registers it with Launch Services and opens
 it. It installs in place only from a release bundle in a folder it can write;
 otherwise, and on Windows and Linux, the button opens the release page and
 the installer does the update. A `tauri dev` build always sees an update
-but never installs it.
+but never installs it. The channel is the app's own: Homebrew and the CLI
+updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
+prerelease both skip).
 
 It does not use `tauri-plugin-updater`: that plugin requires its own
 signing key pair, and a release without the private key in CI would fail.
