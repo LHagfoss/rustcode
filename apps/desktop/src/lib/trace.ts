@@ -114,6 +114,23 @@ export interface Trace {
 const clamp = (n: number, low: number, high: number) => Math.min(high, Math.max(low, n));
 
 /**
+ * The panel's columns, in px: a row's label column, the track, and the numbers
+ * at the right. The axis over the rows and the rows themselves are laid out on
+ * these, so a tick sits exactly on the end of the bar under it.
+ */
+export const TRACE_COLUMNS = { label: 184, value: 124 } as const;
+
+/**
+ * How far inside the track's ends the bars are drawn, in px on both sides: a bar
+ * at the turn's first instant keeps clear of the track's rounded edge, and the
+ * axis ticks sit on the ends of that inner box, not the track's own.
+ */
+export const TRACE_TRACK_INSET = 4;
+
+/** The narrowest a bar is drawn, in px, so a call that took an instant still shows. */
+export const TRACE_MIN_BAR = 3;
+
+/**
  * Whether a turn has a timeline worth drawing. A replayed turn has no start of
  * its own, and its calls all share the moment the transcript loaded.
  */
