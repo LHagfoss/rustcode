@@ -249,7 +249,7 @@ function DelegateRow({
         </span>
       </div>
       {showAnswer && answer && (
-        <div className="rc-expand mb-1 ml-8 max-h-48 overflow-y-auto rounded-lg bg-fill-subtle p-2.5">
+        <div className="rc-expand mb-1 ml-8 max-h-48 overflow-y-auto rounded-lg bg-fill-subtle p-2">
           <Markdown text={answer} className="text-callout" />
         </div>
       )}

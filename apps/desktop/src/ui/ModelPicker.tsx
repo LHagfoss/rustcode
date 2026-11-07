@@ -216,7 +216,7 @@ function EffortSlider({
   };
   return (
     // The band above the track is the dots' own labels' room, not part of the target.
-    <div className="mx-2.5 pt-6 pb-0.5">
+    <div className="mx-2 pt-6 pb-0.5">
       <div
         ref={rail}
         role="slider"
@@ -618,7 +618,7 @@ function ModelPanel({
           </div>
         ))}
         {!rows.length && (
-          <div className="px-2.5 py-3 text-center text-callout text-fg-muted">
+          <div className="px-2 py-3 text-center text-callout text-fg-muted">
             {searching ? "No matching models" : "No models listed"}
           </div>
         )}

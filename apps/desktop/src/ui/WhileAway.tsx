@@ -113,7 +113,7 @@ export function WhileAwayCard({ className }: { className?: string }) {
   return (
     <section
       aria-label="While you were away"
-      className={cx("elevated flex flex-col gap-2.5 rounded-xl p-3.5 rc-in", className)}
+      className={cx("elevated flex flex-col gap-2 rounded-xl p-4 rc-in", className)}
     >
       <div className="flex items-center gap-2">
         <Sparkles size={14} className="shrink-0 text-accent" />

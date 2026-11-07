@@ -48,7 +48,7 @@ import {
   sameValue,
 } from "../state/pageCache";
 import { request, useApp } from "../state/store";
-import { cx, menuItem, Skeleton, Tooltip } from "./primitives";
+import { cx, menuItem, rowInset, Skeleton, Tooltip } from "./primitives";
 
 /** A section's name, above its card: `text-base` in `fg`, at the card's own inset. */
 export function SectionTitle({
@@ -62,7 +62,7 @@ export function SectionTitle({
 }) {
   if (!title && !action) return null;
   return (
-    <div className={cx("mb-2.5 flex min-h-7 flex-wrap items-center gap-2 px-3 sm:px-4", className)}>
+    <div className={cx("mb-2 flex min-h-7 flex-wrap items-center gap-2 px-4", className)}>
       <h2 className="flex min-w-0 flex-1 items-center gap-2 font-semibold text-fg text-title3">{title}</h2>
       {action}
     </div>
@@ -83,10 +83,10 @@ export function Group({
   action?: ReactNode;
 }) {
   return (
-    <section className="mb-8 scroll-mt-5" data-setting={typeof title === "string" ? title : undefined}>
+    <section className="mb-6 scroll-mt-5" data-setting={typeof title === "string" ? title : undefined}>
       <SectionTitle title={title} action={action} />
       <div className="divide-y divide-border overflow-hidden rounded-xl bg-surface">{children}</div>
-      {footer && <div className="mt-2 max-w-[70ch] px-3 text-caption text-fg-faint sm:px-4">{footer}</div>}
+      {footer && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-faint">{footer}</div>}
     </section>
   );
 }
@@ -195,7 +195,12 @@ export function Row({
       className={cx("@container group/row relative", className)}
       data-setting={typeof title === "string" ? title : undefined}
     >
-      <div className="flex min-h-12 flex-col gap-3 px-4 py-3.5 @min-[34rem]:flex-row @min-[34rem]:items-center @min-[34rem]:gap-8">
+      <div
+        className={cx(
+          "flex min-h-12 flex-col gap-3 @min-[34rem]:flex-row @min-[34rem]:items-center @min-[34rem]:gap-6",
+          rowInset,
+        )}
+      >
         <div className={cx("min-w-0 flex-1", reset && "@max-[34rem]:pr-7")}>
           <div className="flex min-h-5 items-center gap-1.5 font-medium text-body text-fg">{title}</div>
           {subtitle && (
@@ -213,7 +218,7 @@ export function Row({
               <ResetButton
                 title={title}
                 onClick={reset}
-                className="@max-[34rem]:absolute @max-[34rem]:top-2 @max-[34rem]:right-2.5"
+                className="@max-[34rem]:absolute @max-[34rem]:top-2 @max-[34rem]:right-2"
               />
             )}
             {children}
@@ -327,7 +332,7 @@ export function Select({
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          className="elevated z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-1.5 rc-in"
+          className="elevated z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
         >
           <RadixSelect.Viewport>
             {options.map((o) => (
@@ -403,7 +408,7 @@ export function Choice<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "relative h-6 rounded-sm px-2.5 font-medium text-caption whitespace-nowrap disabled:opacity-40",
+            "relative h-6 rounded-sm px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
         >
@@ -498,7 +503,7 @@ export function Loading({ error }: { error: string | null }) {
     <p className="text-callout text-warning">{error}</p>
   ) : (
     // Where the page's list will be: a group card of rows, title and subtitle each.
-    <section className="mb-8" role="status" aria-label="Loading">
+    <section className="mb-6" role="status" aria-label="Loading">
       <Skeleton className="mx-3 mb-3 h-3 w-24 sm:mx-4" />
       <div className="divide-y divide-border overflow-hidden rounded-xl bg-surface">
         {[46, 62, 38, 54].map((w, i) => (

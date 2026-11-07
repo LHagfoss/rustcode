@@ -260,7 +260,7 @@ export function AgentRow({
     showWord && detail !== undefined && state !== "done" ? (status ?? AGENT_LABEL[state]) : undefined;
   const bottom = detail ?? status ?? AGENT_LABEL[state];
   // The row's own text starts where the composer's does: the card's 4px and the row's 12px.
-  const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg py-1.5 pr-2 pl-3 text-left";
+  const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pr-2 pl-3 text-left";
   const chevron = onClick !== undefined || expanded !== undefined;
   const body = (
     <>
@@ -519,7 +519,7 @@ export function SubagentRow({
             <span className="text-caption text-fg-faint">No steps recorded.</span>
           )}
           {output && !running && output.includes("\n") && (
-            <div className="mt-1.5 max-h-64 overflow-y-auto rounded-lg bg-fill-subtle p-2.5">
+            <div className="mt-1.5 max-h-64 overflow-y-auto rounded-lg bg-fill-subtle p-2">
               <Markdown text={output} className="text-callout" />
             </div>
           )}
@@ -639,7 +639,7 @@ export function AgentGroupCard({
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle"
+        className="group flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle"
       >
         <AgentGroupHeader
           harness={harness}
@@ -882,7 +882,7 @@ export function AgentPill({ threadId }: { threadId?: string }) {
     return (
       <span
         role="status"
-        className="flex h-[26px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-success/10 px-2.5 text-callout text-success rc-in"
+        className="flex h-[26px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-success/10 px-2 text-callout text-success rc-in"
       >
         <CircleCheck size={13} className="rc-dot-in" />
         {finished === 1 ? "Agent finished" : `${finished} agents finished`}
@@ -906,7 +906,7 @@ export function AgentPill({ threadId }: { threadId?: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 flex w-[300px] flex-col gap-0.5 p-1.5 rc-in"
+          className="elevated z-40 flex w-[300px] flex-col gap-0.5 p-2 rc-in"
         >
           {working.map((w) => (
             <div key={w.key} className="flex items-start gap-2 rounded-lg px-3 py-[7px]">

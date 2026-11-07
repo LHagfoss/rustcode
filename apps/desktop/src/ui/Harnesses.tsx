@@ -65,13 +65,13 @@ function SignIn({ harness }: { harness: Harness }) {
         <Popover.Content
           align="end"
           sideOffset={6}
-          className="elevated z-[60] flex w-[340px] flex-col gap-2.5 p-3 rc-in"
+          className="elevated z-[60] flex w-[340px] flex-col gap-2 p-3 rc-in"
         >
           <p className="text-callout text-fg-muted">
             {harness.name} signs in with its own login. Run this in a terminal; RustCode never sees the
             credentials.
           </p>
-          <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
+          <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2">
             <code className="selectable flex-1 truncate font-mono text-callout">{line}</code>
             <CopyButton text={line} />
           </div>
@@ -217,7 +217,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
     });
   };
   return (
-    <div className="ml-11 flex flex-col gap-2 rounded-lg bg-surface-2 px-3 py-2.5">
+    <div className="ml-11 flex flex-col gap-2 rounded-lg bg-surface-2 px-3 py-2">
       <div className="flex items-center gap-2">
         <span className="text-caption text-fg-muted">Accounts</span>
         <span className="flex-1" />
@@ -273,7 +273,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
                 </Tooltip>
               </div>
               {account.auth !== "ok" && accountSignIn(harness) && (
-                <div className="flex items-center gap-2 rounded-md bg-fill py-1 pr-1 pl-2.5">
+                <div className="flex items-center gap-2 rounded-md bg-fill py-1 pr-1 pl-2">
                   <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
                     {accountLoginCommand(harness, account)}
                   </code>
@@ -445,7 +445,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         </Tooltip>
       </div>
       {!harness.installed && harness.install_hint && (
-        <div className="ml-11 flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
+        <div className="ml-11 flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2">
           <span className="text-caption text-fg-muted">Install</span>
           <code className="selectable flex-1 truncate font-mono text-callout">{harness.install_hint}</code>
           <CopyButton text={harness.install_hint} />
@@ -479,7 +479,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           Details
         </button>
         {open && (
-          <div className="mt-2 flex flex-col gap-2.5">
+          <div className="mt-2 flex flex-col gap-2">
             {!local && harness.command.length > 0 && (
               <div className="flex items-center gap-2 text-caption">
                 <span className="text-fg-muted">Runs</span>

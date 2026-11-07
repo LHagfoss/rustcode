@@ -82,7 +82,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               <DefaultsForm snapshot={snapshot} value={value} onChange={setChoice} />
             )}
           </div>
-          <div className="flex items-center gap-2 border-border border-t px-6 py-3.5">
+          <div className="flex items-center gap-2 border-border border-t px-6 py-3">
             {snapshot?.onboarded && <Pill onClick={onClose}>Cancel</Pill>}
             <span className="flex-1" />
             {step === 1 && <Pill onClick={() => setStep(0)}>Back</Pill>}
