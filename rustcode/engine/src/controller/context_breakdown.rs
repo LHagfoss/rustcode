@@ -90,6 +90,24 @@ pub struct ContextBreakdownInput<'a> {
     pub compaction: Option<crate::app::CompactionStats>,
 }
 
+/// One thing inside a category: a message, a tool call, a skill or a subagent.
+/// `tokens` is an estimate in the same unit as the category, not a provider
+/// count; the client shows it the way it shows every other context number.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextItem {
+    pub name: String,
+    pub tokens: usize,
+}
+
+impl ContextItem {
+    fn new(name: impl Into<String>, tokens: usize) -> Self {
+        Self {
+            name: name.into(),
+            tokens,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ContextBreakdown {
     pub context_window: usize,
@@ -109,6 +127,10 @@ pub struct ContextBreakdown {
     /// What the last compaction in this session did, if any.
     pub compaction: Option<crate::app::CompactionStats>,
     pub remaining_tokens: usize,
+    /// The biggest things in each category, in [`CONTEXT_CATEGORY_LABELS`]
+    /// order, largest first. A client may show fewer; the counts stay in the
+    /// same estimate as the category itself.
+    pub items: [Vec<ContextItem>; 8],
 }
 
 /// The category names, in legend order, shared by every frontend.
@@ -156,7 +178,7 @@ impl ContextBreakdown {
         } else {
             0
         };
-        context_breakdown(ContextBreakdownInput {
+        let mut breakdown = context_breakdown(ContextBreakdownInput {
             context_window: state.active_context_window(),
             current_usage: ContextUsage::new(provider_prompt, history),
             active_profile: profile.as_ref(),
@@ -170,7 +192,31 @@ impl ContextBreakdown {
             visualization_level: state.visualization_level,
             smart_ui: state.smart_ui,
             compaction: state.last_compaction.clone(),
-        })
+        });
+        // Subagent transcripts are held by the state, not the input: the root
+        // view lists each child beside its own tokens.
+        if selected.is_none() {
+            breakdown.items[7] = state
+                .subagents
+                .iter()
+                .filter_map(|agent| {
+                    let tokens: usize = agent
+                        .history
+                        .iter()
+                        .map(super::estimate_message_tokens)
+                        .sum();
+                    (tokens > 0).then(|| ContextItem {
+                        name: if agent.name.is_empty() {
+                            snippet(&agent.task)
+                        } else {
+                            agent.name.clone()
+                        },
+                        tokens,
+                    })
+                })
+                .collect();
+        }
+        breakdown
     }
 
     /// Each category's tokens, in [`CONTEXT_CATEGORY_LABELS`] order.
@@ -223,6 +269,9 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
 
     let (mut user_tokens, mut assistant_tokens, mut tool_tokens) = (0, 0, 0);
     let mut compacted_history_tokens = 0usize;
+    let mut user_items = Vec::new();
+    let mut assistant_items = Vec::new();
+    let mut tool_items: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for message in input.history {
         // The compaction summary and the deterministic record are `system`
         // messages. Count them here so the categories add up to the used total
@@ -239,20 +288,37 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
             continue;
         }
         match message.role.as_str() {
-            "user" => user_tokens += super::estimate_tokens(&message.content),
+            "user" => {
+                let tokens = super::estimate_tokens(&message.content);
+                user_tokens += tokens;
+                if tokens > 0 {
+                    user_items.push(ContextItem::new(snippet(&message.content), tokens));
+                }
+            }
             "assistant" => {
-                assistant_tokens += super::estimate_tokens(&message.content);
-                if !message.tool_calls.is_empty()
-                    && let Ok(calls) = serde_json::to_string(&message.tool_calls)
-                {
-                    tool_tokens += super::estimate_tokens(&calls);
+                let tokens = super::estimate_tokens(&message.content);
+                assistant_tokens += tokens;
+                if tokens > 0 {
+                    assistant_items.push(ContextItem::new(snippet(&message.content), tokens));
+                }
+                for call in &message.tool_calls {
+                    let Ok(arguments) = serde_json::to_string(call) else {
+                        continue;
+                    };
+                    let tokens = super::estimate_tokens(&arguments);
+                    tool_tokens += tokens;
+                    *tool_items
+                        .entry(tool_label(&call.name, &call.arguments))
+                        .or_default() += tokens;
                 }
             }
             "tool" => {
-                tool_tokens += super::estimate_tokens(&message.content);
+                let mut tokens = super::estimate_tokens(&message.content);
                 if let Some(id) = message.tool_call_id.as_deref() {
-                    tool_tokens += super::estimate_tokens(id);
+                    tokens += super::estimate_tokens(id);
                 }
+                tool_tokens += tokens;
+                *tool_items.entry(tool_result_label(message)).or_default() += tokens;
             }
             _ => {}
         }
@@ -292,6 +358,29 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
     let system_prompt_tokens = full_system_prompt_tokens
         .saturating_sub(system_tools_tokens)
         .saturating_sub(skills_tokens);
+    let mut items: [Vec<ContextItem>; 8] = std::array::from_fn(|_| Vec::new());
+    items[0] = top_items(user_items);
+    items[1] = top_items(assistant_items);
+    items[2] = top_items(
+        tool_items
+            .into_iter()
+            .map(|(name, tokens)| ContextItem::new(name, tokens))
+            .collect(),
+    );
+    if compacted_history_tokens > 0 {
+        items[3] = vec![ContextItem::new(
+            "Compaction summary",
+            compacted_history_tokens,
+        )];
+    }
+    if system_prompt_tokens > 0 {
+        items[4] = vec![ContextItem::new(
+            "Instructions and hints",
+            system_prompt_tokens,
+        )];
+    }
+    items[5] = tool_schema_items(system_tools_tokens);
+    items[6] = skill_items(&skills, skills_tokens);
     // Every request carries the system prompt, tools and skills, so an
     // estimate made before the provider counts one includes them. From the
     // transcript alone a new chat read as `~95 / 272k` while its first
@@ -317,7 +406,128 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
         compacted_history_tokens,
         compaction: input.compaction.clone(),
         remaining_tokens: context_window.saturating_sub(current_usage.used_tokens as usize),
+        items,
     }
+}
+
+/// How many items one category carries: enough to name what dominates the
+/// window, small enough for a card and its JSON.
+const MAX_CONTEXT_ITEMS: usize = 12;
+
+/// The first meaningful line of a message, bounded for a tile's list.
+fn snippet(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let mut shortened: String = line.chars().take(72).collect();
+    if line.chars().count() > 72 {
+        shortened.push('…');
+    }
+    if shortened.is_empty() {
+        "(empty message)".to_owned()
+    } else {
+        shortened
+    }
+}
+
+/// A tool call as a readable item: its name and the file, command or query it
+/// named, so a reader can tell two reads of different files apart.
+fn tool_label(name: &str, arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return name.to_owned();
+    };
+    const TARGETS: [&str; 10] = [
+        "path",
+        "file_path",
+        "file",
+        "filename",
+        "target_file",
+        "target",
+        "command",
+        "pattern",
+        "query",
+        "url",
+    ];
+    let target = TARGETS
+        .iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_str))
+        .map(snippet);
+    match target {
+        Some(target) => format!("{name} {target}"),
+        None => name.to_owned(),
+    }
+}
+
+/// A tool's result as an item: the tool and the file it changed, or its
+/// command, since the result body itself is what the token count covers.
+fn tool_result_label(message: &ChatMessage) -> String {
+    let Some(record) = message.tool_result.as_ref() else {
+        return "Tool result".to_owned();
+    };
+    if let Some(path) = record.changed_paths.first() {
+        return format!("{} {path}", record.tool_name);
+    }
+    if let Some(command) = record.command.as_deref() {
+        return format!("{} {}", record.tool_name, snippet(command));
+    }
+    if record.tool_name.is_empty() {
+        "Tool result".to_owned()
+    } else {
+        record.tool_name.clone()
+    }
+}
+
+/// Sort largest first, drop empty entries, and keep the list a card can show.
+fn top_items(mut items: Vec<ContextItem>) -> Vec<ContextItem> {
+    items.retain(|item| item.tokens > 0);
+    items.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.name.cmp(&b.name)));
+    items.truncate(MAX_CONTEXT_ITEMS);
+    items
+}
+
+/// The built-in tools' own definitions, as the prompt lists them. The
+/// category also holds protocol guidance and examples, so the remainder is
+/// named rather than folded into a tool or dropped.
+fn tool_schema_items(category_tokens: usize) -> Vec<ContextItem> {
+    let mut items = crate::tools::TOOLS
+        .iter()
+        .map(|tool| {
+            let text = format!(
+                "- {} | Args: {} | {}",
+                tool.name, tool.arguments, tool.description
+            );
+            ContextItem::new(tool.name, super::estimate_tokens(&text))
+        })
+        .collect::<Vec<_>>();
+    let listed: usize = items.iter().map(|item| item.tokens).sum();
+    if category_tokens > listed {
+        items.push(ContextItem::new(
+            "Tool protocol and examples",
+            category_tokens - listed,
+        ));
+    }
+    top_items(items)
+}
+
+/// One item per discovered skill, with the remainder of the category named as
+/// the headings and separators around them.
+fn skill_items(skills: &[super::SkillInfo], category_tokens: usize) -> Vec<ContextItem> {
+    let mut items = skills
+        .iter()
+        .map(|skill| {
+            ContextItem::new(
+                &skill.name,
+                super::estimate_tokens(&format!("{} {}", skill.name, skill.description)),
+            )
+        })
+        .collect::<Vec<_>>();
+    let listed: usize = items.iter().map(|item| item.tokens).sum();
+    if category_tokens > listed {
+        items.push(ContextItem::new("Skill headings", category_tokens - listed));
+    }
+    top_items(items)
 }
 
 /// `1.2M`, `34.5k` or a plain count.
@@ -475,6 +685,35 @@ mod tests {
             breakdown.remaining_tokens,
             breakdown.context_window - 2 - overhead
         );
+    }
+
+    #[test]
+    fn each_category_names_its_biggest_items() {
+        let mut state = AppState::new();
+        state.history.replace(Vec::new());
+        state
+            .history
+            .push(ChatMessage::new("user", "Fix the composer context card"));
+        let mut assistant = ChatMessage::new("assistant", "I will read the composer first.");
+        assistant.tool_calls.push(rustcode_core::ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "view_file".to_owned(),
+            arguments: r#"{"path":"apps/desktop/src/ui/ComposerUsage.tsx"}"#.to_owned(),
+        });
+        state.history.push(assistant);
+
+        let breakdown = ContextBreakdown::from_state(&state);
+        let [user, agent, tools, _, _, schemas, skills, _] = &breakdown.items;
+        assert_eq!(user[0].name, "Fix the composer context card");
+        assert_eq!(agent[0].name, "I will read the composer first.");
+        assert!(
+            tools.iter().any(|item| item
+                .name
+                .contains("view_file apps/desktop/src/ui/ComposerUsage.tsx")),
+            "{tools:?}"
+        );
+        assert!(schemas.iter().any(|item| item.name == "view_file"));
+        assert!(skills.iter().all(|item| item.tokens > 0));
     }
 
     #[test]
