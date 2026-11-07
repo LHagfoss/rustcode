@@ -39,6 +39,7 @@ import {
 } from "../state/store";
 import { formatDuration, formatTokens, shortAge } from "../state/thread";
 import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
+import { DelegatedThreads, delegateBranchCount } from "./DelegateTree";
 import { HarnessIcon } from "./HarnessIcon";
 import { copyText, cx, Pill } from "./primitives";
 import { DiffCount } from "./Rows";
@@ -110,13 +111,25 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
  * thread it *messaged* was already running. The hint says which, once per group,
  * so the heading stays short at a narrow pane.
  */
-function GroupHeading({ label, count, hint }: { label: string; count: number; hint: string }) {
+function GroupHeading({
+  label,
+  count,
+  nested = 0,
+  hint,
+}: {
+  label: string;
+  count: number;
+  /** How many of the count were started by the threads it started, not by it. */
+  nested?: number;
+  hint: string;
+}) {
   return (
     <div className="px-2.5 pt-1.5 pb-1">
       <div className="flex items-baseline gap-1.5 text-caption">
         <span className="font-medium text-fg-muted">{label}</span>
         <span className="text-fg-faint tabular">
           {count} {count === 1 ? "thread" : "threads"}
+          {nested > 0 ? `, ${nested} nested` : ""}
         </span>
       </div>
       <p className="text-caption text-fg-faint">{hint}</p>
@@ -270,12 +283,15 @@ export function ThreadDetails() {
   });
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const grants = useApp((s) => s.grants);
+  const delegateLinks = useApp((s) => s.links.links);
   const changes = useChanges(thread?.cwd, !!thread?.running);
   // "Allow for 1 hour" grants are the engine's user config, so this panel lists
   // what is still in force; it is read on open and after a revoke.
   useEffect(() => {
     void refreshGrants();
   }, []);
+  // The whole branch, not only the threads it started itself: the tree nests them.
+  const delegates = useMemo(() => (id ? delegateBranchCount(id, delegateLinks) : 0), [id, delegateLinks]);
 
   const subagents = useMemo(() => subagentLines(thread?.items ?? [], agents), [thread?.items, agents]);
   const working = subagents.some((s) => s.state === "working");
@@ -394,10 +410,7 @@ export function ThreadDetails() {
         />
       )}
 
-      {(lineage.parent ||
-        lineage.messagedBy ||
-        lineage.started.length > 0 ||
-        lineage.messaged.length > 0) && (
+      {(lineage.parent || lineage.messagedBy || delegates > 0 || lineage.messaged.length > 0) && (
         <>
           {hairline}
           <Section title="Threads">
@@ -442,23 +455,15 @@ export function ThreadDetails() {
                 />
               </>
             )}
-            {lineage.started.length > 0 && (
+            {delegates > 0 && (
               <>
                 <GroupHeading
                   label="Started"
-                  count={lineage.started.length}
-                  hint="New threads it handed a task to."
+                  count={delegates}
+                  nested={Math.max(0, delegates - lineage.started.length)}
+                  hint="New threads it handed a task to, and the threads those started."
                 />
-                {lineage.started.map((group) => (
-                  <LinkRow
-                    key={group.links[0]!.id}
-                    link={group.link}
-                    id={group.link.target}
-                    now={now}
-                    relationship="Thread it started"
-                    count={group.links.length}
-                  />
-                ))}
+                <DelegatedThreads threadId={id} />
               </>
             )}
             {lineage.messaged.length > 0 && (

@@ -12,6 +12,7 @@
 //! before its id was recorded) runs again from the start.
 
 use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -445,13 +446,29 @@ fn blocked_reason(status: &MigrationStatus) -> Option<String> {
 fn write_checkpoint(path: &Path, checkpoint: &Checkpoint) -> Result<(), String> {
     let json = serde_json::to_vec_pretty(checkpoint).map_err(|error| error.to_string())?;
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    fs::write(&temporary, json)
-        .and_then(|()| File::open(&temporary)?.sync_all())
+    write_synced(&temporary, &json)
         .and_then(|()| crate::atomic_file::replace_file(&temporary, path))
         .map_err(|error| {
             let _ = fs::remove_file(&temporary);
             format!("could not write {}: {error}", path.display())
         })
+}
+
+/// Write `bytes` to `path` and flush them to disk through the same handle,
+/// dropping it before the caller publishes the file.
+///
+/// Flushing through a reopened `File::open` needs write access that a read
+/// handle does not have, and `FlushFileBuffers` then fails with `Access is
+/// denied (os error 5)`: on Windows a fresh profile wrote its checkpoint,
+/// failed to sync it, and ran every migration again on the next start.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// Hold the migration lock, waiting up to `wait`. `None` when another

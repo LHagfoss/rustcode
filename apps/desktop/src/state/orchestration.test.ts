@@ -65,6 +65,8 @@ import {
   WAKE_COALESCE_MS,
   type Wake,
   type WakeContext,
+  waitEnded,
+  waitStarted,
   wakeFor,
   wakeIds,
   wakeMessage,
@@ -572,6 +574,29 @@ describe("the data store", () => {
     const refused = checkQueryData(false);
     expect(refused?.code).toBe("not_allowed");
     expect(refused?.message).toContain("Let agents read threads in other projects");
+  });
+});
+
+describe("a link's wait on the user", () => {
+  test("stops the clock once, and only for the thread that waits", () => {
+    const links = [link("a", "b", "working"), link("a", "c", "working"), link("a", "d", "done")];
+    const waiting = waitStarted(links, "b", 5_000);
+    expect(waiting[0]!.waitingSince).toBe(5_000);
+    expect(waiting[1]!.waitingSince).toBeUndefined();
+    // A second request in the same wait keeps the moment it started.
+    expect(waitStarted(waiting, "b", 7_000)).toBe(waiting);
+    // A settled link is not waiting on anything.
+    expect(waitStarted(links, "d", 5_000)).toBe(links);
+  });
+
+  test("folds the wait it took into the time already waited, and clears it", () => {
+    const waiting = [{ ...link("a", "b", "working"), waitingSince: 5_000, waitedMs: 1_000 }];
+    const answered = waitEnded(waiting, "b", 8_500);
+    // Its one second from before, plus the three and a half seconds of this wait.
+    expect(answered[0]).toMatchObject({ waitedMs: 4_500 });
+    expect(answered[0]!.waitingSince).toBeUndefined();
+    // Nothing waiting: the same array, so a book that did not change is not saved.
+    expect(waitEnded(answered, "b", 9_000)).toBe(answered);
   });
 });
 

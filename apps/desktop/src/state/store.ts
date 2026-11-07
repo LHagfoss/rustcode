@@ -106,6 +106,8 @@ import {
   answerOrchestration,
   linkFinished,
   linkStarted,
+  linkWaitEnded,
+  linkWaitStarted,
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
@@ -148,12 +150,15 @@ import {
   appendSteer,
   applyUpdate,
   beginTurn,
+  departQueued,
+  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
   foldingBatch,
   localId,
   messagesAfter,
+  type QueuedPrompt,
   questionItem,
   requeueSteers,
   type ThreadState,
@@ -448,6 +453,12 @@ export const PLAN_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
 
 /** How many threads keep their panel; past this the oldest entry is dropped. */
 export const MAX_PANELS = 500;
+
+/**
+ * The views the panel can show. Declared before the store: `parsePanels` reads it while the store
+ * is created, and a `const` further down is not initialized yet then (a blank window on start).
+ */
+const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 const STORAGE = {
   smartUi: "rustcode.smartUi",
@@ -1219,6 +1230,8 @@ async function handleInbound(message: Inbound) {
           return;
         }
         updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
+        // Its links stop their work clock while the user decides (state/delegates.ts).
+        linkWaitStarted(request.sessionId);
         // The inbox is the screen that lists this request already: a toast there would
         // stack over its own first rows. Other toasts (copied, finished) still show.
         if (request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
@@ -2406,10 +2419,23 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   }
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
+    glideAway(id, item);
     return true;
   }
   toast(QUEUE_REASON.refused);
   return false;
+}
+
+/** How long a queued row takes to leave the stack, gliding up toward the transcript (index.css). */
+const STEER_GLIDE_MS = 240;
+
+/**
+ * A queued row a steer took keeps the stack's place while it glides out, so the row itself leaves
+ * instead of vanishing from under the reader; it is dropped once the glide is over.
+ */
+function glideAway(id: string, item: QueuedPrompt) {
+  updateThread(id, (t) => departQueued(t, item));
+  setTimeout(() => updateThread(id, (t) => dropDeparted(t, item.id)), STEER_GLIDE_MS);
 }
 
 /**
@@ -2689,6 +2715,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
     for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
     updateThread(id, (t) => ({ ...t, permissions: [] }));
+    if (thread.permissions.length) linkWaitEnded(id);
   } catch (error) {
     toast(errorText(error), "error");
   }
@@ -2742,6 +2769,8 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string) 
     permissions: t.permissions.filter((p) => p.rpcId !== request.rpcId),
     items: answer ? [...t.items, questionItem(request, answer)] : t.items,
   }));
+  // Another request of the same thread keeps it waiting; the last one ends the wait.
+  if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
   connection?.respond(request.rpcId, result);
 }
 
@@ -3646,9 +3675,6 @@ export function setTerminalOpen(open: boolean) {
 
 /** A panel view: one of the side views, never closed. */
 export type PanelKind = NonNullable<AppState["panel"]>;
-
-/** The views the panel can show. */
-const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 /**
  * The view a thread with no panel open might show: its own overview. Changes,

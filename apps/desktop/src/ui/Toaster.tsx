@@ -7,11 +7,20 @@
 // sideways) dismisses; a drag never selects text anywhere.
 
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { observeSize } from "../lib/resize";
 import { dragExit, dragOpacity, dragState, holdSelection, startsDrag, TOAST_DRAG_MS } from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
-import { nextExpiry } from "../state/toasts";
+import { nextExpiry, toastTtl } from "../state/toasts";
 import { cx, Pill, Spinner } from "./primitives";
+
+/** How far the cards behind the front one peek over its top edge, and how much smaller each is. */
+const TOAST_PEEK = 6;
+const TOAST_SHRINK = 0.04;
+/** The 8px between fanned-out cards. */
+const TOAST_GAP = 8;
+/** A quiet settle on the check after a spinner finishes. */
+const TOAST_SETTLE_MS = 320;
 
 /** A popover, menu or dialog over the toast takes Escape and the click first. */
 function aboveToasts(): boolean {
@@ -30,7 +39,15 @@ interface DragSession {
   release: () => void;
 }
 
-function ToastCard({ toast, onDrag }: { toast: Toast; onDrag: (dragging: boolean) => void }) {
+function ToastCard({
+  toast,
+  paused,
+  onDrag,
+}: {
+  toast: Toast;
+  paused: boolean;
+  onDrag: (dragging: boolean) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<DragSession | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -122,6 +139,19 @@ function ToastCard({ toast, onDrag }: { toast: Toast; onDrag: (dragging: boolean
 
   const error = toast.tone === "error";
   const Icon = error ? CircleAlert : toast.tone === "success" ? CircleCheck : Info;
+  // A promise-style toast (the engine's start) is replaced in place by its success; the spinner
+  // it had morphs into the check instead of swapping between two unrelated icons.
+  const spinning = toast.progress !== undefined && !error;
+  const wasSpinning = useRef(spinning);
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    const before = wasSpinning.current;
+    wasSpinning.current = spinning;
+    if (!before || spinning || toast.tone !== "success") return;
+    setSettled(true);
+    const timer = setTimeout(() => setSettled(false), TOAST_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [spinning, toast.tone]);
   return (
     <div
       ref={ref}
@@ -138,12 +168,15 @@ function ToastCard({ toast, onDrag }: { toast: Toast; onDrag: (dragging: boolean
       )}
     >
       <span className="flex h-6 shrink-0 items-center">
-        {toast.progress !== undefined && !error ? (
+        {spinning ? (
           <Spinner size={13} />
         ) : (
           <Icon
             size={14}
-            className={error ? "text-danger" : toast.tone === "success" ? "text-success" : "text-fg-muted"}
+            className={cx(
+              settled && "rc-dot-in",
+              error ? "text-danger" : toast.tone === "success" ? "text-success" : "text-fg-muted",
+            )}
           />
         )}
       </span>
@@ -167,11 +200,24 @@ function ToastCard({ toast, onDrag }: { toast: Toast; onDrag: (dragging: boolean
       >
         <X size={12} />
       </button>
-      {toast.progress !== undefined && (
+      {toast.persist && toast.progress !== undefined ? (
         <span className="absolute inset-x-0 bottom-0 h-0.5 bg-fill" aria-hidden>
           <span
             className="block h-full bg-accent transition-[width] duration-300 ease-snappy"
             style={{ width: `${Math.round(Math.min(1, Math.max(0, toast.progress)) * 100)}%` }}
+          />
+        </span>
+      ) : toast.persist ? null : (
+        // An auto-dismissing card drains a 1px accent hairline along its foot; it stops with
+        // the clock while the stack is held by the pointer, focus or a drag.
+        <span className="absolute inset-x-0 bottom-0 h-px overflow-hidden" aria-hidden>
+          <span
+            key={toast.at}
+            className="rc-toast-timer block h-full bg-accent"
+            style={{
+              animationDuration: `${toastTtl(toast.tone)}ms`,
+              animationPlayState: paused ? "paused" : "running",
+            }}
           />
         </span>
       )}
@@ -190,6 +236,20 @@ export function Toaster() {
   // blur (or a hidden document) stops the clock.
   const [active, setActive] = useState(true);
   const paused = hovering || focused || dragging || !active;
+  // The stack holds only the front card in flow; the cards behind it are absolute and need the
+  // front card's height, and their own, to fan out below it without overlapping.
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const measure = useCallback((id: string, height: number) => {
+    setHeights((prev) => (prev[id] === height ? prev : { ...prev, [id]: height }));
+  }, []);
+  const expanded = hovering || focused || dragging;
+  let stack = 0;
+  const offsets = toasts.map((toast) => {
+    const at = stack;
+    stack += (heights[toast.id] ?? 0) + TOAST_GAP;
+    return at;
+  });
+  const stackHeight = toasts.length ? stack - TOAST_GAP : 0;
 
   useEffect(() => {
     const onFocus = () => setActive(true);
@@ -248,7 +308,7 @@ export function Toaster() {
     <section
       ref={section}
       aria-label="Notifications"
-      className="pointer-events-none fixed z-50 flex -translate-x-1/2 flex-col items-center gap-2"
+      className="pointer-events-none fixed z-50 flex w-[380px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col items-stretch"
       style={
         settings
           ? { left: "50%", top: 16 }
@@ -261,9 +321,62 @@ export function Toaster() {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
       }}
     >
-      {toasts.map((toast) => (
-        <ToastCard key={toast.id} toast={toast} onDrag={setDragging} />
-      ))}
+      <div className="relative w-full">
+        {/* The fan leaves the section's own box; this keeps the pointer inside it on the way
+            down to a card behind, so the stack does not fold before it is reached. */}
+        {expanded && stackHeight > 0 && (
+          <span
+            className="pointer-events-auto absolute inset-x-0 top-0"
+            style={{ height: stackHeight }}
+            aria-hidden
+          />
+        )}
+        {toasts.map((toast, index) => (
+          <ToastSlot
+            key={toast.id}
+            id={toast.id}
+            onHeight={measure}
+            className={index === 0 ? "relative" : "absolute inset-x-0 top-0"}
+            style={{
+              zIndex: toasts.length - index,
+              transform: expanded
+                ? `translateY(${offsets[index]}px) scale(1)`
+                : `translateY(${-index * TOAST_PEEK}px) scale(${Math.max(0.9, 1 - index * TOAST_SHRINK)})`,
+            }}
+          >
+            <ToastCard toast={toast} paused={paused} onDrag={setDragging} />
+          </ToastSlot>
+        ))}
+      </div>
     </section>
+  );
+}
+
+/** One card's place in the stack: measured, and moved by transform only. */
+function ToastSlot({
+  id,
+  onHeight,
+  className,
+  style,
+  children,
+}: {
+  id: string;
+  onHeight: (id: string, height: number) => void;
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const report = () => onHeight(id, el.offsetHeight);
+    report();
+    return observeSize(el, report);
+  }, [id, onHeight]);
+  return (
+    <div ref={ref} className={cx("rc-toast-slot", className)} style={style}>
+      {children}
+    </div>
   );
 }

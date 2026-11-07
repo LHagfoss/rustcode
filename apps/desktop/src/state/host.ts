@@ -82,6 +82,8 @@ import {
   type Wake,
   type WakeContext,
   type WakeReport,
+  waitEnded,
+  waitStarted,
   wakeIds,
   wakeMessage,
   wakeStillOwed,
@@ -2233,6 +2235,24 @@ function markHeard(link: Link, state: LinkState, now: number): HeardMark {
 }
 
 // ---------------------------------------------------------------- link turns
+
+/**
+ * The user must answer something in `thread`: every live link to it stops its
+ * work clock, so the delegate tree never counts a wait on the user (`state/delegates.ts`).
+ */
+export function linkWaitStarted(thread: string, at = Date.now()) {
+  const links = waitStarted(book().links, thread, at);
+  // No link to that thread waits on anything: leave the book, and its save, alone.
+  if (links === book().links) return;
+  setBook((b) => ({ ...b, links }));
+}
+
+/** It was answered (or stopped): the wait it took is remembered and the clock resumes. */
+export function linkWaitEnded(thread: string, at = Date.now()) {
+  const links = waitEnded(book().links, thread, at);
+  if (links === book().links) return;
+  setBook((b) => ({ ...b, links }));
+}
 
 export function linkStarted(id: string) {
   // The turn starts as this link's turn: its notice reports the time from here.

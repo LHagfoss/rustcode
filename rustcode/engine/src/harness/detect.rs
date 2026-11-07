@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+/// One status probe gets a little longer than a version print: Claude Code's
+/// own `claude auth status` bound in its ACP adapter is 5 s, and a cold start
+/// of that CLI is slower than `--version`.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -51,38 +54,52 @@ pub(crate) fn forget(id: &str) {
 /// Whether a named account's config directory holds a sign-in.
 ///
 /// A `probe` look runs the harness's own cheap status command with the
-/// account's directory (`codex login status`), which is authoritative about a
-/// sign-in that expired behind `auth.json` and prints no secret. Only the
-/// CLI's own `Not logged in` counts as a sign-out; any other failure (an older
-/// CLI without the command, a broken `config.toml`, a shim) is no answer, and
-/// the login's own credentials file is looked for by name instead
-/// (`.credentials.json`, Codex's `auth.json`), never opened. Claude Code has no
-/// status command: its macOS Keychain item, named after the directory, is asked
-/// for existence too. An account on the harness's default directory is the
-/// login with no variable set, so it reads as that login does. Nothing is
-/// started as a session and no token is read. `ok` is a sign-in found,
-/// `needs_login` one looked for and not found (only after `probe`), `unknown`
-/// not looked for.
+/// account's directory and with the variables a thread on it would drop
+/// (`codex login status`, `claude auth status --json`), which is authoritative
+/// about a sign-in that expired behind a credentials file and prints no
+/// secret. Only an explicit answer counts as a sign-out: Codex's own
+/// `Not logged in`, or Claude's `loggedIn: false` with no API key source or
+/// third-party backend. Any other failure (an older CLI without the command, a
+/// broken `config.toml`, a shim) is no answer, and the login's own credentials
+/// file is looked for by name instead (`.credentials.json`, Codex's
+/// `auth.json`), never opened. On macOS Claude Code may keep its sign-in in a
+/// Keychain item named after the directory instead, which is asked for
+/// existence only. An account on the harness's default directory is the login
+/// with no variable set, so it reads as that login does. Nothing is started as
+/// a session, and the engine itself reads no token: the CLI reports its own
+/// state and prints none. `ok` is a sign-in found, `needs_login` one looked
+/// for and not found (only after `probe`), `unknown` not looked for.
 pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool) -> &'static str {
+    account_auth_with(account, probe, run_quick_env)
+}
+
+/// [`account_auth`], with the probe runner passed in so fixture tests can
+/// answer for a CLI without starting one.
+fn account_auth_with(
+    account: &super::config::HarnessAccount,
+    probe: bool,
+    run: Probe,
+) -> &'static str {
     let Some(layout) = super::config::account_layout(&account.harness) else {
         return "unknown";
     };
     let dir = account.resolved_dir();
     let status = super::known(&account.harness).and_then(|known| known.auth_probe);
-    if probe && let Some(args) = status {
+    if probe && let Some(status) = status {
         let env = super::config::login_env(&account.harness, &dir);
         let env: Vec<(&str, &std::path::Path)> = env
             .as_ref()
             .map(|(name, value)| (*name, std::path::Path::new(value)))
             .into_iter()
             .collect();
-        if let Some((success, output)) = run_quick_env(args[0], &args[1..], &env) {
-            match status_says_signed_in(success, &output) {
-                Some(true) => return "ok",
-                Some(false) => return "needs_login",
-                // No answer we can trust: fall through to the file by name.
-                None => {}
-            }
+        let (program, args) = status.argv();
+        // A named account is its own login: the variables RustCode drops for
+        // its threads would otherwise answer for it (an API key in the
+        // engine's environment is not this account's sign-in).
+        if let Some((success, stdout, stderr)) = run(program, args, &env, layout.drop_env)
+            && let Some(signed_in) = probe_answer(status, success, &stdout, &stderr)
+        {
+            return if signed_in { "ok" } else { "needs_login" };
         }
     }
     if dir.join(layout.marker).is_file() {
@@ -91,18 +108,20 @@ pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool)
     if !probe {
         return "unknown";
     }
-    if status.is_some() {
-        // A harness with a status command has no Keychain to ask as well.
-        return "needs_login";
+    // Claude Code on macOS keeps its sign-in in a Keychain item, not the file:
+    // ask only whether it exists, and ask it even when the status command could
+    // not answer (a refused read is not the user signing out).
+    if layout.keychain {
+        let found = if super::config::is_default_dir(&account.harness, &dir) {
+            crate::provider_auth::claude_usage::default_keychain_item_exists()
+        } else {
+            crate::provider_auth::claude_usage::keychain_item_exists(&dir)
+        };
+        if found {
+            return "ok";
+        }
     }
-    // Claude Code: on macOS its sign-in is a Keychain item named after the
-    // directory, and the default login's after none.
-    let found = if super::config::is_default_dir(&account.harness, &dir) {
-        crate::provider_auth::claude_usage::default_keychain_item_exists()
-    } else {
-        crate::provider_auth::claude_usage::keychain_item_exists(&dir)
-    };
-    if found { "ok" } else { "needs_login" }
+    "needs_login"
 }
 
 /// What a harness's own sign-in status command said. Only the Codex CLI's own
@@ -113,6 +132,50 @@ fn status_says_signed_in(success: bool, output: &str) -> Option<bool> {
         return Some(false);
     }
     success.then_some(true)
+}
+
+/// What one probe's output says about the sign-in: `Some(true)` signed in,
+/// `Some(false)` signed out, `None` no answer we can trust.
+fn probe_answer(
+    probe: super::AuthProbe,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) -> Option<bool> {
+    match probe {
+        super::AuthProbe::Text(_) => {
+            let mut output = String::from(stdout);
+            output.push('\n');
+            output.push_str(stderr);
+            status_says_signed_in(success, &output)
+        }
+        super::AuthProbe::Json(_) => json_says_signed_in(stdout),
+    }
+}
+
+/// What `claude auth status --json` says about the sign-in. `loggedIn` alone is
+/// the claude.ai login; a third-party backend (Bedrock, Vertex, Foundry) keeps
+/// its credentials outside the CLI, and an API key signs in without one, so
+/// both count as signed in. `None` when the output is not that JSON: an older
+/// CLI without the command is no answer, never a sign-out.
+fn json_says_signed_in(stdout: &str) -> Option<bool> {
+    let text = stdout.trim();
+    // A warning line before the object must not hide it; `claude auth status`
+    // also prints nothing else on stdout.
+    let text = match (text.find('{'), text.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &text[start..=end],
+        _ => return None,
+    };
+    let status: serde_json::Value = serde_json::from_str(text).ok()?;
+    let logged_in = status.get("loggedIn")?.as_bool()?;
+    let elsewhere = status
+        .get("apiProvider")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|provider| provider != "firstParty");
+    let api_key = status
+        .get("apiKeySource")
+        .is_some_and(|source| !source.is_null());
+    Some(logged_in || elsewhere || api_key)
 }
 
 /// The version the last detection of `id` found, without running anything.
@@ -154,6 +217,12 @@ pub(crate) fn detect(harness: &ResolvedHarness) -> Detection {
 }
 
 fn detect_uncached(harness: &ResolvedHarness) -> Detection {
+    detect_uncached_with(harness, run_quick_env)
+}
+
+/// [`detect_uncached`], with the probe runner passed in so fixture tests can
+/// answer for a CLI without starting one.
+fn detect_uncached_with(harness: &ResolvedHarness, run: Probe) -> Detection {
     let Some(program) = harness.command.first() else {
         return Detection {
             error: Some("no command configured".to_owned()),
@@ -170,18 +239,17 @@ fn detect_uncached(harness: &ResolvedHarness) -> Detection {
     if let Some(known) = harness.known {
         if let Some((program, args)) = known.version
             && resolve_program(program).is_some()
-            && let Some((true, output)) = run_quick(program, args)
+            && let Some((true, stdout, stderr)) = run(program, args, &[], &[])
         {
-            detection.version = parse_version(&output);
+            detection.version = parse_version(&format!("{stdout}\n{stderr}"));
         }
-        if let Some(probe) = known.auth_probe
-            && let Some((success, output)) = run_quick(probe[0], &probe[1..])
-        {
-            detection.auth = if success && !output.to_ascii_lowercase().contains("not logged in") {
-                "ok"
-            } else {
-                "needs_login"
-            };
+        if let Some(probe) = known.auth_probe {
+            let (program, args) = probe.argv();
+            if let Some((success, stdout, stderr)) = run(program, args, &[], &[])
+                && let Some(signed_in) = probe_answer(probe, success, &stdout, &stderr)
+            {
+                detection.auth = if signed_in { "ok" } else { "needs_login" };
+            }
         }
     }
     detection
@@ -203,15 +271,20 @@ pub(crate) fn parse_version(output: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Run `program args` with no input, for at most a few seconds. Returns
-/// whether it succeeded and its stdout and stderr.
-fn run_quick(program: &str, args: &[&str]) -> Option<(bool, String)> {
-    run_quick_env(program, args, &[])
-}
+/// Runs one status probe: whether it succeeded, its stdout and its stderr, or
+/// `None` when it could not start, hung, or had to be killed.
+type Probe = fn(&str, &[&str], &[(&str, &Path)], &[&str]) -> Option<(bool, String, String)>;
 
-/// [`run_quick`] with environment variables added, for a harness status
-/// command that has to look at one login's own directory.
-fn run_quick_env(program: &str, args: &[&str], env: &[(&str, &Path)]) -> Option<(bool, String)> {
+/// Run `program args` with no input, for at most a few seconds. Returns
+/// whether it succeeded, its stdout and its stderr. `env` adds variables and
+/// `remove` drops them, for a harness status command that has to look at one
+/// login's own directory.
+fn run_quick_env(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &Path)],
+    remove: &[&str],
+) -> Option<(bool, String, String)> {
     let path = resolve_program(program)?;
     let mut command = std::process::Command::new(path);
     command
@@ -220,8 +293,17 @@ fn run_quick_env(program: &str, args: &[&str], env: &[(&str, &Path)]) -> Option<
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    // A probe answers for the user, not for whichever project the engine
+    // happens to sit in: `claude auth status` reads the cwd's own settings
+    // (`apiKeyHelper` included).
+    if let Some(cwd) = probe_cwd() {
+        command.current_dir(cwd);
+    }
     for (name, value) in env {
         command.env(name, value);
+    }
+    for name in remove {
+        command.env_remove(name);
     }
     let mut child = command.spawn().ok()?;
     let started = Instant::now();
@@ -239,10 +321,21 @@ fn run_quick_env(program: &str, args: &[&str], env: &[(&str, &Path)]) -> Option<
         }
     }
     let output = child.wait_with_output().ok()?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push('\n');
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
-    Some((output.status.success(), text))
+    Some((
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
+/// The directory a probe runs in: the user's home, so a project's own settings
+/// in the engine's cwd cannot decide a harness-wide answer. `None` inherits
+/// the engine's cwd when neither variable names an existing home.
+fn probe_cwd() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
 }
 
 /// The `PATH` a harness is looked up on and started with: the engine's own,
@@ -393,6 +486,7 @@ fn is_executable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{AuthProbe, KnownHarness};
     use super::*;
 
     #[test]
@@ -555,6 +649,240 @@ mod tests {
                 }
             ),
             None
+        );
+    }
+
+    #[test]
+    fn claude_json_status_decides_without_its_exit_code() {
+        assert_eq!(
+            json_says_signed_in(r#"{"loggedIn": true, "authMethod": "claude.ai"}"#),
+            Some(true)
+        );
+        assert_eq!(
+            json_says_signed_in(r#"{"loggedIn": false, "authMethod": "none"}"#),
+            Some(false)
+        );
+        // A key signs in without the claude.ai login, which is what the
+        // tester's `authMethod: none` case lacked.
+        assert_eq!(
+            json_says_signed_in(
+                r#"{"loggedIn": true, "authMethod": "api_key", "apiKeySource": "ANTHROPIC_API_KEY"}"#
+            ),
+            Some(true)
+        );
+        // A third-party backend keeps its credentials outside the CLI, so
+        // `loggedIn: false` there is not a sign-out.
+        for provider in ["bedrock", "vertex", "foundry", "gateway"] {
+            let status = format!(r#"{{"loggedIn": false, "apiProvider": "{provider}"}}"#);
+            assert_eq!(json_says_signed_in(&status), Some(true), "{provider}");
+        }
+        // Not the shape we know -- an older CLI, a broken one, a shim -- is no
+        // answer, never a sign-out.
+        assert_eq!(json_says_signed_in(""), None);
+        assert_eq!(json_says_signed_in("error: unknown command 'status'"), None);
+        assert_eq!(json_says_signed_in(r#"{"authMethod": "none"}"#), None);
+        // A warning line before the object must not hide it.
+        assert_eq!(
+            json_says_signed_in("warning: something\n{\"loggedIn\": false}\n"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_probe_without_an_answer_is_not_a_sign_out() {
+        let claude = AuthProbe::Json(&["claude", "auth", "status", "--json"]);
+        assert_eq!(probe_answer(claude, false, "not json", ""), None);
+        assert_eq!(
+            probe_answer(claude, false, r#"{"loggedIn": false}"#, ""),
+            Some(false)
+        );
+        // Codex keeps its text rule: only its own line is a sign-out.
+        let codex = AuthProbe::Text(&["codex", "login", "status"]);
+        assert_eq!(
+            probe_answer(codex, false, "", "Not logged in\n"),
+            Some(false)
+        );
+        assert_eq!(
+            probe_answer(codex, true, "Logged in using ChatGPT", ""),
+            Some(true)
+        );
+        assert_eq!(
+            probe_answer(codex, false, "error: unexpected argument 'status'", ""),
+            None
+        );
+    }
+
+    #[test]
+    fn the_known_probes_ask_their_own_status_commands() {
+        let codex = crate::harness::known("codex").unwrap().auth_probe.unwrap();
+        assert_eq!(codex.argv(), ("codex", &["login", "status"][..]));
+        let claude = crate::harness::known("claude-code")
+            .unwrap()
+            .auth_probe
+            .unwrap();
+        assert_eq!(claude.argv(), ("claude", &["auth", "status", "--json"][..]));
+        assert!(matches!(claude, AuthProbe::Json(_)));
+    }
+
+    /// A probe fixture: Claude Code's `auth status --json` answering signed
+    /// out, as the tester's Windows profile did.
+    type ProbeAnswer = Option<(bool, String, String)>;
+    fn claude_signed_out(
+        _program: &str,
+        _args: &[&str],
+        _env: &[(&str, &Path)],
+        _remove: &[&str],
+    ) -> ProbeAnswer {
+        Some((
+            false,
+            r#"{"loggedIn": false, "authMethod": "none", "apiProvider": "firstParty"}"#.to_owned(),
+            String::new(),
+        ))
+    }
+
+    /// The same answer signed in, with a failing exit code on purpose: the JSON
+    /// decides, not the status.
+    fn claude_signed_in(
+        _program: &str,
+        _args: &[&str],
+        _env: &[(&str, &Path)],
+        _remove: &[&str],
+    ) -> ProbeAnswer {
+        Some((
+            false,
+            r#"{"loggedIn": true, "authMethod": "claude.ai"}"#.to_owned(),
+            String::new(),
+        ))
+    }
+
+    /// A probe that could not start or answer.
+    fn no_probe_answer(
+        _program: &str,
+        _args: &[&str],
+        _env: &[(&str, &Path)],
+        _remove: &[&str],
+    ) -> ProbeAnswer {
+        None
+    }
+
+    /// A probe fixture for a named login: it checks how that account's probe is
+    /// started, then answers signed in.
+    fn claude_account_probe(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &Path)],
+        remove: &[&str],
+    ) -> ProbeAnswer {
+        assert_eq!(program, "claude");
+        assert_eq!(args, ["auth", "status", "--json"]);
+        let config_dir = env
+            .iter()
+            .find(|(name, _)| *name == "CLAUDE_CONFIG_DIR")
+            .map(|(_, value)| *value)
+            .expect("a named account is probed with its own directory");
+        assert!(config_dir.is_dir());
+        // The engine's own keys are not this login's sign-in.
+        for dropped in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ] {
+            assert!(remove.contains(&dropped), "{dropped} is dropped");
+        }
+        Some((
+            true,
+            r#"{"loggedIn": true, "authMethod": "claude.ai"}"#.to_owned(),
+            String::new(),
+        ))
+    }
+
+    #[test]
+    fn a_named_claude_account_is_read_by_its_own_status_command() {
+        use crate::harness::config::HarnessAccount;
+        let dir = tempfile::tempdir().unwrap();
+        let account = HarnessAccount {
+            id: "paral".into(),
+            harness: "claude-code".into(),
+            name: Some("Paral".into()),
+            config_dir: dir.path().to_string_lossy().into_owned(),
+        };
+        // A cheap look runs nothing, so it says nothing.
+        assert_eq!(
+            account_auth_with(&account, false, claude_account_probe),
+            "unknown"
+        );
+        assert_eq!(
+            account_auth_with(&account, true, claude_account_probe),
+            "ok"
+        );
+        assert_eq!(
+            account_auth_with(&account, true, claude_signed_out),
+            "needs_login"
+        );
+    }
+
+    #[test]
+    fn a_status_command_that_cannot_answer_falls_back_to_the_credentials_file() {
+        use crate::harness::config::HarnessAccount;
+        let account = |harness: &str, dir: &Path| HarnessAccount {
+            id: "paral".into(),
+            harness: harness.into(),
+            name: None,
+            config_dir: dir.to_string_lossy().into_owned(),
+        };
+        // Claude Code: the file by name, never opened.
+        let signed_in = tempfile::tempdir().unwrap();
+        std::fs::write(signed_in.path().join(".credentials.json"), "{}").unwrap();
+        assert_eq!(
+            account_auth_with(
+                &account("claude-code", signed_in.path()),
+                true,
+                no_probe_answer
+            ),
+            "ok",
+            "an older CLI without the command still reads the file by name"
+        );
+        // Codex has no Keychain item, so no file and no answer is a look that
+        // found no sign-in.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            account_auth_with(&account("codex", empty.path()), true, no_probe_answer),
+            "needs_login"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_detection_reports_the_status_its_json_answers() {
+        static FIXTURE: KnownHarness = KnownHarness {
+            id: "fixture",
+            name: "Fixture",
+            kind: HarnessKind::Acp,
+            command: &["sh"],
+            login_command: None,
+            install_hint: None,
+            version: None,
+            auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
+        };
+        let harness = ResolvedHarness {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            kind: HarnessKind::Acp,
+            command: vec!["sh".into()],
+            enabled: false,
+            known: Some(&FIXTURE),
+        };
+        let signed_out = detect_uncached_with(&harness, claude_signed_out);
+        assert!(signed_out.installed);
+        assert_eq!(signed_out.auth, "needs_login");
+        assert_eq!(
+            detect_uncached_with(&harness, claude_signed_in).auth,
+            "ok",
+            "the JSON decides, not the exit code"
+        );
+        assert_eq!(
+            detect_uncached_with(&harness, no_probe_answer).auth,
+            "unknown"
         );
     }
 
