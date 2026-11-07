@@ -43,7 +43,7 @@ const SHAPED = /(?<![\w-])rounded-(?:md|lg|full)(?![\w-])/;
  */
 const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/AttentionCards.tsx", "answerQuestionOptions(request, [o])", "the answers are choice rows"],
-  ["ui/Board.tsx", "Clear the status", "a 24px icon button"],
+  ["ui/Board.tsx", "Unsettle", "a 24px icon button"],
   ["ui/ChatView.tsx", "px-2.5 font-medium", "the plan pill is a popover trigger"],
   ["ui/ChatView.tsx", "Thread status:", "the status pill is a menu trigger"],
   ["ui/Composer.tsx", 'role="option"', "a slash-command menu row"],
