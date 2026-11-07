@@ -271,10 +271,28 @@ impl Adapter {
         }
     }
 
-    pub(crate) fn models(&self) -> Vec<HarnessModel> {
+    /// The harness's models, asking the models a person can see for the
+    /// efforts they themselves offer (`AcpChild::probed_models`). `known` is
+    /// what a previous listing learned, `preferred` the model a setting or a
+    /// thread uses. Only an ACP harness has to be asked; Codex lists the
+    /// efforts of each model itself.
+    pub(crate) async fn probed_models(
+        &self,
+        known: &[HarnessModel],
+        preferred: &[String],
+    ) -> Vec<HarnessModel> {
         match self {
-            Adapter::Acp(adapter) => adapter.models(),
+            Adapter::Acp(adapter) => adapter.probed_models(known, preferred).await,
             Adapter::Codex(adapter) => adapter.models(),
+        }
+    }
+
+    /// Record the efforts of the model the harness runs now, for the cache.
+    /// Only an ACP harness learns them here; Codex listed them from
+    /// `model/list`.
+    pub(crate) fn learn_efforts(&self, harness: &str) {
+        if let Adapter::Acp(adapter) = self {
+            adapter.learn_efforts(harness);
         }
     }
 
@@ -308,9 +326,40 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
     });
     let cwd = std::env::temp_dir();
     let adapter = Adapter::start(harness, &cwd, StartOptions::default(), out).await?;
-    let models = adapter.models();
+    // A scratch session in the temp directory, kept for this listing alone:
+    // what it switches to learn a model's levels never touches a thread.
+    let learned = super::learned_for(&harness.id);
+    let known = if learned.probed {
+        learned.models.unwrap_or_default()
+    } else {
+        // A thread start knows one model's efforts for all of them.
+        Vec::new()
+    };
+    let models = adapter
+        .probed_models(&known, &preferred_models(harness))
+        .await;
     adapter.kill();
     Ok(models)
+}
+
+/// The models a setting names for `harness`: the engine's default, and the
+/// model its entry remembers. A listing asks them for their own efforts first.
+fn preferred_models(harness: &ResolvedHarness) -> Vec<String> {
+    let Ok(dir) = super::config::config_dir() else {
+        return Vec::new();
+    };
+    let (defaults, entries) = super::config::load_in(&dir);
+    [
+        defaults.model,
+        entries
+            .into_iter()
+            .find(|entry| entry.id == harness.id)
+            .and_then(|entry| entry.model),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|model| !model.is_empty())
+    .collect()
 }
 
 /// `model` and `effort` options from a model list, without a running
@@ -1038,6 +1087,11 @@ impl ExternalSession {
     ) -> Result<Vec<SessionConfigOption>, String> {
         let adapter = self.ensure_started().await?;
         let options = adapter.set_config(id, value).await?;
+        // Another model answers with its own thought levels: keep them, so the
+        // picker knows them the next time without a listing (`docs/harnesses.md`).
+        if id == "model" {
+            adapter.learn_efforts(&self.harness.id);
+        }
         let (model, effort) = adapter.model_and_effort();
         let before = {
             let record = self.record();

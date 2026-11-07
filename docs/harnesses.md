@@ -99,6 +99,8 @@ All methods are on the client's existing `rustcode --acp` connection.
     "capabilities": { /* see above */ },
     "models": [{ "id": "gpt-6-luna", "name": "gpt-6-luna",
                  "efforts": ["low", "medium", "high"], "default_effort": "medium" }],
+                 // "efforts_unknown": true when those are the union of what the
+                 // harness's models offer, not this model's own (see below)
     "last": { "model": "gpt-6-luna", "effort": "high" },  // last new-thread choice, or null
     "accounts": [{              // named logins of this harness; [] for most
       "id": "paral-2", "name": "Paral 2",
@@ -151,9 +153,25 @@ Errors (an unknown id, an invalid command, removing a known harness) are
 Starts the harness briefly if needed to list its models. Codex answers from
 `model/list` (hidden models left out, efforts per model). An ACP harness is
 started in the system temp directory and one session is opened there to read
-its `model` and thought-level options; every model then shows the same
-efforts, and `default_effort` is the harness's own (read before a thread's
-choice is applied).
+its `model` and thought-level options, then killed; no thread's process is
+touched.
+
+An ACP agent reports the thought levels of the model its session runs alone,
+so a model is selected to read its own. That costs a round trip each, so the
+listing asks only the models a person can see: the model the session runs,
+the model a setting names (`[harness_defaults].model`, a `[[harnesses]]`
+entry's `model`, or one already learned), then the catalog in order, at most
+30 models and 5 seconds (`PROBE_LIMIT` and `PROBE_BUDGET` in
+`rustcode/engine/src/harness/acp_child.rs`). Each probed model lists the
+efforts it really takes, ordered from no thinking to the most (`default`
+first), with `default_effort` the level the harness puts it on.
+
+Every other model keeps `"efforts_unknown": true` and lists the union of the
+levels known for the harness, with `default_effort` the level the harness runs
+with: never another model's list as if it were its own. A level picked from
+that union is clamped to the closest one the model really takes when it is
+sent, and a thread that starts or switches to the model learns its own levels,
+so a model the user picks is exact from then on.
 
 **Model cache.** Every listing (this request, or a thread starting the
 harness) is kept in memory and in `~/.config/rustcode/harness-models.json`:
@@ -162,9 +180,12 @@ it came from, and the learned `effort`, `resume` and `images` capabilities. A
 restarted engine reads it, so the snapshot, the capabilities and the
 `session/load` answer of a restored thread (its `model` and `effort`
 options, before the harness starts again) are complete. A cached list older
-than 24 hours, or from another harness version, is answered at once and
-listed again in the background. A failed listing is not cached: the next
-request tries again (one listing per harness runs at a time).
+than 24 hours, from another harness version, or learned at a thread start
+(which sees the model it runs alone) is answered at once and listed again in
+the background. A failed listing is not cached: the next request tries again
+(one listing per harness runs at a time). Every model a thread starts or
+switches to also updates that model's entry, so the cache converges on the
+models people use.
 
 ### `_rustcode/harnesses/set` → `HarnessSnapshot`
 
