@@ -992,6 +992,22 @@ describe("waking a parent", () => {
     expect(wakesDue(again, chainCtx({ now: 12_000 }))).toEqual([]);
   });
 
+  test("a re-armed link forgets the time of the turn it already reported", () => {
+    const reported = book([
+      {
+        ...done("top", "middle", 9_000),
+        notifiedAt: 9_100,
+        startedAt: 8_000,
+        workedMs: 1_000,
+      },
+    ]);
+    const woken = restateLinks(reported, "middle", said("the real answer"), 10_000, true);
+    // The next notice reports a 30s answer, not the 12m that included the turn before it.
+    expect(woken.links[0]!.startedAt).toBeUndefined();
+    expect(woken.links[0]!.workedMs).toBeUndefined();
+    expect(woken.links[0]!.notifiedAt).toBeUndefined();
+  });
+
   test("a finished link never loses its answer to a turn that said nothing", () => {
     const good = book([{ ...done("top", "middle", 9_000), answer: "MIDDLE DONE" }]);
     // A turn whose rows carried no reply (they arrived later, or the harness said nothing) must

@@ -60,35 +60,42 @@ function longest(worked: string[]): string | undefined {
   return best;
 }
 
-/** A delegate line's title, when it is quoted the way `linkLine` writes it. */
-function titleOf(bits: string[]): string | undefined {
-  const quoted = /^“(.+)”$/.exec(bits[2] ?? "");
-  return quoted?.[1]?.trim() || undefined;
-}
-
-/** The harness and worked time from the rest of a delegate line. */
-function detailOf(bits: string[]): { harness?: string; worked?: string } {
+/** The harness and worked time from what follows a delegate line's title. */
+function detailOf(rest: string): { harness?: string; worked?: string } {
   let harness: string | undefined;
   let worked: string | undefined;
-  for (const bit of bits.slice(3)) {
+  for (const bit of rest.split(SEP)) {
     if (bit.startsWith("session ") || bit.startsWith("worked ")) {
       if (bit.startsWith("worked ")) worked = bit.slice("worked ".length).trim() || undefined;
       continue;
     }
-    if (/^\d+ files? changed$/.test(bit) || /^\d+s ago$/.test(bit)) continue;
+    if (!bit || /^\d+ files? changed$/.test(bit) || /^\d+s ago$/.test(bit)) continue;
     if (!harness) harness = bit;
   }
   return { harness, worked };
 }
 
-/** A line of the message's body as the delegate it names. */
+/**
+ * A line of the message's body as the delegate it names. The title is quoted,
+ * so the regex takes everything up to the last closing quote: a fan-out's
+ * `Title · Harness · Account` is one title, never a harness.
+ */
 function delegateOf(line: string): WakeDelegate | undefined {
-  if (!line.startsWith("- link_id ")) return undefined;
-  const bits = line.slice(2).split(SEP);
-  const linkId = bits[0]?.replace(/^link_id\s+/, "");
-  const state = bits[1] ?? "";
-  if (!state) return undefined;
-  return { linkId, state, title: titleOf(bits), ...detailOf(bits) };
+  const quoted = /^- link_id (\S+) · (\w+) · “(.*)”(?: · (.*))?$/.exec(line);
+  if (quoted) {
+    const [, linkId, state, title, rest] = quoted;
+    return {
+      linkId,
+      state: state ?? "",
+      ...(title?.trim() ? { title: title.trim() } : {}),
+      ...detailOf(rest ?? ""),
+    };
+  }
+  // A line written before titles were quoted, or a hand-written one: its state is all it carries.
+  const bare = /^- link_id (\S+) · (\w+)(?: · (?!“)(.*))?$/.exec(line);
+  if (!bare) return undefined;
+  const [, linkId, state, rest] = bare;
+  return { linkId, state: state ?? "", ...detailOf(rest ?? "") };
 }
 
 /**
@@ -114,13 +121,16 @@ export function wakeNotice(text: string): WakeNotice | null {
 
   // An asking part is the head's second segment ("… · Delegate asks: Title", "… · 2 delegates need you");
   // old rows append their own ("1 child finished · 1 needs you").
-  const asksAt = head.indexOf(`${SEP}Delegate asks: `);
+  const asksAt = head.lastIndexOf(`${SEP}Delegate asks: `);
   const manyAsks = /^(.*) · (\d+) delegates need you$/.exec(head);
   const settledHead = asksAt >= 0 ? head.slice(0, asksAt) : (manyAsks?.[1] ?? head);
   const asksTitle = asksAt >= 0 ? head.slice(asksAt + `${SEP}Delegate asks: `.length).trim() : undefined;
   // An older build's first line ("1 child finished · 1 needs you"), whose count is all it says.
   const oldFinished = /^(\d+) child(?:ren)? finished/.exec(settledHead);
-  const oldAsking = /(\d+) needs? you/.exec(head);
+  // Only an old row's own segment says this. A quoted or fan-out title can contain the words, so the
+  // match needs a segment boundary and the head must be the old shape: otherwise "Fix the 3 needs you
+  // bug" would read as three delegates.
+  const oldAsking = oldFinished ? /(?:^| · )(\d+) needs? you(?: · |$)/.exec(head) : null;
   // A newer line names one delegate in full; several only by count (their titles are on the lines).
   const one = /^Delegate (finished|failed): (.+)$/.exec(settledHead);
   const oneAsks = /^Delegate asks: (.+)$/.exec(settledHead);
@@ -165,8 +175,11 @@ export function wakeNotice(text: string): WakeNotice | null {
     label += `${SEP}${asks === 1 ? "1 delegate asks" : `${asks} delegates need you`}`;
   }
 
-  const harness =
+  const named =
     count === 1 ? finished[0]?.harness : count === 0 && asking.length === 1 ? asking[0]?.harness : undefined;
+  // A fan-out title already names its harness ("Review · Codex", "Review · Codex · Work"):
+  // do not say it twice.
+  const harness = named && !titles?.split(SEP).includes(named) ? named : undefined;
   const worked =
     count === 1 ? finished[0]?.worked : longest(finished.flatMap((d) => (d.worked ? [d.worked] : [])));
 

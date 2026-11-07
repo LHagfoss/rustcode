@@ -408,12 +408,13 @@ they finish or ask, instead of having to poll with sleeps.
   restored row as on any other. Settings' *Threads can start and message other
   threads* turns the waking half off with the rest of orchestration; the queue
   itself is kept either way.
-- **In the transcript** a wake turn is a quiet divider row that names the
-  delegate, its harness and how long it worked ("Delegate finished: Fix
-  composer focus · Pi · 3m 49s"), not a message that reads as the user's own.
-  Several delegates show up to three harness marks, their titles and the longest
-  worked time. A wake steered into a running turn is a steer row there, which
-  says the turn reads it after its current step.
+- **In the transcript** a wake turn is a quiet divider row built from the
+  message, not a message that reads as the user's own. Its first line names the
+  delegate ("Delegate finished: Fix composer focus") and its detail lines add
+  the harness and how long it worked; the row shows all of it. Several
+  delegates show up to three harness marks, their titles and the longest worked
+  time. A wake steered into a running turn is a steer row there, which says the
+  turn reads it after its current step.
 
 ## Orchestration tools v3
 

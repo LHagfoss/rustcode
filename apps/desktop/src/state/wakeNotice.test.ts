@@ -44,6 +44,58 @@ describe("a wake row's divider", () => {
     expect(notice.harness).toBeUndefined();
   });
 
+  test("a title keeps its own separator, so no quote fragment becomes a harness", () => {
+    const text = [
+      "Delegate finished: Fix composer · focus",
+      "",
+      "Finished:",
+      "- link_id a/b · done · “Fix composer · focus” · Pi · worked 3m 49s · session s-b · 2 files changed",
+    ].join("\n");
+    expect(wakeNotice(text)).toMatchObject({
+      label: "Delegate finished",
+      titles: "Fix composer · focus",
+      harness: "Pi",
+      worked: "3m 49s",
+    });
+  });
+
+  test("a fan-out's titles keep their harness and account, and show the harness once", () => {
+    const two = [
+      "2 delegates finished",
+      "",
+      "Finished:",
+      "- link_id a/1 · done · “Fix composer focus · Codex · Work” · Codex · worked 3m 49s · session s-1",
+      "- link_id a/2 · done · “Review PR 3110 · Pi” · Pi · worked 8m 2s · session s-2",
+    ].join("\n");
+    const notice = wakeNotice(two)!;
+    expect(notice.titles).toBe("Fix composer focus · Codex · Work, Review PR 3110 · Pi");
+    expect(notice.worked).toBe("8m 2s");
+    expect(notice.harness).toBeUndefined();
+    // One fan-out delegate whose title already names its harness: the divider does not add it again.
+    const one = [
+      "Delegate finished: Review PR 3110 · Codex · Work",
+      "",
+      "Finished:",
+      "- link_id a/1 · done · “Review PR 3110 · Codex · Work” · Codex · worked 2m 0s · session s-1",
+    ].join("\n");
+    expect(wakeNotice(one)).toMatchObject({ titles: "Review PR 3110 · Codex · Work", harness: undefined });
+  });
+
+  test("a title's words are never read as an asking count", () => {
+    const finished = "Delegate finished: Fix the 3 needs you bug";
+    expect(wakeNotice(finished)).toMatchObject({
+      label: "Delegate finished",
+      titles: "Fix the 3 needs you bug",
+      asking: [],
+    });
+    // The old shape still reads its own asking segment.
+    expect(wakeNotice("1 child finished · 1 needs you")).toMatchObject({
+      label: "Delegate finished · 1 delegate asks",
+    });
+    const asks = "Delegate asks: Fix the 3 needs you bug";
+    expect(wakeNotice(asks)).toMatchObject({ label: "Delegate asks", titles: "Fix the 3 needs you bug" });
+  });
+
   test("a failed delegate says so in words, and mixed results count the failures", () => {
     const failed = wakeNotice(
       [

@@ -1259,7 +1259,15 @@ export function restateLinks(
       };
       if (link.notifiedAt === undefined) return { ...replaced, settledAt: now };
       if (!woken || link.answerChangedAt !== undefined) return link;
-      return { ...replaced, settledAt: now, notifiedAt: undefined, answerChangedAt: now };
+      // The answer is a later turn's: the time of the turn already reported is not its own.
+      return {
+        ...replaced,
+        settledAt: now,
+        startedAt: undefined,
+        workedMs: undefined,
+        notifiedAt: undefined,
+        answerChangedAt: now,
+      };
     }),
   };
 }
