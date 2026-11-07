@@ -252,10 +252,11 @@ describe("the strip above the composer", () => {
     const bar = branchBar(total(), starts, 20 * MINUTE);
     expect(bar.working).toBe(2);
     expect(bar.needs).toBe(1);
-    // Every thread the branch holds, working and finished, is still the cap's own count.
-    expect(bar.threads).toBe(5);
-    expect(bar.label).toBe("5 threads");
-    expect(bar.status).toBe("2 working · 1 needs you");
+    expect(bar.live).toBe(3);
+    // The two finished delegates are history: the header counts what runs now.
+    expect(bar.label).toBe("2 running");
+    expect(bar.status).toBe("1 needs you");
+    expect(bar.show).toBe(true);
   });
 
   test("the time is the longest working thread's wall clock, never a sum", () => {
@@ -266,7 +267,25 @@ describe("the strip above the composer", () => {
     expect(branchBar(total(), [4 * MINUTE, 10 * MINUTE], 20 * MINUTE).longestMs).toBe(16 * MINUTE);
   });
 
-  test("nothing working is one quiet count of what is done, with no time", () => {
+  test("a thread only waiting on the user says that alone", () => {
+    const asking = [
+      link("root", "one", { state: "needs_user", waitingSince: MINUTE }),
+      link("root", "two", { state: "needs_user", waitingSince: 2 * MINUTE }),
+    ];
+    const bar = branchBar(
+      forestTotal(delegateViews(delegateTree("root", asking), read({ activity: () => undefined }))),
+      [],
+      3 * MINUTE,
+    );
+    expect(bar.working).toBe(0);
+    expect(bar.needs).toBe(2);
+    expect(bar.label).toBe("2 need you");
+    expect(bar.status).toBe("");
+    expect(bar.state).toBe("needs");
+    expect(bar.show).toBe(true);
+  });
+
+  test("a branch that only finished has nothing to show, however long it ran", () => {
     const done = [
       link("root", "one", { state: "done", settledAt: MINUTE }),
       link("root", "two", { state: "done", settledAt: 2 * MINUTE }),
@@ -278,21 +297,21 @@ describe("the strip above the composer", () => {
       60 * MINUTE,
     );
     expect(bar.working).toBe(0);
+    expect(bar.live).toBe(0);
     expect(bar.longestMs).toBeUndefined();
-    expect(bar.label).toBe("3 delegates done");
+    expect(bar.label).toBe("");
     expect(bar.status).toBe("");
-    expect(bar.state).toBe("done");
-    const one = branchBar(
+    expect(bar.show).toBe(false);
+    // A stopped delegate is the user's own doing, and history too.
+    const stopped = branchBar(
       forestTotal(
-        delegateViews(
-          delegateTree("root", [link("root", "only", { state: "done", settledAt: MINUTE })]),
-          read({ activity: () => undefined }),
-        ),
+        delegateViews(delegateTree("root", [link("root", "stopped", { state: "cancelled" })]), read()),
       ),
       [],
       2 * MINUTE,
     );
-    expect(one.label).toBe("1 delegate done");
+    expect(stopped.show).toBe(false);
+    expect(stopped.label).toBe("");
   });
 
   test("a failure is still named when nothing works", () => {
@@ -302,10 +321,11 @@ describe("the strip above the composer", () => {
       [],
       2 * MINUTE,
     );
-    expect(bar.label).toBe("1 thread");
-    expect(bar.status).toBe("1 failed");
+    expect(bar.label).toBe("1 failed");
+    expect(bar.status).toBe("");
     expect(bar.state).toBe("failed");
     expect(bar.longestMs).toBeUndefined();
+    expect(bar.show).toBe(true);
   });
 });
 

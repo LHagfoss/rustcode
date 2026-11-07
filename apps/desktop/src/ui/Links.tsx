@@ -19,7 +19,16 @@ import {
 import { Dialog, Popover } from "radix-ui";
 import { useEffect, useMemo } from "react";
 import type { StackAgent, StackState } from "../state/agentStack";
-import { addBranch, branchBar, flattenViews, forestTotal, ownBranch } from "../state/delegates";
+import {
+  type AgentState,
+  addBranch,
+  type BranchTotal,
+  branchBar,
+  type DelegateView,
+  flattenViews,
+  forestTotal,
+  ownBranch,
+} from "../state/delegates";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import {
   doneLinks,
@@ -92,21 +101,31 @@ function LinkRow({ link }: { link: Link }) {
 /** When a link's turn began, for the strip's live clock: its start, else when it was made. */
 const startedOf = (link: Link) => link.startedAt ?? link.createdAt;
 
+/** What the strip reads of the branch once per render: its header, its marks and its clock. */
+interface Strip {
+  /** The threads this one started, and the threads those started, at every depth. */
+  views: DelegateView[];
+  /** The threads the tree holds: a strip row for one of them is already counted there. */
+  inTree: ReadonlySet<string>;
+  /** What each strip row's thread does now, in row order. */
+  states: readonly LinkState[];
+  /** The branch's figures, the strip's own rows added to the tree. */
+  total: BranchTotal;
+  /** When each thread working now started its turn, for the header's clock. */
+  runningSince: number[];
+}
+
 /**
- * Three or more linked threads in the strip fold into one card header, the same
- * header a group of agents has in the transcript: the strip above the composer
- * has about 800px, and a third of it spent on a made-up title tells the reader
- * nothing. Two stay as rows of their own; they fit.
+ * What the strip reads of the branch: the details tree's figures, plus a row for
+ * each thread it only messaged (which has no node of its own), and when each
+ * thread working now started its turn.
  */
-function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
-  // Joined into one string so the selector's result is stable between renders.
-  const states = useApp((s) => links.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
-  // What the details panel draws as a tree is the authority for the branch:
-  // the threads this one started, and the threads those started, at every
-  // depth. The strip's own rows are only the links it can stop or dismiss, so
-  // its count, state and time come from the branch and not from those rows.
-  const views = useDelegateBranch(threadId);
-  const inTree = new Set(flattenViews(views).map((view) => view.id));
+function readStrip(
+  views: DelegateView[],
+  inTree: ReadonlySet<string>,
+  links: readonly Link[],
+  states: readonly LinkState[],
+): Strip {
   const at = Date.now();
   const total = links.reduce((sum, link, i) => {
     // A thread the tree already holds, at any depth, is counted there.
@@ -121,10 +140,7 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
     };
     return addBranch(sum, ownBranch(state, elapsed, emptyCost()));
   }, forestTotal(views));
-  // A live clock, not the branch's summed work time: how long the longest thread working now has
-  // been at it. A branch that finished is one quiet count, so nothing ticks there.
-  const now = useNow(total.counts.working > 0);
-  const starts = [
+  const runningSince = [
     ...flattenViews(views).flatMap((view) => (view.state === "working" ? [startedOf(view.link)] : [])),
     ...links.flatMap((link, i) =>
       !inTree.has(link.target) && LINK_AGENT_STATE[states[i] ?? "done"] === "working"
@@ -132,9 +148,24 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
         : [],
     ),
   ];
-  const bar = branchBar(total, starts, now);
-  // The marks are who works now: the finished ones are the popover's "Done", not a wall of avatars.
-  const mark = (view: (typeof views)[number]): StackAgent => ({
+  return { views, inTree, states, total, runningSince };
+}
+
+/**
+ * Three or more linked threads in the strip fold into one card header, the same
+ * header a group of agents has in the transcript: the strip above the composer
+ * has about 800px, and a third of it spent on a made-up title tells the reader
+ * nothing. Two stay as rows of their own; they fit.
+ */
+function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string; strip: Strip }) {
+  const { views, inTree, states, total, runningSince } = strip;
+  // A live clock, not the branch's summed work time: how long the longest thread working now has
+  // been at it. Nothing runs once the branch finished, so nothing ticks there.
+  const now = useNow(total.counts.working > 0);
+  const bar = branchBar(total, runningSince, now);
+  // The marks are who is live now, working or waiting: the finished ones are the popover's "Done",
+  // not a wall of avatars.
+  const mark = (view: DelegateView): StackAgent => ({
     id: view.id,
     state: view.state === "stopped" ? "done" : view.state,
     kind: "thread",
@@ -142,16 +173,17 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
     label: view.title,
     since: view.link.createdAt,
   });
+  const liveState = (state: AgentState) => state === "working" || state === "needs";
   const marks: StackAgent[] = [
-    ...flattenViews(views).flatMap((view) => (view.state === "working" ? [mark(view)] : [])),
+    ...flattenViews(views).flatMap((view) => (liveState(view.state) ? [mark(view)] : [])),
     ...links.flatMap((link, i): StackAgent[] => {
       if (inTree.has(link.target)) return [];
-      const agent = LINK_AGENT_STATE[states[i] ?? "done"];
-      if (agent !== "working") return [];
+      const state = LINK_AGENT_STATE[states[i] ?? "done"];
+      if (!liveState(state)) return [];
       return [
         {
           id: link.target,
-          state: "working" as StackState,
+          state: state as StackState,
           kind: "thread" as const,
           harness: link.harness,
           label: link.targetTitle,
@@ -167,6 +199,9 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
   const above = new Set(links.map((link) => link.target));
   const done = settled.shown.filter((link) => !above.has(link.target));
   const more = settled.more + (settled.shown.length - done.length);
+  // Nothing runs, waits or failed: a finished branch is history the details panel keeps, not a
+  // header over the composer.
+  if (!bar.show) return null;
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -223,8 +258,21 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     return new Set([...startedLinks(items ?? [], mine).values()].map((l) => l.target));
   }, [items, book.links, threadId]);
   const live = stripLinks(driving, shown);
+  // Joined into one string so the selector's result is stable between renders.
+  const states = useApp((s) => live.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
+  // What the details panel draws as a tree is the authority for the branch: the threads this one
+  // started, and the threads those started, at every depth. The strip's own rows only add the
+  // threads it messaged, which have a row to stop or dismiss but no node of their own.
+  const views = useDelegateBranch(threadId);
+  const inTree = useMemo(() => new Set(flattenViews(views).map((view) => view.id)), [views]);
+  const strip = readStrip(views, inTree, live, states);
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
-  if (!live.length && !drivenBy && !fanOuts.length) return null;
+  // Work under way, a wait on the user or a failure, with a row of its own to draw: a finished
+  // delegate is the details panel's row, so the strip stays out of the chat's way rather than
+  // counting a lifetime.
+  const { working, needs, failed } = strip.total.counts;
+  const news = live.length > 0 && working + needs + failed > 0;
+  if (!news && !drivenBy && !fanOuts.length) return null;
   return (
     // The one surface this strip shares with the jump-to-latest pill above it and its own group card
     // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
@@ -234,7 +282,7 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
       {(live.length > 0 || fanOuts.length > 0) && (
         <div className="flex flex-col gap-0.5">
           {live.length > 2 ? (
-            <ManyLinks links={live} threadId={threadId} />
+            <ManyLinks links={live} threadId={threadId} strip={strip} />
           ) : (
             live.map((l) => <LinkRow key={l.id} link={l} />)
           )}
