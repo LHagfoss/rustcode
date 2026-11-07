@@ -57,6 +57,12 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/ModelPicker.tsx", "Model and effort", "the model pill is a trigger, and not in this pass"],
   ["ui/ModelPicker.tsx", "aria-pressed={chip.selected}", "an account chip, whose fill is its state"],
   ["ui/Settings.tsx", 'role="option"', "a settings result row"],
+  ["ui/ShortcutSettings.tsx", "recording ?", "the keycap button; its fill marks recording"],
+  [
+    "ui/settingsKit.tsx",
+    "enabled:hover:bg-fill-strong",
+    "a settings row's Action: one control shape in a card",
+  ],
   ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
 ];
 

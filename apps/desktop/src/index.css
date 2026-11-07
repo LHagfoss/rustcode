@@ -89,9 +89,9 @@
   color-scheme: light;
   --rc-bg: #ffffff;
   --rc-sidebar: #f7f7f8;
-  --rc-surface: #f0f0f1;
+  --rc-surface: #ececee;
   --rc-surface-2: #ffffff;
-  --rc-surface-3: #e8e8ea;
+  --rc-surface-3: #e4e4e6;
   /* The composer is glass on the raised surface (see `Glass` in index.css). */
   --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 66%, transparent);
   --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 78%, transparent);
@@ -120,10 +120,10 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --rc-bg: #0b0b0c;
-    --rc-sidebar: #131315;
-    --rc-surface: #18181a;
-    --rc-surface-2: #1e1e21;
-    --rc-surface-3: #232327;
+    --rc-sidebar: #151517;
+    --rc-surface: #1d1d20;
+    --rc-surface-2: #242428;
+    --rc-surface-3: #2a2a2e;
     /* A step lighter than the raised surface it is drawn from, so the glass reads as light over a
        dark pane rather than as a darker slab over it. */
     --rc-composer-bg: color-mix(
@@ -160,10 +160,10 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --rc-bg: #0b0b0c;
-  --rc-sidebar: #131315;
-  --rc-surface: #18181a;
-  --rc-surface-2: #1e1e21;
-  --rc-surface-3: #232327;
+  --rc-sidebar: #151517;
+  --rc-surface: #1d1d20;
+  --rc-surface-2: #242428;
+  --rc-surface-3: #2a2a2e;
   --rc-composer-bg: color-mix(
     in srgb,
     color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 58%,

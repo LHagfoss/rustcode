@@ -93,7 +93,7 @@ function Card({
         e.dataTransfer.setData("text/rustcode-thread", session.id);
         e.dataTransfer.effectAllowed = "move";
       }}
-      className="group rounded-lg border border-border bg-fill-subtle p-2.5 transition-[background-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:bg-fill-subtle hover:shadow-1 rc-in"
+      className="group rounded-lg bg-surface-2 p-2.5 transition-[background-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:bg-surface-3 hover:shadow-1 rc-in"
     >
       <button type="button" onClick={() => selectThread(session.id)} className="block w-full text-left">
         <span className="line-clamp-2 text-body">{session.title || "New thread"}</span>
