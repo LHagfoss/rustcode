@@ -55,6 +55,20 @@ interface Choice {
  */
 const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/** The slider thumb's diameter (`size-8`): the track is narrower than it, so each end keeps that room. */
+const THUMB = 32;
+
+/**
+ * Where a point on the track sits from the pill's left edge, as a length: the thumb's radius at 0,
+ * the track's width less that radius at 1, interpolated in between. The fill ends and the thumb
+ * centres on it, so the two can never drift apart. Both use `calc`, and the sign is spelled out
+ * because `calc(100% + -16px)` is not valid CSS.
+ */
+function alongTrack(ratio: number): string {
+  const pad = THUMB / 2 - ratio * THUMB;
+  return `calc(${ratio * 100}% ${pad < 0 ? "-" : "+"} ${Math.abs(pad)}px)`;
+}
+
 export function orderEfforts(efforts: string[]): string[] {
   const rank = (value: string) => {
     const at = EFFORT_ORDER.indexOf(value.toLowerCase());
@@ -124,20 +138,27 @@ function EffortSlider({
   const pct = last > 0 ? at / last : 0;
   const rail = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  // The slider, not the model's name, takes focus when the card opens: ←→ change the effort,
+  // which is what the card is for; the model list is Enter or a click on its name.
+  useEffect(() => {
+    rail.current?.focus({ preventScroll: true });
+  }, []);
   const choose = (index: number) => {
     const level = levels[Math.min(Math.max(index, 0), last)];
     if (level && level !== value) onChange(level);
   };
-  // A press anywhere on the track goes to the dot nearest it.
+  // A press anywhere on the track goes to the dot nearest it, measured between the thumb's
+  // centres at either end so a press on the ends reaches the first and last level.
   const levelAt = (clientX: number) => {
     const rect = rail.current?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return at;
-    const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+    const usable = (rect?.width ?? 0) - THUMB;
+    if (!rect || usable <= 0) return at;
+    const ratio = Math.min(Math.max((clientX - rect.left - THUMB / 2) / usable, 0), 1);
     return Math.round(ratio * last);
   };
   return (
     // The band above the track is the dots' own labels' room, not part of the target.
-    <div className="mx-2 pt-5">
+    <div className="mx-2.5 pt-6 pb-1">
       <div
         ref={rail}
         role="slider"
@@ -180,39 +201,41 @@ function EffortSlider({
             choose(last);
           }
         }}
-        className="relative h-4 cursor-pointer touch-none select-none"
+        className="relative h-7 cursor-pointer touch-none rounded-full bg-fill-subtle select-none"
       >
-        <div className="relative h-4">
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-fill-strong"
-          />
-          <span
-            aria-hidden
-            className="pointer-events-none absolute top-1/2 left-0 h-[3px] -translate-y-1/2 rounded-full bg-accent transition-[width] duration-200 ease-snappy"
-            style={{ width: `${pct * 100}%` }}
-          />
+        {/* The fill runs from the pill's edge to the thumb's centre; the thumb is wider than
+            the track, so its own radius is kept clear at both ends. */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-accent transition-[width] duration-200 ease-snappy"
+          style={{ width: alongTrack(pct) }}
+        />
+        <div className="pointer-events-none absolute inset-y-0" style={{ left: THUMB / 2, right: THUMB / 2 }}>
           {levels.map((level, index) => (
             <span
               key={level}
               aria-hidden
-              className="group/dot absolute top-1/2 flex size-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+              className="group/dot pointer-events-auto absolute top-1/2 flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
               style={{ left: last > 0 ? `${(index / last) * 100}%` : "0%" }}
             >
               <span
-                className={cx("block size-[6px] rounded-full", index < at ? "bg-accent-fg" : "bg-fg-faint")}
+                className={cx(
+                  "block size-[5px] rounded-full",
+                  // Lighter where it sits on the accent fill, a quiet grey on the track.
+                  index < at ? "bg-accent-fg/70" : "bg-fg-muted/50",
+                )}
               />
-              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 rounded-full bg-surface-3 px-1.5 py-0.5 font-medium whitespace-nowrap text-caption text-fg opacity-0 shadow-1 transition-opacity group-hover/dot:opacity-100">
+              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-full bg-surface-3 px-1.5 py-0.5 font-medium whitespace-nowrap text-caption text-fg opacity-0 shadow-1 transition-opacity group-hover/dot:opacity-100">
                 {effortLabel(level)}
               </span>
             </span>
           ))}
-          <span
-            aria-hidden
-            className="pointer-events-none absolute top-1/2 size-[13px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent shadow-1 ring-2 ring-surface-2 transition-[left] duration-200 ease-snappy"
-            style={{ left: `${pct * 100}%` }}
-          />
         </div>
+        <span
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 size-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-fg shadow-2 transition-[left] duration-200 ease-snappy"
+          style={{ left: alongTrack(pct) }}
+        />
       </div>
     </div>
   );
@@ -304,12 +327,6 @@ function EffortCard({
           aria-label={`Model: ${name}`}
           disabled={!!modelReason}
           onClick={onModels}
-          // Enter is the button's own; → opens the list, the way the arrow beside it points.
-          onKeyDown={(e) => {
-            if (e.key !== "ArrowRight") return;
-            e.preventDefault();
-            onModels();
-          }}
           className="flex max-w-full items-center gap-0.5 rounded-full px-2 py-0.5 text-callout text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
         >
           <span className="truncate">{name}</span>
@@ -495,9 +512,11 @@ function ModelPanel({
                   size={12}
                   className="mt-0.5 shrink-0"
                 />
-                <span className="min-w-0 truncate py-0.5">{section.group.harness.name}</span>
+                {/* The name is the header's own word: it keeps its width and the reason beside
+                    it gives way, so "Not installed. Install with: …" never pushes it out. */}
+                <span className="max-w-[55%] shrink-0 truncate py-0.5">{section.group.harness.name}</span>
                 {section.group.blocked && (
-                  <span className="ms-auto shrink-0 truncate">{section.group.blocked}</span>
+                  <span className="ms-auto min-w-0 truncate text-right">{section.group.blocked}</span>
                 )}
               </div>
             )}
@@ -842,6 +861,9 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       onOpenChange={setOpen}
       role="dialog"
       label="Model and effort"
+      // The card focuses its own control (the slider, or the search field from `/model`) so the
+      // arrow keys act on what the card is for the moment it opens.
+      onOpenAutoFocus={(event) => event.preventDefault()}
       // One width for both views: the effort card is small, and the model list lives in the same
       // box, so swapping between them never resizes the card.
       className="w-[min(300px,calc(100vw-32px))] p-0"
