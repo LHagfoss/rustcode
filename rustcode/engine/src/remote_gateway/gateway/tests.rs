@@ -325,17 +325,61 @@ async fn browser_origins_are_refused_at_the_upgrade() {
     use tokio_tungstenite::tungstenite::{Error, client::IntoClientRequest};
 
     let harness = Harness::start().await;
+    for origin in [
+        "https://example.test",
+        "http://127.0.0.1:7878",
+        "null",
+        "chrome-extension://abc",
+        "rustcode-mobile://app/",
+    ] {
+        let mut request = format!("ws://{}/", harness.addr)
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+        let stream = bounded(TcpStream::connect(harness.addr)).await.unwrap();
+        match bounded(client_async(request, stream)).await {
+            Err(Error::Http(response)) => assert_eq!(response.status(), 403, "{origin}"),
+            other => panic!(
+                "expected a refused upgrade for {origin}, got {:?}",
+                other.map(|_| ())
+            ),
+        }
+    }
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn the_native_app_origin_reaches_the_handshake() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let harness = Harness::start().await;
     let mut request = format!("ws://{}/", harness.addr)
         .into_client_request()
         .unwrap();
-    request
-        .headers_mut()
-        .insert("origin", "https://example.test".parse().unwrap());
+    request.headers_mut().insert(
+        "origin",
+        crate::remote_gateway::transport::NATIVE_APP_ORIGIN
+            .parse()
+            .unwrap(),
+    );
     let stream = bounded(TcpStream::connect(harness.addr)).await.unwrap();
-    match bounded(client_async(request, stream)).await {
-        Err(Error::Http(response)) => assert_eq!(response.status(), 403),
-        other => panic!("expected a refused upgrade, got {:?}", other.map(|_| ())),
-    }
+    let (mut socket, _) = bounded(client_async(request, stream))
+        .await
+        .expect("the native app origin is accepted");
+
+    // The upgrade succeeded, so the handshake frame is answered as usual.
+    socket
+        .send(Message::text(
+            json!({"type": "authenticate", "protocol_version": 1, "device_id": "ffffffffffffffff", "token": "x"})
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+    let reply = bounded(socket.next()).await.unwrap().unwrap();
+    let reply: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+    assert_eq!(reply["code"], "unauthorized", "{reply}");
     harness.stop().await;
 }
 

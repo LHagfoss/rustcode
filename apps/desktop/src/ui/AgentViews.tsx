@@ -501,7 +501,7 @@ export function SubagentRow({
         showWord={state !== "working"}
       />
       {open && (
-        <div className="rc-expand mt-0.5 mb-1 ml-[42px] flex flex-col rounded-xl border border-border bg-surface-2 px-3 py-2">
+        <div className="rc-expand mt-0.5 mb-1 ml-[42px] flex flex-col rounded-xl bg-fill-subtle px-3 py-2">
           {loadingSteps && <StepsSkeleton />}
           {steps.map((step) => (
             <div key={step.id} className="flex h-5 min-w-0 items-center gap-1.5 text-caption text-fg-muted">
@@ -566,20 +566,23 @@ export function AgentGroupHeader({
       )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span className="shrink-0 font-medium text-fg text-sub">{label}</span>
-        <span
-          className={cx(
-            "min-w-0 truncate text-caption",
-            state === "working"
-              ? "text-accent"
-              : state === "needs"
-                ? "text-warning"
-                : state === "failed"
-                  ? "text-danger"
-                  : "text-fg-muted",
-          )}
-        >
-          · {status}
-        </span>
+        {/* A header whose label already says it (`34 delegates done`) has no second word. */}
+        {status && (
+          <span
+            className={cx(
+              "min-w-0 truncate text-caption",
+              state === "working"
+                ? "text-accent"
+                : state === "needs"
+                  ? "text-warning"
+                  : state === "failed"
+                    ? "text-danger"
+                    : "text-fg-muted",
+            )}
+          >
+            · {status}
+          </span>
+        )}
       </span>
       {elapsedMs !== undefined && elapsedMs >= 1000 && (
         <span className="shrink-0 text-caption text-fg-faint tabular">
@@ -631,7 +634,7 @@ export function AgentGroupCard({
   children: ReactNode;
 }) {
   return (
-    <div className={cx("rounded-xl border border-border bg-surface p-1", faint && "opacity-80")}>
+    <div className={cx("rounded-xl bg-surface p-1", faint && "opacity-80")}>
       <button
         type="button"
         aria-expanded={open}

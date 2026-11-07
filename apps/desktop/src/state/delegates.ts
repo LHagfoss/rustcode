@@ -350,6 +350,93 @@ export function branchWord(total: BranchTotal): string {
   return "done";
 }
 
+/** What the strip above the composer says of a branch, one header wide. */
+export interface DelegateBar {
+  /** Threads working now; a queued one reads as working, as its own row does. */
+  working: number;
+  /** Threads waiting on the user. */
+  needs: number;
+  failed: number;
+  /** Every thread in the branch, working and finished. */
+  threads: number;
+  /**
+   * How long the longest of the working threads has run, by the wall clock, so
+   * it ticks up once a second. Absent when nothing works: a branch's summed
+   * work time is not a duration anyone can read.
+   */
+  longestMs?: number;
+  /** What the header's mark is tinted by. */
+  state: AgentState;
+  /** The count itself: `34 threads`, or `34 delegates done` once nothing works. */
+  label: string;
+  /** What follows the count: `5 working · 2 need you`, `2 need you`, `1 failed`; empty when done. */
+  status: string;
+}
+
+/**
+ * A branch as the strip above the composer reads it: how many threads work now
+ * and how long the longest has been at it (wall clock, never the branch's summed
+ * work time), and once nothing works, one quiet count of what is done. The
+ * branch's history is not a status: 34 threads that finished over a day are 34
+ * done delegates, not `34 threads · 6h 34m`.
+ */
+export function branchBar(
+  total: BranchTotal,
+  /** When each thread working now started its turn (`link.startedAt`, else when it was made). */
+  runningSince: readonly number[],
+  now = Date.now(),
+): DelegateBar {
+  const { working, needs, failed } = total.counts;
+  const longestMs = working && runningSince.length ? now - Math.min(...runningSince) : undefined;
+  const state: AgentState = needs
+    ? "needs"
+    : working
+      ? "working"
+      : failed
+        ? "failed"
+        : total.counts.stopped
+          ? "stopped"
+          : "done";
+  const count = `${total.threads} ${total.threads === 1 ? "thread" : "threads"}`;
+  const parts: string[] = [];
+  if (working) parts.push(`${working} working`);
+  if (needs) parts.push(`${needs} ${needs === 1 ? "needs" : "need"} you`);
+  if (parts.length) {
+    return {
+      working,
+      needs,
+      failed,
+      threads: total.threads,
+      longestMs,
+      state,
+      label: count,
+      status: parts.join(" · "),
+    };
+  }
+  // Nothing works and nothing waits: a failure is still news, but a finished branch only a count.
+  if (failed) {
+    return {
+      working,
+      needs,
+      failed,
+      threads: total.threads,
+      state,
+      label: count,
+      status: `${failed} failed`,
+    };
+  }
+  return {
+    working,
+    needs,
+    failed,
+    threads: total.threads,
+    state,
+    label: `${total.threads} ${total.threads === 1 ? "delegate" : "delegates"} done`,
+    // The label already says it: a finished branch has no second word in its header.
+    status: "",
+  };
+}
+
 /**
  * A time as a row shows it: `2m 04s`, or `—` while it is under a second. The
  * parts are padded, so a live clock does not jump a pixel a second under it.

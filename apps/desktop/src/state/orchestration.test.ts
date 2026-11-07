@@ -20,6 +20,7 @@ import {
   checkStart,
   DEFAULT_ACTIVITY_ITEMS,
   depthOf,
+  doneLinks,
   emptyBook,
   failureJson,
   fillAnswers,
@@ -1455,6 +1456,27 @@ describe("a group of threads", () => {
     expect(stripLinks(links, new Set(["c"])).map((l) => l.target)).toEqual(["b", "d"]);
     expect(stripLinks(links, new Set(["b", "c"])).map((l) => l.target)).toEqual(["b", "d"]);
     expect(stripLinks(links, new Set(["b", "c", "d"]))).toEqual([working]);
+  });
+
+  test("the done list is one row per thread, newest first, and a count for the rest", () => {
+    const links = [
+      { ...link("a", "older", "done"), started: true, settledAt: 100 },
+      { ...link("a", "newer", "done"), started: true, settledAt: 300 },
+      { ...link("a", "newer", "working"), started: true },
+      { ...link("a", "refused", "failed"), started: true, settledAt: 200 },
+      { ...link("a", "busy", "working"), started: true },
+      link("other", "elsewhere", "done"),
+    ];
+    // One row for `newer`, at its latest moment; the live ones and another parent are not done.
+    expect(doneLinks(links, "a").shown.map((l) => [l.target, l.state])).toEqual([
+      ["newer", "done"],
+      ["refused", "failed"],
+      ["older", "done"],
+    ]);
+    const capped = doneLinks(links, "a", 2);
+    expect(capped.shown.map((l) => l.target)).toEqual(["newer", "refused"]);
+    expect(capped.more).toBe(1);
+    expect(doneLinks(links, "a", 0)).toEqual({ shown: [], more: 3 });
   });
 });
 

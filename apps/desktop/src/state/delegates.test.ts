@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentStateOf,
+  branchBar,
   branchWord,
   costLabel,
   type DelegateRead,
@@ -222,6 +223,89 @@ describe("a branch's cost and time", () => {
   test("the flat list keeps parents before their children", () => {
     const tree = delegateViews(delegateTree("root", links), read());
     expect(flattenViews(tree).map((view) => view.id)).toEqual(["research", "tests"]);
+  });
+});
+
+describe("the strip above the composer", () => {
+  const links = [
+    link("root", "longest", { createdAt: 0 }),
+    link("root", "second", { createdAt: 4 * MINUTE }),
+    link("root", "asking", { createdAt: 5 * MINUTE, state: "needs_user", waitingSince: 6 * MINUTE }),
+    link("root", "finished", { createdAt: 1 * MINUTE, state: "done", settledAt: 3 * MINUTE }),
+    link("root", "older", { createdAt: 0, state: "done", settledAt: 2 * MINUTE }),
+  ];
+  const read = (over: Partial<DelegateRead> = {}): DelegateRead => ({
+    now: 20 * MINUTE,
+    title: (_id, link) => link.targetTitle,
+    harness: () => "codex",
+    activity: (id) => (id === "asking" ? "needs_input" : undefined),
+    waitingSince: (_id, link) => link.waitingSince,
+    cost: () => undefined,
+    ...over,
+  });
+  const total = (over: Partial<DelegateRead> = {}) =>
+    forestTotal(delegateViews(delegateTree("root", links), read(over)));
+  // The longest working thread started at 0, the second at 4m.
+  const starts = [0, 4 * MINUTE];
+
+  test("counts live work, not every delegate ever started", () => {
+    const bar = branchBar(total(), starts, 20 * MINUTE);
+    expect(bar.working).toBe(2);
+    expect(bar.needs).toBe(1);
+    // Every thread the branch holds, working and finished, is still the cap's own count.
+    expect(bar.threads).toBe(5);
+    expect(bar.label).toBe("5 threads");
+    expect(bar.status).toBe("2 working · 1 needs you");
+  });
+
+  test("the time is the longest working thread's wall clock, never a sum", () => {
+    // The branch's own summed work time is far larger; the strip reads the clock.
+    expect(total().ms).toBeGreaterThan(20 * MINUTE);
+    expect(branchBar(total(), starts, 20 * MINUTE).longestMs).toBe(20 * MINUTE);
+    // The clock reads from the earliest of the working threads, so the newest start never wins.
+    expect(branchBar(total(), [4 * MINUTE, 10 * MINUTE], 20 * MINUTE).longestMs).toBe(16 * MINUTE);
+  });
+
+  test("nothing working is one quiet count of what is done, with no time", () => {
+    const done = [
+      link("root", "one", { state: "done", settledAt: MINUTE }),
+      link("root", "two", { state: "done", settledAt: 2 * MINUTE }),
+      link("root", "three", { state: "done", settledAt: 3 * MINUTE }),
+    ];
+    const bar = branchBar(
+      forestTotal(delegateViews(delegateTree("root", done), read({ activity: () => undefined }))),
+      [],
+      60 * MINUTE,
+    );
+    expect(bar.working).toBe(0);
+    expect(bar.longestMs).toBeUndefined();
+    expect(bar.label).toBe("3 delegates done");
+    expect(bar.status).toBe("");
+    expect(bar.state).toBe("done");
+    const one = branchBar(
+      forestTotal(
+        delegateViews(
+          delegateTree("root", [link("root", "only", { state: "done", settledAt: MINUTE })]),
+          read({ activity: () => undefined }),
+        ),
+      ),
+      [],
+      2 * MINUTE,
+    );
+    expect(one.label).toBe("1 delegate done");
+  });
+
+  test("a failure is still named when nothing works", () => {
+    const failed = [link("root", "broken", { state: "failed", settledAt: MINUTE })];
+    const bar = branchBar(
+      forestTotal(delegateViews(delegateTree("root", failed), read({ activity: () => undefined }))),
+      [],
+      2 * MINUTE,
+    );
+    expect(bar.label).toBe("1 thread");
+    expect(bar.status).toBe("1 failed");
+    expect(bar.state).toBe("failed");
+    expect(bar.longestMs).toBeUndefined();
   });
 });
 

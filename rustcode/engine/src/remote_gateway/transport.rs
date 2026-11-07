@@ -101,12 +101,28 @@ pub(super) async fn serve_connection(
     session(&shared, socket, connection, sink, queue, thread_names).await;
 }
 
-/// Refuse the upgrade when the request carries an `Origin` header. Browsers
-/// always send one and native clients do not, so a web page open on the host
-/// or the LAN cannot be used to reach the gateway and spend pairing attempts.
+/// The one `Origin` a native app may send. React Native always adds one to a
+/// WebSocket upgrade and lets the caller replace it, so the phone app sends
+/// this custom scheme instead. A browser can never send a non-`http(s)`
+/// origin, and a page cannot set a header on a WebSocket it opens, so
+/// accepting it verbatim does not open the gateway to a web page.
+pub const NATIVE_APP_ORIGIN: &str = "rustcode-mobile://app";
+
+/// Refuse the upgrade when the request carries an `Origin` header other than
+/// [`NATIVE_APP_ORIGIN`]. Browsers always send one and native clients do not,
+/// so a web page open on the host or the LAN cannot be used to reach the
+/// gateway and spend pairing attempts.
+///
+/// The value is compared verbatim: `null`, a near miss such as a trailing
+/// slash, and an `http(s)` origin that merely matches the request's `Host`
+/// all stay refused, because DNS rebinding can forge the last of those.
 #[allow(clippy::result_large_err)]
 fn refuse_browsers(request: &Request, response: Response) -> Result<Response, ErrorResponse> {
-    if request.headers().contains_key("origin") {
+    let native_app = request
+        .headers()
+        .get("origin")
+        .is_none_or(|origin| origin.as_bytes() == NATIVE_APP_ORIGIN.as_bytes());
+    if !native_app {
         let mut refusal = ErrorResponse::new(None);
         *refusal.status_mut() = StatusCode::FORBIDDEN;
         return Err(refusal);
@@ -256,5 +272,56 @@ fn close_message(code: ErrorCode) -> &'static str {
         ErrorCode::InvalidFrame => "frames must be JSON text",
         ErrorCode::ShuttingDown => "the gateway is shutting down",
         _ => "connection closed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NATIVE_APP_ORIGIN, refuse_browsers};
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+
+    /// `None` accepts the upgrade; `Some(403)` refuses it.
+    fn upgrade_status(origin: Option<&str>) -> Option<u16> {
+        let mut request = Request::builder().uri("/").body(()).unwrap();
+        if let Some(origin) = origin {
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().unwrap());
+        }
+        let response = Response::new(());
+        match refuse_browsers(&request, response) {
+            Ok(_) => None,
+            Err(refusal) => Some(refusal.status().as_u16()),
+        }
+    }
+
+    #[test]
+    fn a_request_without_an_origin_is_accepted() {
+        assert_eq!(upgrade_status(None), None);
+    }
+
+    #[test]
+    fn the_native_app_origin_is_accepted() {
+        assert_eq!(NATIVE_APP_ORIGIN, "rustcode-mobile://app");
+        assert_eq!(upgrade_status(Some(NATIVE_APP_ORIGIN)), None);
+    }
+
+    #[test]
+    fn browser_origins_and_near_misses_are_refused() {
+        for origin in [
+            "http://192.168.1.5:7878",
+            "http://127.0.0.1:7878",
+            "https://evil.com",
+            "null",
+            "chrome-extension://x",
+            "file://",
+            "rustcode-mobile://app/",
+            "rustcode-mobile://app?x",
+            "rustcode-mobile://appx",
+            "rustcode-mobile://app ",
+            "RUSTCODE-MOBILE://APP",
+        ] {
+            assert_eq!(upgrade_status(Some(origin)), Some(403), "{origin}");
+        }
     }
 }

@@ -117,6 +117,7 @@ import {
   answerOrchestration,
   linkFinished,
   linkStarted,
+  linksOf,
   linkWaitEnded,
   linkWaitStarted,
   loadBook,
@@ -1381,10 +1382,15 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
   );
   // A limit already said what stopped it, in the words the composer's notice uses.
   if (!failed || !get().limitWaits[id]) {
-    notifyThread(
-      { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: threadName(id) },
-      get(),
-    );
+    // A delegate finishing is not news for the system either: the wake message reaches its parent
+    // and the strip above that parent's composer already says it. A failure still is.
+    const delegated = linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
+    if (!delegated) {
+      notifyThread(
+        { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: threadName(id) },
+        get(),
+      );
+    }
   }
 }
 
@@ -2716,15 +2722,20 @@ export async function runPrompt(
   void refreshCheckpoints(id);
   if ((outcome === "completed" || outcome === "failed") && id !== get().selectedId) {
     const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
-    toast(
-      waiting
-        ? `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
-        : outcome === "failed"
-          ? `“${name}” failed`
-          : `“${name}” finished`,
-      waiting ? "info" : outcome === "failed" ? "error" : "success",
-      { action: { label: "Open", run: () => selectThread(id) } },
-    );
+    // A delegate finishing is already said twice: the wake message into its parent's transcript and
+    // the strip above that composer. Only a failure, or the limit that stopped it, is news here.
+    const delegated = options.link !== undefined && outcome === "completed" && !waiting;
+    if (!delegated) {
+      toast(
+        waiting
+          ? `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
+          : outcome === "failed"
+            ? `“${name}” failed`
+            : `“${name}” finished`,
+        waiting ? "info" : outcome === "failed" ? "error" : "success",
+        { action: { label: "Open", run: () => selectThread(id) } },
+      );
+    }
   }
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
   // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
