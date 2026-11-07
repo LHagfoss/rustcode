@@ -474,7 +474,7 @@ export function Switch({
     >
       <span
         className={cx(
-          "absolute top-[2px] size-[14px] rounded-full bg-accent-fg shadow-1 transition-transform duration-150 ease-snappy",
+          "absolute top-[2px] size-[14px] rounded-full bg-knob shadow-knob transition-transform duration-150 ease-snappy",
           checked ? "translate-x-[16px]" : "translate-x-[2px]",
         )}
       />
@@ -502,17 +502,25 @@ export function Segments<T extends string>({
     const el = group.current?.querySelector<HTMLElement>('[aria-checked="true"]');
     setThumb(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
   }, [value, options.map((o) => o.label).join()]);
+  // The pick's label sits on the white pill, so it takes the pill's dark fg. Before the first
+  // measure the button draws the pill itself; a measured pill with no width (a track measured while
+  // hidden) draws none, so its label keeps the track's own fg instead of dark on dark.
+  const selected = thumb
+    ? thumb.width > 0
+      ? "text-knob-fg"
+      : "text-fg"
+    : "bg-knob text-knob-fg shadow-knob";
   return (
     <div
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex rounded-full bg-fill-subtle p-[2px]"
+      className="relative inline-flex rounded-full bg-fill p-[2px]"
     >
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0 left-0 h-5 rounded-full bg-surface-3 shadow-1 transition-[transform,width] duration-200 ease-snappy"
+          className="absolute top-0 left-0 h-5 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
           style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
         />
       )}
@@ -526,9 +534,7 @@ export function Segments<T extends string>({
           onClick={() => onChange(o.value)}
           className={cx(
             "relative h-5 whitespace-nowrap rounded-full px-2.5 font-medium text-caption disabled:opacity-40",
-            o.value === value
-              ? cx("text-fg", !thumb && "bg-surface-3 shadow-1")
-              : "text-fg-muted hover:text-fg",
+            o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
         >
           {o.label}

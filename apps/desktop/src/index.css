@@ -59,6 +59,9 @@
   --color-fill-subtle: var(--rc-fill-subtle);
   --color-fill: var(--rc-fill);
   --color-fill-strong: var(--rc-fill-strong);
+  /* The knob of an active control (docs/design.md › Active controls). */
+  --color-knob: var(--rc-knob);
+  --color-knob-fg: var(--rc-knob-fg);
 
   /* Radius steps; a theme's `radius` scales them (lib/themes.ts). */
   --radius-*: initial;
@@ -75,6 +78,8 @@
   --shadow-*: initial;
   --shadow-1: var(--rc-shadow-1);
   --shadow-2: var(--rc-shadow-2);
+  /* The hairline and close shadow a white knob needs to read on a light track. */
+  --shadow-knob: var(--rc-knob-shadow);
 
   --ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -194,6 +199,15 @@
   --rc-fill-subtle: color-mix(in srgb, var(--rc-text) 4.5%, transparent);
   --rc-fill: color-mix(in srgb, var(--rc-text) 8%, transparent);
   --rc-fill-strong: color-mix(in srgb, var(--rc-text) 13%, transparent);
+  /* The knob of an active control: a segmented control's selected pill, a switch's thumb, the
+     settings slider's thumb. White in both modes, so what is selected reads as white rather than
+     as the accent or a dark pill; the text on it is dark in both, and its shadow is the hairline
+     that keeps it apart from a light track, where white alone would not read. */
+  --rc-knob: #ffffff;
+  --rc-knob-fg: #171717;
+  /* Its hairline is `border-strong` on the dark theme; the light theme lifts it (below), where a
+     white pill sits on a near-white track. */
+  --rc-knob-shadow: 0 1px 2px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border-strong);
   /* A sent message's surface: 8.5% of the text over the pane lands a step above the background in
      either mode, and follows whatever neutrals a theme brings. */
   --rc-message: color-mix(in srgb, var(--rc-text) 8.5%, var(--rc-bg));
@@ -220,6 +234,16 @@
   /* The composer's box and tray take a step of their own: it is the one surface the chat floats
      in, and the rounder corner reads as one floating card over the transcript. */
   --rc-composer-radius: var(--rc-radius-3xl);
+}
+
+/*
+ * The knob's ring on the light theme, where its track is a near-white fill: `border-strong` at 12%
+ * black is too faint for a white pill to read as one, so the hairline goes to 20% of the text
+ * colour. The dark theme keeps the ring the token's own `border-strong` above gives it.
+ */
+:root[data-theme="light"] {
+  --rc-knob-shadow:
+    0 1px 2px var(--rc-shadow-soft), 0 0 0 1px color-mix(in srgb, var(--rc-text) 20%, transparent);
 }
 
 /* The chat lane: the transcript's rows and the composer share one measure (docs/design.md).
@@ -840,6 +864,54 @@
 /* Rows that open (tool calls, thoughts, completion cards): their body slides in. */
 .rc-expand {
   animation: rc-in 160ms var(--ease-snappy);
+}
+
+/*
+ * A native slider's thumb is the same knob (settingsKit.tsx `Slider`): the browser draws it in
+ * the accent colour otherwise, which reads as a filled control rather than a knob. The range
+ * keys, Home and End are the native ones' still; only the drawing changes.
+ */
+.rc-range {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+}
+/*
+ * A range is an `input`, and the base layer takes the ring off every field whose container shows
+ * focus. This one has no container of its own, so it draws the ring like any other control does.
+ */
+.rc-range:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
+  outline-offset: 2px;
+}
+.rc-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--rc-fill-strong);
+}
+.rc-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 9999px;
+  background: var(--rc-knob);
+  box-shadow: var(--rc-knob-shadow);
+}
+.rc-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--rc-fill-strong);
+}
+.rc-range::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--rc-knob);
+  box-shadow: var(--rc-knob-shadow);
 }
 
 /*

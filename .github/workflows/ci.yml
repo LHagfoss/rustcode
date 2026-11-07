@@ -40,12 +40,69 @@ jobs:
     changes:
         name: detect relevant changes
         runs-on: ubuntu-24.04
+        permissions:
+            # The changed paths come from the pull request's file list, so no
+            # clone of the repository or its history is needed to diff it.
+            contents: read
+            pull-requests: read
         outputs:
             code: ${{ steps.filter.outputs.code }}
             packages: ${{ steps.filter.outputs.packages }}
+            scripts: ${{ steps.filter.outputs.scripts }}
             seatbelt: ${{ steps.filter.outputs.seatbelt }}
         steps:
+            - name: Check out the change matchers
+              if: github.event_name == 'pull_request'
+              uses: actions/checkout@v7
+              with:
+                  # The matchers under scripts/ are what runs next, and nothing
+                  # else is needed: one commit of that directory instead of the
+                  # whole history. Their self-tests run in the lint job. A
+                  # release PR repeats this below with the full history.
+                  fetch-depth: 1
+                  sparse-checkout: scripts
+
+            - name: List the changed files
+              id: files
+              if: github.event_name == 'pull_request'
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  changed_files="$RUNNER_TEMP/changed-files"
+                  gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files \
+                      --paginate --jq '.[].filename' > "$changed_files"
+                  # The files API stops at 3000 entries, so a list that long is
+                  # not the whole change: run everything rather than guess.
+                  if [[ "$(wc -l < "$changed_files")" -ge 3000 ]]; then
+                      echo "The file list is truncated; treating every check as relevant"
+                      echo "truncated=true" >> "$GITHUB_OUTPUT"
+                      echo "release_metadata=false" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  echo "truncated=false" >> "$GITHUB_OUTPUT"
+                  # A release PR touches only version literals and the changelog.
+                  # The paths are all this step can see, so the prefilter only
+                  # rules a PR out; the filter step rechecks the diff against
+                  # scripts/ci-version-only.sh under the full checkout below.
+                  if [[ -s "$changed_files" ]] &&
+                      bash scripts/ci-version-only.sh --prefilter < "$changed_files"; then
+                      echo "release_metadata=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "release_metadata=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Check out the release metadata diff
+              # The full history to diff the version literals against, and the
+              # matcher to read it: the diff needs objects, not a worktree.
+              if: github.event_name == 'pull_request' && steps.files.outputs.release_metadata == 'true'
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  sparse-checkout: scripts
+
             - name: Check out repository
+              if: github.event_name != 'pull_request'
               uses: actions/checkout@v7
               with:
                   fetch-depth: 0
@@ -55,28 +112,43 @@ jobs:
               shell: bash
               env:
                   BASE_SHA: ${{ github.event.pull_request.base.sha }}
+                  RELEASE_METADATA: ${{ steps.files.outputs.release_metadata }}
+                  TRUNCATED: ${{ steps.files.outputs.truncated }}
               run: |
                   if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
                       echo "code=true" >> "$GITHUB_OUTPUT"
                       echo "packages=--workspace" >> "$GITHUB_OUTPUT"
+                      echo "scripts=true" >> "$GITHUB_OUTPUT"
+                      echo "seatbelt=true" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  if [[ "$TRUNCATED" == "true" ]]; then
+                      echo "code=true" >> "$GITHUB_OUTPUT"
+                      echo "packages=--workspace" >> "$GITHUB_OUTPUT"
+                      echo "scripts=true" >> "$GITHUB_OUTPUT"
                       echo "seatbelt=true" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi
 
-                  changed_files="$(git diff --name-only "$BASE_SHA...HEAD")"
-                  if bash scripts/ci-version-only.sh "$BASE_SHA"; then
+                  changed_files="$(< "$RUNNER_TEMP/changed-files")"
+                  if [[ "$RELEASE_METADATA" == "true" ]] && bash scripts/ci-version-only.sh "$BASE_SHA"; then
                       packages=""
                       echo "Release metadata only; reusing checks from the code PR"
                   else
-                      packages="$(printf '%s\n' "$changed_files" | bash scripts/ci-affected-packages.sh)"
+                      packages="$(bash scripts/ci-affected-packages.sh <<< "$changed_files")"
                   fi
                   echo "packages=$packages" >> "$GITHUB_OUTPUT"
-                  if [[ -n "$packages" ]] && printf '%s\n' "$changed_files" | grep -Eq '^(Cargo\.(toml|lock)$|rust-toolchain|\.cargo/|rustcode/engine/|rustcode/core/(rustcode-tools|rustcode-tool-protocol)/|src/|tests/)'; then
+                  if [[ -n "$packages" ]] && grep -Eq '^(Cargo\.(toml|lock)$|rust-toolchain|\.cargo/|rustcode/engine/|rustcode/core/(rustcode-tools|rustcode-tool-protocol)/|src/|tests/)' <<< "$changed_files"; then
                       echo "seatbelt=true" >> "$GITHUB_OUTPUT"
                   else
                       echo "seatbelt=false" >> "$GITHUB_OUTPUT"
                   fi
-                  if printf '%s\n' "$changed_files" | bash scripts/ci-relevant-changes.sh; then
+                  if grep -Eq '^scripts/' <<< "$changed_files"; then
+                      echo "scripts=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "scripts=false" >> "$GITHUB_OUTPUT"
+                  fi
+                  if bash scripts/ci-relevant-changes.sh <<< "$changed_files"; then
                       echo "Relevant code or build files changed"
                       echo "code=true" >> "$GITHUB_OUTPUT"
                   else
@@ -85,7 +157,9 @@ jobs:
                   fi
 
     test:
-        # Keep this context name stable: main branch protection requires `test`.
+        # Keep this context name stable: branch protection requires nothing on
+        # main, so scripts/pr-merge.sh waits for every non-advisory check by
+        # name, this one included.
         needs: changes
         name: test
         runs-on: ubuntu-24.04
@@ -138,9 +212,10 @@ jobs:
                       --skip grep_stops_at_byte_cap_for_large_matching_lines
 
     lint:
-        # Keep linting separate from the required test job so the expensive
-        # compiler work runs in parallel. This context is required alongside
-        # `test` by main branch protection.
+        # Keep linting separate from the test job so the expensive compiler
+        # work runs in parallel. Branch protection requires nothing on main;
+        # scripts/pr-merge.sh waits for every non-advisory check, this one and
+        # `test` included, before merging.
         needs: changes
         name: lint
         runs-on: ubuntu-24.04
@@ -168,16 +243,24 @@ jobs:
               if: env.AFFECTED_PACKAGES != ''
               run: cargo fmt --all -- --check
 
+            # The installer and the change matchers under scripts/ test
+            # themselves. Only a change to them can break those tests, and any
+            # scripts/ change sets `scripts`, so they run on the PR that
+            # changes them.
             - name: Check shell installer syntax
+              if: needs.changes.outputs.scripts == 'true'
               run: bash -n scripts/install.sh
 
             - name: Check CI change matcher
+              if: needs.changes.outputs.scripts == 'true'
               run: bash scripts/test-ci-relevant-changes.sh
 
             - name: Check affected package matcher
+              if: needs.changes.outputs.scripts == 'true'
               run: bash scripts/test-ci-affected-packages.sh
 
             - name: Check version-only matcher
+              if: needs.changes.outputs.scripts == 'true'
               run: bash scripts/test-ci-version-only.sh
 
             - name: Clippy correctness gate

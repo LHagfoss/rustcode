@@ -49,3 +49,17 @@ git add .
 git commit -qm source
 if bash "$script_dir/ci-version-only.sh" "$base"; then exit 1; fi
 echo 'ok - source edits require compiled checks'
+
+# The path-only mode the CI filter job uses before it has a diff.
+prefilter() { bash "$script_dir/ci-version-only.sh" --prefilter; }
+printf 'CHANGELOG.md\nCargo.toml\nCargo.lock\nrustcode/tui/Cargo.toml\nios/RustCode.xcodeproj/project.pbxproj\n' | prefilter
+echo 'ok - release metadata paths pass the prefilter'
+
+if printf 'CHANGELOG.md\nrustcode/tui/src/main.rs\n' | prefilter; then exit 1; fi
+echo 'ok - a source path fails the prefilter'
+
+if printf 'docs/readme.md\n' | prefilter; then exit 1; fi
+echo 'ok - an unrelated path fails the prefilter'
+
+if prefilter </dev/null; then exit 1; fi
+echo 'ok - an empty path list fails the prefilter'
