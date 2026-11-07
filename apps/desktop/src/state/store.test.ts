@@ -68,6 +68,7 @@ import {
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
+  refreshSessionsOnFocus,
   removeQueued,
   renameThread,
   request,
@@ -1804,6 +1805,43 @@ describe("engine controller with the mock engine", () => {
     await setThreadStatus(b!.id, "idle");
     s = useApp.getState();
     expect(statusOf(s, b!.id)).toBe("idle");
+  });
+
+  test("a status changed outside the window shows on the next list", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    const id = useApp.getState().sessions[0]!.id;
+    await setThreadStatus(id, "review");
+    expect(statusOf(useApp.getState(), id)).toBe("review");
+
+    // `rustcode threads settle <id>` in a terminal stores the same status.json without a turn, so
+    // no update announces it: the app's mark must not outlive the first list that disagrees.
+    await request(V2Method.sessionStatus, { session_id: id, status: "done" }, 10_000);
+    await refreshSessions();
+    expect(useApp.getState().statusMarks[id]).toBeUndefined();
+    expect(statusOf(useApp.getState(), id)).toBe("done");
+
+    // A mark for a thread the list does not carry (a starting thread, an older engine) is all
+    // there is, so it stays until the list says something about it.
+    useApp.setState((s) => ({ statusMarks: { ...s.statusMarks, "mock-thread-unlisted": "review" } }));
+    await refreshSessions();
+    expect(useApp.getState().statusMarks["mock-thread-unlisted"]).toBe("review");
+  });
+
+  test("a window focus re-lists threads at most once per five seconds", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length === 6);
+    const at = Date.now();
+
+    // Nothing is listed twice in the gap: a list per focus would read every thread each time.
+    useApp.setState({ sessions: [] });
+    await refreshSessionsOnFocus(at);
+    expect(useApp.getState().sessions.length).toBe(6);
+    useApp.setState({ sessions: [] });
+    await refreshSessionsOnFocus(at + 4_000);
+    expect(useApp.getState().sessions.length).toBe(0);
+    await refreshSessionsOnFocus(at + 6_000);
+    expect(useApp.getState().sessions.length).toBe(6);
   });
 
   test("the panel is remembered per thread and never opens on its own", async () => {

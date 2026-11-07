@@ -334,6 +334,33 @@ mod tests {
     }
 
     #[test]
+    fn the_cli_writer_stores_the_status_the_app_reads() {
+        let id = crate::config::create_detached_session();
+        let dir = crate::config::get_active_session_dir(&id).expect("session dir");
+        std::fs::write(
+            dir.join("history.json"),
+            r#"[{"role":"user","content":"hi"},{"role":"assistant","content":"ok"}]"#,
+        )
+        .expect("write transcript");
+        assert!(crate::config::session_ids().contains(&id));
+
+        crate::config::set_session_status(&id, "done").expect("settle");
+        assert_eq!(current(&id), Status::Done);
+        crate::config::set_session_status(&id, "review").expect("review");
+        assert_eq!(current(&id), Status::Review);
+        crate::config::set_session_status(&id, "idle").expect("unsettle");
+        assert_eq!(current(&id), Status::Idle);
+
+        // The MCP spelling of settled is not what the store holds.
+        assert!(crate::config::set_session_status(&id, "settled").is_err());
+        // An id with no thread folder is refused instead of creating one.
+        assert!(
+            crate::config::set_session_status("ffffffff-ffff-7fff-8fff-ffffffffffff", "done")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn the_update_carries_the_status() {
         let value = serde_json::to_value(update(Status::NeedsInput)).unwrap();
         assert_eq!(value["sessionUpdate"], "session_info_update");
