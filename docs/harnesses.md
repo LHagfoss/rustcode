@@ -139,7 +139,9 @@ harnesses. Detection is cached for a minute; `set` and `remove` refresh it.
 | `pi` | `acp` | `npx -y pi-acp` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
 
 Commands are looked up on the engine's `PATH` and then the login shell's, so
-an app started from the Dock finds what the terminal finds.
+an app started from the Dock finds what the terminal finds. On Windows a bare
+name tries the `PATHEXT` extensions in order, as the shell does: `codex` is
+`codex.exe`, npm's `npx` is `npx.cmd`.
 
 Errors (an unknown id, an invalid command, removing a known harness) are
 `invalid_params` with a message for the user.
