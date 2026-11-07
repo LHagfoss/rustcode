@@ -236,6 +236,10 @@ export function CardPopover({
 /**
  * A row in a `CardPopover` menu: the shared menu row, closed by the panel after it runs.
  * `close={false}` keeps the panel open for a row that changes something in place (an effort step).
+ *
+ * A popover is not a Radix menu, so nothing sets `data-highlighted` on its rows: the row takes the
+ * menu's `bg-fill` from the pointer and from keyboard focus itself. `index.css` times both at the
+ * one hover pair (in 60ms, out 120ms), so a popover's rows answer exactly as a Radix menu's do.
  */
 export function CardMenuItem({
   onSelect,
@@ -254,7 +258,7 @@ export function CardMenuItem({
         onSelect();
         if (close) onClose();
       }}
-      className={cx(menuItem, className)}
+      className={cx(menuItem, "hover:bg-fill focus-visible:bg-fill", className)}
       {...rest}
     >
       {children}
