@@ -9,6 +9,7 @@ import {
   parsePermissionRequest,
   parseSessionList,
   parseSessionUpdate,
+  projectName,
   questionOptionsAnswer,
   questionTextAnswer,
 } from "./types";
@@ -192,5 +193,34 @@ describe("displayPath", () => {
     expect(displayPath("/Users/me/code/app")).toBe("~/code/app");
     expect(displayPath("/private/tmp/app")).toBe("/tmp/app");
     expect(displayPath("/private/tmpx")).toBe("/private/tmpx");
+  });
+
+  test("a Windows extended-length path as the path it wraps", () => {
+    expect(displayPath("\\\\?\\F:\\code\\app")).toBe("F:\\code\\app");
+    expect(displayPath("\\\\?\\UNC\\server\\share\\app")).toBe("\\\\server\\share\\app");
+    expect(displayPath("F:\\code\\app")).toBe("F:\\code\\app");
+  });
+});
+
+describe("projectName", () => {
+  test("the last folder of a POSIX path", () => {
+    expect(projectName("/Users/me/code/rustcode")).toBe("rustcode");
+    expect(projectName("/Users/me/code/rustcode/")).toBe("rustcode");
+    expect(projectName("/private/tmp/rustcode-worktree")).toBe("rustcode-worktree");
+  });
+
+  test("the last folder of a Windows path, prefix and all", () => {
+    const long = "\\\\?\\F:\\Users\\lagos\\code\\rustcode";
+    expect(projectName(long)).toBe("rustcode");
+    expect(projectName("C:\\Users\\lagos\\code\\rustcode")).toBe("rustcode");
+    expect(projectName("\\\\?\\UNC\\server\\share\\rustcode")).toBe("rustcode");
+    expect(projectName("C:\\Users\\lagos\\code\\rustcode\\")).toBe("rustcode");
+    // A drive root has no folder of its own: it names itself.
+    expect(projectName("\\\\?\\F:\\")).toBe("F:");
+  });
+
+  test("a path with no folder left says itself", () => {
+    expect(projectName("")).toBe("");
+    expect(projectName("/")).toBe("/");
   });
 });

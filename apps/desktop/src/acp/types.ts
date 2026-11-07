@@ -216,13 +216,29 @@ export function byActivity(sessions: SessionSummary[]): SessionSummary[] {
     .map(({ session }) => session);
 }
 
-/** A folder as people read it: the home folder as `~`, and macOS's /private/tmp as /tmp. */
+/**
+ * A folder as people read it: the home folder as `~`, macOS's /private/tmp as /tmp, and Windows'
+ * extended-length prefix (`\\?\C:\code\app`, `\\?\UNC\server\share`) as the plain path it wraps.
+ * The prefix is a Win32 API detail, and it only makes a path harder to read in a tooltip.
+ */
 export function displayPath(path: string): string {
-  return path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
+  return path
+    .replace(/^\\\\\?\\UNC\\/, "\\\\")
+    .replace(/^\\\\\?\\/, "")
+    .replace(/^\/Users\/[^/]+/, "~")
+    .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
 }
 
+/**
+ * The last folder of a path, which names it in the app: the sidebar, the header, the composer and
+ * the new-thread heading. Windows paths use `\` and often carry the extended-length prefix, so a
+ * path is split on both separators; a drive or share root names itself (`C:`, `share`).
+ */
 export function projectName(cwd: string): string {
-  const parts = cwd.split("/").filter(Boolean);
+  // The path inside `\\?\C:\code\app` (or `\\?\UNC\server\share`), whose own `\` and `?` are
+  // separators and prefix, not folders.
+  const plain = cwd.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "");
+  const parts = plain.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] ?? cwd;
 }
 

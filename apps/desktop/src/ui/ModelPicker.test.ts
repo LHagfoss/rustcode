@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BUILTIN_CAPABILITIES, type Harness } from "../acp/types";
+import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
 import { orderEfforts, pickerModels } from "./ModelPicker";
 
 const harness = (efforts: string[]): Harness => ({
@@ -55,5 +55,59 @@ describe("effort order", () => {
     );
     expect(picked.efforts).toEqual(["low", "medium", "high"]);
     expect(picked.effort).toBe("medium");
+  });
+});
+
+describe("a new thread before its harness lists models", () => {
+  // The options of whichever thread is open in the app: the built-in harness's own list, whose
+  // effort is high and whose models this external harness cannot run.
+  const openThread: ConfigOption[] = [
+    { id: "model", name: "Model", type: "select", current: "gemini-3.6-flash", choices: [] },
+    {
+      id: "effort",
+      name: "Effort",
+      type: "select",
+      current: "high",
+      choices: [
+        { value: "default", name: "Default" },
+        { value: "high", name: "High" },
+      ],
+    },
+  ];
+  const unlisted: Harness = { ...harness([]), models: [] };
+
+  test("keeps its own model and effort, not the open thread's", () => {
+    const picked = pickerModels(
+      undefined,
+      unlisted,
+      { harness: "codex", model: null, effort: "medium" },
+      openThread,
+    );
+    expect(picked.model).toBeNull();
+    expect(picked.effort).toBe("medium");
+    expect(picked.models).toEqual([]);
+    expect(picked.efforts).toEqual([]);
+  });
+
+  test("shows no effort when none is remembered", () => {
+    const picked = pickerModels(
+      undefined,
+      unlisted,
+      { harness: "codex", model: null, effort: null },
+      openThread,
+    );
+    expect(picked.effort).toBeNull();
+  });
+
+  test("the built-in harness still reads the open thread's list", () => {
+    const local: Harness = { ...unlisted, id: "rustcode", builtin: true, models: [] };
+    const picked = pickerModels(
+      undefined,
+      local,
+      { harness: "rustcode", model: null, effort: null },
+      openThread,
+    );
+    expect(picked.model).toBe("gemini-3.6-flash");
+    expect(picked.effort).toBe("high");
   });
 });
