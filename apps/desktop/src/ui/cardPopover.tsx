@@ -222,7 +222,9 @@ export function CardPopover({
           }}
           style={style}
           className={cx(
-            "elevated z-40 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-y-auto p-1.5 outline-none",
+            // No panel scrolls sideways: the drill motion slides a page a few px, and the card
+            // must not grow a horizontal scrollbar for those 220ms.
+            "elevated z-40 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-x-hidden overflow-y-auto p-1.5 outline-none",
             className,
           )}
         >
@@ -236,6 +238,10 @@ export function CardPopover({
 /**
  * A row in a `CardPopover` menu: the shared menu row, closed by the panel after it runs.
  * `close={false}` keeps the panel open for a row that changes something in place (an effort step).
+ *
+ * A popover is not a Radix menu, so nothing sets `data-highlighted` on its rows: the row takes the
+ * menu's `bg-fill` from the pointer and from keyboard focus itself. `index.css` times both at the
+ * one hover pair (in 60ms, out 120ms), so a popover's rows answer exactly as a Radix menu's do.
  */
 export function CardMenuItem({
   onSelect,
@@ -254,7 +260,7 @@ export function CardMenuItem({
         onSelect();
         if (close) onClose();
       }}
-      className={cx(menuItem, className)}
+      className={cx(menuItem, "hover:bg-fill focus-visible:bg-fill", className)}
       {...rest}
     >
       {children}

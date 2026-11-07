@@ -148,6 +148,11 @@ export interface Checkpoint {
   filesChanged: number;
   insertions: number;
   deletions: number;
+  /**
+   * The state a rewind abandoned, kept rather than taken before a turn: it belongs to no turn of
+   * the chat, so no turn's Changes chip pairs with it (`checkpointsByTurn`).
+   */
+  attempt?: boolean;
 }
 
 export function parseCheckpoints(result: Json | undefined): Checkpoint[] {
@@ -166,10 +171,32 @@ export function parseCheckpoints(result: Json | undefined): Checkpoint[] {
           filesChanged: num(o.files_changed) ?? 0,
           insertions: num(o.insertions) ?? 0,
           deletions: num(o.deletions) ?? 0,
+          attempt: bool(o.attempt) ?? false,
         },
       ];
     })
     .sort((a, b) => a.turn - b.turn);
+}
+
+/** What a restore answered: whether the conversation came back too, and what it kept.
+ *
+ * `kept` is the checkpoint of the state the restore abandoned, when `keep` asked for it: the
+ * attempt a rewind leaves behind, which going back can read.
+ */
+export interface RestoreAnswer {
+  conversation: "rewound" | "kept";
+  kept?: number;
+  /** Why the conversation stayed, when a rewind was asked for and refused. */
+  rewindError?: string;
+}
+
+export function parseRestoreAnswer(result: Json | undefined): RestoreAnswer {
+  const o = obj(result);
+  return {
+    conversation: str(o?.conversation) === "rewound" ? "rewound" : "kept",
+    kept: num(obj(o?.kept)?.turn),
+    rewindError: str(o?.rewind_error),
+  };
 }
 
 export interface PatchFile {
@@ -205,7 +232,8 @@ export function parseTurnDiff(result: Json | undefined): PatchFile[] {
  * a turn starts, so the list holds one for a turn still running: it is left out (it is written
  * after the last finished turn ended), never shifted onto the turn above it. What is left is
  * matched by the message that started each turn, from the end, because the engine keeps only the
- * latest 50 and the transcript may hold fewer or more than either.
+ * latest 50 and the transcript may hold fewer or more than either. A checkpoint kept for the state
+ * a rewind abandoned starts no turn, so it is never paired (`Checkpoint.attempt`).
  */
 export function checkpointsByTurn(
   turns: { id: string; prompt: string; at?: number }[],
@@ -213,7 +241,9 @@ export function checkpointsByTurn(
 ): Record<string, Checkpoint> {
   const out: Record<string, Checkpoint> = {};
   const ended = turns.reduce((last, turn) => Math.max(last, turn.at ?? 0), 0);
-  const finished = checkpoints.filter((c) => !ended || c.createdAt === undefined || c.createdAt <= ended);
+  const finished = checkpoints.filter(
+    (c) => !c.attempt && (!ended || c.createdAt === undefined || c.createdAt <= ended),
+  );
   let at = finished.length - 1;
   for (let i = turns.length - 1; i >= 0 && at >= 0; i--) {
     const prompt = promptKey(turns[i]!.prompt);

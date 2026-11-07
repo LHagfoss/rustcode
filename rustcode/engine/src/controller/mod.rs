@@ -79,7 +79,7 @@ pub use context::{
 };
 pub use context_breakdown::{
     CONTEXT_CATEGORY_LABELS, ConfiguredContextGuards, ContextBreakdown, ContextBreakdownInput,
-    ContextUsage, ContextUsageSource, context_breakdown, context_report_markdown,
+    ContextItem, ContextUsage, ContextUsageSource, context_breakdown, context_report_markdown,
     format_token_count,
 };
 pub use events::{

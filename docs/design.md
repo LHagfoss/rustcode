@@ -233,14 +233,16 @@ that change use `tabular`.
 
 - Hover: **in 60ms, out 120ms** (`--rc-hover-in`, `--rc-hover-out`),
   colour only, set once in `index.css` for every button, link, row,
-  switch and menu item. Components never add `transition-colors` or their
-  own hover duration. Press: `active:bg-fill-strong`, no delay. No
-  `transform` on press (no scale): text re-rasterizes and reads as a flash.
+  switch and menu item, and for the row the keyboard lands on. Components
+  never add `transition-colors` or their own hover duration. Press:
+  `active:bg-fill-strong`, no delay. No `transform` on press (no scale): text
+  re-rasterizes and reads as a flash.
 - Hover is pure CSS `:hover` (or Radix's `data-highlighted`). No hover
   state in React (`onMouseEnter` setting an id); a keyboard-driven list may
-  keep a selected index, shown with the same `bg-fill`. Row menus are
-  `modal={false}`, so other rows keep answering the pointer while one is
-  open.
+  keep a selected index, shown with the same `bg-fill`. A popover's menu row
+  has neither hook, so it fills on `:hover` and `:focus-visible` itself. Row
+  menus are `modal={false}`, so other rows keep answering the pointer while
+  one is open.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
@@ -263,22 +265,55 @@ that change use `tabular`.
   something that moves every frame.
 - Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
   in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off
-  in 160ms, and a card shown meanwhile takes the top of the stack.
+  in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
+  the front card is in flow, the ones behind peeking 6px above it; hovering or
+  focusing the stack fans them out 8px apart (`transform` only).
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
-  selection slides (`transform`) to the new segment.
+  selection slides (`transform`) to the new segment. A count that changes rolls
+  its digits vertically in 220ms `--ease-snappy` (`ui/RollingNumber.tsx`),
+  keeping each column's place from the right, so 9 → 10 rolls the units and
+  grows a tens.
 - A message sent from the composer flies instead of rising: it starts a
   little inside the field's card (at 96%) and lands in its row in 220ms
   `--ease-snappy`, `transform` and `opacity` only, so nothing around it moves
-  (`lib/sendFlight.ts`). The composer is found by the marker on its card, and
-  the row travels at most 220px. Only a message typed here flies: a wake, a
-  resume, one another thread or a view sent, and the history a thread opens
-  with keep the plain row rise. The field it left fades back in empty over
-  160ms rather than blinking. `prefers-reduced-motion` gets the fade alone.
-  A message sent from the new-thread screen fades where it lands instead,
-  because the composer itself is on its way to the foot of the chat: the
-  stack's own 500ms move is that send's motion.
+  (`lib/sendFlight.ts`). The composer is found by the marker on its card. It
+  starts at the card whatever the gap above it, so a message whose row rests
+  above the field (its own `Working` line, a reply already streaming) rises
+  into place instead of fading where it stands; the row travels at most 220px.
+  Only a message typed here flies, and only once: the item the app sends from
+  the composer is marked (`thread.ts` `beginTurn`), so a wake, a resume, one
+  another thread or a view sent, and the history a thread opens with keep the
+  plain row rise, and a flight is never replayed by a re-render, a closed
+  turn, or opening the thread again. The field it left fades back in empty
+  over 160ms rather than blinking. `prefers-reduced-motion` gets the fade
+  alone.
+  A message sent from the new-thread screen does not fly: it is drawn where
+  the thread's own first row will keep it (the lane's cap, 20px under the
+  header) and arrives from 8px below over 160ms (`rc-send-in`,
+  `--ease-snappy`), while the composer glides from the middle of the chat to
+  the foot. A session can exist in a single frame, so the thread takes the
+  screen when that entry has played and not before (at most one entry,
+  `PENDING_ENTRY_MS`): the screen it keeps draws the same row in the same
+  place, at rest, so the hand-over itself moves nothing. A harness slower than
+  the entry is already past it and takes the screen the moment its session
+  exists. And each of the send's own updates gets a painted frame of its own
+  (`lib/frame.ts` `afterPaint`): the pending screen is drawn before
+  `session/new` is asked for, and the message's row before its prompt is built,
+  so an in-process harness cannot fold all of it into one frame.
+- A steering note landing in a running turn: the queued row it took from the
+  stack glides 14px up toward the transcript and fades there (`rc-steer-away`,
+  240ms `--ease-snappy`, `transform` and `opacity` only, and it collapses
+  under reduced motion), and the note's marker appears where the turn
+  read it — on the plan card's active step, else under its message — without
+  moving anything around it.
+- A row mounts at the size the transcript already reserved for it: `estimateSize`
+  is the row's own air (`rowGap`) plus its content, and a measured row keeps
+  both. An estimate that left the gap out, or guessed a live `Working for 12s`
+  at 24px when it draws 35, was corrected a frame after mounting — and a
+  pinned transcript takes that difference back in one step, moving every row
+  above it, the message just sent included.
 - A streaming reply's new words fade in once each (`rc-reveal`, 280ms, from
   `opacity: 0` and a 4px blur, 18ms apart, no word waiting past 180ms).
   `lib/reveal.ts` wraps only the words that arrived in the chunk, and only in
@@ -363,9 +398,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
   most one action as a secondary pill (`h-6 bg-fill`), and a close button.
   Progress is a 2px accent bar along its foot. `Toaster` shows at most three
-  (`state/toasts.ts` enforces the queue), newest on top, stacked with 8px
-  between, centred at the top of the chat column 8px under its header (the
-  window's top over Settings). The same message again refreshes its card and
+  (`state/toasts.ts` enforces the queue), newest on top: at rest only the
+  front card is fully shown, the others peeking 6px above it, and hovering or
+  focusing the stack fans them out 8px apart. Centred at the top of the chat
+  column 8px under its header (the window's top over Settings). An
+  auto-dismissing card drains a 1px accent hairline along its foot, which
+  stops with its clock; a card replaced in place from spinner to check settles
+  onto the check. The same message again refreshes its card and
   restarts its time instead of stacking; past three, the oldest is dropped.
   Info and success leave after 3s, errors after 7s. The pointer or focus on
   the stack, a drag, and a window in the background stop every clock, which
@@ -425,9 +464,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   The thread above this one reads `Started from` or `Working for`, or
   `Messaged by`. A row is the thread's own name, its state word, and at its end
   what the sidebar's row for that thread ends with: the review mark when it
-  waits for review, and its age in the same short form (`4m`, `2d`). Its
-  subagents are
-  their own section, said to be helpers inside this thread and not threads.
+  waits for review, and its age in the same short form (`4m`, `2d`). `Started`
+  draws its delegates as a tree (`ui/DelegateTree.tsx`, the rules in
+  `state/delegates.ts`): the threads it started and the threads those started,
+  each row a harness mark, its name, its state word, the work time and the
+  best-known cost of its branch, indented under a tree line. A parent's figures
+  are the sum of its whole branch; time counts only while a thread works, so a
+  wait on an approval holds the clock still, and a cost no turn reported is `—`,
+  never a zero (`≈` marks an estimate). A branch that finished folds to one
+  line, opening a node folds the one open beside it, and its reply button shows
+  the last answer in place. A Board card carries the same tree as one line
+  (`3 delegates · 1 working · $8.71`). Its subagents are their own section, said
+  to be helpers inside this thread and not threads.
 - **Sidebar selection:** one tab stop for the whole list, on the row the
   keyboard is on (the open thread — an open delegate is a row of its own while
   it is open — else the first): ↑ ↓ move it through the rows on screen,
@@ -532,7 +580,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   at its end, with no divider above it — the air between the field and the row,
   and the row's own `pt-1`, separate them. The model reads as its own name and
   effort, plain on the card, `bg-fill-strong` only while its popover is open;
-  the **+** rests on `bg-fill-subtle` (`bg-fill` on hover).
+  the **+** rests on `bg-fill-subtle` (`bg-fill` on hover). The popover opens
+  on the effort, the control changed most: Fast mode and a reset on top, the
+  level as a large accent word, the model's name under it, a 28px pill track
+  with one dot per level the model itself lists, the part up to a 32px round
+  thumb filled in the accent (a press or a drag lands on the nearest dot, ←/→
+  step one, a hover names it), and the harness's logins below while it has more
+  than one to choose. The card opens with the slider focused, so ←/→ change the
+  effort at once; the model's name (Enter or a click) opens the list. The model's name swaps the card for the
+  searchable list of every harness's models, and picking one comes back to the
+  track with the effort clamped to that model's levels.
 - **Composer strip:** what the thread works in and what it is allowed to do
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
   (`.rc-composer-footer`) inset 12px each side, its top edge tucked 8px behind
@@ -543,7 +600,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
   them is a pill whose panel opens off the pill itself, 8px away from it,
-  `top` by default. The project picker is pinned above its pill whatever the
+  `top` by default. The usage meter's percentage shimmers while its turn runs
+  and settles on the number when the turn ends, so a live number is not read
+  as a final one. The project picker is pinned above its pill whatever the
   room below, the list belonging to the card above it; the other strip menus
   open downward when the window has room under the strip and upward when it
   does not, and shrink to the room they have (at least 280px below, else
@@ -584,7 +643,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   queue stops the turn and sends the message in its place. It is edited in the composer,
   never in a field of its own: its pencil, or ↑ at the start of an empty
   composer, loads its text, command, links and attachments there, ⏎ saves it
-  back in the queue and Esc leaves it. A held queue ends with Resume, which
+  back in the queue and Esc leaves it. A row a steer takes out of the queue
+  keeps the stack's place while it glides up toward the transcript and fades
+  (`rc-steer-away`, 240ms, `transform` and `opacity` only), and the message it
+  became lands where the turn read it. A held queue ends with Resume, which
   starts its first message. A wake turn the app sends is one quiet line in the
   notice divider's style (`Delegate finished · Fix composer focus · Pi · 3m 49s`
   for one, the working delegate's harness marks and the longest time for
@@ -632,7 +694,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   type over the same hairline, which a divider right above it already draws
   (so it drops its own). The duration lives here and nowhere else; a red
   `CircleX` marks only a turn that itself failed, and a step that failed
-  keeps its own count inside. A turn that wrote no answer keeps its time in
+  keeps its own count inside. The running header (`Working for 12s`) holds
+  its place for 400ms after a completed turn, settling on a green check and
+  `Worked for 12s` before that divider replaces it; the live line at the foot
+  settles the same way when no reply is under it. A turn that wrote no answer keeps its time in
   the header (`Worked for 4s · 09:55 PM`) and has no footer, since there is
   nothing under it to copy or fork. A turn with no steps folds nothing and
   so has no header, and its duration goes with it: a short direct answer
@@ -651,13 +716,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   A turn's changes are one line, never two: the completion card
   (`N files changed +A −R ›`, with the checks and the files it opens)
   where the harness reported one, else the checkpoint's `Changes +A −R`
-  chip (which also holds Restore). The two sources are picked once per
-  turn, so the numbers can't disagree. The newest finished turn keeps the
-  line in view above its footer; an older turn's change line folds with
-  its steps, as the last row inside that turn's `Worked for 2m`, so it is
-  there when the turn is opened and out of the way when scrolling past
-  (and its Restore goes with it). The right panel's Changes view is the
-  thread's own and stays as it is.
+  chip (which also holds *Rewind to before turn N*). The two sources are
+  picked once per turn, so the numbers can't disagree. The newest finished
+  turn keeps the line in view above its footer, and so does a turn with
+  nothing folded: a turn whose work was only a reply has no `Worked for 2m`
+  row to hold the line, and hiding it there would lose the turn's changes
+  entirely. An older turn that did fold keeps its line as the last row
+  inside its `Worked for 2m`, so it is there when the turn is opened and out
+  of the way when scrolling past (and its rewind goes with it). The right
+  panel's Changes view is the thread's own and stays as it is.
   Opening the fold shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
   under a transition; Reduce motion makes it instant). A `<button
@@ -665,7 +732,61 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   thread while the app runs; an opened old thread starts with every turn
   folded; find in thread opens them all while it searches. Folded steps are
   not rows at all, so the virtualizer and the timeline rail have fewer.
+- **Rewind an attempt.** A checkpoint is an attempt, not a one-shot restore:
+  *Rewind to before turn N*, in a turn's Changes chip, puts the files back to
+  before that turn (the chip names it because that turn goes too) — and the
+  conversation with them when the harness rewinds — and keeps the turns it
+  leaves as an **earlier attempt**: the same rows, faded to 50%, under an
+  *Earlier attempt* divider at the foot of the transcript (a hairline with
+  `History`, how many turns it held, and *Go back to this attempt*). The
+  block starts right under the last live turn — it takes over the room the
+  transcript reserves for the composer instead of sitting below that blank —
+  and keeps the same room under its own last row, so the faded turns scroll
+  clear of the composer. The view rests a little past the live end when an
+  attempt follows, so the divider and the first lines it kept read above the
+  composer rather than behind it. The turns
+  stay readable and clickable — messages select and copy, a reply's footer
+  copies it, a turn's Changes opens its diff — but nothing in them sends the
+  thread on. The divider's *Go back* puts the files where that attempt ended,
+  and its confirm says the conversation cannot follow, because the engine has
+  no way to restore messages it took out. An attempt whose state the engine
+  could not keep says so instead (`TriangleAlert`, "The state it left was not
+  kept") rather than offering a button that would pretend. The record is the
+  app's, so it lasts while the thread is open (like a question's row): the
+  engine's history no longer holds those turns.
+  The minimap's **checkpoint lane** is the same idea at thread scale: one node
+  per turn a rewind can go back to, at that turn's height, joined by a
+  `w-px` hairline and drawn in front of the strips' left edge; the head (the
+  newest) is the one `accent` mark the rail uses, the other nodes are
+  `fg/35`. Pointing at a node's height picks that turn as the strips do, and
+  the hover card adds `Checkpoint N · current` for it. The lane never asks
+  for a click of its own: rewinding is the chip's, behind a confirm.
   Logic: `state/fold.ts` (`foldTurns`).
+- **Turn trace:** the footer's `Trace` chip, beside Changes, opens a card above it
+  (`ui/TurnTrace.tsx`): the turn's own timeline from 0 to its end, one row per
+  model call, tool call and delegate. A model call has no event of its own, so
+  it is the stretch between the calls around it, and it is named by the
+  thread's model (the round's ordinal is a suffix only when there are several);
+  its bar is `accent/55`, a tool's is `fill-strong`, and a delegate's is
+  dotted. The label is on the left in a 184px column and gives way in its
+  middle, keeping the file name (`edit …/app.ts`), never the bar's room; the
+  cost or token count and the work duration are on the right, with
+  `+38s waiting` beside it when an approval held the call, and the longest row
+  by work carries `Slowest`. The stretch spent waiting on the user is hatched
+  (`rc-wait-hatch`) apart from the work, and the tooltip says `38s waiting on
+  you`; `Duration` and `Slowest` read work alone, so an approval someone took
+  their time over is not a slow call. Delegates (`spawn_agent`,
+  `start_session`, `fan_out`) fold into one dotted row that opens to each
+  call. `Sort` is Timeline, Duration or the number shown; `Show` switches cost
+  ↔ tokens, opening on cost when the harness reported one and on tokens when
+  it did not. Hovering a bar names the call, when it ran and what it used; a
+  press opens the tool row's own detail (Input, Output, diffs, Copy) or the
+  text a model call streamed. The numbers are the engine's per-round usage
+  updates, subtracted from the turn's baseline (`state/thread.ts` `TurnUsage`);
+  a row a harness left unpriced stays blank rather than guessed, and a
+  replayed turn (no per-call timing) has no chip at all. Logic:
+  `lib/trace.ts`, waits recorded in `state/thread.ts` (`waitingOn`,
+  `settledWait`).
 - **Settings reset:** a row whose value differs from its default shows a small
   reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).
   When the control stacks under the text, the icon leaves the flow for the
@@ -729,31 +850,49 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   being typed in.
   Details lists what a thread is, in titled sections that drop out when
   they have nothing to say: harness, workspace, linked threads, subagents with
-  status and elapsed time, plan and usage.
+  status and elapsed time, plan, the timed approvals still in force
+  (`Allowed`, each with its minutes left and Revoke), and usage.
 - **Switch row:** where a thread's model or effort changed after its first
   message, a quiet divider (`gpt-6-luna → gpt-6-astra · Medium → High`). Picks
   with no message between them are one row; the engine records it in the
   history on harness threads, so it survives a reload.
 - **Approval row:** an approval waits as a row in the transcript, at the call
-  it is about (`ui/AttentionCards.tsx` `ApprovalRow`): the `Hand` in
-  `warning` in the 18px column, `Waiting for approval` in `font-medium`, then
-  the command or title in `font-mono`, with `1 of N` when the turn waits on
-  a batch. Under it, indented 26px, one body at most 160px tall that scrolls:
-  the command in a `bg-fill-subtle` code well (`$ ` in `text-fg-muted`), the
-  change it would make (`DiffView`), and its reason in `warning` when it has
-  one. Then its answers as 24px pills: Decline `esc`, Approve `⏎`,
-  Always allow, and More for the rest. It sits 2px from the call above it,
-  like the tool rows do. An approval whose call is not on screen yet (or is
-  folded away) goes to the foot of the transcript, where it can still be
-  answered.
+  it is about (`ui/AttentionCards.tsx` `ApprovalRow`): the `Hand` in the
+  risk's tone in the 18px column, `Waiting for approval` in `font-medium`, a
+  risk badge, then the command or title in `font-mono`, with `1 of N` when the
+  turn waits on a batch. The risk (`lib/approval.ts` `assessApproval`) tints
+  the icon and badge and nothing else: `success` reads *Read-only*, `warning`
+  *Risky* or *Changes files*, `danger` *Destructive* — a tree deletion, a
+  forced push, a dropped table, sudo, or a write outside the thread's folder.
+  An unknown tool is *Risky*. Under it, indented 26px, one body at most 160px
+  tall that scrolls: for a command, the key–value preview (Command, Folder,
+  Path), then the change it would make (`DiffView`), then its reason when it
+  has one. An edit has no block: its diff header already names the file and
+  its `+N −M`, and a `why` repeating the path is not drawn. Then its answers
+  as 24px pills: Decline `esc`, Approve `⏎` (once), and a Grant menu — *Allow
+  for* *1 hour* or *Always allow*, the engine's other answers, and *Allow all
+  N waiting*. A *Destructive* call offers no grant, here or in the bar or the
+  inbox, whatever the engine listed; it is answered once or declined. It sits
+  2px from the call above it, like the tool rows do. An approval whose call is
+  not on screen yet (or is folded away) goes to the foot of the transcript,
+  where it can still be answered.
 - **Approval bar:** the card over the composer keeps one slim line for the
-  same approval — `Waiting for approval · <title>` with the same answers
-  (`elevated rounded-2xl`, `min-h-[34px]`, `py-1`) — because it is the target
-  for the keys: 1–9 pick an answer in the engine's order (reject, always,
-  allow once), `⏎` approves and `esc` declines, whenever no field, menu or
-  dialog has the keyboard. The body is not repeated there; it is read in the
-  row. A message sent from the composer meanwhile declines it and tells the
-  agent what to do instead.
+  same approval — `Waiting for approval · <subject>`, its risk badge (the
+  icon carries the risk in a tip) and the same answers (`elevated
+  rounded-2xl`, `min-h-[34px]`, `py-1`) — because it is the target for the
+  keys: 1–9 pick a visible answer in the engine's order (reject, hour,
+  always, allow once; a destructive call has only reject and once), `⏎`
+  approves and `esc` declines, whenever no field, menu or dialog has the
+  keyboard. The body is not repeated there; it is read in the row. A message
+  sent from the composer meanwhile declines it and tells the agent what to do
+  instead.
+- **Answered approval:** the bar folds into one settled line where the card
+  was (`ResolvedApprovalBar`, `rc-resolve`, 180 ms): a `CircleCheck` in
+  `success` for an allow or the `Hand` in `text-fg-muted` for a decline, then
+  `Allowed edit src/app.ts · once`, `Allowed cargo test --lib · 1 hour` or
+  `Declined git push --force`. It stays `RESOLVED_APPROVAL_MS` (1.8 s) and
+  leaves, so an answer has a visible result instead of a card vanishing under
+  the pointer.
 - **Question row:** an answered question stays in the transcript
   (`ui/Rows.tsx` `QuestionRow`, `bg-fill-subtle rounded-lg px-3 py-2`): the
   header in `font-medium` after a `MessageCircleQuestion` in accent, the
@@ -761,17 +900,34 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   under a `CornerDownRight` in `success`. It is not folded away with its
   turn. A question still waiting keeps its form over the composer, since its
   answer is a choice; only the answer leaves a row.
-- **Plan card:** a paused thread's plan, at the foot of the transcript
+- **Plan card:** a thread's plan, at the foot of the transcript
   (`ui/PlanCard.tsx`): `rounded-2xl bg-surface p-4`, a `ListChecks` and
   `Plan` in `font-semibold` with `3 of 8 left` in `text-fg-muted tabular`, a
   Copy button and Implement (a prominent 24px pill that sends `Implement the
-  plan.` as an ordinary message). Its steps are one line each, `text-body`
-  with a 6px status dot (`success` done, `accent` now, `fill-strong` next)
-  and done steps in `text-fg-muted`. Past 220px it clips and fades over its
-  last 24px, with `Expand · N steps` under it; expanded, it shows whole and
-  offers `Collapse`. It is drawn only while the thread is not running and
-  something is unfinished, so a finished plan leaves no card; the header's
-  popover and the composer's meter are unchanged.
+  plan.` as an ordinary message; it is only there while the plan waits on
+  you). Its steps are one line each, `text-body` with a 6px status dot
+  (`success` done, `accent` now, `fill-strong` next) and done steps in
+  `text-fg-muted`. A step carries its clock at the right in `text-caption
+  text-fg-faint tabular`: the time it has run while the turn is on it, its
+  whole time once it is done, and nothing when the app did not see it start
+  (`state/steer.ts`). Under the step the turn was on sits each steering note
+  it read there, as `Steered: <first line>` (`ui/SteerMark.tsx`); a click, or
+  the hover tip, gives the whole note and when it was sent. Past 220px it
+  clips and fades over its last 24px, with `Expand · N steps` under it;
+  expanded, it shows whole and offers `Collapse`. It is drawn while a turn
+  works through the plan — live, with the running step's clock — and once the
+  thread waits on you with something left; an all-done plan still draws it
+  while it holds a note, and otherwise leaves no card. The header's popover
+  and the composer's meter are unchanged.
+- **Steering note:** a message sent into a running turn says where the turn
+  read it. The plan card marks it on the step that was active then; a thread
+  with no plan, or a plan rewritten past that step, gets a quiet row in the
+  transcript instead (`ui/Transcript.tsx`), on the divider's own line under the
+  message it was sent as (`Steered: use the fast path`, in `accent` behind a
+  `CornerDownRight`). Either marker is one line at rest and stays out of the
+  turn's fold, and opening it — a click, or the hover tip — shows the whole
+  note and when it was sent. The note is the app's own record of the turn, kept
+  while the thread is open and not replayed from history.
 - **Jump to latest:** `.rc-glass-overlay rounded-full`, centred 8px
   above the composer stack and above its drawer when one is open, over it
   in z.

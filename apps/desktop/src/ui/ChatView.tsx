@@ -18,17 +18,17 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
-import { flyInFromComposer } from "../lib/sendFlight";
+import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
-import { type PendingSetup, pendingStatus } from "../state/setup";
+import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   dismissPendingSetup,
   refreshSessions,
@@ -47,7 +47,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, type ThreadState } from "../state/thread";
-import { AttentionCard } from "./AttentionCards";
+import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
@@ -70,9 +70,11 @@ import {
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
+import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
-import { Transcript } from "./Transcript";
+import { FIRST_ROW_PAD, Transcript } from "./Transcript";
+import { WhileAwayCard } from "./WhileAway";
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -85,8 +87,10 @@ function PlanButton({ thread }: { thread: ThreadState }) {
           className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 font-medium text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           <ListChecks size={13} />
-          <span className="tabular">
-            {done}/{thread.plan.length}
+          <span className="flex items-center gap-0.5 tabular">
+            <RollingNumber value={done} />
+            <span className="text-fg-faint">/</span>
+            <RollingNumber value={thread.plan.length} />
           </span>
         </button>
       </Popover.Trigger>
@@ -513,59 +517,54 @@ function PendingClock({ since }: { since: number }) {
  * takes the screen the moment the session exists. Failed, the reason takes the line's place with
  * Retry, which sends the same message again, and Dismiss, which puts the text back in the field.
  */
-function PendingSetupView({ pending, bottomInset }: { pending: PendingSetup; bottomInset: number }) {
-  const row = useRef<HTMLDivElement>(null);
-  // The message rises out of the composer it was sent from, as every sent message does; a retry
-  // has its own clock, so it rises again.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the clock is the cue to replay it
-  useLayoutEffect(() => {
-    flyInFromComposer(row.current);
-  }, [pending.startedAt]);
+function PendingSetupView({ pending }: { pending: PendingSetup }) {
   const extras = pending.extras ?? emptyExtras;
   const shown = composedText(pending.text, extras);
   const attachments = sentAttachments(extras);
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 [scrollbar-gutter:stable_both-edges] sm:px-12">
+    // Absolute like the composer's stack beside it: the column holds nothing above this view, and
+    // taking it out of the flow keeps it that way, so no sibling that mounts during a send can push
+    // the message down. `overflow-anchor: none` and `overscroll-contain` are the transcript's own
+    // scroller settings: nothing here may scroll or be scrolled by the browser on our behalf.
+    <div className="absolute inset-0 overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges] sm:px-12">
       <div
-        // Bottom-aligned by the same inset the transcript uses, so the row does not move when the
-        // session arrives and the thread's own transcript takes over.
-        className="flex min-h-full flex-col justify-end"
-        style={{ paddingTop: HEADER_HEIGHT + 20, paddingBottom: bottomInset }}
+        // The row takes the place the transcript's first row keeps — the lane's cap, the same 20px
+        // under the glass header (`FIRST_ROW_PAD`), so the thread takes the screen over without
+        // moving it — and arrives in 160ms from 8px below. The thread waits for that entry before it
+        // takes the screen (`PENDING_ENTRY_MS`), because a session can exist in one frame.
+        className="rc-send-in mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5"
+        style={{ paddingTop: FIRST_ROW_PAD + HEADER_HEIGHT }}
       >
-        <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5">
-          <div ref={row}>
-            <UserRow
-              item={{
-                kind: "user",
-                id: pending.id,
-                text: shown || pending.title,
-                attachments: attachments.length ? attachments : undefined,
-              }}
-            />
+        <UserRow
+          item={{
+            kind: "user",
+            id: pending.id,
+            text: shown || pending.title,
+            attachments: attachments.length ? attachments : undefined,
+          }}
+        />
+        {pending.failure ? (
+          <Callout
+            action={
+              <>
+                <Pill prominent onClick={() => void retryPendingSetup()}>
+                  Retry
+                </Pill>
+                <Pill onClick={dismissPendingSetup}>Dismiss</Pill>
+              </>
+            }
+          >
+            {pending.failure.text}
+          </Callout>
+        ) : (
+          <div className="flex items-center gap-2 text-body text-fg-muted" role="status">
+            <Spinner size={14} />
+            <span>{pendingStatus(pending)}</span>
+            <span className="text-fg-faint tabular">
+              <PendingClock since={pending.startedAt} />
+            </span>
           </div>
-          {pending.failure ? (
-            <Callout
-              action={
-                <>
-                  <Pill prominent onClick={() => void retryPendingSetup()}>
-                    Retry
-                  </Pill>
-                  <Pill onClick={dismissPendingSetup}>Dismiss</Pill>
-                </>
-              }
-            >
-              {pending.failure.text}
-            </Callout>
-          ) : (
-            <div className="flex items-center gap-2 text-body text-fg-muted" role="status">
-              <Spinner size={14} />
-              <span>{pendingStatus(pending)}</span>
-              <span className="text-fg-faint tabular">
-                <PendingClock since={pending.startedAt} />
-              </span>
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );
@@ -619,11 +618,48 @@ export function ChatView() {
     return observeSize(el, measure);
   }, []);
 
+  // The message's arrival on the new-thread screen (`rc-send-in`) is 160ms, and a session can exist
+  // in a single frame: the thread must not take the screen over mid-entry, or the entry is cut to
+  // one frame that reads as no motion at all. The screen it keeps is the same picture — the same row,
+  // in the same place, at rest — so the hand-over itself moves nothing; a harness slower than the
+  // entry is already past it and takes the screen the moment its session exists.
+  const [arrived, setArrived] = useState(true);
+  const shownSetup = useRef<PendingSetup | null>(null);
+  // The entry's clock belongs to the setup, not to its lifetime: it must not be stopped when the
+  // session exists, because that is the moment the hold begins. (Stopping it there — a cleanup on a
+  // `pending` dependency — is what left the chat on `Starting…` for good: the session, the sidebar
+  // row and the turn all arrived, and the screen that was waiting for the entry never let go.) A new
+  // setup, a retry or the view going away is what ends a clock.
+  const entryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  if (pending) shownSetup.current = pending;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the setup's id; its clock runs on after it
+  useEffect(() => {
+    if (!pending) return;
+    setArrived(false);
+    clearTimeout(entryTimer.current);
+    // Nothing to wait for where motion is off: the entry is instant, so the thread may be too.
+    entryTimer.current = setTimeout(() => setArrived(true), motionAllowed() ? PENDING_ENTRY_MS : 0);
+  }, [pending?.id]);
+  useEffect(() => () => clearTimeout(entryTimer.current), []);
+  // Which thread the setup became: the one selected as the setup went. A later selection (the reader
+  // picking another thread in the sidebar) ends any hold at once, so the screen never keeps a thread
+  // the reader has left.
+  const became = useRef<string | null>(null);
+  if (pending && !selectedId) became.current = null;
+  if (!pending && selectedId && !became.current && shownSetup.current) became.current = selectedId;
+  const held = heldSetup({
+    pending,
+    last: shownSetup.current,
+    became: became.current,
+    selectedId,
+    hasThread: !!thread,
+    arrived,
+  });
+  const setup = pending ?? held;
   // A thread setting up owns the new-thread screen until its session exists: the chat keeps its
   // message and the composer sits at the foot, where the thread's own will be.
-  const showsPending = !!pending && !selectedId;
+  const showsPending = !!setup && (!selectedId || !!held);
   const isNew = !selectedId && !showsPending;
-
   // Toasts sit centred at the top of the chat column, under its header (ui/Toaster.tsx).
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-place when the column resizes, which opening the right panel also does
   useEffect(() => {
@@ -636,6 +672,8 @@ export function ChatView() {
   }, [isNew, stackHeight, width, height]);
 
   const ownRequest = thread?.permissions[0];
+  // The approval just answered, which stands where its card was for a moment.
+  const resolved = useApp((s) => (thread ? s.resolvedApprovals[thread.id] : undefined));
   const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   // The lane's gutter sits outside the cap: `px-3 sm:px-12` on the transcript's scroller (its rows
@@ -658,7 +696,7 @@ export function ChatView() {
           className="!absolute top-0 left-0 rc-fade-in"
         />
       )}
-      <Header thread={thread} pending={showsPending ? pending : undefined} overBanner={showsBanner} />
+      <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
         The chat column and the right panel share one row, so the panel is docked beside
         the chat rather than floating over it: the column is `flex-1` and narrows by the
@@ -667,7 +705,17 @@ export function ChatView() {
       */}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-          {thread && !thread.loading ? (
+          <div
+            className="pointer-events-none absolute inset-x-3 z-20 mx-auto max-w-[var(--rc-chat-content-max-width)] sm:inset-x-12"
+            style={{ top: HEADER_HEIGHT + 8 }}
+          >
+            <WhileAwayCard className="pointer-events-auto" />
+          </div>
+          {showsPending && setup ? (
+            // Preferred over the thread: while its message is still arriving, the screen that has it
+            // is this one, and the row it draws is the row the transcript draws (`FIRST_ROW_PAD`).
+            <PendingSetupView pending={setup} />
+          ) : thread && !thread.loading ? (
             // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
             <Transcript
               key={thread.id}
@@ -677,8 +725,6 @@ export function ChatView() {
             />
           ) : thread?.loading ? (
             <TranscriptSkeleton />
-          ) : showsPending && pending ? (
-            <PendingSetupView pending={pending} bottomInset={stackHeight + 32} />
           ) : (
             <div className="flex-1" />
           )}
@@ -734,7 +780,13 @@ export function ChatView() {
                 <AttentionCard
                   request={ownRequest}
                   pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
+                  project={thread?.cwd}
                 />
+              </LaneItem>
+            )}
+            {!ownRequest && resolved && (
+              <LaneItem over>
+                <ResolvedApprovalBar approval={resolved} />
               </LaneItem>
             )}
             <LaneItem over>

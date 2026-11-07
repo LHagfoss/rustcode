@@ -168,6 +168,8 @@ export async function defaultTransport(): Promise<Transport> {
     const q = new URLSearchParams(window.location.search);
     return new MockTransport({
       scenario: q.get("scenario") ?? undefined,
+      // The inbox's demo rows (a question, approvals, a failed turn); `?needsYou=0` starts clean.
+      needsYou: q.get("needsYou") !== "0",
       bootMs: Number(q.get("boot")) || undefined,
       crashAfterMs: Number(q.get("crash")) || undefined,
       claudeUsage: (["expired", "refused", "forbidden", "denied"] as const).find(

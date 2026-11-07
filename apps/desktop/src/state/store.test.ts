@@ -56,6 +56,7 @@ import {
   plansToCache,
   prunePanels,
   prunePlans,
+  RESOLVED_APPROVAL_MS,
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
@@ -65,6 +66,9 @@ import {
   resetForTests,
   resumeQueue,
   retryPendingSetup,
+  returnToAttempt,
+  revokeGrant,
+  rewindCheckpoint,
   saveQueuedEdit,
   selectThread,
   sendDecisionFor,
@@ -94,6 +98,7 @@ import {
   steerOrSubmit,
   submit,
   switchNewThreadHarness,
+  toast,
   togglePin,
   toggleRightPanel,
   trashThread,
@@ -730,6 +735,44 @@ describe("engine controller with the mock engine", () => {
     }
   });
 
+  test("a timed approval is listed from the engine and can be revoked", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().grants.length > 0);
+    const grant = useApp.getState().grants[0]!;
+    expect(grant.prefix).toBe("bun test");
+    await revokeGrant(grant.id);
+    expect(useApp.getState().grants).toEqual([]);
+  });
+
+  test("an answered approval settles into one line, then leaves", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const thread = selected()!;
+    const once = thread.permissions[0]!.options.find((o) => o.kind === "allow_once")!;
+    answerPermission(thread.permissions[0]!, once);
+    expect(useApp.getState().resolvedApprovals[thread.id]).toMatchObject({
+      text: "Approved edit src/app.ts · once",
+      allowed: true,
+    });
+    await done;
+    await until(() => !useApp.getState().resolvedApprovals[thread.id], RESOLVED_APPROVAL_MS + 1000);
+  });
+
+  test("opening the inbox dismisses the attention toasts it lists", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    toast("A thread needs approval", "info");
+    toast("Copied", "info");
+    setView({ kind: "inbox" });
+    expect(useApp.getState().toasts.find((t) => t.text === "A thread needs approval")?.leaving).toBe(true);
+    expect(useApp.getState().toasts.some((t) => t.text === "Copied")).toBe(true);
+    await until(() => !useApp.getState().toasts.some((t) => t.text === "A thread needs approval"));
+  });
+
   test("a new thread streams a turn, asks for approval and finishes", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready");
@@ -799,7 +842,7 @@ describe("engine controller with the mock engine", () => {
 
   test("thread actions: pin, archive, rename and trash", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().sessions.length === 5);
+    await until(() => useApp.getState().sessions.length === 6);
     const id = useApp.getState().sessions[1]!.id;
     togglePin(id);
     expect(useApp.getState().pinned).toEqual([id]);
@@ -830,7 +873,7 @@ describe("engine controller with the mock engine", () => {
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 5);
+    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 6);
     const id = useApp.getState().sessions[2]!.id;
     togglePin(id);
     await new Promise((r) => setTimeout(r, 10));
@@ -838,6 +881,42 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().sessions.find((x) => x.id === id)?.pinned).toBe(true);
     await setThreadStatus(id, "done");
     expect(statusOf(useApp.getState(), id)).toBe("done");
+  });
+
+  test("a rewind keeps the turns it leaves as an earlier attempt", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const id = "mock-thread-attempts";
+    selectThread(id);
+    await until(() => useApp.getState().threads[id]?.loaded === true);
+    await until(() => (useApp.getState().checkpoints[id]?.length ?? 0) === 3);
+    const second = useApp.getState().checkpoints[id]!.find((c) => c.turn === 2)!;
+
+    // The engine keeps the abandoned state, so this rewinds without asking first.
+    await rewindCheckpoint(id, second);
+    expect(useApp.getState().confirm).toBeNull();
+    await until(() => (useApp.getState().attempts[id]?.length ?? 0) === 1);
+    await until(() => useApp.getState().threads[id]?.loaded === true);
+
+    // The live transcript is the turn above the cut; the two it left read as the attempt.
+    const live = useApp.getState().threads[id]!;
+    expect(live.items.filter((i) => i.kind === "turnEnd")).toHaveLength(1);
+    const attempt = useApp.getState().attempts[id]![0]!;
+    expect(attempt.turn).toBe(2);
+    expect(attempt.items.filter((i) => i.kind === "turnEnd")).toHaveLength(2);
+    // Its head was kept, as a checkpoint of its own, and the turns above it are still listed.
+    expect(attempt.head).toBe(4);
+    const after = useApp.getState().checkpoints[id]!;
+    expect(after.map((c) => c.turn)).toEqual([1, 2, 3, 4]);
+    expect(after.find((c) => c.turn === 4)?.attempt).toBe(true);
+
+    // Going back puts the files on that attempt, and says the conversation cannot follow.
+    returnToAttempt(id, attempt.id);
+    const confirm = useApp.getState().confirm;
+    expect(confirm?.action).toBe("Restore the Files");
+    confirm!.run();
+    await until(() => useApp.getState().toasts[0]?.text === "Files restored to the earlier attempt");
+    expect(useApp.getState().attempts[id]).toHaveLength(1);
   });
 
   test("edit and resend rewinds the thread to the message first", async () => {
@@ -2438,6 +2517,27 @@ describe("a message sent from the new-thread screen", () => {
     expect(mine).toHaveLength(1);
     expect(mine[0]!.text).toBe("rename the greeting");
     expect(s.threads[id]!.queue).toHaveLength(0);
+  });
+
+  test("the setup goes and its thread is selected in one update", async () => {
+    await ready();
+    // Every state the store passes through, from the press to the answer. The chat hands the screen
+    // from the setup to the thread, so it needs a state where the setup has gone and a thread is
+    // selected: a gap between those two is a screen with nothing to hand over to.
+    const seen: { pending: boolean; selected: string | null }[] = [];
+    const stop = useApp.subscribe((s) => seen.push({ pending: !!s.pendingSetup, selected: s.selectedId }));
+    expect(await submit("run the tests")).toBe(true);
+    stop();
+    const fromPress = seen.slice(seen.findIndex((s) => s.pending));
+    // It saw the setup appear and then go: a recording that caught one state could not tell.
+    expect(fromPress.length).toBeGreaterThan(1);
+    expect(fromPress.some((s) => !s.pending && !s.selected)).toBe(false);
+
+    const s = useApp.getState();
+    expect(s.pendingSetup).toBeNull();
+    const id = s.selectedId;
+    expect(id).not.toBeNull();
+    expect(s.threads[id!]!.items.some((i) => i.kind === "user" && i.text === "run the tests")).toBe(true);
   });
 
   test("a second send while the first sets up starts no second thread", async () => {

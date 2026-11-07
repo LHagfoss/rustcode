@@ -50,18 +50,23 @@ import {
 } from "../acp/types";
 import {
   type Checkpoint,
+  checkpointsByTurn,
   type PatchFile,
   parseCheckpoints,
+  parseRestoreAnswer,
   parseTurnDiff,
   parseWorktree,
   parseWorktreeList,
+  type RestoreAnswer,
   removeRefusal,
   statusInUpdate,
   type ThreadStatus,
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
+import { afterPaint } from "../lib/frame";
 import {
   APP_COMMANDS,
   bindingOf,
@@ -75,6 +80,7 @@ import { dismissOverlays } from "../lib/overlays";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
+import { type Attempt, splitAtTurn, transcriptTurns } from "./attempts";
 import { createBatcher, frameQueue } from "./batch";
 import {
   type HarnessCommands,
@@ -92,6 +98,7 @@ import {
   splitImageMarkers,
 } from "./compose";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
+import { parseGrants, type TimedGrant } from "./grants";
 import { restoreChoice, selectOption } from "./harness";
 import {
   DEFAULT_HEADER_BUTTONS,
@@ -103,6 +110,8 @@ import {
   answerOrchestration,
   linkFinished,
   linkStarted,
+  linkWaitEnded,
+  linkWaitStarted,
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
@@ -138,23 +147,31 @@ import {
   sendDecision,
   type TurnState,
 } from "./queue";
+import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
   appendSteer,
   applyUpdate,
   beginTurn,
+  departQueued,
+  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
   foldingBatch,
   localId,
   messagesAfter,
+  type QueuedPrompt,
   questionItem,
   requeueSteers,
+  settledWait,
+  settleEveryWait,
   type ThreadState,
+  type TranscriptItem,
   truncateBefore,
   userIndexOf,
+  waitingOn,
   wakeTurn,
 } from "./thread";
 import {
@@ -363,6 +380,14 @@ export interface AppState {
   systemNotifications: boolean;
   /** Those notifications only while the app is in the background (Settings › General). */
   notificationsBackgroundOnly: boolean;
+  /** A recap of what happened while the app was idle (Settings › Notifications). */
+  recapWhileAway: boolean;
+  /** How long the app must be idle before that recap is due, in hours. */
+  recapHours: number;
+  /** When the user left, while a recap is on screen; null when there is none. */
+  recapSince: number | null;
+  /** The recap was dismissed until the next break. */
+  recapDismissed: boolean;
   /** A thread stopped by its plan's limit continues when the limit resets. */
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
@@ -406,14 +431,28 @@ export interface AppState {
   finished: Record<string, number>;
   /** Threads whose last turn failed while you looked elsewhere, until you open them. */
   failed: Record<string, number>;
+  /** Timed approvals still in force ("Allow for 1 hour"), from `_rustcode/permissions`. */
+  grants: TimedGrant[];
+  /**
+   * The approval each thread just answered, by thread id: its card folds into
+   * this one settled line for a moment instead of vanishing (ui/AttentionCards.tsx).
+   */
+  resolvedApprovals: Record<string, ResolvedApproval>;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
+    | { kind: "inbox" }
     | { kind: "board" }
     | { kind: "review"; threadId: string }
     | { kind: "compare"; fanOut: string };
   /** Each thread's per-turn checkpoints (`_rustcode/checkpoints/list`). */
   checkpoints: Record<string, Checkpoint[]>;
+  /**
+   * The turns each thread's rewinds abandoned, newest first: drawn faded under a divider below the
+   * live transcript (`state/attempts.ts`). In memory only, like a question's row: the engine's
+   * history no longer holds those turns, so a reload reads only what is left.
+   */
+  attempts: Record<string, Attempt[]>;
   /** The new-thread composer's worktree choice. */
   newWorktree: { on: boolean; branch: string; edited: boolean };
   /**
@@ -428,6 +467,12 @@ export const PLAN_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
 
 /** How many threads keep their panel; past this the oldest entry is dropped. */
 export const MAX_PANELS = 500;
+
+/**
+ * The views the panel can show. Declared before the store: `parsePanels` reads it while the store
+ * is created, and a `const` further down is not initialized yet then (a blank window on start).
+ */
+const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 const STORAGE = {
   smartUi: "rustcode.smartUi",
@@ -446,6 +491,10 @@ const STORAGE = {
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
   notificationsBackgroundOnly: "rustcode.notificationsBackgroundOnly",
+  recapWhileAway: "rustcode.recapWhileAway",
+  recapHours: "rustcode.recapHours",
+  /** When the app was last used, so a return after hours knows how long the break was. */
+  lastActive: "rustcode.lastActiveAt",
   continueAfterLimit: "rustcode.continueAfterLimit",
   limitWaits: "rustcode.limitWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
@@ -487,6 +536,8 @@ export const SETTINGS_DEFAULTS = {
   resumeAfterRestart: true,
   systemNotifications: true,
   notificationsBackgroundOnly: true,
+  recapWhileAway: true,
+  recapHours: RECAP_HOURS_DEFAULT,
   continueAfterLimit: true,
   orchestration: true,
   threadLimit: MAX_ACTIVE_LINKS,
@@ -559,6 +610,10 @@ export const useApp = create<AppState>((_set, _get, api) => ({
     STORAGE.notificationsBackgroundOnly,
     SETTINGS_DEFAULTS.notificationsBackgroundOnly,
   ),
+  recapWhileAway: storedFlag(STORAGE.recapWhileAway, SETTINGS_DEFAULTS.recapWhileAway),
+  recapHours: parseRecapHours(stored(STORAGE.recapHours)),
+  recapSince: null,
+  recapDismissed: false,
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
@@ -578,8 +633,11 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   newThreadPermissionMode: null,
   finished: {},
   failed: {},
+  grants: [],
+  resolvedApprovals: {},
   view: { kind: "chat" },
   checkpoints: {},
+  attempts: {},
   newWorktree: { on: false, branch: "", edited: false },
   pendingSetup: null,
   smartUi: storedFlag(STORAGE.smartUi, SETTINGS_DEFAULTS.smartUi),
@@ -926,6 +984,7 @@ async function handshake(): Promise<void> {
       probeFeatures(conn),
       refreshThemes(conn),
       refreshCommands(conn),
+      refreshGrants(conn),
     ]);
     // The composer's meter is ready before the first thread opens.
     void refreshPlanCache();
@@ -1185,8 +1244,17 @@ async function handleInbound(message: Inbound) {
           connection?.respond(message.id, permissionSelected(auto.id));
           return;
         }
-        updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
-        if (request.sessionId !== get().selectedId) {
+        updateThread(request.sessionId, (t) => {
+          // An approval holds its call: the turn's Trace draws that time apart
+          // from the call's work (state/thread.ts `waitingOn`).
+          const held = request.question ? t : waitingOn(t, request.toolCallId, request.at ?? Date.now());
+          return { ...held, permissions: [...held.permissions, request] };
+        });
+        // Its links stop their work clock while the user decides (state/delegates.ts).
+        linkWaitStarted(request.sessionId);
+        // The inbox is the screen that lists this request already: a toast there would
+        // stack over its own first rows. Other toasts (copied, finished) still show.
+        if (request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
           toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
         // The system says the same, so a thread waiting behind another window is not forgotten.
@@ -1705,6 +1773,11 @@ async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtr
   }
   // One update switches the screen and shows the message: nothing waits for the engine.
   set({ pendingSetup: setup });
+  // That update gets its own painted frame before `session/new` is asked for. An in-process harness
+  // answers in a microtask, so both updates would otherwise land in one task and one frame: the
+  // pending screen's message would be drawn for the first time by the thread's own transcript, and
+  // its entry (`rc-send-in`) would never get a frame to play in.
+  await afterPaint();
   return await startSetup(setup);
 }
 
@@ -1778,7 +1851,8 @@ export async function retryPendingSetup(): Promise<boolean> {
   set({ pendingSetup: setup });
   const id = await startSetup(setup);
   if (!id) return false;
-  void runPrompt(id, setup.text, setup.extras ?? emptyExtras);
+  // Its bubble is already on screen, from the setup it keeps through the retry: it does not fly in.
+  void runPrompt(id, setup.text, setup.extras ?? emptyExtras, { alreadyShown: true });
   return true;
 }
 
@@ -1848,6 +1922,27 @@ export function retryMessage(id: string, itemId: string) {
       run: () => void go(),
     });
   } else void go();
+}
+
+/**
+ * Retry a thread's failed turn: the inbox's action for a failure. The thread is
+ * opened first when the app has not read it, because the message to send again
+ * lives in its transcript; its last message is the one the failure answered.
+ */
+export async function retryThread(id: string): Promise<void> {
+  if (!get().threads[id]?.loaded) await openThread(id);
+  const thread = get().threads[id];
+  if (!thread) return;
+  for (let i = thread.items.length - 1; i >= 0; i--) {
+    const item = thread.items[i]!;
+    if (item.kind !== "user") continue;
+    // Retried: the failure is answered, so the inbox and the row stop saying Failed.
+    clearFinished(id);
+    retryMessage(id, item.id);
+    return;
+  }
+  // Nothing to send again (an empty transcript): at least show the thread.
+  selectThread(id);
 }
 
 /** Edit: the message goes back to the composer; sending it rewinds the thread to it first. */
@@ -2100,6 +2195,9 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
       : null;
   if (bare && runCommandAction(bare, get().selectedId)) return true;
   let id = get().selectedId;
+  // The thread is made for this message, so the new-thread screen already draws its row: it must not
+  // fly in again when the thread takes the screen over (lib/sendFlight.ts).
+  const madeHere = !id;
   try {
     if (!id) {
       const started = await createThread(trimmed, extras);
@@ -2164,7 +2262,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     void resumeQueue(id);
     return true;
   }
-  void runPrompt(id, trimmed, extras);
+  void runPrompt(id, trimmed, extras, { alreadyShown: madeHere });
   return true;
 }
 
@@ -2341,10 +2439,23 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   }
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
+    glideAway(id, item);
     return true;
   }
   toast(QUEUE_REASON.refused);
   return false;
+}
+
+/** How long a queued row takes to leave the stack, gliding up toward the transcript (index.css). */
+const STEER_GLIDE_MS = 240;
+
+/**
+ * A queued row a steer took keeps the stack's place while it glides out, so the row itself leaves
+ * instead of vanishing from under the reader; it is dropped once the glide is over.
+ */
+function glideAway(id: string, item: QueuedPrompt) {
+  updateThread(id, (t) => departQueued(t, item));
+  setTimeout(() => updateThread(id, (t) => dropDeparted(t, item.id)), STEER_GLIDE_MS);
 }
 
 /**
@@ -2471,6 +2582,11 @@ export async function runPrompt(
     automatic?: boolean;
     /** The turn that continues after a limit: its wait is settled when it ends. */
     limitResume?: boolean;
+    /**
+     * The thread was made for this message, and the new-thread screen already shows its row
+     * (`state/setup.ts`): it does not fly in when the thread takes the screen over.
+     */
+    alreadyShown?: boolean;
   } = {},
 ): Promise<void> {
   const conn = engine();
@@ -2511,11 +2627,17 @@ export async function runPrompt(
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
   if (id in get().snoozed) snoozeThread(id, null);
   const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
+  // A message typed here flies out of the composer on its first sighting; one the new-thread screen
+  // already drew does not (lib/sendFlight.ts).
+  const sent = userTypedPrompt(options) && !options.fromView && !options.alreadyShown;
   // The message is on screen before its blocks are built: a long paste or a 20 MB picture is copied
-  // into the prompt's JSON after the bubble lands, not before it.
+  // into the prompt's JSON after the bubble lands, not before it — and that update gets a painted
+  // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that
+  // follows it, which on a fast harness is the whole rest of the turn's first frame.
   updateThread(id, (t) =>
-    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake),
+    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
   );
+  await afterPaint();
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
     images: acceptsImages(thread),
@@ -2612,7 +2734,8 @@ export async function cancel(id = get().selectedId): Promise<void> {
     connection.notify(Method.sessionCancel, { sessionId: id });
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
     for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
-    updateThread(id, (t) => ({ ...t, permissions: [] }));
+    updateThread(id, (t) => settleEveryWait({ ...t, permissions: [] }, Date.now()));
+    if (thread.permissions.length) linkWaitEnded(id);
   } catch (error) {
     toast(errorText(error), "error");
   }
@@ -2646,17 +2769,31 @@ export async function setConfigOption(id: string, configId: string, value: strin
 
 // ---------------------------------------------------------------- approvals
 
+/** One answered approval, kept a moment so its card can settle into a line. */
+export interface ResolvedApproval {
+  rpcId: number | string;
+  /** "Allowed edit src/app.ts · once". */
+  text: string;
+  allowed: boolean;
+  at: number;
+}
+
 /**
  * Answer exactly this request; it leaves the queue before the reply, so a double click cannot
  * answer the next. A question also leaves its answer in the transcript, where the reader can see
  * what was asked and what they said (state/thread.ts `questionItem`).
  */
 function reply(request: PermissionRequest, result: JsonObject, answer?: string) {
-  updateThread(request.sessionId, (t) => ({
-    ...t,
-    permissions: t.permissions.filter((p) => p.rpcId !== request.rpcId),
-    items: answer ? [...t.items, questionItem(request, answer)] : t.items,
-  }));
+  updateThread(request.sessionId, (t) => {
+    const settled = request.question ? t : settledWait(t, request.toolCallId, Date.now());
+    return {
+      ...settled,
+      permissions: settled.permissions.filter((p) => p.rpcId !== request.rpcId),
+      items: answer ? [...settled.items, questionItem(request, answer)] : settled.items,
+    };
+  });
+  // Another request of the same thread keeps it waiting; the last one ends the wait.
+  if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
   connection?.respond(request.rpcId, result);
 }
 
@@ -2666,6 +2803,72 @@ export function answerPermission(request: PermissionRequest, option: PermissionO
     option ? permissionSelected(option.id) : permissionCancelled,
     request.question ? (option?.name ?? "Declined") : undefined,
   );
+  if (request.question) return;
+  settleApproval(request, option);
+  // An hour's grant is the engine's to keep: list it again so the panel shows it.
+  if (option && optionScope(option) === "hour") void refreshGrants(connection);
+}
+
+/** How long an answered card stays as one settled line before it leaves. */
+export const RESOLVED_APPROVAL_MS = 1800;
+
+/**
+ * The card an answer just closed folds into one line in place ("Allowed edit
+ * src/app.ts · once") for a moment, so the answer has a visible result instead
+ * of the card vanishing under the pointer.
+ */
+function settleApproval(request: PermissionRequest, option: PermissionOption | null) {
+  const threadId = request.sessionId;
+  const scope = option ? optionScope(option) : "decline";
+  const text = option ? resolvedLine(request, option) : `Declined ${approvalSubject(request)}`;
+  const previous = resolvedTimers.get(threadId);
+  if (previous) clearTimeout(previous);
+  set((s) => ({
+    resolvedApprovals: {
+      ...s.resolvedApprovals,
+      [threadId]: { rpcId: request.rpcId, text, allowed: scope !== "decline", at: Date.now() },
+    },
+  }));
+  const timer = setTimeout(() => {
+    resolvedTimers.delete(threadId);
+    set((s) => {
+      // A later answer replaced it: that one owns the line and its own timer.
+      if (s.resolvedApprovals[threadId]?.rpcId !== request.rpcId) return s;
+      const { [threadId]: _gone, ...rest } = s.resolvedApprovals;
+      return { resolvedApprovals: rest };
+    });
+  }, RESOLVED_APPROVAL_MS);
+  resolvedTimers.set(threadId, timer);
+}
+
+const resolvedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// ---------------------------------------------------------------- timed grants
+
+/**
+ * `_rustcode/permissions`: the "Allow for 1 hour" grants still in force, with
+ * what each covers and when it ends. An engine without the method lists none.
+ */
+export async function refreshGrants(conn: AcpConnection | null = connection): Promise<void> {
+  if (!conn) return;
+  try {
+    const grants = parseGrants(await conn.request(Method.permissions, {}, 10_000));
+    if (connection === conn) set({ grants });
+  } catch {
+    // An older engine has none to list; what is known stays as it is.
+  }
+}
+
+/** Revoke one timed grant; the engine answers with the list as it stands then. */
+export async function revokeGrant(id: string): Promise<void> {
+  const conn = connection;
+  if (!conn) return;
+  try {
+    const grants = parseGrants(await conn.request(Method.permissionsRevoke, { id }, 10_000));
+    if (connection === conn) set({ grants });
+  } catch (error) {
+    toast(`Could not revoke it: ${errorText(error)}`, "error");
+  }
 }
 
 /** Approve every approval the thread waits on (not questions), each with its "allow once" option. */
@@ -3094,6 +3297,43 @@ export function setNotificationsBackgroundOnly(on: boolean) {
   store(STORAGE.notificationsBackgroundOnly, on ? "1" : "0");
 }
 
+export function setRecapWhileAway(on: boolean) {
+  set({ recapWhileAway: on, ...(on ? {} : { recapSince: null }) });
+  store(STORAGE.recapWhileAway, on ? "1" : "0");
+}
+
+export function setRecapHours(hours: number) {
+  const kept = parseRecapHours(String(hours));
+  set({ recapHours: kept });
+  store(STORAGE.recapHours, String(kept));
+}
+
+/** A return after a long enough break: the recap starts at the moment the user left. */
+export function beginRecap(since: number) {
+  set({ recapSince: since, recapDismissed: false });
+}
+
+/** Puts the card away until the next break; the inbox keeps a row that brings it back. */
+export function dismissRecap() {
+  set({ recapDismissed: true });
+}
+
+export function showRecap() {
+  set({ recapDismissed: false });
+}
+
+/** When the app was last used, from app storage; 0 on a first run. */
+export function lastActiveAt(): number {
+  const raw = stored(STORAGE.lastActive);
+  const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Records that the app was used now, so a later return measured from here. */
+export function markActive(now = Date.now()) {
+  store(STORAGE.lastActive, String(now));
+}
+
 export function setRoundedFont(on: boolean) {
   set({ roundedFont: on });
   store(STORAGE.roundedFont, on ? "1" : "0");
@@ -3303,6 +3543,18 @@ export function settleThread(id: string): void {
 export function setView(view: AppState["view"]) {
   dismissOverlays();
   set({ view, switcherOpen: false, settings: null });
+  // The inbox lists what those toasts were about, so they have said their piece.
+  if (view.kind === "inbox") dismissAttentionToasts();
+}
+
+/** The toasts that point at a thread needing the user; the inbox lists them all. */
+const ATTENTION_TOASTS = ["A thread needs approval", "A thread has a question"];
+
+/** Dismiss every attention toast already on screen, leaving the rest alone. */
+export function dismissAttentionToasts() {
+  for (const toast of get().toasts) {
+    if (!toast.persist && ATTENTION_TOASTS.includes(toast.text)) dismissToast(toast.id);
+  }
 }
 
 /** The worktree a thread runs in, from the thread or the list. */
@@ -3390,19 +3642,24 @@ export async function turnDiff(id: string, turn: number): Promise<PatchFile[]> {
 }
 
 /**
- * Put the files back to before a turn; with `rewind`, the conversation too
- * when the harness can rewind (else the engine keeps it and says so).
+ * Rewind to before turn N: put the files back to that turn's checkpoint, and the conversation with them
+ * when the harness can rewind. With `keep`, the state it abandons is kept as a checkpoint first,
+ * so the attempt it leaves can be returned to. The restored files and the reloaded conversation
+ * are the feedback; the caller says what happened to the transcript.
  */
-export async function restoreCheckpoint(id: string, turn: number, rewind: boolean): Promise<boolean> {
+async function restoreCheckpoint(
+  id: string,
+  turn: number,
+  { rewind, keep }: { rewind: boolean; keep: boolean },
+): Promise<RestoreAnswer | undefined> {
   try {
-    const result = (await engine().request(
+    const result = await engine().request(
       V2Method.checkpointRestore,
-      { session_id: id, turn, rewind },
+      { session_id: id, turn, rewind, keep },
       60_000,
-    )) as JsonObject | null;
-    const kept = result?.conversation === "kept";
-    // The restored files and the reloaded conversation are the feedback.
-    if (rewind && !kept) {
+    );
+    const answer = parseRestoreAnswer(result);
+    if (answer.conversation === "rewound") {
       // The conversation changed under the app: load it again.
       updateThread(id, (t) => ({ ...t, loaded: false }));
       set((s) => {
@@ -3412,11 +3669,118 @@ export async function restoreCheckpoint(id: string, turn: number, rewind: boolea
       await openThread(id);
     }
     void refreshCheckpoints(id);
-    return true;
+    return answer;
   } catch (error) {
-    toast(`Could not restore: ${errorText(error)}`, "error");
-    return false;
+    toast(`Could not rewind: ${errorText(error)}`, "error");
+    return undefined;
   }
+}
+
+/** Whether this engine keeps the state a rewind abandons, so there is a way back to it. */
+function keepsAbandonedState(): boolean {
+  return !!get().agent?.checkpointAttempts;
+}
+
+/**
+ * Rewind to a turn's checkpoint. The turns it leaves stay in the app as an earlier attempt, faded
+ * under a divider below the transcript (`state/attempts.ts`), and the state they ended in is kept,
+ * so "go back to this attempt" can put the files there again. A harness that cannot rewind its
+ * conversation gets the files only, and says so: the thread stays as it is.
+ */
+export async function rewindCheckpoint(id: string, checkpoint: Checkpoint): Promise<void> {
+  const thread = get().threads[id];
+  if (!thread || thread.running) return;
+  const rewind = canRewind(thread);
+  const keep = rewind && keepsAbandonedState();
+  const go = () => void runRewind(id, checkpoint.turn, { rewind, keep });
+  if (!rewind) {
+    askConfirm({
+      title: `Put the files back to before turn ${checkpoint.turn}?`,
+      message:
+        "This harness cannot rewind the conversation, so the thread stays as it is and only the files go back. Later messages are kept.",
+      action: "Files Only",
+      destructive: true,
+      run: go,
+    });
+    return;
+  }
+  if (!keep) {
+    askConfirm({
+      title: `Rewind to before turn ${checkpoint.turn}?`,
+      message:
+        "The files and the conversation go back to before this turn. This engine cannot keep the state it leaves, so there is no way back to it.",
+      action: "Rewind",
+      destructive: true,
+      run: go,
+    });
+    return;
+  }
+  go();
+}
+
+/** The rewind itself: what it abandons becomes an attempt, then the thread reads from the cut. */
+async function runRewind(
+  id: string,
+  turn: number,
+  { rewind, keep }: { rewind: boolean; keep: boolean },
+): Promise<void> {
+  const thread = get().threads[id];
+  if (!thread) return;
+  const tail = abandonsAt(thread, turn);
+  const answer = await restoreCheckpoint(id, turn, { rewind, keep });
+  if (!answer) return;
+  if (answer.conversation !== "rewound") {
+    toast(
+      answer.rewindError
+        ? `The files went back to before turn ${turn}. The conversation stayed: ${answer.rewindError}`
+        : `The files went back to before turn ${turn}. The conversation stayed.`,
+      answer.rewindError ? "error" : "success",
+    );
+    return;
+  }
+  if (!tail) {
+    toast(`The files went back to before turn ${turn}.`, "success");
+    return;
+  }
+  const attempt: Attempt = {
+    id: localId("attempt"),
+    at: Date.now(),
+    turn,
+    head: answer.kept,
+    items: tail,
+  };
+  set((s) => ({ attempts: { ...s.attempts, [id]: [attempt, ...(s.attempts[id] ?? [])] } }));
+}
+
+/** The turns a rewind to `turn` abandons: from the message that started it to the transcript's end. */
+function abandonsAt(thread: ThreadState, turn: number): TranscriptItem[] | undefined {
+  const byEnd = checkpointsByTurn(transcriptTurns(thread.items), get().checkpoints[thread.id] ?? []);
+  const end = Object.entries(byEnd).find(([, checkpoint]) => checkpoint.turn === turn)?.[0];
+  if (!end) return undefined;
+  return splitAtTurn(thread.items, end)?.tail;
+}
+
+/**
+ * Go back to an earlier attempt: the files return to where it ended. The conversation cannot
+ * follow (its messages are out of the thread's context for good), so the transcript stays as it
+ * reads, and the confirm says so rather than pretending the two go together.
+ */
+export function returnToAttempt(threadId: string, attemptId: string): void {
+  const attempt = get().attempts[threadId]?.find((a) => a.id === attemptId);
+  const thread = get().threads[threadId];
+  if (!attempt || attempt.head === undefined || !thread || thread.running) return;
+  const head = attempt.head;
+  askConfirm({
+    title: "Go back to this attempt?",
+    message:
+      "The files go back to where this attempt ended. Its messages cannot: they are no longer in the thread's context, so the thread keeps reading as it does now.",
+    action: "Restore the Files",
+    run: () => {
+      void restoreCheckpoint(threadId, head, { rewind: false, keep: false }).then((answer) => {
+        if (answer) toast("Files restored to the earlier attempt", "success");
+      });
+    },
+  });
 }
 
 export function setNewWorktree(change: Partial<AppState["newWorktree"]>) {
@@ -3446,9 +3810,6 @@ export function setTerminalOpen(open: boolean) {
 
 /** A panel view: one of the side views, never closed. */
 export type PanelKind = NonNullable<AppState["panel"]>;
-
-/** The views the panel can show. */
-const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 /**
  * The view a thread with no panel open might show: its own overview. Changes,
@@ -4127,6 +4488,7 @@ export function resetForTests() {
     newThreadPermissionMode: null,
     view: { kind: "chat" },
     checkpoints: {},
+    attempts: {},
     newWorktree: { on: false, branch: "", edited: false },
     pendingSetup: null,
   });

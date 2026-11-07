@@ -15,6 +15,7 @@ import type {
 import { unwrapShell } from "../lib/command";
 import type { ComposeExtras, SentAttachment } from "./compose";
 import type { Link } from "./orchestration";
+import { activeStep, advancePlanClocks, type PlanClocks, type SteerNote } from "./steer";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "./toolNames";
 
 export type TranscriptItem =
@@ -29,6 +30,12 @@ export type TranscriptItem =
       fromView?: boolean;
       /** The app woke the thread for its children: a divider row, not a message the user typed. */
       wake?: boolean;
+      /**
+       * Typed here and sent from the composer: its row flies out of the field on its first sighting
+       * (`lib/sendFlight.ts`). A replayed item, a wake, a message from another thread or a view and
+       * the one a thread was made for all leave it out, so they only rise in.
+       */
+      sent?: boolean;
     }
   | { kind: "assistant"; id: string; text: string; at?: number; turnId?: string }
   | {
@@ -66,6 +73,12 @@ export type TranscriptItem =
       startedAt?: number;
       endedAt?: number;
       /**
+       * Stretches of this call spent waiting on the user's approval, in order.
+       * A wait still open has no `to`; the trace draws each one apart from the
+       * call's work and measures the work alone (`lib/trace.ts`).
+       */
+      waits?: ToolWait[];
+      /**
        * Its work goes on after the call returned: `agent` for a subagent sent
        * to the background (the turn waits for it), `task` for a background
        * command (it outlives the turn; the engine completes the call when it ends).
@@ -97,8 +110,89 @@ export type TranscriptItem =
       id: string;
       elapsedMs?: number;
       at?: number;
+      /** When the app saw this turn begin. A replayed turn has none, and so no Trace. */
+      startedAt?: number;
+      /** The usage the engine reported while the turn ran, for its Trace. */
+      usage?: TurnUsage;
       outcome: "completed" | "cancelled" | "failed";
     };
+
+/**
+ * What a turn's tracer reads: the session's totals when the turn began, and one
+ * sample for each usage update the engine sent while it ran. Every number is
+ * cumulative, so the tracer subtracts the one before to price a round.
+ */
+export interface TurnUsage {
+  before?: SessionUsage;
+  samples: { at: number; usage: SessionUsage }[];
+}
+
+/**
+ * The baseline a turn's usage samples are subtracted from. A thread's first
+ * turn has no earlier usage to subtract: the engine's totals are then its own,
+ * so they start at zero rather than leaving the turn unpriced.
+ */
+function usageBaseline(state: ThreadState): TurnUsage {
+  if (state.usage) return { before: state.usage, samples: [] };
+  const first = !state.items.some((item) => item.kind === "turnEnd");
+  return {
+    before: first
+      ? { used: 0, size: 0, estimated: false, inputTokens: 0, outputTokens: 0, cachedTokens: 0, cost: 0 }
+      : undefined,
+    samples: [],
+  };
+}
+
+/** A stretch of a tool call the app spent waiting on the user's approval. */
+export interface ToolWait {
+  from: number;
+  /** Unset while the approval still waits. */
+  to?: number;
+}
+
+/**
+ * The user's decision is what held this call: the approval arrived, so its
+ * clock starts. A request that arrives before the call's own notification is
+ * picked up when the call is added (`toolCall`), so both orders work.
+ */
+export function waitingOn(state: ThreadState, toolCallId: string, at: number): ThreadState {
+  const index = state.toolIndex[toolCallId];
+  const item = index === undefined ? undefined : state.items[index];
+  if (index === undefined || item?.kind !== "tool") return state;
+  // One approval per call, and a second notice does not restart a wait already running.
+  if (item.waits?.some((wait) => wait.to === undefined)) return state;
+  const items = replaceAt(state.items, index, { ...item, waits: [...(item.waits ?? []), { from: at }] });
+  return { ...state, items };
+}
+
+/** The approval was answered (or the turn stopped): the wait closes at `at`. */
+export function settledWait(state: ThreadState, toolCallId: string, at: number): ThreadState {
+  const index = state.toolIndex[toolCallId];
+  const item = index === undefined ? undefined : state.items[index];
+  if (index === undefined || item?.kind !== "tool" || !item.waits) return state;
+  const open = item.waits.findLastIndex((wait) => wait.to === undefined);
+  if (open < 0) return state;
+  const waits = item.waits.map((wait, i) =>
+    i === open ? { from: wait.from, to: Math.max(wait.from, at) } : wait,
+  );
+  return { ...state, items: replaceAt(state.items, index, { ...item, waits }) };
+}
+
+/** Every wait the thread still holds closes at `at` (a stopped turn, or one that ended). */
+export function settleEveryWait(state: ThreadState, at: number): ThreadState {
+  let changed = false;
+  const items = state.items.map((item) => {
+    if (item.kind !== "tool" || !item.waits?.some((wait) => wait.to === undefined)) return item;
+    changed = true;
+    return {
+      ...item,
+      waits: item.waits.map((wait) =>
+        wait.to === undefined ? { from: wait.from, to: Math.max(wait.from, at) } : wait,
+      ),
+    };
+  });
+  return changed ? { ...state, items } : state;
+}
 
 /**
  * The row a resolved question leaves behind: what was asked and what was answered. Built here,
@@ -176,14 +270,25 @@ export interface ThreadState {
   /** Index by tool call id into `items`. */
   toolIndex: Record<string, number>;
   plan: PlanEntry[];
+  /** When each plan step came up and finished, for the card's clocks (`state/steer.ts`). */
+  planClocks: PlanClocks;
+  /** The steering notes this thread's turns read, and where each took effect. */
+  steers: SteerNote[];
   usage?: SessionUsage;
   configOptions: ConfigOption[];
   permissions: PermissionRequest[];
   queue: QueuedPrompt[];
   /** A stopped or failed turn left the queue waiting: it keeps its order until Resume starts it. */
   queueHeld?: boolean;
+  /**
+   * Rows a steer just took out of the queue: they keep the stack's place while they glide out
+   * toward the transcript, then they are dropped (`ui/QueuedMessages.tsx` `LeavingQueuedRow`).
+   */
+  departing?: QueuedPrompt[];
   running: boolean;
   turnStartedAt?: number;
+  /** The running turn's usage samples, handed to its footer when it ends. */
+  turnUsage?: TurnUsage;
   /** Background commands the last turn parked on; it resumes when they finish. */
   waiting?: number;
   /** The running turn is one the engine resumed itself, not a prompt the app sent. */
@@ -210,6 +315,8 @@ export function emptyThread(id: string, cwd: string, title?: string): ThreadStat
     items: [],
     toolIndex: {},
     plan: [],
+    planClocks: {},
+    steers: [],
     configOptions: [],
     permissions: [],
     queue: [],
@@ -231,12 +338,23 @@ function closePendingTurn(state: ThreadState, now = Date.now()): ThreadState {
   if (!turn && !(state.running && started !== undefined)) return state;
   const outcome = turn?.outcome === "cancelled" || turn?.outcome === "failed" ? turn.outcome : "completed";
   const elapsedMs = turn?.elapsedMs ?? (started !== undefined ? Math.max(0, now - started) : undefined);
+  const settled = settleEveryWait(state, now);
   return {
-    ...state,
+    ...settled,
     pendingTurn: undefined,
+    turnUsage: undefined,
     items: [
-      ...state.items,
-      { kind: "turnEnd", id: localId("turn"), elapsedMs, at: turn?.at ?? now, outcome },
+      ...settled.items,
+      {
+        kind: "turnEnd",
+        id: localId("turn"),
+        elapsedMs,
+        at: turn?.at ?? now,
+        // The app watched this turn run only if it started it: a replay has no start.
+        startedAt: turn ? undefined : started,
+        usage: turn ? undefined : state.turnUsage,
+        outcome,
+      },
     ],
   };
 }
@@ -391,6 +509,9 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
     case "toolCall": {
       const items = finishThoughts(state.items, now);
       const existing = state.toolIndex[update.id];
+      // An approval can arrive before the call it is about: its clock starts here.
+      const approval = state.permissions.find((p) => p.toolCallId === update.id && !p.question);
+      const waits: ToolWait[] | undefined = approval ? [{ from: approval.at ?? now }] : undefined;
       const tool: TranscriptItem = {
         kind: "tool",
         id: update.id,
@@ -406,6 +527,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         parent: update.parent,
         startedAt: now,
         endedAt: update.status === "completed" || update.status === "failed" ? now : undefined,
+        waits,
       };
       if (existing !== undefined && items[existing]?.kind === "tool") {
         const before = items[existing] as Extract<TranscriptItem, { kind: "tool" }>;
@@ -416,6 +538,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           parent: tool.parent ?? before.parent,
           startedAt: before.startedAt,
           endedAt: tool.endedAt ?? before.endedAt,
+          waits: before.waits ?? waits,
           autoAllowed: before.autoAllowed,
         };
         return { ...state, items: replaceAt(items, existing, merged) };
@@ -449,14 +572,25 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       };
       return { ...state, items: next };
     }
-    case "plan":
-      return { ...state, plan: update.entries };
+    case "plan": {
+      // Each step's clock runs while the turn is on it, so the card can say how long it has taken
+      // and how long it took (`state/steer.ts`).
+      const planClocks = advancePlanClocks(state.planClocks, update.entries, now, state.running);
+      return { ...state, plan: update.entries, planClocks };
+    }
     case "title":
       return { ...state, title: update.title };
     case "configOptions":
       return { ...state, configOptions: update.options };
-    case "usage":
-      return { ...state, usage: update.usage };
+    case "usage": {
+      // A usage update while the turn runs is one round's totals: the Trace
+      // chip under the turn prices its model calls from them.
+      const turnUsage =
+        state.running && state.turnUsage
+          ? { ...state.turnUsage, samples: [...state.turnUsage.samples, { at: now, usage: update.usage }] }
+          : state.turnUsage;
+      return { ...state, usage: update.usage, turnUsage };
+    }
     case "compaction":
       // One quiet row, whichever harness compacted.
       return {
@@ -519,6 +653,7 @@ export function beginTurn(
   attachments?: SentAttachment[],
   fromView?: boolean,
   wake?: boolean,
+  sent?: boolean,
 ): ThreadState {
   const closed = closePendingTurn(state);
   return {
@@ -527,6 +662,7 @@ export function beginTurn(
     // A turn starts the queue: what a stopped turn held is running again.
     queueHeld: undefined,
     turnStartedAt: now,
+    turnUsage: usageBaseline(state),
     waiting: undefined,
     woken: undefined,
     error: undefined,
@@ -540,6 +676,7 @@ export function beginTurn(
         attachments: attachments?.length ? attachments : undefined,
         fromView: fromView || undefined,
         wake: wake || isWakeMessage(text) || undefined,
+        sent: sent || undefined,
       },
     ],
   };
@@ -558,6 +695,7 @@ export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
     woken: true,
     waiting: undefined,
     turnStartedAt: now,
+    turnUsage: usageBaseline(state),
     error: undefined,
     items: [
       ...state.items,
@@ -603,7 +741,7 @@ export function finishTurn(
   now = Date.now(),
   error?: string,
 ): ThreadState {
-  const items = finishAllThoughts(state.items, now).map((item) =>
+  const items = finishAllThoughts(settleEveryWait(state, now).items, now).map((item) =>
     item.kind === "tool" &&
     (item.status === "pending" || item.status === "in_progress") &&
     !(item.background === "task" && outcome === "completed")
@@ -623,7 +761,19 @@ export function finishTurn(
     pendingTurn: undefined,
     permissions: [],
     error,
-    items: [...items, { kind: "turnEnd", id: localId("turn"), elapsedMs, at: now, outcome }],
+    turnUsage: undefined,
+    items: [
+      ...items,
+      {
+        kind: "turnEnd",
+        id: localId("turn"),
+        elapsedMs,
+        at: now,
+        startedAt: state.turnStartedAt,
+        usage: state.turnUsage,
+        outcome,
+      },
+    ],
   };
 }
 
@@ -688,43 +838,65 @@ export function autoAllowedNoticeNeeded(state: ThreadState, tool: string): boole
   return !state.items.some((item) => item.kind === "tool" && orchestrationTool(item.title) === want);
 }
 
-/** Add a steered message where the running turn will read it. */
+/**
+ * Add a steered message where the running turn will read it, and the note saying where that was: the
+ * plan step the turn was on when it took the note, so the plan card can show it there, or none, and
+ * the transcript draws a line under the message instead (`state/steer.ts`).
+ */
 export function appendSteer(
   state: ThreadState,
   text: string,
   now = Date.now(),
   attachments?: SentAttachment[],
 ): ThreadState {
+  const id = localId("user");
   return {
     ...state,
     items: [
       ...state.items,
       {
         kind: "user",
-        id: localId("user"),
+        id,
         text,
         at: now,
         steered: true,
         attachments: attachments?.length ? attachments : undefined,
       },
     ],
+    steers: [...state.steers, { id, text, at: now, step: activeStep(state.plan) }],
   };
+}
+
+/** A queued row a steer took: it glides out of the stack, then `dropDeparted` removes it. */
+export function departQueued(state: ThreadState, item: QueuedPrompt): ThreadState {
+  if (state.departing?.some((d) => d.id === item.id)) return state;
+  return { ...state, departing: [item, ...(state.departing ?? [])] };
+}
+
+/** The row has finished gliding: the thread lets it go. */
+export function dropDeparted(state: ThreadState, id: string): ThreadState {
+  if (!state.departing?.some((d) => d.id === id)) return state;
+  return { ...state, departing: state.departing.filter((d) => d.id !== id) };
 }
 
 /** Steers the turn never read go back to the front of the queue, and leave the transcript. */
 export function requeueSteers(state: ThreadState, unused: string[]): ThreadState {
   if (!unused.length) return state;
   const wanted = unused.map((t) => t.trim());
+  const dropped: string[] = [];
   const items = state.items.filter((item) => {
     if (item.kind !== "user" || !item.steered) return true;
     const at = wanted.indexOf(item.text.trim());
     if (at < 0) return true;
     wanted.splice(at, 1);
+    dropped.push(item.id);
     return false;
   });
   return {
     ...state,
     items,
+    // A note whose message went back to the queue took effect nowhere: it goes with it.
+    steers: state.steers.filter((note) => !dropped.includes(note.id)),
     queue: [...unused.map((text) => ({ id: localId("queued"), text })), ...state.queue],
   };
 }
@@ -738,7 +910,16 @@ export function truncateBefore(state: ThreadState, itemId: string): ThreadState 
   items.forEach((item, i) => {
     if (item.kind === "tool") toolIndex[item.id] = i;
   });
-  return { ...state, items, toolIndex, pendingTurn: undefined, plan: [] };
+  const kept = new Set(items.map((item) => item.id));
+  return {
+    ...state,
+    items,
+    toolIndex,
+    pendingTurn: undefined,
+    plan: [],
+    planClocks: {},
+    steers: state.steers.filter((note) => kept.has(note.id)),
+  };
 }
 
 /** Which of the thread's messages `itemId` is, counting from 0 as a replay shows them; -1 if none. */

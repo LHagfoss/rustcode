@@ -40,9 +40,10 @@ Next, in rough order:
 2. #2799, cross-harness delegation: the live test plan with Claude Code
    and Codex parents, a harness/model discovery tool, one approval per
    delegation, waking a parent when its child ends.
-3. Compaction follow-ups: the auto-compact tick on the context
-   bar (`autoCompactThreshold`), Claude's idle compaction before the prompt
-   cache expires.
+3. Compaction follow-ups: the built-in harness's context bar marks its
+   auto-compact point and the card compares the context before and after a
+   compaction; a harness that reports no threshold keeps the total-only view.
+   Remaining: Claude's idle compaction before the prompt cache expires.
 4. SQLite as the store, not only an index: pins and status first, then an
    event table with projections, the
    sidebar listed from the index, lazy transcript import.
@@ -292,10 +293,13 @@ composer's keys stay outside the table.
   (`state/setup.ts` `PendingSetup`). From the new-thread screen the message
   bubble and the `Starting…` line (with the setup's clock) take the place the
   thread's first row will keep, with its pictures and files, its links and
-  its command, and the composer waits at the foot; the prompt goes out the
-  moment the session exists, and the thread's own transcript takes over in the
-  same place (`createThread` and `startSetup` in `state/store.ts`). The
-  message's title is the thread's from the first frame, so the row never
+  its command, and the composer glides down to the foot as that send's own
+  motion; the prompt goes out the moment the session exists, and the thread's
+  own transcript takes over without moving the bubble (`createThread` and
+  `startSetup` in `state/store.ts`). The bubble is drawn at rest and never
+  animated in: this screen is unmounted the moment the session exists, so
+  anything it started would stop halfway through. The message's title is the
+  thread's from the first frame, so the row never
   blinks back to "New thread". A failure keeps the message, its attachments
   and the reason on the bubble with *Retry*, which sends exactly that again,
   and *Dismiss*, which gives up and puts the text and its attachments back in
@@ -461,12 +465,21 @@ composer's keys stay outside the table.
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
   long scrollers.
-- **Approvals** are one card over the composer: what the agent wants (the
-  title opens the command and diff), then "Waiting for your approval" and
-  two buttons, *Decline* and *Allow* (prominent). The rarer answers, the
-  engine's always-allow and always-reject options and, when a turn waits
-  on several, *Allow all N waiting*, sit in *More*. Keys
-  1–9 still pick in the engine's order. A child thread's approval or question
+- **Approvals** are one card over the composer: what the agent wants, its
+  risk (*Read-only*, *Risky*, *Changes files* or *Destructive*, from the tool
+  and its input; anything unknown is risky), then *Decline* and *Approve*
+  (prominent, once). *Grant* says how long an approval lasts: *1 hour* or
+  *Always allow*, the engine's other answers and, when a turn waits on
+  several, *Allow all N waiting*. A *Destructive* call — a tree deletion, a
+  forced push, sudo, a write outside the folder — gets neither grant, in the
+  card, the bar or the inbox: only Allow once and Decline. The row in the
+  transcript adds the key–value preview of what would run (command, folder,
+  paths); an edit needs none, since its diff header names the file and its
+  `+N −M`. An answered card settles into one line (`Allowed edit src/app.ts ·
+  once`) for a moment.
+  A timed grant is kept by the engine beside the permanent always-allow
+  rules and listed with its minutes left under Details › Allowed, where
+  Revoke drops it. Keys 1–9 still pick in the engine's order. A child thread's approval or question
   also appears at the foot of the transcript of the thread above it, under a
   header naming the child (a click opens it); answering there answers the
   child through the same card, and it leaves both chats. The composer is glass
@@ -640,8 +653,10 @@ composer's keys stay outside the table.
   read brighter. Hovering widens the strips around the pointer and previews
   the message and its answer; clicking jumps there, chevrons step a turn, and
   arrows, Home and End move it from the keyboard. With under 48px of gutter it
-  shows on hover. It reads the virtualizer's row offsets on scroll and
-  re-renders only when the turns on screen change (`src/ui/TimelineRail.tsx`).
+  shows on hover. Its checkpoint lane marks each turn whose checkpoint a rewind
+  can return to, the head current, and the hover card names it. It reads the
+  virtualizer's row offsets on scroll and re-renders only when the turns on
+  screen change (`src/ui/TimelineRail.tsx`).
 - **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
   (no fetch, no dependency), in the model pill, the harness picker and list
   (onboarding, Settings), the composer's footer, the sidebar's rows and the thread's
@@ -761,8 +776,15 @@ composer's keys stay outside the table.
   branch, its answer, Open and Review. *Keep this* marks the others done
   and the kept one for review.
 - **Checkpoints and Review.** A finished turn has a *Changes* chip from its
-  checkpoint (`_rustcode/checkpoints/list|diff`) with *Restore…* (files only,
-  or files and conversation when the harness rewinds). The Review screen
+  checkpoint (`_rustcode/checkpoints/list|diff`) with *Rewind to before turn N*:
+  the files go back to before that turn and, when the harness rewinds, the
+  conversation with them; the turns it leaves stay below as a faded earlier
+  attempt whose *Go back to this attempt* restores the state the rewind
+  abandoned (`_rustcode/checkpoints/restore` with `keep`). A turn with nothing
+  folded keeps its chip in its footer, so every turn that has a checkpoint can
+  say what it changed. The minimap's checkpoint lane marks each turn that has
+  one, its head current. A harness that cannot rewind the conversation gets the
+  files only, after a confirm that says so. The Review screen
   (thread menu, header menu or ⌘K) shows the uncommitted changes, the
   worktree branch since its base (the base named beside the file count, as
   `vs main`, with the full ref on hover), one turn, or the branch's open pull

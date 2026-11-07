@@ -5,15 +5,24 @@
 // harness contract in docs/harnesses.md, so the UI works before that lands.
 
 import { BUILTIN_THEMES } from "../lib/themes";
-import { arr, type Json, type JsonObject, obj, str } from "./jsonrpc";
+import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
 export interface MockOptions {
-  /** `default`: onboarded with history. `onboarding`: first run. `empty`: no threads. */
+  /**
+   * `default`: onboarded with history. `onboarding`: first run. `empty`: no threads.
+   * `delegates`: a thread with two levels of delegates in mixed states, for the details tree.
+   */
   scenario?: string;
   /** Milliseconds between streamed chunks; 0 for tests. */
   delayMs?: number;
+  /**
+   * Seed the needs-you inbox: two approvals and a question across threads, one of
+   * them on a thread whose last turn failed. Off by default so a test starts from
+   * silence; the browser mock turns it on unless `?needsYou=0`.
+   */
+  needsYou?: boolean;
   /** Milliseconds the engine takes to start (`?boot=`), to see the slow-start toast. */
   bootMs?: number;
   /** Crash this many ms after the first start (`?crash=`); it comes back after `bootMs`, as the shell restarts it. */
@@ -56,6 +65,8 @@ interface MockThread {
   /** The thread an agent started this one from, as the engine records it. */
   parent?: { id?: string; title?: string };
   checkpoints: MockCheckpoint[];
+  /** How many times `/compact` ran here, so the card can compare before and after. */
+  compactions?: number;
 }
 
 interface MockWorktree {
@@ -75,6 +86,8 @@ interface MockCheckpoint {
   prompt: string;
   created_at: string;
   files: { path: string; status: string; insertions: number; deletions: number; patch: string }[];
+  /** The state a rewind abandoned, kept for "go back to this attempt": no turn of its own. */
+  attempt?: boolean;
 }
 
 const COMPOSER_PATCH = `@@ -40,2 +40,3 @@
@@ -102,6 +115,55 @@ const LOGIN_PATCH = `@@ -0,0 +1,14 @@
 +}
 +
 +export default LoginForm;`;
+
+const SETTINGS_SEARCH_PATCH = `@@ -18,6 +18,17 @@
+ export function SettingsPanel({ groups }: { groups: SettingsGroup[] }) {
++  const [query, setQuery] = useState("");
++  const shown = query.trim() ? groups.filter((group) => matches(group, query)) : groups;
+   return (
+     <div className="flex flex-col gap-4">
++      <input
++        type="search"
++        value={query}
++        placeholder="Search settings"
++        onChange={(e) => setQuery(e.target.value)}
++        onKeyDown={(e) => e.key === "Escape" && setQuery("")}
++      />
+-      {groups.map((group) => (
++      {shown.map((group) => (
+         <SettingsGroup key={group.id} group={group} />
+       ))}`;
+
+const SETTINGS_FILTER_PATCH = `@@ -1,4 +1,4 @@
+-export function matches(group: SettingsGroup, query: string) {
+-  return group.title.toLowerCase().includes(query.toLowerCase());
++export function matches(group: SettingsGroup, query: string) {
++  const needle = query.trim().toLowerCase();
++  if (!needle) return true;
++  if (group.title.toLowerCase().includes(needle)) return true;
++  return group.rows.some((row) => isOpen(group, row) && matchesRow(row, needle));`;
+
+const SETTINGS_HELPER_PATCH = `@@ -0,0 +1,10 @@
++import type { SettingsGroup, SettingsRow } from "./Settings";
++
++export function matchesRow(row: SettingsRow, needle: string): boolean {
++  return row.label.toLowerCase().includes(needle) || row.description.toLowerCase().includes(needle);
++}
++
++/** A group whose title answered keeps its rows: the reader is looking for the group itself. */
++export function isOpen(group: SettingsGroup, _row: SettingsRow): boolean {
++  return group.rows.length > 0;
++}`;
+
+const SETTINGS_KEYWORDS_PATCH = `@@ -2,2 +2,7 @@
+ export function matchesRow(row: SettingsRow, needle: string): boolean {
+-  return row.label.toLowerCase().includes(needle) || row.description.toLowerCase().includes(needle);
++  const words = [row.label, row.description, ...(row.keywords ?? [])].join(" ").toLowerCase();
++  return words.includes(needle);
+ }
++
++/** Keywords a row answers to besides its own words, such as "dark" for Appearance. */
++export const KEYWORDS: Record<string, string[]> = { appearance: ["dark", "theme"] };`;
 
 function slug(text: string): string {
   return (
@@ -399,6 +461,203 @@ function seedDelegatedThreads(): MockThread[] {
   ];
 }
 
+/** The threads of `?scenario=delegates`: ids and titles, shared by the threads and the links. */
+const DELEGATES = {
+  root: "mock-delegate-root",
+  research: "mock-delegate-research",
+  tests: "mock-delegate-tests",
+  docs: "mock-delegate-docs",
+  review: "mock-delegate-review",
+  wait: "mock-delegate-wait",
+  stop: "mock-delegate-stop",
+} as const;
+
+const DELEGATE_TITLES: Record<string, string> = {
+  [DELEGATES.root]: "Ship the delegate tree",
+  [DELEGATES.research]: "Research how delegates are recorded",
+  [DELEGATES.tests]: "Write the rollup unit tests",
+  [DELEGATES.docs]: "Document the delegate tree",
+  [DELEGATES.review]: "Review the delegate tree diff",
+  [DELEGATES.wait]: "Confirm the tree's status words",
+  [DELEGATES.stop]: "Try the tree in the app",
+};
+
+/**
+ * `?scenario=delegates`: a thread that delegated two levels deep, so the details
+ * tree has something to nest: a branch still working, one waiting on the user,
+ * and branches that finished, failed and were stopped. The links carry the times
+ * the tree counts (a working branch from its turn's start, a waiting one from
+ * the approval it waits on); the threads' own status is what makes a branch live
+ * once the app has marked the stored links interrupted at connect
+ * (`state/host.ts` `syncLinkBook`).
+ */
+function seedDelegateTreeThreads(): MockThread[] {
+  const thread = (
+    id: string,
+    harness: string,
+    model: string,
+    effort: string,
+    updatedAt: number,
+    parent: string | undefined,
+    ask: string,
+    say: string,
+    status?: string,
+  ): MockThread => ({
+    id,
+    cwd: "/Users/you/code/rustcode",
+    title: DELEGATE_TITLES[id],
+    updatedAt,
+    harness,
+    model,
+    effort,
+    ...(status ? { status } : {}),
+    ...(parent ? { parent: { id: parent, title: DELEGATE_TITLES[parent] } } : {}),
+    checkpoints: [],
+    history: [
+      update(id, { sessionUpdate: "user_message_chunk", content: text(ask) }),
+      update(id, { sessionUpdate: "agent_message_chunk", content: text(say) }),
+    ],
+  });
+  return [
+    thread(
+      DELEGATES.root,
+      "rustcode",
+      "chatgpt/gpt-6-luna",
+      "high",
+      minutes(2),
+      undefined,
+      "Draw the delegates as a tree in the details panel.",
+      "I will hand the research, the tests and the docs to threads and keep the wiring here.",
+    ),
+    // The live branch: a working researcher with a finished and a failed thread under it.
+    thread(
+      DELEGATES.research,
+      "codex",
+      "gpt-6-luna",
+      "low",
+      minutes(1),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nMap how a delegated thread records its parent and its turns.",
+      "The link carries the start and the settle; the thread's own status tells what it does now.",
+      "running",
+    ),
+    thread(
+      DELEGATES.tests,
+      "codex",
+      "gpt-6-luna",
+      "low",
+      minutes(6),
+      DELEGATES.research,
+      "From thread “Research how delegates are recorded” (agent):\n\nCover the roll-up and the paused clock.",
+      "Added 14 tests: the branch sum, the clock that freezes on an approval, and an unknown cost.",
+    ),
+    thread(
+      DELEGATES.docs,
+      "claude-code",
+      "claude-sonnet-6",
+      "medium",
+      minutes(7),
+      DELEGATES.research,
+      "From thread “Research how delegates are recorded” (agent):\n\nWrite the delegate tree down in docs/design.md.",
+      "The docs build failed on an unknown token name.",
+    ),
+    thread(
+      DELEGATES.review,
+      "pi",
+      "deepseek/flash",
+      "high",
+      minutes(5),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nReview the tree's rules before this goes out.",
+      "Two notes: fold the finished branch, and keep the cost unknown when no turn reported one.",
+    ),
+    thread(
+      DELEGATES.wait,
+      "claude-code",
+      "sonnet",
+      "medium",
+      minutes(3),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nCheck the state words against docs/terminology.md.",
+      "“Needs you” reads right for an approval; may I rename the stopped branch too?",
+      "needs_input",
+    ),
+    thread(
+      DELEGATES.stop,
+      "rustcode",
+      "chatgpt/gpt-6-luna",
+      "medium",
+      minutes(9),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nClick through the tree in the app.",
+      "Stopped before the check ran.",
+    ),
+  ];
+}
+
+/** The links of `?scenario=delegates`: who started whom, how it went and for how long. */
+function seedDelegateLinks(): JsonObject[] {
+  const link = (
+    orchestrator: string,
+    n: number,
+    target: string,
+    state: string,
+    createdAt: number,
+    extra: JsonObject,
+  ): JsonObject => ({
+    id: `${orchestrator}/${n}`,
+    orchestrator,
+    target,
+    orchestratorTitle: DELEGATE_TITLES[orchestrator]!,
+    targetTitle: DELEGATE_TITLES[target]!,
+    message: `From thread “${DELEGATE_TITLES[orchestrator]}” (agent):\n\n${DELEGATE_TITLES[target]}.`,
+    state,
+    started: true,
+    createdAt,
+    ...extra,
+  });
+  return [
+    // Two levels: the root started the researcher, the researcher started two threads of its own.
+    link(DELEGATES.root, 1, DELEGATES.research, "working", minutes(3), {
+      harness: "codex",
+      harnessName: "Codex",
+      startedAt: minutes(2),
+    }),
+    link(DELEGATES.research, 1, DELEGATES.tests, "done", minutes(8), {
+      harness: "codex",
+      harnessName: "Codex",
+      settledAt: minutes(6),
+      answer: "Added 14 tests: the branch sum, the clock that freezes on an approval, and an unknown cost.",
+      filesChanged: 1,
+    }),
+    link(DELEGATES.research, 2, DELEGATES.docs, "failed", minutes(7), {
+      harness: "claude-code",
+      harnessName: "Claude Code",
+      settledAt: minutes(6),
+      answer: "The docs build failed on an unknown token name.",
+    }),
+    link(DELEGATES.root, 2, DELEGATES.review, "done", minutes(9), {
+      harness: "pi",
+      harnessName: "Pi",
+      settledAt: minutes(5),
+      answer: "Two notes: fold the finished branch, and keep the cost unknown when no turn reported one.",
+      filesChanged: 2,
+    }),
+    // Waiting on the user: the clock stopped when the question was asked.
+    link(DELEGATES.root, 3, DELEGATES.wait, "needs_user", minutes(4), {
+      harness: "claude-code",
+      harnessName: "Claude Code",
+      startedAt: minutes(3),
+      waitingSince: minutes(2),
+    }),
+    link(DELEGATES.root, 4, DELEGATES.stop, "cancelled", minutes(10), {
+      harness: "rustcode",
+      harnessName: "RustCode",
+      settledAt: minutes(9),
+    }),
+  ];
+}
+
 function seedThreads(): MockThread[] {
   const a = "mock-thread-1";
   const b = "mock-thread-2";
@@ -596,6 +855,130 @@ function seedThreads(): MockThread[] {
       ],
     },
     {
+      // Three turns, one checkpoint each: rewinding to one of them keeps the later turns as an
+      // earlier attempt (state/attempts.ts), so the mock can show the whole of it.
+      id: "mock-thread-attempts",
+      cwd: "/Users/you/code/rustcode",
+      title: "Give the settings panel a search field",
+      updatedAt: minutes(18),
+      harness: "rustcode",
+      model: "chatgpt/gpt-6-luna",
+      effort: "medium",
+      checkpoints: [
+        {
+          turn: 1,
+          prompt: "Add a search field to the settings panel",
+          created_at: new Date(minutes(24)).toISOString(),
+          files: [
+            {
+              path: "src/ui/Settings.tsx",
+              status: "modified",
+              insertions: 12,
+              deletions: 1,
+              patch: SETTINGS_SEARCH_PATCH,
+            },
+          ],
+        },
+        {
+          turn: 2,
+          prompt: "Match the section names too, and keep the list open",
+          created_at: new Date(minutes(22)).toISOString(),
+          files: [
+            {
+              path: "src/ui/Settings.tsx",
+              status: "modified",
+              insertions: 6,
+              deletions: 4,
+              patch: SETTINGS_FILTER_PATCH,
+            },
+            {
+              path: "src/ui/SettingsSearch.ts",
+              status: "added",
+              insertions: 34,
+              deletions: 0,
+              patch: SETTINGS_HELPER_PATCH,
+            },
+          ],
+        },
+        {
+          turn: 3,
+          prompt: "Also search what each setting does, not only its name",
+          created_at: new Date(minutes(20)).toISOString(),
+          files: [
+            {
+              path: "src/ui/SettingsSearch.ts",
+              status: "modified",
+              insertions: 9,
+              deletions: 2,
+              patch: SETTINGS_KEYWORDS_PATCH,
+            },
+          ],
+        },
+      ],
+      history: [
+        update("mock-thread-attempts", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Add a search field to the settings panel"),
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "Added a field above the panel that filters the sections as you type, and clears with Escape.",
+          ),
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t1",
+                elapsedMs: 41_000,
+                outcome: "completed",
+                endedAt: new Date(minutes(23)).toISOString(),
+              },
+            },
+          },
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Match the section names too, and keep the list open"),
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "It now matches section headings as well, and a group stays open when one of its rows answers the query.",
+          ),
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t2",
+                elapsedMs: 63_000,
+                outcome: "completed",
+                endedAt: new Date(minutes(21)).toISOString(),
+              },
+            },
+          },
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Also search what each setting does, not only its name"),
+        }),
+        update("mock-thread-attempts", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "Each setting carries a few keywords now, so `dark`, `notify` and `token` all find their row.",
+          ),
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t3",
+                elapsedMs: 28_000,
+                outcome: "completed",
+                endedAt: new Date(minutes(19)).toISOString(),
+              },
+            },
+          },
+        }),
+      ],
+    },
+    {
       id: "mock-thread-4",
       cwd: "/Users/you/.config/rustcode/worktrees/rustcode/feat-login-form",
       title: "Add the login form",
@@ -648,8 +1031,20 @@ function seedThreads(): MockThread[] {
         }),
         update("mock-thread-4", {
           sessionUpdate: "agent_message_chunk",
-          content: text("Added `LoginForm` with an email field and a submit button, on `feat/login-form`."),
-          _meta: { rustcode: { turn: { id: "t1", elapsedMs: 52_000, outcome: "completed" } } },
+          content: text(
+            "I wrote `LoginForm`, but the typecheck failed: the form's submit handler expects a `FormEvent` and the field is `unknown`.",
+          ),
+          // The last turn failed, so the inbox has a failed row to offer Retry for.
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t1",
+                elapsedMs: 52_000,
+                outcome: "failed",
+                endedAt: new Date(minutes(20)).toISOString(),
+              },
+            },
+          },
         }),
       ],
     },
@@ -812,6 +1207,113 @@ const MOCK_SPEND: Record<string, MockSpend> = {
     withoutCacheWrite: 5,
     withoutCost: 5,
   },
+  // `?scenario=delegates`: a branch with reported costs, and one thread whose
+  // model has no price, so the tree shows `—` rather than a made-up number.
+  "mock-delegate-root": {
+    input: 640_000,
+    output: 24_000,
+    cached: 520_000,
+    cacheWrite: null,
+    cost: 1.9,
+    turns: 5,
+    withoutTokens: 0,
+    withoutAny: 5,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 5,
+    withoutCost: 0,
+  },
+  "mock-delegate-research": {
+    input: 1_450_000,
+    output: 58_000,
+    cached: 1_200_000,
+    cacheWrite: null,
+    cost: 2.4,
+    turns: 9,
+    withoutTokens: 0,
+    withoutAny: 9,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 9,
+    withoutCost: 0,
+  },
+  "mock-delegate-tests": {
+    input: 520_000,
+    output: 26_000,
+    cached: 410_000,
+    cacheWrite: null,
+    cost: 0.85,
+    turns: 4,
+    withoutTokens: 0,
+    withoutAny: 4,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 4,
+    withoutCost: 0,
+  },
+  "mock-delegate-docs": {
+    input: 190_000,
+    output: 8_000,
+    cached: 150_000,
+    cacheWrite: 21_000,
+    cost: null,
+    turns: 3,
+    withoutTokens: 0,
+    withoutAny: 0,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 3,
+  },
+  "mock-delegate-review": {
+    input: 2_100_000,
+    output: 61_000,
+    cached: 1_800_000,
+    cacheWrite: null,
+    cost: 3.1,
+    turns: 11,
+    withoutTokens: 0,
+    withoutAny: 11,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 11,
+    withoutCost: 0,
+  },
+  "mock-delegate-wait": {
+    input: 380_000,
+    output: 15_000,
+    cached: 300_000,
+    cacheWrite: 48_000,
+    cost: 1.05,
+    turns: 4,
+    withoutTokens: 0,
+    withoutAny: 4,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 0,
+  },
+  "mock-delegate-stop": {
+    input: 60_000,
+    output: 2_000,
+    cached: 40_000,
+    cacheWrite: null,
+    cost: 0.2,
+    turns: 1,
+    withoutTokens: 0,
+    withoutAny: 1,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 1,
+    withoutCost: 0,
+  },
 };
 
 function spendOf(thread: MockThread, index: number): MockSpend {
@@ -971,6 +1473,143 @@ const MOCK_REPORTS: Record<string, string[]> = {
   ],
 };
 
+/**
+ * What the mock says fills its own context: enough per category, and enough per item, to show the
+ * card's tile map and its item list the way the engine's breakdown does. `used` scales the canned
+ * categories so the bar, the tiles and the headline agree.
+ */
+const MOCK_CONTEXT: Json[] = [
+  {
+    name: "User messages",
+    tokens: 1_900,
+    items: [
+      { name: "Make the context card show what fills it", tokens: 1_200 },
+      { name: "Add a tile map and a compact comparison", tokens: 700 },
+    ],
+  },
+  {
+    name: "Agent responses",
+    tokens: 3_400,
+    items: [
+      { name: "I will trace the context breakdown through the engine", tokens: 2_100 },
+      { name: "The mock now reports per-category items as well", tokens: 1_300 },
+    ],
+  },
+  {
+    name: "Tool calls",
+    tokens: 5_100,
+    items: [
+      { name: "read src/ui/ComposerUsage.tsx", tokens: 2_200 },
+      { name: "replace_file_content src/ui/ComposerUsage.tsx", tokens: 1_600 },
+      { name: "run_command cargo test", tokens: 800 },
+      { name: "read src/lib/treemap.ts", tokens: 500 },
+    ],
+  },
+  { name: "Compacted history", tokens: 0, items: [] },
+  {
+    name: "System prompt",
+    tokens: 4_200,
+    items: [{ name: "Instructions and hints", tokens: 4_200 }],
+  },
+  {
+    name: "System tools",
+    tokens: 2_900,
+    items: [
+      { name: "replace_file_content", tokens: 1_100 },
+      { name: "run_command", tokens: 800 },
+      { name: "view_file", tokens: 600 },
+      { name: "Tool protocol and examples", tokens: 400 },
+    ],
+  },
+  {
+    name: "Skills",
+    tokens: 900,
+    items: [
+      { name: "impeccable", tokens: 500 },
+      { name: "Skill headings", tokens: 400 },
+    ],
+  },
+  { name: "Subagents", tokens: 0, items: [] },
+];
+
+/** The same categories after a compaction: tool output is gone, a summary took its place. */
+const MOCK_CONTEXT_COMPACTED: Json[] = [
+  {
+    name: "User messages",
+    tokens: 1_200,
+    items: [{ name: "Make the context card show what fills it", tokens: 1_200 }],
+  },
+  {
+    name: "Agent responses",
+    tokens: 1_500,
+    items: [{ name: "I will trace the context breakdown through the engine", tokens: 1_500 }],
+  },
+  {
+    name: "Tool calls",
+    tokens: 1_800,
+    items: [
+      { name: "read src/ui/ComposerUsage.tsx", tokens: 1_100 },
+      { name: "run_command cargo test", tokens: 700 },
+    ],
+  },
+  {
+    name: "Compacted history",
+    tokens: 3_000,
+    items: [{ name: "Compaction summary", tokens: 3_000 }],
+  },
+  {
+    name: "System prompt",
+    tokens: 4_200,
+    items: [{ name: "Instructions and hints", tokens: 4_200 }],
+  },
+  {
+    name: "System tools",
+    tokens: 2_900,
+    items: [{ name: "replace_file_content", tokens: 2_900 }],
+  },
+  { name: "Skills", tokens: 900, items: [{ name: "impeccable", tokens: 900 }] },
+  { name: "Subagents", tokens: 0, items: [] },
+];
+
+/** The context block the engine puts on `usage_update`, scaled to the headline `used`. */
+function mockContext(
+  used: number,
+  compaction?: { count: number; reclaimed: number; before: number },
+): JsonObject {
+  const base = compaction ? MOCK_CONTEXT_COMPACTED : MOCK_CONTEXT;
+  const total = base.reduce<number>((sum, category) => sum + Number(obj(category)?.tokens ?? 0), 0);
+  const scale = total > 0 ? used / total : 1;
+  const categories = base.map((category) => {
+    const fields = obj(category) ?? {};
+    return {
+      ...fields,
+      tokens: Math.round(Number(fields.tokens ?? 0) * scale),
+      items: arr(fields.items).map((item) => {
+        const entry = obj(item) ?? {};
+        return { ...entry, tokens: Math.round(Number(entry.tokens ?? 0) * scale) };
+      }),
+    };
+  });
+  return {
+    model: "gpt-6-luna",
+    window: 272_000,
+    used,
+    free: 272_000 - used,
+    compactAt: { tokens: 199_000 },
+    categories,
+    ...(compaction
+      ? {
+          compaction: {
+            count: compaction.count,
+            reclaimedTokens: compaction.reclaimed,
+            beforeTokens: compaction.before,
+            afterTokens: used,
+          },
+        }
+      : {}),
+  };
+}
+
 const COMMANDS: Json[] = [
   { name: "compact", description: "Summarize the conversation to free context" },
   {
@@ -1045,6 +1684,8 @@ export class MockEngine {
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
   private agents = new Map<string, JsonObject[]>();
+  /** The inbox seed runs once, after the list the app first reads. */
+  private needsYouSeeded = false;
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
@@ -1090,6 +1731,29 @@ export class MockEngine {
   private activeTheme = "rustcode";
   /** MCP servers the mock restarted through `_rustcode/capabilities/mcp/restart`. */
   private mcpRestarted = new Set<string>();
+  /**
+   * The timed approvals `_rustcode/permissions` lists: one seeded hour so the
+   * details panel has "Allowed for 42m · Revoke" to show, and whatever the user
+   * granted while the mock ran.
+   */
+  private grants: JsonObject[] = [
+    {
+      id: "prefix-v1:bun test",
+      prefix: "bun test",
+      expiresAt: Math.floor(Date.now() / 1000) + 42 * 60,
+      remainingSecs: 42 * 60,
+    },
+  ];
+
+  /** A timed approval the user just gave in the mock: listed and revocable like the engine's. */
+  private addGrant(prefix: string) {
+    const remainingSecs = 60 * 60;
+    const id = `prefix-v1:${prefix}`;
+    this.grants = [
+      { id, prefix, expiresAt: Math.floor(Date.now() / 1000) + remainingSecs, remainingSecs },
+      ...this.grants.filter((grant) => str(grant.id) !== id),
+    ];
+  }
 
   private themesSnapshot(): JsonObject {
     return { active: this.activeTheme, themes: this.themes as unknown as Json };
@@ -1149,12 +1813,146 @@ export class MockEngine {
   ) {
     const scenario = options.scenario ?? "default";
     this.threads =
-      scenario === "default" ? seedThreads() : scenario === "delegated" ? seedDelegatedThreads() : [];
+      scenario === "default"
+        ? seedThreads()
+        : scenario === "delegated"
+          ? seedDelegatedThreads()
+          : scenario === "delegates"
+            ? seedDelegateTreeThreads()
+            : [];
+    // The stored book is the only one the app reads at connect; a scenario brings its own.
+    if (scenario === "delegates") {
+      this.options.links ??= {
+        links: seedDelegateLinks() as unknown as Json,
+        grants: {},
+        counters: {},
+        fanOuts: [],
+      };
+    }
     this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
   }
 
   private get delay() {
     return this.options.delayMs ?? 40;
+  }
+
+  /**
+   * The inbox's demo: a question, an approval and a failed turn on threads the
+   * app has not opened, so the list has something to show on first open. Each
+   * request is asked like a live one and answered by the app's own cards.
+   */
+  private seedNeedsYou() {
+    const has = (id: string) => this.threads.some((t) => t.id === id);
+    // One of each risk level, so the card's tint and preview are visible in the mock:
+    // a read-only call, an edit with a diff, and a command that would destroy a tree.
+    if (has("mock-thread-1")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-1",
+        toolCall: {
+          toolCallId: "seed-approval-1",
+          title: "read src/ui/Composer.tsx",
+          kind: "read",
+          rawInput: {
+            path: "src/ui/Composer.tsx",
+            summary: "Read the composer before changing it",
+          },
+        },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          {
+            optionId: "allow_hour",
+            name: "Allow for 1 hour `cat src/ui/Composer.tsx`",
+            kind: "allow_always",
+          },
+          { optionId: "always", name: "Always allow `cat src/ui/Composer.tsx`", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      }).then((answer) => {
+        // An hour granted here is listed and revocable, like the engine's own.
+        if (obj(answer.outcome)?.optionId === "allow_hour") this.addGrant("cat src/ui/Composer.tsx");
+      });
+    }
+    if (has("mock-thread-4")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-4",
+        toolCall: {
+          toolCallId: "seed-approval-destructive",
+          title: "bash",
+          kind: "execute",
+          rawInput: {
+            command: "rm -rf node_modules && bun install",
+            cwd: "/Users/you/.config/rustcode/worktrees/rustcode/feat-login-form",
+            summary: "Start the dependencies over",
+          },
+        },
+        // A harness that offers grants for a destructive command: the app must
+        // show only Allow once and Reject (lib/approval.ts `grantAllowed`).
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "allow_hour", name: "Allow for 1 hour `rm -rf node_modules`", kind: "allow_always" },
+          { optionId: "always", name: "Always allow `rm -rf node_modules`", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      });
+    }
+    if (has("mock-thread-claude")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-claude",
+        toolCall: {
+          toolCallId: "seed-question-1",
+          title: "Which tone?",
+          rawInput: {
+            header: "Pricing copy",
+            question: "Which tone should the pricing blurbs use?",
+            options: ["Plain and short", "Warmer, more human", "Keep the current voice"],
+            descriptions: [
+              "Three lines, no adjectives",
+              "Talks to one reader at a time",
+              "Only fix the jargon",
+            ],
+            multiple: false,
+          },
+        },
+        options: [
+          { optionId: "tone-plain", name: "Plain and short", kind: "allow_once" },
+          { optionId: "tone-warm", name: "Warmer, more human", kind: "allow_once" },
+          { optionId: "tone-keep", name: "Keep the current voice", kind: "allow_once" },
+        ],
+        _meta: {
+          rustcode: {
+            kind: "question",
+            version: 2,
+            questionId: "seed-question-1",
+            answerKinds: ["options", "text"],
+          },
+        },
+      });
+    }
+    if (has("mock-thread-4")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-4",
+        toolCall: {
+          toolCallId: "seed-approval-4",
+          title: "edit src/ui/LoginForm.tsx",
+          kind: "edit",
+          content: [
+            {
+              type: "diff",
+              path: "src/ui/LoginForm.tsx",
+              oldText: '  <button type="submit">Sign in</button>',
+              newText: '  <button type="submit" disabled={!email}>Sign in</button>',
+              _meta: { rustcode: { oldStart: 8, newStart: 8 } },
+            },
+          ],
+          rawInput: { path: "src/ui/LoginForm.tsx", summary: "Disable sign-in until the email is typed" },
+        },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "always", name: "Always allow edits", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      });
+    }
   }
 
   private sleep(ms = this.delay): Promise<void> {
@@ -1241,7 +2039,15 @@ export class MockEngine {
             promptCapabilities: { image: true, audio: false, embeddedContext: false },
             sessionCapabilities: { list: {}, close: {} },
             _meta: {
-              rustcode: { steer: 1, agents: 2, rewind: 1, pullRequests: 3, sessionMove: 1, sessionRepair: 1 },
+              rustcode: {
+                steer: 1,
+                agents: 2,
+                rewind: 1,
+                pullRequests: 3,
+                sessionMove: 1,
+                sessionRepair: 1,
+                checkpoints: 2,
+              },
             },
           },
           authMethods: [],
@@ -1250,7 +2056,11 @@ export class MockEngine {
       // The catalog, for a thread that has no session yet to send it on.
       case "_rustcode/commands":
         return { sessionUpdate: "available_commands_update", availableCommands: COMMANDS };
-      case "session/list":
+      case "session/list": {
+        if (this.options.needsYou && !this.needsYouSeeded) {
+          this.needsYouSeeded = true;
+          setTimeout(() => this.seedNeedsYou(), 500);
+        }
         return {
           sessions: this.threads
             .filter((t) => t.history.length > 0)
@@ -1272,6 +2082,7 @@ export class MockEngine {
               },
             })),
         };
+      }
       case "session/new": {
         const meta = obj(obj(params._meta)?.rustcode);
         const harness = str(meta?.harness) ?? this.harnesses.default.harness;
@@ -1341,28 +2152,14 @@ export class MockEngine {
             sessionUpdate: "usage_update",
             used: 18_400,
             size: 272_000,
+            cost: { amount: 0.0123, currency: "USD" },
             _meta: {
               rustcode: {
                 estimated: true,
                 inputTokens: 90_000,
                 outputTokens: 3_200,
                 cachedTokens: 61_000,
-                context: {
-                  model: "gpt-6-luna",
-                  window: 272_000,
-                  used: 18_400,
-                  free: 253_600,
-                  categories: [
-                    { name: "User messages", tokens: 1_900 },
-                    { name: "Agent responses", tokens: 3_400 },
-                    { name: "Tool calls", tokens: 5_100 },
-                    { name: "Compacted history", tokens: 0 },
-                    { name: "System prompt", tokens: 4_200 },
-                    { name: "System tools", tokens: 2_900 },
-                    { name: "Skills", tokens: 900 },
-                    { name: "Subagents", tokens: 0 },
-                  ],
-                },
+                context: mockContext(18_400),
               },
             },
           }),
@@ -1811,6 +2608,7 @@ export class MockEngine {
             files_changed: c.files.length,
             insertions: c.files.reduce((n, f) => n + f.insertions, 0),
             deletions: c.files.reduce((n, f) => n + f.deletions, 0),
+            ...(c.attempt ? { attempt: true } : {}),
           })),
         };
       }
@@ -1822,18 +2620,41 @@ export class MockEngine {
       }
       case "_rustcode/checkpoints/restore": {
         const thread = this.thread(params.session_id);
-        const at = thread.checkpoints.findIndex((x) => x.turn === params.turn);
+        const turn = Number(params.turn);
+        const at = thread.checkpoints.findIndex((x) => x.turn === turn);
         if (at < 0) throw Object.assign(new Error("No such checkpoint"), { code: -32602 });
-        const canRewind = thread.harness === "rustcode";
+        // A kept attempt can be gone back to as well: it restores the state it left, and the
+        // conversation stays where it is (the engine has no rewind forward either).
+        const attempt = thread.checkpoints[at]!.attempt === true;
+        // The engine keeps every checkpoint: a rewind never deletes the turns it leaves.
+        let kept: { turn: number; ref: string } | undefined;
+        if (params.keep === true) {
+          const next = (thread.checkpoints.at(-1)?.turn ?? 0) + 1;
+          const abandoned = thread.checkpoints.filter((c) => c.turn >= turn && !c.attempt);
+          thread.checkpoints.push({
+            turn: next,
+            prompt: "",
+            created_at: new Date().toISOString(),
+            files: abandoned.flatMap((c) => c.files),
+            attempt: true,
+          });
+          kept = { turn: next, ref: `refs/rustcode/checkpoints/${thread.id}/${next}` };
+        }
+        const canRewind = thread.harness === "rustcode" && !attempt;
         if (params.rewind === true && canRewind) {
+          // Its own turn's message, in the history the conversation still has.
+          const own = thread.checkpoints.filter((c) => !c.attempt).findIndex((c) => c.turn === turn);
           let n = 0;
           const cut = thread.history.findIndex(
-            (u) => str(obj(u.update)?.sessionUpdate) === "user_message_chunk" && ++n === at + 1,
+            (u) => str(obj(u.update)?.sessionUpdate) === "user_message_chunk" && ++n === own + 1,
           );
           if (cut >= 0) thread.history.splice(cut);
         }
-        thread.checkpoints.splice(at);
-        return { restored: true, conversation: params.rewind === true && canRewind ? "rewound" : "kept" };
+        return {
+          restored: true,
+          conversation: params.rewind === true && canRewind ? "rewound" : "kept",
+          ...(kept ? { kept } : {}),
+        };
       }
       case "_rustcode/config/telemetry":
         // The same shape `_rustcode/config/telemetry` answers with (engine/src/acp/telemetry.rs).
@@ -2030,6 +2851,18 @@ export class MockEngine {
           ],
           mcpServers: this.mcpServers(),
         };
+      case "_rustcode/permissions": {
+        // The same shape `_rustcode/permissions` answers with (engine/src/acp/permissions.rs).
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          grants: this.grants.filter((grant) => num(grant.expiresAt)! > now),
+        };
+      }
+      case "_rustcode/permissions/revoke": {
+        const id = str(params.id);
+        this.grants = this.grants.filter((grant) => str(grant.id) !== id);
+        return { grants: this.grants };
+      }
       case "_rustcode/themes":
         return this.themesSnapshot();
       case "_rustcode/themes/set": {
@@ -2391,6 +3224,37 @@ export class MockEngine {
         }
         return done("end_turn");
       }
+      if (prompt.trim() === "/compact") {
+        thread.compactions = (thread.compactions ?? 0) + 1;
+        const before = 18_400;
+        const after = 15_500;
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text(`Context compacted: reduced from ${before / 1_000}k to ${after / 1_000}k tokens.`),
+          _meta: { rustcode: { kind: "compaction" } },
+        });
+        this.notify(
+          update(sid, {
+            sessionUpdate: "usage_update",
+            used: after,
+            size: 272_000,
+            _meta: {
+              rustcode: {
+                estimated: false,
+                inputTokens: 90_000,
+                outputTokens: 3_200,
+                cachedTokens: 61_000,
+                context: mockContext(after, {
+                  count: thread.compactions,
+                  reclaimed: before - after,
+                  before,
+                }),
+              },
+            },
+          }),
+        );
+        return done("end_turn");
+      }
       if (!thread.title) {
         thread.title = prompt.split("\n")[0]?.slice(0, 60) || "New thread";
         this.notify(update(sid, { sessionUpdate: "session_info_update", title: thread.title }));
@@ -2481,7 +3345,31 @@ export class MockEngine {
           return done("cancelled");
         }
       }
-      const callId = `call-${++this.counter}`;
+      // One usage update per round, as the engine sends it: the session's
+      // running totals. The app's Trace subtracts them to price each call, so a
+      // mock turn shows where its money went too.
+      const round = (input: number, output: number, cost: number) => {
+        const used = 24_000 + Math.round((Date.now() - started) / 10);
+        push({
+          sessionUpdate: "usage_update",
+          used,
+          size: 272_000,
+          cost: { amount: cost, currency: "USD" },
+          _meta: {
+            rustcode: {
+              estimated: false,
+              inputTokens: input,
+              outputTokens: output,
+              cachedTokens: Math.round(input * 0.55),
+              context: mockContext(used),
+            },
+          },
+        });
+      };
+      round(120_000, 4_100, 0.0276);
+      // A live call's id never reuses one the replayed history already has: an
+      // update keyed the same would replace an old row instead of adding one.
+      const callId = `live-${++this.counter}`;
       push({
         sessionUpdate: "tool_call",
         toolCallId: callId,
@@ -2508,7 +3396,32 @@ export class MockEngine {
           exitCode: 0,
         },
       });
-      const editId = `call-${++this.counter}`;
+      round(147_000, 4_900, 0.0341);
+      // "trace" asks for the whole picture: a few more calls and one delegate,
+      // so the Trace chip under the turn draws every kind of row.
+      const forTrace = /\b(trace|waterfall|delegate)\b/i.test(prompt);
+      if (forTrace) {
+        const readId = `live-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: readId,
+          title: "read src/ui/Composer.tsx",
+          kind: "read",
+          status: "in_progress",
+          rawInput: { path: "src/ui/Composer.tsx", summary: "Read the composer" },
+        });
+        await this.sleep(this.delay * 3);
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: readId,
+          status: "completed",
+          rawOutput: {
+            content: "export function Composer() {\n  const [draft, setDraft] = useState('');\n  ...\n}\n",
+          },
+        });
+        round(166_000, 5_400, 0.0402);
+      }
+      const editId = `live-${++this.counter}`;
       const diff = {
         type: "diff",
         path: "src/app.ts",
@@ -2567,6 +3480,77 @@ export class MockEngine {
       } else {
         push({ sessionUpdate: "tool_call_update", toolCallId: editId, status: "completed", content: [diff] });
       }
+      if (forTrace) {
+        round(184_000, 6_100, 0.0493);
+        // A delegate: one call folded into the trace's single dotted row. Its
+        // agent is recorded like `spawnAgents` records one, so its row and its
+        // steps answer from the engine rather than from nothing.
+        const task = "Check the composer tests for the focus fix";
+        const agents = this.agents.get(sid) ?? [];
+        this.agents.set(sid, agents);
+        const agentId = agents.length + 1;
+        agents.push({
+          id: agentId,
+          name: `agent-${agentId}`,
+          task,
+          model: "gpt-6-luna",
+          agentType: "explorer",
+          status: "running",
+          activeTurn: true,
+          depth: 1,
+          startedAtMs: Date.now(),
+          lastActivityMs: Date.now(),
+          toolCalls: 1,
+          requests: 1,
+          inputTokens: 12_000,
+          outputTokens: 600,
+          cachedInputTokens: 8_000,
+        });
+        const delegateId = `spawn-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: delegateId,
+          title: "spawn_agent",
+          kind: "other",
+          status: "in_progress",
+          rawInput: { task, agent_type: "explorer" },
+        });
+        await this.sleep(this.delay * 10);
+        const agent = agents.find((a) => a.id === agentId);
+        if (agent) {
+          agent.status = "completed";
+          agent.activeTurn = false;
+          agent.finishedAtMs = Date.now();
+          agent.completion = "The composer tests pass; nothing to change.";
+        }
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: delegateId,
+          status: "completed",
+          rawOutput: {
+            content: JSON.stringify({ agent_id: agentId, name: `agent-${agentId}`, status: "completed" }),
+          },
+        });
+      }
+      // A message the turn read mid-step (`_rustcode/steer`): it says so where it read it, and the
+      // plan moves on, so the app has a step that was active when the note landed and a next step
+      // whose clock starts (`state/steer.ts`). A steer that arrives after this is still answered at
+      // the foot of the turn, below.
+      if (run.steers.length) {
+        const read = run.steers.splice(0);
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text(`Noted ${read.map((steer) => `“${steer}”`).join(", ")}.\n\n`),
+        });
+        push({
+          sessionUpdate: "plan",
+          entries: [
+            { content: "Find the code", status: "completed", priority: "medium" },
+            { content: "Make the change", status: "completed", priority: "medium" },
+            { content: "Run the checks", status: "in_progress", priority: "low" },
+          ],
+        });
+      }
       const reply = /\bkit\b/i.test(prompt)
         ? MOCK_KIT
         : /\b(hover|trend|graph)\b/i.test(prompt)
@@ -2601,14 +3585,7 @@ export class MockEngine {
           { content: "Run the checks", status: "completed" },
         ],
       });
-      this.notify(
-        update(sid, {
-          sessionUpdate: "usage_update",
-          used: 24_000 + Math.round((Date.now() - started) / 10),
-          size: 272_000,
-          _meta: { rustcode: { estimated: false, inputTokens: 120_000, outputTokens: 4_100 } },
-        }),
-      );
+      round(214_000, 7_100, 0.0612);
       return done("end_turn");
     } finally {
       this.running.delete(sid);

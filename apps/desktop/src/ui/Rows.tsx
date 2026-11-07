@@ -38,6 +38,7 @@ import { effortLabel, modelName } from "../acp/types";
 import { clip } from "../lib/clip";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
+import { hasTimeline } from "../lib/trace";
 import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
@@ -453,6 +454,35 @@ function inputWithoutSummary(input: Json | undefined): string | undefined {
   return Object.keys(rest).length ? JSON.stringify(rest, null, 2) : undefined;
 }
 
+/**
+ * A tool call's detail: its diffs, or the input and output it read and printed.
+ * Shared by the tool row's expander and a turn's Trace, so both format a call
+ * the same way and both offer Copy.
+ */
+export function ToolDetail({
+  item,
+  className,
+}: {
+  item: Item<"tool">;
+  /** Padding around the detail, for a host that draws its own indent. */
+  className?: string;
+}) {
+  const input = inputWithoutSummary(item.input);
+  return (
+    <div className={cx("flex flex-col gap-2", className)}>
+      {item.diffs.length > 0 ? (
+        item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
+      ) : (
+        <>
+          {input && <TextBox label="Input" text={input} />}
+          {item.output && <TextBox label="Output" text={item.output} />}
+          {!input && !item.output && <span className="text-caption text-fg-faint">No output</span>}
+        </>
+      )}
+    </div>
+  );
+}
+
 export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">; cwd: string }) {
   const kind = inferToolKind(item);
   const [open, setOpen] = useState(kind === "edit" && item.diffs.length > 0 && item.diffs.length <= 2);
@@ -480,7 +510,6 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
-  const input = inputWithoutSummary(item.input);
   return (
     <div>
       <div className="group flex items-center gap-0.5">
@@ -567,16 +596,8 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         </pre>
       )}
       {open && (
-        <div className="rc-expand mt-1.5 mb-1 ml-[26px] flex flex-col gap-2">
-          {item.diffs.length > 0 ? (
-            item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
-          ) : (
-            <>
-              {input && <TextBox label="Input" text={input} />}
-              {item.output && <TextBox label="Output" text={item.output} />}
-              {!input && !item.output && <span className="text-caption text-fg-faint">No output</span>}
-            </>
-          )}
+        <div className="rc-expand mt-1.5 mb-1 ml-[26px]">
+          <ToolDetail item={item} />
         </div>
       )}
     </div>
@@ -912,6 +933,7 @@ export function TurnEndRow({
   reply,
   completion,
   changes,
+  trace,
   folded,
   timeInFold,
   threadId,
@@ -927,6 +949,8 @@ export function TurnEndRow({
   completion?: TurnCompletion | null;
   /** The turn's checkpoint chip (Changes), when the harness reported no completion. */
   changes?: ReactNode;
+  /** The turn's Trace chip, when the app watched it run. */
+  trace?: ReactNode;
   /** The thread, so the footer's fork can copy its conversation. */
   threadId?: string;
 }) {
@@ -934,10 +958,18 @@ export function TurnEndRow({
   // chip. It is the turn's only action row (nothing hovers in, nothing holds room): the reply
   // above it draws none, and a turn still running has no footer yet.
   const row = turnActions({ text: reply, at: item.at, threadId });
+  const traced = hasTimeline(item) && !!trace;
   // An empty turn that folded its work: its header already says the time, and there is no reply
   // to copy or fork, so a footer row of icons would sit over nothing.
   if (
-    turnFooterHidden({ folded, reply, completion: !!completion, changes: !!changes, outcome: item.outcome })
+    turnFooterHidden({
+      folded,
+      reply,
+      completion: !!completion,
+      changes: !!changes,
+      trace: traced,
+      outcome: item.outcome,
+    })
   )
     return null;
   // The outcome, in words, and the time. How long the turn took is the fold header's to say.
@@ -961,6 +993,7 @@ export function TurnEndRow({
             {row.fork && <ReplyForkButton threadId={threadId!} />}
           </span>
         )}
+        {traced && trace}
         {changes}
       </div>
     </div>
@@ -989,31 +1022,49 @@ export function WaitingRow({ wait }: { wait: Waiting }) {
 
 /**
  * The running turn's header, right under the message that started it:
- * `Working for 12s` over a hairline. What the turn does now
- * shows at the foot ({@link LiveActivityRow}).
+ * `Working for 12s` over a hairline. When the turn ends it settles on a green check and
+ * `Worked for 12s` for a moment (`Transcript` keeps it in place), before the fold's own
+ * `Worked for 12s` divider replaces it. What the turn does now shows at the foot
+ * ({@link LiveActivityRow}).
  */
-export function WorkingRow({ startedAt, now }: { startedAt?: number; now: number }) {
-  const elapsed = startedAt ? Math.max(0, now - startedAt) : undefined;
+export function WorkingRow({
+  startedAt,
+  now,
+  done,
+  elapsedMs,
+}: {
+  startedAt?: number;
+  now: number;
+  /** The turn finished: the line settles on a check for a moment instead of vanishing. */
+  done?: boolean;
+  /** The finished turn's own duration, once `turnStartedAt` is gone. */
+  elapsedMs?: number;
+}) {
+  const elapsed = elapsedMs ?? (startedAt ? Math.max(0, now - startedAt) : undefined);
+  const time = elapsed !== undefined ? formatDuration(Math.floor(elapsed / 1000) * 1000) : undefined;
   return (
     <div
-      className="flex h-[34px] items-center border-border/60 border-b pt-1 pb-2.5 text-body text-fg-muted tabular"
+      className="flex h-[34px] items-center gap-2 border-border/60 border-b pt-1 pb-2.5 text-body text-fg-muted tabular"
       role="status"
     >
-      {elapsed !== undefined
-        ? `Working for ${formatDuration(Math.floor(elapsed / 1000) * 1000)}`
-        : "Working…"}
+      {done && <CircleCheck size={13} className="shrink-0 text-success rc-dot-in" aria-hidden />}
+      {time ? `${done ? "Worked" : "Working"} for ${time}` : done ? "Worked" : "Working…"}
     </div>
   );
 }
 
 /** The running turn's foot while nothing else shows it working: what it does now, shimmering. */
-export function LiveActivityRow({ label }: { label: string }) {
+export function LiveActivityRow({ label, done }: { label: string; done?: boolean }) {
   return (
     <div className="flex min-h-6 items-center gap-2 text-body" role="status" aria-live="polite">
       <span className="flex w-[18px] shrink-0 justify-center">
-        <Spinner size={14} />
+        {done ? (
+          <CircleCheck size={14} className="text-success rc-dot-in" aria-hidden />
+        ) : (
+          <Spinner size={14} />
+        )}
       </span>
-      <span className="rc-shimmer truncate">{label}</span>
+      <span className={done ? "truncate text-fg-muted" : "rc-shimmer truncate"}>{label}</span>
     </div>
   );
 }

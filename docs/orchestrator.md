@@ -104,14 +104,23 @@ user's index, HEAD and stash are never touched). Not in a git repo → no
 checkpoints, capability `checkpoints: false`.
 
 - `_rustcode/checkpoints/list` `{ "session_id" }` → `{ "checkpoints": [{ "turn": 3, "ref": "…", "created_at": "…", "prompt": "first 80 chars", "files_changed": 2, "insertions": 10, "deletions": 1 }] }`
+  — plus `"attempt": true` on a checkpoint kept for the state a rewind
+  abandoned (see `keep` below); it has no prompt and belongs to no turn.
 - `_rustcode/checkpoints/diff` `{ "session_id", "turn" }` → `{ "files": [{ "path", "status": "added|modified|deleted|renamed", "insertions", "deletions", "patch": "unified diff" }] }`
   — what that turn changed: its checkpoint vs the next one (or the working
   tree for the latest turn).
-- `_rustcode/checkpoints/restore` `{ "session_id", "turn", "rewind": bool }` → `{ "restored": true }`
+- `_rustcode/checkpoints/restore` `{ "session_id", "turn", "rewind": bool, "keep": bool }` → `{ "restored": true }`
   — puts the files back to before that turn. With `rewind: true` it also calls
   the existing rewind for the conversation when the harness supports it
   (`capabilities.rewind`); otherwise files only, and the response says
   `"conversation": "kept"`.
+- With `keep: true`, the work tree is checkpointed **before** anything changes
+  and answered as `"kept": { "turn": N, "ref": "…" }`: the state the rewind
+  abandons, so "go back to this attempt" can restore it with a second
+  `restore` of that turn (files only; a conversation cannot be brought
+  forward). If it cannot be kept, the request fails and nothing has changed,
+  so the client can ask before restoring without a way back. `restore` of a
+  kept attempt is allowed, and rewinds nothing.
 - Refs are pruned when the thread is deleted, and kept to the last 50 turns.
 
 Built (`rustcode/engine/src/checkpoints.rs`). Details:
@@ -124,7 +133,10 @@ Built (`rustcode/engine/src/checkpoints.rs`). Details:
   past 3 s or when the repository's index is over 48 MiB; the turn runs
   either way. The commit's message holds the prompt (up to 4 KiB) and, for
   built-in turns, the chat position `_rustcode/rewind` takes.
-- `turn` numbers count checkpoints (1, 2, …), not chat messages.
+- `turn` numbers count checkpoints (1, 2, …), not chat messages, and a kept
+  attempt takes the next number like a turn's. The initialize meta carries
+  `checkpoints: 2` for `keep` (and `"attempt"` on the list); `1` is the
+  version without it, so a client asks before a rewind it cannot undo.
 - `list` also answers `"available": bool` (whether the thread's cwd is in a
   git repository); per-thread `checkpoints: false` is in the `session/new` /
   `session/load` answer (`_meta.rustcode.checkpoints` and

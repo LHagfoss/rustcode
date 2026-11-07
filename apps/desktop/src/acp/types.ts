@@ -67,6 +67,9 @@ export const Method = {
   githubLogout: "_rustcode/connections/github/logout",
   accountLogout: "_rustcode/connections/account/logout",
   pulls: "_rustcode/pulls",
+  /** The timed approvals still in force ("Allow for 1 hour"), and revoking one. */
+  permissions: "_rustcode/permissions",
+  permissionsRevoke: "_rustcode/permissions/revoke",
 } as const;
 
 // ---------------------------------------------------------------- initialize
@@ -86,6 +89,11 @@ export interface AgentInfo {
   sessionMove: boolean;
   /** `_rustcode/session/repair`: Repair Thread for one that will not open. */
   sessionRepair: boolean;
+  /**
+   * `_rustcode/checkpoints/restore` with `keep`: a rewind keeps the state it abandons as a
+   * checkpoint, so the attempt it leaves can be returned to.
+   */
+  checkpointAttempts: boolean;
 }
 
 export function parseAgentInfo(result: Json): AgentInfo {
@@ -113,6 +121,7 @@ export function parseAgentInfo(result: Json): AgentInfo {
     pullRequests: num(meta?.pullRequests) !== undefined,
     sessionMove: num(meta?.sessionMove) !== undefined,
     sessionRepair: num(meta?.sessionRepair) !== undefined,
+    checkpointAttempts: (num(meta?.checkpoints) ?? 0) >= 2,
   };
 }
 
@@ -317,13 +326,21 @@ export interface SessionUsage {
   context?: ContextDetail;
 }
 
+export interface ContextItem {
+  name: string;
+  /** An estimate in the engine's token unit, when it knows one. */
+  tokens?: number;
+}
+
 export interface ContextDetail {
   model?: string;
   /** In the engine's order, which matches the TUI legend; empty ones are kept. */
-  categories: { name: string; tokens: number }[];
+  categories: { name: string; tokens: number; items?: ContextItem[] }[];
   free?: number;
   compactions?: number;
   reclaimed?: number;
+  /** Where the harness compacts on its own, when it reports a threshold. */
+  compactAt?: number;
 }
 
 function parseContextDetail(value: unknown): ContextDetail | undefined {
@@ -333,15 +350,25 @@ function parseContextDetail(value: unknown): ContextDetail | undefined {
     const x = obj(c);
     const name = str(x?.name);
     const tokens = num(x?.tokens);
-    return name && tokens !== undefined ? [{ name, tokens }] : [];
+    if (!name || tokens === undefined) return [];
+    const items = Array.isArray(x?.items)
+      ? x.items.flatMap((item) => {
+          const y = obj(item);
+          const itemName = str(y?.name);
+          return itemName ? [{ name: itemName, tokens: num(y?.tokens) }] : [];
+        })
+      : undefined;
+    return [{ name, tokens, ...(items?.length ? { items } : {}) }];
   });
   const compaction = obj(o.compaction);
+  const compactAt = obj(o.compactAt);
   return {
     model: str(o.model),
     categories,
     free: num(o.free),
     compactions: num(compaction?.count),
     reclaimed: num(compaction?.reclaimedTokens),
+    compactAt: num(compactAt?.tokens),
   };
 }
 

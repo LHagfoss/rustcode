@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Checkpoint, checkpointsByTurn } from "./v2";
+import { type Checkpoint, checkpointsByTurn, parseCheckpoints, parseRestoreAnswer } from "./v2";
 
 const hour = 3_600_000;
 const t0 = 1_700_000_000_000;
@@ -106,6 +106,53 @@ describe("pairing a turn with its checkpoint", () => {
     expect(checkpointsByTurn(turns, checkpoints)).toMatchObject({
       t1: { turn: 1 },
       t2: { turn: 2 },
+    });
+  });
+});
+
+describe("a rewind as an attempt", () => {
+  const listed = (turn: number, prompt: string, attempt = false) => ({
+    turn,
+    ref: `refs/rustcode/checkpoints/t/${turn}`,
+    created_at: new Date(t0 + turn * hour).toISOString(),
+    prompt,
+    files_changed: 1,
+    insertions: 2,
+    deletions: 1,
+    ...(attempt ? { attempt: true } : {}),
+  });
+
+  test("a checkpoint kept for the abandoned state pairs with no turn", () => {
+    // turn 3 is the state the rewind left, kept after turn 2: an empty prompt used to match any
+    // turn, so it must be told apart by what it is, not by its message.
+    const checkpoints = parseCheckpoints({
+      checkpoints: [listed(1, "one"), listed(2, "two"), listed(3, "", true)],
+    });
+    expect(checkpoints.map((c) => c.attempt)).toEqual([false, false, true]);
+    const turns = [
+      { id: "t1", prompt: "one", at: t0 + 2 * hour },
+      { id: "t2", prompt: "two", at: t0 + 3 * hour },
+    ];
+    expect(checkpointsByTurn(turns, checkpoints)).toMatchObject({ t1: { turn: 1 }, t2: { turn: 2 } });
+  });
+
+  test("the answer says whether the conversation came back and what was kept", () => {
+    expect(parseRestoreAnswer({ restored: true, conversation: "rewound", kept: { turn: 4 } })).toEqual({
+      conversation: "rewound",
+      kept: 4,
+      rewindError: undefined,
+    });
+    expect(
+      parseRestoreAnswer({ restored: true, conversation: "kept", rewind_error: "no such message" }),
+    ).toEqual({
+      conversation: "kept",
+      kept: undefined,
+      rewindError: "no such message",
+    });
+    expect(parseRestoreAnswer(undefined)).toEqual({
+      conversation: "kept",
+      kept: undefined,
+      rewindError: undefined,
     });
   });
 });

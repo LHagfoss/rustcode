@@ -1296,6 +1296,16 @@ pub fn effective_scroll_lines(configured: Option<u16>) -> u16 {
     })
 }
 
+/// A command prefix the user allowed for a limited time (the desktop's "For
+/// 1 hour"), kept beside the permanent `approved_command_prefixes`. The
+/// prefix uses the same stored form as a permanent rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimedCommandApproval {
+    pub prefix: String,
+    /// Unix seconds; the approval stops covering calls after this.
+    pub expires_at: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub default: DefaultConfig,
@@ -1341,6 +1351,10 @@ pub struct AppConfig {
     /// over reusable approvals and session auto-confirm.
     #[serde(default)]
     pub denied_command_prefixes: Vec<String>,
+    /// Reusable approvals that expire on their own (`expires_at`). Matching is
+    /// the same as `approved_command_prefixes`, which stays permanent.
+    #[serde(default)]
+    pub timed_command_approvals: Vec<TimedCommandApproval>,
     /// Effective OS sandbox permissions for shell commands.
     #[serde(default)]
     pub sandbox_mode: SandboxMode,
@@ -1605,6 +1619,8 @@ struct RuntimeConfig {
     #[serde(default)]
     denied_command_prefixes: Vec<String>,
     #[serde(default)]
+    timed_command_approvals: Vec<TimedCommandApproval>,
+    #[serde(default)]
     sandbox_mode: SandboxMode,
     #[serde(default = "default_true")]
     discord_rpc_enabled: bool,
@@ -1670,6 +1686,8 @@ struct TomlConfig {
     approved_command_prefixes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     denied_command_prefixes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timed_command_approvals: Option<Vec<TimedCommandApproval>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sandbox_mode: Option<SandboxMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1849,6 +1867,7 @@ impl Default for AppConfig {
             }],
             approved_command_prefixes: Vec::new(),
             denied_command_prefixes: Vec::new(),
+            timed_command_approvals: Vec::new(),
             sandbox_mode: SandboxMode::default(),
             discord_rpc_enabled: true,
             fullscreen: false,
@@ -2122,6 +2141,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.mcp_servers = runtime.mcp_servers;
                     config.approved_command_prefixes = runtime.approved_command_prefixes;
                     config.denied_command_prefixes = runtime.denied_command_prefixes;
+                    config.timed_command_approvals = runtime.timed_command_approvals;
                     config.sandbox_mode = runtime.sandbox_mode;
                     config.agent_mode = runtime.agent_mode;
                     config.verbosity = runtime.verbosity;
@@ -2291,6 +2311,8 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         mcp_servers: Some(config.mcp_servers.clone()),
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
         denied_command_prefixes: Some(config.denied_command_prefixes.clone()),
+        timed_command_approvals: (!config.timed_command_approvals.is_empty())
+            .then(|| config.timed_command_approvals.clone()),
         sandbox_mode: Some(config.sandbox_mode),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
         fullscreen: Some(config.fullscreen),
@@ -2431,6 +2453,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(prefixes) = file.denied_command_prefixes {
         config.denied_command_prefixes = prefixes;
     }
+    if let Some(approvals) = file.timed_command_approvals {
+        config.timed_command_approvals = approvals;
+    }
     if let Some(sandbox_mode) = file.sandbox_mode {
         config.sandbox_mode = sandbox_mode;
     }
@@ -2525,6 +2550,7 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // checked-out project configuration.
     file.approved_command_prefixes = None;
     file.denied_command_prefixes = None;
+    file.timed_command_approvals = None;
     // A checked-out project must not widen the user's OS command permissions.
     file.sandbox_mode = None;
     // Auto-approval is a user trust decision for the same reason.
@@ -2670,6 +2696,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         mcp_servers: None,
         approved_command_prefixes: None,
         denied_command_prefixes: None,
+        timed_command_approvals: None,
         sandbox_mode: None,
         discord_rpc_enabled: None,
         fullscreen: None,
