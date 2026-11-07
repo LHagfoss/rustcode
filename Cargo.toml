@@ -28,6 +28,14 @@ exclude = ["apps/desktop/src-tauri"]
 name = "rustcode"
 path = "rustcode/engine/src/lib.rs"
 
+# Its own test target, next to the engine sources: the root `tests/` folder is
+# git-ignored scratch space, and this target must link only the library. The
+# library's `#[cfg(test)]` modules hold unix-only assertions, so a test inside
+# them cannot build on Windows, where the portability job runs this one.
+[[test]]
+name = "storage_migrations_fresh_profile"
+path = "rustcode/engine/tests/storage_migrations_fresh_profile.rs"
+
 [dependencies]
 anyhow = "1.0.97"
 agent-client-protocol = "2.0.0"

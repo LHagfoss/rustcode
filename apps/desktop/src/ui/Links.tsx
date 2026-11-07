@@ -18,21 +18,23 @@ import {
 } from "lucide-react";
 import { Dialog, Popover } from "radix-ui";
 import { useEffect, useMemo } from "react";
-import type { StackAgent } from "../state/agentStack";
-import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
+import type { StackAgent, StackState } from "../state/agentStack";
 import {
-  isActive,
-  LINK_LABEL,
-  type Link,
-  type LinkState,
-  linkCounts,
-  linkGroupStatus,
-  stripLinks,
-} from "../state/orchestration";
+  type AgentState,
+  addBranch,
+  branchWord,
+  flattenViews,
+  forestTotal,
+  ownBranch,
+} from "../state/delegates";
+import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
+import { isActive, LINK_LABEL, type Link, type LinkState, stripLinks } from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
+import { emptyCost } from "../state/pricing";
 import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
-import { AgentGroupHeader, type AgentState, LINK_AGENT_STATE, ThreadAgentRow, useNow } from "./AgentViews";
+import { AgentGroupHeader, LINK_AGENT_STATE, ThreadAgentRow } from "./AgentViews";
+import { useDelegateBranch } from "./DelegateTree";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const ICON: Record<LinkState, typeof Clock> = {
@@ -93,33 +95,65 @@ function LinkRow({ link }: { link: Link }) {
  * has about 800px, and a third of it spent on a made-up title tells the reader
  * nothing. Two stay as rows of their own; they fit.
  */
-function ManyLinks({ links }: { links: Link[] }) {
+function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
   // Joined into one string so the selector's result is stable between renders.
   const states = useApp((s) => links.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
-  const counts = linkCounts(states);
-  const state: AgentState = counts.working
-    ? "working"
-    : counts.needs
-      ? "needs"
-      : counts.failed
+  // What the details panel draws as a tree is the authority for the branch:
+  // the threads this one started, and the threads those started, at every
+  // depth. The strip's own rows are only the links it can stop or dismiss, so
+  // its count, state and time come from the branch and not from those rows.
+  const views = useDelegateBranch(threadId);
+  const inTree = new Set(flattenViews(views).map((view) => view.id));
+  const now = Date.now();
+  const total = links.reduce((sum, link, i) => {
+    // A thread the tree already holds, at any depth, is counted there.
+    if (inTree.has(link.target)) return sum;
+    // One it only messaged: not a delegate, but still a row of this strip.
+    const state = LINK_AGENT_STATE[states[i] ?? "done"];
+    const end = link.settledAt ?? now;
+    const elapsed = {
+      ms: Math.max(0, end - link.createdAt),
+      live: link.settledAt === undefined,
+      frozen: false,
+    };
+    return addBranch(sum, ownBranch(state, elapsed, emptyCost()));
+  }, forestTotal(views));
+  const state: AgentState = total.counts.needs
+    ? "needs"
+    : total.counts.working
+      ? "working"
+      : total.counts.failed
         ? "failed"
-        : "done";
+        : total.counts.stopped
+          ? "stopped"
+          : "done";
   // The same stack as the sidebar: what works or needs you first, and once the work is
   // done, the marks of what did it.
-  const marks: StackAgent[] = links.map((link, i) => {
-    const agent = LINK_AGENT_STATE[states[i] ?? "done"];
-    return {
-      id: link.target,
-      state: agent === "stopped" ? "done" : agent,
-      kind: "thread",
-      harness: link.harness,
-      label: link.targetTitle,
-      since: link.createdAt,
-    };
+  const mark = (view: (typeof views)[number]): StackAgent => ({
+    id: view.id,
+    state: view.state === "stopped" ? "done" : view.state,
+    kind: "thread",
+    harness: view.harness,
+    label: view.title,
+    since: view.link.createdAt,
   });
-  const now = useNow(counts.working + counts.needs > 0);
-  const started = Math.min(...links.map((l) => l.createdAt));
-  const ended = Math.max(...links.map((l) => l.settledAt ?? 0));
+  const marks: StackAgent[] = [
+    ...flattenViews(views).map(mark),
+    ...links.flatMap((link, i): StackAgent[] => {
+      if (inTree.has(link.target)) return [];
+      const agent = LINK_AGENT_STATE[states[i] ?? "done"];
+      return [
+        {
+          id: link.target,
+          state: (agent === "stopped" ? "done" : agent) as StackState,
+          kind: "thread" as const,
+          harness: link.harness,
+          label: link.targetTitle,
+          since: link.createdAt,
+        },
+      ];
+    }),
+  ];
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -130,9 +164,9 @@ function ManyLinks({ links }: { links: Link[] }) {
           <AgentGroupHeader
             agents={marks}
             state={state}
-            label={`${links.length} threads`}
-            status={linkGroupStatus(counts)}
-            elapsedMs={(counts.working || counts.needs ? now : ended || now) - started}
+            label={`${total.threads} threads`}
+            status={branchWord(total)}
+            elapsedMs={total.ms}
             open={false}
             chevron="down"
           />
@@ -177,7 +211,11 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
       {drivenBy && <WorkingFor link={drivenBy} />}
       {(live.length > 0 || fanOuts.length > 0) && (
         <div className="flex flex-col gap-0.5">
-          {live.length > 2 ? <ManyLinks links={live} /> : live.map((l) => <LinkRow key={l.id} link={l} />)}
+          {live.length > 2 ? (
+            <ManyLinks links={live} threadId={threadId} />
+          ) : (
+            live.map((l) => <LinkRow key={l.id} link={l} />)
+          )}
           {fanOuts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-2 pt-0.5">
               {fanOuts.map((f) => (

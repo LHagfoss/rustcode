@@ -51,7 +51,7 @@ describe("the height a row is reserved at", () => {
 
   test("the turn's own lines are the heights they are drawn at", () => {
     // `WorkingRow` is `h-[34px]` over a hairline; the live activity row is `min-h-6`.
-    expect(estimatedRowHeight({ key: "working", working: true })).toBe(35);
+    expect(estimatedRowHeight({ key: "working", working: {} })).toBe(35);
     expect(estimatedRowHeight({ key: "activity", activity: "Reading files" })).toBe(24);
   });
 
@@ -81,7 +81,7 @@ describe("the height a row is reserved at", () => {
     const rows: Row[] = [
       tool("c0"),
       user("m1"),
-      { key: "working", working: true },
+      { key: "working", working: {} },
       { key: "activity", activity: "Working" },
     ];
     const reserved = rows.map((row, i) => rowGap(rows, i) + estimatedRowHeight(row));

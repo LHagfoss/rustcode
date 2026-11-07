@@ -104,6 +104,8 @@ import {
   answerOrchestration,
   linkFinished,
   linkStarted,
+  linkWaitEnded,
+  linkWaitStarted,
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
@@ -139,18 +141,22 @@ import {
   sendDecision,
   type TurnState,
 } from "./queue";
+import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
   appendSteer,
   applyUpdate,
   beginTurn,
+  departQueued,
+  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
   foldingBatch,
   localId,
   messagesAfter,
+  type QueuedPrompt,
   questionItem,
   requeueSteers,
   type ThreadState,
@@ -364,6 +370,14 @@ export interface AppState {
   systemNotifications: boolean;
   /** Those notifications only while the app is in the background (Settings › General). */
   notificationsBackgroundOnly: boolean;
+  /** A recap of what happened while the app was idle (Settings › Notifications). */
+  recapWhileAway: boolean;
+  /** How long the app must be idle before that recap is due, in hours. */
+  recapHours: number;
+  /** When the user left, while a recap is on screen; null when there is none. */
+  recapSince: number | null;
+  /** The recap was dismissed until the next break. */
+  recapDismissed: boolean;
   /** A thread stopped by its plan's limit continues when the limit resets. */
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
@@ -410,6 +424,7 @@ export interface AppState {
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
+    | { kind: "inbox" }
     | { kind: "board" }
     | { kind: "review"; threadId: string }
     | { kind: "compare"; fanOut: string };
@@ -430,6 +445,12 @@ export const PLAN_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
 /** How many threads keep their panel; past this the oldest entry is dropped. */
 export const MAX_PANELS = 500;
 
+/**
+ * The views the panel can show. Declared before the store: `parsePanels` reads it while the store
+ * is created, and a `const` further down is not initialized yet then (a blank window on start).
+ */
+const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
+
 const STORAGE = {
   smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
@@ -447,6 +468,10 @@ const STORAGE = {
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
   notificationsBackgroundOnly: "rustcode.notificationsBackgroundOnly",
+  recapWhileAway: "rustcode.recapWhileAway",
+  recapHours: "rustcode.recapHours",
+  /** When the app was last used, so a return after hours knows how long the break was. */
+  lastActive: "rustcode.lastActiveAt",
   continueAfterLimit: "rustcode.continueAfterLimit",
   limitWaits: "rustcode.limitWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
@@ -488,6 +513,8 @@ export const SETTINGS_DEFAULTS = {
   resumeAfterRestart: true,
   systemNotifications: true,
   notificationsBackgroundOnly: true,
+  recapWhileAway: true,
+  recapHours: RECAP_HOURS_DEFAULT,
   continueAfterLimit: true,
   orchestration: true,
   threadLimit: MAX_ACTIVE_LINKS,
@@ -560,6 +587,10 @@ export const useApp = create<AppState>((_set, _get, api) => ({
     STORAGE.notificationsBackgroundOnly,
     SETTINGS_DEFAULTS.notificationsBackgroundOnly,
   ),
+  recapWhileAway: storedFlag(STORAGE.recapWhileAway, SETTINGS_DEFAULTS.recapWhileAway),
+  recapHours: parseRecapHours(stored(STORAGE.recapHours)),
+  recapSince: null,
+  recapDismissed: false,
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
@@ -1187,7 +1218,11 @@ async function handleInbound(message: Inbound) {
           return;
         }
         updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
-        if (request.sessionId !== get().selectedId) {
+        // Its links stop their work clock while the user decides (state/delegates.ts).
+        linkWaitStarted(request.sessionId);
+        // The inbox is the screen that lists this request already: a toast there would
+        // stack over its own first rows. Other toasts (copied, finished) still show.
+        if (request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
           toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
         // The system says the same, so a thread waiting behind another window is not forgotten.
@@ -1857,6 +1892,27 @@ export function retryMessage(id: string, itemId: string) {
   } else void go();
 }
 
+/**
+ * Retry a thread's failed turn: the inbox's action for a failure. The thread is
+ * opened first when the app has not read it, because the message to send again
+ * lives in its transcript; its last message is the one the failure answered.
+ */
+export async function retryThread(id: string): Promise<void> {
+  if (!get().threads[id]?.loaded) await openThread(id);
+  const thread = get().threads[id];
+  if (!thread) return;
+  for (let i = thread.items.length - 1; i >= 0; i--) {
+    const item = thread.items[i]!;
+    if (item.kind !== "user") continue;
+    // Retried: the failure is answered, so the inbox and the row stop saying Failed.
+    clearFinished(id);
+    retryMessage(id, item.id);
+    return;
+  }
+  // Nothing to send again (an empty transcript): at least show the thread.
+  selectThread(id);
+}
+
 /** Edit: the message goes back to the composer; sending it rewinds the thread to it first. */
 export function editMessage(id: string, itemId: string) {
   const thread = get().threads[id];
@@ -2351,10 +2407,23 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   }
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
+    glideAway(id, item);
     return true;
   }
   toast(QUEUE_REASON.refused);
   return false;
+}
+
+/** How long a queued row takes to leave the stack, gliding up toward the transcript (index.css). */
+const STEER_GLIDE_MS = 240;
+
+/**
+ * A queued row a steer took keeps the stack's place while it glides out, so the row itself leaves
+ * instead of vanishing from under the reader; it is dropped once the glide is over.
+ */
+function glideAway(id: string, item: QueuedPrompt) {
+  updateThread(id, (t) => departQueued(t, item));
+  setTimeout(() => updateThread(id, (t) => dropDeparted(t, item.id)), STEER_GLIDE_MS);
 }
 
 /**
@@ -2634,6 +2703,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
     for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
     updateThread(id, (t) => ({ ...t, permissions: [] }));
+    if (thread.permissions.length) linkWaitEnded(id);
   } catch (error) {
     toast(errorText(error), "error");
   }
@@ -2678,6 +2748,8 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string) 
     permissions: t.permissions.filter((p) => p.rpcId !== request.rpcId),
     items: answer ? [...t.items, questionItem(request, answer)] : t.items,
   }));
+  // Another request of the same thread keeps it waiting; the last one ends the wait.
+  if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
   connection?.respond(request.rpcId, result);
 }
 
@@ -3115,6 +3187,43 @@ export function setNotificationsBackgroundOnly(on: boolean) {
   store(STORAGE.notificationsBackgroundOnly, on ? "1" : "0");
 }
 
+export function setRecapWhileAway(on: boolean) {
+  set({ recapWhileAway: on, ...(on ? {} : { recapSince: null }) });
+  store(STORAGE.recapWhileAway, on ? "1" : "0");
+}
+
+export function setRecapHours(hours: number) {
+  const kept = parseRecapHours(String(hours));
+  set({ recapHours: kept });
+  store(STORAGE.recapHours, String(kept));
+}
+
+/** A return after a long enough break: the recap starts at the moment the user left. */
+export function beginRecap(since: number) {
+  set({ recapSince: since, recapDismissed: false });
+}
+
+/** Puts the card away until the next break; the inbox keeps a row that brings it back. */
+export function dismissRecap() {
+  set({ recapDismissed: true });
+}
+
+export function showRecap() {
+  set({ recapDismissed: false });
+}
+
+/** When the app was last used, from app storage; 0 on a first run. */
+export function lastActiveAt(): number {
+  const raw = stored(STORAGE.lastActive);
+  const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Records that the app was used now, so a later return measured from here. */
+export function markActive(now = Date.now()) {
+  store(STORAGE.lastActive, String(now));
+}
+
 export function setRoundedFont(on: boolean) {
   set({ roundedFont: on });
   store(STORAGE.roundedFont, on ? "1" : "0");
@@ -3467,9 +3576,6 @@ export function setTerminalOpen(open: boolean) {
 
 /** A panel view: one of the side views, never closed. */
 export type PanelKind = NonNullable<AppState["panel"]>;
-
-/** The views the panel can show. */
-const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 /**
  * The view a thread with no panel open might show: its own overview. Changes,

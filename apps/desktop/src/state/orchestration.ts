@@ -125,6 +125,13 @@ export interface Link {
   workedMs?: number;
   /** When it settled (done or failed), for the coalescing window. */
   settledAt?: number;
+  /**
+   * When the approval it waits on now was asked: the delegate tree's clock stops
+   * there, so a question left open costs the branch no time.
+   */
+  waitingSince?: number;
+  /** How long it has waited on approvals before this one, which its work time leaves out. */
+  waitedMs?: number;
   /** When the parent was told it settled: one delivery per link, kept in the book across restarts. */
   notifiedAt?: number;
   /** The child's pending request (its rpc id, as text) the parent was told about. */
@@ -1020,6 +1027,38 @@ function chainRefusal(book: LinkBook, caller: RuleThread, target?: RuleThread): 
   }
   return null;
 }
+
+/**
+ * The clock of a delegate that now waits on the user: every live link to that
+ * thread stops counting work time at `at`. A link already waiting keeps its
+ * moment — a harness can ask twice in one wait — and a settled one is untouched.
+ */
+export function waitStarted(links: readonly Link[], thread: string, at: number): Link[] {
+  let changed = false;
+  const next = links.map((link) => {
+    if (link.target !== thread || !isActive(link.state) || link.waitingSince !== undefined) return link;
+    changed = true;
+    return { ...link, waitingSince: at };
+  });
+  return changed ? next : (links as Link[]);
+}
+
+/**
+ * Its wait ended at `at` (the user answered, or the turn was stopped): the time
+ * it took is folded into `waitedMs`, so the clock resumes from where it froze
+ * instead of jumping over the wait.
+ */
+export function waitEnded(links: readonly Link[], thread: string, at: number): Link[] {
+  let changed = false;
+  const next = links.map((link) => {
+    if (link.target !== thread || link.waitingSince === undefined) return link;
+    changed = true;
+    const { waitingSince, ...rest } = link;
+    return { ...rest, waitedMs: (link.waitedMs ?? 0) + Math.max(0, at - waitingSince) };
+  });
+  return changed ? next : (links as Link[]);
+}
+
 export function forget(book: LinkBook, thread: string): LinkBook {
   const grants = Object.fromEntries(
     Object.entries(book.grants)

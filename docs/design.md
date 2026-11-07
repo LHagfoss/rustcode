@@ -233,14 +233,16 @@ that change use `tabular`.
 
 - Hover: **in 60ms, out 120ms** (`--rc-hover-in`, `--rc-hover-out`),
   colour only, set once in `index.css` for every button, link, row,
-  switch and menu item. Components never add `transition-colors` or their
-  own hover duration. Press: `active:bg-fill-strong`, no delay. No
-  `transform` on press (no scale): text re-rasterizes and reads as a flash.
+  switch and menu item, and for the row the keyboard lands on. Components
+  never add `transition-colors` or their own hover duration. Press:
+  `active:bg-fill-strong`, no delay. No `transform` on press (no scale): text
+  re-rasterizes and reads as a flash.
 - Hover is pure CSS `:hover` (or Radix's `data-highlighted`). No hover
   state in React (`onMouseEnter` setting an id); a keyboard-driven list may
-  keep a selected index, shown with the same `bg-fill`. Row menus are
-  `modal={false}`, so other rows keep answering the pointer while one is
-  open.
+  keep a selected index, shown with the same `bg-fill`. A popover's menu row
+  has neither hook, so it fills on `:hover` and `:focus-visible` itself. Row
+  menus are `modal={false}`, so other rows keep answering the pointer while
+  one is open.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
@@ -263,11 +265,16 @@ that change use `tabular`.
   something that moves every frame.
 - Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
   in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off
-  in 160ms, and a card shown meanwhile takes the top of the stack.
+  in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
+  the front card is in flow, the ones behind peeking 6px above it; hovering or
+  focusing the stack fans them out 8px apart (`transform` only).
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
-  selection slides (`transform`) to the new segment.
+  selection slides (`transform`) to the new segment. A count that changes rolls
+  its digits vertically in 220ms `--ease-snappy` (`ui/RollingNumber.tsx`),
+  keeping each column's place from the right, so 9 → 10 rolls the units and
+  grows a tens.
 - A message sent from the composer flies instead of rising: it starts a
   little inside the field's card (at 96%) and lands in its row in 220ms
   `--ease-snappy`, `transform` and `opacity` only, so nothing around it moves
@@ -295,6 +302,12 @@ that change use `tabular`.
   (`lib/frame.ts` `afterPaint`): the pending screen is drawn before
   `session/new` is asked for, and the message's row before its prompt is built,
   so an in-process harness cannot fold all of it into one frame.
+- A steering note landing in a running turn: the queued row it took from the
+  stack glides 14px up toward the transcript and fades there (`rc-steer-away`,
+  240ms `--ease-snappy`, `transform` and `opacity` only, and it collapses
+  under reduced motion), and the note's marker appears where the turn
+  read it — on the plan card's active step, else under its message — without
+  moving anything around it.
 - A row mounts at the size the transcript already reserved for it: `estimateSize`
   is the row's own air (`rowGap`) plus its content, and a measured row keeps
   both. An estimate that left the gap out, or guessed a live `Working for 12s`
@@ -385,9 +398,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
   most one action as a secondary pill (`h-6 bg-fill`), and a close button.
   Progress is a 2px accent bar along its foot. `Toaster` shows at most three
-  (`state/toasts.ts` enforces the queue), newest on top, stacked with 8px
-  between, centred at the top of the chat column 8px under its header (the
-  window's top over Settings). The same message again refreshes its card and
+  (`state/toasts.ts` enforces the queue), newest on top: at rest only the
+  front card is fully shown, the others peeking 6px above it, and hovering or
+  focusing the stack fans them out 8px apart. Centred at the top of the chat
+  column 8px under its header (the window's top over Settings). An
+  auto-dismissing card drains a 1px accent hairline along its foot, which
+  stops with its clock; a card replaced in place from spinner to check settles
+  onto the check. The same message again refreshes its card and
   restarts its time instead of stacking; past three, the oldest is dropped.
   Info and success leave after 3s, errors after 7s. The pointer or focus on
   the stack, a drag, and a window in the background stop every clock, which
@@ -447,9 +464,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   The thread above this one reads `Started from` or `Working for`, or
   `Messaged by`. A row is the thread's own name, its state word, and at its end
   what the sidebar's row for that thread ends with: the review mark when it
-  waits for review, and its age in the same short form (`4m`, `2d`). Its
-  subagents are
-  their own section, said to be helpers inside this thread and not threads.
+  waits for review, and its age in the same short form (`4m`, `2d`). `Started`
+  draws its delegates as a tree (`ui/DelegateTree.tsx`, the rules in
+  `state/delegates.ts`): the threads it started and the threads those started,
+  each row a harness mark, its name, its state word, the work time and the
+  best-known cost of its branch, indented under a tree line. A parent's figures
+  are the sum of its whole branch; time counts only while a thread works, so a
+  wait on an approval holds the clock still, and a cost no turn reported is `—`,
+  never a zero (`≈` marks an estimate). A branch that finished folds to one
+  line, opening a node folds the one open beside it, and its reply button shows
+  the last answer in place. A Board card carries the same tree as one line
+  (`3 delegates · 1 working · $8.71`). Its subagents are their own section, said
+  to be helpers inside this thread and not threads.
 - **Sidebar selection:** one tab stop for the whole list, on the row the
   keyboard is on (the open thread — an open delegate is a row of its own while
   it is open — else the first): ↑ ↓ move it through the rows on screen,
@@ -574,7 +600,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
   them is a pill whose panel opens off the pill itself, 8px away from it,
-  `top` by default. The project picker is pinned above its pill whatever the
+  `top` by default. The usage meter's percentage shimmers while its turn runs
+  and settles on the number when the turn ends, so a live number is not read
+  as a final one. The project picker is pinned above its pill whatever the
   room below, the list belonging to the card above it; the other strip menus
   open downward when the window has room under the strip and upward when it
   does not, and shrink to the room they have (at least 280px below, else
@@ -615,7 +643,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   queue stops the turn and sends the message in its place. It is edited in the composer,
   never in a field of its own: its pencil, or ↑ at the start of an empty
   composer, loads its text, command, links and attachments there, ⏎ saves it
-  back in the queue and Esc leaves it. A held queue ends with Resume, which
+  back in the queue and Esc leaves it. A row a steer takes out of the queue
+  keeps the stack's place while it glides up toward the transcript and fades
+  (`rc-steer-away`, 240ms, `transform` and `opacity` only), and the message it
+  became lands where the turn read it. A held queue ends with Resume, which
   starts its first message. A wake turn the app sends is one quiet line in the
   notice divider's style (`Delegate finished · Fix composer focus · Pi · 3m 49s`
   for one, the working delegate's harness marks and the longest time for
@@ -663,7 +694,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   type over the same hairline, which a divider right above it already draws
   (so it drops its own). The duration lives here and nowhere else; a red
   `CircleX` marks only a turn that itself failed, and a step that failed
-  keeps its own count inside. A turn that wrote no answer keeps its time in
+  keeps its own count inside. The running header (`Working for 12s`) holds
+  its place for 400ms after a completed turn, settling on a green check and
+  `Worked for 12s` before that divider replaces it; the live line at the foot
+  settles the same way when no reply is under it. A turn that wrote no answer keeps its time in
   the header (`Worked for 4s · 09:55 PM`) and has no footer, since there is
   nothing under it to copy or fork. A turn with no steps folds nothing and
   so has no header, and its duration goes with it: a short direct answer
@@ -792,17 +826,34 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   under a `CornerDownRight` in `success`. It is not folded away with its
   turn. A question still waiting keeps its form over the composer, since its
   answer is a choice; only the answer leaves a row.
-- **Plan card:** a paused thread's plan, at the foot of the transcript
+- **Plan card:** a thread's plan, at the foot of the transcript
   (`ui/PlanCard.tsx`): `rounded-2xl bg-surface p-4`, a `ListChecks` and
   `Plan` in `font-semibold` with `3 of 8 left` in `text-fg-muted tabular`, a
   Copy button and Implement (a prominent 24px pill that sends `Implement the
-  plan.` as an ordinary message). Its steps are one line each, `text-body`
-  with a 6px status dot (`success` done, `accent` now, `fill-strong` next)
-  and done steps in `text-fg-muted`. Past 220px it clips and fades over its
-  last 24px, with `Expand · N steps` under it; expanded, it shows whole and
-  offers `Collapse`. It is drawn only while the thread is not running and
-  something is unfinished, so a finished plan leaves no card; the header's
-  popover and the composer's meter are unchanged.
+  plan.` as an ordinary message; it is only there while the plan waits on
+  you). Its steps are one line each, `text-body` with a 6px status dot
+  (`success` done, `accent` now, `fill-strong` next) and done steps in
+  `text-fg-muted`. A step carries its clock at the right in `text-caption
+  text-fg-faint tabular`: the time it has run while the turn is on it, its
+  whole time once it is done, and nothing when the app did not see it start
+  (`state/steer.ts`). Under the step the turn was on sits each steering note
+  it read there, as `Steered: <first line>` (`ui/SteerMark.tsx`); a click, or
+  the hover tip, gives the whole note and when it was sent. Past 220px it
+  clips and fades over its last 24px, with `Expand · N steps` under it;
+  expanded, it shows whole and offers `Collapse`. It is drawn while a turn
+  works through the plan — live, with the running step's clock — and once the
+  thread waits on you with something left; an all-done plan still draws it
+  while it holds a note, and otherwise leaves no card. The header's popover
+  and the composer's meter are unchanged.
+- **Steering note:** a message sent into a running turn says where the turn
+  read it. The plan card marks it on the step that was active then; a thread
+  with no plan, or a plan rewritten past that step, gets a quiet row in the
+  transcript instead (`ui/Transcript.tsx`), on the divider's own line under the
+  message it was sent as (`Steered: use the fast path`, in `accent` behind a
+  `CornerDownRight`). Either marker is one line at rest and stays out of the
+  turn's fold, and opening it — a click, or the hover tip — shows the whole
+  note and when it was sent. The note is the app's own record of the turn, kept
+  while the thread is open and not replayed from history.
 - **Jump to latest:** `.rc-glass-overlay rounded-full`, centred 8px
   above the composer stack and above its drawer when one is open, over it
   in z.

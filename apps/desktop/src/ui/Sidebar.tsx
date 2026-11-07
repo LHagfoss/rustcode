@@ -122,6 +122,7 @@ import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "..
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
+import { NeedsYouRow } from "./Inbox";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
@@ -144,6 +145,7 @@ import {
   surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
+import { RollingNumber } from "./RollingNumber";
 import { StatusChip } from "./Status";
 import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
@@ -1062,16 +1064,16 @@ function SectionHeader({
       <span className="grid shrink-0 items-center justify-items-end">
         <span
           className={cx(
-            "font-normal text-fg-faint tabular [grid-area:1/1]",
+            "font-normal text-fg-faint [grid-area:1/1]",
             open && "group-hover/h:opacity-0 group-focus-visible/h:opacity-0",
             !open && "hidden",
           )}
         >
-          {section.items.length}
+          <RollingNumber value={section.items.length} />
         </span>
         {!open && (
           <span className="flex items-center gap-1.5 [grid-area:1/1]">
-            <span className="font-normal text-fg-faint tabular">{section.items.length}</span>
+            <RollingNumber value={section.items.length} className="font-normal text-fg-faint" />
             <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
           </span>
         )}
@@ -1122,7 +1124,7 @@ function ProjectHeader({
         )}
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {!open && <HiddenDot kind={hidden} />}
-        {!open && <span className="font-normal text-fg-faint text-sub tabular">{count}</span>}
+        {!open && <RollingNumber value={count} className="font-normal text-fg-faint text-sub" />}
         <ChevronDown
           size={12}
           className={cx(
@@ -1290,7 +1292,7 @@ function SettledRow({
     >
       <span className="min-w-0 flex-1 truncate">Settled</span>
       {!open && <HiddenDot kind={hidden} />}
-      <span className="shrink-0 text-fg-faint text-sub tabular">{count}</span>
+      <RollingNumber value={count} className="shrink-0 text-fg-faint text-sub" />
       {/* Two marks rather than one turned by a class: a rotated icon keeps the transform it had. */}
       {open ? (
         <ChevronDown size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
@@ -1941,6 +1943,9 @@ export function Sidebar() {
           >
             <SquarePen size={14} />
           </ClusterButton>
+        </div>
+        <div className="shrink-0 px-2 pb-1">
+          <NeedsYouRow />
         </div>
         <nav
           ref={list}

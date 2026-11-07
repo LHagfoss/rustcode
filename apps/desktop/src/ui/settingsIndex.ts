@@ -55,6 +55,16 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "While-you-were-away recap",
+    keywords: "away recap summary digest idle returned after lunch dismissed",
+  },
+  {
+    section: "general",
+    title: "Away for",
+    keywords: "away recap hours idle threshold",
+  },
+  {
+    section: "general",
     title: "Discord Rich Presence",
     keywords: "rich presence status shared project",
   },

@@ -10,10 +10,19 @@ import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
 export interface MockOptions {
-  /** `default`: onboarded with history. `onboarding`: first run. `empty`: no threads. */
+  /**
+   * `default`: onboarded with history. `onboarding`: first run. `empty`: no threads.
+   * `delegates`: a thread with two levels of delegates in mixed states, for the details tree.
+   */
   scenario?: string;
   /** Milliseconds between streamed chunks; 0 for tests. */
   delayMs?: number;
+  /**
+   * Seed the needs-you inbox: two approvals and a question across threads, one of
+   * them on a thread whose last turn failed. Off by default so a test starts from
+   * silence; the browser mock turns it on unless `?needsYou=0`.
+   */
+  needsYou?: boolean;
   /** Milliseconds the engine takes to start (`?boot=`), to see the slow-start toast. */
   bootMs?: number;
   /** Crash this many ms after the first start (`?crash=`); it comes back after `bootMs`, as the shell restarts it. */
@@ -401,6 +410,203 @@ function seedDelegatedThreads(): MockThread[] {
   ];
 }
 
+/** The threads of `?scenario=delegates`: ids and titles, shared by the threads and the links. */
+const DELEGATES = {
+  root: "mock-delegate-root",
+  research: "mock-delegate-research",
+  tests: "mock-delegate-tests",
+  docs: "mock-delegate-docs",
+  review: "mock-delegate-review",
+  wait: "mock-delegate-wait",
+  stop: "mock-delegate-stop",
+} as const;
+
+const DELEGATE_TITLES: Record<string, string> = {
+  [DELEGATES.root]: "Ship the delegate tree",
+  [DELEGATES.research]: "Research how delegates are recorded",
+  [DELEGATES.tests]: "Write the rollup unit tests",
+  [DELEGATES.docs]: "Document the delegate tree",
+  [DELEGATES.review]: "Review the delegate tree diff",
+  [DELEGATES.wait]: "Confirm the tree's status words",
+  [DELEGATES.stop]: "Try the tree in the app",
+};
+
+/**
+ * `?scenario=delegates`: a thread that delegated two levels deep, so the details
+ * tree has something to nest: a branch still working, one waiting on the user,
+ * and branches that finished, failed and were stopped. The links carry the times
+ * the tree counts (a working branch from its turn's start, a waiting one from
+ * the approval it waits on); the threads' own status is what makes a branch live
+ * once the app has marked the stored links interrupted at connect
+ * (`state/host.ts` `syncLinkBook`).
+ */
+function seedDelegateTreeThreads(): MockThread[] {
+  const thread = (
+    id: string,
+    harness: string,
+    model: string,
+    effort: string,
+    updatedAt: number,
+    parent: string | undefined,
+    ask: string,
+    say: string,
+    status?: string,
+  ): MockThread => ({
+    id,
+    cwd: "/Users/you/code/rustcode",
+    title: DELEGATE_TITLES[id],
+    updatedAt,
+    harness,
+    model,
+    effort,
+    ...(status ? { status } : {}),
+    ...(parent ? { parent: { id: parent, title: DELEGATE_TITLES[parent] } } : {}),
+    checkpoints: [],
+    history: [
+      update(id, { sessionUpdate: "user_message_chunk", content: text(ask) }),
+      update(id, { sessionUpdate: "agent_message_chunk", content: text(say) }),
+    ],
+  });
+  return [
+    thread(
+      DELEGATES.root,
+      "rustcode",
+      "chatgpt/gpt-6-luna",
+      "high",
+      minutes(2),
+      undefined,
+      "Draw the delegates as a tree in the details panel.",
+      "I will hand the research, the tests and the docs to threads and keep the wiring here.",
+    ),
+    // The live branch: a working researcher with a finished and a failed thread under it.
+    thread(
+      DELEGATES.research,
+      "codex",
+      "gpt-6-luna",
+      "low",
+      minutes(1),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nMap how a delegated thread records its parent and its turns.",
+      "The link carries the start and the settle; the thread's own status tells what it does now.",
+      "running",
+    ),
+    thread(
+      DELEGATES.tests,
+      "codex",
+      "gpt-6-luna",
+      "low",
+      minutes(6),
+      DELEGATES.research,
+      "From thread “Research how delegates are recorded” (agent):\n\nCover the roll-up and the paused clock.",
+      "Added 14 tests: the branch sum, the clock that freezes on an approval, and an unknown cost.",
+    ),
+    thread(
+      DELEGATES.docs,
+      "claude-code",
+      "claude-sonnet-6",
+      "medium",
+      minutes(7),
+      DELEGATES.research,
+      "From thread “Research how delegates are recorded” (agent):\n\nWrite the delegate tree down in docs/design.md.",
+      "The docs build failed on an unknown token name.",
+    ),
+    thread(
+      DELEGATES.review,
+      "pi",
+      "deepseek/flash",
+      "high",
+      minutes(5),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nReview the tree's rules before this goes out.",
+      "Two notes: fold the finished branch, and keep the cost unknown when no turn reported one.",
+    ),
+    thread(
+      DELEGATES.wait,
+      "claude-code",
+      "sonnet",
+      "medium",
+      minutes(3),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nCheck the state words against docs/terminology.md.",
+      "“Needs you” reads right for an approval; may I rename the stopped branch too?",
+      "needs_input",
+    ),
+    thread(
+      DELEGATES.stop,
+      "rustcode",
+      "chatgpt/gpt-6-luna",
+      "medium",
+      minutes(9),
+      DELEGATES.root,
+      "From thread “Ship the delegate tree” (agent):\n\nClick through the tree in the app.",
+      "Stopped before the check ran.",
+    ),
+  ];
+}
+
+/** The links of `?scenario=delegates`: who started whom, how it went and for how long. */
+function seedDelegateLinks(): JsonObject[] {
+  const link = (
+    orchestrator: string,
+    n: number,
+    target: string,
+    state: string,
+    createdAt: number,
+    extra: JsonObject,
+  ): JsonObject => ({
+    id: `${orchestrator}/${n}`,
+    orchestrator,
+    target,
+    orchestratorTitle: DELEGATE_TITLES[orchestrator]!,
+    targetTitle: DELEGATE_TITLES[target]!,
+    message: `From thread “${DELEGATE_TITLES[orchestrator]}” (agent):\n\n${DELEGATE_TITLES[target]}.`,
+    state,
+    started: true,
+    createdAt,
+    ...extra,
+  });
+  return [
+    // Two levels: the root started the researcher, the researcher started two threads of its own.
+    link(DELEGATES.root, 1, DELEGATES.research, "working", minutes(3), {
+      harness: "codex",
+      harnessName: "Codex",
+      startedAt: minutes(2),
+    }),
+    link(DELEGATES.research, 1, DELEGATES.tests, "done", minutes(8), {
+      harness: "codex",
+      harnessName: "Codex",
+      settledAt: minutes(6),
+      answer: "Added 14 tests: the branch sum, the clock that freezes on an approval, and an unknown cost.",
+      filesChanged: 1,
+    }),
+    link(DELEGATES.research, 2, DELEGATES.docs, "failed", minutes(7), {
+      harness: "claude-code",
+      harnessName: "Claude Code",
+      settledAt: minutes(6),
+      answer: "The docs build failed on an unknown token name.",
+    }),
+    link(DELEGATES.root, 2, DELEGATES.review, "done", minutes(9), {
+      harness: "pi",
+      harnessName: "Pi",
+      settledAt: minutes(5),
+      answer: "Two notes: fold the finished branch, and keep the cost unknown when no turn reported one.",
+      filesChanged: 2,
+    }),
+    // Waiting on the user: the clock stopped when the question was asked.
+    link(DELEGATES.root, 3, DELEGATES.wait, "needs_user", minutes(4), {
+      harness: "claude-code",
+      harnessName: "Claude Code",
+      startedAt: minutes(3),
+      waitingSince: minutes(2),
+    }),
+    link(DELEGATES.root, 4, DELEGATES.stop, "cancelled", minutes(10), {
+      harness: "rustcode",
+      harnessName: "RustCode",
+      settledAt: minutes(9),
+    }),
+  ];
+}
+
 function seedThreads(): MockThread[] {
   const a = "mock-thread-1";
   const b = "mock-thread-2";
@@ -650,8 +856,20 @@ function seedThreads(): MockThread[] {
         }),
         update("mock-thread-4", {
           sessionUpdate: "agent_message_chunk",
-          content: text("Added `LoginForm` with an email field and a submit button, on `feat/login-form`."),
-          _meta: { rustcode: { turn: { id: "t1", elapsedMs: 52_000, outcome: "completed" } } },
+          content: text(
+            "I wrote `LoginForm`, but the typecheck failed: the form's submit handler expects a `FormEvent` and the field is `unknown`.",
+          ),
+          // The last turn failed, so the inbox has a failed row to offer Retry for.
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t1",
+                elapsedMs: 52_000,
+                outcome: "failed",
+                endedAt: new Date(minutes(20)).toISOString(),
+              },
+            },
+          },
         }),
       ],
     },
@@ -813,6 +1031,113 @@ const MOCK_SPEND: Record<string, MockSpend> = {
     withoutCached: 0,
     withoutCacheWrite: 5,
     withoutCost: 5,
+  },
+  // `?scenario=delegates`: a branch with reported costs, and one thread whose
+  // model has no price, so the tree shows `—` rather than a made-up number.
+  "mock-delegate-root": {
+    input: 640_000,
+    output: 24_000,
+    cached: 520_000,
+    cacheWrite: null,
+    cost: 1.9,
+    turns: 5,
+    withoutTokens: 0,
+    withoutAny: 5,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 5,
+    withoutCost: 0,
+  },
+  "mock-delegate-research": {
+    input: 1_450_000,
+    output: 58_000,
+    cached: 1_200_000,
+    cacheWrite: null,
+    cost: 2.4,
+    turns: 9,
+    withoutTokens: 0,
+    withoutAny: 9,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 9,
+    withoutCost: 0,
+  },
+  "mock-delegate-tests": {
+    input: 520_000,
+    output: 26_000,
+    cached: 410_000,
+    cacheWrite: null,
+    cost: 0.85,
+    turns: 4,
+    withoutTokens: 0,
+    withoutAny: 4,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 4,
+    withoutCost: 0,
+  },
+  "mock-delegate-docs": {
+    input: 190_000,
+    output: 8_000,
+    cached: 150_000,
+    cacheWrite: 21_000,
+    cost: null,
+    turns: 3,
+    withoutTokens: 0,
+    withoutAny: 0,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 3,
+  },
+  "mock-delegate-review": {
+    input: 2_100_000,
+    output: 61_000,
+    cached: 1_800_000,
+    cacheWrite: null,
+    cost: 3.1,
+    turns: 11,
+    withoutTokens: 0,
+    withoutAny: 11,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 11,
+    withoutCost: 0,
+  },
+  "mock-delegate-wait": {
+    input: 380_000,
+    output: 15_000,
+    cached: 300_000,
+    cacheWrite: 48_000,
+    cost: 1.05,
+    turns: 4,
+    withoutTokens: 0,
+    withoutAny: 4,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 0,
+    withoutCost: 0,
+  },
+  "mock-delegate-stop": {
+    input: 60_000,
+    output: 2_000,
+    cached: 40_000,
+    cacheWrite: null,
+    cost: 0.2,
+    turns: 1,
+    withoutTokens: 0,
+    withoutAny: 1,
+    withoutInput: 0,
+    withoutOutput: 0,
+    withoutCached: 0,
+    withoutCacheWrite: 1,
+    withoutCost: 0,
   },
 };
 
@@ -1184,6 +1509,8 @@ export class MockEngine {
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
   private agents = new Map<string, JsonObject[]>();
+  /** The inbox seed runs once, after the list the app first reads. */
+  private needsYouSeeded = false;
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
@@ -1288,12 +1615,101 @@ export class MockEngine {
   ) {
     const scenario = options.scenario ?? "default";
     this.threads =
-      scenario === "default" ? seedThreads() : scenario === "delegated" ? seedDelegatedThreads() : [];
+      scenario === "default"
+        ? seedThreads()
+        : scenario === "delegated"
+          ? seedDelegatedThreads()
+          : scenario === "delegates"
+            ? seedDelegateTreeThreads()
+            : [];
+    // The stored book is the only one the app reads at connect; a scenario brings its own.
+    if (scenario === "delegates") {
+      this.options.links ??= {
+        links: seedDelegateLinks() as unknown as Json,
+        grants: {},
+        counters: {},
+        fanOuts: [],
+      };
+    }
     this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
   }
 
   private get delay() {
     return this.options.delayMs ?? 40;
+  }
+
+  /**
+   * The inbox's demo: a question, an approval and a failed turn on threads the
+   * app has not opened, so the list has something to show on first open. Each
+   * request is asked like a live one and answered by the app's own cards.
+   */
+  private seedNeedsYou() {
+    const has = (id: string) => this.threads.some((t) => t.id === id);
+    if (has("mock-thread-1")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-1",
+        toolCall: {
+          toolCallId: "seed-approval-1",
+          title: "bash",
+          kind: "execute",
+          rawInput: { command: "bun test src/ui", summary: "Run the composer tests" },
+        },
+        options: [
+          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "always", name: "Always allow commands", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      });
+    }
+    if (has("mock-thread-claude")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-claude",
+        toolCall: {
+          toolCallId: "seed-question-1",
+          title: "Which tone?",
+          rawInput: {
+            header: "Pricing copy",
+            question: "Which tone should the pricing blurbs use?",
+            options: ["Plain and short", "Warmer, more human", "Keep the current voice"],
+            descriptions: [
+              "Three lines, no adjectives",
+              "Talks to one reader at a time",
+              "Only fix the jargon",
+            ],
+            multiple: false,
+          },
+        },
+        options: [
+          { optionId: "tone-plain", name: "Plain and short", kind: "allow_once" },
+          { optionId: "tone-warm", name: "Warmer, more human", kind: "allow_once" },
+          { optionId: "tone-keep", name: "Keep the current voice", kind: "allow_once" },
+        ],
+        _meta: {
+          rustcode: {
+            kind: "question",
+            version: 2,
+            questionId: "seed-question-1",
+            answerKinds: ["options", "text"],
+          },
+        },
+      });
+    }
+    if (has("mock-thread-4")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-4",
+        toolCall: {
+          toolCallId: "seed-approval-4",
+          title: "edit src/ui/LoginForm.tsx",
+          kind: "edit",
+          rawInput: { path: "src/ui/LoginForm.tsx" },
+        },
+        options: [
+          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "always", name: "Always allow edits", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      });
+    }
   }
 
   private sleep(ms = this.delay): Promise<void> {
@@ -1389,7 +1805,11 @@ export class MockEngine {
       // The catalog, for a thread that has no session yet to send it on.
       case "_rustcode/commands":
         return { sessionUpdate: "available_commands_update", availableCommands: COMMANDS };
-      case "session/list":
+      case "session/list": {
+        if (this.options.needsYou && !this.needsYouSeeded) {
+          this.needsYouSeeded = true;
+          setTimeout(() => this.seedNeedsYou(), 500);
+        }
         return {
           sessions: this.threads
             .filter((t) => t.history.length > 0)
@@ -1411,6 +1831,7 @@ export class MockEngine {
               },
             })),
         };
+      }
       case "session/new": {
         const meta = obj(obj(params._meta)?.rustcode);
         const harness = str(meta?.harness) ?? this.harnesses.default.harness;
@@ -2721,6 +3142,25 @@ export class MockEngine {
         }
       } else {
         push({ sessionUpdate: "tool_call_update", toolCallId: editId, status: "completed", content: [diff] });
+      }
+      // A message the turn read mid-step (`_rustcode/steer`): it says so where it read it, and the
+      // plan moves on, so the app has a step that was active when the note landed and a next step
+      // whose clock starts (`state/steer.ts`). A steer that arrives after this is still answered at
+      // the foot of the turn, below.
+      if (run.steers.length) {
+        const read = run.steers.splice(0);
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text(`Noted ${read.map((steer) => `“${steer}”`).join(", ")}.\n\n`),
+        });
+        push({
+          sessionUpdate: "plan",
+          entries: [
+            { content: "Find the code", status: "completed", priority: "medium" },
+            { content: "Make the change", status: "completed", priority: "medium" },
+            { content: "Run the checks", status: "in_progress", priority: "low" },
+          ],
+        });
       }
       const reply = /\bkit\b/i.test(prompt)
         ? MOCK_KIT

@@ -989,31 +989,49 @@ export function WaitingRow({ wait }: { wait: Waiting }) {
 
 /**
  * The running turn's header, right under the message that started it:
- * `Working for 12s` over a hairline. What the turn does now
- * shows at the foot ({@link LiveActivityRow}).
+ * `Working for 12s` over a hairline. When the turn ends it settles on a green check and
+ * `Worked for 12s` for a moment (`Transcript` keeps it in place), before the fold's own
+ * `Worked for 12s` divider replaces it. What the turn does now shows at the foot
+ * ({@link LiveActivityRow}).
  */
-export function WorkingRow({ startedAt, now }: { startedAt?: number; now: number }) {
-  const elapsed = startedAt ? Math.max(0, now - startedAt) : undefined;
+export function WorkingRow({
+  startedAt,
+  now,
+  done,
+  elapsedMs,
+}: {
+  startedAt?: number;
+  now: number;
+  /** The turn finished: the line settles on a check for a moment instead of vanishing. */
+  done?: boolean;
+  /** The finished turn's own duration, once `turnStartedAt` is gone. */
+  elapsedMs?: number;
+}) {
+  const elapsed = elapsedMs ?? (startedAt ? Math.max(0, now - startedAt) : undefined);
+  const time = elapsed !== undefined ? formatDuration(Math.floor(elapsed / 1000) * 1000) : undefined;
   return (
     <div
-      className="flex h-[34px] items-center border-border/60 border-b pt-1 pb-2.5 text-body text-fg-muted tabular"
+      className="flex h-[34px] items-center gap-2 border-border/60 border-b pt-1 pb-2.5 text-body text-fg-muted tabular"
       role="status"
     >
-      {elapsed !== undefined
-        ? `Working for ${formatDuration(Math.floor(elapsed / 1000) * 1000)}`
-        : "Working…"}
+      {done && <CircleCheck size={13} className="shrink-0 text-success rc-dot-in" aria-hidden />}
+      {time ? `${done ? "Worked" : "Working"} for ${time}` : done ? "Worked" : "Working…"}
     </div>
   );
 }
 
 /** The running turn's foot while nothing else shows it working: what it does now, shimmering. */
-export function LiveActivityRow({ label }: { label: string }) {
+export function LiveActivityRow({ label, done }: { label: string; done?: boolean }) {
   return (
     <div className="flex min-h-6 items-center gap-2 text-body" role="status" aria-live="polite">
       <span className="flex w-[18px] shrink-0 justify-center">
-        <Spinner size={14} />
+        {done ? (
+          <CircleCheck size={14} className="text-success rc-dot-in" aria-hidden />
+        ) : (
+          <Spinner size={14} />
+        )}
       </span>
-      <span className="rc-shimmer truncate">{label}</span>
+      <span className={done ? "truncate text-fg-muted" : "rc-shimmer truncate"}>{label}</span>
     </div>
   );
 }
