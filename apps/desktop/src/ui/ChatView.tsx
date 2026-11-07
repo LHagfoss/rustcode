@@ -70,6 +70,7 @@ import {
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
+import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
@@ -86,8 +87,10 @@ function PlanButton({ thread }: { thread: ThreadState }) {
           className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 font-medium text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           <ListChecks size={13} />
-          <span className="tabular">
-            {done}/{thread.plan.length}
+          <span className="flex items-center gap-0.5 tabular">
+            <RollingNumber value={done} />
+            <span className="text-fg-faint">/</span>
+            <RollingNumber value={thread.plan.length} />
           </span>
         </button>
       </Popover.Trigger>

@@ -138,7 +138,15 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
                   style={{ width: `max(3px, ${left}%)` }}
                 />
               </span>
-              <span className="font-medium text-caption text-fg-muted tabular">{left}%</span>
+              <span
+                className={cx(
+                  "font-medium text-caption text-fg-muted tabular",
+                  // Live while the turn runs, then settles on the number it ended with.
+                  running && "rc-shimmer",
+                )}
+              >
+                {left}%
+              </span>
             </span>
           )}
           {fraction !== null && <ContextGauge fraction={fraction} />}

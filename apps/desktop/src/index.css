@@ -538,6 +538,30 @@
   animation: rc-count-roll 200ms var(--ease-snappy);
 }
 
+/* A count's digit sliding to its next value (ui/RollingNumber.tsx, docs/design.md Motion). */
+@keyframes rc-digit-up {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
+@keyframes rc-digit-down {
+  from {
+    transform: translateY(-50%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.rc-digit {
+  animation: rc-digit-up 220ms var(--ease-snappy) forwards;
+}
+.rc-digit-down {
+  animation-name: rc-digit-down;
+}
+
 /* A new transcript row: rises 6px and fades in, a touch slower than a popover. */
 @keyframes rc-row-in {
   from {
@@ -971,6 +995,30 @@
 }
 .rc-toast-out {
   animation: rc-toast-out 140ms ease-in forwards;
+}
+/*
+ * The stack: only the front card is in flow, so the stack is one card tall; the cards behind
+ * it are absolute, 6px higher and a touch smaller each, so they peek over its top edge and
+ * fan down over each other when the pointer or the keyboard is on the stack.
+ */
+.rc-toast-slot {
+  transform-origin: top center;
+  transition: transform 220ms var(--ease-snappy);
+}
+/* An auto-dismissing card's clock, along its foot: a 1px accent hairline that drains. */
+@keyframes rc-toast-timer {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+.rc-toast-timer {
+  animation-name: rc-toast-timer;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  transform-origin: left center;
 }
 
 /*
