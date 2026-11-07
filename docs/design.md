@@ -667,8 +667,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   and the row's own `pt-1`, separate them. The model reads as its own name and
   effort, plain on the card, `bg-fill-strong` only while its popover is open;
   the **+** rests on `bg-fill-subtle` (`bg-fill` on hover). The popover opens
-  on the effort, the control changed most: Fast mode and a reset on top, the
-  level as a large accent word, the model's name under it, a 20px pill track
+  on the effort, the control changed most: the level and the model's name on
+  one header row, with Fast mode and the reset at its end, a 20px pill track
   with one dot per level the model itself lists, the part up to a 24px round
   thumb filled in the accent (a press or a drag lands on the nearest dot, ←/→
   step one, a hover names it), and the harness's logins below while it has more
