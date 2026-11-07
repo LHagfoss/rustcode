@@ -292,10 +292,13 @@ composer's keys stay outside the table.
   (`state/setup.ts` `PendingSetup`). From the new-thread screen the message
   bubble and the `Starting…` line (with the setup's clock) take the place the
   thread's first row will keep, with its pictures and files, its links and
-  its command, and the composer waits at the foot; the prompt goes out the
-  moment the session exists, and the thread's own transcript takes over in the
-  same place (`createThread` and `startSetup` in `state/store.ts`). The
-  message's title is the thread's from the first frame, so the row never
+  its command, and the composer glides down to the foot as that send's own
+  motion; the prompt goes out the moment the session exists, and the thread's
+  own transcript takes over without moving the bubble (`createThread` and
+  `startSetup` in `state/store.ts`). The bubble is drawn at rest and never
+  animated in: this screen is unmounted the moment the session exists, so
+  anything it started would stop halfway through. The message's title is the
+  thread's from the first frame, so the row never
   blinks back to "New thread". A failure keeps the message, its attachments
   and the reason on the bubble with *Retry*, which sends exactly that again,
   and *Dismiss*, which gives up and puts the text and its attachments back in

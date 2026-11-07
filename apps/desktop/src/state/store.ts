@@ -62,6 +62,7 @@ import {
   type Worktree,
 } from "../acp/v2";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
+import { afterPaint } from "../lib/frame";
 import {
   APP_COMMANDS,
   bindingOf,
@@ -1725,6 +1726,11 @@ async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtr
   }
   // One update switches the screen and shows the message: nothing waits for the engine.
   set({ pendingSetup: setup });
+  // That update gets its own painted frame before `session/new` is asked for. An in-process harness
+  // answers in a microtask, so both updates would otherwise land in one task and one frame: the
+  // pending screen's message would be drawn for the first time by the thread's own transcript, and
+  // its entry (`rc-send-in`) would never get a frame to play in.
+  await afterPaint();
   return await startSetup(setup);
 }
 
@@ -1798,7 +1804,8 @@ export async function retryPendingSetup(): Promise<boolean> {
   set({ pendingSetup: setup });
   const id = await startSetup(setup);
   if (!id) return false;
-  void runPrompt(id, setup.text, setup.extras ?? emptyExtras);
+  // Its bubble is already on screen, from the setup it keeps through the retry: it does not fly in.
+  void runPrompt(id, setup.text, setup.extras ?? emptyExtras, { alreadyShown: true });
   return true;
 }
 
@@ -2141,6 +2148,9 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
       : null;
   if (bare && runCommandAction(bare, get().selectedId)) return true;
   let id = get().selectedId;
+  // The thread is made for this message, so the new-thread screen already draws its row: it must not
+  // fly in again when the thread takes the screen over (lib/sendFlight.ts).
+  const madeHere = !id;
   try {
     if (!id) {
       const started = await createThread(trimmed, extras);
@@ -2205,7 +2215,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     void resumeQueue(id);
     return true;
   }
-  void runPrompt(id, trimmed, extras);
+  void runPrompt(id, trimmed, extras, { alreadyShown: madeHere });
   return true;
 }
 
@@ -2512,6 +2522,11 @@ export async function runPrompt(
     automatic?: boolean;
     /** The turn that continues after a limit: its wait is settled when it ends. */
     limitResume?: boolean;
+    /**
+     * The thread was made for this message, and the new-thread screen already shows its row
+     * (`state/setup.ts`): it does not fly in when the thread takes the screen over.
+     */
+    alreadyShown?: boolean;
   } = {},
 ): Promise<void> {
   const conn = engine();
@@ -2552,11 +2567,17 @@ export async function runPrompt(
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
   if (id in get().snoozed) snoozeThread(id, null);
   const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
+  // A message typed here flies out of the composer on its first sighting; one the new-thread screen
+  // already drew does not (lib/sendFlight.ts).
+  const sent = userTypedPrompt(options) && !options.fromView && !options.alreadyShown;
   // The message is on screen before its blocks are built: a long paste or a 20 MB picture is copied
-  // into the prompt's JSON after the bubble lands, not before it.
+  // into the prompt's JSON after the bubble lands, not before it — and that update gets a painted
+  // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that
+  // follows it, which on a fast harness is the whole rest of the turn's first frame.
   updateThread(id, (t) =>
-    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake),
+    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
   );
+  await afterPaint();
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
     images: acceptsImages(thread),

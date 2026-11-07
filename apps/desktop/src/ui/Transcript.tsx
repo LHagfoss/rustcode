@@ -8,7 +8,8 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
-import { flyInFromComposer } from "../lib/sendFlight";
+import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
+import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
 import {
   foldEnds,
   foldTurns,
@@ -156,10 +157,48 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (row.queued) return 96;
   if (row.resume) return 30;
   if (row.queueWake) return 26;
+  // The turn's own lines: `Working for 12s` is `h-[34px]` over its hairline, and the live activity
+  // is `min-h-6`. Left at a generic 24 they measured 39px taller a frame after mounting, and the
+  // pinned view took that back in one step — the message just sent jumped with it.
+  if (row.working) return 35;
+  if (row.activity) return 24;
   const item = row.item;
   if (!item) return 24;
-  if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
+  if (item.kind === "tool" || item.kind === "turnEnd") return 26;
+  // A live thought shows its last lines; a finished one is its one line.
+  if (item.kind === "thought")
+    return item.done ? 17 : 25 + Math.min(THOUGHT_TAIL_LINES, lines(item.text, 55)) * 17;
+  // A sent bubble: its pictures and files above it, 12px of padding each way, its text, and the
+  // 22px line under it that holds the time (shown on hover, laid out always). A long one folds at
+  // `COLLAPSED_MESSAGE_HEIGHT` and keeps its "Show full message" pill, so its estimate never
+  // reserves a screenful the row will not use.
+  if (item.kind === "user") {
+    const body = lines(item.text, 60) * BODY_LINE;
+    const text = messageCollapses(body) ? COLLAPSED_MESSAGE_HEIGHT + SHOW_FULL_PILL : body;
+    return (item.attachments?.length ? ATTACHMENT_CHIPS : 0) + BUBBLE_PADDING * 2 + text + META_LINE;
+  }
   return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
+}
+
+/** The lines a string wraps to in the lane, near enough for an estimate. */
+function lines(text: string, perLine: number): number {
+  return Math.max(1, Math.ceil(text.length / perLine));
+}
+
+/**
+ * The air above a row, from the transcript's own two values: a turn starts and a footer ends on the
+ * wide one, everything inside a turn sits on the narrow one, and the first line under a divider
+ * takes the narrow one. The rows draw it and so does `estimateSize`, because a row that mounts with
+ * a size that leaves this out measures a gap taller a frame later — and the pinned transcript takes
+ * that difference back in one step, moving every row above it, the message just sent included.
+ */
+export function rowGap(rows: readonly Row[], index: number): number {
+  if (index <= 0) return 0;
+  const item = rows[index]?.item;
+  const prev = rows[index - 1]?.item;
+  if ((prev?.kind === "notice" && prev.tone === "info") || (prev?.kind === "user" && !!prev.wake))
+    return ITEM_GAP;
+  return item?.kind === "user" || prev?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }
 
 function searchable(item: TranscriptItem): string {
@@ -220,6 +259,22 @@ const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
  */
 const ITEM_GAP = 14;
 const TURN_GAP = 28;
+
+/**
+ * The pieces an estimate is made of, in the sizes the rows are drawn at: a sent bubble's padding and
+ * the line it sits on, the time line under it, the chips above it when it carries pictures or files,
+ * and how much of a live thought's tail shows (`ThoughtRow`'s `line-clamp-5`).
+ */
+const BUBBLE_PADDING = 12;
+const BODY_LINE = 23;
+const META_LINE = 24;
+const ATTACHMENT_CHIPS = 32;
+const THOUGHT_TAIL_LINES = 5;
+/** The "Show full message" pill a folded bubble ends with, and its air above it. */
+const SHOW_FULL_PILL = 30;
+
+/** The air above the transcript's first row, under the glass header. */
+export const FIRST_ROW_PAD = 20;
 
 /** A turn's change line, wherever it draws: the completion card, else the checkpoint chip. */
 function ChangeLine({ threadId, line }: { threadId: string; line: TurnChangeLine }) {
@@ -545,7 +600,9 @@ export function Transcript({
       if (hidden) return 0;
       const known = rowSizes.get(row?.key ?? "");
       if (known !== undefined) return known;
-      return estimatedRowHeight(row, false);
+      // A measured row keeps the gap it was drawn with, so an estimate must carry its own or every
+      // row would come up short by one and be corrected a frame later.
+      return rowGap(rows, i) + estimatedRowHeight(row, false);
     },
     getItemKey: (i) => rows[i]?.key ?? i,
     // Read lazily, after `attachScroll` put the view at the end (scroll events come later).
@@ -564,7 +621,7 @@ export function Transcript({
     overscan: 8,
     // Row measurements land on the next frame, not inside the ResizeObserver's own delivery.
     useAnimationFrameWithResizeObserver: true,
-    paddingStart: 20 + topInset,
+    paddingStart: FIRST_ROW_PAD + topInset,
     paddingEnd: bottomInset,
   });
 
@@ -808,22 +865,20 @@ export function Transcript({
     if (!at.has(key)) at.set(key, nowMs);
     return nowMs - at.get(key)! < 300;
   };
-  // The message just sent, when the row that holds it is new: it rises out of the composer instead
-  // of only rising in (lib/sendFlight.ts). A wake, a resume and a message another thread or a view
-  // sent are not messages typed here, so they keep the plain row rise.
-  const sentRow = rows.findLast((r) => {
-    const item = r.item;
-    return item?.kind === "user" && !item.wake && !item.fromView && item.text !== RESUME_TEXT && fresh(r.key);
-  });
-  const sent = useRef<string | undefined>(undefined);
+  // The message the composer just sent: it rises out of the field rather than only rising in
+  // (lib/sendFlight.ts). The item says so itself (thread.ts `beginTurn`), so a thread's history, a
+  // wake, a resume, a message from another thread or a view keep the plain row rise, and the flight
+  // log keeps one flight per message when the row is redrawn or the thread is opened again.
+  const sentRow = rows.findLast((r) => r.item?.kind === "user" && r.item.sent);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the row's key is its item's id, and `rows.length` retries a flight whose row the virtualizer had not drawn yet
   useLayoutEffect(() => {
     const key = sentRow?.key;
-    if (!key || sent.current === key) return;
-    sent.current = key;
-    flyInFromComposer(
-      innerRef.current?.querySelector<HTMLElement>(`[data-rc-row="${CSS.escape(key)}"]`) ?? null,
-    );
-  }, [sentRow?.key]);
+    const el = key
+      ? (innerRef.current?.querySelector<HTMLElement>(`[data-rc-row="${CSS.escape(key)}"]`) ?? null)
+      : null;
+    if (!el || !takesFlight(sentRow?.item?.id)) return;
+    flyInFromComposer(el);
+  }, [sentRow?.key, rows.length]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -904,22 +959,15 @@ export function Transcript({
               const afterDivider =
                 (prev?.item?.kind === "notice" && prev.item.tone === "info") ||
                 (prev?.item?.kind === "user" && !!prev.item.wake);
-              // A message starts a turn and a footer ends it, so those two rows take the wider gap;
-              // everything inside a turn sits on the one value.
-              const gap =
-                v.index === 0
-                  ? 0
-                  : item?.kind === "user" || prev?.item?.kind === "user"
-                    ? TURN_GAP
-                    : ITEM_GAP;
-              // A wake divider is the turn's own first line: the work under it sits on it.
-              const turnGap = afterDivider ? ITEM_GAP : gap;
+              // The air above the row, from the same answer its estimate reads (`rowGap`), so a row
+              // mounts at the size the transcript already reserved for it.
+              const turnGap = rowGap(rows, v.index);
               if (row.fold) {
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                     <div
                       className={cx("mx-auto w-full max-w-[var(--rc-chat-content-max-width)]", LANE_MOTION)}
-                      style={{ paddingTop: v.index === 0 ? 0 : turnGap }}
+                      style={{ paddingTop: turnGap }}
                     >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} rule={!afterDivider} />
                     </div>
