@@ -45,6 +45,16 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "Auto-compact",
+    keywords: "compact compaction context tokens threshold cache prompt cache idle claude codex",
+  },
+  {
+    section: "general",
+    title: "Auto-compact threshold",
+    keywords: "compact compaction context tokens size limit threshold",
+  },
+  {
+    section: "general",
     title: "System notifications",
     keywords: "notify notification alert badge dock attention approval question finished system",
   },
@@ -118,8 +128,18 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
-    title: "Threads one thread can run at once",
-    keywords: "orchestration delegation parallel slots limit concurrent children tree",
+    title: "Delegation",
+    keywords: "orchestration delegates delegate slots limit concurrent children total",
+  },
+  {
+    section: "agents",
+    title: "Delegates across all threads",
+    keywords: "orchestration delegation total machine wide global slots limit concurrent running at once",
+  },
+  {
+    section: "agents",
+    title: "Delegates one thread can run at once",
+    keywords: "orchestration delegation per thread parallel slots limit concurrent children",
   },
   {
     section: "agents",
@@ -157,6 +177,25 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Skills",
     keywords: "skill agents shared project user edit folder create",
   },
+
+  // ------------------------------------------------------------ Remote access
+  {
+    section: "remote",
+    title: "Share this app's threads",
+    keywords: "remote access gateway phone device share mobile iphone pair on off",
+  },
+  {
+    section: "remote",
+    title: "Gateway address",
+    keywords: "address ip port lan netbird remote gateway network",
+  },
+  {
+    section: "remote",
+    title: "Pair a device",
+    keywords: "pair pairing qr code device phone mobile scan eight digit",
+  },
+  { section: "remote", title: "Paired devices", keywords: "devices paired revoke phone" },
+  { section: "remote", title: "Open threads", keywords: "threads shared open list" },
 
   // ------------------------------------------------------------ Appearance
   { section: "appearance", title: "Light or dark", keywords: "mode theme system" },

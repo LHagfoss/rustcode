@@ -43,7 +43,8 @@ Next, in rough order:
 3. Compaction follow-ups: the built-in harness's context bar marks its
    auto-compact point and the card compares the context before and after a
    compaction; a harness that reports no threshold keeps the total-only view.
-   Remaining: Claude's idle compaction before the prompt cache expires.
+   RustCode now also decides its own auto-compaction from the app: when a turn
+   ends above the size threshold, and shortly before a prompt cache expires.
 4. SQLite as the store, not only an index: pins and status first, then an
    event table with projections, the
    sidebar listed from the index, lazy transcript import.
@@ -345,10 +346,16 @@ composer's keys stay outside the table.
   Claude Code's `Agent`/`Task` calls (their steps fold under them by
   `_meta.claudeCode.parentToolUseId`) and RustCode's `spawn_agent` (status
   from `_rustcode/agents`, polled every 2 s while a turn runs or a child
-  works; steps from the child's conversation). While one works the row says
-  the step it is on; once done, how many steps and how long. A subagent sent
-  to the background keeps its row running until the turn ends. A pill in the
-  composer row says how many work.
+  works; steps from the child's conversation). A Claude Code thread RustCode
+  starts with orchestration on has that tool disallowed
+  ([harnesses.md](harnesses.md#starting-a-thread-on-a-harness)),
+  so its calls only come from an older session or another harness. While one
+  works the row says the step it is on; once done, how many steps and how
+  long. A subagent sent to the background keeps its row running until the
+  turn ends. While it works it reads in the strip above the composer, beside
+  the threads this one delegated to (Stop lives there); once it settles its
+  row is the transcript's, so there is one delegation surface, never a pill
+  of its own over the composer.
 - **Background work.** Claude Code's background commands and the turns it
   starts on its own when one finishes reach the app as
   `_rustcode/session/activity` (the engine asks the adapter for its async
@@ -463,6 +470,19 @@ composer's keys stay outside the table.
   on, read when the thread first opens, never another login's. A new thread
   shows the limits the last thread learnt. The chat header no longer repeats
   them.
+- **Auto-compact.** Settings › General › Threads owns one mode and a size
+  threshold. RustCode sends the harness's own `/compact` after a turn when the
+  context is above the threshold, and on Claude Code and Codex again about
+  4.5 minutes after a turn ended, while the prompt cache is warm and the
+  context is above 60k. Codex uses only the second rule (it compacts inside a
+  turn itself); the built-in harness keeps its own pre-request compaction; any
+  other ACP agent is used only when it advertises `/compact`. The decision is
+  pure (`state/autoCompact.ts`): it never fires while a turn runs, a message
+  waits, an approval is open, the user is typing, the thread is settled, or a
+  delegate's orchestrator has stopped talking to it, and it runs at most once
+  per idle period. The thread menu turns it off for one thread. A compaction
+  it ran says *Compacted automatically*, and the context inspector compares
+  the context before and after it.
 - **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
   model has the `fast` option) and the model with its effort on one line;
   the model's name drills into the list. Effort is a slider with a dot per
@@ -482,6 +502,21 @@ composer's keys stay outside the table.
   name), decoded once, and the text drawn once per size on an offscreen
   canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
   the new one is ready. It fades in, and does not move under Reduce motion.
+- **Remote access.** Settings › Setup › Remote access
+  ([remote.md](remote.md)) starts the remote gateway, shares the threads
+  this app has open on the built-in harness with a paired phone, and shows
+  the address, the pairing QR code and the eight-digit code with its
+  countdown, the fixed five-wrong-codes allowance, and the paired devices.
+  A new device appears as *Paired ‹name›* and the used code is taken down,
+  not left until it expires. It asks the engine's `_rustcode/remote`,
+  `_rustcode/remote/start`, `_rustcode/remote/pair` and
+  `_rustcode/remote/stop` over ACP; the engine owns the gateway, the
+  shares and pairing (`rustcode/engine/src/acp/remote.rs`). An external
+  harness thread (Claude Code, Codex, Pi) keeps no ACP session, so it is
+  listed but not shareable. The QR code is encoded in the app
+  (`src/lib/qr.ts`), so no pairing material leaves it. A thread opened
+  after remote access was turned on is shared from the page's *Open
+  threads* row, which also says how many devices are attached.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Window.** The window opens at the size it was last closed with
@@ -785,8 +820,8 @@ composer's keys stay outside the table.
   always reachable (another project only
   for `start_session`, one the user has opened, with approval), two levels of
   delegation (a top-level thread, its children and their children — no
-  deeper, and no message that would close a loop), 4 active links per thread,
-  8 per delegation tree, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
+  deeper, and no message that would close a loop), 8 delegates per thread and
+  16 across this app instance, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
   waits up to 1 h. Each needs the user's *Allow for This Thread*,
   *Allow Once* or *Don't Allow*; a grant is per calling thread and kind of
   change, not per harness, model or named login, so an already-granted start
@@ -1285,7 +1320,8 @@ From the SwiftUI app, still missing or partial:
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, remote pairing.
+  keybinding editor, Discord presence, revoking a paired device (the CLI's
+  `rustcode remote revoke` does it).
 - Terminal tabs (one terminal per folder).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The

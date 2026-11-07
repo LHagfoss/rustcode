@@ -104,7 +104,7 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullDetail; onDo
     }
   };
   return (
-    <div className="mt-3 rounded-lg bg-fill-subtle p-2.5">
+    <div className="mt-3 rounded-lg bg-fill-subtle p-2">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-semibold text-callout">Your review</span>
         <Segments
@@ -249,7 +249,7 @@ function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack
             <section className="mt-3 flex flex-col gap-2">
               <h3 className="font-semibold text-caption text-fg-muted">Activity</h3>
               {detail.activity.map((a, i) => (
-                <div key={i} className="rounded-md bg-fill-subtle p-2.5">
+                <div key={i} className="rounded-md bg-fill-subtle p-2">
                   <div className="mb-1 text-caption text-fg-muted">
                     <b className="text-fg">{a.author}</b> {a.kind.replace(/_/g, " ").toLowerCase()} ·{" "}
                     {relativeAge(a.at)}
@@ -308,7 +308,7 @@ export function PullsPanel() {
         <PullView cwd={cwd} number={viewing} onBack={() => setViewing(null)} />
       ) : (
         <>
-          <div className="px-3 pt-2.5">
+          <div className="px-3 pt-2">
             <Segments
               label="State"
               value={state}
@@ -324,7 +324,7 @@ export function PullsPanel() {
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
             {error && <ErrorView error={error} />}
             {!error && pulls?.length === 0 && (
-              <p className="px-2.5 py-2 text-callout text-fg-muted">No pull requests.</p>
+              <p className="px-2 py-2 text-callout text-fg-muted">No pull requests.</p>
             )}
             {!pulls && !error && <PullListSkeleton />}
             {pulls?.map((pull) => (
@@ -332,7 +332,7 @@ export function PullsPanel() {
                 key={pull.number}
                 type="button"
                 onClick={() => setViewing(pull.number)}
-                className="flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left hover:bg-fill-subtle"
+                className="flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-subtle"
               >
                 <span className="flex w-full items-baseline gap-1.5">
                   <span
@@ -391,7 +391,7 @@ function PullListSkeleton() {
   return (
     <div role="status" aria-label="Loading" className="flex flex-col gap-1">
       {[76, 58, 84, 66].map((w, i) => (
-        <div key={i} className="flex flex-col gap-1.5 px-2.5 py-2">
+        <div key={i} className="flex flex-col gap-1.5 px-2 py-2">
           <Skeleton className="h-3" style={{ width: `${w}%` }} />
           <Skeleton className="h-2.5 w-2/5" />
         </div>

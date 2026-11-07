@@ -99,7 +99,6 @@ import {
   useApp,
 } from "../state/store";
 import { localId, type ThreadState } from "../state/thread";
-import { AgentPill } from "./AgentViews";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { openLightbox } from "./Lightbox";
@@ -721,7 +720,7 @@ export const Composer = memo(function Composer({
                   onClick={() => complete(c, true)}
                   onMouseEnter={() => setSelected(i)}
                   className={cx(
-                    "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left",
+                    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
                     i === selected && "bg-fill",
                   )}
                 >
@@ -753,7 +752,7 @@ export const Composer = memo(function Composer({
                     onClick={() => reference(path)}
                     onMouseEnter={() => setSelected(i)}
                     className={cx(
-                      "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left",
+                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
                       i === selected && "bg-fill",
                     )}
                   >
@@ -980,11 +979,6 @@ export const Composer = memo(function Composer({
             />
             <span className="flex-1" />
             <div className="flex shrink-0 items-center gap-2">
-              {/* Who is working for the thread, when any agent is: a status beside the model it runs
-                  on, never a control, so it leaves the strip's business to the strip. */}
-              <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
-                <AgentPill threadId={thread?.id} />
-              </span>
               <ModelPicker thread={thread} compact={compact} />
               {queuedEdit ? (
                 <Tooltip label="Save in the queue (⏎)">
@@ -1173,7 +1167,7 @@ function AttachmentStrip({
         .filter((a) => a.kind !== "image")
         .map((a) => (
           <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
-            <span className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2.5 text-callout rc-in">
+            <span className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2 text-callout rc-in">
               <FileText size={12} className="text-fg-muted" />
               <span className="max-w-[200px] truncate">{a.name}</span>
               <button
@@ -1222,7 +1216,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           disabled={!!missing}
           onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
           className={cx(
-            "flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-callout disabled:opacity-40",
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2 text-callout disabled:opacity-40",
             wt.on
               ? "bg-fill-strong text-fg"
               : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong",
@@ -1244,7 +1238,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           placeholder={suggested}
           size={Math.min(32, Math.max(12, wt.branch.length + 1))}
           className={cx(
-            "h-[24px] min-w-0 max-w-[220px] rounded-full bg-fill px-2.5 font-mono text-caption rc-in",
+            "h-[24px] min-w-0 max-w-[220px] rounded-full bg-fill px-2 font-mono text-caption rc-in",
             valid ? "focus:bg-fill-strong" : "text-danger",
           )}
         />
@@ -1398,7 +1392,7 @@ function FolderActions({ cwd }: { cwd: string }) {
 // not `shrink-0`: a long folder name gives way to the controls to its right (see FolderMenu).
 // Its height is the footer's one height at every width, so the air around it stays even.
 const footerButton =
-  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
+  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
 const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
   ask: Shield,
@@ -1444,7 +1438,7 @@ function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: bo
               role="menuitemradio"
               aria-checked={checked}
               onSelect={() => setPermissionMode(threadId, m.id)}
-              className={cx("items-start gap-2.5 py-1.5", checked && "bg-fill-subtle")}
+              className={cx("items-start gap-2 py-1.5", checked && "bg-fill-subtle")}
             >
               <ItemIcon
                 size={13}

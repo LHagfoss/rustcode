@@ -39,6 +39,7 @@ import {
   checkMessage,
   checkQueryData,
   checkStart,
+  type DelegateLimits,
   delivered,
   emptyBook,
   type Failure,
@@ -62,8 +63,8 @@ import {
   linkResult,
   linksLeft,
   listSessions,
-  MAX_ACTIVE_LINKS,
   MAX_DELEGATES,
+  MAX_DELEGATES_PER_THREAD,
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
   MAX_QUEUE_ITEMS,
@@ -265,8 +266,27 @@ function setBook(fn: (book: LinkBook) => LinkBook) {
 }
 
 const book = () => useApp.getState().links;
-/** How many distinct threads one thread may run at once (Settings › Agents). */
-const threadLimit = () => useApp.getState().threadLimit;
+/** The two delegate limits (Settings › Agents): one thread's own, and the machine's total. */
+const delegateLimits = (): DelegateLimits => ({
+  perThread: useApp.getState().threadLimit,
+  total: useApp.getState().totalLimit,
+});
+
+/**
+ * The calls that open a link run one at a time: each checks the book, asks the
+ * user and only then writes the link, so two calls arriving together would
+ * both see the same free slot and overshoot a limit. The queue is a promise
+ * chain, so a call starts when the one before it has finished, failed or not.
+ */
+let linkGate: Promise<unknown> = Promise.resolve();
+function withLinkGate<T>(run: () => Promise<T>): Promise<T> {
+  const next = linkGate.then(run, run);
+  linkGate = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
 
 // A tab or window closing mid-turn still leaves the store with what happened.
 if (typeof window !== "undefined") {
@@ -1315,9 +1335,13 @@ export function turnsOf(items: TranscriptItem[]): JsonObject[] {
   return out;
 }
 
-async function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+  return withLinkGate(() => messageNow(caller, targetId, text));
+}
+
+async function messageNow(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), targetId);
-  const refused = checkMessage(caller, target, book(), false, false, threadLimit());
+  const refused = checkMessage(caller, target, book(), false, false, delegateLimits());
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const no = await permitted(caller, target.id, {
     kind: "message",
@@ -1334,7 +1358,7 @@ async function message(caller: RuleThread, targetId: string, text: string): Prom
     book(),
     false,
     false,
-    threadLimit(),
+    delegateLimits(),
   );
   if (again) return failureJson(again);
   await openThread(target.id);
@@ -1731,8 +1755,12 @@ async function createThreadFor(
   }
 }
 
-async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), 1, threadLimit());
+function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
+  return withLinkGate(() => startNow(caller, call));
+}
+
+async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject> {
+  const refused = checkStart(caller, book(), 1, delegateLimits());
   if (refused) return failureJson(refused);
   const project = projectFor(caller, call.project);
   if (isFailure(project)) return failureJson(project);
@@ -1760,7 +1788,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     worktree: call.worktree ?? true,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), 1, threadLimit());
+  const again = checkStart(caller, book(), 1, delegateLimits());
   if (again) return failureJson(again);
   let id: string;
   try {
@@ -1798,12 +1826,16 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     harness: harness.id,
     access: accessOf(id),
     ...ranWith(id),
-    links_left: linksLeft(book(), caller.id, threadLimit()),
+    links_left: linksLeft(book(), caller.id, delegateLimits()),
   };
 }
 
-async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), call.harnesses.length, threadLimit());
+function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
+  return withLinkGate(() => fanOutNow(caller, call));
+}
+
+async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
+  const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
   if (refused) return failureJson(refused);
   const chosen: { harness: Harness; model?: string; effort?: string; account: string | null }[] = [];
   const targets = new Set<string>();
@@ -1844,7 +1876,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     worktree: true,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), chosen.length, threadLimit());
+  const again = checkStart(caller, book(), chosen.length, delegateLimits());
   if (again) return failureJson(again);
   const fanId = localId("fan");
   const out: JsonObject[] = [];
@@ -1901,7 +1933,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     };
     setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
   }
-  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, threadLimit()) };
+  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, delegateLimits()) };
 }
 
 /** A link's state now: a running turn that waits on an approval or a question needs the user. */
@@ -2777,7 +2809,7 @@ export async function keepFanOut(fanId: string, keep: string) {
 /** The links of a thread, both ways, for chips, banners and badges. */
 export function linksOf(b: LinkBook, id: string) {
   return {
-    driving: b.links.filter((l) => l.orchestrator === id).slice(-MAX_ACTIVE_LINKS * 2),
+    driving: b.links.filter((l) => l.orchestrator === id).slice(-MAX_DELEGATES_PER_THREAD * 2),
     drivenBy: [...b.links].reverse().find((l) => l.target === id && isActive(l.state)),
   };
 }

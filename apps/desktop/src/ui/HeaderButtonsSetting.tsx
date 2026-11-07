@@ -182,7 +182,7 @@ export function HeaderButtonsSetting() {
           />
         ))}
         {ids.length === 0 && (
-          <p className="px-2 py-2.5 text-callout text-fg-faint">
+          <p className="px-2 py-2 text-callout text-fg-faint">
             {which === "shown"
               ? "Every button is hidden: the header shows only its title."
               : "Every button is in the header."}

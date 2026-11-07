@@ -16,9 +16,11 @@
 // Pure (no React, no store), so the tree, the Board card and their tests share
 // one answer.
 
+import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import type { ThreadStatus } from "../acp/v2";
 import { isActive, type Link, type LinkState, MAX_DEPTH } from "./orchestration";
 import { type CostTotals, emptyCost, formatCost } from "./pricing";
+import { subagentOf, type TranscriptItem } from "./thread";
 
 /** How a node in the tree is doing, the same words the agent rows use. */
 export type AgentState = "working" | "needs" | "done" | "failed" | "stopped";
@@ -382,6 +384,50 @@ export interface DelegateBar {
    * panel's Delegated and Messaged lists keep it).
    */
   show: boolean;
+}
+
+type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
+
+/** A harness's own agent at work in a thread: `item` is the call that started it. */
+export interface NativeAgent {
+  item: ToolItem;
+  /** The calls made under it, so the row says what it is doing. */
+  steps: ToolItem[];
+}
+
+const working = (item: ToolItem) => item.status === "pending" || item.status === "in_progress";
+
+/**
+ * The harness's own subagents at work in `items`. RustCode's threads delegate
+ * through `start_session` and `fan_out`, so a Claude Code thread RustCode
+ * started has none; another harness or an older session can still send one.
+ * They belong in the one strip above the composer, beside RustCode's delegates
+ * (`ui/Links.tsx`), never in a surface of their own. A finished one is
+ * the transcript's row, not the strip's.
+ */
+/**
+ * RustCode's own subagents still at work (`spawn_agent`, fed by
+ * `_rustcode/agents`). A `spawn_agent` call returns once it has started the
+ * agent, so the transcript's call is not where its work is: this list is,
+ * beside the harness's own agents and the delegates, in the strip above the
+ * composer (`ui/Links.tsx`).
+ */
+export function runningAgents(agents: readonly SubagentInfo[]): SubagentInfo[] {
+  return agents.filter(agentActive);
+}
+
+export function runningSubagents(items: readonly TranscriptItem[]): NativeAgent[] {
+  const steps = new Map<string, ToolItem[]>();
+  for (const item of items) {
+    if (item.kind !== "tool" || !item.parent || !working(item)) continue;
+    const list = steps.get(item.parent);
+    if (list) list.push(item);
+    else steps.set(item.parent, [item]);
+  }
+  return items.flatMap((item): NativeAgent[] => {
+    if (item.kind !== "tool" || item.parent || !working(item) || !subagentOf(item)) return [];
+    return [{ item, steps: steps.get(item.id) ?? [] }];
+  });
 }
 
 /**

@@ -16,6 +16,8 @@ import {
 import type { SessionUsage } from "../acp/types";
 import { layoutTiles } from "../lib/treemap";
 import {
+  autoCompactBeforeUsage,
+  autoCompactThresholdFor,
   onlyCachedPlan,
   openSettings,
   planKeyFor,
@@ -107,7 +109,11 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
     threadId?: string;
     usage: SessionUsage;
   } | null>(null);
-  const before = compactSnapshot && compactSnapshot.threadId === threadId ? compactSnapshot.usage : null;
+  const snapshot = compactSnapshot && compactSnapshot.threadId === threadId ? compactSnapshot.usage : null;
+  // An automatic compaction keeps its own before, so the card compares the
+  // context it started from too.
+  const before = snapshot ?? (threadId ? autoCompactBeforeUsage(threadId) : undefined) ?? null;
+  const autoCompactAt = useApp((s) => (threadId ? autoCompactThresholdFor(s, threadId) : undefined));
   // The thread's own account has its own numbers: the meter never shows
   // another login's plan, not even the same harness's default one.
   const cached = useApp((s) => {
@@ -196,6 +202,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
             cached={fromCache}
             usage={usage}
             before={before}
+            autoCompactAt={autoCompactAt}
             openSettings={usageOpen ? undefined : () => openSettings("usage")}
             onCompact={
               running || !usage?.size
@@ -220,10 +227,13 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
 export function ContextInspector({
   usage,
   before,
+  autoCompactAt,
   onCompact,
 }: {
   usage: SessionUsage;
   before?: SessionUsage | null;
+  /** The app's own auto-compact threshold, when rule 1 applies to this harness. */
+  autoCompactAt?: number;
   onCompact?: () => void;
 }) {
   const [view, setView] = useState<"before" | "after">("after");
@@ -254,7 +264,7 @@ export function ContextInspector({
     1.4,
   );
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <span className="font-semibold text-body">Context</span>
         <span className="text-callout text-fg-muted tabular">
@@ -315,9 +325,20 @@ export function ContextInspector({
             style={{ left: `${(compactAt / usage.size) * 100}%` }}
           />
         )}
+        {autoCompactAt !== undefined && autoCompactAt > 0 && autoCompactAt < usage.size && (
+          <span
+            aria-hidden
+            title={`RustCode compacts at ${formatTokens(autoCompactAt)}`}
+            className="absolute inset-y-0 w-px bg-accent/80"
+            style={{ left: `${(autoCompactAt / usage.size) * 100}%` }}
+          />
+        )}
       </div>
       {compactAt !== undefined && compactAt > 0 && compactAt < usage.size && (
         <p className="px-0.5 text-caption text-fg-faint">Compacts itself at {formatTokens(compactAt)}</p>
+      )}
+      {autoCompactAt !== undefined && autoCompactAt > 0 && autoCompactAt < usage.size && (
+        <p className="px-0.5 text-caption text-fg-faint">Auto-compacts at {formatTokens(autoCompactAt)}</p>
       )}
       {shown.length === 0 && (
         <p className="px-0.5 text-caption text-fg-muted">
@@ -452,6 +473,7 @@ function UsageCard({
   cached,
   usage,
   before,
+  autoCompactAt,
   openSettings: onOpenSettings,
   onCompact,
 }: {
@@ -459,6 +481,7 @@ function UsageCard({
   cached?: boolean;
   usage?: SessionUsage;
   before?: SessionUsage | null;
+  autoCompactAt?: number;
   openSettings?: () => void;
   onCompact?: () => void;
 }) {
@@ -487,7 +510,12 @@ function UsageCard({
       )}
       {usage?.size ? (
         <div className="border-border border-t pt-3">
-          <ContextInspector usage={usage} before={before} onCompact={onCompact} />
+          <ContextInspector
+            usage={usage}
+            before={before}
+            autoCompactAt={autoCompactAt}
+            onCompact={onCompact}
+          />
         </div>
       ) : null}
       {onOpenSettings && (

@@ -241,9 +241,43 @@ transparency with the rest.
 
 ## Spacing
 
-Tailwind's 4px grid. Common steps: 4 (icon to label), 8 (between controls
-in a row), 12 (card padding block), 14 (card padding inline), 16 (between
-groups), 24 (between sections). The chat lane is **736px**
+One scale, on Tailwind's 4px grid: every screen takes its gaps and insets from
+it, and `design.test.ts` fails on a half step that sits between two of them
+(the retired 10px `2.5` and 14px `3.5`).
+
+| px | Utility | Use |
+|---|---|---|
+| 2 | `0.5` | a nudge: an icon against its label, an inset separator |
+| 4 | `1` | inside one control: the gap in a chip or a field |
+| 6 | `1.5` | compact rows and the gap between chips |
+| 8 | `2` | between controls in a row; a list's own gutter, a menu row's inline inset |
+| 12 | `3` | a row's block padding, a compact tile, a popover's content |
+| 16 | `4` | card padding, page gutter, a section title above its card |
+| 20 | `5` | the composer's field inset, fixed by its controls |
+| 24 | `6` | between sections, a page's top |
+| 32 | `8` | a page's bottom, the gap a long page gives its parts |
+
+The insets every surface shares are named in `ui/primitives.tsx` and reused
+rather than retyped: `cardInset` (`p-4`), `rowInset` (`px-4 py-3`) and
+`menuInset` (`p-2`). A card's text, a settings row's text and a menu row's text
+all start on the same 16px line, so the surfaces agree at their edges:
+
+- **Sidebar and header:** the list is `px-2`, a row is `px-2` inside it, and a
+  section header, a menu row and a toolbar button take the same 8px inset; the
+  header floats at `px-2` above the pane, so its controls sit on the edge the
+  sidebar's rows and the queue share. A menu's item text lands on the same
+  16px line as a settings row's.
+- **Settings:** the nav column keeps `px-2` rows; the page column is `px-4`, so
+  the breadcrumb, the first section title and the rows under it start on one
+  line. A section is `mb-6` from the next, a title `mb-2` above its card, and a
+  row is `rowInset` (`min-h-12`, the control stacks under the text when the row
+  is narrow). The page column is `pt-4` under its 48px header and `pb-24`.
+- **Popovers and menus:** the surface is `menuInset` with rows at `px-2 py-1`;
+  a content popover (`popoverSurface`) is 12px, its own sections 8px apart.
+- **Cards:** `cardInset` (16) for a card that holds content; a compact tile or
+  a row inside a card takes 12, never 14.
+
+The chat lane is **736px**
 (`--rc-chat-content-max-width`, 46rem) for the transcript's rows and the
 composer alike, inset by a 12px gutter, 48px from the `sm` breakpoint. The
 gutter sits outside the cap, on the transcript's scroller (with
@@ -435,7 +469,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Switch:** the track is `bg-accent` on and `bg-fill-strong` off, its thumb
   the white knob: `bg-knob shadow-knob`.
 - **Slider:** `Slider` (settingsKit) for a whole number in a short range, such
-  as the threads one thread may run at once: the native range (so arrows, Home
+  as the delegates one thread may run at once: the native range (so arrows, Home
   and End work), the value beside it and the ends of the range under the rail.
   The native thumb is the knob too (`.rc-range` in index.css): the browser would
   draw it in the accent colour. Its focus ring is the global one, drawn by the
@@ -450,18 +484,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   reads as a second input.
 - **Chip:** `h-6 rounded-full bg-fill px-2 text-callout text-fg-muted`;
   status chips tint with their colour at 12–14%.
-- **Row (list):** `rounded-md px-2.5 py-1`, hover `bg-fill-subtle`,
+- **Row (list):** `rounded-md px-2 py-1`, hover `bg-fill-subtle`,
   selected `bg-fill` + `font-medium`; the hover action button appears with
   opacity only (no layout change).
-- **Card:** `rounded-lg bg-surface p-3.5`, no border; rows inside separated
+- **Card:** `rounded-lg bg-surface p-4`, no border; rows inside separated
   by `divide-border`.
-- **Menu:** `menuSurface` (`elevated p-1.5`) with `menuItem` rows
-  (`rounded-lg px-3 py-[7px]`), highlighted `bg-fill` (not accent);
+- **Menu:** `menuSurface` (`elevated p-2`) with `menuItem` rows
+  (`rounded-lg px-2 py-1`), highlighted `bg-fill` (not accent);
   destructive rows add `menuItemDanger`; `menuSeparator` and `menuLabel`
   between them. **Popover:** `popoverSurface` (`elevated p-3`).
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
 - **Toast:** `.rc-toast rounded-2xl` (the composer's glass, denser, and its
-  slight shadow), 380px wide, `py-1.5 pl-3.5 pr-1.5 text-callout`: an icon
+  slight shadow), 380px wide, `py-1.5 pl-3 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
   most one action as a secondary pill (`h-6 bg-fill`), and a close button.
@@ -492,6 +526,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   A row's second line reads the worktree branch, then what the thread's calls
   changed (`font-mono +N −N` in `success`/`danger`), for a thread the app has
   already read; one it has not opened shows neither, rather than a made-up zero.
+  The first line ends with one status chip and nothing else: `Working 57:13`
+  (the row's only spinner, then the running turn's clock in `tabular`),
+  `Waiting`, `Needs you`, `Failed` or `Review`, a pill on its tone at 12–16%
+  (`warning`, `accent`, `muted` for a wait, `danger`, `accent`), with what it
+  waits on in its tooltip. A row that is idle or settled shows its age there
+  instead, in the same slot: one state per row, never a spinner on each line.
+  Logic: `state/sidebarRows.ts` `rowStatus`.
 - **Delegated threads:** a thread an agent started has no row of its own while
   its parent exists, and it is nested from its first frame: the parent
   is recorded on the thread when it is created (`_meta.rustcode.parent`, carried
@@ -501,13 +542,19 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   parent's second line ends with a stack of at most three 16px circles
   (`ui/AgentStack.tsx`), each with a 1.5px ring in the sidebar's surface so the
   overlapping marks stay apart, the harness glyph filling 60% of the circle,
-  the circles overlapping by 30% of the diameter, then `+N` past the third and
-  one quiet accent spinner while anything works. What needs you comes first,
+  the circles overlapping by 30% of the diameter, then `+N` past the third.
+  A mark never spins: the row's one spinner is in the status chip above, so the
+  stack stays still and what it cannot say in a glyph is in its tooltip. What
+  needs you comes first,
   and the stack's state is one badge for the whole stack rather than one per
   mark: an 8px ringed dot on the last circle, in `warning` when something needs
   you, in `danger` when something failed; finished delegates draw neither a
   badge nor a count. The slot is a fixed 74px, so a count going from one to
-  three never moves the title's start, the age or the status. Hovering lists
+  three never moves the title's start, the age or the status; it ends on the
+  same right edge as the chip above. In front of the marks a row that works for
+  another thread shows ↳, and nothing counts messaged threads: the threads it
+  started are the marks, and one it messaged is what makes the chip say
+  `Waiting`. Hovering lists
   the running threads and their state, and the row opens the parent. The open
   delegate itself is drawn as an indented row, with a subtle tree line, directly
   under its parent's row, unfolding in with the list's fold motion and folding
@@ -590,17 +637,17 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   has its own 48px header — the breadcrumb `Settings / General` (the first
   part muted) at its start, "Restore defaults" and the close button at its
   end — with a hairline under it, and the page scrolls beneath. One page
-  shows at a time in a centred `max-w-[760px]` column, `pt-5`, its rows
+  shows at a time in a centred `max-w-[760px]` column, `pt-4`, its rows
   keeping the `px-4` inset the section titles share.
   "Restore defaults" shows only while a row on that page differs from its
   default, and puts back every changed row at once with one toast. Picking a
   result opens its page and lights the row it found (`rc-setting-hit`, a
   `fill` fading out over 1.2s).
 - **Settings section and row:** a section is its name in `text-base
-  font-semibold text-fg`, `px-3`/`px-4`, `space-y-2.5` above one group card,
-  and `32px` of gap before the next section. The card is `rounded-xl
+  font-semibold text-fg`, `px-4`, `mb-2` above one group card,
+  `mb-6` below it before the next section. The card is `rounded-xl
   bg-surface`, one step over the page and no border, its rows divided by a
-  `border` hairline. A row is `px-4 py-3.5`: its title `text-sm font-medium`,
+  `border` hairline. A row is `rowInset` (`px-4 py-3`): its title `text-sm font-medium`,
   its description `text-callout leading-normal text-fg-muted`, its control at
   the right, and the control stacks under the text when the row's own
   container is narrow. Controls in a row — buttons, selects, the segmented
@@ -609,7 +656,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   depth; switches keep their own shape.
 - **Settings row, reset:** rows show their description in full and keep the
   reset button of the bullet below where the value differs from its default.
-- **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
+- **Tooltip:** `bg-surface-3 rounded-lg px-2 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
   16px, the `xl` step), with no padding of its own: every text row in it
@@ -1041,7 +1088,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Jump to latest:** `.rc-glass-overlay rounded-full`, centred 8px
   above the composer stack and above its drawer when one is open, over it
   in z.
-- **Error card:** `rounded-lg bg-surface px-3.5 py-3`, the icon in `danger`
+- **Error card:** `rounded-lg bg-surface px-4 py-3`, the icon in `danger`
   (or `warning` for notices), text `text-fg-muted`, actions at the right
   as secondary pills. No coloured border or tinted background.
 - **Markdown in a reply** (`ui/Markdown.tsx`): 14px at 1.625 in `fg` at 90%,
@@ -1068,6 +1115,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 | Use a token class or `var(--rc-…)` | Write `#hex`, `rgb()`, `zinc-800`, `text-white` |
 | Separate with a surface step | Outline every card with a border |
 | Name a radius step | Write `rounded-[14px]` |
+| Take a gap from the spacing scale | Write `p-3.5`, `px-2.5` or `gap-7` |
 | Show focus with `:focus-visible` only | Recolour a field's border on focus |
 | Mark state with the accent | Fill primary buttons with the accent |
 | Keep subtrees mounted; toggle visibility | Remount a view on open, or key it on hover |
@@ -1080,4 +1128,5 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 Retired class names (failing `design.test.ts`): `fg-2`, `fg-3`, `fg-4`,
 `fill-1`…`fill-4`, `hairline`, `brand`, `brand-fill`, `chat`, `field`,
 `attention`, `info`, the `surface` utility (now `elevated`), `shadow-float`,
-`shadow-panel`.
+`shadow-panel`. Off-scale spacing (`p-3.5`, `px-2.5`, `gap-7` and the like) is
+held by the spacing scale's test, not this list.

@@ -19,7 +19,7 @@ import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { askConfirm, request, toast, useApp } from "../state/store";
-import { cx, Spinner, Switch, Tooltip } from "./primitives";
+import { cardInset, cx, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, fieldClass, Group, Loading, Row, SectionTitle, useEngineData } from "./settingsKit";
 
 interface Skill {
@@ -265,12 +265,12 @@ function McpRow({
   };
   return (
     <div>
-      <div className="flex min-h-11 items-center gap-3 px-3.5 py-2">
+      <div className="flex min-h-11 items-center gap-3 px-4 py-2">
         <button
           type="button"
           onClick={onToggleOpen}
           aria-expanded={open}
-          className="-mx-1.5 flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1.5 py-1 text-left hover:bg-fill-subtle"
+          className="-mx-1.5 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-fill-subtle"
         >
           <ChevronRight
             size={11}
@@ -328,7 +328,7 @@ function McpRow({
         </div>
       </div>
       {open && (
-        <div className="rc-expand flex flex-col gap-3 px-3.5 pb-3.5 pl-10">
+        <div className="rc-expand flex flex-col gap-3 px-4 pb-3 pl-10">
           <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-1 text-callout">
             <dt className="text-fg-faint">Command</dt>
             <dd className="selectable m-0 truncate font-mono text-fg-muted">{s.target}</dd>
@@ -344,13 +344,13 @@ function McpRow({
             )}
           </dl>
           {s.error && (
-            <pre className="selectable m-0 rounded-md bg-code-bg p-2.5 font-mono text-caption whitespace-pre-wrap text-danger">
+            <pre className="selectable m-0 rounded-md bg-code-bg p-2 font-mono text-caption whitespace-pre-wrap text-danger">
               {s.error}
             </pre>
           )}
           <div>
             <div className="mb-1 text-caption text-fg-faint">Log</div>
-            <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-md bg-code-bg p-2.5 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
+            <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-md bg-code-bg p-2 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
               {log?.length ? log.join("\n") : "No lines from this server in the engine's log."}
             </pre>
           </div>
@@ -405,7 +405,7 @@ function AddServer({
     if (ok) onDone();
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 px-4 py-3.5">
+    <div className="rc-expand flex flex-col gap-2 px-4 py-3">
       <input
         autoFocus
         value={name}
@@ -559,7 +559,7 @@ function NewSkill({ onDone }: { onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand mb-8 flex flex-col gap-2.5 rounded-xl bg-surface p-4">
+    <div className={cx("rc-expand mb-6 flex flex-col gap-2 rounded-xl bg-surface", cardInset)}>
       <input
         autoFocus
         value={name}

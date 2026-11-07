@@ -30,7 +30,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
       <h2 className="font-semibold text-title3">{title}</h2>
-      <div className="flex flex-wrap items-center gap-3 rounded-lg bg-surface p-3.5">{children}</div>
+      <div className="flex flex-wrap items-center gap-3 rounded-lg bg-surface p-4">{children}</div>
     </section>
   );
 }

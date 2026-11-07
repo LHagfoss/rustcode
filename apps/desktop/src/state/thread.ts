@@ -694,6 +694,24 @@ export function beginTurn(
  * finished): it runs again, with a quiet line saying why. Whether it carries on
  * is the turn's own business, so the line does not claim it does.
  */
+/**
+ * A turn the app starts for the thread's own good (an automatic compaction):
+ * it runs like any other, but adds no message the user did not write.
+ */
+export function beginQuietTurn(state: ThreadState, now = Date.now()): ThreadState {
+  const closed = closePendingTurn(state);
+  return {
+    ...closed,
+    running: true,
+    queueHeld: undefined,
+    turnStartedAt: now,
+    turnUsage: usageBaseline(state),
+    waiting: undefined,
+    woken: undefined,
+    error: undefined,
+  };
+}
+
 export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
   if (state.running) return { ...state, waiting: undefined };
   return {
@@ -747,6 +765,7 @@ export function finishTurn(
   outcome: "completed" | "cancelled" | "failed",
   now = Date.now(),
   error?: string,
+  quiet = false,
 ): ThreadState {
   const items = finishAllThoughts(settleEveryWait(state, now).items, now).map((item) =>
     item.kind === "tool" &&
@@ -769,18 +788,20 @@ export function finishTurn(
     permissions: [],
     error,
     turnUsage: undefined,
-    items: [
-      ...items,
-      {
-        kind: "turnEnd",
-        id: localId("turn"),
-        elapsedMs,
-        at: now,
-        startedAt: state.turnStartedAt,
-        usage: state.turnUsage,
-        outcome,
-      },
-    ],
+    items: quiet
+      ? items
+      : [
+          ...items,
+          {
+            kind: "turnEnd",
+            id: localId("turn"),
+            elapsedMs,
+            at: now,
+            startedAt: state.turnStartedAt,
+            usage: state.turnUsage,
+            outcome,
+          },
+        ],
   };
 }
 

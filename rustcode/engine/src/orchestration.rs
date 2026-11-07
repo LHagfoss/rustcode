@@ -77,10 +77,10 @@ pub const V4_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
 pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 /// Added by version 7: the messages this thread queued on another one.
 pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
-/// Added by version 8: a delegate's pull request, merging and cleanup.
-pub const V8_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
+/// Added by version 9: a delegate's pull request, merging and cleanup.
+pub const V9_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 8;
+pub const VERSION: u8 = 9;
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -158,8 +158,12 @@ pub const PROMPT_HINT_V6: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V6`] for version 7 clients, which can correct what they queued.
 pub const PROMPT_HINT_V7: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
-/// [`PROMPT_HINT_V7`] for version 8 clients, which can finish a delegate's work.
-pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage threads; those, merge and cleanup ask the user first.";
+/// [`PROMPT_HINT_V7`] for version 8 clients: delegation goes through RustCode's
+/// tools, as a Claude Code thread has no native subagent tool (#3176).
+pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`, while a harness with its own subagent tool may use it for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+
+/// [`PROMPT_HINT_V8`] for version 9 clients, which can finish a delegate's work.
+pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves.";
 
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
@@ -172,7 +176,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         5 => PROMPT_HINT_V5,
         6 => PROMPT_HINT_V6,
         7 => PROMPT_HINT_V7,
-        _ => PROMPT_HINT_V8,
+        8 => PROMPT_HINT_V8,
+        _ => PROMPT_HINT_V9,
     }
 }
 
@@ -184,7 +189,7 @@ pub fn is_tool(name: &str) -> bool {
         || V4_TOOL_NAMES.contains(&name)
         || V6_TOOL_NAMES.contains(&name)
         || V7_TOOL_NAMES.contains(&name)
-        || V8_TOOL_NAMES.contains(&name)
+        || V9_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -212,9 +217,9 @@ pub fn is_v7_tool(name: &str) -> bool {
     V7_TOOL_NAMES.contains(&name)
 }
 
-/// Whether `name` needs a version 8 client (delegate pull requests and cleanup).
-pub fn is_v8_tool(name: &str) -> bool {
-    V8_TOOL_NAMES.contains(&name)
+/// Whether `name` needs a version 9 client (delegate pull requests and cleanup).
+pub fn is_v9_tool(name: &str) -> bool {
+    V9_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -253,9 +258,11 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.extend(V7_TOOL_NAMES);
             names
         }
+        // Version 8 adds native-subagent guidance to the hint, not another tool.
+        8 => tool_names(7),
         _ => {
-            let mut names = tool_names(7);
-            names.extend(V8_TOOL_NAMES);
+            let mut names = tool_names(8);
+            names.extend(V9_TOOL_NAMES);
             names
         }
     }
@@ -938,7 +945,7 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 1}})), 1);
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 8}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -975,7 +982,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 8);
+        assert_eq!(VERSION, 9);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -989,13 +996,15 @@ mod tests {
             tool_names(7),
             [tool_names(6), V7_TOOL_NAMES.to_vec()].concat()
         );
+        // Version 8 adds native-subagent guidance to the hint, not another tool.
+        assert_eq!(tool_names(8), tool_names(7));
         assert_eq!(
-            tool_names(8),
-            [tool_names(7), V8_TOOL_NAMES.to_vec()].concat()
+            tool_names(9),
+            [tool_names(8), V9_TOOL_NAMES.to_vec()].concat()
         );
         assert_eq!(
             tool_names(10),
-            tool_names(8),
+            tool_names(9),
             "a newer client gets what this engine speaks"
         );
         for name in [THREAD_USAGE, QUERY_DATA] {
@@ -1021,14 +1030,15 @@ mod tests {
             assert!(PROMPT_HINT_V7.contains(name), "{name}");
             assert!(!PROMPT_HINT_V6.contains(name), "{name} is v7 only");
         }
-        for name in V8_TOOL_NAMES {
-            assert!(is_tool(name) && is_v8_tool(name));
+        for name in V9_TOOL_NAMES {
+            assert!(is_tool(name) && is_v9_tool(name));
             assert!(
-                !is_v7_tool(name) && !tool_names(7).contains(&name),
-                "{name} is v8 only"
+                !is_v7_tool(name) && !tool_names(8).contains(&name),
+                "{name} is v9 only"
             );
-            assert!(PROMPT_HINT_V8.contains(name), "{name}");
-            assert!(!PROMPT_HINT_V7.contains(name), "{name} is v8 only");
+            assert!(PROMPT_HINT_V9.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V8.contains(name), "{name} is v9 only");
+            assert!(!PROMPT_HINT_V7.contains(name), "{name} is v9 only");
         }
         // The hint a client is told follows the version it advertised.
         assert_eq!(prompt_hint(1), PROMPT_HINT);
@@ -1039,7 +1049,8 @@ mod tests {
         assert_eq!(prompt_hint(6), PROMPT_HINT_V6);
         assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
         assert_eq!(prompt_hint(8), PROMPT_HINT_V8);
-        assert_eq!(prompt_hint(10), PROMPT_HINT_V8);
+        assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
+        assert_eq!(prompt_hint(10), PROMPT_HINT_V9);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -1051,7 +1062,7 @@ mod tests {
                     .cloned()
                     .unwrap()
             )),
-            8
+            9
         );
         assert_eq!(
             client_meta_version(Some(
@@ -1065,17 +1076,19 @@ mod tests {
         // It rides in the root prompt and in the MCP server's instructions, so
         // it is bounded: v4 adds the two data tools, v5 the account line and
         // the line that says a thread an agent starts is its delegate, v6 the
-        // activity read, v7 the queue control, v8 a delegate's pull request.
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V8);
+        // activity read, v7 the queue control, v8 that native subagents go
+        // through RustCode's tools, v9 a delegate's pull request.
+
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V9);
         println!(
-            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v8 {tokens} tokens",
+            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v9 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V4),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V6)
         );
-        // v8 adds the three delegate pull-request tools, all named with their use.
-        assert!(tokens < 420, "{tokens}");
+        // v9 adds the three delegate pull-request tools, all named with their use.
+        assert!(tokens < 460, "{tokens}");
     }
 
     #[test]
