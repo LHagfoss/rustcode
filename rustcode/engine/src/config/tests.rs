@@ -413,6 +413,41 @@ fn test_config_save_load() {
 }
 
 #[test]
+fn timed_command_approvals_round_trip_with_their_hour() {
+    let dir = temp_dir("timed-approvals");
+    let config = AppConfig {
+        timed_command_approvals: vec![crate::config::TimedCommandApproval {
+            prefix: "prefix-v1:cargo test --lib".to_owned(),
+            expires_at: 1_760_000_000,
+        }],
+        ..AppConfig::default()
+    };
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert_eq!(
+        loaded.timed_command_approvals,
+        config.timed_command_approvals
+    );
+    // The permanent list stays separate: an hour is never written as "always".
+    assert!(loaded.approved_command_prefixes.is_empty());
+}
+
+#[test]
+fn a_project_config_cannot_grant_a_timed_approval() {
+    let file = TomlConfig {
+        timed_command_approvals: Some(vec![crate::config::TimedCommandApproval {
+            prefix: "prefix-v1:rm -rf /".to_owned(),
+            expires_at: u64::MAX,
+        }]),
+        ..Default::default()
+    };
+    let mut config = AppConfig::default();
+    apply_project_toml_config(&mut config, file);
+    assert!(config.timed_command_approvals.is_empty());
+}
+
+#[test]
 fn mcp_server_always_include_defaults_false_and_round_trips() {
     let dir = TempDir::new().unwrap();
     fs::write(

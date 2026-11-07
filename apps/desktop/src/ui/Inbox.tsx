@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
+import { assessApproval, grantAllowed, optionScope } from "../lib/approval";
 import { type DecidedItem, foldDecided, groupInbox, type InboxGroup, type InboxItem } from "../state/inbox";
 import { useInboxItems } from "../state/inboxRead";
 import {
@@ -56,15 +57,19 @@ interface RowAction {
 }
 
 function optionLabel(option: PermissionOption): string {
-  if (option.kind === "allow_once") return "Allow";
-  if (option.kind === "allow_always") return "Always allow";
-  if (option.kind === "reject_once" || option.kind === "reject_always") return "Decline";
+  const scope = optionScope(option);
+  if (scope === "once") return "Allow";
+  if (scope === "hour") return "1 hour";
+  if (scope === "always") return "Always";
+  if (scope === "decline") return "Decline";
   return option.name;
 }
 
 function decidedLabel(option: PermissionOption): string {
-  if (option.kind === "allow_once" || option.kind === "allow_always") return "Approved";
-  if (option.kind === "reject_once" || option.kind === "reject_always") return "Declined";
+  const scope = optionScope(option);
+  if (scope === "hour") return "Allowed for 1 hour";
+  if (scope === "once" || scope === "always") return "Approved";
+  if (scope === "decline") return "Declined";
   return "Answered";
 }
 
@@ -103,16 +108,35 @@ export function inboxActions(item: InboxItem): RowAction[] {
     );
     return [...actions, open];
   }
-  const actions = orderedOptions(request.options)
-    .slice(0, 3)
-    .map(
-      (option): RowAction => ({
-        label: optionLabel(option),
-        run: () => answerPermission(request, option),
-        primary: option.kind === "allow_once",
-        decided: decidedLabel(option),
-      }),
-    );
+  // The answer the row leads with is a single call; a grant is a choice of how
+  // long it lasts, the same one the thread's own card offers. A destructive
+  // call gets neither: it is answered once, or declined.
+  const options = orderedOptions(request.options);
+  const scopeOf = (scope: ReturnType<typeof optionScope>) =>
+    options.find((option) => optionScope(option) === scope);
+  const grants = grantAllowed(assessApproval(request, item.project));
+  const scopes: ("once" | "hour" | "always")[] = grants ? ["once", "hour", "always"] : ["once"];
+  const actions: RowAction[] = scopes.flatMap((scope) => {
+    const option = scopeOf(scope);
+    return option
+      ? [
+          {
+            label: optionLabel(option),
+            run: () => answerPermission(request, option),
+            primary: scope === "once",
+            decided: decidedLabel(option),
+          },
+        ]
+      : [];
+  });
+  const decline = scopeOf("decline");
+  if (decline) {
+    actions.push({
+      label: optionLabel(decline),
+      run: () => answerPermission(request, decline),
+      decided: decidedLabel(decline),
+    });
+  }
   return [...actions, open];
 }
 
@@ -190,30 +214,36 @@ function InboxRow({
       <span className="mt-1 shrink-0">
         <KindIcon kind={item.kind} />
       </span>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-        <button
-          type="button"
-          onClick={onOpen}
-          title={item.detail}
-          className="min-w-0 flex-1 truncate text-left text-callout text-fg-muted hover:text-fg"
-        >
-          {item.detail}
-        </button>
-        {item.pending > 1 && (
-          <span className="shrink-0 text-caption text-fg-faint tabular">
-            {item.number} of {item.pending}
-          </span>
-        )}
-        <span className="shrink-0 text-caption text-fg-faint tabular">{relativeAge(item.at, now)}</span>
-        {compact && (
-          <span
-            className={cx("shrink-0", active ? "hidden" : "group-hover:hidden group-focus-within:hidden")}
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <button
+            type="button"
+            onClick={onOpen}
+            title={item.detail}
+            className={cx(
+              "min-w-0 flex-1 text-left text-callout text-fg-muted hover:text-fg",
+              // The selected row reads its question whole: the answers drop to their own line.
+              active ? "break-words whitespace-normal" : "truncate",
+            )}
           >
-            <Pill size="sm" prominent={compact.primary} onClick={() => onRun(compact)}>
-              {compact.label}
-            </Pill>
-          </span>
-        )}
+            {item.detail}
+          </button>
+          {item.pending > 1 && (
+            <span className="shrink-0 text-caption text-fg-faint tabular">
+              {item.number} of {item.pending}
+            </span>
+          )}
+          <span className="shrink-0 text-caption text-fg-faint tabular">{relativeAge(item.at, now)}</span>
+          {compact && (
+            <span
+              className={cx("shrink-0", active ? "hidden" : "group-hover:hidden group-focus-within:hidden")}
+            >
+              <Pill size="sm" prominent={compact.primary} onClick={() => onRun(compact)}>
+                {compact.label}
+              </Pill>
+            </span>
+          )}
+        </div>
         <span
           className={cx(
             "min-w-0 flex-wrap items-center gap-1.5",

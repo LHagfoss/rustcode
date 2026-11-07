@@ -2124,6 +2124,32 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |_request: permissions::PermissionsRequest, responder, _connection| {
+                // The user config is what every request's policy reads, so a
+                // client lists and revokes there rather than in one session.
+                let (_, _, config) = crate::config::load_config();
+                responder.respond(permissions::grants_snapshot(&config))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: permissions::RevokePermissionRequest, responder, _connection| {
+                    let (_, _, mut config) = crate::config::load_config();
+                    let answer = permissions::revoke_grant(&mut config, &request.id);
+                    // Open sessions hold their own copy of the user config: the
+                    // one that answers a call must stop covering it now.
+                    for session in server.sessions.lock().await.values() {
+                        session.state.lock().await.config.timed_command_approvals =
+                            config.timed_command_approvals.clone();
+                    }
+                    responder.respond(answer)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: themes::ThemesRequest, responder, connection| {
                 // A client that lists themes restyles when they change.
                 themes::start_watching(&connection);

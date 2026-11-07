@@ -667,8 +667,20 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
     // decision intact. The helpers reject environment/background variants and
     // unsafe shell composition before allowing a rule to match.
     let saved_prefix_covers_call = if name == "run_command" {
-        let prefixes = state.lock().await.config.approved_command_prefixes.clone();
+        let (prefixes, timed) = {
+            let s = state.lock().await;
+            (
+                s.config.approved_command_prefixes.clone(),
+                s.config.timed_command_approvals.clone(),
+            )
+        };
         crate::tools::approved_command_prefix_covers_call(name, args, &prefixes)
+            || crate::tools::timed_approval_covers_call(
+                name,
+                args,
+                &timed,
+                crate::tools::unix_now_secs(),
+            )
     } else {
         false
     };

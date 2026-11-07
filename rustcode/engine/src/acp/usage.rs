@@ -88,8 +88,21 @@ fn context_breakdown_json(
     let categories = crate::controller::CONTEXT_CATEGORY_LABELS
         .iter()
         .zip(breakdown.category_tokens())
-        .map(|(name, tokens)| serde_json::json!({"name": name, "tokens": tokens}))
+        .zip(breakdown.items.iter())
+        .map(|((name, tokens), items)| {
+            let items = items
+                .iter()
+                .map(|item| serde_json::json!({"name": item.name, "tokens": item.tokens}))
+                .collect::<Vec<_>>();
+            serde_json::json!({"name": name, "tokens": tokens, "items": items})
+        })
         .collect::<Vec<_>>();
+    // The built-in harness compacts when the history reaches the model
+    // profile's safe allowance, so the bar can mark that point. An external
+    // harness reports no such threshold and gets null.
+    let budget = state.active_context_budget();
+    let compact_at = (budget.history_tokens > 0 && budget.history_tokens < budget.context_window)
+        .then(|| serde_json::json!({"tokens": budget.history_tokens}));
     serde_json::json!({
         "version": CONTEXT_META_VERSION,
         "model": state.active_model_profile().map(|profile| profile.name),
@@ -98,6 +111,7 @@ fn context_breakdown_json(
         "estimated": breakdown.current_usage.source
             == crate::controller::ContextUsageSource::HistoryEstimate,
         "free": breakdown.remaining_tokens,
+        "compactAt": compact_at,
         "categories": categories,
         "compaction": breakdown.compaction.as_ref().map(|stats| serde_json::json!({
             "trigger": stats.trigger,
@@ -920,6 +934,16 @@ mod tests {
         assert_eq!(categories[3]["name"], "Compacted history");
         assert_eq!(categories[0]["name"], "User messages");
         assert!(categories[0]["tokens"].as_u64().unwrap() > 0);
+        let items = categories[0]["items"].as_array().unwrap();
+        assert_eq!(
+            items[0]["name"].as_str().unwrap(),
+            format!("{}…", "a".repeat(72))
+        );
+        assert!(items[0]["tokens"].as_u64().unwrap() > 0);
+        assert_eq!(
+            context["compactAt"]["tokens"],
+            u64::from(state.active_context_budget().history_tokens)
+        );
         assert_eq!(
             context["free"].as_u64().unwrap(),
             u64::from(state.active_context_window()) - 100 - overhead(&state)
