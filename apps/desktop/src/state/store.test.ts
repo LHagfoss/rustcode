@@ -5,6 +5,7 @@ import { harnessPlanKey, parsePlans } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
+import { rememberedEffort } from "./harness";
 import {
   answerOrchestration,
   linkFinished,
@@ -33,13 +34,16 @@ import {
   DEFAULT_PANEL,
   dismissPendingSetup,
   editMessage,
+  effortMemory,
   ensureHarnessModels,
   errorText,
   fetchHarnessModels,
   forgetPlans,
+  localChoices,
   MAX_PANELS,
   mergePlans,
   moveThread,
+  newThreadChoice,
   onlyCachedPlan,
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
@@ -117,6 +121,20 @@ const until = async (check: () => boolean, ms = 2000) => {
     await new Promise((r) => setTimeout(r, 2));
   }
 };
+
+/**
+ * The app's storage in a test (there is no window): a map `store()` writes into, seeded with an
+ * entry an earlier build left. `done()` takes it away again, so the next test starts empty.
+ */
+function testStorage(seed: Record<string, string> = {}) {
+  const data = new Map<string, string>(Object.entries(seed));
+  const scope = globalThis as unknown as Record<string, unknown>;
+  scope.localStorage = {
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => void data.set(key, value),
+  } as unknown as Storage;
+  return { data, done: () => delete scope.localStorage };
+}
 
 /** A running thread whose own record still reads no steering: the harness learned it after the thread started. */
 const setStaleSteer = (id: string) =>
@@ -1838,6 +1856,103 @@ describe("model memory per harness (#2797, #2798)", () => {
     const picked = pickerModels(undefined, rustcode, { harness: "rustcode", model: null, effort: null }, []);
     expect(picked.efforts.length).toBeGreaterThan(1);
     expect(picked.effort).toBe("medium");
+  });
+});
+
+describe("effort memory per model", () => {
+  test("each model keeps its own level, in one record a harness's logins share", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      await ensureHarnessModels("codex");
+      pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "low" });
+      pickNewThreadChoice({ harness: "codex", model: "gpt-6-astra", effort: "high" });
+      expect(effortMemory()).toEqual({ codex: { "gpt-6-luna": "low", "gpt-6-astra": "high" } });
+      // Each model answers with its own level, never the last one picked.
+      expect(rememberedEffort(effortMemory(), "codex", "gpt-6-luna")).toBe("low");
+      expect(rememberedEffort(effortMemory(), "codex", "gpt-6-astra")).toBe("high");
+      // Another login of the same harness reads the same memory, and does not reset the choice.
+      await addHarnessAccount("codex", "work", "Work");
+      pickNewThreadAccountOn("codex", "work");
+      expect(newThreadChoice(useApp.getState())).toEqual({
+        harness: "codex",
+        model: "gpt-6-astra",
+        effort: "high",
+      });
+      expect(effortMemory()).toEqual({ codex: { "gpt-6-luna": "low", "gpt-6-astra": "high" } });
+      // One entry per harness, keyed only by the model: no login in the stored shape.
+      const kept = JSON.parse(storage.data.get("rustcode.harnessChoices") ?? "{}");
+      expect(kept).toEqual({
+        codex: { model: null, effort: null, efforts: { "gpt-6-luna": "low", "gpt-6-astra": "high" } },
+      });
+    } finally {
+      storage.done();
+    }
+  });
+
+  test("an old stored choice keeps its model and effort, then grows the per-model memory", async () => {
+    // The shape before per-model memory: a model and one effort, no `efforts` map.
+    const storage = testStorage({
+      "rustcode.harnessChoices": JSON.stringify({ codex: { model: "gpt-6-astra", effort: "high" } }),
+    });
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      expect(localChoices()).toEqual({ codex: { model: "gpt-6-astra", effort: "high" } });
+      await ensureHarnessModels("codex");
+      pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "low" });
+      const kept = JSON.parse(storage.data.get("rustcode.harnessChoices") ?? "{}");
+      expect(kept.codex).toEqual({
+        model: "gpt-6-astra",
+        effort: "high",
+        efforts: { "gpt-6-luna": "low" },
+      });
+    } finally {
+      storage.done();
+    }
+  });
+
+  test("junk in storage is dropped instead of crashing the picker", async () => {
+    const storage = testStorage({
+      "rustcode.harnessChoices": JSON.stringify({
+        codex: { model: 42, effort: true, efforts: { "gpt-6-luna": 7, "gpt-6-astra": "high" } },
+        claude: "not an object",
+      }),
+    });
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      expect(localChoices()).toEqual({
+        codex: { model: null, effort: null, efforts: { "gpt-6-astra": "high" } },
+      });
+    } finally {
+      storage.done();
+    }
+  });
+
+  test("the new-thread picker keeps its choice across a visit to another thread", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await ensureHarnessModels("codex");
+    pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "high" });
+    pickNewThreadAccountOn("codex", "paral");
+    // Open an existing thread, then come back to the new-thread screen.
+    selectThread(useApp.getState().sessions[0]!.id);
+    await until(() => selected()?.loaded === true);
+    startNewThread();
+    let s = useApp.getState();
+    expect(s.selectedId).toBeNull();
+    expect(s.newThread).toEqual({ harness: "codex", model: "gpt-6-luna", effort: "high" });
+    expect(s.newThreadAccount).toBe("paral");
+    // Starting a thread from it keeps the draft too, for the next new thread.
+    setProjectCwd("/tmp/project");
+    expect(await submit("hello there")).toBe(true);
+    expect(useApp.getState().selectedId).not.toBeNull();
+    startNewThread();
+    s = useApp.getState();
+    expect(s.newThread).toEqual({ harness: "codex", model: "gpt-6-luna", effort: "high" });
+    expect(s.newThreadAccount).toBe("paral");
   });
 });
 

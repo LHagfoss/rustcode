@@ -449,9 +449,14 @@ composer's keys stay outside the table.
 - **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
   model has the `fast` option) and the model with its effort on one line;
   the model's name drills into the list. Effort is a slider with a dot per
-  level: drag (snaps on release), click, or ←→/Home/End. The harness row
-  shows only when more than one harness is usable. Fast mode is set on a
-  thread once it exists; a new thread does not carry it yet.
+  level: drag (snaps on release), click, or ←→/Home/End. Each model keeps the
+  effort it was last left on (one record per harness, which its logins share),
+  so picking the model again returns to that level; a level the model no longer
+  offers falls back to its default. The harness row shows only when more than
+  one harness is usable. Fast mode is set on a thread once it exists; a new
+  thread does not carry it yet. The new-thread picker keeps the harness, model,
+  effort and login picked there for the session, so opening a thread and
+  coming back to a new one shows that choice rather than the default again.
 - **New thread banner.** Settings › Appearance: a wide picture over new
   threads, drawn in coloured text (ASCII, inverted on a light background)
   or as is, covering the top half of the chat and fading toward the

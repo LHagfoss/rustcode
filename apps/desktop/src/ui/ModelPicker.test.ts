@@ -102,6 +102,17 @@ describe("the slider's stops", () => {
     expect(clampEffort(undefined, [], "high")).toBeNull();
   });
 
+  test("a model picked again returns to the effort it was last left on", () => {
+    const astra = twoModels().models[1]!;
+    // The remembered level wins over the level the picker was showing.
+    expect(clampEffort(astra, ["off", "high", "max"], "high", "max")).toBe("max");
+    expect(clampEffort(astra, ["off", "high", "max"], "off", "high")).toBe("high");
+    // A level the model no longer offers falls through to the current one, else its default.
+    expect(clampEffort(astra, ["off", "high", "max"], "high", "medium")).toBe("high");
+    expect(clampEffort(astra, ["off", "high", "max"], "medium", "minimal")).toBe("high");
+    expect(clampEffort(astra, ["off", "high", "max"], null, null)).toBe("high");
+  });
+
   test("a model that names no default takes the lowest step", () => {
     expect(clampEffort({ id: "m", name: "m", efforts: ["low", "high"] }, ["low", "high"], "max")).toBe("low");
   });
