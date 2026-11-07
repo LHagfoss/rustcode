@@ -212,6 +212,55 @@ describe("thread reducer", () => {
   });
 });
 
+describe("a turn's usage samples", () => {
+  const usage = (inputTokens: number, outputTokens: number, cost: number) => ({
+    kind: "usage" as const,
+    usage: { used: inputTokens, size: 200_000, estimated: false, inputTokens, outputTokens, cost },
+  });
+
+  test("what the engine reported while a turn ran is kept on its footer", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "hi", 1_000);
+    s = applyUpdate(s, usage(1_000, 100, 0.01), 1_500);
+    s = applyUpdate(s, usage(1_900, 180, 0.03), 2_500);
+    s = finishTurn(s, "completed", 4_000);
+    const end = s.items.at(-1)!;
+    expect(end).toMatchObject({ kind: "turnEnd", startedAt: 1_000, at: 4_000, elapsedMs: 3_000 });
+    const turn = end.kind === "turnEnd" ? end.usage : undefined;
+    expect(turn?.samples.map((sample) => sample.at)).toEqual([1_500, 2_500]);
+    expect(turn?.samples[1]?.usage.inputTokens).toBe(1_900);
+  });
+
+  test("a thread with no earlier usage starts its first turn from zero", () => {
+    const s = finishTurn(beginTurn(emptyThread("s", "/p"), "hi", 1_000), "completed", 2_000);
+    const end = s.items.at(-1);
+    expect(end?.kind === "turnEnd" ? end.usage?.before : undefined).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+    });
+  });
+
+  test("a loaded thread starts from the usage it already had", () => {
+    let state = emptyThread("s", "/p");
+    state = {
+      ...state,
+      usage: { used: 10, size: 200_000, estimated: false, inputTokens: 60_000, outputTokens: 2_000 },
+    };
+    state = finishTurn(beginTurn(state, "one", 1_000), "completed", 2_000);
+    let s = beginTurn(state, "two", 3_000);
+    s = finishTurn(s, "completed", 4_000);
+    const end = s.items.at(-1);
+    expect(end?.kind === "turnEnd" ? end.usage?.before?.inputTokens : undefined).toBe(60_000);
+  });
+
+  test("a usage update outside a turn is the session's, not a turn's", () => {
+    let s = emptyThread("s", "/p");
+    s = applyUpdate(s, usage(1_000, 100, 0.01), 1_500);
+    expect(s.turnUsage).toBeUndefined();
+    expect(s.usage?.inputTokens).toBe(1_000);
+  });
+});
+
 describe("helpers", () => {
   test("line diff keeps context and numbers lines", () => {
     const lines = diffLines({

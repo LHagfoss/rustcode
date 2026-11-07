@@ -97,8 +97,38 @@ export type TranscriptItem =
       id: string;
       elapsedMs?: number;
       at?: number;
+      /** When the app saw this turn begin. A replayed turn has none, and so no Trace. */
+      startedAt?: number;
+      /** The usage the engine reported while the turn ran, for its Trace. */
+      usage?: TurnUsage;
       outcome: "completed" | "cancelled" | "failed";
     };
+
+/**
+ * What a turn's tracer reads: the session's totals when the turn began, and one
+ * sample for each usage update the engine sent while it ran. Every number is
+ * cumulative, so the tracer subtracts the one before to price a round.
+ */
+export interface TurnUsage {
+  before?: SessionUsage;
+  samples: { at: number; usage: SessionUsage }[];
+}
+
+/**
+ * The baseline a turn's usage samples are subtracted from. A thread's first
+ * turn has no earlier usage to subtract: the engine's totals are then its own,
+ * so they start at zero rather than leaving the turn unpriced.
+ */
+function usageBaseline(state: ThreadState): TurnUsage {
+  if (state.usage) return { before: state.usage, samples: [] };
+  const first = !state.items.some((item) => item.kind === "turnEnd");
+  return {
+    before: first
+      ? { used: 0, size: 0, estimated: false, inputTokens: 0, outputTokens: 0, cachedTokens: 0, cost: 0 }
+      : undefined,
+    samples: [],
+  };
+}
 
 /**
  * The row a resolved question leaves behind: what was asked and what was answered. Built here,
@@ -184,6 +214,8 @@ export interface ThreadState {
   queueHeld?: boolean;
   running: boolean;
   turnStartedAt?: number;
+  /** The running turn's usage samples, handed to its footer when it ends. */
+  turnUsage?: TurnUsage;
   /** Background commands the last turn parked on; it resumes when they finish. */
   waiting?: number;
   /** The running turn is one the engine resumed itself, not a prompt the app sent. */
@@ -234,9 +266,19 @@ function closePendingTurn(state: ThreadState, now = Date.now()): ThreadState {
   return {
     ...state,
     pendingTurn: undefined,
+    turnUsage: undefined,
     items: [
       ...state.items,
-      { kind: "turnEnd", id: localId("turn"), elapsedMs, at: turn?.at ?? now, outcome },
+      {
+        kind: "turnEnd",
+        id: localId("turn"),
+        elapsedMs,
+        at: turn?.at ?? now,
+        // The app watched this turn run only if it started it: a replay has no start.
+        startedAt: turn ? undefined : started,
+        usage: turn ? undefined : state.turnUsage,
+        outcome,
+      },
     ],
   };
 }
@@ -455,8 +497,15 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       return { ...state, title: update.title };
     case "configOptions":
       return { ...state, configOptions: update.options };
-    case "usage":
-      return { ...state, usage: update.usage };
+    case "usage": {
+      // A usage update while the turn runs is one round's totals: the Trace
+      // chip under the turn prices its model calls from them.
+      const turnUsage =
+        state.running && state.turnUsage
+          ? { ...state.turnUsage, samples: [...state.turnUsage.samples, { at: now, usage: update.usage }] }
+          : state.turnUsage;
+      return { ...state, usage: update.usage, turnUsage };
+    }
     case "compaction":
       // One quiet row, whichever harness compacted.
       return {
@@ -527,6 +576,7 @@ export function beginTurn(
     // A turn starts the queue: what a stopped turn held is running again.
     queueHeld: undefined,
     turnStartedAt: now,
+    turnUsage: usageBaseline(state),
     waiting: undefined,
     woken: undefined,
     error: undefined,
@@ -558,6 +608,7 @@ export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
     woken: true,
     waiting: undefined,
     turnStartedAt: now,
+    turnUsage: usageBaseline(state),
     error: undefined,
     items: [
       ...state.items,
@@ -623,7 +674,19 @@ export function finishTurn(
     pendingTurn: undefined,
     permissions: [],
     error,
-    items: [...items, { kind: "turnEnd", id: localId("turn"), elapsedMs, at: now, outcome }],
+    turnUsage: undefined,
+    items: [
+      ...items,
+      {
+        kind: "turnEnd",
+        id: localId("turn"),
+        elapsedMs,
+        at: now,
+        startedAt: state.turnStartedAt,
+        usage: state.turnUsage,
+        outcome,
+      },
+    ],
   };
 }
 

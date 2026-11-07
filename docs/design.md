@@ -675,6 +675,22 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   folded; find in thread opens them all while it searches. Folded steps are
   not rows at all, so the virtualizer and the timeline rail have fewer.
   Logic: `state/fold.ts` (`foldTurns`).
+- **Turn trace:** the footer's `Trace` chip, beside Changes, opens a card above it
+  (`ui/TurnTrace.tsx`): the turn's own timeline from 0 to its end, one row per
+  model call, tool call and delegate. A model call has no event of its own, so
+  it is the stretch between the calls around it; its bar is `accent/55`, a
+  tool's is `fill-strong`, and a delegate's is dotted. The label is on the
+  left, the cost or token count and the duration on the right, and the longest
+  row carries `Slowest`. Delegates (`spawn_agent`, `start_session`, `fan_out`)
+  fold into one dotted row that opens to each call. `Sort` is Timeline,
+  Duration or the number shown; `Show` switches cost ↔ tokens, opening on cost
+  when the harness reported one and on tokens when it did not. Hovering a bar
+  names the call, when it ran and what it used; a press opens the tool row's
+  own detail (Input, Output, diffs, Copy) or the text a model call streamed.
+  The numbers are the engine's per-round usage updates, subtracted from the
+  turn's baseline (`state/thread.ts` `TurnUsage`); a row a harness left
+  unpriced stays blank rather than guessed, and a replayed turn (no per-call
+  timing) has no chip at all. Logic: `lib/trace.ts`.
 - **Settings reset:** a row whose value differs from its default shows a small
   reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).
   When the control stacks under the text, the icon leaves the flow for the

@@ -9,6 +9,7 @@ import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { flyInFromComposer } from "../lib/sendFlight";
+import { hasTimeline } from "../lib/trace";
 import {
   foldEnds,
   foldTurns,
@@ -62,6 +63,7 @@ import {
 import { turnFooterHidden } from "./replyActions";
 import { plainPreview, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
+import { TurnTrace } from "./TurnTrace";
 
 export type Row = {
   key: string;
@@ -513,6 +515,20 @@ export function Transcript({
     return map;
   }, [changeLines, lastEnd, thread.id]);
 
+  // Each finished turn's own rows, for its Trace chip: everything since the
+  // turn before it, so a wake turn (which has no message of its own) comes out
+  // whole. The trace keeps only what falls between its start and its end.
+  const turnItems = useMemo(() => {
+    const map: Record<string, TranscriptItem[]> = {};
+    let from = 0;
+    thread.items.forEach((item, i) => {
+      if (item.kind !== "turnEnd") return;
+      map[item.id] = thread.items.slice(from, i + 1);
+      from = i + 1;
+    });
+    return map;
+  }, [thread.items]);
+
   // Turn footers that render nothing at all. Nothing measures a row that never mounts, so the
   // virtualizer has to estimate no height for it, or every row below drifts by a footer.
   const footerless = useMemo(() => {
@@ -527,6 +543,7 @@ export function Transcript({
         reply: turnReply.byEnd[item.id]?.text,
         completion: !!line?.completion,
         changes: !!line?.changes,
+        trace: hasTimeline(item),
         outcome: item.outcome,
       });
       if (hidden) set.add(item.id);
@@ -1031,6 +1048,9 @@ export function Transcript({
                         reply={turnReply.byEnd[item.id]?.text}
                         completion={footerChanges[item.id]?.completion}
                         changes={footerChanges[item.id]?.changes}
+                        trace={
+                          hasTimeline(item) ? <TurnTrace end={item} items={turnItems[item.id]} /> : undefined
+                        }
                       />
                     ) : null}
                   </div>
