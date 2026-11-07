@@ -26,7 +26,7 @@ import {
   useApp,
 } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
-import { cx, Pill, Segments } from "./primitives";
+import { cx, Pill, Segments, Tooltip } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
 function contextTint(fraction: number) {
@@ -39,20 +39,29 @@ function planTint(left: number) {
 }
 
 /**
- * The conversation (what a compaction can shrink) in shades of the accent,
- * the fixed overhead sent with every request in greys.
+ * One fill per category, used by both the bar's segments and the tile map so
+ * they are the same colour (mixed over the raised surface, not transparent,
+ * which would take the colour of whatever each one happens to sit on).
  */
-const CATEGORY_COLOR: Record<string, string> = {
+const CATEGORY_FILL: Record<string, string> = {
   "User messages": "var(--rc-accent)",
-  "Agent responses": "color-mix(in srgb, var(--rc-accent) 72%, transparent)",
-  "Tool calls": "color-mix(in srgb, var(--rc-accent) 50%, transparent)",
-  Subagents: "color-mix(in srgb, var(--rc-accent) 36%, transparent)",
-  "Compacted history": "color-mix(in srgb, var(--rc-accent) 24%, transparent)",
+  "Agent responses": "color-mix(in srgb, var(--rc-accent) 72%, var(--rc-surface-2))",
+  "Tool calls": "color-mix(in srgb, var(--rc-accent) 50%, var(--rc-surface-2))",
+  Subagents: "color-mix(in srgb, var(--rc-accent) 36%, var(--rc-surface-2))",
+  "Compacted history": "color-mix(in srgb, var(--rc-accent) 24%, var(--rc-surface-2))",
   "System prompt": "var(--rc-text-muted)",
-  "System tools": "color-mix(in srgb, var(--rc-text-muted) 65%, transparent)",
-  Skills: "color-mix(in srgb, var(--rc-text-muted) 40%, transparent)",
+  "System tools": "color-mix(in srgb, var(--rc-text-muted) 65%, var(--rc-surface-2))",
+  Skills: "color-mix(in srgb, var(--rc-text-muted) 40%, var(--rc-surface-2))",
 };
-const categoryColor = (name: string) => CATEGORY_COLOR[name] ?? "var(--rc-text-faint)";
+const categoryColor = (name: string) => CATEGORY_FILL[name] ?? "var(--rc-text-faint)";
+
+/** Text on a tile: the pane colour on the opaque fills, the body ink on the
+ * ones that approach the surface. */
+const CATEGORY_INK: Record<string, string> = {
+  "User messages": "var(--rc-bg)",
+  "System prompt": "var(--rc-bg)",
+};
+const categoryInk = (name: string) => CATEGORY_INK[name] ?? "var(--rc-text)";
 
 const percentOf = (part: number, whole: number) =>
   whole > 0 ? `${part / whole < 0.01 && part > 0 ? "<1" : Math.round((part / whole) * 100)}%` : "";
@@ -176,7 +185,8 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 max-h-[var(--radix-popper-available-height,80vh)] w-[320px] overflow-y-auto p-3 rc-in"
+          style={{ maxHeight: "min(var(--radix-popper-available-height, 70vh), calc(100dvh - 140px))" }}
+          className="elevated z-40 flex w-[320px] flex-col overflow-hidden p-3 rc-in"
         >
           <UsageCard
             plan={plan}
@@ -226,6 +236,7 @@ export function ContextInspector({
     undefined,
   );
   const active = shown.find((c) => c.name === picked) ?? largest;
+  const pickedCategory = shown.find((c) => c.name === picked);
   const compactAt = detail?.compactAt;
   const compactedAfter = !!before && !!before.context && !!detail;
   const comparable =
@@ -272,13 +283,20 @@ export function ContextInspector({
           className="flex h-[8px] gap-px overflow-hidden rounded-full bg-fill-strong"
         >
           {shown.length ? (
-            shown.map((c) => (
-              <span
-                key={c.name}
-                className="h-full transition-[width] duration-300 ease-snappy first:rounded-l-full"
-                style={{ width: `${(c.tokens / usage.size) * 100}%`, background: categoryColor(c.name) }}
-              />
-            ))
+            shown.map((c) => {
+              const lit = pickedCategory?.name === c.name;
+              return (
+                <span
+                  key={c.name}
+                  className="h-full transition-[width,opacity] duration-300 ease-snappy first:rounded-l-full"
+                  style={{
+                    width: `${(c.tokens / usage.size) * 100}%`,
+                    background: categoryColor(c.name),
+                    opacity: pickedCategory && !lit ? 0.35 : 1,
+                  }}
+                />
+              );
+            })
           ) : (
             <span
               className="h-full rounded-full transition-[width] duration-300 ease-snappy"
@@ -309,33 +327,43 @@ export function ContextInspector({
           {tiles.map((tile) => {
             const category = shown.find((c) => c.name === tile.key)!;
             const lit = active?.name === category.name;
+            const share = percentOf(category.tokens, usage.size);
+            // Enough room for the full name and a number under it: otherwise no text, only the
+            // tooltip. A cut-off "Ski…" says less than no label at all.
+            const roomy = tile.height > 26 && tile.width > category.name.length * 2.2 + 6;
+            const label = `${category.name} · ${formatTokens(category.tokens)} · ${share}`;
             return (
-              <button
-                key={tile.key}
-                type="button"
-                aria-label={`${category.name}: ${formatTokens(category.tokens)}, ${percentOf(category.tokens, usage.size)}`}
-                aria-pressed={lit}
-                onPointerEnter={() => setPicked(category.name)}
-                onFocus={() => setPicked(category.name)}
-                onClick={() => setPicked(category.name)}
-                className={cx(
-                  "absolute cursor-pointer overflow-hidden rounded-xs text-left transition-[left,top,width,height] duration-300 ease-snappy motion-reduce:transition-none",
-                  lit && "z-10 outline outline-1 outline-fg/70",
-                )}
-                style={{
-                  left: `${tile.x}%`,
-                  top: `${tile.y}%`,
-                  width: `${tile.width}%`,
-                  height: `${tile.height}%`,
-                  background: categoryColor(category.name),
-                }}
-              >
-                {tile.height > 18 && (
-                  <span className="pointer-events-none absolute inset-x-1 top-1 truncate rounded-xs bg-bg/75 px-1 py-0.5 font-medium text-caption text-fg">
-                    {category.name}
-                  </span>
-                )}
-              </button>
+              <Tooltip key={tile.key} label={roomy ? undefined : label} side="top">
+                <button
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={lit}
+                  onPointerEnter={() => setPicked(category.name)}
+                  onFocus={() => setPicked(category.name)}
+                  onClick={() => setPicked(category.name)}
+                  className={cx(
+                    "absolute cursor-pointer overflow-hidden rounded-xs text-left transition-[left,top,width,height] duration-300 ease-snappy motion-reduce:transition-none",
+                    lit && "z-10 outline outline-1 outline-fg/70",
+                  )}
+                  style={{
+                    left: `${tile.x}%`,
+                    top: `${tile.y}%`,
+                    width: `${tile.width}%`,
+                    height: `${tile.height}%`,
+                    background: categoryColor(category.name),
+                    color: categoryInk(category.name),
+                  }}
+                >
+                  {roomy && (
+                    <span className="pointer-events-none absolute inset-x-1.5 top-1 flex flex-col">
+                      <span className="truncate font-medium text-caption">{category.name}</span>
+                      <span className="truncate text-caption tabular opacity-80">
+                        {formatTokens(category.tokens)}
+                      </span>
+                    </span>
+                  )}
+                </button>
+              </Tooltip>
             );
           })}
         </div>
@@ -349,8 +377,8 @@ export function ContextInspector({
             </span>
           </div>
           {active.items?.length ? (
-            <ul className="flex flex-col">
-              {active.items.slice(0, 5).map((item, index) => (
+            <ul className="flex max-h-[132px] flex-col overflow-y-auto">
+              {active.items.map((item, index) => (
                 <li key={`${item.name}-${index}`} className="flex items-center gap-2 py-[2px] text-caption">
                   <span className="flex-1 truncate text-fg-muted" title={item.name}>
                     {item.name}
@@ -360,9 +388,6 @@ export function ContextInspector({
                   </span>
                 </li>
               ))}
-              {active.items.length > 5 && (
-                <li className="py-[2px] text-caption text-fg-faint">+{active.items.length - 5} more</li>
-              )}
             </ul>
           ) : (
             <p className="text-caption text-fg-muted">This harness reports the category's total only.</p>
@@ -443,7 +468,7 @@ function UsageCard({
       : relativeAge(plan.fetchedAt)
     : undefined;
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <span className="font-semibold text-body">Usage</span>
         {plan?.source === "codex" && <span className="text-caption text-fg-faint">from the Codex CLI</span>}
