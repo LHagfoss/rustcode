@@ -1,3 +1,12 @@
+## [v1.17.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.17.0) - 2026-11-07
+
+### Features
+- Accounts are explicit: each harness's subscriptions are chips in its header in the model picker, "Default login" is gone, adding an account signs in from the app, and logins already on the Mac are offered to add. (#3114)
+- Codex accounts: a thread can run on any Codex login (`CODEX_HOME`), chosen and added like a Claude Code account. (#3115)
+- Settings › Statistics shows a best-known cost (reported, or estimated at API list prices) with a redesigned summary, cost-by-model bars and a 30-day chart. (#3112)
+- The project picker lists every project, ranks them by use and opens above its button. Pressing Shift+Enter after using the model picker no longer reopens it, and pasted images sit closer to the message. (#3110)
+- A finished delegate's notice now names it, its harness and how long it worked. (#3111)
+- `bun run mock-window` in `apps/desktop` gives agents one shared, visible Chrome window for UI checks, with real clicks and keys. (#3109, #3113)
 ## [v1.16.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.16.1) - 2026-11-06
 
 ### Features
