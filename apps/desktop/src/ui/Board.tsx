@@ -98,7 +98,7 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
               <span className="truncate">{wt.branch}</span>
             </span>
           ) : (
-            session.cwd && <span>{projectName(session.cwd)}</span>
+            session.cwd && <span className="max-w-full truncate">{projectName(session.cwd)}</span>
           )}
           {harness && <span>· {harness}</span>}
           <span>· {relativeAge(session.updatedAt)}</span>

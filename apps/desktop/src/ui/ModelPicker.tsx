@@ -451,13 +451,20 @@ export function pickerModels(
         : defaultEffort(entry, efforts);
     return { models: listedModels(harness), model, efforts: orderEfforts(efforts), effort };
   }
+  // A new thread on an external harness that has not listed its models yet: its own choice, never
+  // another thread's. `knownConfig` is whichever thread happens to be open, so it can only speak for
+  // the built-in harness: that thread's effort is not this harness's, its model name is not one this
+  // harness runs, and picking an effort here sends the shown model with the choice (`setChoice`).
+  if (harness && !harness.builtin) {
+    return { models: [], model: effective.model, efforts: [], effort: effective.effort };
+  }
+  // The built-in harness, or no snapshot yet: the model and effort list an open thread knows.
   const m = selectOption(knownConfig, "model");
   const e = selectOption(knownConfig, "effort");
-  const builtin = harness?.builtin !== false;
   return {
-    models: builtin ? (m?.choices ?? []) : [],
+    models: m?.choices ?? [],
     model: effective.model ?? m?.current,
-    efforts: builtin ? orderEfforts(e?.choices.map((c) => c.value) ?? []) : [],
+    efforts: orderEfforts(e?.choices.map((c) => c.value) ?? []),
     effort: effective.effort ?? e?.current,
   };
 }

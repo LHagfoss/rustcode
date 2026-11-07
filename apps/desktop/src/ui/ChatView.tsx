@@ -372,10 +372,12 @@ function EmptyState({ banner }: { banner: boolean }) {
   const drafted = useApp((s) => !!(s.drafts.new ?? "").trim());
   const choose = () => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p));
   return (
-    <div className="flex flex-col items-center gap-3.5 pb-6 text-center">
+    <div className="flex min-w-0 max-w-full flex-col items-center gap-3.5 pb-6 text-center">
       {/* A banner is drawn behind the chat instead of the icon. */}
       {!banner && <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />}
-      <h2 className="font-semibold text-title tracking-tight">
+      {/* `max-w-full` beside the heading's own `truncate`: a folder name with no break in it (an
+          extended Windows path, a long branch slug) must ellipsize, not widen the lane. */}
+      <h2 className="min-w-0 max-w-full font-semibold text-title tracking-tight">
         {projectCwd ? (
           <>
             What should we build in{" "}
@@ -396,10 +398,13 @@ function EmptyState({ banner }: { banner: boolean }) {
           "What should we build?"
         )}
       </h2>
-      <div className="flex max-w-[560px] items-center gap-1.5 text-fg-faint text-sub">
-        <Folder size={13} />
-        <span className="truncate">{projectCwd ? displayPath(projectCwd) : "No folder chosen"}</span>
-        <button type="button" onClick={choose} className="text-accent hover:underline">
+      <div className="flex w-full max-w-[560px] min-w-0 items-center justify-center gap-1.5 text-fg-faint text-sub">
+        <Folder size={13} className="shrink-0" />
+        {/* The path elides to what fits and says the whole of it on hover. */}
+        <span className="min-w-0 truncate" title={projectCwd ? displayPath(projectCwd) : undefined}>
+          {projectCwd ? displayPath(projectCwd) : "No folder chosen"}
+        </span>
+        <button type="button" onClick={choose} className="shrink-0 text-accent hover:underline">
           {projectCwd ? "Change" : "Choose…"}
         </button>
       </div>
