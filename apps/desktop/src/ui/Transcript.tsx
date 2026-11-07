@@ -14,6 +14,7 @@ import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
 import {
   foldEnds,
   foldTurns,
+  footerChangeTurns,
   groupTools,
   newestTurnEnd,
   type ToolGroup,
@@ -318,6 +319,12 @@ const SHOW_FULL_PILL = 30;
 
 /** The air above the transcript's first row, under the glass header. */
 export const FIRST_ROW_PAD = 20;
+
+/**
+ * How far past the live end the view rests when an earlier attempt sits below it: enough for that
+ * attempt's divider and the first lines of the turn it kept to read above the composer.
+ */
+const ATTEMPT_PEEK = 100;
 
 /** A turn's change line, wherever it draws: the completion card, else the checkpoint chip. */
 function ChangeLine({ threadId, line }: { threadId: string; line: TurnChangeLine }) {
@@ -635,30 +642,40 @@ export function Transcript({
     return map;
   }, [thread.items, completions, turnCheckpoints]);
 
-  // The newest finished turn keeps its change line in view under its footer; an older turn draws
-  // it as the last row inside its own fold, so it appears only when that turn is opened.
+  // Which turns keep their change line in their own footer: the newest, and one with nothing
+  // folded to hold it (state/fold.ts, footerChangeTurns).
+  const footerLines = useMemo(() => {
+    const ends = thread.items.flatMap((item) => (item.kind === "turnEnd" ? [item.id] : []));
+    return new Set(footerChangeTurns(ends, { last: lastEnd, folded: foldedEnds }));
+  }, [thread.items, lastEnd, foldedEnds]);
+
+  // An older turn with steps draws its change line as the last row inside its own fold, so it
+  // appears only when that turn is opened.
   const foldChanges = useMemo(() => {
     const map = new Map<number, ReactNode>();
     const ends = foldEnds(rows);
     for (const item of thread.items) {
-      if (item.kind !== "turnEnd" || item.id === lastEnd) continue;
+      if (item.kind !== "turnEnd" || footerLines.has(item.id)) continue;
       const at = ends[turnFoldKey(item.id)];
       const line = changeLines[item.id];
       if (at === undefined || !line) continue;
       map.set(at, <ChangeLine threadId={thread.id} line={line} />);
     }
     return map;
-  }, [rows, thread.items, changeLines, lastEnd, thread.id]);
+  }, [rows, thread.items, changeLines, footerLines, thread.id]);
 
-  // The newest turn's line as the footer's props: the completion card, else the checkpoint chip.
+  // Those turns' lines as their footer's props: the completion card, else the checkpoint chip.
   const footerChanges = useMemo(() => {
     const map: Record<string, { completion?: TurnCompletion; changes?: ReactNode }> = {};
-    const line = lastEnd ? changeLines[lastEnd] : undefined;
-    if (line?.kind === "completion") map[lastEnd!] = { completion: line.completion };
-    else if (line?.kind === "checkpoint")
-      map[lastEnd!] = { changes: <ChangeLine threadId={thread.id} line={line} /> };
+    for (const item of thread.items) {
+      if (item.kind !== "turnEnd" || !footerLines.has(item.id)) continue;
+      const line = changeLines[item.id];
+      if (!line) continue;
+      if (line.kind === "completion") map[item.id] = { completion: line.completion };
+      else map[item.id] = { changes: <ChangeLine threadId={thread.id} line={line} /> };
+    }
     return map;
-  }, [changeLines, lastEnd, thread.id]);
+  }, [thread.items, changeLines, footerLines, thread.id]);
 
   // Turn footers that render nothing at all. Nothing measures a row that never mounts, so the
   // virtualizer has to estimate no height for it, or every row below drifts by a footer.
@@ -667,7 +684,7 @@ export function Transcript({
     for (const row of rows) {
       const item = row.item;
       if (item?.kind !== "turnEnd") continue;
-      // Only the newest turn keeps its change line in the footer; an older one folds it.
+      // A turn with a footered change line keeps its footer; an older folded one has none.
       const line = footerChanges[item.id];
       const hidden = turnFooterHidden({
         folded: foldedEnds.has(item.id),
@@ -750,16 +767,25 @@ export function Transcript({
     virtualizer.measure();
   }, [approvalSig, planSig, childSig]);
 
-  // Where the thread's own rows end, past the earlier attempts a rewind kept below it: the view
-  // pins there, so a new turn is never scrolled past into a record the reader is not writing to.
+  // Where the thread's own rows end: the last live row just above the composer, past the earlier
+  // attempts a rewind keeps below it, so a new turn is never scrolled into a record the reader is
+  // not writing to.
   const liveEnd = useCallback((el: HTMLDivElement) => {
     const inner = innerRef.current;
     return Math.max(0, (inner?.offsetHeight ?? el.scrollHeight) - el.clientHeight);
   }, []);
+  // Where the view rests at the thread's end, and what counts as being there. With an earlier
+  // attempt below the live end it rests a little past it, far enough that the divider and the
+  // first lines of the turn it kept read above the composer rather than behind it.
+  const attemptCount = attempts?.length ?? 0;
+  const threadEnd = useCallback(
+    (el: HTMLDivElement) => liveEnd(el) + (attemptCount ? ATTEMPT_PEEK : 0),
+    [attemptCount, liveEnd],
+  );
   const toBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = liveEnd(el);
-  }, [liveEnd]);
+    if (el) el.scrollTop = threadEnd(el);
+  }, [threadEnd]);
 
   // Opening a thread starts at its end.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the thread changes
@@ -782,7 +808,9 @@ export function Transcript({
     return () => observer.disconnect();
   }, [toBottom]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: new rows and new text re-pin
+  // A new earlier attempt re-pins through `toBottom`'s own deps; rows and the composer's room have
+  // none to read, only a moment to act on.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: new rows and a taller composer re-pin
   useLayoutEffect(() => {
     if (pinned.current && !selecting()) toBottom();
   }, [rows, toBottom, bottomInset]);
@@ -849,8 +877,8 @@ export function Transcript({
     const el = scrollRef.current;
     if (!el) return;
     // Reading an earlier attempt is below the thread's end: the pill shows there too.
-    const end = liveEnd(el);
-    const atBottom = el.scrollTop <= end && end - el.scrollTop < 48;
+    const end = threadEnd(el);
+    const atBottom = Math.abs(el.scrollTop - end) < 48;
     pinned.current = atBottom;
     setShowLatest(!atBottom);
     // The turn being read: the last one whose first line is above 30% of the visible part.
@@ -1227,7 +1255,12 @@ export function Transcript({
           </div>
         </div>
         {attempts?.length ? (
-          <EarlierAttempts threadId={thread.id} cwd={thread.cwd} attempts={attempts} />
+          <EarlierAttempts
+            threadId={thread.id}
+            cwd={thread.cwd}
+            attempts={attempts}
+            bottomInset={bottomInset}
+          />
         ) : null}
       </div>
       <TimelineRail
@@ -1247,7 +1280,7 @@ export function Transcript({
           pinned.current = true;
           setShowLatest(false);
           const el = scrollRef.current;
-          el?.scrollTo({ top: liveEnd(el), behavior: "smooth" });
+          el?.scrollTo({ top: threadEnd(el), behavior: "smooth" });
         }}
         aria-hidden={!showLatest}
         tabIndex={showLatest ? 0 : -1}

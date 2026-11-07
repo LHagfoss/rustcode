@@ -3532,7 +3532,7 @@ export async function turnDiff(id: string, turn: number): Promise<PatchFile[]> {
 }
 
 /**
- * Rewind here: put the files back to before a turn's checkpoint, and the conversation with them
+ * Rewind to before turn N: put the files back to that turn's checkpoint, and the conversation with them
  * when the harness can rewind. With `keep`, the state it abandons is kept as a checkpoint first,
  * so the attempt it leaves can be returned to. The restored files and the reloaded conversation
  * are the feedback; the caller says what happened to the transcript.

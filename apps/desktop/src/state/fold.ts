@@ -97,6 +97,19 @@ export function turnFoldKey(endId: string): string {
 export type FoldBlockRow = { key: string; inFold?: string; fold?: TurnFold; group?: ToolGroup };
 
 /**
+ * The finished turns that draw their change line in their own footer: the newest one, which keeps
+ * it in view, and any turn with nothing folded. A turn whose work was only a reply has no
+ * `Worked for …` row to hold the line, so folding it away would hide the turn's changes for good.
+ * An older turn with steps keeps its line inside its fold, so it is there when the turn is opened.
+ */
+export function footerChangeTurns(
+  ends: readonly string[],
+  { last, folded }: { last?: string; folded: ReadonlySet<string> },
+): string[] {
+  return ends.filter((id) => id === last || !folded.has(id));
+}
+
+/**
  * Where each open fold's steps end, by fold key: the row index of its last step.
  * An older turn's change line draws there, as the last row inside its fold, so
  * it appears only when the reader has opened that turn's `Worked for …`. A fold

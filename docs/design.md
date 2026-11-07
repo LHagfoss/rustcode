@@ -716,13 +716,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   A turn's changes are one line, never two: the completion card
   (`N files changed +A −R ›`, with the checks and the files it opens)
   where the harness reported one, else the checkpoint's `Changes +A −R`
-  chip (which also holds Rewind here). The two sources are picked once per
-  turn, so the numbers can't disagree. The newest finished turn keeps the
-  line in view above its footer; an older turn's change line folds with
-  its steps, as the last row inside that turn's `Worked for 2m`, so it is
-  there when the turn is opened and out of the way when scrolling past
-  (and its Rewind here goes with it). The right panel's Changes view is the
-  thread's own and stays as it is.
+  chip (which also holds *Rewind to before turn N*). The two sources are
+  picked once per turn, so the numbers can't disagree. The newest finished
+  turn keeps the line in view above its footer, and so does a turn with
+  nothing folded: a turn whose work was only a reply has no `Worked for 2m`
+  row to hold the line, and hiding it there would lose the turn's changes
+  entirely. An older turn that did fold keeps its line as the last row
+  inside its `Worked for 2m`, so it is there when the turn is opened and out
+  of the way when scrolling past (and its rewind goes with it). The right
+  panel's Changes view is the thread's own and stays as it is.
   Opening the fold shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
   under a transition; Reduce motion makes it instant). A `<button
@@ -731,11 +733,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   folded; find in thread opens them all while it searches. Folded steps are
   not rows at all, so the virtualizer and the timeline rail have fewer.
 - **Rewind an attempt.** A checkpoint is an attempt, not a one-shot restore:
-  *Rewind here*, in a turn's Changes chip, puts the files back to before that
-  turn — and the conversation with them when the harness rewinds — and keeps
-  the turns it leaves as an **earlier attempt**: the same rows, faded to 50%,
-  under an *Earlier attempt* divider at the foot of the transcript (a hairline
-  with `History`, how many turns it held, and *Go back to this attempt*). They
+  *Rewind to before turn N*, in a turn's Changes chip, puts the files back to
+  before that turn (the chip names it because that turn goes too) — and the
+  conversation with them when the harness rewinds — and keeps the turns it
+  leaves as an **earlier attempt**: the same rows, faded to 50%, under an
+  *Earlier attempt* divider at the foot of the transcript (a hairline with
+  `History`, how many turns it held, and *Go back to this attempt*). The
+  block starts right under the last live turn — it takes over the room the
+  transcript reserves for the composer instead of sitting below that blank —
+  and keeps the same room under its own last row, so the faded turns scroll
+  clear of the composer. The view rests a little past the live end when an
+  attempt follows, so the divider and the first lines it kept read above the
+  composer rather than behind it. The turns
   stay readable and clickable — messages select and copy, a reply's footer
   copies it, a turn's Changes opens its diff — but nothing in them sends the
   thread on. The divider's *Go back* puts the files where that attempt ended,

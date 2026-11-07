@@ -31,17 +31,26 @@ export function EarlierAttempts({
   threadId,
   cwd,
   attempts,
+  bottomInset,
 }: {
   threadId: string;
   /** The folder the abandoned turns ran in: their tool rows read paths against it. */
   cwd: string;
   /** Newest first, as the store keeps them. */
   attempts: readonly Attempt[];
+  /** The room the composer takes at the foot, so the record ends where the thread does. */
+  bottomInset: number;
 }) {
   const checkpoints = useApp((s) => s.checkpoints[threadId]);
   if (!attempts.length) return null;
   return (
-    <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-7 pt-7 pb-4">
+    <div
+      className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-7 pt-7"
+      // The transcript reserves the composer's room below its rows; this block takes it over: it
+      // starts right under the last live row instead of after that blank, and keeps the same room
+      // under its own last row so the faded turns can be scrolled clear of the composer.
+      style={{ marginTop: -bottomInset, paddingBottom: bottomInset }}
+    >
       {attempts.map((attempt) => (
         <EarlierAttempt
           key={attempt.id}

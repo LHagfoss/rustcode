@@ -1,9 +1,11 @@
 // The "Changes" chip under a finished turn: what that turn changed, from its
-// checkpoint (`_rustcode/checkpoints/diff`), and Rewind here, which goes back
-// to before the turn (files and conversation when the harness can rewind) and
-// keeps the turns it leaves as an earlier attempt (state/attempts.ts). A turn
-// the harness reported a completion for draws that card instead, so a turn
-// never shows its changes twice (state/fold.ts `turnChangeLine`).
+// checkpoint (`_rustcode/checkpoints/diff`), and Rewind to before turn N, which
+// goes back to just before that turn (files and conversation when the harness
+// can rewind) and keeps the turns it leaves as an earlier attempt
+// (state/attempts.ts). The label names the turn, because the rewind undoes that
+// turn too: a chip that said "this turn" would read as keeping it. A turn the
+// harness reported a completion for draws that card instead, so a turn never
+// shows its changes twice (state/fold.ts `turnChangeLine`).
 
 import { FileDiff, History } from "lucide-react";
 import { Popover } from "radix-ui";
@@ -68,9 +70,9 @@ export function TurnChanges({
               <Pill
                 disabled={running}
                 onClick={rewindTo}
-                title={running ? "Stop the turn first" : rewindNote(rewind)}
+                title={running ? "Stop the turn first" : rewindNote(rewind, checkpoint.turn)}
               >
-                <History size={12} /> Rewind here
+                <History size={12} /> Rewind to before turn {checkpoint.turn}
               </Pill>
             )}
           </div>
@@ -97,10 +99,10 @@ export function TurnChanges({
 }
 
 /** What the pill says above it, so the outcome is not a surprise: the conversation goes too, or not. */
-function rewindNote(rewind: boolean): string {
+function rewindNote(rewind: boolean, turn: number): string {
   return rewind
-    ? "Put the files and the conversation back to before this turn; the turns it leaves stay below as an earlier attempt"
-    : "Put the files back to before this turn; this harness cannot rewind the conversation";
+    ? `Put the files and the conversation back to before turn ${turn}; it and the turns after it stay below as an earlier attempt`
+    : `Put the files back to before turn ${turn}; this harness cannot rewind the conversation`;
 }
 
 /** The shape of two changed files: their header line, then the patch's lines. */
