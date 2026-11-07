@@ -25,6 +25,7 @@ import {
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
+import { type PlanClocks, planCardShown, type SteerNote, steerMarks } from "../state/steer";
 import { RESUME_TEXT, shortcutFor, steeringOf, turnState, useApp } from "../state/store";
 import {
   type QueuedPrompt,
@@ -43,7 +44,7 @@ import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { EarlierAttempts } from "./EarlierAttempts";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
-import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
+import { LeavingQueuedRow, QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
 import {
   AssistantRow,
   CompletionCard,
@@ -63,19 +64,23 @@ import {
   WorkingRow,
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
+import { SteerMark } from "./SteerMark";
 import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
 export type Row = {
   key: string;
   item?: TranscriptItem;
-  working?: true;
+  /** The running turn's header; on the moment it ends, `done` holds its check. */
+  working?: { done?: boolean; elapsedMs?: number };
   /** Two or more subagents in a row, shown as one. */
   agents?: { items: Extract<TranscriptItem, { kind: "tool" }>[]; open: boolean };
   /** The threads a run of `start_session` calls started, shown as one row or card. */
   threads?: { links: Link[]; open: boolean };
   /** The running turn's foot: what it does now, when no row of its own shows it. */
   activity?: string;
+  /** The turn ended while the foot was the live line: it settles on a check. */
+  activityDone?: boolean;
   /** The thread's background work, when no turn of its own runs (state/waiting.ts). */
   waiting?: Waiting;
   /** A request from a thread below this one, at the foot (state/pending.ts). */
@@ -89,8 +94,14 @@ export type Row = {
   approval?: PermissionRequest;
   /** Which of the thread's waiting approvals it is, from 1: `2 of 3`. */
   approvalNumber?: number;
-  /** The plan a paused thread keeps to, at the foot. */
-  plan?: { threadId: string; entries: PlanEntry[] };
+  /** The plan a thread keeps to, at the foot: the one a turn works through, and the one it waits on. */
+  plan?: {
+    threadId: string;
+    entries: PlanEntry[];
+    running: boolean;
+    steers: SteerNote[];
+    clocks: PlanClocks;
+  };
   /** A message waiting for the thread, at the end of it. */
   queued?: {
     item: QueuedPrompt;
@@ -104,6 +115,10 @@ export type Row = {
   };
   /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
   queueWake?: { line: string; text: string };
+  /** A steering note the plan cannot hold, drawn under the message it was sent as. */
+  steerNote?: SteerNote;
+  /** A queued row a steer just took: it is gliding out of the stack on its way to the transcript. */
+  leaving?: QueuedPrompt;
   /** Resume, under a queue a stopped or failed turn held. */
   resume?: { threadId: string; count: number };
 };
@@ -136,6 +151,32 @@ function useNow(active: boolean) {
     return () => clearInterval(t);
   }, [active]);
   return now;
+}
+
+/** How long the finished turn's live header holds its check before the fold replaces it. */
+const TURN_SETTLE_MS = 400;
+
+/**
+ * The turn that just completed: its footer's id, for a moment after `running` falls and a new
+ * footer appears, so its live header can settle on a check instead of vanishing. A thread switch,
+ * the next turn, or a stop that added no footer clears it.
+ */
+function useTurnSettle(threadId: string, running: boolean, endId: string | undefined): string | undefined {
+  const [settling, setSettling] = useState<string | undefined>(undefined);
+  const before = useRef({ threadId, running, endId });
+  useLayoutEffect(() => {
+    const previous = before.current;
+    before.current = { threadId, running, endId };
+    if (previous.threadId !== threadId || running) {
+      setSettling(undefined);
+      return;
+    }
+    if (!previous.running || !endId || endId === previous.endId) return;
+    setSettling(endId);
+    const timer = setTimeout(() => setSettling(undefined), TURN_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [threadId, running, endId]);
+  return settling;
 }
 
 /**
@@ -308,6 +349,8 @@ export function Transcript({
   const pinned = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
   const now = useNow(thread.running);
+  const latestEndId = thread.items.findLast((item) => item.kind === "turnEnd")?.id;
+  const settlingId = useTurnSettle(thread.id, thread.running, latestEndId);
 
   // Finished turns fold into one summary row each (state/fold.ts); find opens them all so it can reach every step.
   const [open, setOpen] = useState<ReadonlySet<string>>(() => openFolds.get(thread.id) ?? NO_FOLDS);
@@ -322,6 +365,14 @@ export function Transcript({
     [thread.id],
   );
   const searching = !!find?.query;
+  // The turn that just ended, while its finished header can still hold its check: the latest end
+  // is a completed turn and its fold is closed (an open fold already shows the steps).
+  const settleEnd = useMemo(() => {
+    if (!settlingId || thread.running) return undefined;
+    const end = thread.items.find((item) => item.id === settlingId);
+    if (end?.kind !== "turnEnd" || end.outcome !== "completed") return undefined;
+    return (searching ? ALL_OPEN : open).has(turnFoldKey(end.id)) ? undefined : end;
+  }, [settlingId, thread.running, thread.items, searching, open]);
   // A subagent's steps fold into its own row instead of filling the thread.
   const { items: visible, steps: subagentSteps } = useMemo(
     () => splitSubagentSteps(thread.items),
@@ -344,7 +395,11 @@ export function Transcript({
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
     const shown = searching ? ALL_OPEN : open;
-    const grouped: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown);
+    const grouped: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown).filter(
+      // The turn that just finished keeps its live header for a moment instead of its fold
+      // divider: the header settles on a check and then becomes this divider.
+      (row) => !(settleEnd && "fold" in row && row.fold?.key === turnFoldKey(settleEnd.id)),
+    );
     // Subagents started together read as one row (`3 agents · 2 working`), and so do the
     // threads a run of `start_session` calls started (`2 threads · done`).
     const kindOf = (r?: Row): "agents" | "threads" | undefined => {
@@ -405,8 +460,9 @@ export function Transcript({
       else loose.push(row);
     }
     out.push(...loose);
-    if (thread.running) {
-      // `Working for 12s` heads the turn, under the message that started it.
+    if (thread.running || settleEnd) {
+      // `Working for 12s` heads the turn, under the message that started it; when the turn just
+      // ended, the same row holds a green check for a moment instead of vanishing.
       let at = out.length;
       for (let i = out.length - 1; i >= 0; i--) {
         if (out[i]!.item?.kind === "user") {
@@ -414,16 +470,25 @@ export function Transcript({
           break;
         }
       }
-      out.splice(at, 0, { key: "working", working: true });
+      out.splice(at, 0, {
+        key: "working",
+        working: { done: !thread.running, elapsedMs: settleEnd?.elapsedMs },
+      });
       // The foot says what it does now unless the last row already does (a call
       // or thought still running, a reply streaming).
-      const last = out.at(-1)?.item;
+      const last = out.filter((row) => row.item?.kind !== "turnEnd").at(-1)?.item;
       const shows =
         (last?.kind === "tool" && (last.status === "in_progress" || last.status === "pending")) ||
         (last?.kind === "thought" && !last.done) ||
         last?.kind === "assistant";
       // With an approval waiting, the turn is not working: the row that asks is the foot.
-      if (!shows && !waiting) out.push({ key: "activity", activity: workingLabel(visible) });
+      const activity = workingLabel(visible);
+      if (!shows && !waiting && !(settleEnd && activity === "Working"))
+        out.push({
+          key: "activity",
+          activity,
+          activityDone: !!settleEnd,
+        });
     } else if (wait) out.push({ key: "waiting", waiting: wait });
     // What a thread below this one asks sits at the foot with the waiting line, oldest first; the
     // first one that can take the keyboard does, so a key never answers another thread's card too.
@@ -435,10 +500,20 @@ export function Transcript({
         childKeys: ownKeys && i === 0,
       });
     });
-    // The plan a paused thread still has work on, at the foot: what is left, and Implement. A
-    // finished plan, or one a running turn is working through, is not repeated here.
-    if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
-      out.push({ key: "plan", plan: { threadId: thread.id, entries: thread.plan } });
+    // The plan a thread works to, at the foot: while a turn runs it is live (the step it is on, and
+    // the notes it was handed there), and once the thread waits on you it keeps what is left and
+    // Implement. A plan with nothing left still shows where a steering note landed.
+    if (planCardShown(thread.plan, thread.steers))
+      out.push({
+        key: "plan",
+        plan: {
+          threadId: thread.id,
+          entries: thread.plan,
+          running: thread.running,
+          steers: thread.steers,
+          clocks: thread.planClocks,
+        },
+      });
     // What waits for the thread comes after all of it: its queued messages, the one quiet line a
     // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
     // the transcript, and the pinned view follows them like any other row.
@@ -464,14 +539,25 @@ export function Transcript({
     });
     if (queue.resumable)
       out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
+    // Rows a steer just took keep the stack's place while they glide up toward the transcript.
+    for (const item of thread.departing ?? []) out.push({ key: `leaving-${item.id}`, leaving: item });
+    // A steering note the plan does not hold says where it took effect, under the message it was
+    // sent as. It is its own row, outside the turn's fold, so it stays readable once that folds.
+    for (const note of steerMarks(thread.steers, thread.plan).inline) {
+      const at = out.findIndex((r) => r.item?.id === note.id);
+      if (at >= 0) out.splice(at + 1, 0, { key: `steer-${note.id}`, steerNote: note });
+      else out.push({ key: `steer-${note.id}`, steerNote: note });
+    }
     return out;
-  }, [visible, subagentSteps, started, links, thread, open, searching, wait, childRequests]);
-  // Footers of folded turns: their time is in the summary row, not repeated.
+  }, [visible, subagentSteps, started, links, thread, open, searching, wait, childRequests, settleEnd]);
+  // Footers of folded turns: their time is in the summary row, not repeated. The turn that just
+  // finished still counts as folded while its live header holds the place of that summary row.
   const foldedEnds = useMemo(() => {
     const set = new Set<string>();
     for (const row of rows) if (row.fold) set.add(row.fold.key.slice("fold-".length));
+    if (settleEnd) set.add(settleEnd.id);
     return set;
-  }, [rows]);
+  }, [rows, settleEnd]);
 
   // Folded turns that wrote no answer: their summary row says the time, so the footer leaves it out.
   // Only when the header itself carries a time (`TurnFoldRow`): a `turnEnd` without one would
@@ -1023,7 +1109,17 @@ export function Transcript({
                         keys={row.childKeys}
                       />
                     ) : row.plan ? (
-                      <PlanCard threadId={row.plan.threadId} entries={row.plan.entries} />
+                      <PlanCard
+                        threadId={row.plan.threadId}
+                        entries={row.plan.entries}
+                        running={row.plan.running}
+                        steers={row.plan.steers}
+                        clocks={row.plan.clocks}
+                      />
+                    ) : row.steerNote ? (
+                      <SteerMark note={row.steerNote} />
+                    ) : row.leaving ? (
+                      <LeavingQueuedRow item={row.leaving} />
                     ) : row.agents ? (
                       <SubagentGroupRow
                         items={row.agents.items}
@@ -1052,9 +1148,14 @@ export function Transcript({
                     ) : row.resume ? (
                       <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (
-                      <WorkingRow startedAt={thread.turnStartedAt} now={now} />
+                      <WorkingRow
+                        startedAt={thread.turnStartedAt}
+                        now={now}
+                        done={row.working.done}
+                        elapsedMs={row.working.elapsedMs}
+                      />
                     ) : row.activity ? (
-                      <LiveActivityRow label={row.activity} />
+                      <LiveActivityRow label={row.activity} done={row.activityDone} />
                     ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
                       <div className="flex items-center gap-2 text-caption text-fg-faint">
                         <span className="h-px flex-1 bg-border" />

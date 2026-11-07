@@ -70,9 +70,11 @@ import {
 } from "./primitives";
 import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
+import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
+import { WhileAwayCard } from "./WhileAway";
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -85,8 +87,10 @@ function PlanButton({ thread }: { thread: ThreadState }) {
           className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 font-medium text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           <ListChecks size={13} />
-          <span className="tabular">
-            {done}/{thread.plan.length}
+          <span className="flex items-center gap-0.5 tabular">
+            <RollingNumber value={done} />
+            <span className="text-fg-faint">/</span>
+            <RollingNumber value={thread.plan.length} />
           </span>
         </button>
       </Popover.Trigger>
@@ -687,6 +691,12 @@ export function ChatView() {
       */}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            className="pointer-events-none absolute inset-x-3 z-20 mx-auto max-w-[var(--rc-chat-content-max-width)] sm:inset-x-12"
+            style={{ top: HEADER_HEIGHT + 8 }}
+          >
+            <WhileAwayCard className="pointer-events-auto" />
+          </div>
           {showsPending && setup ? (
             // Preferred over the thread: while its message is still arriving, the screen that has it
             // is this one, and the row it draws is the row the transcript draws (`FIRST_ROW_PAD`).
