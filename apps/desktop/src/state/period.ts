@@ -190,6 +190,16 @@ export function dailySeries(rows: readonly UsageRow[], days: readonly string[]):
   });
 }
 
+/**
+ * A tile's sparkline values. A day nothing was reported for is a zero, never a
+ * gap: the line has to span the period, or a store whose cost was reported on
+ * two days and blank on the rest would draw a dash at one edge. The exact
+ * figures and their caveats are in the tile's value and note, not the line.
+ */
+export function sparklineSeries(values: readonly (number | undefined)[]): number[] {
+  return values.map((value) => value ?? 0);
+}
+
 /** A path over the values that are known, at `width` × `height`; empty when none is. */
 export function sparklinePath(
   values: readonly (number | undefined)[],

@@ -9,6 +9,7 @@ import {
   previousRows,
   rangeDays,
   sparklinePath,
+  sparklineSeries,
   statsRange,
   sumRows,
   trend,
@@ -125,6 +126,33 @@ describe("a day at a time", () => {
 
   test("every day recorded uses the days the rows name, oldest first", () => {
     expect(dailySeries(rows, []).map((point) => point.day)).toEqual(["2026-11-08", "2026-11-10"]);
+  });
+
+  test("the mock's shape: cost and tokens on a few days, blank on the rest", () => {
+    // A month of days, as the mock answers `groupBy=day`: only a handful of days
+    // have a row, and one of them reported no cost and no output.
+    const days = rangeDays("2026-09-01", 30);
+    const rows = [
+      row({ day: days[2]!, cost: 0.4, input: 100, output: 10 }),
+      row({ day: days[9]!, cost: 1.2, input: 200, output: 20 }),
+      row({ day: days[27]!, cost: undefined, input: 300, output: undefined }),
+    ];
+    const points = dailySeries(rows, days);
+    // Two days reported a cost; three reported tokens (the last one only input).
+    expect(points.filter((point) => point.cost === undefined)).toHaveLength(28);
+    expect(points.filter((point) => point.tokens === undefined)).toHaveLength(27);
+
+    // The tile's line is full width: a blank day sits at zero, so no day is a gap.
+    const cost = sparklineSeries(points.map((point) => point.cost));
+    const tokens = sparklineSeries(points.map((point) => point.tokens));
+    expect(cost).toHaveLength(30);
+    expect(cost.filter((value) => value === 0)).toHaveLength(28);
+    for (const series of [cost, tokens]) {
+      const path = sparklinePath(series, 100, 24);
+      expect(path.match(/[ML]/g)).toHaveLength(30);
+      expect(path.startsWith("M0.00 ")).toBe(true);
+      expect(path.includes("L100.00 ")).toBe(true);
+    }
   });
 
   test("a sparkline breaks at a day with nothing and stays empty with no numbers", () => {

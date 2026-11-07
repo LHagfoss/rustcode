@@ -11,7 +11,7 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { count } from "../lib/plural";
-import { type DayPoint, sparklinePath, type Trend } from "../state/period";
+import { type DayPoint, sparklinePath, sparklineSeries, type Trend } from "../state/period";
 import { cx } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
 import { Choice } from "./settingsKit";
@@ -80,13 +80,9 @@ export function Tile({
   series: (number | undefined)[];
   seriesLabel: string;
 }) {
-  // One or two reported days would draw a lone dash: with fewer than three,
-  // the whole period is drawn and its empty days sit on the zero baseline, the
-  // way the Turns tile always reads.
-  const known = series.filter((value) => value !== undefined).length;
-  const drawn = known >= 3 ? series : series.map((value) => value ?? 0);
-  // One day is a point, not a line: the tile keeps its shape but draws nothing.
-  const path = series.length > 1 ? sparklinePath(drawn, 100, 24) : "";
+  // A day with nothing reported is a zero here, so every tile draws the same
+  // full-width line as Turns; one day is a point, not a line, and draws nothing.
+  const path = series.length > 1 ? sparklinePath(sparklineSeries(series), 100, 24) : "";
   return (
     <div className="flex min-w-0 flex-col rounded-xl border border-border-strong bg-surface-2/40 px-4 py-3.5">
       <div className="flex min-h-5 items-center gap-2">
