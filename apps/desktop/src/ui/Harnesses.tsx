@@ -12,6 +12,7 @@ import {
   accountSignIn,
   capabilityRows,
   commandLine,
+  groupHarnesses,
   harnessStatus,
   normalizeDefault,
   orderHarnesses,
@@ -385,7 +386,8 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   // RustCode turns off only once another harness starts new threads: the engine refuses otherwise.
   const isDefault = useApp((s) => s.harnesses?.default.harness === harness.id);
   const pinned = local && isDefault && harness.enabled;
-  const custom = !local && !["codex", "claude-code", "gemini", "opencode", "pi"].includes(harness.id);
+  // The engine says which harnesses are standard; only a hand-added one can go.
+  const custom = !harness.known;
   // Sign in stays out of the way once the harness is known to be signed in.
   // A harness with named accounts signs in per account, in the Accounts list;
   // its own sign-in button would be the wrong one.
@@ -546,9 +548,22 @@ export function HarnessListSkeleton({ rows = 3 }: { rows?: number }) {
 }
 
 export function HarnessList({ snapshot }: { snapshot: HarnessSnapshot }) {
+  // The agents RustCode ships with, then the ones the user added by hand.
+  const { standard, custom } = groupHarnesses(snapshot.harnesses);
   return (
     <div className="divide-y divide-border">
-      {orderHarnesses(snapshot.harnesses).map((h) => (
+      {standard.map((h) => (
+        <HarnessCard key={h.id} harness={h} />
+      ))}
+      {custom.length > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-2 px-4 pt-3 pb-1">
+          <span className="font-medium text-caption text-fg-muted">Added by hand</span>
+          <span className="text-caption text-fg-faint">
+            From <code className="font-mono">[[harnesses]]</code> in config.toml
+          </span>
+        </div>
+      )}
+      {custom.map((h) => (
         <HarnessCard key={h.id} harness={h} />
       ))}
     </div>

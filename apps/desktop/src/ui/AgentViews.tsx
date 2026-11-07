@@ -548,9 +548,9 @@ export function AgentGroupHeader({
   /** The group's agents: their marks are stacked in place of the one what-runs-it mark. */
   agents?: readonly StackAgent[];
   state: AgentState;
-  /** `2 agents`, `3 threads`: the count and what it counts. */
+  /** `2 agents`, `5 running`: the count and what it counts. */
   label: string;
-  /** What follows the count after its `·`: `2 working · 1 needs you`, `done`. */
+  /** What follows the count after its `·`: `2 need you`; empty when the label says it all. */
   status: string;
   elapsedMs?: number;
   open: boolean;
@@ -566,7 +566,7 @@ export function AgentGroupHeader({
       )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span className="shrink-0 font-medium text-fg text-sub">{label}</span>
-        {/* A header whose label already says it (`34 delegates done`) has no second word. */}
+        {/* A live header's second word (`2 need you`); one whose label says it all has none. */}
         {status && (
           <span
             className={cx(

@@ -526,6 +526,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   A row's second line reads the worktree branch, then what the thread's calls
   changed (`font-mono +N −N` in `success`/`danger`), for a thread the app has
   already read; one it has not opened shows neither, rather than a made-up zero.
+  The first line ends with one status chip and nothing else: `Working 57:13`
+  (the row's only spinner, then the running turn's clock in `tabular`),
+  `Waiting`, `Needs you`, `Failed` or `Review`, a pill on its tone at 12–16%
+  (`warning`, `accent`, `muted` for a wait, `danger`, `accent`), with what it
+  waits on in its tooltip. A row that is idle or settled shows its age there
+  instead, in the same slot: one state per row, never a spinner on each line.
+  Logic: `state/sidebarRows.ts` `rowStatus`.
 - **Delegated threads:** a thread an agent started has no row of its own while
   its parent exists, and it is nested from its first frame: the parent
   is recorded on the thread when it is created (`_meta.rustcode.parent`, carried
@@ -535,13 +542,19 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   parent's second line ends with a stack of at most three 16px circles
   (`ui/AgentStack.tsx`), each with a 1.5px ring in the sidebar's surface so the
   overlapping marks stay apart, the harness glyph filling 60% of the circle,
-  the circles overlapping by 30% of the diameter, then `+N` past the third and
-  one quiet accent spinner while anything works. What needs you comes first,
+  the circles overlapping by 30% of the diameter, then `+N` past the third.
+  A mark never spins: the row's one spinner is in the status chip above, so the
+  stack stays still and what it cannot say in a glyph is in its tooltip. What
+  needs you comes first,
   and the stack's state is one badge for the whole stack rather than one per
   mark: an 8px ringed dot on the last circle, in `warning` when something needs
   you, in `danger` when something failed; finished delegates draw neither a
   badge nor a count. The slot is a fixed 74px, so a count going from one to
-  three never moves the title's start, the age or the status. Hovering lists
+  three never moves the title's start, the age or the status; it ends on the
+  same right edge as the chip above. In front of the marks a row that works for
+  another thread shows ↳, and nothing counts messaged threads: the threads it
+  started are the marks, and one it messaged is what makes the chip say
+  `Waiting`. Hovering lists
   the running threads and their state, and the row opens the parent. The open
   delegate itself is drawn as an indented row, with a subtle tree line, directly
   under its parent's row, unfolding in with the list's fold motion and folding
@@ -688,8 +701,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   and the row's own `pt-1`, separate them. The model reads as its own name and
   effort, plain on the card, `bg-fill-strong` only while its popover is open;
   the **+** rests on `bg-fill-subtle` (`bg-fill` on hover). The popover opens
-  on the effort, the control changed most: Fast mode and a reset on top, the
-  level as a large accent word, the model's name under it, a 20px pill track
+  on the effort, the control changed most: the level and the model's name on
+  one header row, with Fast mode and the reset at its end, a 20px pill track
   with one dot per level the model itself lists, the part up to a 24px round
   thumb filled in the accent (a press or a drag lands on the nearest dot, ←/→
   step one, a hover names it), and the harness's logins below while it has more

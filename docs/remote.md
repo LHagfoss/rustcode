@@ -65,6 +65,25 @@ The gateway runs in the background when started by `/remote`; output goes to
 `remote/gateway.log` in the configuration directory. It keeps running when the
 terminal exits; `rustcode remote stop` stops it.
 
+## From the desktop app
+
+The macOS app ([desktop.md](desktop.md)) has the same switch without a
+terminal: **Settings › Setup › Remote access**. It starts the gateway, shares
+the threads the app has open on the built-in harness, and shows the gateway
+address with the pairing QR code, the eight-digit code, its countdown and the
+fixed allowance of five wrong codes (it has no live count of the attempts
+left). Pairing there is the same challenge as `/remote pair`: scan the code or
+type the address and code, and the phone sees the shared threads and can open
+one, send a prompt and resolve an approval. A new device shows as *Paired
+‹name›* and the used code is taken down at once. A thread opened
+after remote access was turned on is shared from the page's *Open threads*
+row, which also says how many devices are attached. A thread on an external
+harness (Claude Code, Codex, Pi) is listed but cannot be shared: only ACP
+sessions register with the gateway. Turning the switch off stops the gateway
+for the whole machine, as `/remote off` does, including shares a terminal
+started; the paired devices stay paired, and revoking one is still
+`rustcode remote revoke <device>`.
+
 ## Automatic address selection
 
 Without `--bind` or a configured bind, `auto` chooses an active Wi-Fi/Ethernet
