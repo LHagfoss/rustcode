@@ -1,16 +1,15 @@
-// Which logins a thread may run on, and which the app offers.
+// Which logins a thread runs on, and which the app offers.
 //
+// With named accounts, the harness's own login is never offered: a thread runs
+// on a named account or, for a thread that already started on the harness's
+// own sign-in before accounts existed, on that sign-in ("Original login").
 // The engine's harness `auth` cannot say for Claude Code: it has no cheap
 // sign-in command (`auth_probe: None` in `rustcode/engine/src/harness/mod.rs`),
-// so its `auth` is always `unknown`, signed in or not. The plan read
-// (`_rustcode/usage/plans`) is what reports a login as signed out: the default
-// login and the account of the thread on screen every few minutes while the
-// composer's meter is on, and each named account's own row when Settings › Usage
-// is shown or refreshed. An answer often holds one login's row only, so a row
-// that is absent says nothing about that login.
+// so its `auth` is always `unknown`, signed in or not. That is why a named
+// account, once one exists, is always the choice for a new thread.
 
 import { harnessPlanKey, planKey, planOf, type UsagePlan } from "../acp/rustcode";
-import type { Harness, HarnessAccount } from "../acp/types";
+import type { Harness, HarnessAccount, HarnessSnapshot } from "../acp/types";
 
 /**
  * The logins the last plan read found signed out, by cache key: the harness
@@ -37,51 +36,73 @@ export function signedOutFrom(plans: UsagePlan[], before: SignedOutLogins = {}):
 }
 
 /**
- * Whether a harness's default login is signed out while named accounts can
- * carry threads: the one case where it is offered nowhere. With no named
- * account, the default login is all there is and stays as it is today.
+ * How good a login is for a thread that must pick one: a sign-in found first,
+ * then one not looked at yet (usually signed in), then one known to be signed
+ * out, whether its own `auth` says so or the plan read did.
  */
-export function defaultLoginGone(harness: Harness | undefined, signedOut: SignedOutLogins): boolean {
-  return !!harness && (harness.accounts?.length ?? 0) > 0 && !!signedOut[harnessPlanKey(harness.id)];
+function accountRank(
+  account: HarnessAccount,
+  harness: string | undefined,
+  signedOut: SignedOutLogins,
+): number {
+  if (harness && accountSignedOut(harness, account.id, signedOut)) return 2;
+  if (account.auth === "ok") return 0;
+  if (account.auth === "unknown") return 1;
+  return 2;
 }
 
 /**
- * The named account to run on when the default login cannot. A login whose
- * credentials are only in the macOS Keychain reads `unknown` until Settings ›
- * Agents probes it, so `unknown` is not "signed out": when none reports `ok`,
- * the first named account stands in rather than a default login known to fail.
+ * The named account to run on, best first: `ok`, then `unknown` (only the
+ * macOS Keychain could tell), then a login known to be signed out. A known
+ * signed-out login is the last resort, never the first pick: the harness's own
+ * sign-in is no longer offered once there is a choice. The list's order
+ * decides between equals.
  */
-export function firstSignedInAccount(accounts: HarnessAccount[] | undefined): string | null {
+export function firstSignedInAccount(
+  accounts: HarnessAccount[] | undefined,
+  harness?: string,
+  signedOut: SignedOutLogins = {},
+): string | null {
   const list = accounts ?? [];
-  return (list.find((account) => account.auth === "ok") ?? list[0])?.id ?? null;
+  let best: HarnessAccount | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const account of list) {
+    const rank = accountRank(account, harness, signedOut);
+    if (rank < bestRank) {
+      best = account;
+      bestRank = rank;
+    }
+  }
+  return best?.id ?? null;
 }
 
 /**
- * The account a new thread on `harness` starts on when nobody chose one: the
- * chosen account while it is still there, else the first signed-in named one
- * once the default login is known to be signed out, else the default login.
+ * The account a new thread on `harness` starts on: the chosen account while it
+ * can run (signed in, or not looked at), else no account at all when the
+ * harness has none (it runs on its own sign-in and no account UI is shown),
+ * else the best named account. `null` is never chosen while named accounts
+ * exist, and a login known to be signed out is not chosen over a better one.
  */
 export function newThreadAccountOn(
   harness: Harness | undefined,
   chosen: string | null,
-  signedOut: SignedOutLogins,
+  signedOut: SignedOutLogins = {},
 ): string | null {
   const accounts = harness?.accounts ?? [];
-  if (chosen && accounts.some((account) => account.id === chosen)) return chosen;
-  if (!defaultLoginGone(harness, signedOut)) return null;
-  return firstSignedInAccount(accounts);
+  const found = accounts.find((account) => account.id === chosen);
+  if (found && accountRank(found, harness?.id, signedOut) < 2) return found.id;
+  return firstSignedInAccount(accounts, harness?.id, signedOut);
 }
 
 /**
  * The account a thread started by another thread (`start_session`, `fan_out`)
  * runs on: the parent's own account when the child runs on the same harness,
- * else what a new thread would start on. Without this, a delegated Claude
- * thread lands on a default login that is signed out and cannot run.
+ * else what a new thread would start on.
  */
 export function childAccountOn(
   harness: Harness | undefined,
   parent: { harness?: string; account?: string | null } | undefined,
-  signedOut: SignedOutLogins,
+  signedOut: SignedOutLogins = {},
 ): string | null {
   const inherited = parent && parent.harness === harness?.id ? (parent.account ?? null) : null;
   return newThreadAccountOn(harness, inherited, signedOut);
@@ -189,18 +210,35 @@ export interface UsageRows {
 }
 
 /**
- * The groups Settings › Usage draws. The engine always lists the default
- * Claude login (`rustcode/engine/src/acp/usage.rs`), signed out or not; with
- * named accounts there, a signed-out "Claude · Not signed in" group is one the
- * user can do nothing with, so it is dropped. The switch that lived in its
- * last row moves to the first Claude group left, once only.
+ * The groups Settings › Usage draws. The engine always lists the Claude login
+ * with no account (`rustcode/engine/src/acp/usage.rs`); with named accounts the
+ * app and the engine read those instead, so its row is dropped. The switch that
+ * lived in its last row moves to the first Claude group left, once only.
  */
-export function usageRows(plans: UsagePlan[]): UsageRows {
+export function usageRows(plans: UsagePlan[], keepOwnLogin = false): UsageRows {
   const claude = (plan: UsagePlan) => planOf(plan) === "claude-code";
   const isDefault = (plan: UsagePlan) => claude(plan) && !plan.account;
   const named = plans.some((plan) => claude(plan) && !!plan.account);
-  const drop = (plan: UsagePlan) => named && isDefault(plan) && plan.status === "signedOut";
-  const shown = plans.filter((plan) => !drop(plan));
+  // The thread on screen may still run on the harness's own sign-in ("Original
+  // login"): its row stays so its plan is not lost.
+  const drop = named && !keepOwnLogin;
+  const shown = plans.filter((plan) => !(drop && isDefault(plan)));
   const own = shown.find(isDefault);
   return { plans: shown, switchIn: (own ?? shown.find(claude))?.id };
+}
+
+/**
+ * The account an add still has to sign in, from the check that followed it:
+ * only a look that found no sign-in asks for one. `accounts/add` answers
+ * without probing, so its row alone reads `unknown`.
+ */
+export function accountToSignIn(
+  snapshot: HarnessSnapshot | null,
+  harness: string,
+  configDir: string,
+): HarnessAccount | undefined {
+  const found = snapshot?.harnesses
+    .find((h) => h.id === harness)
+    ?.accounts?.find((account) => account.config_dir === configDir);
+  return found?.auth === "needs_login" ? found : undefined;
 }

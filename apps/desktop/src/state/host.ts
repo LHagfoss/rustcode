@@ -14,7 +14,13 @@ import { type Harness, Method, projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
-import { accountLabelOf, accountNameOf, accountSignedOut, childAccountFor } from "./logins";
+import {
+  accountLabelOf,
+  accountNameOf,
+  accountSignedOut,
+  childAccountFor,
+  newThreadAccountOn,
+} from "./logins";
 import {
   activeDescendants,
   activityOf,
@@ -98,6 +104,7 @@ import {
   createSession,
   ensureHarnessModels,
   errorText,
+  lastAccountFor,
   markUnread,
   openThread,
   permissionModeOf,
@@ -688,7 +695,7 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
         id: h.id,
         name: h.name,
         available: !reason,
-        // The logins start_session and fan_out may name; the default login has no id.
+        // The logins start_session and fan_out may name; the harness's own sign-in has no id.
         ...(h.accounts?.length
           ? {
               accounts: h.accounts.map((a) => ({
@@ -936,7 +943,12 @@ async function transferSession(caller: RuleThread, id: string, harness: string):
   });
   if (no) return failureJson(no);
   await openThread(target.id);
-  if (!(await switchThreadHarness(target.id, harness))) {
+  // The login a new thread on that harness would start on, as the picker moves
+  // a thread: its remembered account, never a harness login the picker no
+  // longer offers. A harness with no named accounts passes `null`, exactly as
+  // before accounts existed.
+  const account = newThreadAccountOn(to, lastAccountFor(harness), useApp.getState().signedOutLogins);
+  if (!(await switchThreadHarness(target.id, harness, account))) {
     return failureJson(failure("failed", "the thread could not be moved"));
   }
   return { session_id: target.id, harness, moved: true, ...ranWith(target.id) };
@@ -1288,7 +1300,7 @@ function accountFor(caller: RuleThread, harness: Harness, asked?: string): strin
         "invalid",
         refusal.available.length
           ? `${harness.name} has no account “${refusal.asked}”; its named accounts are ${refusal.available.join(", ")}`
-          : `${harness.name} has no named accounts; it runs on its default login, so leave account out`,
+          : `${harness.name} has no named accounts; it runs on its own sign-in, so leave account out`,
       );
   }
 }

@@ -122,10 +122,18 @@ fn launch_env(
         .as_ref()
         .filter(|account| account.harness == harness.id);
     if let Some(account) = account {
-        env.push((
-            "CLAUDE_CONFIG_DIR".to_owned(),
-            account.resolved_dir().to_string_lossy().into_owned(),
-        ));
+        let dir = account.resolved_dir();
+        if super::config::is_default_dir(&dir) {
+            // The Mac's own login: no `CLAUDE_CONFIG_DIR` at all. macOS keys the
+            // sign-in's Keychain item on that variable, so setting it to the
+            // default directory would read as signed out.
+            remove.push("CLAUDE_CONFIG_DIR");
+        } else {
+            env.push((
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                dir.to_string_lossy().into_owned(),
+            ));
+        }
         remove.extend([
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
@@ -1503,6 +1511,37 @@ mod launch_tests {
             remove.iter().all(|name| *name != "HOME"),
             "HOME stays: the macOS Keychain login needs it"
         );
+    }
+
+    #[test]
+    fn the_default_login_account_sets_no_config_dir() {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let harness = test_support::harness("claude-code", HarnessKind::Acp);
+        let options = StartOptions {
+            account: Some(account(
+                "claude-code",
+                &home.join(".claude").to_string_lossy(),
+            )),
+            ..Default::default()
+        };
+        let (env, remove) = launch_env(&harness, &options);
+        assert!(
+            env.is_empty(),
+            "the Mac's own login keeps CLAUDE_CONFIG_DIR unset"
+        );
+        assert!(
+            remove.contains(&"CLAUDE_CONFIG_DIR"),
+            "an inherited CLAUDE_CONFIG_DIR must be dropped"
+        );
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ] {
+            assert!(remove.contains(&name), "{name} must not reach the child");
+        }
     }
 
     #[test]

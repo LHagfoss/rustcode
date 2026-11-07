@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { UsagePlan } from "../acp/rustcode";
-import type { Harness, HarnessAccount } from "../acp/types";
+import type { Harness, HarnessAccount, HarnessSnapshot } from "../acp/types";
 import {
   accountLabelOf,
   accountNameOf,
   accountSignedOut,
+  accountToSignIn,
   childAccountFor,
   childAccountOn,
-  defaultLoginGone,
   firstSignedInAccount,
   namedAccountOn,
   newThreadAccountOn,
@@ -85,12 +85,12 @@ describe("signed out logins", () => {
     // A denied Keychain prompt, a locked Keychain: signed in as far as anyone knows.
     const denied = plan({ status: "unavailable", error: "macOS did not allow reading it." });
     expect(signedOutFrom([denied], { "claude-code": true })).toEqual({});
-    // So its group is drawn (with the reason), its switch stays in it, and
-    // "Default login" is still offered.
+    // Named accounts carry the thread all the same: a login nobody could read
+    // is not a reason to offer the harness's own sign-in again.
     const rows = usageRows([denied, plan({ id: "claude:work", account: "work" })]);
-    expect(rows.plans.map((p) => p.id)).toEqual(["claude", "claude:work"]);
-    expect(rows.switchIn).toBe("claude");
-    expect(newThreadAccountOn(claude([account("work")]), null, signedOutFrom([denied]))).toBeNull();
+    expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
+    expect(rows.switchIn).toBe("claude:work");
+    expect(newThreadAccountOn(claude([account("work")]), null)).toBe("work");
   });
 
   test("an answer that read one account says nothing about the logins it skipped", () => {
@@ -117,57 +117,87 @@ describe("signed out logins", () => {
   });
 });
 
-describe("the default login", () => {
-  test("is gone only when it is signed out and a named account exists", () => {
-    expect(defaultLoginGone(claude([account("work")]), { "claude-code": true })).toBe(true);
-    expect(defaultLoginGone(claude([account("work")]), {})).toBe(false);
-    expect(defaultLoginGone(claude(), { "claude-code": true })).toBe(false);
-    expect(defaultLoginGone(undefined, { "claude-code": true })).toBe(false);
+describe("the harness's own login", () => {
+  test("is not offered once a named account exists", () => {
+    // Whatever was stored, a null choice is not used while named accounts can carry the thread.
+    expect(newThreadAccountOn(claude([account("work")]), null)).toBe("work");
+    expect(newThreadAccountOn(claude([account("work")]), "gone")).toBe("work");
+  });
+
+  test("is the only choice when the harness has no named accounts", () => {
+    expect(newThreadAccountOn(claude(), null)).toBeNull();
+    expect(newThreadAccountOn(undefined, null)).toBeNull();
   });
 
   test("a new thread starts on the chosen account while it is there", () => {
     const h = claude([account("work"), account("home")]);
-    expect(newThreadAccountOn(h, "home", { "claude-code": true })).toBe("home");
-    expect(newThreadAccountOn(h, "gone", { "claude-code": true })).toBe("work");
+    expect(newThreadAccountOn(h, "home")).toBe("home");
+    expect(newThreadAccountOn(h, "gone")).toBe("work");
   });
 
-  test("a new thread falls back to the first signed-in account once the default is gone", () => {
+  test("a new thread falls back to the first signed-in account", () => {
     const h = claude([account("work", "unknown"), account("home")]);
-    expect(newThreadAccountOn(h, null, { "claude-code": true })).toBe("home");
-    // No sign-in found anywhere: the first named account still beats a login known to fail.
-    expect(newThreadAccountOn(claude([account("work", "unknown")]), null, { "claude-code": true })).toBe(
-      "work",
-    );
-  });
-
-  test("a new thread keeps the default login while it can run", () => {
-    expect(newThreadAccountOn(claude([account("work")]), null, {})).toBeNull();
+    expect(newThreadAccountOn(h, null)).toBe("home");
+    // A look found no sign-in anywhere yet: the first named account still carries the thread.
+    expect(newThreadAccountOn(claude([account("work", "needs_login")]), null)).toBe("work");
   });
 
   test("firstSignedInAccount prefers a login whose credentials were found", () => {
     expect(firstSignedInAccount([account("a", "unknown"), account("b")])).toBe("b");
+    expect(firstSignedInAccount([account("a", "needs_login")])).toBe("a");
     expect(firstSignedInAccount([])).toBeNull();
     expect(firstSignedInAccount(undefined)).toBeNull();
+  });
+
+  test("a login the plan read found signed out is the last resort", () => {
+    const h = claude([account("work"), account("home")]);
+    const signedOut = { "claude-code#work": true };
+    // Not looked at beats known signed out, which beats a harness login there is not.
+    expect(firstSignedInAccount([account("a", "unknown"), account("b", "ok")])).toBe("b");
+    expect(
+      firstSignedInAccount([account("a", "unknown"), account("b")], "claude-code", {
+        "claude-code#b": true,
+      }),
+    ).toBe("a");
+    expect(firstSignedInAccount(h.accounts, "claude-code", signedOut)).toBe("home");
+    // A stored choice that is signed out falls to the best other login.
+    expect(newThreadAccountOn(h, "work", signedOut)).toBe("home");
+    // With only a signed-out login left it is still better than nothing.
+    expect(firstSignedInAccount([account("a")], "claude-code", { "claude-code#a": true })).toBe("a");
+  });
+
+  test("does not force a stored bad login on a new thread", () => {
+    const h = claude([{ ...account("work"), auth: "needs_login" }, account("home", "unknown")]);
+    // `needs_login` is last, so the not-looked-at login carries the new thread.
+    expect(newThreadAccountOn(h, "work")).toBe("home");
+    expect(newThreadAccountOn(h, "home")).toBe("home");
   });
 });
 
 describe("a thread started by another thread", () => {
   test("inherits the parent's account on the same harness", () => {
     const h = claude([account("work"), account("home")]);
-    expect(childAccountOn(h, { harness: "claude-code", account: "home" }, {})).toBe("home");
+    expect(childAccountOn(h, { harness: "claude-code", account: "home" })).toBe("home");
   });
 
-  test("uses a named account when the parent is on the default login, which is signed out", () => {
+  test("moves off the parent's own login once named accounts exist", () => {
     const h = claude([account("work")]);
-    expect(childAccountOn(h, { harness: "claude-code", account: null }, { "claude-code": true })).toBe(
-      "work",
+    expect(childAccountOn(h, { harness: "claude-code", account: null })).toBe("work");
+  });
+
+  test("does not inherit a login the plan read found signed out", () => {
+    const h = claude([account("work"), account("home")]);
+    expect(childAccountOn(h, { harness: "claude-code", account: "work" }, { "claude-code#work": true })).toBe(
+      "home",
     );
   });
 
   test("never lends an account to another harness", () => {
-    const h = claude([account("work")]);
-    // Another harness's account is not one of this harness's, so the default login stands.
-    expect(childAccountOn(h, { harness: "codex", account: "home" }, {})).toBeNull();
+    // Another harness's account is not one of this harness's; without named
+    // accounts here, its own login stands.
+    const other = claude([account("work")]);
+    expect(childAccountOn(other, { harness: "codex", account: "home" })).toBe("work");
+    expect(childAccountOn(claude(), { harness: "codex", account: "home" })).toBeNull();
   });
 
   test("runs on the named login it was told to use, by id or by name", () => {
@@ -201,7 +231,9 @@ describe("a thread started by another thread", () => {
     expect(childAccountFor(h, undefined, { harness: "claude-code", account: "work" }, {})).toEqual({
       account: "work",
     });
-    expect(childAccountFor(h, "  ", { harness: "codex", account: "home" }, {})).toEqual({ account: null });
+    expect(childAccountFor(h, "  ", { harness: "codex", account: "home" }, {})).toEqual({
+      account: "work",
+    });
   });
 
   test("refuses an ambiguous name rather than picking one login", () => {
@@ -246,7 +278,7 @@ describe("a thread started by another thread", () => {
     expect(childAccountFor(h, "work", undefined, signedOut)).toEqual({
       refused: { kind: "signedOut", account: "work", name: "Work", available: ["work", "home"] },
     });
-    // Another login is unaffected, and the default login is not an account.
+    // Another login is unaffected, and the harness's own sign-in is not an account.
     expect(childAccountFor(h, "home", undefined, signedOut)).toEqual({ account: "home" });
     expect(childAccountFor(h, "work", undefined, { "claude-code": true })).toEqual({ account: "work" });
   });
@@ -270,15 +302,21 @@ describe("Settings › Usage groups", () => {
     expect(rows.switchIn).toBe("claude");
   });
 
-  test("keeps it when it is signed in, and draws the switch where it always was", () => {
+  test("drops it even when it is signed in, once named accounts are there", () => {
     const rows = usageRows([plan({ status: "ok" }), plan({ id: "claude:work", account: "work" })]);
-    expect(rows.plans.map((p) => p.id)).toEqual(["claude", "claude:work"]);
-    expect(rows.switchIn).toBe("claude");
+    expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
+    expect(rows.switchIn).toBe("claude:work");
   });
 
-  test("drops nothing when the meter is off and the default login was not read", () => {
+  test("drops it whether or not it was read, while named accounts are there", () => {
     const rows = usageRows([plan({ status: "notAsked" }), plan({ id: "claude:work", account: "work" })]);
+    expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
+  });
+
+  test("keeps the own-login row while the thread on screen runs on it", () => {
+    const rows = usageRows([plan({ status: "ok" }), plan({ id: "claude:work", account: "work" })], true);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude", "claude:work"]);
+    expect(rows.switchIn).toBe("claude");
   });
 
   test("draws only the accounts an answer read", () => {
@@ -300,5 +338,42 @@ describe("Settings › Usage groups", () => {
     ]);
     expect(rows.switchIn).toBe("claude:work");
     expect(rows.plans.filter((p) => p.id === rows.switchIn)).toHaveLength(1);
+  });
+});
+
+describe("adding a discovered login", () => {
+  const snapshot = (accounts: HarnessAccount[]): HarnessSnapshot => ({
+    harnesses: [claude(accounts)],
+    default: { harness: "rustcode", model: null, effort: null },
+    onboarded: true,
+  });
+
+  test("signs in only when the check found no sign-in", () => {
+    const dir = "~/.claude-personal";
+    expect(
+      accountToSignIn(
+        snapshot([{ ...account("personal"), config_dir: dir, auth: "needs_login" }]),
+        "claude-code",
+        dir,
+      )?.id,
+    ).toBe("personal");
+    // `accounts/add` answers `unknown`; only a real look says `needs_login`.
+    expect(
+      accountToSignIn(
+        snapshot([{ ...account("personal"), config_dir: dir, auth: "unknown" }]),
+        "claude-code",
+        dir,
+      ),
+    ).toBeUndefined();
+    expect(
+      accountToSignIn(
+        snapshot([{ ...account("personal"), config_dir: dir, auth: "ok" }]),
+        "claude-code",
+        dir,
+      ),
+    ).toBeUndefined();
+    // A failed look, or a different directory, signs in nothing.
+    expect(accountToSignIn(null, "claude-code", dir)).toBeUndefined();
+    expect(accountToSignIn(snapshot([]), "claude-code", dir)).toBeUndefined();
   });
 });

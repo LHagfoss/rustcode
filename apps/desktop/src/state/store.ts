@@ -1733,7 +1733,7 @@ async function startSetup(setup: PendingSetup): Promise<string | null> {
     id = await createSession({
       cwd: setup.cwd,
       harness: choice?.harness,
-      // The account shown for the new thread: a signed-out default login is not one.
+      // The account shown for the new thread: with named accounts, always one of them.
       account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
       model: choice?.model,
       effort: choice?.effort,
@@ -2816,13 +2816,34 @@ export function pickNewThreadAccount(account: string | null) {
   void refreshPlanCache();
 }
 
-export const addHarnessAccount = (harness: string, id: string, name: string) =>
-  harnessCall(Method.harnessAccountAdd, { harness, id, name });
+/**
+ * The user picked a chip in another harness's header: that harness's account is
+ * remembered for new threads, and the new thread moves to that harness on the
+ * model and effort it was last left on.
+ */
+export function pickNewThreadAccountOn(harness: string, account: string) {
+  storeAccount(harness, account);
+  if (newThreadChoice(get())?.harness !== harness) switchNewThreadHarness(harness);
+  set({ newThreadAccount: account });
+  void refreshPlanCache();
+}
+
+export const addHarnessAccount = (harness: string, id: string, name: string, configDir?: string) =>
+  harnessCall(Method.harnessAccountAdd, {
+    harness,
+    id,
+    name,
+    ...(configDir ? { config_dir: configDir } : {}),
+  });
 export const removeHarnessAccount = (harness: string, id: string) =>
   harnessCall(Method.harnessAccountRemove, { harness, id });
 
-/** Reads each account's own credentials again (nothing is started, no token is read). */
-export async function checkHarnessAccounts(): Promise<HarnessSnapshot | null> {
+/**
+ * Reads each account's own credentials again (nothing is started, no token is
+ * read). `readPlans` also re-reads the Claude plan rows, which a 3-second
+ * wait for a sign-in does not need: that would force a Keychain read each time.
+ */
+export async function checkHarnessAccounts(readPlans = true): Promise<HarnessSnapshot | null> {
   const snapshot = await harnessCall(Method.harnessAccountCheck, {});
   // Claude Code signs in with its own credentials, which that snapshot does not
   // report (`auth_probe: None`), and its plan read pauses once it finds the
@@ -2830,7 +2851,7 @@ export async function checkHarnessAccounts(): Promise<HarnessSnapshot | null> {
   // neither asks again and again. An explicit check is the user asking to look
   // now: read the default login again, or it would stay as it was found after
   // signing in or out.
-  if (claudeUsageAllowed()) void refreshPlanCache(true);
+  if (readPlans && claudeUsageAllowed()) void refreshPlanCache(true);
   return snapshot;
 }
 
@@ -2952,11 +2973,12 @@ export function pickNewThreadChoice(choice: NewThreadChoice) {
 export function switchNewThreadHarness(harness: string) {
   const snapshot = get().harnesses;
   if (!snapshot) return;
-  const known = snapshot.harnesses.find((h) => h.id === harness)?.accounts ?? [];
+  const next = snapshot.harnesses.find((h) => h.id === harness);
   const remembered = lastAccountFor(harness);
   set({
     newThread: restoreChoice(snapshot, harness, appChoices(snapshot)),
-    newThreadAccount: known.some((a) => a.id === remembered) ? remembered : null,
+    // A harness with named accounts never starts on its own sign-in.
+    newThreadAccount: newThreadAccountOn(next, remembered, get().signedOutLogins),
   });
   // Another harness means another login, whose meter may have no numbers yet.
   void refreshPlanCache();
@@ -2988,10 +3010,11 @@ export async function switchThreadAccount(id: string, account: string | null): P
     set((s) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, account: next?.account } : x)),
     }));
+    const harnessName = get().harnesses?.harnesses.find((h) => h.id === harness)?.name ?? harness;
     toast(
       named
         ? `This thread now runs on ${named.name}. The conversation so far moves over as a summary with your next message.`
-        : "This thread now runs on the default Claude login, with the conversation so far as a summary.",
+        : `This thread now runs on ${harnessName}'s own sign-in, with the conversation so far as a summary.`,
       "success",
     );
     void refreshPlanUsage(id);
@@ -3010,14 +3033,24 @@ export async function switchThreadAccount(id: string, account: string | null): P
  * (`_rustcode/session/harness`). It starts on the model and effort it was
  * last left on; the thread shows a divider where it switched.
  */
-export async function switchThreadHarness(id: string, harness: string): Promise<boolean> {
+export async function switchThreadHarness(
+  id: string,
+  harness: string,
+  account?: string | null,
+): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread || thread.running) return false;
   const last = get().harnesses?.harnesses.find((h) => h.id === harness)?.last;
   try {
     const result = (await engine().request(
       Method.sessionHarness,
-      { sessionId: id, harness, model: last?.model ?? null, effort: last?.effort ?? null },
+      {
+        sessionId: id,
+        harness,
+        account: account ?? null,
+        model: last?.model ?? null,
+        effort: last?.effort ?? null,
+      },
       30_000,
     )) as JsonObject | null;
     const listed = get().harnesses?.harnesses.find((h) => h.id === harness);
@@ -3029,7 +3062,9 @@ export async function switchThreadHarness(id: string, harness: string): Promise<
       configOptions: parseConfigOptions(result?.configOptions),
     }));
     set((s) => ({
-      sessions: s.sessions.map((x) => (x.id === id ? { ...x, harness, account: undefined } : x)),
+      sessions: s.sessions.map((x) =>
+        x.id === id ? { ...x, harness, account: next?.account ?? account ?? undefined } : x,
+      ),
     }));
     const opened = get().threads[id];
     if (opened && lacksModels(opened)) void ensureHarnessModels(harness);
@@ -3857,7 +3892,7 @@ export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
   const learned = plansToCache(answers);
   setPlanCache(mergePlans(kept, learned));
   // Which logins are signed out, for the places that must not offer one: the
-  // picker's "Default login" and a new thread's account (state/logins.ts).
+  // picker's account chips and a new thread's account (state/logins.ts).
   set({ signedOutLogins: signedOutFrom(answers, get().signedOutLogins) });
   // A login whose read was denied, or that is signed out, pauses its own row
   // only: the default login's failure must not stop a named account's meter,

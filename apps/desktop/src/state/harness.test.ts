@@ -5,6 +5,7 @@ import {
   commandLine,
   controlDisabledReason,
   defaultEffort,
+  harnessStatus,
   normalizeDefault,
   orderHarnesses,
   preferredDefault,
@@ -41,6 +42,39 @@ describe("harness logic", () => {
     expect(unavailableReason({ ...base, enabled: false })).toMatch(/Turned off/);
     expect(unavailableReason({ ...base, auth: "needs_login" })).toBe("Sign in first");
     expect(unavailableReason(base)).toBeUndefined();
+  });
+
+  test("a harness with named accounts is as ready as its best login", () => {
+    const account = (id: string, auth: "ok" | "needs_login" | "unknown") => ({
+      id,
+      name: id,
+      config_dir: `/tmp/${id}`,
+      auth,
+    });
+    const signedIn: Harness = {
+      ...base,
+      auth: "needs_login",
+      accounts: [account("work", "needs_login"), account("home", "ok")],
+    };
+    expect(harnessStatus(signedIn)).toEqual({ tone: "ok", label: "Ready" });
+    expect(unavailableReason(signedIn)).toBeUndefined();
+
+    const signedOut: Harness = {
+      ...base,
+      auth: "ok",
+      accounts: [account("work", "needs_login"), account("home", "needs_login")],
+    };
+    expect(harnessStatus(signedOut)).toEqual({ tone: "warn", label: "Sign in an account" });
+    expect(unavailableReason(signedOut)).toBe("Sign in an account");
+
+    // Not looked at yet is not a reason to block or to claim it is signed out.
+    const unchecked: Harness = {
+      ...base,
+      auth: "needs_login",
+      accounts: [account("work", "unknown")],
+    };
+    expect(unavailableReason(unchecked)).toBeUndefined();
+    expect(harnessStatus(unchecked).tone).toBe("ok");
   });
 
   test("only usable harnesses can run a thread", () => {
@@ -169,5 +203,12 @@ describe("the desktop app's preferred harness", () => {
       "codex",
     );
     expect(preferredDefault(snapshot([rustcode, { ...base, auth: "needs_login" }])).harness).toBe("rustcode");
+    // A harness whose own login is missing but whose account is signed in can run.
+    const withAccount = {
+      ...claude,
+      auth: "needs_login" as const,
+      accounts: [{ id: "work", name: "Work", config_dir: "/tmp/work", auth: "ok" as const }],
+    };
+    expect(preferredDefault(snapshot([rustcode, withAccount])).harness).toBe("claude-code");
   });
 });

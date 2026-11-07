@@ -54,7 +54,7 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/TurnChanges.tsx", "bg-fill-subtle", "the changes pill is a popover trigger"],
   ["ui/ModelPicker.tsx", 'role="switch"', "the fast-mode switch"],
   ["ui/ModelPicker.tsx", "Model and effort", "the model pill is a trigger, and not in this pass"],
-  ["ui/ModelPicker.tsx", "aria-pressed={current}", "an account pill, whose fill is its state"],
+  ["ui/ModelPicker.tsx", "aria-pressed={chip.selected}", "an account chip, whose fill is its state"],
   ["ui/Settings.tsx", 'role="option"', "a settings result row"],
   ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
 ];

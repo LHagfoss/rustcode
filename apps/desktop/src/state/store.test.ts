@@ -47,6 +47,7 @@ import {
   parsePanels,
   peekThread,
   permissionModeOf,
+  pickNewThreadAccountOn,
   pickNewThreadChoice,
   planCacheStale,
   planIsStale,
@@ -222,6 +223,19 @@ describe("engine controller with the mock engine", () => {
     expect(menu).toContain("/model");
     // The open thread still reads its own session, whatever the new-thread picker shows.
     expect(commandsFor(useApp.getState(), first.id).map((c) => c.name)).toContain("/status");
+  });
+
+  test("a chip of another harness moves the new thread there, on that account", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    switchNewThreadHarness("codex");
+    expect(useApp.getState().newThread?.harness).toBe("codex");
+    // The mock's Claude Code lists the `paral-2` login; pressing its chip is
+    // the same move the picker makes for a new thread.
+    pickNewThreadAccountOn("claude-code", "paral-2");
+    const s = useApp.getState();
+    expect(s.newThread?.harness).toBe("claude-code");
+    expect(s.newThreadAccount).toBe("paral-2");
   });
 
   test("a full-access request for an unloaded thread is answered, not shown in the parent", async () => {

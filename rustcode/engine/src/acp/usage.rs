@@ -5,6 +5,8 @@
 
 use agent_client_protocol::schema::v1::{SessionUpdate, UsageUpdate};
 
+use crate::provider_auth::claude_usage::{Freshness, usage};
+
 /// Bumped when the `_meta.rustcode` usage fields change incompatibly.
 pub(crate) const USAGE_META_VERSION: u32 = 1;
 
@@ -323,7 +325,6 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     // Usage looks at all of them). Their windows are per account; RustCode
     // only reads them. A forced read ignores the minute-old cached answer, so
     // Refresh sees a sign-in renewed in Claude Code at once.
-    use crate::provider_auth::claude_usage::{Freshness, usage};
     let freshness = if request.force {
         Freshness::Now
     } else {
@@ -337,12 +338,45 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     let known = crate::harness::config::config_dir()
         .map(|dir| crate::harness::config::load_accounts_in(&dir))
         .unwrap_or_default();
-    let mut named = Vec::new();
-    for account in named_claude_accounts(&request, &known) {
-        let read = usage(Some(&account.resolved_dir()), freshness).await;
-        named.push((account, read));
-    }
+    let named = named_reads(
+        named_claude_accounts(&request, &known),
+        default.as_ref(),
+        freshness,
+        |dir, freshness| async move { usage(dir.as_deref(), freshness).await },
+    )
+    .await;
     plans_answer(default, &named, codex)
+}
+
+/// Reads one row per named account. An account on `~/.claude` is the login
+/// with no `CLAUDE_CONFIG_DIR`: it reuses the default row's read rather than
+/// asking the Keychain and Anthropic again for the same login, which a forced
+/// read would otherwise do twice.
+async fn named_reads<'a, T, R, Fut>(
+    accounts: Vec<&'a crate::harness::config::HarnessAccount>,
+    default: Option<&T>,
+    freshness: Freshness,
+    read: R,
+) -> Vec<(&'a crate::harness::config::HarnessAccount, T)>
+where
+    T: Clone,
+    R: Fn(Option<std::path::PathBuf>, Freshness) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let mut named = Vec::new();
+    for account in accounts {
+        let dir = account.resolved_dir();
+        let row = if crate::harness::config::is_default_dir(&dir) {
+            match default {
+                Some(row) => row.clone(),
+                None => read(None, freshness).await,
+            }
+        } else {
+            read(Some(dir), freshness).await
+        };
+        named.push((account, row));
+    }
+    named
 }
 
 /// The answer's rows: the default login first (silent when it was not read),
@@ -637,6 +671,48 @@ mod tests {
         assert_eq!(plans[1]["windows"][0]["usedPercent"], 71.0);
         assert_eq!(plans[1]["windows"][0]["label"], "5-hour");
         assert_eq!(plans[1]["plan"], "max");
+    }
+
+    /// A forced read of a `~/.claude` account must not ask twice: it shares
+    /// the default login's read, which is the same Keychain item and login.
+    #[tokio::test]
+    async fn an_account_on_the_default_directory_shares_the_default_read() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let own = crate::harness::config::HarnessAccount {
+            id: "own".into(),
+            harness: "claude-code".into(),
+            name: Some("Claude".into()),
+            config_dir: home.join(".claude").to_string_lossy().into_owned(),
+        };
+        let work = account("work", "claude-code");
+        let accounts = vec![&own, &work];
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let reads = super::named_reads(
+            accounts,
+            Some(&7u8),
+            crate::provider_auth::claude_usage::Freshness::Now,
+            move |dir, _| {
+                let seen = seen.clone();
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    if dir.is_some() { 9u8 } else { 4u8 }
+                }
+            },
+        )
+        .await;
+        // Only the account with its own directory is read; the Mac's login is
+        // the default row's answer.
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(reads[0].0.id, "own");
+        assert_eq!(reads[0].1, 7, "the default read is reused, not asked again");
+        assert_eq!(reads[1].1, 9);
     }
 
     #[test]
