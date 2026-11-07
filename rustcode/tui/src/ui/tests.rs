@@ -1,7 +1,22 @@
 use super::*;
 use crate::ui::render_snapshot::{render_snapshot, set_current_response};
 
-pub(crate) static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Serialises tests that change the active theme, so the palette a test sets
+/// stays in force for its assertions. The active theme itself is thread-local
+/// under `cfg(test)` (see `ui::theme`), so render tests on other threads cannot
+/// change it. Take it through [`lock_theme_test`].
+static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take [`THEME_TEST_LOCK`] for a test that sets a theme.
+///
+/// A theme test that panics poisons the lock, which says nothing about the
+/// tests that follow: recovering here keeps one real failure from being
+/// reported as a failure of every other theme test in the run.
+pub(crate) fn lock_theme_test() -> std::sync::MutexGuard<'static, ()> {
+    THEME_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 fn render_state_to_text(state: &mut RenderState, width: u16, height: u16) -> String {
     let (text, _) = render_state_to_text_with_composer_area(state, width, height);
@@ -397,7 +412,7 @@ fn render_snapshot_to_text(state: &RenderState, width: u16, height: u16) -> Stri
 
 #[test]
 fn render_snapshot_preserves_existing_ui_output() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut states = Vec::new();
 
     states.push(RenderState::new());
@@ -665,7 +680,7 @@ fn desired_height_keeps_the_composer_at_the_terminal_bottom() {
 
 #[test]
 fn short_live_reply_follows_the_welcome_cell() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     set_current_response(&mut state, "short reply");
@@ -689,7 +704,7 @@ fn short_live_reply_follows_the_welcome_cell() {
 
 #[test]
 fn streaming_reply_keeps_earlier_lines_visible_in_the_full_viewport() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     set_current_response(&mut state, "First answer line\nSecond answer line");
@@ -707,7 +722,7 @@ fn streaming_reply_keeps_earlier_lines_visible_in_the_full_viewport() {
 
 #[test]
 fn static_slash_output_stays_visible_after_a_picker_closes() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state
         .history
@@ -725,7 +740,7 @@ fn static_slash_output_stays_visible_after_a_picker_closes() {
 
 #[test]
 fn transcript_scroll_moves_chat_without_changing_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -770,7 +785,7 @@ fn transcript_scroll_moves_chat_without_changing_the_composer() {
 
 #[test]
 fn transient_notice_appears_below_input_without_entering_chat_history() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.transient_notice = Some("YOLO mode enabled".to_owned());
     let rendered = render_state_to_text(&mut state, 80, 24);
@@ -832,7 +847,7 @@ fn visible_transcript_groups_tools_from_one_batch_under_one_heading() {
 
 #[test]
 fn active_tool_does_not_repeat_a_committed_thought() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     let thought = "<think>Plan the shell command.</think>";
     state.history.push(ChatMessage::new("assistant", thought));
@@ -870,7 +885,7 @@ fn desired_height_grows_with_streaming_text_and_clamps_to_terminal() {
 
 #[test]
 fn model_picker_keeps_multiple_models_visible_above_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -920,7 +935,7 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
 
 #[test]
 fn filtered_model_picker_highlights_the_selected_visible_profile() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.config.models = (1..=3)
         .map(|number| rustcode::controller::ModelProfile {
@@ -943,7 +958,7 @@ fn filtered_model_picker_highlights_the_selected_visible_profile() {
 
 #[test]
 fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -977,7 +992,7 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
 
 #[test]
 fn inline_command_suggestions_render_above_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1027,7 +1042,7 @@ fn inline_command_suggestions_render_above_the_composer() {
 
 #[test]
 fn completion_footer_hint_replaces_session_metadata() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1068,7 +1083,7 @@ fn completion_footer_hint_replaces_session_metadata() {
 /// with an ellipsis (#1529).
 #[test]
 fn completion_hint_degrades_by_content_at_narrow_widths() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1132,7 +1147,7 @@ fn completion_hint_degrades_by_content_at_narrow_widths() {
 /// the hint needs the whole row (#1529).
 #[test]
 fn composer_footer_drops_the_context_percentage_before_a_hint_clause() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1178,7 +1193,7 @@ fn composer_footer_drops_the_context_percentage_before_a_hint_clause() {
 
 #[test]
 fn command_popup_keeps_composer_on_the_same_bottom_row() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.input_buffer = "/".to_owned();
     state.cursor_position = 1;
@@ -1205,7 +1220,7 @@ fn command_popup_keeps_composer_on_the_same_bottom_row() {
 
 #[test]
 fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     for (width, height) in [(80, 24), (60, 18), (100, 30)] {
         for panel in [false, true] {
             let mut state = RenderState::new();
@@ -1260,7 +1275,7 @@ fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
 #[test]
 fn context_and_settings_panels_survive_controller_tool_events_and_completion() {
     use rustcode::controller::{AgentUiEvent, SettingsPicker, ToolResult, ToolResultMetadata};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     for settings in [false, true] {
         let mut state = RenderState::new();
         state.status = AppStatus::Streaming;
@@ -1337,7 +1352,7 @@ fn context_and_settings_panels_survive_controller_tool_events_and_completion() {
 
 #[test]
 fn remote_panel_uses_the_full_viewport_and_restores_the_composer_on_close() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.input_buffer = "saved draft".into();
     state.command_panel = Some(rustcode::controller::CommandPanel {
@@ -1384,7 +1399,7 @@ fn remote_panel_uses_the_full_viewport_and_restores_the_composer_on_close() {
 
 #[test]
 fn command_panel_overscroll_keeps_short_content_visible_after_resize() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.command_panel = Some(rustcode::controller::CommandPanel {
         title: "Help",
@@ -1401,7 +1416,7 @@ fn command_panel_overscroll_keeps_short_content_visible_after_resize() {
 
 #[test]
 fn command_panel_overscroll_retains_the_last_wrapped_row() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.command_panel = Some(rustcode::controller::CommandPanel {
         title: "Help",
@@ -1422,7 +1437,7 @@ fn command_panel_overscroll_retains_the_last_wrapped_row() {
 
 #[test]
 fn command_panel_limit_tracks_wrapping_empty_content_and_viewport_resize() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.command_panel = Some(rustcode::controller::CommandPanel {
         title: "Remote",
@@ -1460,7 +1475,7 @@ fn command_panel_limit_tracks_wrapping_empty_content_and_viewport_resize() {
 
 #[test]
 fn command_output_panel_scrolls_wrapped_content_on_short_terminals() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.command_panel = Some(rustcode::controller::CommandPanel {
         title: "Help",
@@ -1481,7 +1496,7 @@ fn command_output_panel_scrolls_wrapped_content_on_short_terminals() {
 
 #[test]
 fn status_screen_uses_the_viewport_above_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.show_status_modal = true;
     state.active_session_id = "status-test".to_owned();
@@ -1500,7 +1515,7 @@ fn status_screen_uses_the_viewport_above_the_composer() {
 
 #[test]
 fn pickers_type_their_search_into_the_composer_and_other_panels_blank_it() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.input_buffer = "half-written draft".to_owned();
     state.show_command_picker = true;
@@ -1535,7 +1550,7 @@ fn pickers_type_their_search_into_the_composer_and_other_panels_blank_it() {
 
 #[test]
 fn usage_panel_draws_a_bar_per_reported_subscription_window() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.show_stats_modal = true;
     let without = render_state_to_text(&mut state, 100, 40);
@@ -1579,7 +1594,7 @@ fn usage_panel_draws_a_bar_per_reported_subscription_window() {
 
 #[test]
 fn status_and_usage_show_bound_provider_identity_and_usage_guidance() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let account_id = "render-test-account-1687";
     let profile = rustcode::controller::ModelProfile {
         name: "chatgpt-render-test".into(),
@@ -1632,7 +1647,7 @@ fn status_and_usage_show_bound_provider_identity_and_usage_guidance() {
 
 #[test]
 fn slash_command_modal_leaves_the_transcript_visible_above_it() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let row_of = |rendered: &str, needle: &str| {
         rendered
             .lines()
@@ -1679,7 +1694,7 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
 
 #[test]
 fn stats_and_session_panels_render_their_details_without_touching_the_transcript() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.show_stats_modal = true;
     let rendered = render_state_to_text(&mut state, 80, 24);
@@ -1705,7 +1720,7 @@ fn stats_and_session_panels_render_their_details_without_touching_the_transcript
 
 #[test]
 fn footer_stats_and_session_show_the_context_budget_and_session_total() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let usage =
         |prompt: u32, completion: u32, cached: Option<u32>| rustcode::controller::TokenUsage {
             prompt_tokens: prompt,
@@ -1799,7 +1814,7 @@ fn session_panel_text_can_be_selected_and_copied_without_panel_padding() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::{backend::TestBackend, style::Modifier};
 
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.show_session_modal = true;
     state.active_session_id = "session-test".to_owned();
@@ -1901,7 +1916,7 @@ fn info_command_panel_text_can_be_selected_and_copied() {
     use ratatui::backend::TestBackend;
     use unicode_width::UnicodeWidthStr;
 
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.command_panel = Some(rustcode::controller::CommandPanel {
         title: "About RustCode",
@@ -1950,7 +1965,7 @@ fn info_command_panel_text_can_be_selected_and_copied() {
 
 #[test]
 fn inline_command_selection_is_distinct_from_typed_input() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, style::Modifier};
 
@@ -2022,7 +2037,7 @@ fn inline_command_selection_is_distinct_from_typed_input() {
 
 #[test]
 fn inline_command_recommendations_style_unselected_rows_as_default_text() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, style::Modifier};
@@ -2092,7 +2107,7 @@ fn inline_command_popup_marks_selection_and_clips_descriptions_to_width() {
 /// matched, so a fuzzy hit is not a mystery (#1588).
 #[test]
 fn inline_command_popup_matches_fuzzily_and_marks_the_match() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, layout::Rect};
 
@@ -2155,7 +2170,7 @@ fn inline_command_popup_matches_fuzzily_and_marks_the_match() {
 
 #[test]
 fn welcome_banner_renders_without_a_conversation() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2519,7 +2534,7 @@ fn welcome_cell_remains_reachable_after_many_messages() {
 
 #[test]
 fn queue_preview_shows_recent_user_prompts_without_wakeups() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2556,7 +2571,7 @@ fn queue_preview_shows_recent_user_prompts_without_wakeups() {
 
 #[test]
 fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2631,7 +2646,7 @@ fn narrow_queue_previews_truncate_inside_the_available_width() {
 
 #[test]
 fn steering_escape_hint_is_hidden_when_escape_dismisses_completion_or_selection() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2683,7 +2698,7 @@ fn steering_escape_hint_is_hidden_when_escape_dismisses_completion_or_selection(
 /// transcript selection does.
 #[test]
 fn composer_selection_shows_the_copy_hint() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2716,7 +2731,7 @@ fn composer_selection_shows_the_copy_hint() {
 /// the footer describes the selection rather than the copy it has not made yet.
 #[test]
 fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2789,7 +2804,7 @@ fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
 fn a_panel_still_shows_the_copy_notice_in_the_footer() {
     // Marking text inside an open slash-command panel used to hide the footer
     // entirely, so the copy result was never reported.
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.input_buffer = "/ver".to_owned();
     state.show_command_picker = true;
@@ -2813,7 +2828,7 @@ fn a_panel_still_shows_the_copy_notice_in_the_footer() {
 
 #[test]
 fn copy_feedback_notice_holds_the_footer_until_it_expires() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut state = RenderState::new();
     let binding = rustcode::controller::copy_selection_binding();
@@ -2882,7 +2897,7 @@ fn tool_result_cache_evicts_one_lru_entry_at_cap() {
 fn theme_change_changes_cache_keys() {
     use super::{theme, tool_result_cache_key};
 
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let verbosity = rustcode::controller::Verbosity::Low;
     theme::set_active_theme("default");
@@ -2945,7 +2960,7 @@ fn cached_expand_progress_follows_expansion_and_history_changes() {
 fn palette_for_matches_get_palette_for_active_and_inactive_themes() {
     use super::theme;
 
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     theme::set_active_theme("sky");
     assert_eq!(theme::palette_for("sky"), theme::get_palette("sky"));
@@ -2956,7 +2971,7 @@ fn palette_for_matches_get_palette_for_active_and_inactive_themes() {
 fn sky_theme_loads_and_updates_syntax_highlighting() {
     use super::theme;
 
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let sky = theme::get_palette("sky");
     assert_eq!(sky.name, "sky");
@@ -4518,7 +4533,7 @@ fn homogeneous_command_batch_stays_closed_and_expands_fully() {
 #[test]
 fn edits_verbosity_frame_keeps_hierarchy_and_diff_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut state = RenderState::new();
     state.verbosity = Verbosity::Edits;
@@ -6060,7 +6075,7 @@ fn mixed_batch_keeps_command_collapsible_alongside_generic() {
 #[test]
 fn ctrl_o_without_a_collapsed_body_reports_it_instead_of_doing_nothing() {
     use rustcode::controller::ChatMessage;
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "hello"));
@@ -6111,7 +6126,7 @@ fn collapses_image_markers_to_chips() {
 
 #[test]
 fn pasted_image_and_text_chips_use_accent_text() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
@@ -6882,7 +6897,7 @@ fn new_chat_separator_spans_width_and_centers_label() {
 
 #[test]
 fn resumed_session_separator_spans_width_and_centers_label() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     use unicode_width::UnicodeWidthStr;
 
@@ -7270,7 +7285,7 @@ fn selection_copy_hint_leads_the_footer_drop_order() {
 /// the user can press (#1542).
 #[test]
 fn selection_copy_hint_degrades_by_content_at_narrow_widths() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let binding = rustcode::controller::copy_selection_binding();
     for (width, expected, keeps_percentage) in [
@@ -7813,7 +7828,7 @@ fn speculative_tool_without_target_is_not_rendered() {
 #[test]
 fn low_verbosity_live_tools_show_only_the_current_call() {
     use rustcode::controller::{LiveToolCall, Verbosity};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
@@ -7954,7 +7969,7 @@ fn live_shell_output_wraps_japanese_and_keeps_omission_inside_five_rows() {
 
 #[test]
 fn question_replaces_composer_with_borderless_bottom_pane() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -8013,7 +8028,7 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
 
 #[test]
 fn opening_question_keeps_transcript_rows_in_place_above_the_panel() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -8085,7 +8100,7 @@ fn opening_question_keeps_transcript_rows_in_place_above_the_panel() {
 
 #[test]
 fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -8134,7 +8149,7 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
 
 #[test]
 fn a_wheel_tick_moves_one_painted_row() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -8194,7 +8209,7 @@ fn a_wheel_tick_moves_one_painted_row() {
 
 #[test]
 fn scrolled_transcript_keeps_its_reading_rows_when_history_grows() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     for index in 0..24 {
         state
@@ -8253,7 +8268,7 @@ fn scrolled_transcript_keeps_its_reading_rows_when_history_grows() {
 
 #[test]
 fn first_committed_response_keeps_scrolled_welcome_until_follow_resumes() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     let mut transcript = TranscriptState::default();
     let visible = |state: &RenderState, transcript: &mut TranscriptState| {
@@ -8289,7 +8304,7 @@ fn first_committed_response_keeps_scrolled_welcome_until_follow_resumes() {
 
 #[test]
 fn scrolled_transcript_keeps_top_row_when_viewport_shrinks() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     for index in 0..24 {
         state
@@ -8675,7 +8690,7 @@ fn assistant_message_uses_one_gutter_across_paragraphs() {
 
 #[test]
 fn committed_user_messages_keep_regular_body_text() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut state = RenderState::new();
     state
@@ -8758,7 +8773,7 @@ fn committed_assistant_message_has_one_trailing_separator() {
 
 #[test]
 fn conversation_recap_renders_as_compact_labeled_block() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut state = RenderState::new();
     state.history.push(
@@ -8899,7 +8914,7 @@ fn live_tail_uses_formatted_working_status() {
 fn live_tail_shows_only_the_running_indicator_when_nothing_has_been_produced() {
     // A running turn with no text, no tools and no history must still show
     // that work is happening instead of an empty chat (#1626 feedback).
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -9059,7 +9074,7 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
 
 #[test]
 fn empty_composer_is_a_compact_band_with_settings_in_the_footer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
@@ -9158,7 +9173,7 @@ fn draw_composer(
 
 #[test]
 fn footer_names_the_mode_and_shows_the_approval_posture() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use rustcode::controller::AgentMode;
 
     for (mode, auto_confirm, expected_mode, expected_approval) in [
@@ -9240,7 +9255,7 @@ fn footer_metadata_yields_from_the_end_instead_of_cutting_mid_item() {
 
 #[test]
 fn narrow_footer_keeps_the_posture_and_never_runs_into_the_context_figure() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     for width in 10..=120u16 {
         let mut state = RenderState::new();
         state.cwd_and_branch = "~/code/some/longer/project:feature/branch".to_owned();
@@ -9278,7 +9293,7 @@ fn narrow_footer_keeps_the_posture_and_never_runs_into_the_context_figure() {
 
 #[test]
 fn hovering_the_posture_token_highlights_it() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -9317,7 +9332,7 @@ fn hovering_the_posture_token_highlights_it() {
 
 #[test]
 fn resizing_keeps_the_cursor_inside_the_band_and_the_footer_one_row() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let height = 20;
     for width in 16..=200u16 {
         let mut state = RenderState::new();
@@ -9359,7 +9374,7 @@ fn resizing_keeps_the_cursor_inside_the_band_and_the_footer_one_row() {
 
 #[test]
 fn notices_and_hints_replace_the_footer_without_moving_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut idle = RenderState::new();
     idle.cwd_and_branch = "~/code/project:main".to_owned();
     let mut transcript = TranscriptState::default();
@@ -10327,7 +10342,7 @@ const CONTEXT_SHOT_THEMES: [&str; 8] = [
 
 #[test]
 fn context_panel_tells_filled_from_empty_blocks_by_colour_not_only_by_glyph() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let state = context_state_with_over_threshold_category();
     for theme in CONTEXT_SHOT_THEMES {
         crate::ui::theme::set_active_theme(theme);
@@ -10376,7 +10391,7 @@ fn context_panel_tells_filled_from_empty_blocks_by_colour_not_only_by_glyph() {
 
 #[test]
 fn context_panel_emphasises_an_over_threshold_category_in_the_rendered_buffer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let state = context_state_with_over_threshold_category();
     let breakdown = modals::calculate_context_breakdown(&render_snapshot(&state));
     let share = breakdown.tool_tokens as f64 / breakdown.context_window as f64 * 100.0;
@@ -10439,7 +10454,7 @@ fn context_panel_screenshots_are_written_when_requested() {
     let Ok(dir) = std::env::var("RUSTCODE_CONTEXT_PANEL_SHOTS") else {
         return;
     };
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).expect("screenshot directory");
     let state = context_state_with_over_threshold_category();
@@ -10470,7 +10485,7 @@ fn activity_screenshots_are_written_when_requested() {
     use crate::inline_terminal::InlineTerminal;
     use ratatui::{backend::TestBackend, widgets::Paragraph};
     use rustcode::controller::{LiveToolCall, SubAgentStatus, SubAgentView, TaskDisplay};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     theme::set_active_theme("default");
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).expect("screenshot directory");
@@ -10866,7 +10881,7 @@ fn state_with_a_scrollable_transcript() -> RenderState {
 /// the arriving output instead of jumping to it, and re-follows on request.
 #[test]
 fn streaming_while_scrolled_up_holds_the_rows_and_offers_a_return_to_latest() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = state_with_a_scrollable_transcript();
     let mut transcript = TranscriptState::default();
 
@@ -10941,7 +10956,7 @@ fn rows_above_composer(rendered: &str, input_area: ratatui::layout::Rect) -> &st
 /// degrades to shorter labels instead of overflowing a narrow terminal.
 #[test]
 fn the_return_to_latest_control_is_hidden_at_the_tail_and_degrades_when_narrow() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = state_with_a_scrollable_transcript();
     let mut transcript = TranscriptState::default();
 
@@ -10971,7 +10986,7 @@ fn the_return_to_latest_control_is_hidden_at_the_tail_and_degrades_when_narrow()
 
 #[test]
 fn the_return_to_latest_control_stays_above_the_input_and_hides_for_panels() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = state_with_a_scrollable_transcript();
     let mut transcript = TranscriptState::default();
     let _ = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
@@ -11000,7 +11015,7 @@ fn the_return_to_latest_control_stays_above_the_input_and_hides_for_panels() {
 #[test]
 fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
     use rustcode::controller::{ExpandOutcome, Verbosity};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = state_with_a_scrollable_transcript();
     state.verbosity = Verbosity::High;
     // Only commands and edit diffs expose expandable tool bodies.
@@ -11071,7 +11086,7 @@ fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
 #[test]
 fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
     use rustcode::controller::{ExpandOutcome, ToolCallRef, ToolResultRecord, Verbosity};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     let fixtures = [
@@ -11162,7 +11177,7 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
 /// the viewport still while the model streams.
 #[test]
 fn a_live_selection_also_releases_follow() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = state_with_a_scrollable_transcript();
     let mut transcript = TranscriptState::default();
     let _ = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
@@ -11175,7 +11190,7 @@ fn a_live_selection_also_releases_follow() {
 
 #[test]
 fn generated_recap_shows_next_action_and_stays_bounded_at_narrow_widths() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new("assistant", r#"{"summary":"The fix is implemented and tested.","next_action":"Install it locally."}"#).as_conversation_recap());
     for width in [8, 16, 32, 80] {
@@ -11204,7 +11219,7 @@ fn generated_recap_shows_next_action_and_stays_bounded_at_narrow_widths() {
 fn footer_shows_the_model_without_a_running_indicator() {
     // The running indicator moved to the bottom of the chat, so the footer is
     // model + workspace only — no status words, spinner, or queue markers.
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     for status in [
         AppStatus::Idle,
         AppStatus::Streaming,
@@ -11247,7 +11262,7 @@ fn footer_shows_the_model_without_a_running_indicator() {
 
 #[test]
 fn running_turn_shows_a_plain_spinner_and_model_at_the_bottom_of_the_chat() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     for status in [AppStatus::Streaming, AppStatus::Queued] {
         let mut state = RenderState::new();
         state.status = status.clone();
@@ -11301,7 +11316,7 @@ fn running_turn_shows_a_plain_spinner_and_model_at_the_bottom_of_the_chat() {
 
 #[test]
 fn the_running_indicator_is_pinned_above_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -11358,7 +11373,7 @@ fn the_running_indicator_is_pinned_above_the_composer() {
 
 #[test]
 fn idle_chat_shows_no_running_indicator() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.config.reduced_motion = true;
     state.history.push(ChatMessage::new("user", "hello"));
@@ -11423,7 +11438,7 @@ fn reduced_motion_chat_indicator_is_static_and_live_tools_are_shown() {
 
 #[test]
 fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -11449,7 +11464,7 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
 
 #[test]
 fn running_indicator_adds_live_output_to_turn_total_and_marks_it_provisional() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -11482,7 +11497,7 @@ fn running_indicator_adds_live_output_to_turn_total_and_marks_it_provisional() {
 
 #[test]
 fn running_indicator_keeps_cumulative_usage_while_waiting_for_tools() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.running_tools.push("run_command".to_owned());
@@ -11518,7 +11533,7 @@ fn running_indicator_keeps_cumulative_usage_while_waiting_for_tools() {
 
 #[test]
 fn running_indicator_shows_elapsed_time_and_tokens_for_the_whole_turn() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.running_tools.push("run_command".to_owned());
@@ -11557,7 +11572,7 @@ fn running_indicator_shows_elapsed_time_and_tokens_for_the_whole_turn() {
 
 #[test]
 fn running_indicator_updates_provisional_stream_estimates_across_continuations() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -11608,7 +11623,7 @@ fn running_indicator_updates_provisional_stream_estimates_across_continuations()
 
 #[test]
 fn running_indicator_keeps_estimated_marker_while_waiting_for_tools() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -11632,7 +11647,7 @@ fn running_indicator_keeps_estimated_marker_while_waiting_for_tools() {
 
 #[test]
 fn slash_popup_is_flush_with_composer_when_tools_are_expanded() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state
         .history
@@ -11664,7 +11679,7 @@ fn streaming_timer_only_tick_keeps_frame_stable() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     state.status = AppStatus::Streaming;
@@ -11831,7 +11846,7 @@ fn low_verbosity_command_batch_keeps_one_group_and_per_call_outcomes() {
 
 #[test]
 fn live_running_indicator_never_exceeds_width() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -11971,7 +11986,7 @@ fn bottom_indicator_stays_a_single_state_when_a_queued_cell_is_visible() {
     use rustcode::controller::{LiveToolCall, RenderState, TaskDisplay};
     // #1728: the reserved row repeated `Queued` and the model while the
     // transcript cell already named the state.
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     let mut call = LiveToolCall::new("c1", None, "write_to_file", "Write", "src/db.ts");
@@ -12102,7 +12117,7 @@ fn committed_thought_is_not_repeated_while_an_mcp_call_is_still_invisible() {
     // #1770: an argument-less MCP call has no target until it starts, so the
     // live cell is hidden while `current_response` still holds the thought
     // that history already committed. The thought painted twice.
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let thought = "<think>List the Teams chats.</think>";
     for started in [false, true] {
         let mut state = RenderState::new();
@@ -12155,7 +12170,7 @@ fn tool_rounds_chain_under_one_heading() {
     // One-tool-per-round orchestration: each round is an empty assistant call
     // plus its result. Nothing visible sits between the rounds, so they share
     // one heading and the last child closes the tree.
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "look around"));
     for (round, path) in ["src/a.rs", "src/b.rs", "src/c.rs"].into_iter().enumerate() {
@@ -12201,7 +12216,7 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
     // Chaining only crosses steps that show nothing. Prose or a thought is a
     // boundary: it renders as text and the next round opens its own block.
     // Mixed tool kinds chain under the one heading.
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let round =
         |state: &mut RenderState, id: &str, text: &str, tool: &str, args: serde_json::Value| {
             state
@@ -12298,7 +12313,7 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
 
 #[test]
 fn prompt_improver_notice_shows_the_original_and_the_rewrite() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
         "system",
@@ -12921,7 +12936,7 @@ fn task_row_is_never_a_bare_label() {
 #[test]
 fn live_calls_continue_the_committed_tool_block_under_one_heading() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -12983,7 +12998,7 @@ fn live_calls_continue_the_committed_tool_block_under_one_heading() {
 #[test]
 fn a_call_in_flight_joins_the_block_across_the_step_that_asked_for_it() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -13117,7 +13132,7 @@ fn a_finished_call_keeps_its_row_until_the_batch_is_recorded() {
 // its marker or its hint fails here instead of silently losing its clicks.
 #[test]
 fn the_model_picker_frame_offers_its_rows_and_its_esc_hint_to_the_pointer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     let mut second = state.config.models[0].clone();
     second.name = "second/model".into();
@@ -13162,7 +13177,7 @@ fn the_model_picker_frame_offers_its_rows_and_its_esc_hint_to_the_pointer() {
 // marker instead of under its own text.
 #[test]
 fn a_wrapped_notice_keeps_its_later_rows_under_its_text() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
         "system",
@@ -13194,7 +13209,7 @@ fn a_wrapped_notice_keeps_its_later_rows_under_its_text() {
 // was saved before the engine cleaned the message.
 #[test]
 fn a_provider_refusal_shows_the_providers_message_not_diagnostics() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
         "system",
@@ -13235,7 +13250,7 @@ fn benchmark_scroll_and_selection_with_large_live_output() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     for output_bytes in [0, 4 * 1024 * 1024] {
         for selected in [false, true] {
             let mut state = RenderState::new();
@@ -13444,7 +13459,7 @@ fn visualization_headers_and_tree_nodes_are_click_targets_that_redraw() {
 
 #[test]
 fn scroll_speed_picker_shows_the_value_bar_and_keys() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.settings_picker = Some(rustcode::controller::SettingsPicker::ScrollSpeed);
     state.modal_picker_index = 3;

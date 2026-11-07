@@ -559,7 +559,7 @@ fn oklab_color(lab: [f64; 3]) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::tests::THEME_TEST_LOCK;
+    use crate::ui::tests::lock_theme_test;
 
     const THEMES: [&str; 8] = [
         "default",
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn every_shipped_theme_yields_eight_distinguishable_roles() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         for theme in THEMES {
             crate::ui::theme::set_active_theme(theme);
             let panel = crate::ui::COLOR_PANEL();
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn filled_and_empty_blocks_differ_by_colour_not_only_by_glyph() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         for theme in THEMES {
             crate::ui::theme::set_active_theme(theme);
             let colors = ramp();
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn free_block_clears_the_panel_contrast_floor_in_light_themes() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         // #1515 reported the empty block as effectively invisible on light
         // palettes; `turn_separator` against the light panel is 1.2:1.
         crate::ui::theme::set_active_theme("light");
@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn sky_separates_the_tokens_that_used_to_collide() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("sky");
         // `sky` maps `secondary` and `green` to the same #88c438.
         assert_eq!(crate::ui::COLOR_SECONDARY(), crate::ui::COLOR_GREEN());
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn dracula_separates_the_empty_block_from_system_tools() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         // `dracula` maps `muted` and `turn_separator` to the same #6272a4, so
         // filled and empty used to be colour-identical.
         crate::ui::theme::set_active_theme("dracula");
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn ramp_is_deterministic_for_one_theme() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("tokyo-night");
         let first = ramp();
         let second = ramp();

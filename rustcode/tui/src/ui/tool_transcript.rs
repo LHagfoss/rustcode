@@ -2794,9 +2794,7 @@ mod tests {
 
     #[test]
     fn inline_diff_reuses_cached_rows_and_keys_file_language_and_width() {
-        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = crate::ui::tests::lock_theme_test();
         super::TOOL_RESULT_CACHE.with(|cache| cache.borrow_mut().entries.clear());
         let diff = "@@ -1 +1 @@\n+fn main() { let answer = 42; }\n";
         let first = super::cached_file_edit_diff(diff, "main.rs", 40, false);

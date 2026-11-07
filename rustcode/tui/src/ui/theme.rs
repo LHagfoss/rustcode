@@ -112,9 +112,47 @@ pub fn get_palette(name: &str) -> ThemePalette {
         })
 }
 
-use std::sync::RwLock;
+/// The palette the next frame renders with.
+///
+/// In the app it is process-global: `render_with_transcript_snapshot` re-applies
+/// the configured theme on every frame and every render path reads it back.
+///
+/// Under `cfg(test)` it is thread-local instead. `cargo test` runs hundreds of
+/// render tests in parallel and each of them re-applies its own state's theme,
+/// so a shared slot let a render test on one thread overwrite the palette a
+/// theme test on another thread had just set, halfway through its assertion.
+/// `THEME_TEST_LOCK` cannot prevent that: it only serialises the tests that take
+/// it, and the ordinary render tests have no reason to.
+#[cfg(not(test))]
+static ACTIVE_THEME: std::sync::RwLock<Option<ThemePalette>> = std::sync::RwLock::new(None);
 
-static ACTIVE_THEME: RwLock<Option<ThemePalette>> = RwLock::new(None);
+#[cfg(test)]
+thread_local! {
+    static ACTIVE_THEME: std::cell::RefCell<Option<ThemePalette>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(not(test))]
+fn active_theme() -> Option<ThemePalette> {
+    ACTIVE_THEME.read().ok().and_then(|guard| guard.clone())
+}
+
+#[cfg(test)]
+fn active_theme() -> Option<ThemePalette> {
+    ACTIVE_THEME.with(|slot| slot.borrow().clone())
+}
+
+#[cfg(not(test))]
+fn store_active_theme(palette: ThemePalette) {
+    if let Ok(mut guard) = ACTIVE_THEME.write() {
+        *guard = Some(palette);
+    }
+}
+
+#[cfg(test)]
+fn store_active_theme(palette: ThemePalette) {
+    ACTIVE_THEME.with(|slot| *slot.borrow_mut() = Some(palette));
+}
 
 pub fn set_active_theme(name: &str) {
     // Every frame re-applies the configured theme. Loading a palette reads the
@@ -127,30 +165,24 @@ pub fn set_active_theme(name: &str) {
     {
         return;
     }
-    let palette = get_palette(name);
-    if let Ok(mut guard) = ACTIVE_THEME.write() {
-        *guard = Some(palette);
-    }
+    store_active_theme(get_palette(name));
 }
 
 /// Palette for `name`, served from the active theme when that is the one
 /// asked for. Renderers that need a named theme every frame use this instead of
 /// `get_palette`, which reads the themes directory on each call.
 pub fn palette_for(name: &str) -> ThemePalette {
-    if let Ok(guard) = ACTIVE_THEME.read()
-        && let Some(palette) = guard.as_ref()
+    if let Some(palette) = active_theme()
         && palette.name.eq_ignore_ascii_case(name)
     {
-        return palette.clone();
+        return palette;
     }
     get_palette(name)
 }
 
 pub fn active_palette() -> ThemePalette {
-    if let Ok(guard) = ACTIVE_THEME.read() {
-        if let Some(p) = guard.as_ref() {
-            return p.clone();
-        }
+    if let Some(palette) = active_theme() {
+        return palette;
     }
     get_palette(DEFAULT_THEME_NAME)
 }

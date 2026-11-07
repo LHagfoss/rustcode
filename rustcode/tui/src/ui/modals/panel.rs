@@ -226,7 +226,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::ui::tests::THEME_TEST_LOCK;
+    use crate::ui::tests::lock_theme_test;
 
     fn plain_text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn panel_line_preserves_label_padding_and_text() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let line = panel_line("Model       ", "mock-model", PanelEmphasis::Normal);
         assert_eq!(plain_text(&line), "Model       mock-model");
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn strong_and_threshold_emphasis_use_theme_colors() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let strong = panel_line("L ", "v", PanelEmphasis::Strong);
         assert_eq!(strong.spans[1].style.fg, Some(COLOR_PRIMARY()));
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn code_values_route_through_highlight_path_with_panel_bg() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let line = panel_line("L ", "cargo test", PanelEmphasis::Code);
         assert_eq!(plain_text(&line), "L cargo test");
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn inline_markup_parses_code_and_strong() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let line = panel_line(
             "L ",
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn unclosed_markers_stay_literal() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let line = panel_line("L ", "a ** b `c", PanelEmphasis::Normal);
         assert_eq!(plain_text(&line), "L a ** b `c");
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn category_colors_come_from_the_theme_ramp() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         for theme in ["default", "light", "nord", "dracula", "tokyo-night", "sky"] {
             crate::ui::theme::set_active_theme(theme);
             assert_eq!(
@@ -335,7 +335,7 @@ mod tests {
     /// directly instead of trusting the row format.
     #[test]
     fn command_panel_rows_keep_the_label_column_aligned() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let content = "Keys\n  short         one\n  a-much-longer-label    two\n  mid    three\n";
         let lines = render_panel_content(content, 60);
@@ -368,7 +368,7 @@ mod tests {
     /// indent and the value column are all gone (#1588).
     #[test]
     fn markdown_reflows_the_rows_into_one_paragraph() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let content = "  short    one\n  longer-label   two\n  mid    three\n";
         let collapsed = crate::ui::markdown::render_markdown(content, 28, false, false);
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn command_panel_rows_mark_over_threshold_percentages() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let lines = render_panel_content("  small    12.5%\n  large   85.5%\n", 60);
 
@@ -439,7 +439,7 @@ mod tests {
     /// `•`; both belong in the same column as everything else (#1588).
     #[test]
     fn colon_labels_and_bullets_are_rows() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let content = "• Version:      v0.56.2\n• Repository:   https://example.test/repo\n";
         let rows: Vec<String> = render_panel_content(content, 60)
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_single_double_space_line_stays_prose() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let lines = render_panel_content("Nothing to see here.  Move on.\n", 60);
 
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn markdown_structures_are_left_to_the_markdown_renderer() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         for line in [
             "# Heading",
@@ -505,7 +505,7 @@ mod tests {
     /// one-character fragments.
     #[test]
     fn a_label_too_wide_for_the_frame_is_truncated() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let content = "  short  one\n  a-much-longer-label  two\n";
         let rows: Vec<String> = render_panel_content(content, 20)
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn a_wrapped_value_stays_under_the_value_column() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         crate::ui::theme::set_active_theme("default");
         let content =
             "  key    a description long enough that it has to wrap somewhere\n  other  short\n";

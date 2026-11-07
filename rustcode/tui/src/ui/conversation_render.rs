@@ -1594,7 +1594,7 @@ mod projection_tests {
 
     #[test]
     fn scrolling_can_inspect_the_middle_of_a_long_live_response() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::ui::tests::lock_theme_test();
         let state = streaming_state();
         let mut transcript = TranscriptState::default();
         let bottom = visible_text(&state, &mut transcript, 40, 8).join("\n");
@@ -1623,7 +1623,7 @@ mod projection_tests {
 
     #[test]
     fn live_growth_holds_manual_reading_rows_and_jump_resumes_following() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::ui::tests::lock_theme_test();
         let mut state = streaming_state();
         let mut transcript = TranscriptState::default();
         let _ = visible_text(&state, &mut transcript, 40, 8);
@@ -1651,7 +1651,7 @@ mod projection_tests {
 
     #[test]
     fn live_reading_survives_completion_cancellation_and_height_resize() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::ui::tests::lock_theme_test();
         for cancelled in [false, true] {
             let mut state = streaming_state();
             let mut transcript = TranscriptState::default();
@@ -1684,7 +1684,7 @@ mod projection_tests {
 
     #[test]
     fn tool_output_announces_unseen_activity_without_timer_only_updates() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::ui::tests::lock_theme_test();
         let mut state = streaming_state();
         let mut call = rustcode::controller::LiveToolCall::new(
             "call-1",
@@ -1717,7 +1717,7 @@ mod projection_tests {
 
     #[test]
     fn width_resize_rewraps_unicode_live_rows_and_preserves_subsequent_reading() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::ui::tests::lock_theme_test();
         let mut state = streaming_state();
         let mut transcript = TranscriptState::default();
         let _ = visible_text(&state, &mut transcript, 40, 8);
@@ -1739,9 +1739,7 @@ mod projection_tests {
     fn visible_slice_matches_full_projection_across_blocks_welcome_and_live_tail() {
         // Both projections are rendered with the ambient theme, so a test that
         // changes `ACTIVE_THEME` mid-run would make the two renders disagree.
-        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = crate::ui::tests::lock_theme_test();
         let mut state = RenderState::new();
         state
             .history
@@ -1809,7 +1807,7 @@ mod completion_tests {
 
     #[test]
     fn completion_metadata_is_persisted_and_renders_after_prose() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::ui::tests::lock_theme_test();
         let mut state = RenderState::new();
         let mut message = rustcode::controller::ChatMessage::new("assistant", "Task finished.");
         message.completed_at = Some("2000-09-06T14:32:00+02:00".to_string());
@@ -1858,7 +1856,7 @@ mod completion_tests {
 
     #[test]
     fn completion_omits_unknown_times_and_wraps_short_durations() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::ui::tests::lock_theme_test();
         let mut message = rustcode::controller::ChatMessage::new("assistant", "Done");
         message.response_time_ms = Some(250);
         assert!(render_turn_completion(&message, 100).is_empty());

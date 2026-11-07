@@ -1390,9 +1390,7 @@ mod tests {
 
     #[test]
     fn selected_projection_matches_unselected_view_with_tool_groups_and_welcome() {
-        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = crate::ui::tests::lock_theme_test();
         let mut state = RenderState::new();
         for index in 0..24 {
             state.history.push(ChatMessage::new(
@@ -2069,7 +2067,7 @@ mod tests {
 
     #[test]
     fn scrolled_live_selection_keeps_unicode_copy_through_growth_and_completion() {
-        let _guard = super::super::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _guard = super::super::tests::lock_theme_test();
         let mut state = RenderState::new();
         state
             .history
@@ -2950,7 +2948,7 @@ mod tests {
         use crate::inline_terminal::InlineTerminal;
         use ratatui::backend::TestBackend;
 
-        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let _theme_guard = crate::ui::tests::lock_theme_test();
         for entries in [5_000, 50_000] {
             for width in [132, 240] {
                 let mut state = RenderState::new();
@@ -3065,9 +3063,7 @@ mod tests {
     #[test]
     #[ignore = "manual end-to-end deep selection scroll benchmark"]
     fn bench_deep_selection_scroll_many_history_entries() {
-        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = crate::ui::tests::lock_theme_test();
         let mut state = RenderState::new();
         for index in 0..50_000 {
             state.history.push(ChatMessage::new(
