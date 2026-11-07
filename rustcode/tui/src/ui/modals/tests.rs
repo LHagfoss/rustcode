@@ -1,13 +1,13 @@
 use super::*;
 use crate::inline_terminal::InlineTerminal as Terminal;
 use crate::ui::render_snapshot::render_snapshot;
-use crate::ui::tests::THEME_TEST_LOCK;
+use crate::ui::tests::lock_theme_test;
 use ratatui::{backend::TestBackend, layout::Rect};
 use rustcode::controller::ToolConfirmation;
 
 #[test]
 fn single_command_confirmation_uses_codex_command_prompt() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
     let mut state = RenderState::new();
     state.config.theme = "default".to_owned();
@@ -642,7 +642,7 @@ fn settings_picker_uses_unified_modal_picker_style() {
 /// budget (#1528, #1588).
 #[test]
 fn every_inline_picker_shares_the_measurement_rules() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let panel = COLOR_PANEL();
 
     // Composer row far enough down that every declared height fits above it.
@@ -842,7 +842,7 @@ fn picker_list_window_keeps_the_selection_visible() {
 
 #[test]
 fn picker_panel_is_bounded_above_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let state = RenderState::new();
@@ -862,9 +862,7 @@ fn picker_panel_is_bounded_above_the_composer() {
 
 #[test]
 fn subagent_picker_hints_fit_without_clipping_at_24_40_and_80_columns() {
-    let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
-        .lock()
-        .expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     for width in [24u16, 40, 80] {
         let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
@@ -921,7 +919,7 @@ fn subagent_picker_hints_fit_without_clipping_at_24_40_and_80_columns() {
 
 #[test]
 fn picker_panel_never_exceeds_the_space_above_the_composer() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
 
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let state = RenderState::new();
@@ -1100,7 +1098,7 @@ fn history_picker_renders_borderless_full_width_options() {
 
 #[test]
 fn context_panel_uses_theme_swatches_matching_the_grid() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     crate::ui::theme::set_active_theme("default");
     // Tall enough for all eight legend rows plus the grid and reserves.
     let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
@@ -1152,7 +1150,7 @@ fn context_panel_uses_theme_swatches_matching_the_grid() {
 
 #[test]
 fn context_panel_emphasizes_over_threshold_categories() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     crate::ui::theme::set_active_theme("default");
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
     let mut state = RenderState::new();
@@ -1212,7 +1210,7 @@ fn context_panel_emphasizes_over_threshold_categories() {
 /// the values line up in the frame and not only in the source (#1588).
 #[test]
 fn command_panel_paints_an_aligned_label_column() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.command_panel = Some(rustcode::controller::CommandPanel {
         title: "Memory",
@@ -1244,7 +1242,7 @@ fn command_panel_paints_an_aligned_label_column() {
 /// is still reachable (#1588).
 #[test]
 fn command_palette_matches_a_mistyped_query() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let mut state = RenderState::new();
     state.command_picker_search = "show ram usge".to_owned();
     let snapshot = render_snapshot(&state);
@@ -1272,7 +1270,7 @@ fn command_palette_matches_a_mistyped_query() {
 /// (#1588).
 #[test]
 fn highlight_match_spans_marks_only_the_matched_characters() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     crate::ui::theme::set_active_theme("default");
     let base = Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL());
 
@@ -1373,7 +1371,7 @@ fn tasks_panel_text(view: Option<rustcode::controller::TasksPanelView>, width: u
 
 #[test]
 fn tasks_panel_lists_running_then_finished_with_key_hints() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let rows = tasks_panel_text(Some(tasks_panel_view(None)), 80);
     let text = rows.join("\n");
     let row_of = |needle: &str| {
@@ -1434,7 +1432,7 @@ fn tasks_panel_lists_running_then_finished_with_key_hints() {
 
 #[test]
 fn tasks_panel_empty_and_finished_only_states_say_nothing_is_running() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let empty = rustcode::controller::TasksPanelView {
         rows: Vec::new(),
         selected: 0,
@@ -1459,7 +1457,7 @@ fn tasks_panel_empty_and_finished_only_states_say_nothing_is_running() {
 
 #[test]
 fn tasks_panel_keeps_the_selection_in_view_and_inside_a_narrow_frame() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     use rustcode::controller::{TaskOutcome, TaskPanelRow, TaskRowState};
     let mut view = tasks_panel_view(None);
     view.rows.extend((0..30).map(|index| TaskPanelRow {
@@ -1487,7 +1485,7 @@ fn tasks_panel_keeps_the_selection_in_view_and_inside_a_narrow_frame() {
 
 #[test]
 fn tasks_panel_log_scroll_limit_tracks_wrapping_and_omission_marker() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let measure = |text: String, width: u16, earlier_omitted: bool| {
         let mut state = RenderState::new();
         state.tasks_panel = Some(tasks_panel_view(Some(rustcode::controller::TaskLogView {
@@ -1522,7 +1520,7 @@ fn tasks_panel_log_scroll_limit_tracks_wrapping_and_omission_marker() {
 
 #[test]
 fn tasks_panel_log_view_shows_the_newest_output_and_how_to_go_back() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let _theme_guard = lock_theme_test();
     let log = |scroll: usize| rustcode::controller::TaskLogView {
         task_id: "t2".to_owned(),
         command: "npm run dev".to_owned(),

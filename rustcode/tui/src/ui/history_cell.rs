@@ -1912,9 +1912,7 @@ mod tests {
 
     #[test]
     fn remote_panel_clears_a_hidden_indicator_hold() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         let mut transcript = TranscriptState::default();
         let now = std::time::Instant::now();
         let hold = std::time::Duration::from_secs(1);
@@ -1986,9 +1984,7 @@ mod tests {
     fn committed_history_cache_shares_large_block_and_projects_only_viewport() {
         // The cache key mixes in the process-global active theme, so a
         // concurrent theme test would change it between the two lookups.
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         let mut state = RenderState::new();
         state.history.push(ChatMessage::new(
             "assistant",
@@ -2017,9 +2013,7 @@ mod tests {
 
     #[test]
     fn deep_scroll_reuses_every_block_between_the_tail_and_the_reader() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         // More blocks than the old 32-entry cache: walking back to the first
         // one evicted the newest, so each frame re-rendered the whole span.
         let mut state = RenderState::new();
@@ -2212,9 +2206,7 @@ mod tests {
 
     #[test]
     fn completed_stream_blocks_are_not_reparsed_for_every_append() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         super::super::markdown::take_parsed_bytes();
         let mut transcript = TranscriptState::default();
         let mut source = String::new();
@@ -2238,9 +2230,7 @@ mod tests {
 
     #[test]
     fn streamed_markdown_matches_full_render_after_each_append() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         let cases: &[&[&str]] = &[
             &[
                 "# Heading",
@@ -2292,9 +2282,7 @@ mod tests {
 
     #[test]
     fn streamed_markdown_matches_full_render_for_partial_tokens() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         let source = "# Heading\n\nA **bold** paragraph with [a link](https://example.com).\n\n- first item\n\n- second item\n\n| Key | Value |\n|---|---|\n| one | two |";
         let mut transcript = TranscriptState::default();
         for end in source
@@ -2312,9 +2300,7 @@ mod tests {
 
     #[test]
     fn streaming_markdown_invalidates_after_source_rewrite_and_theme_change() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         super::super::theme::set_active_theme("default");
         let mut transcript = TranscriptState::default();
         for source in [
@@ -2340,9 +2326,7 @@ mod tests {
 
     #[test]
     fn thought_timer_redraw_keeps_streaming_cell_and_markdown_cache() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         let mut transcript = TranscriptState::default();
         let source = "<think>Working through this.\n\nAnother thought.</think>\n\nFinal paragraph";
         transcript.set_assistant(source, false, Some(100), Some(100), Some(4));
@@ -2368,9 +2352,7 @@ mod tests {
     #[test]
     #[ignore = "manual before/after streaming Markdown benchmark"]
     fn benchmark_long_multi_block_stream() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         for run in 0..3 {
             let mut transcript = TranscriptState::default();
             let mut source = String::new();

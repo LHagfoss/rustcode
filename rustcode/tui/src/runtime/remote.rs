@@ -1308,7 +1308,7 @@ mod tests {
     fn remote_panel_paints_the_whole_qr_black_on_white_in_light_and_dark_themes() {
         use crate::inline_terminal::InlineTerminal as Terminal;
         use crate::ui::render;
-        use crate::ui::tests::THEME_TEST_LOCK;
+        use crate::ui::tests::lock_theme_test;
         use ratatui::backend::TestBackend;
         use ratatui::style::Color;
         use rustcode::controller::RenderState;
@@ -1319,7 +1319,7 @@ mod tests {
         use rustcode::remote_gateway::pairing::PairingOffer;
         use rustcode::remote_gateway::qr;
 
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         for (theme, host) in [("default", "192.168.1.20"), ("light", "127.0.0.1")] {
             let offer = OfferDetails::new(
                 &AdvertisedAddress::new(host, 17879).unwrap(),

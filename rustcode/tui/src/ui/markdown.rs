@@ -1304,13 +1304,13 @@ fn last_top_level_block_start(source: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{COLOR_PRIMARY, MarkdownCache, cache_key, render_cache, render_markdown};
-    use crate::ui::tests::THEME_TEST_LOCK;
+    use crate::ui::tests::lock_theme_test;
     use ratatui::style::Modifier;
     use ratatui::text::Line;
 
     #[test]
     fn descriptive_markdown_link_keeps_a_copyable_destination() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_markdown(
             "Read [the guide](https://example.com/docs) now.",
@@ -1337,7 +1337,7 @@ mod tests {
 
     #[test]
     fn autolink_does_not_repeat_its_destination() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let rendered = render_markdown("<https://example.com/docs>", 100, false, false)
             .iter()
@@ -1349,7 +1349,7 @@ mod tests {
 
     #[test]
     fn table_link_keeps_destination_in_the_cell() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let rendered = render_markdown(
             "| Resource |\n|---|\n| [guide](https://example.com/docs) |",
@@ -1369,7 +1369,7 @@ mod tests {
 
     #[test]
     fn local_links_with_unicode_labels_keep_their_paths() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let rendered = render_markdown(
             "See [Café 指南](./docs/guide.md) and [源文件](file:///tmp/source.rs).",
@@ -1393,7 +1393,7 @@ mod tests {
 
     #[test]
     fn narrow_table_wraps_a_link_without_losing_the_destination() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_markdown(
             "| Resource |\n|---|\n| [guide](https://example.com/docs) |",
@@ -1412,7 +1412,7 @@ mod tests {
 
     #[test]
     fn long_table_link_destination_is_utf8_safe_and_visibly_truncated() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let destination = format!("https://example.com/{}", "é".repeat(1_000));
         let markdown = format!("| Resource |\n|---|\n| [guide]({destination}) |");
@@ -1430,7 +1430,7 @@ mod tests {
 
     #[test]
     fn renders_markdown_tables_with_column_separators() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = "| Header 1 | Header 2 |\n|---|---|\n| Cell 1 | Cell 2 |";
         let lines = render_markdown(md, 80, false, false);
@@ -1448,7 +1448,7 @@ mod tests {
 
     #[test]
     fn activity_table_keeps_all_headers_readable() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         let md = "| Day | GitLab project | Activity window | What happened |\n|---|---|---|---|\n| Fri 2/10 (today) | 94 paral-x-webpage (09:40–11:29) + 91 paral-x (13:27–14:18) | 09:40–11:29, 13:27–14:18 | Bilingual Paral X website + release workflow, brand/agents; company-agent + global prompts (D21–D24), agent tools redesign |";
         for width in [80, 120, 180] {
             let lines = render_markdown(md, width, false, false);
@@ -1470,7 +1470,7 @@ mod tests {
 
     #[test]
     fn table_cells_keep_inline_markdown_styles() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = "| Name | Value |\n|---|---|\n| **bold** | `code` |";
         let lines = render_markdown(md, 80, false, false);
@@ -1493,7 +1493,7 @@ mod tests {
 
     #[test]
     fn table_alignment_and_header_emphasis_survive_terminal_layout() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = concat!(
             "| Left | Center | Right |\n",
@@ -1523,7 +1523,7 @@ mod tests {
 
     #[test]
     fn renders_latest_commits_table_fixture_as_markdown() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = concat!(
             "| Commit | Message |\n",
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[test]
     fn wrapped_list_items_keep_a_hanging_indent() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_markdown("- one two three four five six seven", 24, false, false);
         let rendered = lines
@@ -1586,7 +1586,7 @@ mod tests {
 
     #[test]
     fn wrapped_blockquotes_keep_their_gutter() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_markdown(
             "> one two three four five six seven eight",
@@ -1606,7 +1606,7 @@ mod tests {
 
     #[test]
     fn narrow_tables_render_as_key_value_records() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = concat!(
             "| Name | Purpose |\n",
@@ -1633,7 +1633,7 @@ mod tests {
 
     #[test]
     fn parses_nested_inline_markup() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_markdown("**bold _italic_** and `code`", 80, false, false);
         let text: String = lines
@@ -1652,7 +1652,7 @@ mod tests {
 
     #[test]
     fn renders_lists_and_styles_headings_like_codex() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_markdown("# Title\n\n- one\n- two", 80, false, false);
         let text: String = lines
@@ -1674,7 +1674,7 @@ mod tests {
 
     #[test]
     fn soft_breaks_reflow_instead_of_forcing_a_new_line() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         // Source text hard-wrapped at ~20 cols, like a model that mimics
         // fixed-width prose. A soft break (plain newline) must reflow to the
@@ -1688,7 +1688,7 @@ mod tests {
 
     #[test]
     fn hard_breaks_still_force_a_new_line() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = "one two  \nthree four";
         let lines = render_markdown(md, 80, false, false);
@@ -1697,7 +1697,7 @@ mod tests {
 
     #[test]
     fn cache_evicts_least_recently_used_entry_at_cap() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let cap = 8;
         let mut cache = MarkdownCache::new(cap);
@@ -1742,7 +1742,7 @@ mod tests {
 
     #[test]
     fn uncached_render_does_not_touch_the_global_cache() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let width = 4242;
         assert_eq!(global_entries_at_width(width), 0);
@@ -1761,7 +1761,7 @@ mod tests {
 
     #[test]
     fn renders_loose_table_with_blank_lines() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = "Here are my skills:\n\n| Skill | Purpose |\n| --- | --- |\n\n| agents-sdk | Build AI agents |\n| clockify | Time tracking |\n";
         let lines = render_markdown(md, 80, false, false);
@@ -1777,7 +1777,7 @@ mod tests {
 
     #[test]
     fn markdown_fenced_table_renders_as_a_table() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = "```markdown\n| Tool | Purpose |\n| --- | --- |\n| grep | Search files |\n```";
         let rendered = render_markdown(md, 80, false, false)
@@ -1796,7 +1796,7 @@ mod tests {
 
     #[test]
     fn unicode_dash_table_separators_render_as_tables() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = concat!(
             "| Category | Name | Purpose |\n",
@@ -1817,7 +1817,7 @@ mod tests {
 
     #[test]
     fn longer_blockquoted_markdown_fence_unwraps_a_table() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md =
             "> ````markdown\n> | Tool | Purpose |\n> | --- | --- |\n> | grep | Search |\n> ````";
@@ -1829,7 +1829,7 @@ mod tests {
 
     #[test]
     fn renders_loose_bullet_lists_without_intermediate_gaps() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = "Shell & System\n\n• run_command — run any shell command\n\n• get_time — get current date/time\n\n• manage_task — manage background tasks\n";
         let lines = render_markdown(md, 80, false, false);
@@ -1846,7 +1846,7 @@ mod tests {
 
     #[test]
     fn bold_and_headings_use_primary_accent_color() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let md = "# Main Heading\n\nThis is **bold text** in markdown.";
         let lines = render_markdown(md, 80, false, false);

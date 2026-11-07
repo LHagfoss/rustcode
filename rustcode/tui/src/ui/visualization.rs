@@ -1407,9 +1407,7 @@ mod tests {
 
     #[test]
     fn widget_colors_follow_the_active_theme() {
-        let _theme_guard = super::super::tests::THEME_TEST_LOCK
-            .lock()
-            .expect("theme test lock");
+        let _theme_guard = super::super::tests::lock_theme_test();
         let content = fenced(BAR);
         let cell = AssistantMarkdownCell::committed(&content, None, None, None, None);
         let bar_color = |lines: &[Line<'_>]| {

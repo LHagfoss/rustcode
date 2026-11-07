@@ -719,7 +719,7 @@ mod tests {
         COLOR_MUTED, TOOL_RESULT_TRANSCRIPT_MAX_LINES, edit_diff_counts, render_file_edit_diff,
         render_file_preview, render_tool_result, synthesized_edit_preview,
     };
-    use crate::ui::tests::THEME_TEST_LOCK;
+    use crate::ui::tests::lock_theme_test;
     use ratatui::style::Color;
 
     fn text_of(line: &ratatui::text::Line<'_>) -> String {
@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn file_edit_diff_keeps_hunk_line_numbers_and_hides_metadata() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         let diff = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -30,3 +30,3 @@\n before\n-old\n+new\n@@ -90 +90 @@\n--- old-code\n+++ new-code\n";
         let lines = render_file_edit_diff(diff, 80, false);
         let text = lines.iter().map(text_of).collect::<Vec<_>>();
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn file_edit_diff_wraps_long_code_without_repeating_line_numbers() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         let content = "pub fn long_name() { let value = \"012345678901234567890123456789\"; }";
         let diff = format!("@@ -1 +1 @@\n+{content}\n");
         let lines = render_file_edit_diff(&diff, 24, false);
@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn file_edit_diff_handles_tabs_unicode_and_disjoint_hunks() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         let diff = "@@ -12 +12 @@\n-\t旧value\n+\t新value\n@@ -90 +90 @@\n+tail\n";
         for width in [12, 24, 80] {
             let lines = render_file_edit_diff(diff, width, false);
@@ -811,7 +811,7 @@ mod tests {
 
     #[test]
     fn unreadable_overwrite_does_not_synthesize_added_content() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         let args = serde_json::json!({"path": "src/data.bin", "content": "replacement"});
         assert!(
             synthesized_edit_preview(
@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn read_results_have_header_and_line_numbered_code() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "view_file",
@@ -849,7 +849,7 @@ mod tests {
 
     #[test]
     fn read_results_leave_out_the_continuation_note_for_the_model() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "view_file",
@@ -866,7 +866,7 @@ mod tests {
 
     #[test]
     fn grep_results_distinguish_file_headers_and_matches() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "grep",
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn directory_results_get_tree_markers() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "list_directory",
@@ -902,7 +902,7 @@ mod tests {
 
     #[test]
     fn command_results_have_compact_status_and_output() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "run_command",
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn failed_commands_use_error_status_and_stderr_marker() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "run_command",
@@ -937,7 +937,7 @@ mod tests {
 
     #[test]
     fn edit_results_show_only_a_compact_success_summary() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "replace_file_content",
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn edit_results_preserve_embedded_diffs() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "replace_file_content",
@@ -983,7 +983,7 @@ mod tests {
 
     #[test]
     fn write_preview_synthesizes_added_lines_from_content_args() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
         use serde_json::json;
 
         let args = json!({"path": "src/new.rs", "content": "pub fn new() {}\n"});
@@ -1050,7 +1050,7 @@ mod tests {
 
     #[test]
     fn control_plane_results_render_like_any_other_tool() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         for (tool, result) in [("use_skill", "loaded skill"), ("spawn_agent", "agent done")] {
             let lines = render_tool_result(
@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn tool_output_uses_darker_muted_color() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "run_command",
@@ -1091,7 +1091,7 @@ mod tests {
 
     #[test]
     fn generic_results_are_muted_and_keep_errors_visible() {
-        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let _theme_guard = lock_theme_test();
 
         let lines = render_tool_result(
             "mcp_custom_tool",
