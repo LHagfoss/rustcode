@@ -265,12 +265,14 @@ impl CodexAdapter {
 
         let cwd_text = cwd.to_string_lossy().into_owned();
         // Where it runs and how replies are formatted for RustCode's chat
-        // (docs/output-style.md); Codex appends it to its own instructions as
-        // a developer message.
+        // (docs/output-style.md), plus where the skills are: Codex appends it
+        // to its own instructions as a developer message. The note is an input,
+        // computed when the thread started this process.
         let output_style = crate::tools::schema::harness_instructions(
             &harness.name,
             super::client_visualization_level(),
             super::client_smart_ui(),
+            options.skills_note.as_deref(),
         );
         let mut thread = None;
         if let Some(resume) = &options.resume {

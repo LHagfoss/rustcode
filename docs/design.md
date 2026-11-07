@@ -40,12 +40,12 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | Token | Use | Default dark | Default light |
 |---|---|---|---|
 | `bg` | The chat and main panes | `#0b0b0c` | `#ffffff` |
-| `sidebar` | The sidebar | `#131315` | `#f7f7f8` |
-| `surface` | Resting cards: composer, settings groups, error cards | `#18181a` | `#f0f0f1` |
-| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#1e1e21` | `#ffffff` |
-| `surface-3` | Raised over raised: kbd, a hover label or a tooltip drawn on a popover | `#232327` | `#e8e8ea` |
+| `sidebar` | The sidebar | `#151517` | `#f7f7f8` |
+| `surface` | Resting cards: composer, settings groups, error cards | `#1d1d20` | `#eaeaea` |
+| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#242428` | `#ffffff` |
+| `surface-3` | Raised over raised: kbd, a hover label or a tooltip drawn on a popover | `#2a2a2e` | `#e4e4e6` |
 | `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0f` | `#0000000f` |
-| `border-strong` | Inputs, dividers that must read | `#ffffff1c` | `#0000001f` |
+| `border-strong` | A line that must read: a chart marker, a dashed outline, the knob's ring | `#ffffff1c` | `#0000001f` |
 | `text` | Primary text and icons | `#ededed` | `#171717` |
 | `text-muted` | Secondary text, idle icons | `#a1a1a1` | `#5c5c5c` |
 | `text-faint` | Metadata, placeholders, disabled | `#6b6b6b` | `#9a9a9a` |
@@ -60,10 +60,12 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | `scrollbar` | Scrollbar thumb | `#ffffff26` | `#00000026` |
 
 The surfaces step evenly in lightness (CIE L\*): dark `bg` 3.0, `sidebar`
-6.0, `surface` 8.3, `surface-2` 11.4, `surface-3` 13.9; light `bg` 100,
-`sidebar` 97.3, `surface` 94.8, `surface-3` 92.1, with light `surface-2`
+6.8, `surface` 10.9, `surface-2` 14.3, `surface-3` 17.2; light `bg` 100,
+`sidebar` 97.3, `surface` 92.7, `surface-3` 90.6, with light `surface-2`
 white (raised surfaces are lifted by their shadow there). A theme that
-changes them should keep the steps even.
+changes them should keep the steps even, and the step from `bg` to `surface`
+is the one that carries every card: about 7–8 L\* of it, so a card reads as
+its own plane with no border (Borders).
 
 Two more values are the same in every theme, and no theme sets them: `knob`
 (`#ffffff`, `bg-knob`) is the part of an active control that moves or is
@@ -116,14 +118,24 @@ inside a padded parent uses the step below the parent's.
 
 ## Borders
 
+A surface is a plane of fill, never an outline: every card, panel, popover
+and nested block is told apart by its step in `surface` (or by the glass and
+the shadow where it floats), not by a line drawn round it.
+
 - Hairline is always 1px `border-border`; never 0.5px, never 2px.
-- Prefer a surface step: a card is `bg-surface` on `bg-bg`, with no border.
+- A card is `bg-surface` on `bg-bg`, with no border. Inside it, a grouped
+  block is `bg-surface-2` (a nested panel, a token chip) and a quiet inset is
+  `bg-fill-subtle`, again with no border; controls are `bg-fill`, which is
+  translucent and so is always a step over whatever holds it. Never stack two
+  edges to tell them apart.
+- The only lines left are separators: `divide-border` between the rows of one
+  card, `border-b` under a header, `border-t` above a footer. They use
+  `border-border`; `border-strong` is for a line that must read (a chart
+  marker, a dashed outline), never for a card.
 - Raised surfaces get their edge from `--rc-shadow-*`, which includes a 1px
   `border` ring; do not add `border` to a popover or menu as well.
-- Inputs use `border-strong` as an inset ring only when they sit on `bg`
-  with no surface around them; inside a card the fill alone is enough.
 - No coloured borders for state (an error card is not outlined in red; a
-  focused field does not turn blue).
+  focused field does not turn blue). State is a fill, a tint or a chip.
 
 ## Active controls
 
@@ -218,10 +230,14 @@ Frosted rather than near-solid on purpose: the field is what the screen is about
 the lightest surface in the app, and the blur keeps text scrolling under it a hint rather
 than a smear. One filter per surface, two recipes in all
 (the shared glass and the composer's): no larger radius, no second blur
-stacked on the first, no blur on a pane or a scrolling row. The composer's pair
-is also what the cards under a new thread's field are made of
-(`.rc-glass-soft`, ui/NewThreadWidgets.tsx): the same material, not a third
-recipe.
+stacked on the first, no blur on a pane or a scrolling row.
+
+A new thread draws its chosen picture behind the whole pane, so the field there takes a third
+value of its own: 85% (`--rc-composer-bg-over`, `.rc-composer-over`, ui/ChatView.tsx), which
+reads as a panel rather than as another window on the picture. The cards under it are the
+screen's one see-through surface, `.rc-glass-faint`: a third of `surface-2` and the shared
+filter, no edge ring, so the picture runs on behind them. Both go solid under Reduce
+transparency with the rest.
 
 ## Spacing
 
@@ -427,7 +443,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Chip:** `Chip` for a row's short state — signed in, not signed in, active,
   stale — tinted 12% in its tone, never a coloured border.
 - **Input:** `h-8 rounded-md bg-fill-subtle px-3 text-callout`,
-  placeholder `text-fg-faint`, no ring until `:focus-visible`.
+  placeholder `text-fg-faint`, no ring until `:focus-visible`. A control in a
+  Settings row takes `fieldClass` instead: `bg-fill`, hover and focus
+  `bg-fill-strong`, and still no edge. The row's `Action` rests on
+  `bg-fill-subtle`, hovers `bg-fill` and presses `bg-fill-strong`, so it never
+  reads as a second input.
 - **Chip:** `h-6 rounded-full bg-fill px-2 text-callout text-fg-muted`;
   status chips tint with their colour at 12–14%.
 - **Row (list):** `rounded-md px-2.5 py-1`, hover `bg-fill-subtle`,
@@ -555,37 +575,38 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Settings:** a floating panel over the app, not a page of it: a centred
   `max-w-[80rem] max-h-[60rem]` panel inside `p-1 sm:p-6 lg:p-10` (about a
   hundred px in from the sides at 1512×945, a small inset in a narrow
-  window), `rounded-3xl` over our raised shadow and a hairline edge, on a
-  `bg-bg/60` scrim; the shell stays mounted and inert behind it. A press on
-  the scrim, Esc, ⌘, or the header's close button puts you back where you
+  window), `rounded-2xl bg-bg` over our raised shadow, which draws its edge,
+  on a `bg-bg/60` scrim; the shell stays mounted and inert behind it. A press
+  on the scrim, Esc, ⌘, or the header's close button puts you back where you
   were. The panel takes focus when it opens, never its first control. A
-  240px nav column in `bg-sidebar` with a hairline on its end edge holds a
-  32px search field, then the pages under short `text-callout` headings
-  (`Setup`, `App`, `System`), or the results while there is a query. Nav rows
-  are `h-8 rounded-md px-2` with a `size-4` icon, `text-body`; the open one is
-  `bg-fill` in `fg`, the others muted and filled on hover. The content has its
-  own 48px header — the breadcrumb `Settings / General` (the first part
-  muted) at its start, "Restore defaults" and the close button at its end —
-  with a hairline under it, and the page scrolls beneath. One page shows at a
-  time in a centred `max-w-[760px]` column, `pt-5`, its rows keeping the
-  `px-4` inset the section titles share. Under the open page the nav lists
-  that page's sections, marking the one the content is scrolled to and
-  scrolling to another on a press; a page of one section lists none.
+  240px nav column in `bg-sidebar` — its own step over the page, no divider
+  at its end edge — holds a 32px search field, then the pages under short
+  `text-callout` headings (`Setup`, `App`, `System`), or the results while
+  there is a query. Nav rows are `h-8 rounded-md px-2` with a `size-4` icon,
+  `text-body`; the open one is `bg-fill` in `fg`, the others muted and filled
+  on hover. The nav is flat: one row per page, in every state, with no list
+  of that page's sections under it (a page's sections are its headings, in
+  the content), so a page switch never moves the rows around it. The content
+  has its own 48px header — the breadcrumb `Settings / General` (the first
+  part muted) at its start, "Restore defaults" and the close button at its
+  end — with a hairline under it, and the page scrolls beneath. One page
+  shows at a time in a centred `max-w-[760px]` column, `pt-5`, its rows
+  keeping the `px-4` inset the section titles share.
   "Restore defaults" shows only while a row on that page differs from its
   default, and puts back every changed row at once with one toast. Picking a
   result opens its page and lights the row it found (`rc-setting-hit`, a
   `fill` fading out over 1.2s).
 - **Settings section and row:** a section is its name in `text-base
   font-semibold text-fg`, `px-3`/`px-4`, `space-y-2.5` above one group card,
-  and `32px` of gap before the next section. The card is `rounded-xl` with a
-  1px `border-strong` edge over a soft step of the page
-  (`bg-surface-2/40`), rows divided by a `border` hairline. A row is
-  `px-4 py-3.5`: its title `text-sm font-medium`, its description
-  `text-callout leading-normal text-fg-muted`, its control at the right, and
-  the control stacks under the text when the row's own container is narrow.
-  Controls in a row — buttons, selects, the segmented control — are
-  `h-8 rounded-lg` with a thin `border-strong` edge; switches keep their own
-  shape.
+  and `32px` of gap before the next section. The card is `rounded-xl
+  bg-surface`, one step over the page and no border, its rows divided by a
+  `border` hairline. A row is `px-4 py-3.5`: its title `text-sm font-medium`,
+  its description `text-callout leading-normal text-fg-muted`, its control at
+  the right, and the control stacks under the text when the row's own
+  container is narrow. Controls in a row — buttons, selects, the segmented
+  control — are `h-8 rounded-lg` on `bg-fill` over the card (hover and focus
+  `bg-fill-strong`), with no edge, so the same control reads at every nesting
+  depth; switches keep their own shape.
 - **Settings row, reset:** rows show their description in full and keep the
   reset button of the bullet below where the value differs from its default.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
@@ -645,11 +666,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   change the effort at once; the model's name (Enter or a click) swaps the card
   for the searchable list of every harness's models, and picking one comes back
   to the track on that model's own last level.
-- **New thread cards:** under an empty thread's field, a quiet row of five glass cards
-  (`.rc-glass-soft rounded-xl shadow-1`, one height, label in `text-caption text-fg-faint`
-  with a 12px icon): activity, this project's recent threads, the last thirty days of
-  usage, its pull requests, and this month against the last. Three columns from `lg`, one
-  sideways-scrolling row below it; a card with nothing to say says so in one line rather
+- **New thread screen:** the field and its strip, and the cards below them. No heading, no path
+  line and no starter prompts: the project is picked from the folder pill in the strip, whose
+  panel already lists the projects and ends with `Choose Folder…`. A chosen picture covers the
+  whole pane top to bottom (`object-fit: cover`, no fade) under one light scrim (`bg` at 35%), so
+  what is written on it stays readable in either theme.
+- **New thread cards:** under an empty thread's field, a dashboard of five see-through cards
+  (`.rc-glass-faint rounded-xl`, no edge ring, `p-5`, 16px apart), a step wider than the field
+  (up to 1100px, centred; the field keeps the chat's own measure): the activity heatmap and this
+  project's recent threads across the first row, then the last thirty days of usage, its pull
+  requests and this month against the last. One height for every card, its label in
+  `text-caption text-fg-faint` with a 12px icon; six columns from `lg` (3 + 3, then 2 + 2 + 2),
+  one sideways-scrolling row below it; a card with nothing to say says so in one line rather
   than collapsing, so the field above it never moves as reads land.
 - **Composer strip:** what the thread works in and what it is allowed to do
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
@@ -739,9 +767,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `CircleCheck`/`CircleX`, in the 18px column; its type in `font-medium`,
   the task in `text-fg-muted`, and while it works its current step in
   `text-accent`, done `3 steps · 42s`. Its own steps never become
-  transcript rows; the chevron opens a bordered card
-  (`rounded-lg border bg-fill-subtle/30`) of one-line steps and its
-  answer. Two or more subagents in a row are one row:
+  transcript rows; the chevron opens a card (`rounded-xl bg-surface-2`) of
+  one-line steps and its answer. Two or more subagents in a row are one row:
   `3 subagents`, then `2 working · 42s` in accent (or `1 failed`,
   `done`), opening to a card with each agent's row. Over the composer,
   `● 2 agents working` (accent pill with the `Orb`) opens on hover a card
@@ -816,14 +843,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   kept") rather than offering a button that would pretend. The record is the
   app's, so it lasts while the thread is open (like a question's row): the
   engine's history no longer holds those turns.
-  The minimap wears the same idea at thread scale: a turn a rewind can go back
-  to carries a bead 3px in from its strip's left end, `fg/35` and 5px (the
-  head, the newest, `accent` at 7px), inside the strip's hit area, so the
-  strip stays the one target and the bead is never a hit area of its own.
-  Pointing at it picks that turn as any point on the strip does, and the card
-  beside the strip says `Checkpoint · turn N` (`· current` for the head) and
-  offers *Rewind here*: the same `rewindCheckpoint` the Changes chip runs, which
-  is one click with no confirm when the engine keeps the state it abandons (the
+  The minimap wears the same idea at thread scale, without drawing a mark of
+  its own on the strip: a turn a rewind can go back to is named in that turn's
+  hover card, which says `Checkpoint · turn N` (`· current` for the head, the
+  newest) and offers *Rewind here*. Pointing anywhere on the strip picks that
+  turn, so the strip stays the one target: the same `rewindCheckpoint` the
+  Changes chip runs, which is one click with no confirm when the engine keeps
+  the state it abandons (the
   button's title says so, as the chip's does) and behind its confirm when it
   cannot. The card sits clear of the strip rather than widening it, so the
   pointer only ever picks the turn it is over: it takes the pointer itself,

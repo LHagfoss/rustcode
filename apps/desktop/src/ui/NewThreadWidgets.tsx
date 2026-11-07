@@ -1,7 +1,8 @@
 // The cards under the composer on a new thread: what this Mac recorded lately
 // (the activity heatmap, this month's turns and spend), the project's recent
 // threads and pull requests, and the last thirty days of reported usage. Devin's
-// home screen is the shape: a quiet row of small glass cards under the field.
+// home screen is the shape: a quiet dashboard of see-through glass cards under
+// the field, wider than the field itself, so the picture behind them shows.
 //
 // Every card draws from a read the app already makes: one `_rustcode/data/usage`
 // report grouped by day (the Activity, Usage and This month cards all slice it),
@@ -57,7 +58,7 @@ const USAGE_DAYS = 30;
 
 /**
  * The column height below which a new thread leaves the cards out: the stack is bottom-anchored,
- * and a column too short for the field, the heading and the cards would push the field's top off
+ * and a column too short for the field and the cards would push the field's top off
  * the pane instead of scrolling (the message row must never leave the window).
  */
 export const NEW_THREAD_WIDGETS_MIN_HEIGHT = 700;
@@ -72,13 +73,28 @@ const SHADE: Record<HeatCell["level"], string> = {
 };
 
 /** One card: a small icon and label, then whatever the card has to say. */
-function Card({ label, icon: Icon, children }: { label: string; icon: LucideIcon; children: ReactNode }) {
+function Card({
+  label,
+  icon: Icon,
+  span,
+  children,
+}: {
+  label: string;
+  icon: LucideIcon;
+  /** How wide the card is in the dashboard's six columns (from `lg`). */
+  span: string;
+  children: ReactNode;
+}) {
   return (
     <section
       aria-label={label}
       // One height for every card and every state (no read, a read, nothing to say), so the stack
-      // under it never grows and the composer above it never moves.
-      className="rc-glass-soft flex min-h-[148px] w-[240px] shrink-0 snap-start flex-col gap-2 rounded-xl p-3 shadow-1 lg:w-auto"
+      // under it never grows and the composer above it never moves. It is see-through: a third of
+      // the surface and the glass filter, no edge ring, so the picture runs on behind it.
+      className={cx(
+        "rc-glass-faint flex min-h-[152px] w-[240px] shrink-0 snap-start flex-col gap-2.5 rounded-xl p-5 lg:w-auto",
+        span,
+      )}
     >
       <h3 className="flex shrink-0 items-center gap-1.5 text-caption font-medium text-fg-faint">
         <Icon size={12} className="shrink-0" />
@@ -118,7 +134,7 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
     return sessions.filter((session) => (session.updatedAt ?? 0) >= from).length;
   }, [sessions, since]);
   return (
-    <Card label="Activity" icon={Activity}>
+    <Card label="Activity" icon={Activity} span="lg:col-span-3">
       {rows === undefined ? (
         <Skeleton className="h-[62px] w-full flex-1" />
       ) : totalTurns === 0 ? (
@@ -163,7 +179,7 @@ function RecentThreadsCard({ project }: { project: string }) {
   const shown = threads.slice(0, SHOWN_THREADS);
   const more = threads.length - shown.length;
   return (
-    <Card label="Recent threads" icon={History}>
+    <Card label="Recent threads" icon={History} span="lg:col-span-3">
       {shown.length ? (
         <div className="flex flex-1 flex-col gap-0.5">
           {shown.map((thread) => (
@@ -196,7 +212,7 @@ function UsageCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
   );
   const tokens = (totals.input ?? 0) + (totals.output ?? 0);
   return (
-    <Card label="Usage" icon={Gauge}>
+    <Card label="Usage" icon={Gauge} span="lg:col-span-2">
       {rows === undefined ? (
         <div className="flex flex-1 flex-col justify-end gap-1.5">
           <Skeleton className="h-4 w-[60%]" />
@@ -277,7 +293,7 @@ function PullsCard({ project }: { project: string }) {
     [pulls],
   );
   return (
-    <Card label="Pull requests" icon={GitPullRequest}>
+    <Card label="Pull requests" icon={GitPullRequest} span="lg:col-span-2">
       {!project ? (
         <div className="flex flex-1 items-center">
           <Nothing>Choose a folder to see its pull requests.</Nothing>
@@ -361,7 +377,7 @@ function ThisMonthCard({ rows }: { rows?: UsageRow[] }) {
   }, [rows, since, previousSince]);
   const empty = thisMonth.turns === 0 && lastMonth.turns === 0;
   return (
-    <Card label="This month" icon={CalendarDays}>
+    <Card label="This month" icon={CalendarDays} span="lg:col-span-2">
       {rows === undefined ? (
         <div className="flex flex-1 flex-col justify-center gap-2">
           <Skeleton className="h-3 w-full" />
@@ -408,8 +424,10 @@ export function NewThreadWidgets({ project }: { project: string }) {
   return (
     <div
       // Below `lg` the cards are one row that scrolls sideways: five columns of a 240px card in a
-      // narrow window would squeeze the labels to nothing. From `lg` they are a grid two rows tall.
-      className="flex snap-x gap-2.5 overflow-x-auto pb-0.5 lg:grid lg:grid-cols-3 lg:overflow-visible lg:pb-0"
+      // narrow window would squeeze the labels to nothing. From `lg` they are a dashboard two rows
+      // tall: the activity heatmap and the recent threads across the top (three columns each), then
+      // usage, pull requests and this month in three.
+      className="flex snap-x gap-4 overflow-x-auto pb-0.5 lg:grid lg:grid-cols-6 lg:overflow-visible lg:pb-0"
       role="group"
       aria-label="Activity, usage and recent work"
     >

@@ -9,20 +9,22 @@ both is
 [`Live terminal sessions from an iOS client`](architecture/mobile-remote-plan.md).
 
 The SwiftUI client in [`ios/`](../ios/README.md) is a reference now, not part of
-a release: its CI job and its release assets are gone, and the phone app is
-being rebuilt in React Native in its own repository. The gateway and the wire
+a release: its CI job and its release assets are gone. The phone app is an Expo
+(React Native) app in its own repository, `rustcode-mobile`, built against the
+remote gateway and the wire contract in this one; the gateway and the wire
 contract stay here and stay supported.
 
 Plain LAN traffic to the gateway is authenticated but not encrypted; NetBird is
 the recommended way to reach it from a phone.
 
-The rest of this page describes the older experimental `rustcode serve`
-transport, which is separate from the gateway and unchanged.
-
 Decision: the phone never links Rust and never embeds the agent loop. Mobile
 is a remote control for a PC or Mac that already runs RustCode. There is no
-on-device core, no shared renderer strategy, and no Expo app in the release
-matrix. Expo is explicitly out of scope until the transport below has soaked.
+on-device core and no shared renderer strategy; the Expo app above is a thin
+client of the remote gateway, which owns nothing but routing to the terminal
+that shares a session.
+
+The rest of this page describes the older experimental `rustcode serve`
+transport, which is separate from the gateway and unchanged.
 
 ## Transport (`rustcode serve`, experimental MVP)
 

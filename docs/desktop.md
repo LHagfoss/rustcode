@@ -538,7 +538,13 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Sidebar.** One list: pinned threads first, then every
+- **Sidebar.** A *Needs you* row above the list opens the inbox
+  (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits
+  on the user: an approval, a question, a failed turn, or a delegate asking.
+  A thread merely marked for review does not count, and the row's count is the
+  inbox's own list. With nothing waiting there is no row at all, so no empty
+  heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
+  and the palette. One list: pinned threads first, then every
   active thread, and Settled as a shelf at the foot: threads marked Settled
   and threads untouched for three days unless they wait
   for review (`idleSettled`), folded by default, 10 at a time then *Show
@@ -551,7 +557,12 @@ composer's keys stay outside the table.
   (red) until you open the thread (`finished`/`failed` in the store; *Mark
   Unread* in the menu brings Done back). What wants you reads in medium
   weight; what works, waits or is settled recedes. Hovering swaps the slot for
-  Pin, Settle (or Unsettle) and the menu, so nothing shifts.
+  Pin, Settle (or Unsettle) and the menu, so nothing shifts, each on a
+  26px target. ↑ ↓ move through the rows without opening them, ⏎ opens the
+  one the keyboard is on, and P pins (or unpins) it while D settles (or
+  unsettles) it — the picked rows when there are several — with the same
+  toast and Undo; Shift+F10 and the ContextMenu key open the row's menu, and
+  the keys are rebindable in Settings › Keyboard.
   Double-click or F2 renames. Settling is marking a thread Settled, with an
   Undo toast (the row, the selection bar, the chat's menu, the palette and the
   board all offer it); a new message brings it back. Settling the selected
@@ -665,8 +676,11 @@ composer's keys stay outside the table.
   server in place, through `_rustcode/capabilities/mcp/restart`, without
   rewriting the config), add (command or URL, with environment or headers),
   remove, and Edit config; skills by where they
-  were found (project, user, shared, configured) with their path, on/off,
-  Edit (opens SKILL.md), Show in Finder, and New skill (the shell writes
+  were found (project, user, shared, configured, and a harness's own
+  `Claude Code (project)` / `Claude Code (~/.claude)` groups, whose rows carry
+  `readOnly` and so have no Edit action) with their path, on/off,
+  Edit (opens SKILL.md; never for a read-only row), Show in Finder, and New
+  skill (the shell writes
   `SKILL.md` from a template under `~/.config/rustcode/skills` or the
   project's `.rustcode/skills`, `skill_create`, and opens it).
 - **Themes.** Settings › Appearance lists the engine's themes
@@ -688,12 +702,11 @@ composer's keys stay outside the table.
   read brighter. Hovering widens the strips around the pointer and previews
   the message and its answer; clicking jumps there, chevrons step a turn, and
   arrows, Home and End move it from the keyboard. With under 48px of gutter it
-  shows on hover. A turn whose checkpoint a rewind can return to carries a bead
-  inside its strip's left end, the head (the newest) in the accent, and the
-  hover card names it (`Checkpoint · turn N`, plus `current` for the head) with
-  *Rewind here* when the harness can go back. It reads the virtualizer's row
-  offsets on scroll and re-renders only when the turns on screen change
-  (`src/ui/TimelineRail.tsx`).
+  shows on hover. A turn whose checkpoint a rewind can return to is named in
+  its hover card (`Checkpoint · turn N`, plus `current` for the head, the
+  newest) with *Rewind here* when the harness can go back; the strips carry no
+  mark of their own. It reads the virtualizer's row offsets on scroll and
+  re-renders only when the turns on screen change (`src/ui/TimelineRail.tsx`).
 - **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
   (no fetch, no dependency), in the model pill, the harness picker and list
   (onboarding, Settings), the composer's footer, the sidebar's rows and the thread's
@@ -766,7 +779,9 @@ composer's keys stay outside the table.
   On by default (Settings › Agents turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
-  `start_session` and `fan_out`. Same project only (another project only
+  `start_session` and `fan_out`. Same project only — the repository, so a main
+  checkout and all its worktrees are one project — and a thread it started is
+  always reachable (another project only
   for `start_session`, one the user has opened, with approval), two levels of
   delegation (a top-level thread, its children and their children — no
   deeper, and no message that would close a loop), 4 active links per thread,
@@ -777,6 +792,12 @@ composer's keys stay outside the table.
   may name another login without another card. Grants and links are kept in the
   local data store (`data-store.md`), with local storage as the first paint and
   for an older engine, and after a restart active links are *interrupted*.
+  Threads the restart cut off are resumed with a *Continue* message (Settings ›
+  General, on by default), and that resume turn is what answers the links the
+  quit severed: they work again from the resume, and only that turn settles
+  them (a turn the user starts there later does not), so the parent that was
+  waiting is woken with the answer instead of waiting for good
+  (`docs/orchestrator.md`).
   Started threads go through `session/new` with `_meta.rustcode.harness`,
   `.account` (orchestration v5) and `.worktree` and get the prompt as their
   first message, headed
@@ -820,11 +841,11 @@ composer's keys stay outside the table.
   attempt whose *Go back to this attempt* restores the state the rewind
   abandoned (`_rustcode/checkpoints/restore` with `keep`). A turn with nothing
   folded keeps its chip in its footer, so every turn that has a checkpoint can
-  say what it changed. The minimap beads each turn that has a checkpoint, its
-  head in the accent, and that turn's hover card offers *Rewind here*, which is
-  the chip's rewind: one click when the engine keeps the state a rewind
-  abandons, behind its confirm when it does not. A harness that cannot rewind
-  the conversation gets the files only, after a confirm that says so. The Review screen
+  say what it changed. The minimap names each turn that has a checkpoint in
+  that turn's hover card, with *Rewind here*, which is the chip's rewind: one
+  click when the engine keeps the state a rewind abandons, behind its confirm
+  when it does not. A harness that cannot rewind the conversation gets the
+  files only, after a confirm that says so. The Review screen
   (thread menu, header menu or ⌘K) shows the uncommitted changes, the
   worktree branch since its base (the base named beside the file count, as
   `vs main`, with the full ref on hover), one turn, or the branch's open pull

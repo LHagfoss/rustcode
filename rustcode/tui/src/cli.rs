@@ -92,7 +92,7 @@ pub enum Commands {
         out: Option<std::path::PathBuf>,
     },
 
-    /// List, search, export or locate saved threads (`sessions` still works)
+    /// List, search, settle, export or locate saved threads (`sessions` still works)
     #[command(name = "threads", alias = "sessions")]
     Sessions {
         #[command(subcommand)]
@@ -506,6 +506,24 @@ pub enum SessionCommands {
         /// Thread id, as shown by `threads list` or `/session`
         id: String,
     },
+    /// Mark threads settled (done), so they leave the app's thread list
+    Settle {
+        /// Thread ids, or unique prefixes of them
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
+    },
+    /// Put settled threads back to active; a thread in review is kept there
+    Unsettle {
+        /// Thread ids, or unique prefixes of them
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
+    },
+    /// Mark threads as needing review
+    Review {
+        /// Thread ids, or unique prefixes of them
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
+    },
     /// Export a thread as a zip archive (default: into ~/Downloads)
     Export {
         /// Thread id; defaults to the most recent thread
@@ -782,6 +800,33 @@ mod tests {
                 command: Some(SessionCommands::Search { query, all: true, limit: 5, json: true })
             }) if query == "two words"
         ));
+    }
+
+    #[test]
+    fn parses_threads_settle_unsettle_and_review_with_several_ids() {
+        let cli = Cli::try_parse_from(["rustcode", "threads", "settle", "a", "b"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Settle { ids })
+            }) if ids == ["a".to_owned(), "b".to_owned()]
+        ));
+        let cli = Cli::try_parse_from(["rustcode", "threads", "unsettle", "a"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Unsettle { ids })
+            }) if ids == ["a".to_owned()]
+        ));
+        let cli = Cli::try_parse_from(["rustcode", "threads", "review", "a"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Review { ids })
+            }) if ids == ["a".to_owned()]
+        ));
+        // Several ids are the point; none is a usage error.
+        assert!(Cli::try_parse_from(["rustcode", "threads", "settle"]).is_err());
     }
 
     #[test]

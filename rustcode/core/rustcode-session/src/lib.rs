@@ -689,6 +689,11 @@ pub struct SessionMetadata {
     /// link book never forgets it (`docs/orchestrator.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<SessionParent>,
+    /// The repository the session's folder belongs to, recorded when the
+    /// thread is created or attached to a worktree, so `session/list` reports
+    /// it without running git per thread (#3162). Absent for older threads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<PathBuf>,
 }
 
 /// The thread above a delegated one (`start_session`, `fan_out`). `id` is
@@ -742,6 +747,7 @@ impl SessionMetadata {
             model: None,
             compaction: None,
             parent: None,
+            repo: None,
         }
     }
 }
@@ -1431,6 +1437,27 @@ impl SessionStore {
     /// The thread that started this one, if it was ever recorded.
     pub fn load_session_parent(&self, session_id: &str) -> Option<SessionParent> {
         self.load_session_metadata(session_id)?.parent
+    }
+
+    /// Record the repository the session's folder belongs to (or forget it,
+    /// with `None`). Written when the thread is created, attached to a
+    /// worktree or moved, so listing threads never runs git per folder
+    /// (#3162).
+    pub fn save_session_repo(
+        &self,
+        session_id: &str,
+        repo: Option<PathBuf>,
+    ) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.repo != repo;
+            metadata.repo = repo;
+            changed
+        })
+    }
+
+    /// The repository recorded for a session, if one was ever recorded.
+    pub fn load_session_repo(&self, session_id: &str) -> Option<PathBuf> {
+        self.load_session_metadata(session_id)?.repo
     }
 
     /// Record the session's last compaction.

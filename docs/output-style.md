@@ -60,6 +60,14 @@ External harnesses never see RustCode's prompt. Codex takes the rules on
 `thread/start` and `thread/resume` (see [harnesses.md](harnesses.md)). ACP has
 no field for it, so ACP harnesses keep their own style.
 
+The two harness rows also carry the `# Skills` note (`harness_skills_note` in
+`rustcode/engine/src/skills.rs`) between the Smart UI section and the output
+style: the skill roots that exist and the names turned off, not the catalog.
+It is capped at `MAX_HARNESS_SKILLS_NOTE_BYTES` (1,500 bytes) with its own
+root and name budgets, and long lists end in `and N more`, so the per-turn
+cost is bounded whatever is installed on the machine. It is read when the
+thread starts its harness process, not on every request.
+
 ## What the renderers draw
 
 | Element | Desktop app | TUI |
@@ -96,7 +104,9 @@ the behaviour off entirely.
    `rustcode/engine/src/tools/schema.rs`.
 2. Keep it inside the budget: `output_style_reaches_root_prompts_within_budget`
    in `rustcode/engine/src/tools/tests.rs` caps the section and the desktop
-   app's total at 250 extra tokens.
+   app's total at 250 extra tokens. The `# Skills` note has its own cap in
+   `skills.rs` (`the_harness_note_stays_within_its_byte_cap`), which is why it
+   is not in that token budget.
 3. Ask only for what every renderer in the table above draws, or gate the
    rule on a capability the client sends at `initialize`
    (`_meta.rustcode.visualizations`, `_meta.rustcode.smartUi`).

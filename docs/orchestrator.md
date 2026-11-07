@@ -94,6 +94,30 @@ directory. Auto-`done` needs a watch on the pull request
 pull request merged and the thread runs in a worktree, the thread becomes
 `done`. Without a watch nothing polls GitHub.
 
+### From the CLI
+
+A shell changes the same stored status, through the same engine function the
+app's `_rustcode/session/status` and the MCP `update_session` use (#3151):
+
+```bash
+rustcode threads settle <id>...      # done: Settled in the app
+rustcode threads unsettle <id>...    # idle: back to Active, from Settled
+rustcode threads review <id>...      # review: needs a look
+```
+
+Each prints one line per thread (`settled <id> <title>`, `active <id> <title>`,
+`review <id> <title>`), so a script sees which ones changed. Ids may be unique
+prefixes, as in `rustcode threads settle 018f0`, or a full id whose thread
+folder exists but holds no `history.json` yet (a settle right after a start); an
+ambiguous or unknown id is reported on stderr and exits non-zero, and the other
+ids on the line are still applied. `unsettle` only moves a thread out of
+Settled: a thread in review is left as it is, and prints `kept <id> review`,
+because settling (or the app's Review board) is what ends a review. Only the
+stored status is written (`status.json` in the thread's directory), so a thread
+with a turn running stays `running`; the app shows the change on its next
+`session/list` refresh (connect, window focus, or after a turn), and the
+terminal picker shows it on its next list.
+
 ## Checkpoints
 
 Before every turn of any thread (built-in or external harness; the engine sees
@@ -362,8 +386,26 @@ they finish or ask, instead of having to poll with sleeps.
   that answers nothing never erases an answer; it says
   the rest is in `read_session` on the child's session or `wait_session` on a
   `link_id`, and that the message is the notification. A child that was
-  stopped or interrupted is no result to wait for: nothing ever reports it, so
-  it does not hold its parent back.
+  stopped, or interrupted and left interrupted, is no result to wait for:
+  nothing ever reports it, so it does not hold its parent back.
+- **After a restart.** A restart resumes the threads it cut off
+  (`state/store.ts` `resumeInterrupted`), and the resume is what answers the
+  links the quit severed: it is tied to that one turn, never to a turn that
+  merely happens later. As the resume turn starts, each interrupted link to
+  that thread goes back to `working` with its clock, its wait and a `resumedAt`
+  mark reset from the resume (`host.ts` `linksResumed`), and the turn carries
+  the links, so the ordinary link path settles them when it ends
+  (`linksFinished`) — the parent that was waiting reads the answer in a wake,
+  and the time it says the branch worked is the time after the restart, not
+  the time before the quit. Several links one resume turn answers settle in one
+  write to the book and one wake tick, so a parent hears about them in one
+  message that says each was *resumed after a restart* (`orchestration.ts`
+  `linkLine`). A user's own turn in the child never settles an interrupted
+  link; one whose message the quit caught still queued is no resume's (its row
+  is read back and run on its own, see *Across a restart*). A thread whose own
+  turn outlived the window takes the resume behind it as a queued row, which
+  starts a turn that does carry the links, and at most 8 resumes are started.
+  A resumed turn the user stops is a stopped link, and reports nothing.
 - **Waiting on the user.** A child that goes `needs_user` (an approval or a
   question) is reported the same way, once per pending request (its rpc id):
   the parent is told to use `list_pending_requests` and that the user answers,
@@ -459,7 +501,11 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
 
 Every tool that writes, or that hands work to another thread, stays within the
-caller's project. Reads — `list_sessions`, `search_sessions`, `read_session`,
+caller's project. A project is the repository a thread runs for — a main
+checkout and every worktree of it, resolved by the engine from the folder
+(`_meta.rustcode.repo`, `git rev-parse --git-common-dir`) — so a thread working
+in a worktree reaches the repository's other threads and its own worktree
+delegates; a thread it started itself is reachable wherever it runs. Reads — `list_sessions`, `search_sessions`, `read_session`,
 `list_worktrees`, `list_projects` — reach any project while **Let agents read
 threads in other projects** is on (Settings › Agents, on by default;
 `rustcode.readAcrossProjects`). With it off, an `all_projects: true` call and a

@@ -115,8 +115,12 @@ import {
 } from "./headerButtons";
 import {
   answerOrchestration,
+  interruptedLinks,
   linkFinished,
   linkStarted,
+  linksFinished,
+  linksOf,
+  linksResumed,
   linkWaitEnded,
   linkWaitStarted,
   loadBook,
@@ -1350,6 +1354,8 @@ export async function refreshSessions(): Promise<void> {
       if (!cursor) break;
       if (page === 9) capped = true;
     }
+    // The engine's list is the newer truth about a status.
+    reconcileStatusMarks(all);
     set((s) => {
       // Threads started here that the engine does not list yet (it lists a session once it saved history).
       const listed = new Set(all.map((x) => x.id));
@@ -1381,10 +1387,15 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
   );
   // A limit already said what stopped it, in the words the composer's notice uses.
   if (!failed || !get().limitWaits[id]) {
-    notifyThread(
-      { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: threadName(id) },
-      get(),
-    );
+    // A delegate finishing is not news for the system either: the wake message reaches its parent
+    // and the strip above that parent's composer already says it. A failure still is.
+    const delegated = linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
+    if (!delegated) {
+      notifyThread(
+        { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: threadName(id) },
+        get(),
+      );
+    }
   }
 }
 
@@ -1444,8 +1455,28 @@ export function clearFinished(id: string | null) {
   set((s) => ({ finished: without(s.finished, id), failed: without(s.failed, id) }));
 }
 
+/** The shortest gap between two window-focus list refreshes, see below. */
+const FOCUS_LIST_GAP_MS = 5_000;
+let lastFocusListAt = 0;
+
+/**
+ * A window focus re-lists the threads, at most once per 5 s: a change made outside this window
+ * (`rustcode threads settle` in a terminal, another app) reaches the list with no turn to carry it,
+ * and flapping between windows should not read 500 threads each time. Off until connected, and
+ * `now` is a parameter so it can be felt with a clock in tests.
+ */
+export async function refreshSessionsOnFocus(now = Date.now()): Promise<void> {
+  if (!connection || get().status !== "ready") return;
+  if (now - lastFocusListAt < FOCUS_LIST_GAP_MS) return;
+  lastFocusListAt = now;
+  await refreshSessions();
+}
+
 if (typeof window !== "undefined") {
-  window.addEventListener("focus", () => clearFinished(get().selectedId));
+  window.addEventListener("focus", () => {
+    clearFinished(get().selectedId);
+    void refreshSessionsOnFocus();
+  });
 }
 
 export function selectThread(id: string | null) {
@@ -1674,6 +1705,7 @@ export async function createSession(options: NewSession): Promise<string> {
   const worktree: Worktree | undefined = parseWorktree(
     ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
   );
+  const repo = str(((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.repo);
   const cwd = worktree?.path ?? options.cwd;
   const thread: ThreadState = {
     ...emptyThread(id, cwd, options.title),
@@ -1689,6 +1721,7 @@ export async function createSession(options: NewSession): Promise<string> {
     harness: thread.harness?.id ?? options.harness,
     account: thread.harness?.account ?? options.account ?? undefined,
     worktree,
+    repo,
     title: options.title,
     // A thread an agent started is nested from its first frame: without the parent here the
     // sidebar draws it as a row of its own until the engine lists it with the same record, then
@@ -2492,9 +2525,12 @@ export async function resumeQueue(id: string): Promise<boolean> {
   await runPrompt(id, next.text, next.extras, {
     fromView: next.fromView,
     link: next.link,
+    resumeLinks: next.resume,
     wake: next.wake,
     wakeLinks: next.wakeLinks,
     wakeAsking: next.wakeAsking,
+    // A resumed row is the app's, not the user's: the thread stays where it was in the sidebar.
+    automatic: next.resume !== undefined,
   });
   return true;
 }
@@ -2594,6 +2630,12 @@ export async function runPrompt(
   options: {
     fromView?: boolean;
     link?: string;
+    /**
+     * The links a restart severed and this resume turn answers (`resumeInterrupted`): started as
+     * working when its turn begins and settled when it ends, as a link's own turn leaves its link
+     * (host.ts `linksResumed`, `linksFinished`).
+     */
+    resumeLinks?: string[];
     wake?: boolean;
     /** The links a queued wake row reports: marked as heard when its turn starts (host.ts). */
     wakeLinks?: string[];
@@ -2632,6 +2674,7 @@ export async function runPrompt(
           extras: hasExtras(extras) ? extras : undefined,
           fromView: options.fromView,
           link: options.link,
+          resume: options.resumeLinks,
           wake: options.wake,
           wakeLinks: options.wakeLinks,
           wakeAsking: options.wakeAsking,
@@ -2642,6 +2685,9 @@ export async function runPrompt(
   }
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
+  // The turn a restart resumes this thread with answers the links the quit severed: they work again
+  // from here, so the parent reads this turn's answer and its time, never the time before the quit.
+  if (options.resumeLinks?.length) linksResumed(options.resumeLinks);
   // A queued wake reports its links now, as its turn starts: late enough that a restart before this
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
@@ -2704,6 +2750,15 @@ export async function runPrompt(
   }
   if (options.link)
     linkFinished(options.link, id, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
+  // The links this resume turn answers settle together: one write, one wake tick (host.ts).
+  if (options.resumeLinks?.length)
+    linksFinished(
+      options.resumeLinks,
+      id,
+      outcome,
+      failure,
+      get().threads[id]?.items.slice(startIndex) ?? [],
+    );
   // Every finished turn of a thread matters to a parent waiting on it: a middle thread's real
   // answer is the one after the work it started (state/host.ts threadTurnEnded).
   threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
@@ -2716,15 +2771,20 @@ export async function runPrompt(
   void refreshCheckpoints(id);
   if ((outcome === "completed" || outcome === "failed") && id !== get().selectedId) {
     const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
-    toast(
-      waiting
-        ? `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
-        : outcome === "failed"
-          ? `“${name}” failed`
-          : `“${name}” finished`,
-      waiting ? "info" : outcome === "failed" ? "error" : "success",
-      { action: { label: "Open", run: () => selectThread(id) } },
-    );
+    // A delegate finishing is already said twice: the wake message into its parent's transcript and
+    // the strip above that composer. Only a failure, or the limit that stopped it, is news here.
+    const delegated = options.link !== undefined && outcome === "completed" && !waiting;
+    if (!delegated) {
+      toast(
+        waiting
+          ? `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
+          : outcome === "failed"
+            ? `“${name}” failed`
+            : `“${name}” finished`,
+        waiting ? "info" : outcome === "failed" ? "error" : "success",
+        { action: { label: "Open", run: () => selectThread(id) } },
+      );
+    }
   }
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
   // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
@@ -2737,9 +2797,11 @@ export async function runPrompt(
     await runPrompt(id, next.text, next.extras, {
       fromView: next.fromView,
       link: next.link,
+      resumeLinks: next.resume,
       wake: next.wake,
       wakeLinks: next.wakeLinks,
       wakeAsking: next.wakeAsking,
+      automatic: next.resume !== undefined,
     });
   }
 }
@@ -3558,6 +3620,24 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
 function saveMarks(marks: Record<string, ThreadStatus>) {
   set({ statusMarks: marks });
   store(STORAGE.statusMarks, JSON.stringify(marks));
+}
+
+/**
+ * Drop the marks the engine contradicts: it reports a status now, so a different one is the newer
+ * truth — a settle or a review from the CLI, or another window — and the row has to say that. A
+ * mark still covers an engine that reports no status at all (an older build, or a thread the list
+ * has not caught up with).
+ */
+function reconcileStatusMarks(listed: SessionSummary[]) {
+  const next = { ...get().statusMarks };
+  let dropped = false;
+  for (const x of listed) {
+    const mark = next[x.id];
+    if (!x.status || mark === undefined || mark === x.status) continue;
+    delete next[x.id];
+    dropped = true;
+  }
+  if (dropped) saveMarks(next);
 }
 
 export function clearStatusMark(id: string) {
@@ -4545,6 +4625,7 @@ export async function request<T = Json>(
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  lastFocusListAt = 0;
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
   limitTimer = null;
@@ -4786,27 +4867,40 @@ function interruptedThreads(): string[] {
 
 /**
  * Each thread a restart cut off is opened and sent {@link RESUME_TEXT}, so it carries on
- * without the user pressing anything. Settings › General turns it off.
+ * without the user pressing anything. Settings › General turns it off. Up to {@link RESUME_MAX}
+ * are resumed, and only the ones that really get a turn count: a thread the app cannot open, or
+ * one whose resume the app could not send, does not use up someone else's slot.
  */
 async function resumeInterrupted(ids: string[]): Promise<void> {
   store(STORAGE.runningThreads, "[]");
   lastRunning = "";
   if (!get().resumeAfterRestart || !ids.length) return;
   const known = new Set(get().sessions.map((x) => x.id));
-  const resumable = ids.filter((id) => known.has(id)).slice(0, RESUME_MAX);
-  for (const id of resumable) {
+  let started = 0;
+  for (const id of ids) {
+    if (started >= RESUME_MAX) break;
+    if (!known.has(id)) continue;
     await openThread(id);
     // The selected thread may already be loading from the handshake: wait for it.
     for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) await new Promise((r) => setTimeout(r, 100));
     const thread = get().threads[id];
-    if (!thread?.loaded || thread.running) continue;
-    void runPrompt(id, RESUME_TEXT, undefined, { automatic: true });
+    if (!thread?.loaded) continue;
+    started++;
+    // The links the restart severed are this turn's to answer, not any later turn's
+    // (state/host.ts `linksResumed`, `linksFinished`): the resume carries them, so a parent that
+    // was waiting reads the answer in a wake instead of waiting for good. A thread whose turn still
+    // runs (the engine outlived the window) takes the resume behind it as a queued row, which then
+    // starts one that carries the links — dropping it would settle nothing again.
+    void runPrompt(id, RESUME_TEXT, undefined, {
+      automatic: true,
+      resumeLinks: interruptedLinks(id),
+    });
   }
-  if (resumable.length) {
+  if (started) {
     toast(
-      resumable.length === 1
+      started === 1
         ? "A thread the restart interrupted is continuing."
-        : `${resumable.length} threads the restart interrupted are continuing.`,
+        : `${started} threads the restart interrupted are continuing.`,
       "success",
     );
   }

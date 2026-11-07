@@ -104,6 +104,32 @@ export function stripLinks(links: Link[], shown: ReadonlySet<string>): Link[] {
   return links.filter((link) => isActive(link.state) || !shown.has(link.target));
 }
 
+/** How many settled delegates the strip's popover lists under "Done"; the rest are one count. */
+export const DONE_SHOWN = 10;
+
+/**
+ * The delegates of `orchestrator` that settled, one row per thread (a follow-up
+ * is the same delegate), newest first, and how many more there are than `cap`.
+ * The strip has one line for the live work; this is the history it unfolds
+ * under "Done", without a day of delegating turned into 34 rows.
+ */
+export function doneLinks(
+  links: readonly Link[],
+  orchestrator: string,
+  cap = DONE_SHOWN,
+): { shown: Link[]; more: number } {
+  const settledAt = (link: Link) => link.settledAt ?? link.createdAt;
+  const newest = new Map<string, Link>();
+  for (const link of links) {
+    if (link.orchestrator !== orchestrator || isActive(link.state)) continue;
+    const seen = newest.get(link.target);
+    if (!seen || settledAt(link) > settledAt(seen)) newest.set(link.target, link);
+  }
+  const all = [...newest.values()].sort((one, other) => settledAt(other) - settledAt(one));
+  const most = Math.max(0, cap);
+  return { shown: all.slice(0, most), more: Math.max(0, all.length - most) };
+}
+
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
   /** `<orchestrator>/<n>`. */
@@ -128,6 +154,12 @@ export interface Link {
   createdAt: number;
   /** When the turn this link waits on started working, for the notice's time. */
   startedAt?: number;
+  /**
+   * When a restart severed this link and the app resumed its target (`store.ts`
+   * `resumeInterrupted`): the turn it settles on began there, and the notice says
+   * so (`resumed after a restart`).
+   */
+  resumedAt?: number;
   /** How long that turn worked, from its start to the link settling. Absent when not recorded. */
   workedMs?: number;
   /** When it settled (done or failed), for the coalescing window. */
@@ -504,6 +536,10 @@ export interface RuleThread {
   title: string;
   folder: string;
   worktree?: Worktree;
+  /** The repository `folder` belongs to, as the engine resolved it (`_meta.rustcode.repo`). */
+  repo?: string;
+  /** The thread that started this one (`_meta.rustcode.parent`), durable past a pruned link. */
+  parent?: string;
   updatedAt?: number;
   running: boolean;
   harness?: string;
@@ -523,11 +559,37 @@ export const projectOf = (t: Pick<RuleThread, "folder" | "worktree">) => clean(t
 /** Two folders are one project when they are the same place. */
 export const sameProject = (a: string, b: string) => !!a && clean(a) === clean(b);
 
+/**
+ * The reach a thread's tools have: its repository, where a main checkout and
+ * every worktree of it meet, else its folder. `projectOf` stays the stored
+ * project — a worktree's own path — which `thread_usage` and `list_projects`
+ * report, so this is the wider scope only the orchestration tools compare.
+ */
+export const reachOf = (t: Pick<RuleThread, "folder" | "worktree" | "repo">) =>
+  clean(t.worktree?.repo || t.repo || t.folder);
+
+/** Whether two threads are one project for the orchestration tools (issue 3150). */
+export const sameReach = (a: RuleThread, b: RuleThread) => sameProject(reachOf(a), reachOf(b));
+
+/**
+ * Whether `target` is work `caller` handed out itself: a thread it started is
+ * reachable wherever it runs, even in another repository.
+ */
+export const startedBy = (caller: RuleThread, target: RuleThread) =>
+  !!target.parent && target.parent === caller.id;
+
+/**
+ * Whether a caller's orchestration tools may see `target` at all: the same
+ * project, or a thread the caller started wherever it runs.
+ */
+export const reachesThread = (caller: RuleThread, target: RuleThread) =>
+  sameReach(caller, target) || startedBy(caller, target);
+
 /** `list_sessions`: the other threads of the caller's project, newest first, metadata only. */
 /** Why a thread may not manage `target`, the project rule every management tool shares. */
 export function checkManage(caller: RuleThread, target: RuleThread | undefined): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
-  if (!sameProject(projectOf(target), projectOf(caller))) {
+  if (!reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
@@ -549,7 +611,7 @@ export function listSessions(
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = threads
     .filter((t) => t.id !== caller.id)
-    .filter((t) => allProjects || sameProject(projectOf(t), projectOf(caller)))
+    .filter((t) => allProjects || reachesThread(caller, t))
     .filter((t) => words.every((w) => t.title.toLowerCase().includes(w)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 50);
@@ -588,7 +650,7 @@ export function checkMessage(
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!(read && acrossProjects) && !sameProject(projectOf(target), projectOf(caller))) {
+  if (!(read && acrossProjects) && !reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
@@ -1790,7 +1852,10 @@ export function wakeSummary(wake: Wake): string {
     const failed = wake.settled.filter((link) => link.state === "failed").length;
     if (wake.settled.length === 1) {
       const link = wake.settled[0]!;
-      parts.push(`Delegate ${link.state === "failed" ? "failed" : "finished"}: ${link.targetTitle}`);
+      const how = link.state === "failed" ? "failed" : "finished";
+      parts.push(
+        `Delegate ${how}${link.resumedAt !== undefined ? " after a restart" : ""}: ${link.targetTitle}`,
+      );
     } else if (failed === wake.settled.length) {
       parts.push(`${wake.settled.length} delegates failed`);
     } else {
@@ -1818,6 +1883,8 @@ const preview = (text: string, max: number): string =>
 /** One delegate, as the wake message names it: link id, status, title, harness, worked time, thread, changes. */
 const linkLine = (link: Link, state: LinkState, now: number) => {
   const bits = [`link_id ${link.id}`, state, `“${link.targetTitle}”`];
+  // The turn this settled on began with the restart resume, not with the work before the quit.
+  if (link.resumedAt !== undefined) bits.push("resumed after a restart");
   const harness = link.harnessName ?? link.harness;
   if (harness) bits.push(harness);
   if (link.workedMs) bits.push(`worked ${formatDuration(link.workedMs)}`);

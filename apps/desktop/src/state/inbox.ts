@@ -238,6 +238,18 @@ export function foldDecided(
   return [...folded, ...decided.filter((item) => !seen.has(item.key))].slice(0, DECIDED_MAX);
 }
 
+/**
+ * Whether the sidebar draws its "Needs you" row, which opens the inbox. Only while
+ * something actually waits on the user: an empty row over the list reads as a heading
+ * for the threads drawn under it, so with nothing to answer the list starts at its first
+ * thread and the inbox keeps to ⌘⇧I and the palette. What counts is the inbox's own list
+ * — an approval, a question, a failed turn, a delegate — never a thread merely marked for
+ * review, so the row and the count it shows cannot disagree.
+ */
+export function showsNeedsYou(items: readonly InboxItem[]): boolean {
+  return items.length > 0;
+}
+
 /** The project name a row's mark shows (`acp/types.ts` `projectName`). */
 export function inboxProjectName(item: InboxItem): string {
   return projectName(item.project);

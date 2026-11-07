@@ -371,6 +371,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_ids_is_sorted_and_lists_a_legacy_copy_once() {
+        let root = get_config_dir().expect("config dir");
+        let store = rustcode_session::SessionStore::new(&root);
+        let threads = store.threads_dir();
+        let older = "018f0000-0000-7000-8000-000000000001";
+        let newer = "018f0000-0000-7000-8000-000000000002";
+
+        // `newer` is kept the old way and the canonical way, as a thread that
+        // moved leaves it; `older` only canonically.
+        let legacy = threads.join(newer);
+        fs::create_dir_all(&legacy).expect("legacy thread dir");
+        fs::write(legacy.join("history.json"), "[]").expect("legacy transcript");
+        for id in [older, newer] {
+            let canonical = store.canonical_session_dir(id);
+            fs::create_dir_all(&canonical).expect("canonical thread dir");
+            fs::write(canonical.join("history.json"), "[]").expect("canonical transcript");
+        }
+
+        let ids = session_ids();
+        assert_eq!(ids, [older.to_owned(), newer.to_owned()]);
+        // Sorted neighbours, so a prefix of either picks exactly one thread.
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
     fn history_prefix_archive_is_exact_content_addressed_and_collision_safe() {
         let root = tempfile::tempdir().expect("archive root");
         let history = vec![
@@ -649,6 +674,47 @@ pub fn list_sessions_in_scope(limit: usize, scope: &SessionScope) -> (Vec<Sessio
     )
 }
 
+/// Store a thread's status the way the desktop app's
+/// `_rustcode/session/status` does (`done` = Settled, `review`, or `idle` =
+/// Active), for a caller outside the engine such as `rustcode threads
+/// settle` (#3151). The app reads the same `status.json` from `session/list`,
+/// so it shows the change without a second writer.
+pub fn set_session_status(session_id: &str, status: &str) -> Result<(), String> {
+    get_active_session_dir(session_id)
+        .filter(|dir| dir.is_dir())
+        .ok_or_else(|| format!("no saved thread has id `{session_id}`"))?;
+    crate::thread_status::set(session_id, status)
+}
+
+/// The status stored for a thread (`done`, `review`, or `idle` when it has
+/// none), for a caller outside the engine such as `rustcode threads unsettle`,
+/// which leaves a `review` thread alone.
+pub fn session_status(session_id: &str) -> String {
+    crate::thread_status::current(session_id)
+        .as_str()
+        .to_owned()
+}
+
+/// Ids of every saved thread, deduped and sorted, without reading a transcript
+/// (`SessionStore::session_history_paths`). `rustcode threads` resolves an id
+/// prefix against these instead of scanning for a directory that a typo would
+/// create.
+///
+/// One thread can be listed twice, once in the legacy `threads/<id>/` layout
+/// and once canonical (`threads/YYYY/MM/DD/<id>/`), so the same id would
+/// otherwise make every prefix of itself ambiguous. Sorted, the two copies are
+/// neighbours and dedup keeps one; ids sort by their leading timestamp, so the
+/// order is the store's.
+pub fn session_ids() -> Vec<String> {
+    let mut ids: Vec<String> = session_history_paths()
+        .iter()
+        .filter_map(|path| session_id_from_path(path))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 /// Sessions under `scope` whose user or assistant messages contain `query`
 /// (case-insensitive), newest first, at most `limit`.
 pub fn search_sessions(
@@ -754,6 +820,23 @@ pub fn save_session_parent(session_id: &str, parent: &rustcode_session::SessionP
 
 pub fn load_session_parent(session_id: &str) -> Option<rustcode_session::SessionParent> {
     store()?.load_session_parent(session_id)
+}
+
+/// Record the repository a thread's folder belongs to (`None` forgets it), so
+/// `session/list` can report it without running git per thread (#3162).
+pub fn save_session_repo(session_id: &str, repo: Option<&Path>) {
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_session_repo(session_id, repo.map(Path::to_path_buf))
+    {
+        crate::dbg_log!("failed to record the repository for session {session_id}: {error}");
+    }
+}
+
+pub fn load_session_repo(session_id: &str) -> Option<PathBuf> {
+    store()?.load_session_repo(session_id)
 }
 
 pub fn load_session_model(session_id: &str) -> Option<rustcode_session::SessionModel> {

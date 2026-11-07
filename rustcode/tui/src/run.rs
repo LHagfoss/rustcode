@@ -961,6 +961,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
             }
+            Some(crate::cli::SessionCommands::Settle { ids }) => {
+                run_sessions_set_status(ids, ThreadStatusChange::Settle);
+            }
+            Some(crate::cli::SessionCommands::Unsettle { ids }) => {
+                run_sessions_set_status(ids, ThreadStatusChange::Unsettle);
+            }
+            Some(crate::cli::SessionCommands::Review { ids }) => {
+                run_sessions_set_status(ids, ThreadStatusChange::Review);
+            }
             // `rustcode sessions` with no subcommand lists sessions, scoped
             // to the current workspace by default (`list --all` shows every
             // workspace with its path per entry).
@@ -1401,6 +1410,115 @@ fn run_session_export(id: Option<&str>, out: Option<&std::path::Path>) {
     }
 }
 
+/// What `rustcode threads settle|unsettle|review` stores, and the word it
+/// prints: the app's Settled, Active and Review over the engine's `done`,
+/// `idle` and `review` (`docs/orchestrator.md`, *Thread status*).
+#[derive(Clone, Copy)]
+enum ThreadStatusChange {
+    Settle,
+    Unsettle,
+    Review,
+}
+
+impl ThreadStatusChange {
+    /// The status the engine stores (`_rustcode/session/status`).
+    fn status(self) -> &'static str {
+        match self {
+            Self::Settle => "done",
+            Self::Unsettle => "idle",
+            Self::Review => "review",
+        }
+    }
+
+    /// The word the CLI prints, the one the app shows.
+    fn word(self) -> &'static str {
+        match self {
+            Self::Settle => "settled",
+            Self::Unsettle => "active",
+            Self::Review => "review",
+        }
+    }
+}
+
+/// `rustcode threads settle|unsettle|review <id>...`: store each thread's
+/// status through the engine's store, so the app's next `session/list` and the
+/// terminal picker read the same `status.json`. One line per thread, an
+/// unknown or ambiguous id on stderr, and a non-zero exit if any failed.
+fn run_sessions_set_status(ids: &[String], change: ThreadStatusChange) {
+    let saved = rustcode::config::session_ids();
+    let mut failed = false;
+    for raw in ids {
+        let id = match resolve_thread_id(raw, &saved) {
+            Ok(id) => id,
+            Err(message) => {
+                eprintln!("{message}");
+                failed = true;
+                continue;
+            }
+        };
+        if matches!(change, ThreadStatusChange::Unsettle)
+            && rustcode::config::session_status(&id) == "review"
+        {
+            // Settling is the way out of review; un-settling is not that, so a
+            // mark the user has not looked at yet stays.
+            println!("kept {id} review");
+            continue;
+        }
+        if let Err(error) = rustcode::config::set_session_status(&id, change.status()) {
+            eprintln!("Could not mark `{raw}` {}: {error}", change.word());
+            failed = true;
+            continue;
+        }
+        let title =
+            rustcode::config::load_session_title(&id).unwrap_or_else(|| "(untitled)".to_owned());
+        println!("{} {id} {title}", change.word());
+    }
+    if failed {
+        std::process::exit(1);
+    }
+}
+
+/// A thread id, or a unique prefix of one, resolved against the saved threads.
+fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, String> {
+    let wanted = raw.trim();
+    if wanted.is_empty() {
+        return Err("A thread id is required.".to_owned());
+    }
+    if let Some(id) = saved.iter().find(|id| id.as_str() == wanted) {
+        return Ok(id.clone());
+    }
+    // A thread the store has a folder for but no transcript yet (settled right
+    // after it was started, or one whose history was lost) is still that
+    // thread: an exact id may name it, as `threads path` does. A prefix may
+    // not, since that would be guessing at a directory that no list vouches for.
+    if rustcode::config::get_active_session_dir(wanted).is_some_and(|dir| dir.is_dir()) {
+        return Ok(wanted.to_owned());
+    }
+    let matches: Vec<&String> = saved.iter().filter(|id| id.starts_with(wanted)).collect();
+    match matches.as_slice() {
+        [] => Err(format!("No saved thread has id `{wanted}`.")),
+        [id] => Ok((*id).clone()),
+        _ => {
+            let shown = matches
+                .iter()
+                .take(5)
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = matches.len().saturating_sub(5);
+            Err(format!(
+                "`{wanted}` matches {} threads: {shown}{}. Pass more of the id.",
+                matches.len(),
+                if more > 0 {
+                    format!(", and {more} more")
+                } else {
+                    String::new()
+                }
+            ))
+        }
+    }
+}
+
 fn run_sessions_list(show_all: bool) {
     const LIMIT: usize = 50;
     // `--all` lists every workspace; the default scope is the store's shared
@@ -1750,10 +1868,52 @@ fn print_exit_summary(summary: &ExitSummary) {
 mod tests {
     use super::{
         ExitSummary, MAX_SCROLLBACK_BLOCK_LINES, StartupResume, cap_scrollback_block,
-        format_number, resolve_startup_resume, should_clear_mutable_viewport_before_history,
-        write_exit_summary,
+        format_number, resolve_startup_resume, resolve_thread_id,
+        should_clear_mutable_viewport_before_history, write_exit_summary,
     };
     use rustcode::app::AppState;
+
+    fn saved(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_thread_id_resolves_by_prefix_or_in_full() {
+        let threads = saved(&["018f0000-aaaa", "018fffff-bbbb"]);
+        assert_eq!(
+            resolve_thread_id("018f0000-aaaa", &threads),
+            Ok("018f0000-aaaa".to_owned())
+        );
+        assert_eq!(
+            resolve_thread_id("018f0000", &threads),
+            Ok("018f0000-aaaa".to_owned())
+        );
+        // A prefix is trimmed before it is matched.
+        assert_eq!(
+            resolve_thread_id(" 018fffff-bb ", &threads),
+            Ok("018fffff-bbbb".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_unknown_thread_id_names_itself_and_fails() {
+        let error = resolve_thread_id("nope", &saved(&["018f0000-aaaa"])).unwrap_err();
+        assert!(error.contains("No saved thread"), "{error}");
+        assert!(error.contains("nope"), "{error}");
+        assert!(resolve_thread_id("", &saved(&["018f0000-aaaa"])).is_err());
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_lists_its_candidates() {
+        let threads = saved(&["018f-aaaa", "018f-bbbb"]);
+        let error = resolve_thread_id("018f", &threads).unwrap_err();
+        assert!(error.contains("matches 2 threads"), "{error}");
+        assert!(
+            error.contains("018f-aaaa") && error.contains("018f-bbbb"),
+            "{error}"
+        );
+        assert!(error.contains("Pass more of the id"), "{error}");
+    }
 
     /// Never a real session id, so the lookup fails the same way on every run.
     const UNKNOWN_ID: &str = "ffffffff-ffff-7fff-8fff-ffffffffffff";
