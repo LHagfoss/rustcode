@@ -1,8 +1,12 @@
-// The shell's updater (src-tauri/src/updater.rs): the latest GitHub release,
-// and on macOS an in-place install that quits and reopens the app.
+// The shell's updater (src-tauri/src/updater.rs): the release the update
+// channel offers, and on macOS an in-place install that quits and reopens the
+// app.
 
 import { isTauri } from "../acp/transport";
 import { shellCall } from "./shell";
+
+/** Stable releases, or the betas of the next one too (Settings › About). */
+export type UpdateChannel = "stable" | "beta";
 
 export interface UpdateInfo {
   current: string;
@@ -11,6 +15,8 @@ export interface UpdateInfo {
   canInstall: boolean;
   development: boolean;
   page: string | null;
+  /** The channels this build offers: `beta` only where a beta has an app. */
+  channels: UpdateChannel[];
 }
 
 /** Only the app updates; the browser UI has nothing to replace. */
@@ -18,8 +24,9 @@ export function canUpdate(): boolean {
   return isTauri();
 }
 
-export function checkForUpdate(): Promise<UpdateInfo> {
-  return shellCall<UpdateInfo>("update_check");
+/** One check on `channel`, hiding the beta named `skipped` (a skipped beta only). */
+export function checkForUpdate(channel: UpdateChannel, skipped: string | null): Promise<UpdateInfo> {
+  return shellCall<UpdateInfo>("update_check", { channel, skipped });
 }
 
 /** Where an install is (updater.rs `InstallProgress`). */
@@ -29,11 +36,15 @@ export type InstallProgress =
   | { phase: "installing" };
 
 /** Resolves only on failure: on success the app quits and reopens updated. */
-export async function installUpdate(onProgress: (progress: InstallProgress) => void): Promise<void> {
+export async function installUpdate(
+  channel: UpdateChannel,
+  skipped: string | null,
+  onProgress: (progress: InstallProgress) => void,
+): Promise<void> {
   const { Channel } = await import("@tauri-apps/api/core");
-  const channel = new Channel<InstallProgress>();
-  channel.onmessage = onProgress;
-  return shellCall<void>("update_install", { onProgress: channel });
+  const progress = new Channel<InstallProgress>();
+  progress.onmessage = onProgress;
+  return shellCall<void>("update_install", { channel, skipped, onProgress: progress });
 }
 
 /** This app's own version, without the network. */

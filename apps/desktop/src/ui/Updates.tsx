@@ -6,7 +6,14 @@ import { ArrowUpCircle, Sparkles } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { openExternal } from "../lib/native";
 import { toast } from "../state/store";
-import { applyUpdate, closeWhatsNew, installProgress, useUpdates } from "../state/updates";
+import {
+  applyUpdate,
+  closeWhatsNew,
+  installProgress,
+  isPrerelease,
+  skipBeta,
+  useUpdates,
+} from "../state/updates";
 import { Markdown } from "./Markdown";
 import { cx, Pill, Spinner } from "./primitives";
 
@@ -15,7 +22,12 @@ export function UpdateRow() {
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
   if (!info?.available || !info.latest || info.development) return null;
+  const beta = isPrerelease(info.latest);
   const { fraction, step } = installProgress(progress);
+  const skip = () => {
+    const version = skipBeta();
+    if (version) toast(`Skipped ${version}. The next beta shows here.`);
+  };
   return (
     <div className="shrink-0 px-2 pb-2">
       <button
@@ -50,10 +62,21 @@ export function UpdateRow() {
             </span>
           )}
           <span className="block text-caption text-fg-muted tabular">
-            {installing ? step : info.canInstall ? "Installs and reopens RustCode" : "Opens the release page"}
+            {installing
+              ? step
+              : `${beta ? "Beta · " : ""}${info.canInstall ? "Installs and reopens RustCode" : "Opens the release page"}`}
           </span>
         </span>
       </button>
+      {beta && !installing && (
+        <button
+          type="button"
+          onClick={skip}
+          className="mt-1 w-full rounded px-2.5 py-1 text-left text-caption text-fg-muted hover:text-fg"
+        >
+          Skip this beta
+        </button>
+      )}
     </div>
   );
 }

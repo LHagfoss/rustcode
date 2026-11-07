@@ -87,6 +87,7 @@ import {
   checkIfStale,
   checkNow,
   installProgress,
+  setUpdateChannel,
   showWhatsNew,
   useUpdates,
 } from "../state/updates";
@@ -1176,7 +1177,40 @@ function AboutPage() {
       footer="RustCode is open source. The licences of everything it ships are in its release."
     >
       <AppVersion />
+      <UpdateChannelRow />
     </Group>
+  );
+}
+
+/**
+ * Settings › About › Update channel: Stable follows releases only; Beta also
+ * offers the betas of the next version, which show in the same row and install
+ * the same way. Betas build the macOS app alone, so the row is hidden where
+ * there is no beta to install.
+ */
+function UpdateChannelRow() {
+  const info = useUpdates((s) => s.info);
+  const channel = useUpdates((s) => s.channel);
+  if (!canUpdate() || !info?.channels.includes("beta")) return null;
+  return (
+    <Row
+      title="Update channel"
+      subtitle={
+        channel === "beta"
+          ? "Beta: newer betas show here and at the foot of the sidebar."
+          : "Stable releases only. Betas of the next version are skipped."
+      }
+    >
+      <Choice
+        label="Update channel"
+        value={channel}
+        onChange={setUpdateChannel}
+        options={[
+          { value: "stable", label: "Stable" },
+          { value: "beta", label: "Beta" },
+        ]}
+      />
+    </Row>
   );
 }
 

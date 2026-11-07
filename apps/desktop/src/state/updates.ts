@@ -2,7 +2,8 @@
 // seconds while the window is in front and every 30 minutes behind it, an "Update to X" row at the foot of the sidebar
 // when a newer release is out, and What's New with the release's notes the
 // first time a new version starts. The shell does the work
-// (src-tauri/src/updater.rs); this keeps what the UI shows.
+// (src-tauri/src/updater.rs); this keeps what the UI shows, the update channel
+// and the beta the user skipped.
 
 import { create } from "zustand";
 import { openExternal } from "../lib/native";
@@ -14,6 +15,7 @@ import {
   type InstallProgress,
   installUpdate,
   isDevBuild,
+  type UpdateChannel,
   type UpdateInfo,
 } from "../lib/updater";
 
@@ -24,11 +26,19 @@ export const UPDATE_CHECK_HIDDEN_MS = 30 * 60_000;
 const SEEN_KEY = "rustcode.seenVersion";
 /** Written just before an in-app install: the next launch shows What's New whatever else it knows. */
 const UPDATED_FROM_KEY = "rustcode.updatedFrom";
+/** Stable or Beta (Settings › About). */
+const CHANNEL_KEY = "rustcode.updateChannel";
+/** The one beta the user skipped; the next beta is offered as usual. */
+const SKIPPED_KEY = "rustcode.skippedBeta";
 
 interface UpdatesState {
   /** This app's version from the shell, known before any check answers. */
   version: string | null;
   info: UpdateInfo | null;
+  /** What checks look for: every release, or the betas of the next one too. */
+  channel: UpdateChannel;
+  /** The beta hidden from the row and from Settings, when one was skipped. */
+  skipped: string | null;
   /** Why the last check failed, for Settings › Advanced; null after a good check. */
   error: string | null;
   checkedAt: number | null;
@@ -42,6 +52,8 @@ interface UpdatesState {
 export const useUpdates = create<UpdatesState>(() => ({
   version: null,
   info: null,
+  channel: readChannel(read(CHANNEL_KEY)),
+  skipped: read(SKIPPED_KEY),
   error: null,
   checkedAt: null,
   installing: false,
@@ -49,19 +61,60 @@ export const useUpdates = create<UpdatesState>(() => ({
   whatsNew: null,
 }));
 
-/** `0.116.0` is newer than `0.115.2`; prerelease suffixes compare as their base. */
-export function newerVersion(a: string, b: string): boolean {
-  const parts = (v: string) =>
-    v
-      .replace(/^v/, "")
-      .split("-")[0]!
-      .split(".")
-      .map((n) => Number.parseInt(n, 10) || 0);
-  const [x, y] = [parts(a), parts(b)];
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
+/** `channel` as stored, with anything unknown read as Stable: never a surprise beta. */
+export function readChannel(value: string | null): UpdateChannel {
+  return value === "beta" ? "beta" : "stable";
+}
+
+/** Whether a version is a prerelease: a beta, as `1.21.0-beta.2`. */
+export function isPrerelease(version: string): boolean {
+  return version.includes("-");
+}
+
+/** The version and its prerelease fields: `1.21.0-beta.10` is `[[1,21,0],["beta",10]]`. */
+function versionParts(version: string): [number[], string[]] {
+  const text = version.trim().replace(/^v/, "");
+  const dash = text.indexOf("-");
+  const core = (dash === -1 ? text : text.slice(0, dash)).split(".");
+  const pre =
+    dash === -1
+      ? []
+      : text
+          .slice(dash + 1)
+          .split(".")
+          .filter(Boolean);
+  return [core.map((n) => Number.parseInt(n, 10) || 0), pre];
+}
+
+/** Semver's order for one prerelease field: numbers count as numbers, before text. */
+function compareIdentifier(a: string, b: string): number {
+  const [na, nb] = [/^\d+$/.test(a), /^\d+$/.test(b)];
+  if (na && nb) return Math.sign(Number(a) - Number(b));
+  if (na) return -1;
+  if (nb) return 1;
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+/** Semver's order: `1.21.0-beta.2` is older than `1.21.0`, and `.10` newer than `.9`. */
+export function compareVersions(a: string, b: string): number {
+  const [coreA, preA] = versionParts(a);
+  const [coreB, preB] = versionParts(b);
+  for (let i = 0; i < Math.max(coreA.length, coreB.length); i++) {
+    const left = coreA[i] ?? 0;
+    const right = coreB[i] ?? 0;
+    if (left !== right) return left > right ? 1 : -1;
   }
-  return false;
+  if (preA.length !== preB.length) return preA.length ? -1 : 1;
+  for (let i = 0; i < preA.length; i++) {
+    const order = compareIdentifier(preA[i]!, preB[i]!);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+/** `0.116.0` is newer than `0.115.2`; a beta is older than the release it leads to. */
+export function newerVersion(a: string, b: string): boolean {
+  return compareVersions(a, b) > 0;
 }
 
 /**
@@ -143,7 +196,9 @@ async function runCheck(): Promise<void> {
   clearTimeout(retry);
   let info: UpdateInfo;
   try {
-    info = await checkForUpdate();
+    // The store's own channel and skipped beta: a change of either re-checks.
+    const { channel, skipped } = useUpdates.getState();
+    info = await checkForUpdate(channel, skipped);
   } catch (error) {
     // Offline, GitHub busy, or the shell refused: say so in Settings and try again soon.
     useUpdates.setState({ error: error instanceof Error ? error.message : String(error) });
@@ -187,6 +242,7 @@ export function startUpdateChecks() {
         canInstall: true,
         development: false,
         page: null,
+        channels: ["stable", "beta"],
       },
       whatsNew: {
         version: "0.116.0",
@@ -219,7 +275,7 @@ export function startUpdateChecks() {
 
 /** The sidebar row's action: install in place where the app can, else the release page. */
 export async function applyUpdate(): Promise<string | null> {
-  const info = useUpdates.getState().info;
+  const { info, channel, skipped } = useUpdates.getState();
   if (!info?.available) return null;
   if (!info.canInstall) {
     if (info.page) openExternal(info.page);
@@ -228,13 +284,40 @@ export async function applyUpdate(): Promise<string | null> {
   useUpdates.setState({ installing: true, progress: null });
   write(UPDATED_FROM_KEY, info.current);
   try {
-    await installUpdate((progress) => useUpdates.setState({ progress }));
+    await installUpdate(channel, skipped, (progress) => useUpdates.setState({ progress }));
     return null;
   } catch (error) {
     write(UPDATED_FROM_KEY, null);
     useUpdates.setState({ installing: false, progress: null });
     return error instanceof Error ? error.message : String(error);
   }
+}
+
+/**
+ * Pick the update channel (Settings › About): Stable is every release, Beta also
+ * offers the betas of the next one. Checking again at once shows what it finds,
+ * and drops the previous channel's offer so a stable setting never lures anyone
+ * into a beta. Switching to Stable never offers a downgrade: the shell only
+ * offers a version newer than this one.
+ */
+export function setUpdateChannel(channel: UpdateChannel) {
+  if (channel === useUpdates.getState().channel) return;
+  write(CHANNEL_KEY, channel);
+  useUpdates.setState({ channel, info: null, checkedAt: null });
+  void checkNow();
+}
+
+/**
+ * Hide the beta the row offers; the next one shows as usual. Kept in
+ * localStorage, so it outlasts a restart, and passed to the shell so a check
+ * does not name it again.
+ */
+export function skipBeta(): string | null {
+  const info = useUpdates.getState().info;
+  if (!info?.latest || !isPrerelease(info.latest)) return null;
+  write(SKIPPED_KEY, info.latest);
+  useUpdates.setState({ skipped: info.latest, info: { ...info, available: false } });
+  return info.latest;
 }
 
 export function closeWhatsNew() {
