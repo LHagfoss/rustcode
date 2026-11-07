@@ -104,6 +104,8 @@ import {
   answerOrchestration,
   linkFinished,
   linkStarted,
+  linkWaitEnded,
+  linkWaitStarted,
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
@@ -1216,6 +1218,8 @@ async function handleInbound(message: Inbound) {
           return;
         }
         updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
+        // Its links stop their work clock while the user decides (state/delegates.ts).
+        linkWaitStarted(request.sessionId);
         // The inbox is the screen that lists this request already: a toast there would
         // stack over its own first rows. Other toasts (copied, finished) still show.
         if (request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
@@ -2699,6 +2703,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
     for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
     updateThread(id, (t) => ({ ...t, permissions: [] }));
+    if (thread.permissions.length) linkWaitEnded(id);
   } catch (error) {
     toast(errorText(error), "error");
   }
@@ -2743,6 +2748,8 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string) 
     permissions: t.permissions.filter((p) => p.rpcId !== request.rpcId),
     items: answer ? [...t.items, questionItem(request, answer)] : t.items,
   }));
+  // Another request of the same thread keeps it waiting; the last one ends the wait.
+  if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
   connection?.respond(request.rpcId, result);
 }
 

@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SessionSummary } from "../acp/types";
 import { STATUS_LABEL, type ThreadStatus } from "../acp/v2";
+import type { CostTotals } from "../state/pricing";
 import {
   selectThread,
   setThreadStatus,
@@ -19,6 +20,7 @@ import {
   useShortcutHint,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { DelegateTree, useDelegateCosts } from "./DelegateTree";
 import { Cluster, ClusterButton, cx, Pill, Tooltip } from "./primitives";
 import { StatusIcon } from "./Status";
 import { useLightsInset } from "./Titlebar";
@@ -67,7 +69,16 @@ export function ViewHeader({ title, children }: { title: React.ReactNode; childr
   );
 }
 
-function Card({ session, status }: { session: SessionSummary; status: ThreadStatus }) {
+function Card({
+  session,
+  status,
+  costs,
+}: {
+  session: SessionSummary;
+  status: ThreadStatus;
+  /** The best-known cost of each thread, read once for the whole board. */
+  costs: ReadonlyMap<string, CostTotals>;
+}) {
   const harness = useApp((s) =>
     session.harness && session.harness !== "rustcode"
       ? (s.harnesses?.harnesses.find((h) => h.id === session.harness)?.name ?? session.harness)
@@ -104,6 +115,7 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
           <span>· {relativeAge(session.updatedAt)}</span>
         </span>
       </button>
+      <DelegateTree threadId={session.id} compact costs={costs} />
       {(status === "review" || status === "done") && (
         <div className="mt-2 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
           {status === "review" ? (
@@ -141,6 +153,7 @@ function Card({ session, status }: { session: SessionSummary; status: ThreadStat
 
 export function Board() {
   const sessions = useApp((s) => s.sessions);
+  const costs = useDelegateCosts();
   const archived = useApp((s) => s.archived);
   const statuses = useApp(
     useShallow(
@@ -197,7 +210,7 @@ export function Board() {
               </Tooltip>
               <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
                 {c.items.map((x) => (
-                  <Card key={x.id} session={x} status={c.status} />
+                  <Card key={x.id} session={x} status={c.status} costs={costs} />
                 ))}
                 {!c.items.length && (
                   <div className="px-2 py-6 text-center text-caption text-fg-faint">
