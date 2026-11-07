@@ -140,8 +140,11 @@ every device, exactly as `/remote off` does; pairings are kept.
 | **Gateway › Paired devices** | How many devices are paired, with their names. Revoking one is `rustcode remote revoke` for now. |
 | A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
 
-The app and a terminal share one setting: `/remote on` in a terminal shares
-the app's open threads too, and the app's switch shows that it is on. While a
+Each shared thread tells a device which harness runs it and its model
+(`harness` and `model` on the session list and on every snapshot), so a phone
+labels a Claude Code thread as such. The app and a terminal share one setting:
+`/remote on` in a terminal shares the app's open threads too, and the app's
+switch shows that it is on. While a
 thread runs on an external harness, a prompt sent from a device is run through
 the harness exactly as the app's own message is, so it shows in both places;
 cancelling, steering, answering a question and resolving an approval work the

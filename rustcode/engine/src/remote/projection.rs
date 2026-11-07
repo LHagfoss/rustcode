@@ -304,6 +304,10 @@ pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> Re
             .or_else(|| state.effective_workspace_root())
             .map(|path| path.display().to_string()),
         model: state.model_name.clone(),
+        // A session this projection serves is on the built-in harness: a
+        // thread on an external one shares through its own mirror
+        // (`remote/harness.rs`).
+        harness: Some(crate::harness::BUILTIN_ID.to_owned()),
         turn_count: session_turn_count(state),
         last_active_at: state
             .history

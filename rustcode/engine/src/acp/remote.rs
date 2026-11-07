@@ -659,10 +659,10 @@ impl RemoteManager {
             .filter(|title| !title.trim().is_empty())
             .or_else(|| crate::config::load_session_title(&session_id))
             .unwrap_or_default();
-        let model = record
-            .model
-            .clone()
-            .unwrap_or_else(|| external.harness.name.clone());
+        // What the device shows as the thread's model: the harness's own id
+        // for the model, absent when the record has none (a thread that has
+        // not prompted yet).
+        let model = record.model.clone().unwrap_or_default();
         let mirror = Arc::new(HarnessMirror::new(
             session_id.clone(),
             external.harness.id.clone(),

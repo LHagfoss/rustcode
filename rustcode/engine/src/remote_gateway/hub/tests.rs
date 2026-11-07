@@ -36,6 +36,7 @@ fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
         title: format!("title of {session_id}"),
         workspace: None,
         model: "model".to_owned(),
+        harness: Some("rustcode".to_owned()),
         turn_count: None,
         last_active_at: None,
         activity: SessionActivity::Idle,

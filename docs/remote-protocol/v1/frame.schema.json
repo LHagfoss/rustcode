@@ -1708,6 +1708,13 @@
         "attention": {
           "$ref": "#/$defs/RemoteAttention"
         },
+        "harness": {
+          "description": "The harness the thread runs on: `rustcode` for the built-in one, else\nthe harness id (`claude-code`, `codex`, `pi`, …). Absent from a host\nthat predates harness threads.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "health": {
           "$ref": "#/$defs/OwnerHealth"
         },
@@ -1719,6 +1726,7 @@
           ]
         },
         "model": {
+          "description": "The model the thread runs on, as the host names it; empty when the\nhost does not know it.",
           "type": "string"
         },
         "registration_epoch": {

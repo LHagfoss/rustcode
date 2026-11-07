@@ -802,6 +802,7 @@ impl HarnessMirror {
                 title: self.title.clone(),
                 workspace: Some(self.cwd.display().to_string()),
                 model: self.model.clone(),
+                harness: Some(self.harness.clone()),
                 turn_count: Some(state.turns),
                 last_active_at: state.last_active_at.clone(),
                 activity: if state.approval.is_some() {
@@ -1192,6 +1193,21 @@ mod tests {
         let last = snapshot.transcript.last().expect("the reply was kept");
         assert_eq!(last.role, "assistant");
         assert_eq!(last.content.text, "hi there");
+    }
+
+    #[test]
+    fn a_snapshot_names_the_harness_and_model_of_the_thread() {
+        let mirror = HarnessMirror::new(
+            "session-1".to_owned(),
+            "claude-code".to_owned(),
+            PathBuf::from("/tmp/workspace"),
+            "opus".to_owned(),
+            "A thread".to_owned(),
+            Vec::new(),
+        );
+        let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
+        assert_eq!(snapshot.session.harness.as_deref(), Some("claude-code"));
+        assert_eq!(snapshot.session.model, "opus");
     }
 
     #[test]

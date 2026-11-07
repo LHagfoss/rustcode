@@ -305,10 +305,18 @@ session on screen, and host-wide configuration remain local-only.
     "type": "sessions",
     "gateway_id": "…", "instance_id": "…",
     "subscribed": true,
-    "sessions": [ { "session_id": "…", "registration_epoch": 3, "title": "…", "workspace": "…", "model": "…", "activity": "idle", "attention": {"approval": false, "question": false}, "health": "live" } ]
+    "sessions": [ { "session_id": "…", "registration_epoch": 3, "title": "…", "workspace": "…", "model": "…", "harness": "claude-code", "activity": "idle", "attention": {"approval": false, "question": false}, "health": "live" } ]
   }
 }
 ```
+
+A session's `harness` names the agent that runs it: `rustcode` for the
+built-in one, otherwise the harness id (`claude-code`, `codex`, `pi`, …). It
+is optional and absent from a host that predates harness threads; a client
+then shows no harness. It rides on every session entry — the `sessions`
+result, the snapshot's `session`, and `session_created`/`session_resumed` —
+and `model` is the model that harness runs the thread on (empty when the host
+does not know it).
 
 The `sessions` result also carries `capabilities`, the optional host-wide
 operations the gateway implements. It is absent from gateways that implement
