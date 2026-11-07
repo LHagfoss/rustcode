@@ -15,6 +15,7 @@ const report = (rows: Json[], totals?: Json, truncated = false) =>
 const row = (over: Record<string, unknown>) => ({
   harness: "codex",
   model: "gpt-6-luna",
+  model_harness: "codex",
   input_tokens: 100,
   output_tokens: 10,
   cached_tokens: 50,
@@ -61,6 +62,27 @@ describe("recorded usage parsing", () => {
     expect(parsed.totals.input).toBe(300);
     expect(parsed.totals.cost).toBeUndefined();
     expect(parsed.totals.turns).toBe(2);
+  });
+
+  test("a thread row carries the thread's model, so it can be priced", () => {
+    const parsed = parseUsageReport({
+      group_by: "thread",
+      rows: [row({ thread: "t", model: "gpt-6-luna" })],
+      totals: {},
+    });
+    expect(parsed.rows[0]!.thread).toBe("t");
+    expect(parsed.rows[0]!.model).toBe("gpt-6-luna");
+    expect(parsed.rows[0]!.modelHarness).toBe("codex");
+  });
+
+  test("a thread row with no single harness and model carries neither", () => {
+    const parsed = parseUsageReport({
+      group_by: "thread",
+      rows: [row({ thread: "t", model: null, model_harness: null })],
+      totals: {},
+    });
+    expect(parsed.rows[0]!.model).toBeUndefined();
+    expect(parsed.rows[0]!.modelHarness).toBeUndefined();
   });
 });
 
@@ -192,6 +214,178 @@ describe("thread totals including delegates", () => {
 });
 
 describe("thread hierarchy source", () => {
+  test("a thread's cost is its reported cost, or the estimate when none was reported", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "reported",
+          title: "Reported",
+          parent_id: null,
+          parent_title: null,
+          model: "gpt-6-astra",
+          cost_usd: 2.5,
+          turns: 1,
+          turns_without_cost: 0,
+        }),
+        row({
+          thread: "estimated",
+          title: "Estimated",
+          parent_id: null,
+          parent_title: null,
+          model: "gpt-6-luna",
+          input_tokens: 1_000_000,
+          output_tokens: 0,
+          cached_tokens: 0,
+          cost_usd: null,
+          turns: 2,
+          turns_without_cost: 2,
+        }),
+      ],
+      totals: {},
+    });
+    const answer = threadReport(rows, [], []);
+    expect(answer.threads.find((t) => t.id === "reported")!.cost).toMatchObject({
+      usd: 2.5,
+      reportedUsd: 2.5,
+      unknownTurns: 0,
+    });
+    const estimated = answer.threads.find((t) => t.id === "estimated")!.cost;
+    expect(estimated.reportedUsd).toBeUndefined();
+    expect(estimated.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(estimated.usd).toBeCloseTo(0.1, 10);
+  });
+
+  test("a parent's cost includes its delegates, and says part of it is estimated", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "parent",
+          title: "Parent",
+          parent_id: null,
+          parent_title: null,
+          model: "gpt-6-luna",
+          input_tokens: 1_000_000,
+          output_tokens: 0,
+          cached_tokens: 0,
+          cost_usd: null,
+          turns: 2,
+          turns_without_cost: 2,
+        }),
+        row({
+          thread: "child",
+          title: "Child",
+          parent_id: "parent",
+          parent_title: "Parent",
+          model: "gpt-6-astra",
+          cost_usd: 2.5,
+          turns: 1,
+          turns_without_cost: 0,
+        }),
+      ],
+      totals: {},
+    });
+    const answer = threadReport(rows, [], []);
+    const parent = answer.threads[0]!;
+    expect(parent.ownCost.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(parent.cost.reportedUsd).toBe(2.5);
+    expect(parent.cost.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(parent.cost.usd).toBeCloseTo(2.6, 10);
+    expect(parent.delegateCount).toBe(1);
+  });
+
+  test("a thread is priced by the harness its turns share, not its display harness", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "rustcode-turns",
+          // The store's display harness is the latest one; the turns agreed on rustcode.
+          harness: "claude-code",
+          model_harness: "rustcode",
+          model: "gpt-6-luna",
+          input_tokens: 1_000_000,
+          cached_tokens: 400_000,
+          output_tokens: 0,
+          cost_usd: null,
+          turns: 1,
+          turns_without_cost: 1,
+        }),
+      ],
+      totals: {},
+    });
+    const cost = threadReport(rows, [], []).threads[0]!.cost;
+    // rustcode counts cached input inside input_tokens: 600k at $0.10 plus
+    // 400k at $0.01, not 1M uncached at $0.10 (which the display harness would give).
+    expect(cost.estimatedUsd).toBeCloseTo(0.064, 10);
+  });
+
+  test("a thread row without one shared harness and model is not estimated", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "switched",
+          model: "gpt-6-luna",
+          model_harness: null,
+          input_tokens: 1_000_000,
+          cached_tokens: 0,
+          output_tokens: 0,
+          cost_usd: null,
+          turns: 2,
+          turns_without_cost: 2,
+        }),
+      ],
+      totals: {},
+    });
+    const cost = threadReport(rows, [], []).threads[0]!.cost;
+    expect(cost.usd).toBeUndefined();
+    expect(cost.unknownTurns).toBe(2);
+  });
+
+  test("a reported thread counts the turns that reported no cost", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "reported",
+          cost_usd: 11.55,
+          turns: 192,
+          turns_without_cost: 31,
+        }),
+      ],
+      totals: {},
+    });
+    const cost = threadReport(rows, [], []).threads[0]!.cost;
+    expect(cost).toEqual({ usd: 11.55, reportedUsd: 11.55, unknownTurns: 31 });
+  });
+
+  test("a thread with no model, or with no price and no reported cost, is unknown", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "no-model",
+          model: null,
+          cost_usd: null,
+          input_tokens: 1_000,
+          output_tokens: 100,
+          turns: 3,
+        }),
+        row({ thread: "no-price", model: "gpt-9-unknown", cost_usd: null, turns: 4 }),
+      ],
+      totals: {},
+    });
+    const answer = threadReport(rows, [], []);
+    const noModel = answer.threads.find((t) => t.id === "no-model")!.cost;
+    const noPrice = answer.threads.find((t) => t.id === "no-price")!.cost;
+    expect(noModel.usd).toBeUndefined();
+    expect(noModel.unknownTurns).toBe(3);
+    expect(noPrice.usd).toBeUndefined();
+    expect(noPrice.unknownTurns).toBe(4);
+  });
+
   test("parent ids on the rows roll up without a session list", () => {
     const rows = parseUsageReport({
       group_by: "thread",

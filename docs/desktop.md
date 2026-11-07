@@ -357,28 +357,36 @@ composer's keys stay outside the table.
   that file answers and its numbers keep showing; Refresh asks macOS once more.
 - **Settings › Statistics.** What the local data store recorded of every
   turn, by harness and model and by thread: `_rustcode/data/usage`
-  (`engine/src/acp/data.rs`) read twice, once `group_by=model` and once
-  `group_by=thread`. A thread's total includes the threads it started, from
-  the parent recorded in its metadata or the link book, so delegated work is
-  counted once; a parent known only by title is listed on its own and says so.
-  Parents ride on the usage rows from the store; when a row has no parent id,
-  the link book that started it is the fallback, and an older engine also
-  falls back to the session list, which the page marks as incomplete if it was
-  capped or missing threads. Tokens and cost stay blank where a harness
-  reported none, and
-  each token column marks the turns that reported no value for it rather than
-  treating them as zero. A read that was truncated at the store's 1,000-group
-  cap says so. **Reported** is only ever the USD a harness reported. Beside it,
-  **Estimated** prices the same tokens at public list prices
-  (`apps/desktop/src/state/pricing.ts`, dated in `PRICE_DATE`; no network read
-  at runtime): each harness's counts are normalized to
-  `{uncached_input, cache_read, cache_write, output}` first, because the
-  built-in harness and Codex count cached input inside `input_tokens` while
-  Claude Code's and Pi's logs report it separately. The two columns are never
-  merged or added together, and an unknown model price, an unknown harness or
-  a missing count the split needs shows `—` (never `0`) and is counted as a
-  turn not estimated in the table's foot. The CLI's `rustcode usage` has no
-  Estimated column yet; it comes in a later change, from the same table.
+  (`engine/src/acp/data.rs`) read three times, once `group_by=model`, once
+  `group_by=thread` and once `group_by=day`, the last for the 30 UTC days it
+  charts (via `since`, so the store's row cap cannot hide recent days). A
+  thread's total includes the threads it started, from the parent recorded in
+  its metadata or the link book, so delegated work is counted once; a parent
+  known only by title is listed on its own and says so. Parents ride on the
+  usage rows from the store, along with the harness and model its turns share
+  (`model_harness`/`model`, present only when every turn ran the same pair) so
+  its row can be priced; a thread that switched harness or model is not
+  estimated, since one rate would be wrong for the other turns. When a row has
+  no parent id, the link book that started it is the fallback, and an older
+  engine also falls back to the session list, which the page marks as
+  incomplete if it was capped or missing threads. Tokens stay blank where a
+  harness reported none, and each token column marks the turns that reported
+  no value for it rather than treating them as zero. A read truncated at the
+  store's 1,000-group cap says so. A row's **Cost** is the USD its harness
+  reported or, when it reported none (Codex never reports one), the same
+  tokens at public API list prices (`apps/desktop/src/state/pricing.ts`,
+  dated in `PRICE_DATE`; no network read at runtime): each harness's counts
+  are normalized to `{uncached_input, cache_read, cache_write, output}` first,
+  because the built-in harness and Codex count cached input inside
+  `input_tokens` while Claude Code's and Pi's logs report it separately. A
+  reported number always wins and is never altered; the headline total adds
+  each row's reported cost or its estimate, never both, and shows the
+  reported and estimated parts beneath it, with `≈` marking anything partly
+  estimated and `unknown` (never `$0`) where neither number exists. A reported
+  row still counts the turns that reported no cost as unknown. Estimates are
+  list prices, not necessarily what a subscription bills. **Cost by model**
+  draws the same numbers as bars, and **Last 30 days** charts turns per day.
+  The CLI's `rustcode usage` stays reported-only.
 - **Settings › Advanced › Record request bodies.** The two payload-capture
   switches (`docs/data-store.md` › Captured payloads), off by default:
   *Provider requests (built-in harness)* for the built-in harness's request

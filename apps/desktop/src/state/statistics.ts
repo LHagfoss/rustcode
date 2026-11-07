@@ -3,7 +3,12 @@
 // The thread read is rolled up along the delegation a thread records in its
 // metadata (or the link that started it), so a parent's total includes the
 // threads it started and every thread is counted once. Tokens and cost a
-// harness never reported stay absent; nothing here estimates either.
+// harness never reported stay absent; a thread's cost is the USD its harness
+// reported or, where it reported none, the list-price estimate
+// (`state/pricing.ts`), with the reported and estimated parts kept apart. A
+// thread is estimated only when all its turns ran one harness and model
+// (`model_harness`/`model` on the row); otherwise one row's cache convention
+// and rate would be applied to turns that never used them.
 //
 // Pure (no React, no store at runtime), so the page and its tests share one
 // answer.
@@ -11,6 +16,7 @@
 import type { UsageCounts, UsageReport, UsageRow, UsageTotals } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
 import type { Link } from "./orchestration";
+import { addCost, type CostTotals, costOf, emptyCost } from "./pricing";
 import { parentOf } from "./topLevel";
 
 export function emptyTotals(): UsageTotals {
@@ -117,6 +123,10 @@ export interface ThreadTotal {
   own: UsageTotals;
   /** Its own turns plus every thread it started, at any depth. */
   total: UsageTotals;
+  /** This thread's own best known cost, without its delegates. */
+  ownCost: CostTotals;
+  /** Its own cost plus every delegate's, split into reported and estimated parts. */
+  cost: CostTotals;
   /** How many threads are folded in, at any depth. */
   delegateCount: number;
   /**
@@ -159,6 +169,15 @@ export function threadReport(
 ): ThreadReport {
   const rows = new Map<string, UsageRow>();
   for (const row of report.rows) if (row.thread) rows.set(row.thread, row);
+  // A thread row is priceable only when all its turns agreed on one harness
+  // and model; `model_harness` is the store's answer to that, and its absence
+  // leaves the row unestimated rather than guessing from the display harness.
+  const costOfThread = (row: UsageRow, totals: UsageTotals): CostTotals =>
+    costOf({
+      harness: row.modelHarness ?? "",
+      model: row.modelHarness ? row.model : undefined,
+      totals,
+    });
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const parentsFromStore = report.parentsReported;
 
@@ -207,22 +226,26 @@ export function threadReport(
     children.set(above, [...(children.get(above) ?? []), id]);
   }
 
-  const rolled = new Map<string, { total: UsageTotals; delegates: number }>();
+  const rolled = new Map<string, { total: UsageTotals; delegates: number; cost: CostTotals }>();
   const visiting = new Set<string>();
-  const visit = (id: string): { total: UsageTotals; delegates: number } => {
+  const visit = (id: string): { total: UsageTotals; delegates: number; cost: CostTotals } => {
     const known = rolled.get(id);
     if (known) return known;
-    if (visiting.has(id)) return { total: emptyTotals(), delegates: 0 };
+    if (visiting.has(id)) return { total: emptyTotals(), delegates: 0, cost: emptyCost() };
     visiting.add(id);
-    let total = totalsOf(rows.get(id)!);
+    const row = rows.get(id)!;
+    const own = totalsOf(row);
+    let total = own;
     let delegates = 0;
+    let cost = costOfThread(row, own);
     for (const child of children.get(id) ?? []) {
       const below = visit(child);
       total = addTotals(total, below.total);
+      cost = addCost(cost, below.cost);
       delegates += below.delegates + 1;
     }
     visiting.delete(id);
-    const answer = { total, delegates };
+    const answer = { total, delegates, cost };
     rolled.set(id, answer);
     return answer;
   };
@@ -232,13 +255,16 @@ export function threadReport(
     .map(([id, row]): ThreadTotal => {
       const session = sessionById.get(id);
       const answer = visit(id);
+      const own = totalsOf(row);
       return {
         id,
         title: row.title || session?.title || id,
         harness: row.harness || session?.harness || "unknown",
         project: row.project || session?.cwd,
-        own: totalsOf(row),
+        own,
         total: answer.total,
+        ownCost: costOfThread(row, own),
+        cost: answer.cost,
         delegateCount: answer.delegates,
         unlinked: titleOnly.has(id),
       };
