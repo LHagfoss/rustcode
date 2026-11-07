@@ -1,6 +1,8 @@
 //! Whether a harness is installed, its version and sign-in, found cheaply:
 //! a `PATH` lookup and, where the harness has one, a quick status command
-//! under a timeout. Results are cached for a minute.
+//! under a timeout. The lookup follows the platform's shell, so on Windows a
+//! bare name tries each `PATHEXT` extension (`codex` is `codex.exe`, npm's
+//! `npx` is `npx.cmd`). Results are cached for a minute.
 
 use super::{HarnessKind, ResolvedHarness};
 use serde::Serialize;
@@ -262,17 +264,118 @@ pub(crate) fn search_path() -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
-/// Where `program` resolves: itself when it is a path, else the first
-/// executable of that name on [`search_path`].
-pub(crate) fn resolve_program(program: &str) -> Option<PathBuf> {
-    if program.contains(std::path::MAIN_SEPARATOR) {
-        let path = PathBuf::from(program);
-        return is_executable(&path).then_some(path);
+/// The names one configured program becomes, platform by platform: as written
+/// on Unix; on Windows, a name with no extension of its own gains each
+/// `PATHEXT` one (`codex` is `codex.exe`, npm's `npx` is `npx.cmd`), because
+/// the extensionless file a Unix shell would run is not a Windows program.
+struct Lookup {
+    windows: bool,
+    extensions: Vec<std::ffi::OsString>,
+}
+
+impl Lookup {
+    fn current() -> Self {
+        Self {
+            windows: cfg!(windows),
+            extensions: if cfg!(windows) {
+                parse_pathext(std::env::var_os("PATHEXT").as_deref())
+            } else {
+                Vec::new()
+            },
+        }
     }
-    std::env::split_paths(&search_path())
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .map(|dir| dir.join(program))
-        .find(|candidate| is_executable(candidate))
+
+    /// File names to try for `program`, in the order a Windows shell tries
+    /// them. A name that already has an extension is taken literally.
+    fn names(&self, program: &str) -> Vec<std::ffi::OsString> {
+        if !self.windows || Path::new(program).extension().is_some() {
+            return vec![program.into()];
+        }
+        let names: Vec<std::ffi::OsString> = self
+            .extensions
+            .iter()
+            .map(|extension| {
+                let mut name = std::ffi::OsString::from(program);
+                name.push(extension);
+                name
+            })
+            .collect();
+        if names.is_empty() {
+            vec![program.into()]
+        } else {
+            names
+        }
+    }
+}
+
+/// The extensions `PATHEXT` lists, in order; `None` or an empty value is the
+/// Windows default.
+fn parse_pathext(value: Option<&std::ffi::OsStr>) -> Vec<std::ffi::OsString> {
+    const DEFAULT: &str = ".COM;.EXE;.BAT;.CMD";
+    let value = value
+        .filter(|value| !value.is_empty())
+        .unwrap_or(std::ffi::OsStr::new(DEFAULT));
+    let extensions: Vec<std::ffi::OsString> = value
+        .to_string_lossy()
+        .split(';')
+        .map(str::trim)
+        .filter(|extension| !extension.is_empty())
+        .map(Into::into)
+        .collect();
+    if extensions.is_empty() {
+        DEFAULT.split(';').map(Into::into).collect()
+    } else {
+        extensions
+    }
+}
+
+/// Where `program` resolves: itself when it is a path, else the first
+/// executable of that name on [`search_path`]. A bare name is looked up the
+/// way this platform's shell would find it (see [`Lookup`]).
+pub(crate) fn resolve_program(program: &str) -> Option<PathBuf> {
+    let lookup = Lookup::current();
+    if is_program_path(program) {
+        return resolve_path(program, &lookup);
+    }
+    resolve_in(
+        std::env::split_paths(&search_path()).filter(|dir| !dir.as_os_str().is_empty()),
+        program,
+        &lookup,
+    )
+}
+
+/// An explicit path, with its `PATHEXT` extension filled in on Windows.
+fn resolve_path(program: &str, lookup: &Lookup) -> Option<PathBuf> {
+    lookup
+        .names(program)
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| is_executable(path))
+}
+
+/// Whether `program` names a file itself rather than one to look up on
+/// `PATH`. Windows accepts either separator, and `C:name` is drive-relative.
+fn is_program_path(program: &str) -> bool {
+    program.contains('/')
+        || (cfg!(windows) && (program.contains('\\') || program.as_bytes().get(1) == Some(&b':')))
+}
+
+/// The first executable of `program`'s names across `dirs`, in order.
+fn resolve_in(
+    dirs: impl IntoIterator<Item = PathBuf>,
+    program: &str,
+    lookup: &Lookup,
+) -> Option<PathBuf> {
+    let names = lookup.names(program);
+    for dir in dirs {
+        for name in &names {
+            let candidate = dir.join(name);
+            if is_executable(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -320,6 +423,139 @@ mod tests {
         assert!(!detection.installed);
         assert_eq!(detection.auth, "unknown");
         assert!(resolve_program("sh").is_some());
+    }
+
+    fn windows_lookup(extensions: &[&str]) -> Lookup {
+        Lookup {
+            windows: true,
+            extensions: extensions.iter().map(Into::into).collect(),
+        }
+    }
+
+    /// A file that `is_executable` accepts on this host too, so the Windows
+    /// candidate order can be tested from Unix.
+    fn write_program(path: &Path) {
+        std::fs::write(path, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_windows_bare_name_tries_pathext_extensions() {
+        let lookup = windows_lookup(&[".COM", ".EXE", ".BAT", ".CMD"]);
+        let names = lookup.names("codex");
+        assert_eq!(
+            names
+                .first()
+                .map(|name| name.to_string_lossy().into_owned()),
+            Some("codex.COM".into())
+        );
+        assert!(names.iter().any(|name| name == "codex.EXE"));
+        // npm installs `npx.cmd`, never an executable `npx`.
+        let npx = lookup.names("npx");
+        assert!(npx.iter().any(|name| name == "npx.CMD"));
+        // A name that already has an extension is taken literally.
+        assert_eq!(
+            lookup.names("codex.exe"),
+            vec![std::ffi::OsString::from("codex.exe")]
+        );
+    }
+
+    #[test]
+    fn a_unix_bare_name_is_literal() {
+        let lookup = Lookup {
+            windows: false,
+            extensions: vec![".EXE".into()],
+        };
+        assert_eq!(
+            lookup.names("codex"),
+            vec![std::ffi::OsString::from("codex")]
+        );
+    }
+
+    #[test]
+    fn pathext_is_read_in_order_with_a_windows_default() {
+        let default: Vec<std::ffi::OsString> = [".COM", ".EXE", ".BAT", ".CMD"]
+            .iter()
+            .map(Into::into)
+            .collect();
+        assert_eq!(parse_pathext(None), default);
+        assert_eq!(parse_pathext(Some(std::ffi::OsStr::new(""))), default);
+        // An entry may be empty and is skipped; case is the user's own.
+        assert_eq!(
+            parse_pathext(Some(std::ffi::OsStr::new(".exe;;.cmd"))),
+            vec![
+                std::ffi::OsString::from(".exe"),
+                std::ffi::OsString::from(".cmd")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_windows_executable_is_found_through_a_path_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("codex.exe");
+        write_program(&exe);
+        // The Unix literal name is not enough on Windows, which is the reported
+        // bug: the file exists and its directory is on PATH, yet detection
+        // said installed=false.
+        assert_eq!(
+            resolve_in(
+                [dir.path().to_owned()],
+                "codex",
+                &Lookup {
+                    windows: false,
+                    extensions: Vec::new(),
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_in([dir.path().to_owned()], "codex", &windows_lookup(&[".exe"])),
+            Some(exe)
+        );
+    }
+
+    #[test]
+    fn a_windows_command_wrapper_resolves_as_cmd() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("npx.cmd");
+        write_program(&shim);
+        assert_eq!(
+            resolve_in(
+                [dir.path().to_owned()],
+                "npx",
+                &windows_lookup(&[".exe", ".cmd"])
+            ),
+            Some(shim)
+        );
+    }
+
+    #[test]
+    fn an_explicit_windows_path_gains_its_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("codex.exe");
+        write_program(&exe);
+        let without_extension = dir.path().join("codex");
+        let program = without_extension.to_string_lossy().into_owned();
+        assert!(is_program_path(&program));
+        assert_eq!(
+            resolve_path(&program, &windows_lookup(&[".exe"])),
+            Some(exe)
+        );
+        assert_eq!(
+            resolve_path(
+                &program,
+                &Lookup {
+                    windows: false,
+                    extensions: Vec::new(),
+                }
+            ),
+            None
+        );
     }
 
     #[test]
