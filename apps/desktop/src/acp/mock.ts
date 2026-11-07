@@ -2567,6 +2567,25 @@ export class MockEngine {
       } else {
         push({ sessionUpdate: "tool_call_update", toolCallId: editId, status: "completed", content: [diff] });
       }
+      // A message the turn read mid-step (`_rustcode/steer`): it says so where it read it, and the
+      // plan moves on, so the app has a step that was active when the note landed and a next step
+      // whose clock starts (`state/steer.ts`). A steer that arrives after this is still answered at
+      // the foot of the turn, below.
+      if (run.steers.length) {
+        const read = run.steers.splice(0);
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text(`Noted ${read.map((steer) => `“${steer}”`).join(", ")}.\n\n`),
+        });
+        push({
+          sessionUpdate: "plan",
+          entries: [
+            { content: "Find the code", status: "completed", priority: "medium" },
+            { content: "Make the change", status: "completed", priority: "medium" },
+            { content: "Run the checks", status: "in_progress", priority: "low" },
+          ],
+        });
+      }
       const reply = /\bkit\b/i.test(prompt)
         ? MOCK_KIT
         : /\bview\b/i.test(prompt)

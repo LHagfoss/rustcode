@@ -15,6 +15,7 @@ import type {
 import { unwrapShell } from "../lib/command";
 import type { ComposeExtras, SentAttachment } from "./compose";
 import type { Link } from "./orchestration";
+import { activeStep, advancePlanClocks, type PlanClocks, type SteerNote } from "./steer";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "./toolNames";
 
 export type TranscriptItem =
@@ -176,12 +177,21 @@ export interface ThreadState {
   /** Index by tool call id into `items`. */
   toolIndex: Record<string, number>;
   plan: PlanEntry[];
+  /** When each plan step came up and finished, for the card's clocks (`state/steer.ts`). */
+  planClocks: PlanClocks;
+  /** The steering notes this thread's turns read, and where each took effect. */
+  steers: SteerNote[];
   usage?: SessionUsage;
   configOptions: ConfigOption[];
   permissions: PermissionRequest[];
   queue: QueuedPrompt[];
   /** A stopped or failed turn left the queue waiting: it keeps its order until Resume starts it. */
   queueHeld?: boolean;
+  /**
+   * Rows a steer just took out of the queue: they keep the stack's place while they glide out
+   * toward the transcript, then they are dropped (`ui/QueuedMessages.tsx` `LeavingQueuedRow`).
+   */
+  departing?: QueuedPrompt[];
   running: boolean;
   turnStartedAt?: number;
   /** Background commands the last turn parked on; it resumes when they finish. */
@@ -210,6 +220,8 @@ export function emptyThread(id: string, cwd: string, title?: string): ThreadStat
     items: [],
     toolIndex: {},
     plan: [],
+    planClocks: {},
+    steers: [],
     configOptions: [],
     permissions: [],
     queue: [],
@@ -449,8 +461,12 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       };
       return { ...state, items: next };
     }
-    case "plan":
-      return { ...state, plan: update.entries };
+    case "plan": {
+      // Each step's clock runs while the turn is on it, so the card can say how long it has taken
+      // and how long it took (`state/steer.ts`).
+      const planClocks = advancePlanClocks(state.planClocks, update.entries, now, state.running);
+      return { ...state, plan: update.entries, planClocks };
+    }
     case "title":
       return { ...state, title: update.title };
     case "configOptions":
@@ -688,43 +704,65 @@ export function autoAllowedNoticeNeeded(state: ThreadState, tool: string): boole
   return !state.items.some((item) => item.kind === "tool" && orchestrationTool(item.title) === want);
 }
 
-/** Add a steered message where the running turn will read it. */
+/**
+ * Add a steered message where the running turn will read it, and the note saying where that was: the
+ * plan step the turn was on when it took the note, so the plan card can show it there, or none, and
+ * the transcript draws a line under the message instead (`state/steer.ts`).
+ */
 export function appendSteer(
   state: ThreadState,
   text: string,
   now = Date.now(),
   attachments?: SentAttachment[],
 ): ThreadState {
+  const id = localId("user");
   return {
     ...state,
     items: [
       ...state.items,
       {
         kind: "user",
-        id: localId("user"),
+        id,
         text,
         at: now,
         steered: true,
         attachments: attachments?.length ? attachments : undefined,
       },
     ],
+    steers: [...state.steers, { id, text, at: now, step: activeStep(state.plan) }],
   };
+}
+
+/** A queued row a steer took: it glides out of the stack, then `dropDeparted` removes it. */
+export function departQueued(state: ThreadState, item: QueuedPrompt): ThreadState {
+  if (state.departing?.some((d) => d.id === item.id)) return state;
+  return { ...state, departing: [item, ...(state.departing ?? [])] };
+}
+
+/** The row has finished gliding: the thread lets it go. */
+export function dropDeparted(state: ThreadState, id: string): ThreadState {
+  if (!state.departing?.some((d) => d.id === id)) return state;
+  return { ...state, departing: state.departing.filter((d) => d.id !== id) };
 }
 
 /** Steers the turn never read go back to the front of the queue, and leave the transcript. */
 export function requeueSteers(state: ThreadState, unused: string[]): ThreadState {
   if (!unused.length) return state;
   const wanted = unused.map((t) => t.trim());
+  const dropped: string[] = [];
   const items = state.items.filter((item) => {
     if (item.kind !== "user" || !item.steered) return true;
     const at = wanted.indexOf(item.text.trim());
     if (at < 0) return true;
     wanted.splice(at, 1);
+    dropped.push(item.id);
     return false;
   });
   return {
     ...state,
     items,
+    // A note whose message went back to the queue took effect nowhere: it goes with it.
+    steers: state.steers.filter((note) => !dropped.includes(note.id)),
     queue: [...unused.map((text) => ({ id: localId("queued"), text })), ...state.queue],
   };
 }
@@ -738,7 +776,16 @@ export function truncateBefore(state: ThreadState, itemId: string): ThreadState 
   items.forEach((item, i) => {
     if (item.kind === "tool") toolIndex[item.id] = i;
   });
-  return { ...state, items, toolIndex, pendingTurn: undefined, plan: [] };
+  const kept = new Set(items.map((item) => item.id));
+  return {
+    ...state,
+    items,
+    toolIndex,
+    pendingTurn: undefined,
+    plan: [],
+    planClocks: {},
+    steers: state.steers.filter((note) => kept.has(note.id)),
+  };
 }
 
 /** Which of the thread's messages `itemId` is, counting from 0 as a replay shows them; -1 if none. */

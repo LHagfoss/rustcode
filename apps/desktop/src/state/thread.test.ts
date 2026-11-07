@@ -9,8 +9,10 @@ import {
   autoAllowedNoticeNeeded,
   beginTurn,
   checkCommands,
+  departQueued,
   diffCounts,
   diffLines,
+  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
@@ -191,6 +193,50 @@ describe("thread reducer", () => {
     s = requeueSteers(s, ["also this"]);
     expect(s.items.some((i) => i.kind === "user" && i.text === "also this")).toBe(false);
     expect(s.queue.map((q) => q.text)).toEqual(["also this", "later"]);
+  });
+
+  test("a steer says which plan step was active when the turn read it", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 0);
+    s = applyUpdate(
+      s,
+      {
+        kind: "plan",
+        entries: [
+          { content: "a", status: "completed" },
+          { content: "b", status: "in_progress" },
+        ],
+      },
+      1000,
+    );
+    // The clock starts where the turn came to the step, and the note lands on it.
+    expect(s.planClocks).toEqual({ b: { startedAt: 1000 } });
+    s = appendSteer(s, "use the cache", 2000);
+    expect(s.steers).toEqual([
+      { id: expect.any(String), text: "use the cache", at: 2000, step: { index: 1, content: "b" } },
+    ]);
+    // A thread with no step on gets the note with no step: it says where it landed in the transcript.
+    s = { ...s, plan: [], planClocks: {} };
+    s = appendSteer(s, "and the fast path", 3000);
+    expect(s.steers.at(-1)?.step).toBeUndefined();
+  });
+
+  test("the message a steer went back to the queue takes its note with it", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 0);
+    s = appendSteer(s, "also this", 1000);
+    expect(s.steers).toHaveLength(1);
+    s = requeueSteers(s, ["also this"]);
+    expect(s.steers).toEqual([]);
+  });
+
+  test("a queued row a steer took leaves after its glide, and not before", () => {
+    const s = emptyThread("s", "/p");
+    const queued = { id: "q1", text: "also this" };
+    expect(departQueued({ ...s, queue: [] }, queued).departing).toEqual([queued]);
+    expect(dropDeparted(departQueued(s, queued), "q1").departing).toEqual([]);
+    // Dropping one that already went, or departing it twice, changes nothing.
+    expect(dropDeparted(s, "q1")).toBe(s);
+    const once = departQueued(s, queued);
+    expect(departQueued(once, queued)).toBe(once);
   });
 
   test("plan, title, usage and config options", () => {

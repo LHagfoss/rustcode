@@ -538,6 +538,21 @@
 }
 
 /*
+ * A steer takes a queued message out of the stack: it keeps its place and glides up toward the
+ * transcript it was read in, fading as it goes (`ui/QueuedMessages.tsx` `LeavingQueuedRow`,
+ * `state/store.ts` `glideAway`, which holds it this long). Transform and opacity only.
+ */
+@keyframes rc-steer-away {
+  to {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.98);
+  }
+}
+.rc-steer-away {
+  animation: rc-steer-away 240ms var(--ease-snappy) forwards;
+}
+
+/*
  * The idle meta under a message — its time, what can be done with it, and the `Queued` under a
  * queued one — hidden at rest and in on hover of its row or on keyboard focus inside it, so the
  * transcript reads calm and the row keeps its height either way (no layout on hover). A coarse
