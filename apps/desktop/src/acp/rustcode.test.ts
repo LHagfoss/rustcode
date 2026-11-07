@@ -86,7 +86,15 @@ describe("rustcode extensions", () => {
           context: {
             model: "m",
             free: 253_600,
-            categories: [{ name: "Tool calls", tokens: 5_100 }, { name: "bad" }],
+            categories: [
+              {
+                name: "Tool calls",
+                tokens: 5_100,
+                items: [{ name: "read src/ui/Tool.tsx", tokens: 2_200 }],
+              },
+              { name: "bad" },
+            ],
+            compactAt: { tokens: 199_000 },
             compaction: { count: 2, reclaimedTokens: 40_000 },
           },
         },
@@ -94,10 +102,17 @@ describe("rustcode extensions", () => {
     });
     expect(usage?.context).toEqual({
       model: "m",
-      categories: [{ name: "Tool calls", tokens: 5_100 }],
+      categories: [
+        {
+          name: "Tool calls",
+          tokens: 5_100,
+          items: [{ name: "read src/ui/Tool.tsx", tokens: 2_200 }],
+        },
+      ],
       free: 253_600,
       compactions: 2,
       reclaimed: 40_000,
+      compactAt: 199_000,
     });
     expect(parseUsage({ used: 1, size: 2 })?.context).toBeUndefined();
   });

@@ -40,9 +40,10 @@ Next, in rough order:
 2. #2799, cross-harness delegation: the live test plan with Claude Code
    and Codex parents, a harness/model discovery tool, one approval per
    delegation, waking a parent when its child ends.
-3. Compaction follow-ups: the auto-compact tick on the context
-   bar (`autoCompactThreshold`), Claude's idle compaction before the prompt
-   cache expires.
+3. Compaction follow-ups: the built-in harness's context bar marks its
+   auto-compact point and the card compares the context before and after a
+   compaction; a harness that reports no threshold keeps the total-only view.
+   Remaining: Claude's idle compaction before the prompt cache expires.
 4. SQLite as the store, not only an index: pins and status first, then an
    event table with projections, the
    sidebar listed from the index, lazy transcript import.

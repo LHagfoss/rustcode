@@ -317,13 +317,21 @@ export interface SessionUsage {
   context?: ContextDetail;
 }
 
+export interface ContextItem {
+  name: string;
+  /** An estimate in the engine's token unit, when it knows one. */
+  tokens?: number;
+}
+
 export interface ContextDetail {
   model?: string;
   /** In the engine's order, which matches the TUI legend; empty ones are kept. */
-  categories: { name: string; tokens: number }[];
+  categories: { name: string; tokens: number; items?: ContextItem[] }[];
   free?: number;
   compactions?: number;
   reclaimed?: number;
+  /** Where the harness compacts on its own, when it reports a threshold. */
+  compactAt?: number;
 }
 
 function parseContextDetail(value: unknown): ContextDetail | undefined {
@@ -333,15 +341,25 @@ function parseContextDetail(value: unknown): ContextDetail | undefined {
     const x = obj(c);
     const name = str(x?.name);
     const tokens = num(x?.tokens);
-    return name && tokens !== undefined ? [{ name, tokens }] : [];
+    if (!name || tokens === undefined) return [];
+    const items = Array.isArray(x?.items)
+      ? x.items.flatMap((item) => {
+          const y = obj(item);
+          const itemName = str(y?.name);
+          return itemName ? [{ name: itemName, tokens: num(y?.tokens) }] : [];
+        })
+      : undefined;
+    return [{ name, tokens, ...(items?.length ? { items } : {}) }];
   });
   const compaction = obj(o.compaction);
+  const compactAt = obj(o.compactAt);
   return {
     model: str(o.model),
     categories,
     free: num(o.free),
     compactions: num(compaction?.count),
     reclaimed: num(compaction?.reclaimedTokens),
+    compactAt: num(compactAt?.tokens),
   };
 }
 
