@@ -264,6 +264,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "RustCode",
     keywords: "version update check upgrade download what's new about licences licenses open source",
   },
+  {
+    section: "about",
+    title: "Update channel",
+    keywords: "beta stable prerelease channel release updates early",
+  },
 ];
 
 /** How many results the nav shows at once. */

@@ -1,9 +1,16 @@
 //! The in-app updater, the SwiftUI app's `Updater.swift` ported: ask GitHub
-//! for the latest release, and on macOS install it in place. It downloads
-//! `RustCode-<ver>-macos-<arch>.app.zip`, checks it against the release's
-//! `SHA256SUMS`, unpacks it with `ditto`, requires a valid code signature and
-//! this app's bundle identifier, then a detached shell swaps the bundle once
-//! this process has quit and opens the new one.
+//! what the update channel offers, and on macOS install it in place. It
+//! downloads `RustCode-<ver>-macos-<arch>.app.zip`, checks it against the
+//! release's `SHA256SUMS`, unpacks it with `ditto`, requires a valid code
+//! signature and this app's bundle identifier, then a detached shell swaps the
+//! bundle once this process has quit and opens the new one.
+//!
+//! The channel is Stable or Beta (Settings › About). Stable reads the tag that
+//! `releases/latest` redirects to, as it always has. Beta also offers
+//! prereleases, which `releases/latest` never points at, so it reads the
+//! release feed instead (`releases.atom`, which lists prereleases) and offers
+//! the newest version of either kind. Betas ship the macOS app only, so a beta
+//! is offered only where there is an app to install (docs/desktop.md › Updater).
 //!
 //! No tauri-plugin-updater: it needs its own signing key pair, and every
 //! release would fail without that secret. SHA256SUMS is what the installers
@@ -11,6 +18,7 @@
 //! it to the installer (docs/install.md).
 
 use serde::Serialize;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::ipc::Channel;
@@ -23,9 +31,10 @@ const REPO: &str = "LHagfoss/rustcode";
 pub struct UpdateInfo {
     /// This app's version.
     current: String,
-    /// The latest release's version, when GitHub answered.
+    /// The version to update to, when the channel has one that is newer and
+    /// ready to install here.
     latest: Option<String>,
-    /// The latest release is newer and has an app for this platform.
+    /// The channel offers an update this platform can install.
     available: bool,
     /// The app can replace itself (a macOS release bundle in a folder it may write).
     can_install: bool,
@@ -33,29 +42,190 @@ pub struct UpdateInfo {
     development: bool,
     /// The release page, for platforms that update with the installer.
     page: Option<String>,
+    /// The channels this build offers: `beta` only where a beta has an app.
+    channels: Vec<&'static str>,
+    /// The channel this answer was for, so an answer to the previous setting is
+    /// never shown as the current one.
+    channel: &'static str,
 }
 
-/// `X.Y.Z[-pre]` as ((X, Y, Z), has a pre-release suffix).
-fn parse(version: &str) -> Option<((u64, u64, u64), bool)> {
+/// Which releases the app offers: stable ones, or prereleases too.
+///
+/// Betas are GitHub prereleases, so `releases/latest` skips them; on Beta the
+/// check reads the release feed and offers the newest version of either kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReleaseChannel {
+    Stable,
+    Beta,
+}
+
+/// The channel a check runs on. Anything but `beta` is Stable, so a missing or
+/// unknown setting never opts anyone into a prerelease, and a Windows or Linux
+/// build stays on Stable: a beta ships the macOS app only.
+fn channel_of(name: Option<&str>) -> ReleaseChannel {
+    match (name.map(str::trim), offers_beta()) {
+        (Some("beta"), true) => ReleaseChannel::Beta,
+        _ => ReleaseChannel::Stable,
+    }
+}
+
+impl ReleaseChannel {
+    fn name(self) -> &'static str {
+        match self {
+            ReleaseChannel::Stable => "stable",
+            ReleaseChannel::Beta => "beta",
+        }
+    }
+}
+
+/// Whether a beta can be installed on this platform: betas build the macOS app
+/// and CLI only (.github/workflows/build.yml).
+fn offers_beta() -> bool {
+    cfg!(target_os = "macos")
+}
+
+fn channel_names() -> Vec<&'static str> {
+    if offers_beta() {
+        vec!["stable", "beta"]
+    } else {
+        vec!["stable"]
+    }
+}
+
+/// One dot-separated field of a prerelease suffix: `beta.10` orders as text
+/// then number.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Identifier {
+    /// Sorts before any text field, as semver has it.
+    Number(u64),
+    Text(String),
+}
+
+/// A release version as semver orders them: `1.20.0-beta.2` is older than
+/// `1.20.0`, and `1.20.0-beta.10` is newer than `1.20.0-beta.9`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Version {
+    core: (u64, u64, u64),
+    /// The `-pre` fields; empty for a release.
+    pre: Vec<Identifier>,
+}
+
+impl Version {
+    fn is_prerelease(&self) -> bool {
+        !self.pre.is_empty()
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match self.core.cmp(&other.core) {
+            Ordering::Equal => {}
+            ordering => return ordering,
+        }
+        // A release is newer than any prerelease of it, and fields compare one
+        // by one, the longer suffix being newer when the shared fields tie.
+        match (self.pre.is_empty(), other.pre.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => self.pre.cmp(&other.pre),
+        }
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.core.0, self.core.1, self.core.2)?;
+        for (i, field) in self.pre.iter().enumerate() {
+            write!(f, "{}", if i == 0 { '-' } else { '.' })?;
+            match field {
+                Identifier::Number(n) => write!(f, "{n}")?,
+                Identifier::Text(text) => write!(f, "{text}")?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `X.Y.Z[-pre]`, with or without the `v` the tags carry. Build metadata
+/// (`+…`) takes no part in ordering, so it is dropped: `1.21.0+build.7` is
+/// `1.21.0`.
+fn parse_version(version: &str) -> Option<Version> {
     let version = version.trim().trim_start_matches('v');
+    let version = version.split('+').next().unwrap_or(version);
     let (core, pre) = match version.split_once('-') {
-        Some((core, _)) => (core, true),
-        None => (version, false),
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
     };
     let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
-    let triple = (parts.next()??, parts.next()??, parts.next()??);
+    let core = (parts.next()??, parts.next()??, parts.next()??);
     if parts.next().is_some() {
         return None;
     }
-    Some((triple, pre))
+    let mut fields = Vec::new();
+    if let Some(pre) = pre {
+        for field in pre.split('.') {
+            // The identifiers semver allows: alphanumerics and hyphens.
+            if field.is_empty() || !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return None;
+            }
+            fields.push(match field.parse::<u64>() {
+                Ok(n) => Identifier::Number(n),
+                Err(_) => Identifier::Text(field.to_string()),
+            });
+        }
+    }
+    Some(Version { core, pre: fields })
 }
 
 /// Whether `latest` is newer than `current`; a beta is older than its release.
 fn newer(latest: &str, current: &str) -> bool {
-    match (parse(latest), parse(current)) {
-        (Some((l, lpre)), Some((c, cpre))) => l > c || (l == c && cpre && !lpre),
+    match (parse_version(latest), parse_version(current)) {
+        (Some(latest), Some(current)) => latest > current,
         _ => false,
     }
+}
+
+/// The versions `channel` offers, newest first, without the one skipped: a
+/// skipped beta hides that version only, so the next one shows as usual.
+fn candidates(tags: &[String], channel: ReleaseChannel, skipped: Option<&str>) -> Vec<String> {
+    let skipped = skipped.and_then(parse_version);
+    let mut versions: Vec<Version> = tags.iter().filter_map(|tag| parse_version(tag)).collect();
+    versions.sort_by(|a, b| b.cmp(a));
+    versions.dedup();
+    versions
+        .into_iter()
+        .filter(|version| channel == ReleaseChannel::Beta || !version.is_prerelease())
+        .filter(|version| skipped.as_ref() != Some(version))
+        .map(|version| version.to_string())
+        .collect()
+}
+
+/// Every release tag a `releases.atom` feed names, in feed order. The feed is
+/// the release list without the API's rate limit (a check runs every 30 s),
+/// and unlike `releases/latest` it includes prereleases.
+///
+/// Only the entries' own `<link>` elements count, and only a href that names
+/// `…/releases/tag/vX.Y.Z[-pre]`: a release body is quoted HTML that links the
+/// releases mentioned in its notes, and those are not this release's tag.
+fn tags_in_feed(feed: &str) -> Vec<String> {
+    const PATH: &str = "/releases/tag/";
+    feed.match_indices("<link")
+        .filter_map(|(at, _)| {
+            let element = feed.get(at..)?.split_once('>')?.0;
+            let href = element.split_once("href=\"")?.1.split_once('"')?.0;
+            let tag = href.split_once(PATH)?.1;
+            // A tag with build metadata is skipped rather than compared wrongly.
+            (parse_version(tag).is_some() && !tag.contains('+')).then(|| tag.to_string())
+        })
+        .collect()
 }
 
 fn arch() -> &'static str {
@@ -97,7 +267,7 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The latest release's tag, from where `releases/latest` redirects
+/// The latest stable release's tag, from where `releases/latest` redirects
 /// (`…/releases/tag/vX.Y.Z`); betas are prereleases and never latest.
 async fn latest_tag(client: &reqwest::Client) -> Result<String, String> {
     let response = client
@@ -109,8 +279,35 @@ async fn latest_tag(client: &reqwest::Client) -> Result<String, String> {
     url.path()
         .rsplit_once("/releases/tag/")
         .map(|(_, tag)| tag.to_string())
-        .filter(|tag| parse(tag).is_some())
+        .filter(|tag| parse_version(tag).is_some())
         .ok_or_else(|| "GitHub did not answer the update check.".to_string())
+}
+
+/// The release tags the channel chooses from: the one `releases/latest` names
+/// on Stable, every release on Beta.
+async fn release_tags(
+    client: &reqwest::Client,
+    channel: ReleaseChannel,
+) -> Result<Vec<String>, String> {
+    match channel {
+        ReleaseChannel::Stable => Ok(vec![latest_tag(client).await?]),
+        ReleaseChannel::Beta => {
+            let response = client
+                .get(format!("https://github.com/{REPO}/releases.atom"))
+                .send()
+                .await
+                .map_err(|e| format!("GitHub did not answer the update check: {e}"))?;
+            if !response.status().is_success() {
+                return Err("GitHub did not answer the update check.".to_string());
+            }
+            let feed = response.text().await.map_err(|e| e.to_string())?;
+            let tags = tags_in_feed(&feed);
+            if tags.is_empty() {
+                return Err("GitHub did not answer the update check.".to_string());
+            }
+            Ok(tags)
+        }
+    }
 }
 
 async fn exists(client: &reqwest::Client, url: &str) -> bool {
@@ -156,32 +353,68 @@ fn can_install() -> bool {
             .unwrap_or(false)
 }
 
-async fn check(app: &AppHandle) -> Result<(UpdateInfo, String), String> {
-    let current = app.package_info().version.to_string();
-    let development = cfg!(debug_assertions);
-    let client = client()?;
-    let tag = latest_tag(&client).await?;
-    let latest = tag.trim_start_matches('v').to_string();
-    let page = format!("https://github.com/{REPO}/releases/tag/{tag}");
-    // A development build is always behind, as in the Swift app, but it only
-    // links to the release.
-    let mut available = development || newer(&latest, &current);
-    if available && cfg!(target_os = "macos") {
+/// What the channel offers this app, if anything: the newest version that is
+/// newer than this one (any, for a dev build) and, on macOS, uploaded with its
+/// `SHA256SUMS`. A release whose app is not there yet is passed over for the
+/// one before it.
+async fn select(
+    client: &reqwest::Client,
+    current: &str,
+    channel: ReleaseChannel,
+    skipped: Option<&str>,
+    development: bool,
+) -> Result<Option<String>, String> {
+    let tags = release_tags(client, channel).await?;
+    for version in candidates(&tags, channel, skipped) {
+        // Newest first: once one is not newer, none after it is.
+        if !development && !newer(&version, current) {
+            break;
+        }
         // Tagged, but not finished: the release goes public with the macOS
         // app minutes before the other platforms and `SHA256SUMS` land, and
         // an install needs the sums to verify the download. Offer it only
         // once both are there.
-        available = ready(&client, &tag, &asset_name(&latest)).await;
+        if cfg!(target_os = "macos")
+            && !ready(client, &format!("v{version}"), &asset_name(&version)).await
+        {
+            continue;
+        }
+        return Ok(Some(version));
     }
-    let info = UpdateInfo {
+    Ok(None)
+}
+
+async fn check(
+    app: &AppHandle,
+    channel: ReleaseChannel,
+    skipped: Option<&str>,
+) -> Result<UpdateInfo, String> {
+    let current = app.package_info().version.to_string();
+    let development = cfg!(debug_assertions);
+    let client = client()?;
+    let latest = select(&client, &current, channel, skipped, development).await?;
+    let page = match &latest {
+        Some(version) => format!("https://github.com/{REPO}/releases/tag/v{version}"),
+        None => format!("https://github.com/{REPO}/releases"),
+    };
+    Ok(UpdateInfo {
         current,
-        latest: Some(latest),
-        available,
+        available: latest.is_some(),
+        latest,
         can_install: can_install(),
         development,
         page: Some(page),
-    };
-    Ok((info, tag))
+        channels: channel_names(),
+        channel: channel.name(),
+    })
+}
+
+/// The update channels this build offers, without a release check: Settings
+/// shows the picker before, and without, any answer from GitHub (a check can
+/// fail offline, which must not take the picker away).
+#[tauri::command]
+pub fn update_channels() -> Vec<&'static str> {
+    channel_names()
 }
 
 /// A release's notes (its GitHub body, Markdown), for What's New. `None` when
@@ -189,7 +422,7 @@ async fn check(app: &AppHandle) -> Result<(UpdateInfo, String), String> {
 #[tauri::command]
 pub async fn release_notes(version: String) -> Result<Option<String>, String> {
     let version = version.trim().trim_start_matches('v');
-    if parse(version).is_none() {
+    if parse_version(version).is_none() {
         return Err(format!("not a version: {version}"));
     }
     let response = client()?
@@ -217,8 +450,12 @@ pub async fn release_notes(version: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn update_check(app: AppHandle) -> Result<UpdateInfo, String> {
-    check(&app).await.map(|(info, _)| info)
+pub async fn update_check(
+    app: AppHandle,
+    channel: Option<String>,
+    skipped: Option<String>,
+) -> Result<UpdateInfo, String> {
+    check(&app, channel_of(channel.as_deref()), skipped.as_deref()).await
 }
 
 /// Where an install is, for the sidebar's progress bar.
@@ -238,13 +475,16 @@ pub enum InstallProgress {
 #[tauri::command]
 pub async fn update_install(
     app: AppHandle,
+    channel: Option<String>,
+    skipped: Option<String>,
     on_progress: Channel<InstallProgress>,
 ) -> Result<(), String> {
-    let (info, tag) = check(&app).await?;
+    let info = check(&app, channel_of(channel.as_deref()), skipped.as_deref()).await?;
     if !info.available || !info.can_install {
         return Err("No update this app can install itself.".into());
     }
     let version = info.latest.unwrap_or_default();
+    let tag = format!("v{version}");
     let asset = asset_name(&version);
     let client = client()?;
     let work = std::env::temp_dir().join(format!(
@@ -444,6 +684,153 @@ mod tests {
     }
 
     #[test]
+    fn compares_prereleases_as_semver_orders_them() {
+        assert!(newer("1.20.0-beta.2", "1.20.0-beta.1"));
+        assert!(newer("1.20.0-beta.10", "1.20.0-beta.9"));
+        assert!(newer("1.20.0-beta.1", "1.19.9"));
+        assert!(newer("1.20.0", "1.20.0-rc.1"));
+        assert!(!newer("1.20.0-beta.1", "1.20.0-beta.1"));
+        assert!(!newer("1.20.0-beta.1", "1.20.0"));
+        assert!(newer("1.20.0-rc.1", "1.20.0-beta.2"));
+        assert!(!newer("1.20.0-beta.2", "1.20.0-rc.1"));
+        assert_eq!(
+            parse_version("v1.20.0-beta.2").unwrap().to_string(),
+            "1.20.0-beta.2"
+        );
+    }
+
+    fn tags(list: &[&str]) -> Vec<String> {
+        list.iter().map(|tag| tag.to_string()).collect()
+    }
+
+    #[test]
+    fn the_stable_channel_never_offers_a_prerelease() {
+        let feed = tags(&["v1.21.0-beta.2", "v1.20.0", "v1.21.0-beta.1", "v1.19.0"]);
+        assert_eq!(
+            candidates(&feed, ReleaseChannel::Stable, None),
+            tags(&["1.20.0", "1.19.0"])
+        );
+    }
+
+    #[test]
+    fn the_beta_channel_offers_the_newest_of_beta_and_stable() {
+        let feed = tags(&[
+            "v1.19.0",
+            "v1.20.0-beta.2",
+            "v1.20.0-beta.10",
+            "v1.21.0-beta.1",
+        ]);
+        assert_eq!(
+            candidates(&feed, ReleaseChannel::Beta, None),
+            tags(&["1.21.0-beta.1", "1.20.0-beta.10", "1.20.0-beta.2", "1.19.0"])
+        );
+        // A stable release outranks the betas of itself, so it is offered next.
+        let feed = tags(&["v1.20.0-beta.2", "v1.20.0"]);
+        assert_eq!(
+            candidates(&feed, ReleaseChannel::Beta, None),
+            tags(&["1.20.0", "1.20.0-beta.2"])
+        );
+    }
+
+    #[test]
+    fn a_skipped_beta_is_hidden_and_the_next_one_shows() {
+        let feed = tags(&["v1.20.0-beta.3", "v1.20.0-beta.2", "v1.19.0"]);
+        let offered = candidates(&feed, ReleaseChannel::Beta, Some("1.20.0-beta.3"));
+        assert_eq!(offered, tags(&["1.20.0-beta.2", "1.19.0"]));
+        assert!(!offered.contains(&"1.20.0-beta.3".to_string()));
+        // The version skipped is named with or without its `v`, as the UI and the tag have it.
+        assert_eq!(
+            candidates(&feed, ReleaseChannel::Beta, Some("v1.20.0-beta.3")),
+            tags(&["1.20.0-beta.2", "1.19.0"])
+        );
+        // Skipping a beta does not hide the stable release that follows it.
+        let feed = tags(&["v1.20.0", "v1.20.0-beta.3"]);
+        assert_eq!(
+            candidates(&feed, ReleaseChannel::Beta, Some("1.20.0-beta.3")),
+            tags(&["1.20.0"])
+        );
+    }
+
+    #[test]
+    fn switching_back_to_stable_offers_no_downgrade() {
+        // On 1.21.0-beta.2, the newest stable is older: nothing is offered.
+        let stable = tags(&["v1.20.0"]);
+        let offered = candidates(&stable, ReleaseChannel::Stable, None);
+        assert!(offered
+            .iter()
+            .all(|version| !newer(version, "1.21.0-beta.2")));
+        assert!(!newer(&offered[0], "1.21.0-beta.2"));
+        // Once 1.21.0 ships, it is newer than the beta that led to it.
+        assert!(newer("1.21.0", "1.21.0-beta.2"));
+    }
+
+    #[test]
+    fn reads_release_tags_from_the_feed() {
+        let feed = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:github.com,2008:Repository/1290807019/v1.20.0-beta.2</id>
+    <link rel="alternate" type="text/html" href="https://github.com/LHagfoss/rustcode/releases/tag/v1.20.0-beta.2"/>
+    <title>v1.20.0-beta.2</title>
+    <content type="html">&lt;p&gt;Includes &lt;a href=&quot;https://github.com/LHagfoss/rustcode/releases/tag/v1.9.0&quot;&gt;v1.9.0&lt;/a&gt;.&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/LHagfoss/rustcode/releases/tag/v1.19.0"/>
+  </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/LHagfoss/rustcode/releases/tag/nightly"/>
+  </entry>
+  <link type="text/html" rel="alternate" href="https://github.com/LHagfoss/rustcode/releases"/>
+</feed>"#;
+        // The tag quoted in the notes is not this release's tag, and a tag that
+        // is not a version is not one either.
+        assert_eq!(tags_in_feed(feed), tags(&["v1.20.0-beta.2", "v1.19.0"]));
+        assert!(tags_in_feed("").is_empty());
+    }
+
+    #[test]
+    fn build_metadata_takes_no_part_in_ordering() {
+        assert_eq!(
+            parse_version("v1.21.0+build.7").unwrap().to_string(),
+            "1.21.0"
+        );
+        assert_eq!(
+            parse_version("1.21.0-beta.2+sha.abc").unwrap().to_string(),
+            "1.21.0-beta.2"
+        );
+        assert!(!newer("1.21.0+build.7", "1.21.0"));
+        assert_eq!(
+            candidates(
+                &tags(&["v1.21.0+build.7", "v1.20.0"]),
+                ReleaseChannel::Stable,
+                None
+            ),
+            tags(&["1.21.0", "1.20.0"])
+        );
+        // A tag that is not three numbers and an optional prerelease is no version.
+        assert!(parse_version("1.21").is_none());
+        assert!(parse_version("nightly").is_none());
+        assert!(parse_version("1.21.0-beta 2").is_none());
+    }
+
+    #[test]
+    fn a_beta_is_offered_only_where_it_has_the_app_it_installs() {
+        assert_eq!(channel_names().contains(&"beta"), offers_beta());
+        // A Windows or Linux build stays on Stable whatever the setting says.
+        assert_eq!(
+            channel_of(Some("beta")),
+            if offers_beta() {
+                ReleaseChannel::Beta
+            } else {
+                ReleaseChannel::Stable
+            }
+        );
+        assert_eq!(channel_of(Some("stable")), ReleaseChannel::Stable);
+        assert_eq!(channel_of(None), ReleaseChannel::Stable);
+        assert_eq!(channel_of(Some("garbage")), ReleaseChannel::Stable);
+    }
+
+    #[test]
     fn reads_one_checksum() {
         let hash = "a".repeat(64);
         let asset = "RustCode-0.116.0-macos-aarch64.app.zip";
@@ -507,5 +894,11 @@ mod tests {
             newer(latest, "1.0.0-beta.1")
         );
         assert!(exists(&client, &url).await, "the app zip is found");
+        let feed = release_tags(&client, ReleaseChannel::Beta)
+            .await
+            .expect("release feed");
+        let offered = candidates(&feed, ReleaseChannel::Beta, None);
+        println!("beta channel offers {offered:?} from {} tags", feed.len());
+        assert!(!offered.is_empty(), "the feed names releases");
     }
 }
