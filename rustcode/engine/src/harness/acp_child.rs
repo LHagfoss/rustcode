@@ -337,13 +337,13 @@ impl AcpAdapter {
             .unwrap_or(false);
         let mcp_servers = mcp_servers(&options, http);
         // This harness has no `use_skill`, so it is told where the skills are
-        // and which ones the user turned off (#2898).
-        let skills = crate::skills::harness_skills_note();
+        // and which ones the user turned off (#2898). The note is an input:
+        // the thread computed it when it started this process.
         let instructions = crate::tools::schema::harness_instructions(
             &harness.name,
             super::client_visualization_level(),
             super::client_smart_ui(),
-            skills.as_deref(),
+            options.skills_note.as_deref(),
         );
         // An agent that takes a client system prompt (Claude Code's adapter)
         // gets where it runs and how RustCode draws replies appended to its own.

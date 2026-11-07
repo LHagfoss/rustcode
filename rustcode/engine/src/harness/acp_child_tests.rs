@@ -1136,6 +1136,37 @@ async fn an_agent_with_a_system_prompt_gets_no_block() {
     assert_eq!(sent[0].len(), 1, "no block, no double delivery");
 }
 
+/// The skills note is an input of the thread (`StartOptions::skills_note`), so
+/// a test never reads the real home directory, and an agent that takes a
+/// client system prompt gets exactly what the thread computed.
+#[tokio::test]
+async fn the_threads_skills_note_rides_in_the_client_system_prompt() {
+    let note = "# Skills\nRustCode keeps this machine's skills here: `/skills`.\n\n";
+    let (_thread, mut seen) = start(
+        None,
+        StartOptions {
+            skills_note: Some(note.to_owned()),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    let requests = requests(&mut seen);
+    let new = requests
+        .iter()
+        .find(|(method, _)| method == "session/new")
+        .unwrap();
+    let prompt = new.1["systemPrompt"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(prompt.contains(note), "{prompt}");
+    assert!(
+        prompt.ends_with(&crate::tools::schema::harness_output_style(
+            crate::harness::client_smart_ui()
+        )),
+        "the note comes before the reply style"
+    );
+}
+
 #[tokio::test]
 async fn the_agents_echo_of_the_setup_block_is_not_a_user_message() {
     let fake = Fake {

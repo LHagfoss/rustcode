@@ -36,8 +36,12 @@ pub struct SkillEntry {
     pub description: String,
     pub path: String,
     /// The kind of root it was found in: `workspace`, `universal`,
-    /// `rustcode` or `configured`.
+    /// `rustcode`, `configured`, or `claude-project` / `claude-user` for a
+    /// harness's own roots.
     pub source: &'static str,
+    /// A harness owns this folder: Settings lists it, and a toggle only stops
+    /// RustCode from offering the skill. Nothing is ever written there.
+    pub read_only: bool,
     pub enabled: bool,
 }
 
@@ -130,16 +134,18 @@ pub fn skill_entries_from(
 ) -> Vec<SkillEntry> {
     skills
         .iter()
-        .map(|skill| SkillEntry {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            path: skill.path.display().to_string(),
-            source: roots
-                .iter()
-                .find(|root| skill.path.starts_with(&root.path))
-                .map(|root| root_kind_name(root.kind))
-                .unwrap_or("configured"),
-            enabled: !disabled.contains(&skill.name),
+        .map(|skill| {
+            let root = roots.iter().find(|root| skill.path.starts_with(&root.path));
+            SkillEntry {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                path: skill.path.display().to_string(),
+                source: root
+                    .map(|root| root_kind_name(root.kind))
+                    .unwrap_or("configured"),
+                read_only: root.is_some_and(|root| root.kind.is_harness_owned()),
+                enabled: !disabled.contains(&skill.name),
+            }
         })
         .collect()
 }
@@ -511,8 +517,36 @@ mod tests {
         let entries = skill_entries_from(&skills, &roots, &disabled);
         assert_eq!(entries[0].source, "workspace");
         assert!(entries[0].enabled);
+        assert!(!entries[0].read_only);
         assert_eq!(entries[1].source, "universal");
         assert!(!entries[1].enabled, "a disabled skill stays listed");
+    }
+
+    // Settings must not offer to edit a file in another tool's folder (#2898).
+    #[test]
+    fn a_harness_owned_skill_is_listed_read_only() {
+        let roots = [
+            SkillRoot {
+                path: PathBuf::from("/home/.claude/skills"),
+                kind: SkillRootKind::HarnessUser,
+            },
+            SkillRoot {
+                path: PathBuf::from("/work/.claude/skills"),
+                kind: SkillRootKind::HarnessProject,
+            },
+        ];
+        let skills = [
+            skill("user-only", "/home/.claude/skills/user-only"),
+            skill("project-only", "/work/.claude/skills/project-only"),
+        ];
+
+        let entries = skill_entries_from(&skills, &roots, &HashSet::new());
+
+        assert_eq!(entries[0].source, "claude-user");
+        assert!(entries[0].read_only);
+        assert_eq!(entries[1].source, "claude-project");
+        assert!(entries[1].read_only);
+        assert!(entries[0].enabled);
     }
 
     #[test]
@@ -580,6 +614,7 @@ mod tests {
             description: String::new(),
             path: format!("/skills/{name}"),
             source: "universal",
+            read_only: false,
             enabled: true,
         };
         let mut panel = SkillsPanel {
@@ -628,7 +663,7 @@ mod tests {
             serde_json::to_value(snapshot).unwrap(),
             serde_json::json!({
                 "skills": [{"name": "deploy", "description": "deploy skill", "path": "/p/deploy",
-                            "source": "configured", "enabled": true}],
+                            "source": "configured", "readOnly": false, "enabled": true}],
                 "mcpServers": [{"name": "idle", "transport": "stdio", "target": "npx", "enabled": true,
                                 "scope": "user", "connection": "not_connected", "tools": [], "error": null}],
                 "configPath": "/c/config.toml",

@@ -35,12 +35,21 @@ pub struct SkillMetadata {
 
 /// Skills the model may use: every discovered skill except those the user
 /// turned off with `disabled_skills`.
+///
+/// A harness's own roots are left out (`SkillRootKind::is_harness_owned`): the
+/// built-in harness has its own `use_skill` catalog and must not inherit what
+/// another tool installed (`~/.claude/skills` once dumped unrelated plugin
+/// skills into every prompt). A thread on an external harness is told about
+/// them by [`harness_skills_note`] instead, and Settings lists every root
+/// through [`discover_all_skills`].
 pub fn discover_skills() -> Vec<SkillMetadata> {
     let disabled = disabled_skill_names();
-    with_builtin_skills(discover_skills_in(current_root_inputs()))
-        .into_iter()
-        .filter(|skill| !disabled.contains(&skill.name))
-        .collect()
+    with_builtin_skills(discover_skills_in_matching(current_root_inputs(), |kind| {
+        !kind.is_harness_owned()
+    }))
+    .into_iter()
+    .filter(|skill| !disabled.contains(&skill.name))
+    .collect()
 }
 
 /// Every discovered skill, enabled or not, for the settings surfaces that
@@ -126,9 +135,21 @@ fn current_root_inputs() -> SkillRootInputs {
     let config_dir = crate::config::get_config_dir();
     // `load_config_from` reads the user config only, so a checked-out project
     // config can never widen skill discovery.
-    let extra_dirs = config_dir
+    let (extra_dirs, harness_account_dirs) = config_dir
         .as_deref()
-        .map(|dir| crate::config::load_config_from(dir).2.extra_skill_dirs)
+        .map(|dir| {
+            let config = crate::config::load_config_from(dir).2;
+            // A named Claude Code login reads `<account dir>/skills`, so it is
+            // a harness root of its own (`harness/config.rs`). Codex's
+            // `CODEX_HOME` has no skills directory.
+            let account_dirs = config
+                .harness_accounts
+                .iter()
+                .filter(|account| account.harness == "claude-code")
+                .map(|account| account.resolved_dir())
+                .collect();
+            (config.extra_skill_dirs, account_dirs)
+        })
         .unwrap_or_default();
     SkillRootInputs {
         // Prefer the explicit workspace the tool call is running against; fall
@@ -138,6 +159,7 @@ fn current_root_inputs() -> SkillRootInputs {
         home: std::env::var_os("HOME").map(PathBuf::from),
         extra_dirs,
         extra_dirs_env: std::env::var_os("RUSTCODE_EXTRA_SKILL_DIRS"),
+        harness_account_dirs,
     }
 }
 
@@ -145,9 +167,21 @@ fn current_root_inputs() -> SkillRootInputs {
 /// [`skill_roots_from`] returns and the first definition of a name wins, so
 /// project roots override user-level ones.
 pub fn discover_skills_in(inputs: SkillRootInputs) -> Vec<SkillMetadata> {
+    discover_skills_in_matching(inputs, |_| true)
+}
+
+/// [`discover_skills_in`] over the roots `include` accepts, so the prompt
+/// catalog and Settings can read the same roots and disagree only on kinds.
+fn discover_skills_in_matching(
+    inputs: SkillRootInputs,
+    include: impl Fn(SkillRootKind) -> bool,
+) -> Vec<SkillMetadata> {
     let mut skills: Vec<SkillMetadata> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for root in skill_roots_from(&inputs) {
+        if !include(root.kind) {
+            continue;
+        }
         let mut found = Vec::new();
         scan_skill_dir(&root.path, &mut found);
         for skill in found {
@@ -227,6 +261,10 @@ pub struct SkillRootInputs {
     pub extra_dirs: Vec<PathBuf>,
     /// `RUSTCODE_EXTRA_SKILL_DIRS`, using the platform path-list separator.
     pub extra_dirs_env: Option<OsString>,
+    /// The config directories of the user's named Claude Code logins
+    /// (`[[harness_accounts]]`): each one reads `<dir>/skills`, so it is a
+    /// harness root of its own.
+    pub harness_account_dirs: Vec<PathBuf>,
 }
 
 /// Assembles every skill root in precedence order, highest first.
@@ -234,14 +272,15 @@ pub struct SkillRootInputs {
 /// Explicit roots (`extra_skill_dirs`, `RUSTCODE_EXTRA_SKILL_DIRS`) override
 /// everything, then project-local roots override user-level ones.
 ///
-/// A harness's own roots are read too (`<workspace>/.claude/skills` and
-/// `~/.claude/skills`, #2898), so Settings › Skills lists the skills an
-/// installed harness has, wherever they live, and one toggle list covers them.
-/// They are read only: RustCode never creates a file in another tool's
-/// directory. Skills from these roots are in the catalog but not in the
-/// built-in prompt; a thread on an external harness gets
-/// [`harness_skills_note`] instead. A user who does not want them can turn
-/// each off in Settings › Skills (`disabled_skills`).
+/// A harness's own roots are read too (`<workspace>/.claude/skills`,
+/// `~/.claude/skills` and every named Claude Code login's `skills`, #2898), so
+/// Settings › Skills lists the skills an installed harness has, wherever they
+/// live, and one toggle list covers them. They are read only: RustCode never
+/// creates a file in another tool's directory. Skills from these roots are
+/// listed in Settings but never in the built-in prompt catalog, because that
+/// harness loads them with its own Skill tool; a thread on a harness without
+/// one gets [`harness_skills_note`] instead. A user who does not want them can
+/// turn each off in Settings › Skills (`disabled_skills`).
 pub fn skill_roots_from(inputs: &SkillRootInputs) -> Vec<SkillRoot> {
     let mut roots: Vec<SkillRoot> = Vec::new();
     let mut push = |path: PathBuf, kind: SkillRootKind| {
@@ -270,9 +309,15 @@ pub fn skill_roots_from(inputs: &SkillRootInputs) -> Vec<SkillRoot> {
 
     if let Some(home) = &inputs.home {
         push(home.join(".agents/skills"), SkillRootKind::Universal);
-        // Claude Code's own user root. Read only, and below RustCode's own
-        // roots, so a skill RustCode manages wins a name clash.
+        // Claude Code's own user root. Read only, and above RustCode's own
+        // root below, so a skill Claude Code already installed wins a name
+        // clash; turning it off in Settings is what hides it from RustCode.
         push(home.join(".claude/skills"), SkillRootKind::HarnessUser);
+    }
+    // A named Claude Code login (`CLAUDE_CONFIG_DIR`) reads its own `skills`
+    // directory, so each one is a user root beside `~/.claude/skills`.
+    for account_dir in &inputs.harness_account_dirs {
+        push(account_dir.join("skills"), SkillRootKind::HarnessUser);
     }
     if let Some(config_dir) = &inputs.config_dir {
         push(config_dir.join("skills"), SkillRootKind::Rustcode);
@@ -287,8 +332,8 @@ pub fn skill_roots() -> Vec<SkillRoot> {
     skill_roots_from(&current_root_inputs())
 }
 
-/// The skills a thread on an external harness is told about, or `None` when
-/// there are none.
+/// The skills a thread on `harness` is told about, or `None` when RustCode has
+/// nothing to add.
 ///
 /// Codex, Gemini CLI, OpenCode and Pi have no `use_skill` tool, so RustCode's
 /// catalog cannot reach them the way MCP servers do (`docs/harnesses.md`).
@@ -296,72 +341,127 @@ pub fn skill_roots() -> Vec<SkillRoot> {
 /// harness's own file tools; it also makes `disabled_skills` authoritative for
 /// that thread. It is bounded to the roots and the disabled names, never the
 /// whole catalog, because an external harness pays for it on every request.
-pub fn harness_skills_note() -> Option<String> {
-    harness_skills_note_from(&current_root_inputs(), &disabled_skill_names())
+///
+/// Claude Code is the exception: it loads its own `.claude/skills` roots with
+/// its own Skill tool, so those roots are not named to it, and with nothing
+/// else installed it gets no note at all.
+pub fn harness_skills_note(harness: &str) -> Option<String> {
+    harness_skills_note_from(harness, &current_root_inputs(), &disabled_skill_names())
 }
+
+/// The note goes in every request of an external-harness thread, so it is
+/// capped in bytes as well as in entries: a machine with many deeply nested
+/// roots must not add kilobytes to each turn.
+pub(crate) const MAX_HARNESS_SKILLS_NOTE_BYTES: usize = 1500;
+/// What the root paths and the disabled names may each take of that cap.
+const MAX_NOTE_ROOTS_BYTES: usize = 600;
+const MAX_NOTE_NAMES_BYTES: usize = 400;
+/// The most one root path may take: a deeper path is cut and marked with `…`,
+/// so no single directory can crowd out the rest.
+const MAX_NOTE_ROOT_BYTES: usize = 200;
+/// The most one skill name may take, for the same reason.
+const MAX_NOTE_NAME_BYTES: usize = 48;
 
 /// [`harness_skills_note`] over explicit roots, so a test never reads the real
 /// home directory.
 pub(crate) fn harness_skills_note_from(
+    harness: &str,
     inputs: &SkillRootInputs,
     disabled: &std::collections::HashSet<String>,
 ) -> Option<String> {
-    let roots: Vec<PathBuf> = skill_roots_from(inputs)
-        .into_iter()
-        .map(|root| root.path)
-        .filter(|path| path.is_dir())
-        .collect();
-    if roots.is_empty() {
+    // One pass over the roots: which exist and hold a skill, and what is in
+    // them. Roots are never scanned twice for one note.
+    let claude_code = harness == "claude-code";
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut found: Vec<SkillMetadata> = Vec::new();
+    for root in skill_roots_from(inputs) {
+        if claude_code && root.kind.is_harness_owned() {
+            continue;
+        }
+        let before = found.len();
+        scan_skill_dir(&root.path, &mut found);
+        // A root with nothing in it is not worth a path in the note.
+        if found.len() > before {
+            roots.push(root.path);
+        }
+    }
+    if found.is_empty() {
         return None;
     }
-    let discovered = with_builtin_skills(discover_skills_in(inputs.clone()));
-    // Built-in skills are not on disk, so they cannot be named in the note.
-    if !discovered
-        .iter()
-        .any(|skill| skill.path != builtin_skill_path(&skill.name))
-    {
-        return None;
-    }
-    let mut names: Vec<&str> = discovered
+    let mut names: Vec<String> = found
         .iter()
         .filter(|skill| disabled.contains(&skill.name))
-        .map(|skill| skill.name.as_str())
+        .map(|skill| truncate_to_bytes(&skill.name, MAX_NOTE_NAME_BYTES).to_owned())
         .collect();
     names.sort_unstable();
+    names.dedup();
 
-    let mut note = String::from("# Skills\nRustCode keeps this machine's skills here: ");
-    note.push_str(
-        &roots
-            .iter()
-            .map(|root| format!("`{}`", root.display()))
-            .collect::<Vec<_>>()
-            .join(", "),
+    let (root_list, more_roots) = bounded_list(
+        roots.iter().map(|root| clipped_root(root)).collect(),
+        MAX_NOTE_ROOTS_BYTES,
     );
+    let mut note = format!("# Skills\nRustCode keeps this machine's skills here: {root_list}");
+    if more_roots > 0 {
+        note.push_str(&format!(" and {more_roots} more roots"));
+    }
     note.push_str(
         ". When a request names a skill or clearly matches one, read its `SKILL.md` \
          at `<root>/<name>/SKILL.md` with your own tools; if your own skill settings \
          already list it, use the copy you have.",
     );
     if !names.is_empty() {
-        const MAX_NAMED: usize = 20;
+        let (name_list, more_names) = bounded_list(names, MAX_NOTE_NAMES_BYTES);
         note.push_str(
             "\nTurned off in RustCode, so do not use even if your own settings list them: ",
         );
-        note.push_str(
-            &names
-                .iter()
-                .take(MAX_NAMED)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        if names.len() > MAX_NAMED {
-            note.push_str(&format!(" and {} more", names.len() - MAX_NAMED));
+        note.push_str(&name_list);
+        if more_names > 0 {
+            note.push_str(&format!(" and {more_names} more"));
         }
         note.push('.');
     }
     note.push_str("\n\n");
+    debug_assert!(note.len() <= MAX_HARNESS_SKILLS_NOTE_BYTES);
     Some(note)
+}
+
+/// A root as the note names it: a backticked path, cut short with `…` when it
+/// is longer than one root may take.
+fn clipped_root(root: &Path) -> String {
+    let text = root.display().to_string();
+    if text.len() <= MAX_NOTE_ROOT_BYTES {
+        return format!("`{text}`");
+    }
+    format!("`{}…`", truncate_to_bytes(&text, MAX_NOTE_ROOT_BYTES))
+}
+
+/// `items` joined with `", "` up to `limit` bytes, and how many were left out:
+/// the note reports a count where a list would cost too much.
+fn bounded_list(items: Vec<String>, limit: usize) -> (String, usize) {
+    let total = items.len();
+    let mut kept: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
+    for item in items {
+        let extra = item.len() + if kept.is_empty() { 0 } else { 2 };
+        if bytes + extra > limit {
+            break;
+        }
+        bytes += extra;
+        kept.push(item);
+    }
+    (kept.join(", "), total - kept.len())
+}
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn truncate_to_bytes(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// The roots actually searched, formatted once so `list_skills`, both
@@ -1152,6 +1252,7 @@ mod tests {
             home: Some(fixture.path("home")),
             extra_dirs: vec![fixture.path("configured")],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         };
 
         let roots = skill_roots_from(&inputs);
@@ -1187,6 +1288,7 @@ mod tests {
             home: None,
             extra_dirs: vec![first.clone()],
             extra_dirs_env: Some(std::env::join_paths([first.clone(), second.clone()]).unwrap()),
+            harness_account_dirs: Vec::new(),
         };
 
         let roots = skill_roots_from(&inputs);
@@ -1216,6 +1318,7 @@ mod tests {
             home: None,
             extra_dirs: vec![fixture.path("configured")],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         };
 
         let roots = skill_roots_from(&inputs);
@@ -1263,6 +1366,7 @@ mod tests {
             home: Some(fixture.path("home")),
             extra_dirs: vec![fixture.path("configured")],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         });
 
         let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
@@ -1282,6 +1386,7 @@ mod tests {
             home: Some(fixture.path("home")),
             extra_dirs: vec![],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         });
 
         assert_eq!(skills.len(), 1);
@@ -1300,6 +1405,7 @@ mod tests {
             home: None,
             extra_dirs: vec![fixture.path("configured")],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         });
         assert_eq!(skills[0].path, extra_dir);
 
@@ -1310,6 +1416,7 @@ mod tests {
             home: None,
             extra_dirs: vec![],
             extra_dirs_env: Some(std::env::join_paths([fixture.path("configured")]).unwrap()),
+            harness_account_dirs: Vec::new(),
         });
         assert_eq!(via_env[0].path, extra_dir);
     }
@@ -1325,6 +1432,7 @@ mod tests {
             home: None,
             extra_dirs: vec![],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         });
 
         assert_eq!(skills.len(), 1);
@@ -1362,6 +1470,7 @@ mod tests {
             home: Some(fixture.path("home")),
             extra_dirs: vec![],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         });
 
         assert_eq!(
@@ -1382,6 +1491,7 @@ mod tests {
             home: Some(fixture.path("home")),
             extra_dirs: vec![],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         });
         assert_eq!(skills.len(), 2);
         assert_eq!(skills[0].path, project_dir);
@@ -1399,18 +1509,40 @@ mod tests {
             home: Some(fixture.path("home")),
             extra_dirs: vec![],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         };
-        let disabled = ["deploy".to_string()].into_iter().collect();
+        let disabled: std::collections::HashSet<String> =
+            ["deploy".to_string(), "notes".to_string()]
+                .into_iter()
+                .collect();
 
-        let note = harness_skills_note_from(&inputs, &disabled).expect("a note when skills exist");
+        let note = harness_skills_note_from("codex", &inputs, &disabled)
+            .expect("a note when skills exist");
 
         assert!(note.starts_with("# Skills\n"));
         assert!(note.contains(&fixture.path("home/.claude/skills").display().to_string()));
         assert!(note.contains(&fixture.path("config/skills").display().to_string()));
         assert!(note.contains("<root>/<name>/SKILL.md"));
         assert!(note.contains("deploy"));
-        assert!(!note.contains("notes"), "only disabled skills are named");
+        assert!(
+            note.contains("notes"),
+            "a disabled skill in a RustCode root"
+        );
         assert!(note.ends_with("\n\n"));
+
+        // Claude Code loads its own roots with its own Skill tool, so naming
+        // them would only send it after files it already has.
+        let for_claude = harness_skills_note_from("claude-code", &inputs, &disabled)
+            .expect("the RustCode root is still named");
+        assert!(
+            !for_claude.contains(&fixture.path("home/.claude/skills").display().to_string()),
+            "{for_claude}"
+        );
+        assert!(for_claude.contains(&fixture.path("config/skills").display().to_string()));
+        assert!(
+            !for_claude.contains("deploy"),
+            "a skill only Claude Code has is not named to it: {for_claude}"
+        );
 
         // Nothing installed anywhere: no note, no empty heading.
         let empty = Fixture::new("harness_note_empty");
@@ -1420,8 +1552,178 @@ mod tests {
             home: Some(empty.path("home")),
             extra_dirs: vec![],
             extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
         };
-        assert!(harness_skills_note_from(&empty_inputs, &disabled).is_none());
+        assert!(harness_skills_note_from("codex", &empty_inputs, &disabled).is_none());
+    }
+
+    // Only Claude Code's own skills are installed, so a Claude Code thread has
+    // nothing left to be told about (#2898).
+    #[test]
+    fn claude_code_gets_no_note_when_it_only_has_its_own_roots() {
+        let fixture = Fixture::new("harness_note_claude_only");
+        fixture.skill("home/.claude/skills/deploy", "deploy", "Ship it");
+        fixture.skill(
+            "workspace/.claude/skills/project-only",
+            "project-only",
+            "Project skill",
+        );
+        fixture.skill(
+            "accounts/work/skills/login-only",
+            "login-only",
+            "Login skill",
+        );
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+            harness_account_dirs: vec![fixture.path("accounts/work")],
+        };
+
+        // Another harness is told about all of them, including the login's.
+        let note =
+            harness_skills_note_from("gemini", &inputs, &std::collections::HashSet::new()).unwrap();
+        assert!(
+            note.contains(&fixture.path("accounts/work/skills").display().to_string()),
+            "{note}"
+        );
+        assert!(
+            note.contains(
+                &fixture
+                    .path("workspace/.claude/skills")
+                    .display()
+                    .to_string()
+            )
+        );
+
+        assert!(
+            harness_skills_note_from("claude-code", &inputs, &Default::default()).is_none(),
+            "Claude Code needs no note for skills it loads itself"
+        );
+    }
+
+    // A named Claude Code login reads `<CLAUDE_CONFIG_DIR>/skills`, not
+    // `~/.claude/skills`, so each account directory is a root of its own.
+    #[test]
+    fn a_named_claude_code_accounts_skills_are_discovered() {
+        let fixture = Fixture::new("discover_account_roots");
+        let account_dir = fixture.skill(
+            "accounts/work/skills/work-only",
+            "work-only",
+            "From the work login",
+        );
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+            harness_account_dirs: vec![fixture.path("accounts/work")],
+        };
+
+        let roots = skill_roots_from(&inputs);
+        assert!(roots.contains(&SkillRoot {
+            path: fixture.path("accounts/work/skills"),
+            kind: SkillRootKind::HarnessUser,
+        }));
+
+        let skills = discover_skills_in(inputs);
+        assert_eq!(
+            skills
+                .iter()
+                .find(|skill| skill.name == "work-only")
+                .map(|skill| skill.path.clone()),
+            Some(account_dir)
+        );
+    }
+
+    // The built-in prompt catalog must not inherit another tool's skills: they
+    // were once dumped into every prompt that way. Settings still lists them.
+    #[test]
+    fn the_prompt_catalog_leaves_harness_roots_out_and_settings_keeps_them() {
+        let fixture = Fixture::new("catalog_harness_roots");
+        fixture.skill(
+            "workspace/.claude/skills/claude-only",
+            "claude-only",
+            "Claude",
+        );
+        fixture.skill("home/.claude/skills/user-only", "user-only", "Claude user");
+        fixture.skill("config/skills/owned", "owned", "RustCode");
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
+        };
+
+        let all = with_builtin_skills(discover_skills_in(inputs.clone()));
+        let named =
+            |skills: &[SkillMetadata], name: &str| skills.iter().any(|skill| skill.name == name);
+        assert!(named(&all, "user-only"), "Settings lists every root");
+
+        let catalog = with_builtin_skills(discover_skills_in_matching(inputs, |kind| {
+            !kind.is_harness_owned()
+        }));
+        assert!(!named(&catalog, "claude-only"));
+        assert!(!named(&catalog, "user-only"));
+        assert!(named(&catalog, "owned"));
+        assert!(
+            named(&catalog, "smart-ui"),
+            "built-in skills still ride along"
+        );
+    }
+
+    // The note rides in every request of an external harness, so it is capped:
+    // many roots, deep paths and long names still fit the budget.
+    #[test]
+    fn the_harness_note_stays_within_its_byte_cap() {
+        let fixture = Fixture::new("harness_note_budget");
+        // Roots that exist, each with one skill: the note must name a few and
+        // count the rest, not print them all.
+        let long_root = "deeply/nested/working/directory/that/keeps/going/on/and/on/and/on";
+        let mut extra_dirs = Vec::new();
+        for index in 0..120 {
+            let root = format!("extra/{long_root}/{index}");
+            fixture.skill(
+                &format!("{root}/skill-{index}"),
+                &format!("skill-{index}"),
+                "Extra",
+            );
+            extra_dirs.push(fixture.path(&root));
+        }
+        // One absurdly deep root is cut short, not dropped: a path over the
+        // per-root cap is still the root the skill is in.
+        let deep = (0..9).map(|_| "d".repeat(48)).collect::<Vec<_>>().join("/");
+        fixture.skill(&format!("{deep}/deep-skill"), "deep-skill", "Deep");
+        extra_dirs.insert(0, fixture.path(&deep));
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs,
+            extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
+        };
+        // Long, many, and turned off: the name list has to be cut too.
+        let disabled: std::collections::HashSet<String> = (0..60)
+            .map(|i| format!("{}{i}", "x".repeat(40)))
+            .chain((0..120).map(|i| format!("skill-{i}")))
+            .collect();
+
+        let note = harness_skills_note_from("codex", &inputs, &disabled).unwrap();
+
+        assert!(
+            note.len() <= MAX_HARNESS_SKILLS_NOTE_BYTES,
+            "the note is {} bytes",
+            note.len()
+        );
+        assert!(note.contains("more roots"), "{note}");
+        assert!(note.contains("more."), "{note}");
+        assert!(note.contains('…'), "a path over the per-root cap is cut");
     }
 
     #[test]

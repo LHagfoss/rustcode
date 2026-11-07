@@ -27,6 +27,8 @@ interface Skill {
   description: string;
   path: string;
   source: string;
+  /** A harness owns the folder: listed here, never written by RustCode. */
+  readOnly: boolean;
   enabled: boolean;
 }
 
@@ -60,6 +62,7 @@ const parseCapabilities = (v: Json): Capabilities => {
         description: str(o.description) ?? "",
         path: str(o.path) ?? "",
         source: str(o.source) ?? "",
+        readOnly: bool(o.readOnly) ?? false,
         enabled: bool(o.enabled) ?? false,
       };
     }),
@@ -492,16 +495,18 @@ function SkillsSection({
             >
               {s.path && hasShell() && (
                 <div className="flex shrink-0 items-center">
-                  <Tooltip label="Edit SKILL.md">
-                    <button
-                      type="button"
-                      aria-label={`Edit ${s.name}`}
-                      onClick={() => openPath(skillFile(s.path))}
-                      className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-                    >
-                      <SquarePen size={13} />
-                    </button>
-                  </Tooltip>
+                  {!s.readOnly && (
+                    <Tooltip label="Edit SKILL.md">
+                      <button
+                        type="button"
+                        aria-label={`Edit ${s.name}`}
+                        onClick={() => openPath(skillFile(s.path))}
+                        className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+                      >
+                        <SquarePen size={13} />
+                      </button>
+                    </Tooltip>
+                  )}
                   <Tooltip label="Show in Finder">
                     <button
                       type="button"

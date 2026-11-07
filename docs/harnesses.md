@@ -725,21 +725,34 @@ directory (#2898). RustCode scans a harness's own roots next to its own:
 | Harness | Skills root it reads itself | What RustCode does |
 | --- | --- | --- |
 | Built-in | RustCode's roots ([configuration.md](configuration.md#skills)) | Discovers and offers them through `list_skills` / `use_skill` |
-| Claude Code | `.claude/skills` in the project, `~/.claude/skills` | Reads both, so Settings › Skills lists what Claude Code installed; Claude Code keeps reading them itself too |
+| Claude Code | `.claude/skills` in the project, `~/.claude/skills`, and `<CLAUDE_CONFIG_DIR>/skills` of each named login | Reads all of them, so Settings › Skills lists what each login installed; Claude Code keeps reading them itself, so these threads get no note |
 | Pi | `~/.agents/skills`, `.agents/skills` | Reads the same roots (`universal` and project), so one list covers Pi and RustCode |
 | Codex | No skills directory: `AGENTS.md` and prompts | Gets the note below, naming the roots to read |
 | Gemini CLI | No skills directory: extensions and commands | Gets the note below, naming the roots to read |
 | OpenCode | No skills directory: its own agent/plugin model | Gets the note below, naming the roots to read |
 
 Every external-harness thread's instructions carry one short `# Skills`
-section: the roots that exist on this machine, `read <root>/<name>/SKILL.md`
-with the harness's own tools, and the names turned off in RustCode (do not use
-them, even where the harness's own settings list them). It is bounded to the
-roots and disabled names, never the whole catalog, because that text is paid
-on every request. It is captured when the thread starts, so a toggle made
-later reaches the next external-harness thread, not the running one.
+section (`harness_skills_note`): the roots that exist on this machine, `read
+<root>/<name>/SKILL.md` with the harness's own tools, and the names turned off
+in RustCode (do not use them, even where the harness's own settings list them).
+It is bounded to the roots and disabled names, never the whole catalog,
+because that text is paid on every request, and it is capped at 1,500 bytes:
+long lists end in "and N more" so a machine with many roots or very long paths
+still pays a fixed, small amount per turn. A Claude Code thread is told only
+about the roots RustCode owns: it loads its own `.claude/skills` roots with its
+own Skill tool, so those are never named to it, and with nothing but harness
+roots installed it gets no note at all.
+
+The note is computed when RustCode starts that thread's harness process, and
+again whenever it starts one again — after the idle reaper stopped it, for
+example, `ensure_started` resumes the harness's own session with a fresh note.
+So a toggle reaches every new thread at once, and an already-running process
+only when it is restarted.
 
 Settings › Skills groups a harness's skills under its own heading and lists
-their paths, and says there that the folder is read only. Nothing is copied,
-linked or removed in `~/.claude` or any other harness directory, and no
-setting has to be turned on for the list to be complete.
+their paths, and says there that the folder is read only; those rows have no
+Edit SKILL.md button, only Show in Finder. Nothing is copied, linked or removed
+in `~/.claude` or any other harness directory, and no setting has to be turned
+on for the list to be complete. A harness skill that a higher-precedence root
+shadows by name is not listed a second time: the group shows the definition
+that wins, and `rustcode doctor` lists the roots that were searched.

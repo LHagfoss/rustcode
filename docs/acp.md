@@ -106,7 +106,9 @@ These extension requests back the app's Settings pages:
   "mcpServers": [...], "configPath"}`. A skill has `name`, `description`,
   `path`, `source` (`workspace`, `universal`, `rustcode`, `configured`,
   `claude-project` or `claude-user`; the last two are a harness's own read-only
-  roots) and `enabled`. A server has `name`, `transport` (`stdio` or `http`),
+  roots), `readOnly` (true for exactly those two sources, so a client hides its
+  Edit action) and `enabled`. A server has `name`, `transport` (`stdio` or
+  `http`),
   `target` (credentials masked), `enabled`, `scope` (`user`, `project` or
   `session`), `connection` (`connected`, `not_connected`, `disabled` or
   `failed`), `tools` and `error`. Header and environment values are never sent.

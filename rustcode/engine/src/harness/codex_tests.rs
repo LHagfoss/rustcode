@@ -699,6 +699,36 @@ async fn the_workspaces_mcp_servers_are_thread_config() {
     );
 }
 
+/// The skills note is an input of the thread (`StartOptions::skills_note`), so
+/// a test never reads the real home directory, and Codex sends exactly what the
+/// thread computed.
+#[tokio::test]
+async fn the_threads_skills_note_rides_in_the_developer_instructions() {
+    let note = "# Skills\nRustCode keeps this machine's skills here: `/skills`.\n\n";
+    let (_thread, mut seen) = start(
+        Script::Reply,
+        None,
+        StartOptions {
+            skills_note: Some(note.to_owned()),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    let started = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "thread/start")
+        .expect("thread/start was sent")
+        .1;
+    let instructions = started["developerInstructions"].as_str().unwrap();
+    assert!(instructions.contains(note), "{instructions}");
+    assert!(
+        instructions.ends_with(&crate::tools::schema::harness_output_style(
+            crate::harness::client_smart_ui()
+        )),
+        "the note comes before the reply style"
+    );
+}
+
 #[tokio::test]
 async fn compact_runs_codex_compaction_and_shows_a_compaction_card() {
     let (mut thread, mut seen) = start(Script::Reply, None, StartOptions::default()).await;

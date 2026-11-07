@@ -334,16 +334,25 @@ first definition of a skill name wins:
 5. `<workspace>/.claude/skills` — Claude Code's project root, read only
 6. `~/.agents/skills` — the universal root, shared with other agents
 7. `~/.claude/skills` — Claude Code's user root, read only
-8. `<config dir>/skills` — RustCode's own root (see *Configuration files*)
+8. `<CLAUDE_CONFIG_DIR>/skills` of every named Claude Code login in
+   `[[harness_accounts]]` (read only; `~/.claude` collapses into root 7)
+9. `<config dir>/skills` — RustCode's own root (see *Configuration files*)
 
 So a project can override a user-level skill, and an explicitly configured
-root can override both. The harness roots (5 and 7) are read so Settings ›
+root can override both. The harness roots (5, 7 and 8) are read so Settings ›
 Skills lists the skills Claude Code has installed, wherever they live, and one
 toggle list covers them. RustCode only reads those directories: it never
 creates, rewrites, symlinks or deletes anything there, and nothing has to be
-moved out of `~/.claude` for the list to be complete. A harness's project root
-comes before RustCode's and the user's other roots, and a project definition
-wins over the user's, exactly as it does inside RustCode's own roots.
+moved out of `~/.claude` for the list to be complete. A named login keeps its
+own `skills` directory, because Claude Code reads it with `CLAUDE_CONFIG_DIR`
+set to that directory. A harness's project root comes before RustCode's and
+the user's other roots, and a project definition wins over the user's, exactly
+as it does inside RustCode's own roots.
+
+The built-in harness's own prompt catalog leaves the harness roots out: Claude
+Code loads them with its own Skill tool, and RustCode's model is not offered
+another tool's skills. Settings still lists every one of them, so one toggle
+list covers what Claude Code has and what RustCode offers.
 
 Extra roots are a global-only setting — a checked-out `.rustcode/config.toml`
 cannot widen skill discovery:
@@ -389,11 +398,14 @@ itself for those threads; the harness starts the server in its own session, and
 the server's name, command and URL are the same as in `Settings → MCP Servers`.
 
 Skills are shared in the read direction instead. RustCode reads a harness's own
-roots as well as its own (steps 5 and 7 above), so the list is complete, and a
-thread on an external harness is told where the discovered skills are on disk
+roots as well as its own (steps 5, 7 and 8 above), so the list is complete, and
+a thread on an external harness is told where the discovered skills are on disk
 and which ones are turned off, so it can read a `SKILL.md` with its own tools.
-That note is fixed when the thread starts: a toggle made later reaches the next
-external-harness thread, not the running one (see `docs/harnesses.md`).
+The note is computed when RustCode starts (or restarts) that thread's harness
+process: a running process keeps the note it was given, so a toggle made later
+reaches that thread when its process is started again — after the idle reaper
+stopped it, for example — and every new thread immediately (see
+`docs/harnesses.md`).
 
 A toggle applies from the next message of every open session in the process
 that made it: the terminal you toggled in, or the macOS app's engine for all of
