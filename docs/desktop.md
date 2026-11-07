@@ -307,6 +307,18 @@ composer's keys stay outside the table.
   read when they are attached, not when they are sent, and the prompt's blocks
   are built after the bubble is on screen, so a long paste or a 20 MB picture
   does not hold the row back.
+- **New thread cards.** Under an empty thread's field, a quiet row of glass cards
+  (`ui/NewThreadWidgets.tsx`, `state/widgets.ts`): the last 17 weeks as a
+  contribution heatmap of turns with the threads active in them, this project's
+  three most recent threads, the last 30 days of reported tokens and cost, this
+  project's three most recent pull requests (the same cached `gh` read the
+  sidebar uses; a row opens the pull on GitHub), and this month's turns and
+  spend against the last. One `_rustcode/data/usage` read grouped by day feeds
+  the three figures cards, so the screen asks the engine once. Every card keeps
+  one height from the first frame and says what it has in a line when it has
+  nothing, so the field above never moves as the reads land; below `lg` the
+  cards are one sideways-scrolling row, and a window shorter than 700px leaves
+  them out rather than push the field off the pane.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries
