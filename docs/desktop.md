@@ -465,12 +465,21 @@ composer's keys stay outside the table.
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
   long scrollers.
-- **Approvals** are one card over the composer: what the agent wants (the
-  title opens the command and diff), then "Waiting for your approval" and
-  two buttons, *Decline* and *Allow* (prominent). The rarer answers, the
-  engine's always-allow and always-reject options and, when a turn waits
-  on several, *Allow all N waiting*, sit in *More*. Keys
-  1–9 still pick in the engine's order. A child thread's approval or question
+- **Approvals** are one card over the composer: what the agent wants, its
+  risk (*Read-only*, *Risky*, *Changes files* or *Destructive*, from the tool
+  and its input; anything unknown is risky), then *Decline* and *Approve*
+  (prominent, once). *Grant* says how long an approval lasts: *1 hour* or
+  *Always allow*, the engine's other answers and, when a turn waits on
+  several, *Allow all N waiting*. A *Destructive* call — a tree deletion, a
+  forced push, sudo, a write outside the folder — gets neither grant, in the
+  card, the bar or the inbox: only Allow once and Decline. The row in the
+  transcript adds the key–value preview of what would run (command, folder,
+  paths); an edit needs none, since its diff header names the file and its
+  `+N −M`. An answered card settles into one line (`Allowed edit src/app.ts ·
+  once`) for a moment.
+  A timed grant is kept by the engine beside the permanent always-allow
+  rules and listed with its minutes left under Details › Allowed, where
+  Revoke drops it. Keys 1–9 still pick in the engine's order. A child thread's approval or question
   also appears at the foot of the transcript of the thread above it, under a
   header naming the child (a click opens it); answering there answers the
   child through the same card, and it leaves both chats. The composer is glass
