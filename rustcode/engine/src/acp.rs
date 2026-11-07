@@ -231,6 +231,16 @@ fn session_info(
     if let Some(worktree) = crate::worktrees::list_meta(&session_id) {
         extra = crate::worktrees::merge_rustcode_meta(Some(extra), "worktree", worktree);
     }
+    // The repository the thread's folder belongs to: a main checkout and every
+    // worktree of it are one project for the orchestration tools (#3150). It
+    // was recorded when the thread was created or attached, so listing threads
+    // never runs git (#3162). A thread whose workspace is unknown inherits the
+    // engine's cwd, which is not its project: it publishes no repository.
+    if !workspace_unknown
+        && let Some(repo) = crate::worktrees::recorded_repo(&session_id, metadata.as_ref())
+    {
+        extra = crate::worktrees::merge_rustcode_meta(Some(extra), "repo", serde_json::json!(repo));
+    }
     // The thread an agent started this one from, kept in its own metadata so a
     // pruned link cannot turn it into a top-level thread (`thread_parent.rs`).
     if let Some(parent) = metadata.and_then(|metadata| metadata.parent) {
@@ -3448,6 +3458,55 @@ mod tests {
             .expect("parent meta");
         assert_eq!(parent["sessionId"], "parent-session");
         assert_eq!(parent["title"], "Update the sidebar");
+    }
+
+    #[test]
+    fn session_info_lists_a_recorded_repository_without_asking_git() {
+        let id = crate::config::create_detached_session();
+        let directory = crate::config::get_active_session_dir(&id).expect("session dir");
+        let repo = PathBuf::from("/Users/me/code/rustcode");
+        crate::config::save_session_repo(&id, Some(&repo));
+        // A folder that is not a git repository: only the record can name one,
+        // and listing reads the record instead of running git (#3162).
+        let cwd = tempfile::tempdir().unwrap();
+        let meta = crate::config::SessionMeta {
+            path: directory.join("history.json"),
+            title: "Worktree thread".into(),
+            when: "2026-09-24T00:00:00Z".into(),
+            message_count: 1,
+            workspace_cwd: Some(cwd.path().to_path_buf()),
+        };
+        let workspace = rustcode_session::SessionWorkspace {
+            cwd: cwd.path().to_path_buf(),
+            additional_directories: Vec::new(),
+            task_workspace_id: None,
+        };
+        let info = session_info(&meta, Some(workspace));
+        let meta = info.meta.expect("thread meta");
+        assert_eq!(meta["rustcode"]["repo"], serde_json::json!(repo));
+    }
+
+    #[test]
+    fn session_info_does_not_publish_a_repository_for_a_thread_with_no_workspace() {
+        // A legacy thread inherits the engine's cwd; publishing that folder's
+        // repository would give it another project's scope (#3162).
+        let id = crate::config::create_detached_session();
+        let directory = crate::config::get_active_session_dir(&id).expect("session dir");
+        crate::config::save_session_repo(
+            &id,
+            Some(std::path::Path::new("/Users/me/code/rustcode")),
+        );
+        let meta = crate::config::SessionMeta {
+            path: directory.join("history.json"),
+            title: "Legacy thread".into(),
+            when: "2026-09-24T00:00:00Z".into(),
+            message_count: 1,
+            workspace_cwd: None,
+        };
+        let info = session_info(&meta, None);
+        let meta = info.meta.expect("thread meta");
+        assert_eq!(meta["workspaceUnknown"], serde_json::json!(true));
+        assert!(meta["rustcode"].get("repo").is_none());
     }
 
     #[test]

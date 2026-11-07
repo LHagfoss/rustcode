@@ -536,6 +536,10 @@ export interface RuleThread {
   title: string;
   folder: string;
   worktree?: Worktree;
+  /** The repository `folder` belongs to, as the engine resolved it (`_meta.rustcode.repo`). */
+  repo?: string;
+  /** The thread that started this one (`_meta.rustcode.parent`), durable past a pruned link. */
+  parent?: string;
   updatedAt?: number;
   running: boolean;
   harness?: string;
@@ -555,11 +559,37 @@ export const projectOf = (t: Pick<RuleThread, "folder" | "worktree">) => clean(t
 /** Two folders are one project when they are the same place. */
 export const sameProject = (a: string, b: string) => !!a && clean(a) === clean(b);
 
+/**
+ * The reach a thread's tools have: its repository, where a main checkout and
+ * every worktree of it meet, else its folder. `projectOf` stays the stored
+ * project — a worktree's own path — which `thread_usage` and `list_projects`
+ * report, so this is the wider scope only the orchestration tools compare.
+ */
+export const reachOf = (t: Pick<RuleThread, "folder" | "worktree" | "repo">) =>
+  clean(t.worktree?.repo || t.repo || t.folder);
+
+/** Whether two threads are one project for the orchestration tools (issue 3150). */
+export const sameReach = (a: RuleThread, b: RuleThread) => sameProject(reachOf(a), reachOf(b));
+
+/**
+ * Whether `target` is work `caller` handed out itself: a thread it started is
+ * reachable wherever it runs, even in another repository.
+ */
+export const startedBy = (caller: RuleThread, target: RuleThread) =>
+  !!target.parent && target.parent === caller.id;
+
+/**
+ * Whether a caller's orchestration tools may see `target` at all: the same
+ * project, or a thread the caller started wherever it runs.
+ */
+export const reachesThread = (caller: RuleThread, target: RuleThread) =>
+  sameReach(caller, target) || startedBy(caller, target);
+
 /** `list_sessions`: the other threads of the caller's project, newest first, metadata only. */
 /** Why a thread may not manage `target`, the project rule every management tool shares. */
 export function checkManage(caller: RuleThread, target: RuleThread | undefined): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
-  if (!sameProject(projectOf(target), projectOf(caller))) {
+  if (!reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
@@ -581,7 +611,7 @@ export function listSessions(
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = threads
     .filter((t) => t.id !== caller.id)
-    .filter((t) => allProjects || sameProject(projectOf(t), projectOf(caller)))
+    .filter((t) => allProjects || reachesThread(caller, t))
     .filter((t) => words.every((w) => t.title.toLowerCase().includes(w)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 50);
@@ -620,7 +650,7 @@ export function checkMessage(
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!(read && acrossProjects) && !sameProject(projectOf(target), projectOf(caller))) {
+  if (!(read && acrossProjects) && !reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",

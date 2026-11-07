@@ -477,7 +477,11 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
 
 Every tool that writes, or that hands work to another thread, stays within the
-caller's project. Reads — `list_sessions`, `search_sessions`, `read_session`,
+caller's project. A project is the repository a thread runs for — a main
+checkout and every worktree of it, resolved by the engine from the folder
+(`_meta.rustcode.repo`, `git rev-parse --git-common-dir`) — so a thread working
+in a worktree reaches the repository's other threads and its own worktree
+delegates; a thread it started itself is reachable wherever it runs. Reads — `list_sessions`, `search_sessions`, `read_session`,
 `list_worktrees`, `list_projects` — reach any project while **Let agents read
 threads in other projects** is on (Settings › Agents, on by default;
 `rustcode.readAcrossProjects`). With it off, an `all_projects: true` call and a
