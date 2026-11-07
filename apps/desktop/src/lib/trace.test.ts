@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
   barLayout,
+  barSegments,
   buildTrace,
   hasTimeline,
+  middleClip,
   rowTokens,
   rowValue,
   sortTrace,
   type TraceCall,
   type TraceInput,
   usageDelta,
+  waitedMs,
+  workDuration,
 } from "./trace";
 
 const start = 1_000_000;
@@ -129,6 +133,144 @@ describe("a turn's trace", () => {
     expect(
       buildTrace(input({ calls: [call({ id: "only", startedAt: start, endedAt: start + 10_000 })] })).slowest,
     ).toBeUndefined();
+  });
+});
+
+describe("a call that waited on the user", () => {
+  const waitEnd = start + 50_000;
+  const waited = () =>
+    buildTrace(
+      input({
+        end: waitEnd,
+        calls: [
+          call({
+            id: "edit",
+            startedAt: start + 1_000,
+            endedAt: start + 41_000,
+            waits: [{ from: start + 3_000, to: start + 39_000 }],
+          }),
+        ],
+      }),
+    );
+
+  test("its work is the call minus the approval", () => {
+    const row = waited().rows.find((r) => r.id === "edit")!;
+    expect(waitedMs(row)).toBe(36_000);
+    expect(workDuration(row)).toBe(4_000);
+    expect(row.endedAt - row.startedAt).toBe(40_000);
+  });
+
+  test("an approval still waiting when the turn ends closes there", () => {
+    const trace = buildTrace(
+      input({
+        end: waitEnd,
+        calls: [
+          call({
+            id: "edit",
+            startedAt: start + 1_000,
+            endedAt: start + 41_000,
+            waits: [{ from: start + 30_000 }],
+          }),
+        ],
+      }),
+    );
+    const row = trace.rows.find((r) => r.id === "edit")!;
+    expect(row.waits).toEqual([{ from: start + 30_000, to: start + 41_000 }]);
+    expect(waitedMs(row)).toBe(11_000);
+  });
+
+  test("the longest row is the most work, not the longest wait", () => {
+    const trace = buildTrace(
+      input({
+        end: waitEnd,
+        calls: [
+          call({
+            id: "held",
+            startedAt: start + 1_000,
+            endedAt: start + 40_000,
+            waits: [{ from: start + 2_000, to: start + 39_000 }],
+          }),
+          call({ id: "worked", startedAt: start + 41_000, endedAt: start + 46_000 }),
+        ],
+      }),
+    );
+    expect(trace.slowest).toBe("worked");
+  });
+
+  test("by duration orders by work too", () => {
+    const trace = buildTrace(
+      input({
+        end: waitEnd,
+        calls: [
+          call({
+            id: "held",
+            startedAt: start + 1_000,
+            endedAt: start + 40_000,
+            waits: [{ from: start + 2_000, to: start + 39_000 }],
+          }),
+          call({ id: "worked", startedAt: start + 41_000, endedAt: start + 46_000 }),
+        ],
+      }),
+    );
+    const ordered = sortTrace(trace.rows, "duration", "cost");
+    expect(ordered[0]?.id).toBe("worked");
+    expect(ordered.find((row) => row.id === "held")?.id).toBe("held");
+  });
+
+  test("its bar is drawn in pieces: the work solid, the wait apart", () => {
+    const trace = waited();
+    const row = trace.rows.find((r) => r.id === "edit")!;
+    const bars = barSegments(row, trace);
+    expect(bars.map((bar) => bar.kind)).toEqual(["work", "wait", "work"]);
+    // The turn is 50s: 1-3s work, 3-39s waiting, 39-41s work.
+    expect(bars).toEqual([
+      { kind: "work", left: 2, width: 4 },
+      { kind: "wait", left: 6, width: 72 },
+      { kind: "work", left: 78, width: 4 },
+    ]);
+  });
+
+  test("a call with no wait is one solid piece", () => {
+    const trace = buildTrace(
+      input({
+        end: waitEnd,
+        calls: [call({ id: "read", startedAt: start + 2_000, endedAt: start + 6_000 })],
+      }),
+    );
+    const row = trace.rows.find((r) => r.id === "read")!;
+    expect(barSegments(row, trace)).toEqual([{ kind: "work", left: 4, width: 8 }]);
+  });
+});
+
+describe("how a row reads", () => {
+  test("a model call is named by its model, the ordinal only when there are several", () => {
+    const two = buildTrace(
+      input({
+        model: "gpt-6-luna",
+        calls: [
+          call({ id: "a", startedAt: start + 1_000, endedAt: start + 2_000 }),
+          call({ id: "b", startedAt: start + 3_000, endedAt: start + 4_000 }),
+        ],
+      }),
+    );
+    expect(two.rows.filter((row) => row.kind === "model").map((row) => row.label)).toEqual([
+      "gpt-6-luna · 1",
+      "gpt-6-luna · 2",
+      "gpt-6-luna · 3",
+    ]);
+    const one = buildTrace(input({ model: "gpt-6-luna", calls: [] }));
+    expect(one.rows.map((row) => row.label)).toEqual(["gpt-6-luna"]);
+    const nameless = buildTrace(input({ calls: [] }));
+    expect(nameless.rows.map((row) => row.label)).toEqual(["Model 1"]);
+  });
+
+  test("a long label keeps both ends, the file name among them", () => {
+    expect(middleClip("edit src/app.ts", 40)).toBe("edit src/app.ts");
+    expect(middleClip("edit src/ui/Composer.tsx", 18)).toBe("edit src…poser.tsx");
+    expect(middleClip("edit src/ui/Composer.tsx", 20)).toBe("edit src/…mposer.tsx");
+    // The column shows 30; a longer path still gives way in its middle.
+    expect(middleClip("edit src/ui/very/deep/Composer.tsx", 30)).toBe("edit src/ui/very…/Composer.tsx");
+    expect(middleClip("edit src/ui/very/deep/Composer.tsx", 24)).toBe("edit src/ui…Composer.tsx");
   });
 });
 

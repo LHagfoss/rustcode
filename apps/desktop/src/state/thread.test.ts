@@ -22,6 +22,8 @@ import {
   idleSettled,
   messageTime,
   requeueSteers,
+  settledWait,
+  settleEveryWait,
   shortAge,
   splitSubagentSteps,
   startedLinks,
@@ -30,6 +32,7 @@ import {
   subagentTitle,
   type TranscriptItem,
   thoughtHeadings,
+  waitingOn,
   wakeLine,
   wakeTurn,
   withWakeMark,
@@ -269,6 +272,65 @@ describe("thread reducer", () => {
       usage: { used: 1 },
       configOptions: [{ id: "model" }],
     });
+  });
+});
+
+describe("a call that waits on the user", () => {
+  const tool = (id: string) => ({ kind: "toolCall" as const, id, title: "edit src/app.ts", diffs: [] });
+
+  test("an approval holds the call until the answer, then the wait closes", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = applyUpdate(s, tool("call-1"), 2_000);
+    s = waitingOn(s, "call-1", 3_000);
+    const waiting = s.items.find((item) => item.kind === "tool" && item.id === "call-1");
+    expect(waiting?.kind === "tool" ? waiting.waits : undefined).toEqual([{ from: 3_000 }]);
+    s = settledWait(s, "call-1", 41_000);
+    const settled = s.items.find((item) => item.kind === "tool" && item.id === "call-1");
+    expect(settled?.kind === "tool" ? settled.waits : undefined).toEqual([{ from: 3_000, to: 41_000 }]);
+  });
+
+  test("an approval that arrives before its call starts the wait on the call", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = {
+      ...s,
+      permissions: [
+        {
+          rpcId: 1,
+          sessionId: "s",
+          toolCallId: "call-9",
+          title: "edit src/app.ts",
+          options: [],
+          diffs: [],
+          at: 2_500,
+        },
+      ],
+    };
+    s = applyUpdate(s, tool("call-9"), 2_600);
+    const item = s.items.find((i) => i.kind === "tool" && i.id === "call-9");
+    expect(item?.kind === "tool" ? item.waits : undefined).toEqual([{ from: 2_500 }]);
+  });
+
+  test("a turn that ends while the approval waits closes it there", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = applyUpdate(s, tool("call-1"), 2_000);
+    s = waitingOn(s, "call-1", 3_000);
+    s = finishTurn(s, "cancelled", 9_000);
+    const item = s.items.find((i) => i.kind === "tool" && i.id === "call-1");
+    expect(item?.kind === "tool" ? item.waits : undefined).toEqual([{ from: 3_000, to: 9_000 }]);
+  });
+
+  test("every open wait closes when the thread stops", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = applyUpdate(s, tool("call-1"), 2_000);
+    s = applyUpdate(s, tool("call-2"), 2_100);
+    s = waitingOn(s, "call-1", 3_000);
+    s = waitingOn(s, "call-2", 3_500);
+    const settled = settleEveryWait(s, 8_000);
+    const waits = settled.items.flatMap((i) => (i.kind === "tool" ? (i.waits ?? []) : []));
+    expect(waits).toEqual([
+      { from: 3_000, to: 8_000 },
+      { from: 3_500, to: 8_000 },
+    ]);
   });
 });
 

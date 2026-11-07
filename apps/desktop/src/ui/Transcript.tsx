@@ -22,6 +22,7 @@ import {
   turnChangeLine,
   turnFoldKey,
 } from "../state/fold";
+import { selectOption } from "../state/harness";
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
@@ -656,6 +657,9 @@ export function Transcript({
     return map;
   }, [changeLines, lastEnd, thread.id]);
 
+  // The thread's model names its Trace's model calls (state/thread.ts TurnUsage).
+  const model = useMemo(() => selectOption(thread.configOptions, "model")?.current, [thread.configOptions]);
+
   // Each finished turn's own rows, for its Trace chip: everything since the
   // turn before it, so a wake turn (which has no message of its own) comes out
   // whole. The trace keeps only what falls between its start and its end.
@@ -1198,7 +1202,9 @@ export function Transcript({
                         completion={footerChanges[item.id]?.completion}
                         changes={footerChanges[item.id]?.changes}
                         trace={
-                          hasTimeline(item) ? <TurnTrace end={item} items={turnItems[item.id]} /> : undefined
+                          hasTimeline(item) ? (
+                            <TurnTrace end={item} items={turnItems[item.id]} model={model} />
+                          ) : undefined
                         }
                       />
                     ) : null}

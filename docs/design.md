@@ -734,19 +734,28 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Turn trace:** the footer's `Trace` chip, beside Changes, opens a card above it
   (`ui/TurnTrace.tsx`): the turn's own timeline from 0 to its end, one row per
   model call, tool call and delegate. A model call has no event of its own, so
-  it is the stretch between the calls around it; its bar is `accent/55`, a
-  tool's is `fill-strong`, and a delegate's is dotted. The label is on the
-  left, the cost or token count and the duration on the right, and the longest
-  row carries `Slowest`. Delegates (`spawn_agent`, `start_session`, `fan_out`)
-  fold into one dotted row that opens to each call. `Sort` is Timeline,
-  Duration or the number shown; `Show` switches cost ↔ tokens, opening on cost
-  when the harness reported one and on tokens when it did not. Hovering a bar
-  names the call, when it ran and what it used; a press opens the tool row's
-  own detail (Input, Output, diffs, Copy) or the text a model call streamed.
-  The numbers are the engine's per-round usage updates, subtracted from the
-  turn's baseline (`state/thread.ts` `TurnUsage`); a row a harness left
-  unpriced stays blank rather than guessed, and a replayed turn (no per-call
-  timing) has no chip at all. Logic: `lib/trace.ts`.
+  it is the stretch between the calls around it, and it is named by the
+  thread's model (the round's ordinal is a suffix only when there are several);
+  its bar is `accent/55`, a tool's is `fill-strong`, and a delegate's is
+  dotted. The label is on the left in a 184px column and gives way in its
+  middle, keeping the file name (`edit …/app.ts`), never the bar's room; the
+  cost or token count and the work duration are on the right, with
+  `+38s waiting` beside it when an approval held the call, and the longest row
+  by work carries `Slowest`. The stretch spent waiting on the user is hatched
+  (`rc-wait-hatch`) apart from the work, and the tooltip says `38s waiting on
+  you`; `Duration` and `Slowest` read work alone, so an approval someone took
+  their time over is not a slow call. Delegates (`spawn_agent`,
+  `start_session`, `fan_out`) fold into one dotted row that opens to each
+  call. `Sort` is Timeline, Duration or the number shown; `Show` switches cost
+  ↔ tokens, opening on cost when the harness reported one and on tokens when
+  it did not. Hovering a bar names the call, when it ran and what it used; a
+  press opens the tool row's own detail (Input, Output, diffs, Copy) or the
+  text a model call streamed. The numbers are the engine's per-round usage
+  updates, subtracted from the turn's baseline (`state/thread.ts` `TurnUsage`);
+  a row a harness left unpriced stays blank rather than guessed, and a
+  replayed turn (no per-call timing) has no chip at all. Logic:
+  `lib/trace.ts`, waits recorded in `state/thread.ts` (`waitingOn`,
+  `settledWait`).
 - **Settings reset:** a row whose value differs from its default shows a small
   reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).
   When the control stacks under the text, the icon leaves the flow for the

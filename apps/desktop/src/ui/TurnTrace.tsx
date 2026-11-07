@@ -9,9 +9,10 @@ import { Activity, Brain, CircleX, Users, Wrench } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useMemo, useState } from "react";
 import {
-  barLayout,
+  barSegments,
   buildTrace,
   hasTimeline,
+  middleClip,
   rowValue,
   sortTrace,
   type Trace,
@@ -20,6 +21,8 @@ import {
   type TraceRow,
   type TraceSort,
   type TraceText,
+  waitedMs,
+  workDuration,
 } from "../lib/trace";
 import { formatDuration, formatTokens, subagentOf, type TranscriptItem } from "../state/thread";
 import { displayTool, orchestrationTool, usefulSummary } from "../state/toolNames";
@@ -49,6 +52,7 @@ function traceCall(item: ToolItem): TraceCall {
     startedAt: item.startedAt ?? 0,
     endedAt: item.endedAt,
     delegate: isDelegate(item),
+    waits: item.waits,
   };
 }
 
@@ -56,10 +60,13 @@ function traceCall(item: ToolItem): TraceCall {
 export function TurnTrace({
   end,
   items,
+  model,
 }: {
   end: TurnEnd;
   /** The turn's transcript rows, from the message that started it to its footer. */
   items?: TranscriptItem[];
+  /** The thread's model, which names its model calls. */
+  model?: string;
 }) {
   if (!hasTimeline(end)) return null;
   return (
@@ -81,14 +88,14 @@ export function TurnTrace({
           aria-label="Turn trace"
           className="elevated z-40 flex max-h-[min(560px,75vh)] w-[min(640px,85vw)] flex-col gap-2 p-3 outline-none"
         >
-          <TracePanel end={end} items={items ?? []} />
+          <TracePanel end={end} items={items ?? []} model={model} />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
   );
 }
 
-function TracePanel({ end, items }: { end: TurnEnd; items: TranscriptItem[] }) {
+function TracePanel({ end, items, model }: { end: TurnEnd; items: TranscriptItem[]; model?: string }) {
   const [sort, setSort] = useState<TraceSort>("timeline");
   // Each tool call by its id, for a row's expanded detail. A delegate's own
   // steps stay out of the timeline and live in its card, as in the transcript.
@@ -116,8 +123,9 @@ function TracePanel({ end, items }: { end: TurnEnd; items: TranscriptItem[] }) {
       text,
       before: end.usage?.before,
       samples: end.usage?.samples,
+      model,
     });
-  }, [items, end]);
+  }, [items, end, model]);
   // What the rows show, and what the third sort orders by. Cost first: the
   // money is what the chip is for. A harness that reported none (Claude Code,
   // Pi) leaves tokens, so the panel opens on them instead of a column of dashes.
@@ -239,8 +247,9 @@ function TraceRowView({
   nested?: boolean;
 }) {
   const isOpen = open.has(row.id);
-  const bar = barLayout(row, trace);
-  const duration = row.endedAt - row.startedAt;
+  const bars = barSegments(row, trace);
+  const duration = workDuration(row);
+  const waiting = waitedMs(row);
   const value = rowValue(row, measure);
   const Icon = row.kind === "delegates" ? Users : row.kind === "model" ? Brain : Wrench;
   const tool = row.toolId ? tools.get(row.toolId) : undefined;
@@ -248,7 +257,7 @@ function TraceRowView({
   const expandable = !!detail?.length || !!tool || !!row.text;
   const content = (
     <>
-      <span className="flex w-[136px] min-w-0 shrink-0 items-center gap-1.5">
+      <span className="flex w-[184px] min-w-0 shrink-0 items-center gap-1.5">
         <span className="flex w-[14px] shrink-0 justify-center">
           {row.status === "failed" ? (
             <CircleX size={13} className="text-danger" />
@@ -256,7 +265,10 @@ function TraceRowView({
             <Icon size={13} className="text-fg-muted" />
           )}
         </span>
-        <span className="truncate text-callout text-fg">{row.label}</span>
+        {/* The bar keeps its room: a long path gives way in its middle, not its end. */}
+        <span className="truncate text-callout text-fg" title={row.label}>
+          {middleClip(row.label, 30)}
+        </span>
         {slowest && (
           <span className="shrink-0 rounded-full bg-fill px-1 text-caption text-fg-muted">Slowest</span>
         )}
@@ -264,25 +276,34 @@ function TraceRowView({
       <span className="relative h-[18px] flex-1">
         <span className="absolute inset-0 rounded-xs bg-fill-subtle" />
         {/* Hovering the bar, not the row, names the call: the row's label and
-            numbers are already on screen, and the bar is what is being read. */}
+            numbers are already on screen, and the bar is what is being read. A
+            wait on the user is hatched, so it is not read as the call's work. */}
         <Tooltip label={rowTip(row, trace, measure)}>
-          <span
-            className={cx(
-              "absolute inset-y-[4px] rounded-xs",
-              row.kind === "model"
-                ? "bg-accent/55 group-hover:bg-accent/80"
-                : row.kind === "delegates"
-                  ? "border border-accent/50 border-dashed bg-accent/10"
-                  : "bg-fill-strong group-hover:bg-fg-faint",
-            )}
-            style={{ left: `${bar.left}%`, width: `${bar.width}%`, minWidth: 3 }}
-          />
+          <span className="absolute inset-0">
+            {bars.map((bar, i) => (
+              <span
+                key={i}
+                className={cx(
+                  "absolute inset-y-[4px] rounded-xs",
+                  bar.kind === "wait"
+                    ? "rc-wait-hatch"
+                    : row.kind === "model"
+                      ? "bg-accent/55 group-hover:bg-accent/80"
+                      : row.kind === "delegates"
+                        ? "border border-accent/50 border-dashed bg-accent/10"
+                        : "bg-fill-strong group-hover:bg-fg-faint",
+                )}
+                style={{ left: `${bar.left}%`, width: `${bar.width}%`, minWidth: 3 }}
+              />
+            ))}
+          </span>
         </Tooltip>
       </span>
-      <span className="flex w-[92px] shrink-0 items-center justify-end gap-1.5 text-caption text-fg-muted tabular">
+      <span className="flex w-[122px] shrink-0 items-center justify-end gap-1 whitespace-nowrap text-caption text-fg-muted tabular">
         {value !== undefined && <span>{measure === "cost" ? usd(value) : formatTokens(value)}</span>}
         {value !== undefined && <span className="text-fg-faint">·</span>}
         <span className={value === undefined ? "text-fg-faint" : undefined}>{formatDuration(duration)}</span>
+        {waiting > 0 && <span className="text-fg-faint">{`+${formatDuration(waiting)} waiting`}</span>}
       </span>
     </>
   );
@@ -342,7 +363,8 @@ function rowTip(row: TraceRow, trace: Trace, measure: TraceMeasure) {
       <span className="font-medium">{row.label}</span>
       {row.detail && <span className="max-w-72 truncate text-fg-muted">{row.detail}</span>}
       <span className="tabular">
-        {formatDuration(row.startedAt - trace.start)} in · {formatDuration(row.endedAt - row.startedAt)}
+        {formatDuration(row.startedAt - trace.start)} in · {formatDuration(workDuration(row))} work
+        {waitedMs(row) > 0 ? ` + ${formatDuration(waitedMs(row))} waiting on you` : ""}
         {row.status === "running" ? " · running" : ""}
         {row.status === "failed" ? " · failed" : ""}
       </span>

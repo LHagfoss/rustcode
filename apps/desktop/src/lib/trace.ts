@@ -31,6 +31,14 @@ export interface TraceCall {
   endedAt?: number;
   /** A call that reaches another thread or starts a subagent: folded into one row. */
   delegate?: boolean;
+  /** Stretches the call spent waiting on the user's approval, as the app recorded them. */
+  waits?: { from: number; to?: number }[];
+}
+
+/** A stretch of a call spent waiting on the user, closed at both ends. */
+export interface TraceWait {
+  from: number;
+  to: number;
 }
 
 /** Text a turn streamed, for naming the model call it arrived in. */
@@ -61,6 +69,8 @@ export interface TraceInput {
   end: number;
   calls: TraceCall[];
   text?: TraceText[];
+  /** The thread's model, which names its model calls. */
+  model?: string;
   /** The session's totals when the turn began, so a sample minus it is the turn's own. */
   before?: TraceUsage;
   /** One per round the engine reported, oldest first. */
@@ -79,6 +89,8 @@ export interface TraceRow {
   toolId?: string;
   /** What a model call streamed, for the detail its expander draws. */
   text?: string;
+  /** Stretches of the call the user's approval held, drawn apart from its work. */
+  waits?: TraceWait[];
   /** The tokens and cost this call reported. Absent when the engine reported none for it. */
   usage?: TraceUsage;
   /** A folded delegate row's own calls. */
@@ -139,6 +151,12 @@ export function rowValue(row: TraceRow, measure: TraceMeasure): number | undefin
 
 function rowOf(call: TraceCall, end: number): TraceRow {
   const endedAt = clamp(call.endedAt ?? end, call.startedAt, end);
+  const waits = (call.waits ?? [])
+    .map((wait) => ({
+      from: clamp(wait.from, call.startedAt, endedAt),
+      to: clamp(wait.to ?? end, call.startedAt, endedAt),
+    }))
+    .filter((wait) => wait.to > wait.from);
   return {
     id: call.id,
     kind: "tool",
@@ -147,8 +165,30 @@ function rowOf(call: TraceCall, end: number): TraceRow {
     status: call.endedAt === undefined ? "running" : call.status,
     startedAt: call.startedAt,
     endedAt,
+    waits: waits.length ? waits : undefined,
     toolId: call.id,
   };
+}
+
+/** How long a call spent waiting on the user, in all its waits together. */
+export function waitedMs(row: TraceRow): number {
+  return (row.waits ?? []).reduce((sum, wait) => sum + (wait.to - wait.from), 0);
+}
+
+/**
+ * How long a call actually worked: its span minus what the user's approval
+ * held. This is what `Duration` sorts by and what `Slowest` marks, so an
+ * approval someone took their time over does not read as a slow call.
+ */
+export function workDuration(row: TraceRow): number {
+  return Math.max(0, row.endedAt - row.startedAt - waitedMs(row));
+}
+
+/** A model name for a row, the round's ordinal a suffix only when there is more than one. */
+function modelLabel(model: string | undefined, index: number, total: number): string {
+  const name = model?.trim();
+  if (!name) return `Model ${index + 1}`;
+  return total > 1 ? `${name} · ${index + 1}` : name;
 }
 
 /** Build one finished turn's trace: its calls, the model time between them, and what each cost. */
@@ -200,7 +240,7 @@ export function buildTrace(input: TraceInput): Trace {
     return {
       id: `model-${i + 1}`,
       kind: "model",
-      label: `Model ${i + 1}`,
+      label: modelLabel(input.model, i, windows.length),
       detail: reply ? "Wrote the reply" : thought ? "Thought before its next call" : undefined,
       status: "completed",
       startedAt: window.startedAt,
@@ -226,16 +266,18 @@ export function buildTrace(input: TraceInput): Trace {
           : "completed",
       startedAt: first.startedAt,
       endedAt: last.endedAt,
+      waits: delegates.flatMap((row) => row.waits ?? []).sort((a, b) => a.from - b.from),
       children: delegates,
     });
   }
   rows.sort((a, b) => a.startedAt - b.startedAt || a.endedAt - b.endedAt || a.id.localeCompare(b.id));
 
-  // The longest call among the rows in view. One row alone has nothing to beat.
+  // The longest call among the rows in view, by the work it did: one row alone
+  // has nothing to beat.
   let slowest: string | undefined;
   if (rows.length > 1) {
-    const longest = rows.reduce((a, b) => (b.endedAt - b.startedAt > a.endedAt - a.startedAt ? b : a));
-    if (longest.endedAt > longest.startedAt) slowest = longest.id;
+    const longest = rows.reduce((a, b) => (workDuration(b) > workDuration(a) ? b : a));
+    if (workDuration(longest) > 0) slowest = longest.id;
   }
 
   const last = samples.at(-1);
@@ -254,7 +296,7 @@ export function buildTrace(input: TraceInput): Trace {
 /** The rows in the order the panel draws them: unknown numbers always last. */
 export function sortTrace(rows: TraceRow[], sort: TraceSort, measure: TraceMeasure): TraceRow[] {
   if (sort === "timeline") return rows;
-  const duration = (row: TraceRow) => row.endedAt - row.startedAt;
+  const duration = (row: TraceRow) => workDuration(row);
   const ordered = [...rows];
   if (sort === "duration") {
     return ordered.sort((a, b) => duration(b) - duration(a) || a.startedAt - b.startedAt);
@@ -270,14 +312,58 @@ export function sortTrace(rows: TraceRow[], sort: TraceSort, measure: TraceMeasu
   });
 }
 
-/** Where a row's bar sits on the turn's timeline, as percentages of the track. */
-export function barLayout(
-  row: TraceRow,
+function onTrack(
+  from: number,
+  to: number,
   trace: Pick<Trace, "start" | "end">,
 ): { left: number; width: number } {
   const span = trace.end - trace.start;
   if (span <= 0) return { left: 0, width: 100 };
-  const left = clamp(((row.startedAt - trace.start) / span) * 100, 0, 100);
-  const right = clamp(((row.endedAt - trace.start) / span) * 100, left, 100);
+  const left = clamp(((from - trace.start) / span) * 100, 0, 100);
+  const right = clamp(((to - trace.start) / span) * 100, left, 100);
   return { left, width: right - left };
+}
+
+/** Where a row's bar sits on the turn's timeline, as percentages of the track. */
+export function barLayout(row: TraceRow, trace: Pick<Trace, "start" | "end">) {
+  return onTrack(row.startedAt, row.endedAt, trace);
+}
+
+/** One drawn piece of a row's bar: the work it did, or the approval it waited for. */
+export interface TraceBar {
+  kind: "work" | "wait";
+  left: number;
+  width: number;
+}
+
+/**
+ * A row's bar in pieces, in time order: the work solid, and each wait on the
+ * user hatched apart from it. A call that only waited draws one wait.
+ */
+export function barSegments(row: TraceRow, trace: Pick<Trace, "start" | "end">): TraceBar[] {
+  const bars: TraceBar[] = [];
+  let cursor = row.startedAt;
+  for (const wait of [...(row.waits ?? [])].sort((a, b) => a.from - b.from)) {
+    if (wait.from > cursor) bars.push({ kind: "work", ...onTrack(cursor, wait.from, trace) });
+    bars.push({ kind: "wait", ...onTrack(Math.max(wait.from, cursor), wait.to, trace) });
+    cursor = Math.max(cursor, wait.to);
+  }
+  if (row.endedAt > cursor) bars.push({ kind: "work", ...onTrack(cursor, row.endedAt, trace) });
+  if (!bars.length) bars.push({ kind: "work", ...onTrack(row.startedAt, row.endedAt, trace) });
+  return bars;
+}
+
+/**
+ * A label that keeps both ends when it has to give: `edit src/…/Composer.tsx`
+ * still says what it touched. The row's column is narrow, the bar's is not.
+ */
+export function middleClip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const start = Math.max(1, Math.floor((max - 1) / 2));
+  const end = Math.max(1, max - 1 - start);
+  // The end that starts at the file name, when the budget holds it: the row
+  // says which file it touched, not the last few characters of a folder.
+  const slash = text.lastIndexOf("/");
+  const tail = slash >= 0 && text.length - slash <= end ? text.slice(slash) : text.slice(text.length - end);
+  return `${text.slice(0, max - 1 - tail.length)}…${tail}`;
 }

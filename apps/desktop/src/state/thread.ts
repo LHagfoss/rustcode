@@ -73,6 +73,12 @@ export type TranscriptItem =
       startedAt?: number;
       endedAt?: number;
       /**
+       * Stretches of this call spent waiting on the user's approval, in order.
+       * A wait still open has no `to`; the trace draws each one apart from the
+       * call's work and measures the work alone (`lib/trace.ts`).
+       */
+      waits?: ToolWait[];
+      /**
        * Its work goes on after the call returned: `agent` for a subagent sent
        * to the background (the turn waits for it), `task` for a background
        * command (it outlives the turn; the engine completes the call when it ends).
@@ -135,6 +141,57 @@ function usageBaseline(state: ThreadState): TurnUsage {
       : undefined,
     samples: [],
   };
+}
+
+/** A stretch of a tool call the app spent waiting on the user's approval. */
+export interface ToolWait {
+  from: number;
+  /** Unset while the approval still waits. */
+  to?: number;
+}
+
+/**
+ * The user's decision is what held this call: the approval arrived, so its
+ * clock starts. A request that arrives before the call's own notification is
+ * picked up when the call is added (`toolCall`), so both orders work.
+ */
+export function waitingOn(state: ThreadState, toolCallId: string, at: number): ThreadState {
+  const index = state.toolIndex[toolCallId];
+  const item = index === undefined ? undefined : state.items[index];
+  if (index === undefined || item?.kind !== "tool") return state;
+  // One approval per call, and a second notice does not restart a wait already running.
+  if (item.waits?.some((wait) => wait.to === undefined)) return state;
+  const items = replaceAt(state.items, index, { ...item, waits: [...(item.waits ?? []), { from: at }] });
+  return { ...state, items };
+}
+
+/** The approval was answered (or the turn stopped): the wait closes at `at`. */
+export function settledWait(state: ThreadState, toolCallId: string, at: number): ThreadState {
+  const index = state.toolIndex[toolCallId];
+  const item = index === undefined ? undefined : state.items[index];
+  if (index === undefined || item?.kind !== "tool" || !item.waits) return state;
+  const open = item.waits.findLastIndex((wait) => wait.to === undefined);
+  if (open < 0) return state;
+  const waits = item.waits.map((wait, i) =>
+    i === open ? { from: wait.from, to: Math.max(wait.from, at) } : wait,
+  );
+  return { ...state, items: replaceAt(state.items, index, { ...item, waits }) };
+}
+
+/** Every wait the thread still holds closes at `at` (a stopped turn, or one that ended). */
+export function settleEveryWait(state: ThreadState, at: number): ThreadState {
+  let changed = false;
+  const items = state.items.map((item) => {
+    if (item.kind !== "tool" || !item.waits?.some((wait) => wait.to === undefined)) return item;
+    changed = true;
+    return {
+      ...item,
+      waits: item.waits.map((wait) =>
+        wait.to === undefined ? { from: wait.from, to: Math.max(wait.from, at) } : wait,
+      ),
+    };
+  });
+  return changed ? { ...state, items } : state;
 }
 
 /**
@@ -281,12 +338,13 @@ function closePendingTurn(state: ThreadState, now = Date.now()): ThreadState {
   if (!turn && !(state.running && started !== undefined)) return state;
   const outcome = turn?.outcome === "cancelled" || turn?.outcome === "failed" ? turn.outcome : "completed";
   const elapsedMs = turn?.elapsedMs ?? (started !== undefined ? Math.max(0, now - started) : undefined);
+  const settled = settleEveryWait(state, now);
   return {
-    ...state,
+    ...settled,
     pendingTurn: undefined,
     turnUsage: undefined,
     items: [
-      ...state.items,
+      ...settled.items,
       {
         kind: "turnEnd",
         id: localId("turn"),
@@ -451,6 +509,9 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
     case "toolCall": {
       const items = finishThoughts(state.items, now);
       const existing = state.toolIndex[update.id];
+      // An approval can arrive before the call it is about: its clock starts here.
+      const approval = state.permissions.find((p) => p.toolCallId === update.id && !p.question);
+      const waits: ToolWait[] | undefined = approval ? [{ from: approval.at ?? now }] : undefined;
       const tool: TranscriptItem = {
         kind: "tool",
         id: update.id,
@@ -466,6 +527,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         parent: update.parent,
         startedAt: now,
         endedAt: update.status === "completed" || update.status === "failed" ? now : undefined,
+        waits,
       };
       if (existing !== undefined && items[existing]?.kind === "tool") {
         const before = items[existing] as Extract<TranscriptItem, { kind: "tool" }>;
@@ -476,6 +538,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           parent: tool.parent ?? before.parent,
           startedAt: before.startedAt,
           endedAt: tool.endedAt ?? before.endedAt,
+          waits: before.waits ?? waits,
           autoAllowed: before.autoAllowed,
         };
         return { ...state, items: replaceAt(items, existing, merged) };
@@ -678,7 +741,7 @@ export function finishTurn(
   now = Date.now(),
   error?: string,
 ): ThreadState {
-  const items = finishAllThoughts(state.items, now).map((item) =>
+  const items = finishAllThoughts(settleEveryWait(state, now).items, now).map((item) =>
     item.kind === "tool" &&
     (item.status === "pending" || item.status === "in_progress") &&
     !(item.background === "task" && outcome === "completed")
