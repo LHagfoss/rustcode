@@ -9,7 +9,6 @@ import {
   CircleDot,
   Eye,
   FileDiff,
-  Folder,
   GitBranch,
   GitPullRequest,
   ListChecks,
@@ -22,7 +21,6 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
-import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
@@ -34,9 +32,7 @@ import {
   refreshSessions,
   repairThread,
   retryPendingSetup,
-  setDraft,
   setPanel,
-  setProjectCwd,
   setTerminalOpen,
   setThreadStatus,
   settleThread,
@@ -378,64 +374,6 @@ function Header({
   );
 }
 
-/** Ways into a first message: one click fills the box, and ⏎ sends it. */
-const STARTS = ["Explain this codebase", "Review my changes", "Find and fix a bug"];
-
-function EmptyState({ banner }: { banner: boolean }) {
-  const projectCwd = useApp((s) => s.projectCwd);
-  // A draft of the user's own is theirs: the starts wait for an empty box.
-  const drafted = useApp((s) => !!(s.drafts.new ?? "").trim());
-  const choose = () => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p));
-  return (
-    <div className="flex min-w-0 max-w-full flex-col items-center gap-3.5 pb-6 text-center">
-      {/* A banner is drawn behind the chat instead of the icon. */}
-      {!banner && <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />}
-      {/* `max-w-full` beside the heading's own `truncate`: a folder name with no break in it (an
-          extended Windows path, a long branch slug) must ellipsize, not widen the lane. */}
-      <h2 className="min-w-0 max-w-full font-semibold text-title tracking-tight">
-        {projectCwd ? (
-          <>
-            What should we build in{" "}
-            {/* The folder names itself here, and a click swaps it. The pill pads
-                the name on hover without widening the sentence. */}
-            <button
-              type="button"
-              onClick={choose}
-              title={`Change folder (${displayPath(projectCwd)})`}
-              className="-mx-1 inline-block max-w-full truncate rounded-md px-1 align-bottom text-fg hover:bg-fill"
-            >
-              {projectName(projectCwd)}
-              <span className="sr-only"> (change folder)</span>
-            </button>
-            ?
-          </>
-        ) : (
-          "What should we build?"
-        )}
-      </h2>
-      <div className="flex w-full max-w-[560px] min-w-0 items-center justify-center gap-1.5 text-fg-faint text-sub">
-        <Folder size={13} className="shrink-0" />
-        {/* The path elides to what fits and says the whole of it on hover. */}
-        <span className="min-w-0 truncate" title={projectCwd ? displayPath(projectCwd) : undefined}>
-          {projectCwd ? displayPath(projectCwd) : "No folder chosen"}
-        </span>
-        <button type="button" onClick={choose} className="shrink-0 text-accent hover:underline">
-          {projectCwd ? "Change" : "Choose…"}
-        </button>
-      </div>
-      {!drafted && (
-        <div className="flex max-w-[520px] flex-wrap items-center justify-center gap-1.5">
-          {STARTS.map((start) => (
-            <Pill key={start} size="sm" quiet onClick={() => setDraft("new", start)}>
-              {start}
-            </Pill>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ErrorBanner({
   text,
   onDismiss,
@@ -720,15 +658,20 @@ export function ChatView() {
       aria-label="Chat"
       onMouseDown={releaseComposer}
     >
+      {/* The chosen picture covers the whole pane, the header included (`height` is the column's,
+          which starts under the header), so the screen is the picture all the way down. */}
       {showsBanner && (
         <NewThreadBanner
           key={banner.style}
           name={banner.name}
           style={banner.style}
-          height={Math.round(height / 2)}
+          height={Math.round(height) + HEADER_HEIGHT}
           className="!absolute top-0 left-0 rc-fade-in"
         />
       )}
+      {/* One light scrim over it, so the field and the cards stay the readable thing: dark text on
+          a light theme's pane wash, light text on the dark one's. */}
+      {showsBanner && <div aria-hidden className="pointer-events-none absolute inset-0 bg-bg/35" />}
       <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
         The chat column and the right panel share one row, so the panel is docked beside
@@ -773,63 +716,71 @@ export function ChatView() {
               transition: "bottom 500ms var(--ease-snappy)",
               ...(isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined),
             }}
-            className="absolute inset-x-3 bottom-4 mx-auto flex max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5 sm:inset-x-12"
+            className={cx(
+              "absolute inset-x-3 bottom-4 mx-auto flex flex-col gap-2.5 sm:inset-x-12",
+              // An empty thread's cards are a dashboard, not a lane: they take the wider measure
+              // (up to 1100px) while the field and everything over it keep the chat's own.
+              isNew ? "max-w-[1100px]" : "max-w-[var(--rc-chat-content-max-width)]",
+            )}
           >
-            {isNew && (
-              <LaneItem>
-                <EmptyState banner={showsBanner} />
-              </LaneItem>
-            )}
-            {error && (
+            <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5">
+              {error && (
+                <LaneItem over>
+                  <ErrorBanner
+                    text={error}
+                    action={
+                      thread && error.startsWith("Could not open this thread") ? (
+                        <Pill prominent onClick={() => void repairThread(thread.id)}>
+                          Repair Thread
+                        </Pill>
+                      ) : undefined
+                    }
+                    onDismiss={() => {
+                      setDismissed(error);
+                      void refreshSessions();
+                    }}
+                  />
+                </LaneItem>
+              )}
+              {thread && (
+                <LaneItem over>
+                  <LinkedThreads threadId={thread.id} />
+                </LaneItem>
+              )}
+              {report && report.threadId === thread?.id && (
+                <LaneItem over>
+                  <ReportPanel text={report.text} />
+                </LaneItem>
+              )}
+              {ownRequest && (
+                <LaneItem over>
+                  <AttentionCard
+                    request={ownRequest}
+                    pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
+                    project={thread?.cwd}
+                  />
+                </LaneItem>
+              )}
+              {!ownRequest && resolved && (
+                <LaneItem over>
+                  <ResolvedApprovalBar approval={resolved} />
+                </LaneItem>
+              )}
+              {thread && (
+                <LaneItem over>
+                  <SettledBar threadId={thread.id} />
+                </LaneItem>
+              )}
               <LaneItem over>
-                <ErrorBanner
-                  text={error}
-                  action={
-                    thread && error.startsWith("Could not open this thread") ? (
-                      <Pill prominent onClick={() => void repairThread(thread.id)}>
-                        Repair Thread
-                      </Pill>
-                    ) : undefined
-                  }
-                  onDismiss={() => {
-                    setDismissed(error);
-                    void refreshSessions();
-                  }}
+                {/* Over a new thread's picture the field is a step more opaque than its usual
+                    glass, so it reads as a panel rather than as another window on the picture. */}
+                <Composer
+                  thread={thread}
+                  compact={width < 600}
+                  className={isNew ? "rc-composer-over" : undefined}
                 />
               </LaneItem>
-            )}
-            {thread && (
-              <LaneItem over>
-                <LinkedThreads threadId={thread.id} />
-              </LaneItem>
-            )}
-            {report && report.threadId === thread?.id && (
-              <LaneItem over>
-                <ReportPanel text={report.text} />
-              </LaneItem>
-            )}
-            {ownRequest && (
-              <LaneItem over>
-                <AttentionCard
-                  request={ownRequest}
-                  pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
-                  project={thread?.cwd}
-                />
-              </LaneItem>
-            )}
-            {!ownRequest && resolved && (
-              <LaneItem over>
-                <ResolvedApprovalBar approval={resolved} />
-              </LaneItem>
-            )}
-            {thread && (
-              <LaneItem over>
-                <SettledBar threadId={thread.id} />
-              </LaneItem>
-            )}
-            <LaneItem over>
-              <Composer thread={thread} compact={width < 600} />
-            </LaneItem>
+            </div>
             {/* The cards under an empty thread's field: what this Mac recorded lately, the
                 project's recent threads and pull requests. They join the stack rather than float
                 beside it, so the whole group centres together and the cards keep the field's lane.
