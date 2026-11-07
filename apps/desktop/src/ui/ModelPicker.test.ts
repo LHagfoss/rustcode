@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
-import { clampEffort, orderEfforts, pickerModels, shownAccounts } from "./ModelPicker";
+import {
+  clampEffort,
+  modelThreadWrites,
+  orderEfforts,
+  pickerModels,
+  shownAccounts,
+  writeModelPick,
+} from "./ModelPicker";
 
 const harness = (efforts: string[]): Harness => ({
   id: "codex",
@@ -102,8 +109,66 @@ describe("the slider's stops", () => {
     expect(clampEffort(undefined, [], "high")).toBeNull();
   });
 
+  test("a model picked again returns to the effort it was last left on", () => {
+    const astra = twoModels().models[1]!;
+    // The remembered level wins over the level the picker was showing.
+    expect(clampEffort(astra, ["off", "high", "max"], "high", "max")).toBe("max");
+    expect(clampEffort(astra, ["off", "high", "max"], "off", "high")).toBe("high");
+    // A level the model no longer offers falls through to the current one, else its default.
+    expect(clampEffort(astra, ["off", "high", "max"], "high", "medium")).toBe("high");
+    expect(clampEffort(astra, ["off", "high", "max"], "medium", "minimal")).toBe("high");
+    expect(clampEffort(astra, ["off", "high", "max"], null, null)).toBe("high");
+  });
+
   test("a model that names no default takes the lowest step", () => {
     expect(clampEffort({ id: "m", name: "m", efforts: ["low", "high"] }, ["low", "high"], "max")).toBe("low");
+  });
+});
+
+describe("a model picked in a thread", () => {
+  const [luna, astra] = twoModels().models;
+
+  test("another harness's model brings a level even when none was remembered", () => {
+    // The old branch wrote only a level the thread's own effort already listed, so a switch to a
+    // model this one does not offer left the thread on an effort the new model lacks.
+    expect(modelThreadWrites(astra, "gpt-6-astra", "medium", null, false)).toEqual([
+      { configId: "model", value: "gpt-6-astra" },
+      { configId: "effort", value: "high" },
+    ]);
+    // The level that model was last left on, never the other harness's effort.
+    expect(modelThreadWrites(astra, "gpt-6-astra", "medium", "max", false)).toEqual([
+      { configId: "model", value: "gpt-6-astra" },
+      { configId: "effort", value: "max" },
+    ]);
+  });
+
+  test("inside one harness the level picked here stays while the model lists it", () => {
+    expect(modelThreadWrites(luna, "gpt-6-luna", "low", null, true)).toEqual([
+      { configId: "model", value: "gpt-6-luna" },
+    ]);
+    expect(modelThreadWrites(luna, "gpt-6-luna", "off", null, true)).toEqual([
+      { configId: "model", value: "gpt-6-luna" },
+      { configId: "effort", value: "medium" },
+    ]);
+  });
+
+  test("a model that lists no levels leaves the effort the thread had", () => {
+    expect(modelThreadWrites(undefined, "bare", "high", null, true)).toEqual([
+      { configId: "model", value: "bare" },
+    ]);
+  });
+
+  test("the level is written after the model, so memory files it under the model now run", async () => {
+    const writes = modelThreadWrites(astra, "gpt-6-astra", "medium", null, false);
+    const seen: string[] = [];
+    let model: string | null = null;
+    await writeModelPick("thread-1", writes, async (_id, configId, value) => {
+      seen.push(`${configId}:${value}`);
+      if (configId === "model") model = value;
+      // What the harness files the level under: the model the thread has when the write lands.
+      else expect(model).toBe("gpt-6-astra");
+    });
+    expect(seen).toEqual(["model:gpt-6-astra", "effort:high"]);
   });
 });
 

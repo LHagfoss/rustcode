@@ -22,11 +22,13 @@ import {
   controlDisabledReason,
   defaultEffort,
   normalizeDefault,
+  rememberedEffort,
   selectOption,
   unavailableReason,
 } from "../state/harness";
 import { accountSignedOut, newThreadAccountOn } from "../state/logins";
 import {
+  effortMemory,
   ensureHarnessModels,
   lastAccountFor,
   type NewThreadChoice,
@@ -55,8 +57,11 @@ interface Choice {
  */
 const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/** The slider thumb's diameter (`size-8`): the track is narrower than it, so each end keeps that room. */
-const THUMB = 32;
+/**
+ * The slider thumb's diameter (`size-6`): the track is narrower than it, so each end keeps that room.
+ * The `size-6` class and this number move together.
+ */
+const THUMB = 24;
 
 /**
  * Where a point on the track sits from the pill's left edge, as a length: the thumb's radius at 0,
@@ -81,16 +86,69 @@ export function orderEfforts(efforts: string[]): string[] {
 }
 
 /**
- * The effort a model keeps after its levels changed: the chosen one while the new list still has
- * it, else the model's own default (the lowest step when it names none).
+ * The effort a model keeps after its levels changed: the level it was last left on (`remembered`),
+ * else the chosen one while the new list still has it, else the model's own default (the lowest
+ * step when it names none).
  */
 export function clampEffort(
   model: HarnessModel | undefined,
   efforts: string[],
   effort: string | null | undefined,
+  remembered?: string | null,
 ): string | null {
+  if (remembered && efforts.includes(remembered)) return remembered;
   if (effort && efforts.includes(effort)) return effort;
   return defaultEffort(model, efforts);
+}
+
+/** One write a model row makes on a thread: its config option and the value to set. */
+export interface ModelWrite {
+  configId: "model" | "effort";
+  value: string;
+}
+
+/**
+ * What a model row writes on an open thread, in order. The model comes first and the level it
+ * brings second: the harness keeps a level per model from what the thread runs when the write
+ * lands, so an effort sent beside its model would be filed under the model it replaced. A
+ * harness's model brings the level it was last left on (`remembered`), else its own default. The
+ * level is clamped from nothing after a switch to another harness, which never keeps this one's
+ * effort, and from `effort` inside one harness, where the level picked here may stay.
+ */
+export function modelThreadWrites(
+  model: HarnessModel | undefined,
+  value: string,
+  effort: string | null | undefined,
+  remembered: string | null | undefined,
+  sameHarness: boolean,
+): ModelWrite[] {
+  const next = clampEffort(
+    model,
+    orderEfforts(model?.efforts ?? []),
+    sameHarness ? effort : null,
+    remembered,
+  );
+  const writes: ModelWrite[] = [{ configId: "model", value }];
+  // A model that lists no levels keeps the effort the thread had.
+  if (next && (sameHarness ? next !== effort : true)) writes.push({ configId: "effort", value: next });
+  return writes;
+}
+
+/**
+ * Writes them one after another, so each lands on the thread the one before it left. `write` is
+ * the store's `setConfigOption` unless a test hands in its own.
+ */
+export function writeModelPick(
+  id: string,
+  writes: ModelWrite[],
+  write: (id: string, configId: string, value: string) => Promise<unknown> = setConfigOption,
+): Promise<void> {
+  return writes
+    .reduce<Promise<unknown>>(
+      (chain, next) => chain.then(() => write(id, next.configId, next.value)),
+      Promise.resolve(),
+    )
+    .then(() => undefined);
 }
 
 /** One login row in the card: a named account, or a thread's own state. */
@@ -158,7 +216,7 @@ function EffortSlider({
   };
   return (
     // The band above the track is the dots' own labels' room, not part of the target.
-    <div className="mx-2.5 pt-6 pb-1">
+    <div className="mx-2.5 pt-6 pb-0.5">
       <div
         ref={rail}
         role="slider"
@@ -201,7 +259,7 @@ function EffortSlider({
             choose(last);
           }
         }}
-        className="relative h-7 cursor-pointer touch-none rounded-full bg-fill-subtle select-none"
+        className="relative h-5 cursor-pointer touch-none rounded-full bg-fill-subtle select-none"
       >
         {/* The fill runs from the pill's edge to the thumb's centre; the thumb is wider than
             the track, so its own radius is kept clear at both ends. */}
@@ -221,11 +279,12 @@ function EffortSlider({
               <span
                 className={cx(
                   "block size-[5px] rounded-full",
-                  // Lighter where it sits on the accent fill, a quiet grey on the track.
+                  // The theme's own contrast on the accent where the dot sits on the fill (a light
+                  // accent gets dark dots), a quiet grey on the track.
                   index < at ? "bg-accent-fg/70" : "bg-fg-muted/50",
                 )}
               />
-              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-full bg-surface-3 px-1.5 py-0.5 font-medium whitespace-nowrap text-caption text-fg opacity-0 shadow-1 transition-opacity group-hover/dot:opacity-100">
+              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 rounded-full bg-surface-3 px-1.5 py-0.5 font-medium whitespace-nowrap text-caption text-fg opacity-0 shadow-1 transition-opacity group-hover/dot:opacity-100">
                 {effortLabel(level)}
               </span>
             </span>
@@ -233,7 +292,10 @@ function EffortSlider({
         </div>
         <span
           aria-hidden
-          className="pointer-events-none absolute top-1/2 size-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-fg shadow-2 transition-[left] duration-200 ease-snappy"
+          // The active control's knob (docs/design.md › Active controls): white in every theme,
+          // with the hairline that keeps it apart from a light track where white alone would not
+          // read. A theme may set a dark `accent-text`; the knob still reads as the grip.
+          className="pointer-events-none absolute top-1/2 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-knob shadow-knob transition-[left] duration-200 ease-snappy"
           style={{ left: alongTrack(pct) }}
         />
       </div>
@@ -294,17 +356,17 @@ function EffortCard({
               aria-label="Fast mode"
               onClick={() => onFast(!fastOn)}
               className={cx(
-                "flex size-7 items-center justify-center rounded-full",
+                "flex size-6 items-center justify-center rounded-full",
                 fastOn
                   ? "bg-fill-strong text-accent"
                   : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
               )}
             >
-              <Zap size={14} fill={fastOn ? "currentColor" : "none"} />
+              <Zap size={13} fill={fastOn ? "currentColor" : "none"} />
             </button>
           </Tooltip>
         ) : (
-          <span aria-hidden className="size-7" />
+          <span aria-hidden className="size-6" />
         )}
         <Tooltip label="Reset effort to default" side="bottom">
           <button
@@ -312,15 +374,15 @@ function EffortCard({
             aria-label="Reset effort to default"
             disabled={!!effortReason || !defaultLevel || defaultLevel === effort}
             onClick={() => defaultLevel && onEffort(defaultLevel)}
-            className="flex size-7 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
+            className="flex size-6 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
           >
-            <RotateCcw size={13} />
+            <RotateCcw size={12} />
           </button>
         </Tooltip>
       </div>
-      <div className="flex flex-col items-center gap-0.5 px-3 pt-0.5 pb-1">
+      <div className="flex flex-col items-center gap-0.5 px-3 pb-0.5">
         {effortsShown(levels, effort) && (
-          <span className="text-title2 font-semibold text-accent">{effortLabel(effort!)}</span>
+          <span className="text-title3 font-semibold text-accent">{effortLabel(effort!)}</span>
         )}
         <button
           type="button"
@@ -345,7 +407,7 @@ function EffortCard({
       </div>
       {blocked && <p className="px-3 pb-1 text-caption text-fg-faint">{blocked}</p>}
       {accounts.length > 0 && (
-        <div className="mt-1 border-border border-t px-1.5 pt-1.5">
+        <div className="mt-0.5 border-border border-t px-1.5 pt-1">
           <div className="flex items-baseline gap-1.5 px-1 pb-0.5 text-caption text-fg-faint">
             <span>Account</span>
             {accountsDisabled && <span className="ms-auto">Stop the turn to switch</span>}
@@ -363,7 +425,7 @@ function EffortCard({
                 onPickAccount(chip.id);
               }}
               className={cx(
-                "flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-callout",
+                "flex h-6 w-full items-center gap-2 rounded-md px-2 text-left text-callout",
                 chip.selected
                   ? "bg-fill font-medium text-fg"
                   : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
@@ -814,27 +876,32 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
    */
   const pickModel = (group: ModelGroup, value: string) => {
     if (group.blocked) return;
-    if (group.harness.id === providerId) {
-      const entry = harness?.models.find((m) => m.id === value);
-      const levels = orderEfforts(entry?.efforts ?? []);
-      const next = clampEffort(entry, levels, effort);
-      if (thread) {
-        void setConfigOption(thread.id, "model", value);
-        if (next && next !== effort) void setConfigOption(thread.id, "effort", next);
-      } else {
+    // The level the model was last left on, so picking it again returns to that level; a level
+    // its list no longer offers is left to the model's default (`clampEffort`).
+    const entry = group.harness.models.find((m) => m.id === value);
+    const remembered = rememberedEffort(effortMemory(), group.harness.id, value);
+    const same = group.harness.id === providerId;
+    if (same) {
+      if (thread) void writeModelPick(thread.id, modelThreadWrites(entry, value, effort, remembered, true));
+      else {
         // A harness that lists no levels for the model keeps the effort it had.
-        setChoice(levels.length ? { model: value, effort: next } : { model: value });
+        const next = clampEffort(entry, orderEfforts(entry?.efforts ?? []), effort, remembered);
+        setChoice(entry?.efforts.length ? { model: value, effort: next } : { model: value });
       }
     } else if (isNew) {
-      // A harness's remembered effort belongs to its own models: the choice normalizes it,
-      // and its remembered account goes with it.
-      setChoice({ harness: group.harness.id, model: value, effort: null });
+      // Another harness's model brings the level it was last left on, never this harness's
+      // effort: the choice normalizes it, and its remembered account goes with it.
+      const next = clampEffort(entry, orderEfforts(entry?.efforts ?? []), null, remembered);
+      setChoice({ harness: group.harness.id, model: value, effort: next });
       pickNewThreadAccount(newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut));
     } else if (thread) {
-      // The harness's remembered login goes with the model, as a login row would.
+      // The harness's remembered login goes with the model, as a login row would, and the model
+      // brings the level it was last left on once the switch lands. That harness never keeps
+      // this one's effort, so the level is clamped from nothing.
       const account = newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut);
+      const writes = modelThreadWrites(entry, value, null, remembered, false);
       void switchThreadHarness(thread.id, group.harness.id, account).then((switched) => {
-        if (switched) void setConfigOption(thread.id, "model", value);
+        if (switched) void writeModelPick(thread.id, writes);
       });
     }
     turnPage("effort");

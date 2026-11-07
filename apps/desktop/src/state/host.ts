@@ -912,7 +912,9 @@ async function configureSession(caller: RuleThread, call: ConfigureCall): Promis
     });
     if (no) return failureJson(no);
   }
-  for (const [id, value] of changes) await setConfigOption(target.id, id, value);
+  // An agent's own configuring is not the user's pick: it leaves the effort memory alone
+  // (state/store.ts `setConfigOption`).
+  for (const [id, value] of changes) await setConfigOption(target.id, id, value, { remember: false });
   return {
     session_id: target.id,
     harness: target.harness ?? "rustcode",

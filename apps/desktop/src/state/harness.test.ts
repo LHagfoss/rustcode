@@ -11,6 +11,7 @@ import {
   normalizeDefault,
   orderHarnesses,
   preferredDefault,
+  rememberedEffort,
   restoreChoice,
   unavailableReason,
   usableHarnesses,
@@ -216,6 +217,51 @@ describe("harness logic", () => {
     expect(defaultEffort(undefined, ["low", "medium", "high", "default"])).toBe("default");
     expect(defaultEffort(undefined, ["low", "high"])).toBe("low");
     expect(defaultEffort(undefined, [])).toBeNull();
+  });
+
+  test("the effort each model was last left on is remembered per harness, not per login", () => {
+    const memory = {
+      "claude-code": { opus: "high", sonnet: "medium" },
+    };
+    expect(rememberedEffort(memory, "claude-code", "opus")).toBe("high");
+    expect(rememberedEffort(memory, "claude-code", "sonnet")).toBe("medium");
+    // A model never picked, a harness with no memory, and no memory at all say nothing.
+    expect(rememberedEffort(memory, "claude-code", "haiku")).toBeNull();
+    expect(rememberedEffort(memory, "codex", "gpt-6-luna")).toBeNull();
+    expect(rememberedEffort(undefined, "claude-code", "opus")).toBeNull();
+    expect(rememberedEffort(memory, "claude-code", null)).toBeNull();
+  });
+
+  test("a restored choice takes the effort its model was last left on", () => {
+    const claude: Harness = {
+      ...base,
+      id: "claude-code",
+      name: "Claude Code",
+      models: [
+        { id: "opus", name: "Opus", efforts: ["low", "high"], default_effort: "low" },
+        { id: "sonnet", name: "Sonnet", efforts: ["low", "medium"], default_effort: "low" },
+      ],
+      last: { model: "sonnet", effort: "medium" },
+    };
+    const snap = snapshot([claude]);
+    // The remembered model is the harness's, and its effort is its own model's.
+    expect(restoreChoice(snap, "claude-code", undefined, { "claude-code": { sonnet: "low" } })).toEqual({
+      harness: "claude-code",
+      model: "sonnet",
+      effort: "low",
+    });
+    // A level the model no longer offers is dropped for the harness's own, then the model's default.
+    expect(restoreChoice(snap, "claude-code", undefined, { "claude-code": { sonnet: "max" } })).toEqual({
+      harness: "claude-code",
+      model: "sonnet",
+      effort: "medium",
+    });
+    // A memory for another model does not leak onto this one.
+    expect(restoreChoice(snap, "claude-code", undefined, { "claude-code": { opus: "high" } })).toEqual({
+      harness: "claude-code",
+      model: "sonnet",
+      effort: "medium",
+    });
   });
 });
 

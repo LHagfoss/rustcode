@@ -172,15 +172,36 @@ export function normalizeDefault(
 }
 
 /**
+ * The effort each model of each harness was last left on, keyed by harness id and then model id.
+ * One record per harness, never per login: two accounts of one harness share the memory.
+ */
+export type EffortMemory = Record<string, Record<string, string>>;
+
+/**
+ * The effort `harness`'s `model` was last left on, or null when the app kept none (a model never
+ * picked, or a harness it has no memory of).
+ */
+export function rememberedEffort(
+  memory: EffortMemory | undefined,
+  harness: string | undefined,
+  model: string | null | undefined,
+): string | null {
+  if (!memory || !harness || !model) return null;
+  return memory[harness]?.[model] ?? null;
+}
+
+/**
  * The choice a new thread on `id` starts with: the harness's remembered model and effort (the
  * engine's `last`, else what the app kept in `local`), else the default when it names this
- * harness, else nothing (the harness picks). A model the harness no longer lists, or an effort its
- * model does not offer, is dropped quietly.
+ * harness, else nothing (the harness picks). The effort that model was last left on (`memory`)
+ * wins over the harness's own, so a model picked again returns to its own level. A model the
+ * harness no longer lists, or an effort its model does not offer, is dropped quietly.
  */
 export function restoreChoice(
   snapshot: HarnessSnapshot,
   id: string,
   local?: Record<string, HarnessLast>,
+  memory?: EffortMemory,
 ): { harness: string; model: string | null; effort: string | null } {
   const h = snapshot.harnesses.find((x) => x.id === id);
   if (!h) return { harness: "rustcode", model: null, effort: null };
@@ -193,11 +214,14 @@ export function restoreChoice(
   const known = h.models.find((m) => m.id === model);
   const offers = (effort: string | null) =>
     !!effort && h.capabilities.effort && (!known?.efforts.length || known.efforts.includes(effort));
+  const own = rememberedEffort(memory, h.id, model);
   const effort =
+    (offers(own) ? own : null) ??
     candidates
       .filter((c) => !c.model || c.model === model)
       .map((c) => c.effort)
-      .find(offers) ?? null;
+      .find(offers) ??
+    null;
   return { harness: h.id, model, effort };
 }
 
