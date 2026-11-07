@@ -30,7 +30,7 @@ import {
 import { cx, Kbd, MenuContent, MenuShortcut, menuItem, Pill, Tooltip } from "./primitives";
 import { DiffView } from "./Rows";
 
-function orderedOptions(options: PermissionOption[]): PermissionOption[] {
+export function orderedOptions(options: PermissionOption[]): PermissionOption[] {
   const rank = (o: PermissionOption) =>
     o.kind === "reject_once" || o.kind === "reject_always" ? 0 : o.kind === "allow_once" ? 2 : 1;
   return [...options].sort((a, b) => rank(a) - rank(b));
