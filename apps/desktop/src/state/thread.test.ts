@@ -9,8 +9,10 @@ import {
   autoAllowedNoticeNeeded,
   beginTurn,
   checkCommands,
+  departQueued,
   diffCounts,
   diffLines,
+  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
@@ -184,6 +186,20 @@ describe("thread reducer", () => {
     expect(s.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "cancelled", elapsedMs: 4000 });
   });
 
+  test("a message typed here is marked as sent, one the app made for it is not", () => {
+    const typed = beginTurn(emptyThread("s", "/p"), "go", 0, undefined, false, false, true);
+    expect(typed.items.at(-1)).toMatchObject({ kind: "user", sent: true });
+    // A wake, a message from another thread or a view, and the message a thread was made for all
+    // reach the transcript without the mark: their rows only rise in, never out of the composer.
+    const sentOf = (state: ReturnType<typeof beginTurn>) => {
+      const last = state.items.at(-1);
+      return last?.kind === "user" ? last.sent : undefined;
+    };
+    expect(sentOf(beginTurn(emptyThread("s", "/p"), "go", 0))).toBeUndefined();
+    expect(sentOf(beginTurn(emptyThread("s", "/p"), "go", 0, undefined, true))).toBeUndefined();
+    expect(sentOf(beginTurn(emptyThread("s", "/p"), "go", 0, undefined, false, true))).toBeUndefined();
+  });
+
   test("unused steers leave the transcript and go back to the front of the queue", () => {
     let s = beginTurn(emptyThread("s", "/p"), "go", 0);
     s = { ...s, queue: [{ id: "q", text: "later" }] };
@@ -191,6 +207,50 @@ describe("thread reducer", () => {
     s = requeueSteers(s, ["also this"]);
     expect(s.items.some((i) => i.kind === "user" && i.text === "also this")).toBe(false);
     expect(s.queue.map((q) => q.text)).toEqual(["also this", "later"]);
+  });
+
+  test("a steer says which plan step was active when the turn read it", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 0);
+    s = applyUpdate(
+      s,
+      {
+        kind: "plan",
+        entries: [
+          { content: "a", status: "completed" },
+          { content: "b", status: "in_progress" },
+        ],
+      },
+      1000,
+    );
+    // The clock starts where the turn came to the step, and the note lands on it.
+    expect(s.planClocks).toEqual({ b: { startedAt: 1000 } });
+    s = appendSteer(s, "use the cache", 2000);
+    expect(s.steers).toEqual([
+      { id: expect.any(String), text: "use the cache", at: 2000, step: { index: 1, content: "b" } },
+    ]);
+    // A thread with no step on gets the note with no step: it says where it landed in the transcript.
+    s = { ...s, plan: [], planClocks: {} };
+    s = appendSteer(s, "and the fast path", 3000);
+    expect(s.steers.at(-1)?.step).toBeUndefined();
+  });
+
+  test("the message a steer went back to the queue takes its note with it", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 0);
+    s = appendSteer(s, "also this", 1000);
+    expect(s.steers).toHaveLength(1);
+    s = requeueSteers(s, ["also this"]);
+    expect(s.steers).toEqual([]);
+  });
+
+  test("a queued row a steer took leaves after its glide, and not before", () => {
+    const s = emptyThread("s", "/p");
+    const queued = { id: "q1", text: "also this" };
+    expect(departQueued({ ...s, queue: [] }, queued).departing).toEqual([queued]);
+    expect(dropDeparted(departQueued(s, queued), "q1").departing).toEqual([]);
+    // Dropping one that already went, or departing it twice, changes nothing.
+    expect(dropDeparted(s, "q1")).toBe(s);
+    const once = departQueued(s, queued);
+    expect(departQueued(once, queued)).toBe(once);
   });
 
   test("plan, title, usage and config options", () => {

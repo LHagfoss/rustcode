@@ -8,8 +8,9 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
-import { flyInFromComposer } from "../lib/sendFlight";
+import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
 import { hasTimeline } from "../lib/trace";
+import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
 import {
   foldEnds,
   foldTurns,
@@ -24,6 +25,7 @@ import {
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
+import { type PlanClocks, planCardShown, type SteerNote, steerMarks } from "../state/steer";
 import { RESUME_TEXT, shortcutFor, steeringOf, turnState, useApp } from "../state/store";
 import {
   type QueuedPrompt,
@@ -41,7 +43,7 @@ import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
-import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
+import { LeavingQueuedRow, QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
 import {
   AssistantRow,
   CompletionCard,
@@ -61,6 +63,7 @@ import {
   WorkingRow,
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
+import { SteerMark } from "./SteerMark";
 import { plainPreview, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
@@ -88,8 +91,14 @@ export type Row = {
   approval?: PermissionRequest;
   /** Which of the thread's waiting approvals it is, from 1: `2 of 3`. */
   approvalNumber?: number;
-  /** The plan a paused thread keeps to, at the foot. */
-  plan?: { threadId: string; entries: PlanEntry[] };
+  /** The plan a thread keeps to, at the foot: the one a turn works through, and the one it waits on. */
+  plan?: {
+    threadId: string;
+    entries: PlanEntry[];
+    running: boolean;
+    steers: SteerNote[];
+    clocks: PlanClocks;
+  };
   /** A message waiting for the thread, at the end of it. */
   queued?: {
     item: QueuedPrompt;
@@ -103,6 +112,10 @@ export type Row = {
   };
   /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
   queueWake?: { line: string; text: string };
+  /** A steering note the plan cannot hold, drawn under the message it was sent as. */
+  steerNote?: SteerNote;
+  /** A queued row a steer just took: it is gliding out of the stack on its way to the transcript. */
+  leaving?: QueuedPrompt;
   /** Resume, under a queue a stopped or failed turn held. */
   resume?: { threadId: string; count: number };
 };
@@ -158,10 +171,48 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (row.queued) return 96;
   if (row.resume) return 30;
   if (row.queueWake) return 26;
+  // The turn's own lines: `Working for 12s` is `h-[34px]` over its hairline, and the live activity
+  // is `min-h-6`. Left at a generic 24 they measured 39px taller a frame after mounting, and the
+  // pinned view took that back in one step — the message just sent jumped with it.
+  if (row.working) return 35;
+  if (row.activity) return 24;
   const item = row.item;
   if (!item) return 24;
-  if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
+  if (item.kind === "tool" || item.kind === "turnEnd") return 26;
+  // A live thought shows its last lines; a finished one is its one line.
+  if (item.kind === "thought")
+    return item.done ? 17 : 25 + Math.min(THOUGHT_TAIL_LINES, lines(item.text, 55)) * 17;
+  // A sent bubble: its pictures and files above it, 12px of padding each way, its text, and the
+  // 22px line under it that holds the time (shown on hover, laid out always). A long one folds at
+  // `COLLAPSED_MESSAGE_HEIGHT` and keeps its "Show full message" pill, so its estimate never
+  // reserves a screenful the row will not use.
+  if (item.kind === "user") {
+    const body = lines(item.text, 60) * BODY_LINE;
+    const text = messageCollapses(body) ? COLLAPSED_MESSAGE_HEIGHT + SHOW_FULL_PILL : body;
+    return (item.attachments?.length ? ATTACHMENT_CHIPS : 0) + BUBBLE_PADDING * 2 + text + META_LINE;
+  }
   return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
+}
+
+/** The lines a string wraps to in the lane, near enough for an estimate. */
+function lines(text: string, perLine: number): number {
+  return Math.max(1, Math.ceil(text.length / perLine));
+}
+
+/**
+ * The air above a row, from the transcript's own two values: a turn starts and a footer ends on the
+ * wide one, everything inside a turn sits on the narrow one, and the first line under a divider
+ * takes the narrow one. The rows draw it and so does `estimateSize`, because a row that mounts with
+ * a size that leaves this out measures a gap taller a frame later — and the pinned transcript takes
+ * that difference back in one step, moving every row above it, the message just sent included.
+ */
+export function rowGap(rows: readonly Row[], index: number): number {
+  if (index <= 0) return 0;
+  const item = rows[index]?.item;
+  const prev = rows[index - 1]?.item;
+  if ((prev?.kind === "notice" && prev.tone === "info") || (prev?.kind === "user" && !!prev.wake))
+    return ITEM_GAP;
+  return item?.kind === "user" || prev?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }
 
 function searchable(item: TranscriptItem): string {
@@ -222,6 +273,22 @@ const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
  */
 const ITEM_GAP = 14;
 const TURN_GAP = 28;
+
+/**
+ * The pieces an estimate is made of, in the sizes the rows are drawn at: a sent bubble's padding and
+ * the line it sits on, the time line under it, the chips above it when it carries pictures or files,
+ * and how much of a live thought's tail shows (`ThoughtRow`'s `line-clamp-5`).
+ */
+const BUBBLE_PADDING = 12;
+const BODY_LINE = 23;
+const META_LINE = 24;
+const ATTACHMENT_CHIPS = 32;
+const THOUGHT_TAIL_LINES = 5;
+/** The "Show full message" pill a folded bubble ends with, and its air above it. */
+const SHOW_FULL_PILL = 30;
+
+/** The air above the transcript's first row, under the glass header. */
+export const FIRST_ROW_PAD = 20;
 
 /** A turn's change line, wherever it draws: the completion card, else the checkpoint chip. */
 function ChangeLine({ threadId, line }: { threadId: string; line: TurnChangeLine }) {
@@ -380,10 +447,20 @@ export function Transcript({
         childKeys: ownKeys && i === 0,
       });
     });
-    // The plan a paused thread still has work on, at the foot: what is left, and Implement. A
-    // finished plan, or one a running turn is working through, is not repeated here.
-    if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
-      out.push({ key: "plan", plan: { threadId: thread.id, entries: thread.plan } });
+    // The plan a thread works to, at the foot: while a turn runs it is live (the step it is on, and
+    // the notes it was handed there), and once the thread waits on you it keeps what is left and
+    // Implement. A plan with nothing left still shows where a steering note landed.
+    if (planCardShown(thread.plan, thread.steers))
+      out.push({
+        key: "plan",
+        plan: {
+          threadId: thread.id,
+          entries: thread.plan,
+          running: thread.running,
+          steers: thread.steers,
+          clocks: thread.planClocks,
+        },
+      });
     // What waits for the thread comes after all of it: its queued messages, the one quiet line a
     // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
     // the transcript, and the pinned view follows them like any other row.
@@ -409,6 +486,15 @@ export function Transcript({
     });
     if (queue.resumable)
       out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
+    // Rows a steer just took keep the stack's place while they glide up toward the transcript.
+    for (const item of thread.departing ?? []) out.push({ key: `leaving-${item.id}`, leaving: item });
+    // A steering note the plan does not hold says where it took effect, under the message it was
+    // sent as. It is its own row, outside the turn's fold, so it stays readable once that folds.
+    for (const note of steerMarks(thread.steers, thread.plan).inline) {
+      const at = out.findIndex((r) => r.item?.id === note.id);
+      if (at >= 0) out.splice(at + 1, 0, { key: `steer-${note.id}`, steerNote: note });
+      else out.push({ key: `steer-${note.id}`, steerNote: note });
+    }
     return out;
   }, [visible, subagentSteps, started, links, thread, open, searching, wait, childRequests]);
   // Footers of folded turns: their time is in the summary row, not repeated.
@@ -562,7 +648,9 @@ export function Transcript({
       if (hidden) return 0;
       const known = rowSizes.get(row?.key ?? "");
       if (known !== undefined) return known;
-      return estimatedRowHeight(row, false);
+      // A measured row keeps the gap it was drawn with, so an estimate must carry its own or every
+      // row would come up short by one and be corrected a frame later.
+      return rowGap(rows, i) + estimatedRowHeight(row, false);
     },
     getItemKey: (i) => rows[i]?.key ?? i,
     // Read lazily, after `attachScroll` put the view at the end (scroll events come later).
@@ -581,7 +669,7 @@ export function Transcript({
     overscan: 8,
     // Row measurements land on the next frame, not inside the ResizeObserver's own delivery.
     useAnimationFrameWithResizeObserver: true,
-    paddingStart: 20 + topInset,
+    paddingStart: FIRST_ROW_PAD + topInset,
     paddingEnd: bottomInset,
   });
 
@@ -825,22 +913,20 @@ export function Transcript({
     if (!at.has(key)) at.set(key, nowMs);
     return nowMs - at.get(key)! < 300;
   };
-  // The message just sent, when the row that holds it is new: it rises out of the composer instead
-  // of only rising in (lib/sendFlight.ts). A wake, a resume and a message another thread or a view
-  // sent are not messages typed here, so they keep the plain row rise.
-  const sentRow = rows.findLast((r) => {
-    const item = r.item;
-    return item?.kind === "user" && !item.wake && !item.fromView && item.text !== RESUME_TEXT && fresh(r.key);
-  });
-  const sent = useRef<string | undefined>(undefined);
+  // The message the composer just sent: it rises out of the field rather than only rising in
+  // (lib/sendFlight.ts). The item says so itself (thread.ts `beginTurn`), so a thread's history, a
+  // wake, a resume, a message from another thread or a view keep the plain row rise, and the flight
+  // log keeps one flight per message when the row is redrawn or the thread is opened again.
+  const sentRow = rows.findLast((r) => r.item?.kind === "user" && r.item.sent);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the row's key is its item's id, and `rows.length` retries a flight whose row the virtualizer had not drawn yet
   useLayoutEffect(() => {
     const key = sentRow?.key;
-    if (!key || sent.current === key) return;
-    sent.current = key;
-    flyInFromComposer(
-      innerRef.current?.querySelector<HTMLElement>(`[data-rc-row="${CSS.escape(key)}"]`) ?? null,
-    );
-  }, [sentRow?.key]);
+    const el = key
+      ? (innerRef.current?.querySelector<HTMLElement>(`[data-rc-row="${CSS.escape(key)}"]`) ?? null)
+      : null;
+    if (!el || !takesFlight(sentRow?.item?.id)) return;
+    flyInFromComposer(el);
+  }, [sentRow?.key, rows.length]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -921,22 +1007,15 @@ export function Transcript({
               const afterDivider =
                 (prev?.item?.kind === "notice" && prev.item.tone === "info") ||
                 (prev?.item?.kind === "user" && !!prev.item.wake);
-              // A message starts a turn and a footer ends it, so those two rows take the wider gap;
-              // everything inside a turn sits on the one value.
-              const gap =
-                v.index === 0
-                  ? 0
-                  : item?.kind === "user" || prev?.item?.kind === "user"
-                    ? TURN_GAP
-                    : ITEM_GAP;
-              // A wake divider is the turn's own first line: the work under it sits on it.
-              const turnGap = afterDivider ? ITEM_GAP : gap;
+              // The air above the row, from the same answer its estimate reads (`rowGap`), so a row
+              // mounts at the size the transcript already reserved for it.
+              const turnGap = rowGap(rows, v.index);
               if (row.fold) {
                 return (
                   <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                     <div
                       className={cx("mx-auto w-full max-w-[var(--rc-chat-content-max-width)]", LANE_MOTION)}
-                      style={{ paddingTop: v.index === 0 ? 0 : turnGap }}
+                      style={{ paddingTop: turnGap }}
                     >
                       <TurnFoldRow fold={row.fold} onToggle={toggleFold} rule={!afterDivider} />
                     </div>
@@ -967,7 +1046,17 @@ export function Transcript({
                         keys={row.childKeys}
                       />
                     ) : row.plan ? (
-                      <PlanCard threadId={row.plan.threadId} entries={row.plan.entries} />
+                      <PlanCard
+                        threadId={row.plan.threadId}
+                        entries={row.plan.entries}
+                        running={row.plan.running}
+                        steers={row.plan.steers}
+                        clocks={row.plan.clocks}
+                      />
+                    ) : row.steerNote ? (
+                      <SteerMark note={row.steerNote} />
+                    ) : row.leaving ? (
+                      <LeavingQueuedRow item={row.leaving} />
                     ) : row.agents ? (
                       <SubagentGroupRow
                         items={row.agents.items}

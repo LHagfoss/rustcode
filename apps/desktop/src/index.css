@@ -526,6 +526,18 @@
   animation: rc-dot-in 320ms var(--ease-snappy);
 }
 
+/* A count badge changing: the new number rolls in from below. */
+@keyframes rc-count-roll {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+.rc-count-roll {
+  display: inline-block;
+  animation: rc-count-roll 200ms var(--ease-snappy);
+}
+
 /* A new transcript row: rises 6px and fades in, a touch slower than a popover. */
 @keyframes rc-row-in {
   from {
@@ -535,6 +547,38 @@
 }
 .rc-row-in {
   animation: rc-row-in 260ms var(--ease-snappy) both;
+}
+
+/*
+/*
+ * A steer takes a queued message out of the stack: it keeps its place and glides up toward the
+ * transcript it was read in, fading as it goes (`ui/QueuedMessages.tsx` `LeavingQueuedRow`,
+ * `state/store.ts` `glideAway`, which holds it this long). Transform and opacity only.
+ */
+@keyframes rc-steer-away {
+  to {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.98);
+  }
+}
+.rc-steer-away {
+  animation: rc-steer-away 240ms var(--ease-snappy) forwards;
+}
+
+/*
+ * The first message of a new thread, on the screen that holds it while the session is made: it takes
+ * the place the thread's own transcript will keep it, 8px below, in 160ms on the app's ease. Short
+ * on purpose: that screen is unmounted the moment the session exists, so this is safe to cut, and
+ * the transcript draws the same row at rest in the same place (`ui/ChatView.tsx` PendingSetupView).
+ */
+@keyframes rc-send-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.rc-send-in {
+  animation: rc-send-in 160ms var(--ease-snappy) both;
 }
 
 /*
@@ -623,8 +667,10 @@
 
 /*
  * Hover timing, shared by every control: in at once (60 ms), out in 120 ms,
- * so moving along a list never leaves the last item looking hovered.
- * Components do not set their own hover durations.
+ * so moving along a list never leaves the last item looking hovered. A row the
+ * keyboard lands on answers at the same speed as the pointer, so a menu driven
+ * by `data-highlighted` (Radix) and one driven by focus (a popover's rows) feel
+ * alike. Components do not set their own hover durations.
  */
 :root {
   --rc-hover-in: 60ms;
@@ -656,7 +702,7 @@
     [role="radio"],
     [role="tab"],
     summary
-  ):is(:hover, [data-highlighted]) {
+  ):is(:hover, [data-highlighted], :focus-visible) {
     transition-duration: var(--rc-hover-in);
   }
 }

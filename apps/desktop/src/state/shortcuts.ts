@@ -12,6 +12,7 @@ import {
   openSettings,
   setSwitcher,
   setTerminalOpen,
+  setView,
   startNewThread,
   toast,
   toggleRightPanel,
@@ -44,6 +45,10 @@ export function runShortcut(command: string): boolean {
       return true;
     case "settings":
       openSettings(s.settings ? null : "general");
+      return true;
+    case "inbox":
+      // The row toggles: the shortcut that opened the inbox takes you back to the chat.
+      setView(s.view.kind === "inbox" ? { kind: "chat" } : { kind: "inbox" });
       return true;
     case "toggle-sidebar":
       toggleSidebar();

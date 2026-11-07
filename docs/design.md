@@ -233,14 +233,16 @@ that change use `tabular`.
 
 - Hover: **in 60ms, out 120ms** (`--rc-hover-in`, `--rc-hover-out`),
   colour only, set once in `index.css` for every button, link, row,
-  switch and menu item. Components never add `transition-colors` or their
-  own hover duration. Press: `active:bg-fill-strong`, no delay. No
-  `transform` on press (no scale): text re-rasterizes and reads as a flash.
+  switch and menu item, and for the row the keyboard lands on. Components
+  never add `transition-colors` or their own hover duration. Press:
+  `active:bg-fill-strong`, no delay. No `transform` on press (no scale): text
+  re-rasterizes and reads as a flash.
 - Hover is pure CSS `:hover` (or Radix's `data-highlighted`). No hover
   state in React (`onMouseEnter` setting an id); a keyboard-driven list may
-  keep a selected index, shown with the same `bg-fill`. Row menus are
-  `modal={false}`, so other rows keep answering the pointer while one is
-  open.
+  keep a selected index, shown with the same `bg-fill`. A popover's menu row
+  has neither hook, so it fills on `:hover` and `:focus-visible` itself. Row
+  menus are `modal={false}`, so other rows keep answering the pointer while
+  one is open.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
@@ -271,14 +273,42 @@ that change use `tabular`.
 - A message sent from the composer flies instead of rising: it starts a
   little inside the field's card (at 96%) and lands in its row in 220ms
   `--ease-snappy`, `transform` and `opacity` only, so nothing around it moves
-  (`lib/sendFlight.ts`). The composer is found by the marker on its card, and
-  the row travels at most 220px. Only a message typed here flies: a wake, a
-  resume, one another thread or a view sent, and the history a thread opens
-  with keep the plain row rise. The field it left fades back in empty over
-  160ms rather than blinking. `prefers-reduced-motion` gets the fade alone.
-  A message sent from the new-thread screen fades where it lands instead,
-  because the composer itself is on its way to the foot of the chat: the
-  stack's own 500ms move is that send's motion.
+  (`lib/sendFlight.ts`). The composer is found by the marker on its card. It
+  starts at the card whatever the gap above it, so a message whose row rests
+  above the field (its own `Working` line, a reply already streaming) rises
+  into place instead of fading where it stands; the row travels at most 220px.
+  Only a message typed here flies, and only once: the item the app sends from
+  the composer is marked (`thread.ts` `beginTurn`), so a wake, a resume, one
+  another thread or a view sent, and the history a thread opens with keep the
+  plain row rise, and a flight is never replayed by a re-render, a closed
+  turn, or opening the thread again. The field it left fades back in empty
+  over 160ms rather than blinking. `prefers-reduced-motion` gets the fade
+  alone.
+  A message sent from the new-thread screen does not fly: it is drawn where
+  the thread's own first row will keep it (the lane's cap, 20px under the
+  header) and arrives from 8px below over 160ms (`rc-send-in`,
+  `--ease-snappy`), while the composer glides from the middle of the chat to
+  the foot. A session can exist in a single frame, so the thread takes the
+  screen when that entry has played and not before (at most one entry,
+  `PENDING_ENTRY_MS`): the screen it keeps draws the same row in the same
+  place, at rest, so the hand-over itself moves nothing. A harness slower than
+  the entry is already past it and takes the screen the moment its session
+  exists. And each of the send's own updates gets a painted frame of its own
+  (`lib/frame.ts` `afterPaint`): the pending screen is drawn before
+  `session/new` is asked for, and the message's row before its prompt is built,
+  so an in-process harness cannot fold all of it into one frame.
+- A steering note landing in a running turn: the queued row it took from the
+  stack glides 14px up toward the transcript and fades there (`rc-steer-away`,
+  240ms `--ease-snappy`, `transform` and `opacity` only, and it collapses
+  under reduced motion), and the note's marker appears where the turn
+  read it — on the plan card's active step, else under its message — without
+  moving anything around it.
+- A row mounts at the size the transcript already reserved for it: `estimateSize`
+  is the row's own air (`rowGap`) plus its content, and a measured row keeps
+  both. An estimate that left the gap out, or guessed a live `Working for 12s`
+  at 24px when it draws 35, was corrected a frame after mounting — and a
+  pinned transcript takes that difference back in one step, moving every row
+  above it, the message just sent included.
 - A streaming reply's new words fade in once each (`rc-reveal`, 280ms, from
   `opacity: 0` and a 4px blur, 18ms apart, no word waiting past 180ms).
   `lib/reveal.ts` wraps only the words that arrived in the chunk, and only in
@@ -593,7 +623,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   queue stops the turn and sends the message in its place. It is edited in the composer,
   never in a field of its own: its pencil, or ↑ at the start of an empty
   composer, loads its text, command, links and attachments there, ⏎ saves it
-  back in the queue and Esc leaves it. A held queue ends with Resume, which
+  back in the queue and Esc leaves it. A row a steer takes out of the queue
+  keeps the stack's place while it glides up toward the transcript and fades
+  (`rc-steer-away`, 240ms, `transform` and `opacity` only), and the message it
+  became lands where the turn read it. A held queue ends with Resume, which
   starts its first message. A wake turn the app sends is one quiet line in the
   notice divider's style (`Delegate finished · Fix composer focus · Pi · 3m 49s`
   for one, the working delegate's harness marks and the longest time for
@@ -786,17 +819,34 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   under a `CornerDownRight` in `success`. It is not folded away with its
   turn. A question still waiting keeps its form over the composer, since its
   answer is a choice; only the answer leaves a row.
-- **Plan card:** a paused thread's plan, at the foot of the transcript
+- **Plan card:** a thread's plan, at the foot of the transcript
   (`ui/PlanCard.tsx`): `rounded-2xl bg-surface p-4`, a `ListChecks` and
   `Plan` in `font-semibold` with `3 of 8 left` in `text-fg-muted tabular`, a
   Copy button and Implement (a prominent 24px pill that sends `Implement the
-  plan.` as an ordinary message). Its steps are one line each, `text-body`
-  with a 6px status dot (`success` done, `accent` now, `fill-strong` next)
-  and done steps in `text-fg-muted`. Past 220px it clips and fades over its
-  last 24px, with `Expand · N steps` under it; expanded, it shows whole and
-  offers `Collapse`. It is drawn only while the thread is not running and
-  something is unfinished, so a finished plan leaves no card; the header's
-  popover and the composer's meter are unchanged.
+  plan.` as an ordinary message; it is only there while the plan waits on
+  you). Its steps are one line each, `text-body` with a 6px status dot
+  (`success` done, `accent` now, `fill-strong` next) and done steps in
+  `text-fg-muted`. A step carries its clock at the right in `text-caption
+  text-fg-faint tabular`: the time it has run while the turn is on it, its
+  whole time once it is done, and nothing when the app did not see it start
+  (`state/steer.ts`). Under the step the turn was on sits each steering note
+  it read there, as `Steered: <first line>` (`ui/SteerMark.tsx`); a click, or
+  the hover tip, gives the whole note and when it was sent. Past 220px it
+  clips and fades over its last 24px, with `Expand · N steps` under it;
+  expanded, it shows whole and offers `Collapse`. It is drawn while a turn
+  works through the plan — live, with the running step's clock — and once the
+  thread waits on you with something left; an all-done plan still draws it
+  while it holds a note, and otherwise leaves no card. The header's popover
+  and the composer's meter are unchanged.
+- **Steering note:** a message sent into a running turn says where the turn
+  read it. The plan card marks it on the step that was active then; a thread
+  with no plan, or a plan rewritten past that step, gets a quiet row in the
+  transcript instead (`ui/Transcript.tsx`), on the divider's own line under the
+  message it was sent as (`Steered: use the fast path`, in `accent` behind a
+  `CornerDownRight`). Either marker is one line at rest and stays out of the
+  turn's fold, and opening it — a click, or the hover tip — shows the whole
+  note and when it was sent. The note is the app's own record of the turn, kept
+  while the thread is open and not replayed from history.
 - **Jump to latest:** `.rc-glass-overlay rounded-full`, centred 8px
   above the composer stack and above its drawer when one is open, over it
   in z.
