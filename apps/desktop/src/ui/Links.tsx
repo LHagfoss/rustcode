@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Dialog, Popover } from "radix-ui";
 import { useEffect, useMemo } from "react";
+import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import type { StackAgent, StackState } from "../state/agentStack";
 import {
   type AgentState,
@@ -27,6 +28,8 @@ import {
   flattenViews,
   forestTotal,
   ownBranch,
+  runningAgents,
+  runningSubagents,
 } from "../state/delegates";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import {
@@ -41,9 +44,18 @@ import { modeLabel } from "../state/permissions";
 import { emptyCost } from "../state/pricing";
 import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
-import { AgentGroupHeader, LINK_AGENT_STATE, ThreadAgentRow, useNow } from "./AgentViews";
+import {
+  AgentGroupHeader,
+  AgentRow,
+  LINK_AGENT_STATE,
+  SubagentRow,
+  ThreadAgentRow,
+  useNow,
+} from "./AgentViews";
 import { useDelegateBranch } from "./DelegateTree";
 import { cx, Pill, Tooltip } from "./primitives";
+
+const NO_AGENTS: SubagentInfo[] = [];
 
 const ICON: Record<LinkState, typeof Clock> = {
   queued: Clock,
@@ -245,11 +257,27 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
   );
 }
 
-/** Above the composer: the threads this one is working with, and the thread it works for. */
+/** Above the composer: the delegates this one is working with, and the thread it works for. */
 export function LinkedThreads({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
   const items = useApp((s) => s.threads[threadId]?.items);
   const { driving, drivenBy } = linksOf(book, threadId);
+  const agents = useApp((s) => s.agents[threadId] ?? NO_AGENTS);
+  // A harness's own subagents, from another harness or an older session, read
+  // in this same strip: one surface for everything working under the thread.
+  const natives = useMemo(() => runningSubagents(items ?? []), [items]);
+  // RustCode's own subagents: a live `spawn_agent` call already draws its
+  // agent (`SubagentRow` reads `_rustcode/agents` for it), so only those whose
+  // call returned at launch are left to add here.
+  const builtins = useMemo(() => {
+    const drawn = new Set(
+      natives.flatMap(({ item }) => {
+        const id = item.title === "spawn_agent" ? spawnedAgentId(item.output) : undefined;
+        return id === undefined ? [] : [id];
+      }),
+    );
+    return runningAgents(agents).filter((agent) => !drawn.has(agent.id));
+  }, [agents, natives]);
   // A thread this one started reads in the transcript once it settles; the strip is its live
   // place until then, so the two never draw the same thread.
   const shown = useMemo(() => {
@@ -268,17 +296,18 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
   // Work under way or a wait on the user, with a row of its own to draw: anything settled is the
   // details panel's row (and a failure the inbox's), so the strip stays out of the chat's way
-  // rather than counting a lifetime or pinning an old failure.
+  // rather than counting a lifetime or pinning an old failure. A native agent at work is a row
+  // of its own too.
   const { working, needs } = strip.total.counts;
   const news = live.length > 0 && working + needs > 0;
-  if (!news && !drivenBy && !fanOuts.length) return null;
+  if (!news && !drivenBy && !fanOuts.length && !natives.length && !builtins.length) return null;
   return (
     // The one surface this strip shares with the jump-to-latest pill above it and its own group card
     // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
     // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
     <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
       {drivenBy && <WorkingFor link={drivenBy} />}
-      {(live.length > 0 || fanOuts.length > 0) && (
+      {(live.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
         <div className="flex flex-col gap-0.5">
           {live.length > 2 ? (
             <ManyLinks links={live} threadId={threadId} strip={strip} />
@@ -298,9 +327,32 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
               ))}
             </div>
           )}
+          {natives.map(({ item, steps }) => (
+            <SubagentRow key={item.id} item={item} steps={steps} threadId={threadId} />
+          ))}
+          {builtins.map((agent) => (
+            <BuiltinAgentRow key={agent.id} agent={agent} threadId={threadId} />
+          ))}
         </div>
       )}
     </div>
+  );
+}
+
+/** One of RustCode's own subagents at work, as the same row every agent gets. */
+function BuiltinAgentRow({ agent, threadId }: { agent: SubagentInfo; threadId: string }) {
+  const harness = useApp((s) => s.threads[threadId]?.harness?.id);
+  const now = useNow(agentActive(agent));
+  return (
+    <AgentRow
+      harness={harness}
+      state="working"
+      title={agent.name}
+      detail={agent.task.split("\n")[0]}
+      elapsed={agentElapsed(agent, now)}
+      label={`${agent.name}: ${agent.task}`}
+      showWord={false}
+    />
   );
 }
 

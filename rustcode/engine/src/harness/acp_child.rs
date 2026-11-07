@@ -226,6 +226,72 @@ fn with_system_prompt(mut params: Value, system_prompt: Option<&Value>) -> Value
     params
 }
 
+/// Claude Code's own subagent tool, under the name it had (`Task`) and the one
+/// it has now (`Agent`). A Claude Code thread RustCode runs delegates through
+/// the orchestrator's MCP tools (`start_session`, `fan_out`) instead, so its
+/// native subagents do not bypass the thread's delegate UI (#3176).
+const CLAUDE_CODE_SUBAGENT_TOOLS: [&str; 2] = ["Task", "Agent"];
+
+/// Add Claude Code's subagent tool to a session's `_meta` as disallowed. Only
+/// the keys this names are set, so another `_meta` key a caller carries stays,
+/// and a `disallowedTools` list already there is extended rather than replaced.
+fn disallow_subagent_tool(meta: &mut Value) {
+    let Some(meta) = meta.as_object_mut() else {
+        return;
+    };
+    let Some(claude) = meta
+        .entry("claudeCode")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    let Some(options) = claude
+        .entry("options")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    let disallowed = options
+        .entry("disallowedTools")
+        .or_insert_with(|| json!([]));
+    let Some(list) = disallowed.as_array_mut() else {
+        return;
+    };
+    for tool in CLAUDE_CODE_SUBAGENT_TOOLS {
+        if !list.iter().any(|held| held == tool) {
+            list.push(json!(tool));
+        }
+    }
+}
+
+/// `params` with the disallow its harness's session takes, if any. Only
+/// `claude-agent-acp` takes one this way: it forwards
+/// `_meta.claudeCode.options` to the Claude Agent SDK and merges
+/// `disallowedTools` into its own list, which leaves the rustcode MCP server
+/// (and with it `start_session` and `fan_out`) alone.
+///
+/// Without the orchestrator (orchestration off in Settings, or a platform where
+/// its socket is not built) there is nothing to delegate through, so Claude
+/// Code keeps its own subagent tool rather than losing delegation entirely.
+fn with_session_meta(
+    mut params: Value,
+    harness: &ResolvedHarness,
+    options: &StartOptions,
+) -> Value {
+    if harness.id != "claude-code" || options.orchestrator.is_none() {
+        return params;
+    }
+    if !params.get("_meta").is_some_and(Value::is_object) {
+        params["_meta"] = json!({});
+    }
+    if let Some(meta) = params.get_mut("_meta") {
+        disallow_subagent_tool(meta);
+    }
+    params
+}
+
 /// The MCP servers the child's session gets: the orchestrator when the thread has one, then the
 /// workspace's own servers, so a Claude Code or OpenCode thread has the servers Settings · MCP
 /// shows (docs/configuration.md). A stdio server is `name`/`command`/`args`/`env`, a remote one
@@ -368,7 +434,11 @@ impl AcpAdapter {
                 .request_within(
                     "session/load",
                     with_system_prompt(
-                        json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": mcp_servers}),
+                        with_session_meta(
+                            json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": mcp_servers}),
+                            harness,
+                            &options,
+                        ),
                         system_prompt.as_ref(),
                     ),
                     HANDSHAKE_TIMEOUT,
@@ -395,7 +465,11 @@ impl AcpAdapter {
                 .request_within(
                     "session/new",
                     with_system_prompt(
-                        json!({"cwd": cwd_text, "mcpServers": mcp_servers}),
+                        with_session_meta(
+                            json!({"cwd": cwd_text, "mcpServers": mcp_servers}),
+                            harness,
+                            &options,
+                        ),
                         system_prompt.as_ref(),
                     ),
                     HANDSHAKE_TIMEOUT,

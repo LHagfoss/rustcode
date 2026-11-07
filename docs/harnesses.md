@@ -482,6 +482,17 @@ What each part does for an external thread:
   RustCode created — once, never after `session/load`. It never reaches the
   thread's history, title or search index, and the agent's own echo of it as
   `user_message_chunk` is stripped.
+- **Native subagents.** A `claude-code` session RustCode starts with the
+  orchestrator attached gets
+  `_meta.claudeCode.options.disallowedTools: ["Task", "Agent"]` on
+  `session/new` and `session/load` — the shape `claude-agent-acp` forwards to
+  the Claude Agent SDK and merges with its own list. The thread delegates
+  through `start_session` and `fan_out` instead, so every subagent is a
+  RustCode thread in the delegate UI. The rustcode MCP server is untouched.
+  Without the orchestrator (orchestration off in Settings, or a platform
+  where it has no socket) nothing is disallowed: the thread keeps its own
+  subagent tool rather than losing delegation entirely. Another harness's
+  session gets no `_meta` from RustCode.
 - **Codex events.** Message deltas are `agent_message_chunk`, reasoning
   summaries `agent_thought_chunk`, command, file-change, MCP and web-search
   items `tool_call`/`tool_call_update` (command output and diffs as text

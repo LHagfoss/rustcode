@@ -600,7 +600,7 @@ Built. Clients advertising `_meta.rustcode.orchestration >= 6` also get
 version is bumped rather than the tool added to v5 for the same reason as v4:
 the *client* carries it out, and a v5 app has no `_rustcode/data/activity` to
 ask. The app advertised 6 from `CAPABILITY_VERSION`
-(`state/orchestration.ts`; v7 raised it to 7), and a v5 client keeps exactly the
+(`state/orchestration.ts`; v7 raised it to 7, v8 to 8), and a v5 client keeps exactly the
 v5 set and `PROMPT_HINT_V5`.
 
 | Tool | Args | Answer | Approval |
@@ -648,6 +648,20 @@ where the harness takes no message mid-turn — including a harness that would
 have to stop the turn (`interrupt_restart`), which is not steering. The queue
 lives in the app, so the engine only validates the call
 (`orchestration.rs` `validate`, `QUEUE_ACTIONS`).
+
+## Orchestration tools v8
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 8` get no new tool:
+v8 is the prompt hint and the MCP server's `instructions`. It says a Claude Code
+thread has no subagent tool, so delegate even a quick lookup through
+`start_session` or `fan_out`, while a harness that has its own subagent tool may
+use it for quick lookups. A `claude-code` thread RustCode starts with the
+orchestrator attached has `Task` and `Agent` disallowed in the adapter's session
+`_meta` ([harnesses.md](harnesses.md#starting-a-thread-on-a-harness)), so every
+subagent it starts is a RustCode delegate; without the orchestrator its own tool
+stays, since there is nothing to delegate through. The app advertises 8 from
+`CAPABILITY_VERSION` (`state/orchestration.ts`), and a v7 app keeps exactly the
+v7 set and `PROMPT_HINT_V7`.
 
 ## External harnesses as orchestrators
 
@@ -724,6 +738,7 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 7` while threads may orchestrate
+`_meta.rustcode.orchestration = 8` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
-v4 data-store tools, the v6 activity read and the v7 queue control.
+v4 data-store tools, the v6 activity read and the v7 queue control; v8 adds no
+tool, only its prompt hint.

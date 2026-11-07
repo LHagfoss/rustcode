@@ -346,10 +346,16 @@ composer's keys stay outside the table.
   Claude Code's `Agent`/`Task` calls (their steps fold under them by
   `_meta.claudeCode.parentToolUseId`) and RustCode's `spawn_agent` (status
   from `_rustcode/agents`, polled every 2 s while a turn runs or a child
-  works; steps from the child's conversation). While one works the row says
-  the step it is on; once done, how many steps and how long. A subagent sent
-  to the background keeps its row running until the turn ends. A pill in the
-  composer row says how many work.
+  works; steps from the child's conversation). A Claude Code thread RustCode
+  starts with orchestration on has that tool disallowed
+  ([harnesses.md](harnesses.md#starting-a-thread-on-a-harness)),
+  so its calls only come from an older session or another harness. While one
+  works the row says the step it is on; once done, how many steps and how
+  long. A subagent sent to the background keeps its row running until the
+  turn ends. While it works it reads in the strip above the composer, beside
+  the threads this one delegated to (Stop lives there); once it settles its
+  row is the transcript's, so there is one delegation surface, never a pill
+  of its own over the composer.
 - **Background work.** Claude Code's background commands and the turns it
   starts on its own when one finishes reach the app as
   `_rustcode/session/activity` (the engine asks the adapter for its async

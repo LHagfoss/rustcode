@@ -99,7 +99,6 @@ import {
   useApp,
 } from "../state/store";
 import { localId, type ThreadState } from "../state/thread";
-import { AgentPill } from "./AgentViews";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { openLightbox } from "./Lightbox";
@@ -980,11 +979,6 @@ export const Composer = memo(function Composer({
             />
             <span className="flex-1" />
             <div className="flex shrink-0 items-center gap-2">
-              {/* Who is working for the thread, when any agent is: a status beside the model it runs
-                  on, never a control, so it leaves the strip's business to the strip. */}
-              <span className="flex h-7 shrink-0 items-center empty:hidden @max-sm/composer:hidden">
-                <AgentPill threadId={thread?.id} />
-              </span>
               <ModelPicker thread={thread} compact={compact} />
               {queuedEdit ? (
                 <Tooltip label="Save in the queue (⏎)">
