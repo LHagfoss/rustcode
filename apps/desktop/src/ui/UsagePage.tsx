@@ -18,9 +18,11 @@ import {
   sameValue,
 } from "../state/pageCache";
 import {
+  accountOn,
   CLAUDE_USAGE_DEFAULT,
   claudeUsageAllowed,
   commitPlansAnswer,
+  harnessOf,
   request,
   setClaudeUsageAllowed,
   useApp,
@@ -96,13 +98,20 @@ export function UsagePage() {
     setClaudeUsageAllowed(on);
     setClaude(on);
   };
+  // A thread still on the harness's own login ("Original login") keeps its row:
+  // dropping it would leave Settings › Usage with nothing for that thread.
+  const keepOwnLogin = useApp((s) => {
+    const thread = s.selectedId ?? undefined;
+    return harnessOf(s, thread) === "claude-code" && !accountOn(s, thread);
+  });
   const view = usageView(answer, claude, error);
   if (view.plans === null) {
     return view.fatal ? <p className="text-callout text-warning">{view.fatal}</p> : <PlansSkeleton />;
   }
-  // The harness's own login row is dropped whenever named accounts are there; the
-  // composer's switch moves to the first Claude group left (state/logins.ts).
-  const rows = usageRows(view.plans);
+  // The harness's own login row is dropped while named accounts are there, unless
+  // the thread on screen still runs on it; the composer's switch moves to the
+  // first Claude group left (state/logins.ts).
+  const rows = usageRows(view.plans, keepOwnLogin);
   return (
     <>
       {rows.plans.map((p) => (

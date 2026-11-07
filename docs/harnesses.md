@@ -102,7 +102,8 @@ All methods are on the client's existing `rustcode --acp` connection.
     "last": { "model": "gpt-6-luna", "effort": "high" },  // last new-thread choice, or null
     "accounts": [{              // named logins of this harness; [] for most
       "id": "paral-2", "name": "Paral 2",
-      "config_dir": "~/.claude-paral-2", "auth": "ok" | "needs_login" | "unknown"
+      "config_dir": "~/.claude-paral-2", "auth": "ok" | "needs_login" | "unknown",
+      "own_dir": false          // true for the Mac's own login, ~/.claude
     }],
     "discovered_accounts": [{   // Claude Code only: logins on this Mac no account names yet
       "config_dir": "~/.claude-personal", "suggested_name": "Personal"
@@ -238,9 +239,11 @@ account (they can be moved to another named account, or to the harness's own
 sign-in when it has none left). `auth` for an account is `ok` when its own
 credentials exist (`<dir>/.credentials.json`, or on macOS the Keychain item its
 directory names), `needs_login` when a look found none, and `unknown` when it
-was not looked for. Only `check` (Settings' Refresh) probes the Keychain, and
-it asks whether the item exists without reading the secret. Nothing is started
-to answer either.
+was not looked for. `check` (Settings › Agents' own look when its Accounts
+section opens, and its Refresh) probes the Keychain, asking only whether the
+item exists and never reading the secret; it does not force a plan read.
+Nothing is started to answer either. `own_dir` is true for the Mac's own login,
+the directory `~/.claude`, whatever path the account was written with.
 
 `discovered_accounts` lists the Claude login directories on this Mac that no
 account names yet: `~/.claude` and `~/.claude-*` that hold `.claude.json`,

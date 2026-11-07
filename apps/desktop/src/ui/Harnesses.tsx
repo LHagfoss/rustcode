@@ -17,6 +17,7 @@ import {
   unavailableReason,
   validateDefault,
 } from "../state/harness";
+import { accountToSignIn } from "../state/logins";
 import {
   accountSlug,
   addHarnessAccount,
@@ -85,16 +86,17 @@ function SignIn({ harness }: { harness: Harness }) {
 }
 
 /**
- * Whether the account's directory is Claude Code's own `~/.claude`, the login
- * that runs with no `CLAUDE_CONFIG_DIR` at all: macOS keys its Keychain item
- * on the variable, so an account on it must not set one.
+ * Whether the account is the Mac's own login (`~/.claude`), which runs with no
+ * `CLAUDE_CONFIG_DIR` at all: macOS keys its Keychain item on the variable, so
+ * setting one would look signed out. The engine decides it on the resolved
+ * path, so an account written as an absolute path is still the own login.
  */
-export function isOwnLoginDir(account: Pick<HarnessAccount, "config_dir">): boolean {
-  return account.config_dir.replace(/\/+$/, "") === "~/.claude";
+export function isOwnLoginDir(account: Pick<HarnessAccount, "own_dir">): boolean {
+  return account.own_dir === true;
 }
 
 /** The command that signs Claude Code in under the account's own directory. */
-export function accountLoginCommand(account: Pick<HarnessAccount, "config_dir">): string {
+export function accountLoginCommand(account: Pick<HarnessAccount, "config_dir" | "own_dir">): string {
   if (isOwnLoginDir(account)) return "claude auth login";
   return `mkdir -p ${account.config_dir} && CLAUDE_CONFIG_DIR=${account.config_dir} claude auth login`;
 }
@@ -109,7 +111,7 @@ function accountStatus(account: HarnessAccount): string {
 }
 
 /** Signs the account in: Claude Code's own command, under the account's own directory. */
-function accountSignIn(account: Pick<HarnessAccount, "config_dir">): Promise<boolean> {
+function accountSignIn(account: Pick<HarnessAccount, "config_dir" | "own_dir">): Promise<boolean> {
   return openInTerminal(
     ["claude", "auth", "login"],
     isOwnLoginDir(account) ? [] : [["CLAUDE_CONFIG_DIR", account.config_dir]],
@@ -137,9 +139,10 @@ export function AccountsList({ harness }: { harness: Harness }) {
   const [waiting, setWaiting] = useState<string | null>(null);
   const [gaveUp, setGaveUp] = useState<string | null>(null);
   // One real look when the section opens: an account reads `unknown` until
-  // the Keychain is asked, which only a Refresh did.
+  // the Keychain is asked. It is the existence probe only: forcing a plan read
+  // here would clear the pauses a denied Keychain prompt earned and ask again.
   useEffect(() => {
-    void checkHarnessAccounts();
+    void checkHarnessAccounts(false);
   }, []);
   // The waiting row asks again every three seconds, for at most five minutes
   // while this section is mounted.
@@ -191,13 +194,13 @@ export function AccountsList({ harness }: { harness: Harness }) {
   const addFound = async (configDir: string, suggested: string) => {
     const id = accountSlug(suggested) || accountSlug(configDir.replace(/^.*[./]/, "")) || "account";
     setBusy(true);
-    const snapshot = await addHarnessAccount(harness.id, id, suggested, configDir);
+    await addHarnessAccount(harness.id, id, suggested, configDir);
+    // `accounts/add` answers without probing, so its row alone reads `unknown`:
+    // ask what the account's sign-in is before opening a Terminal for it.
+    const checked = await checkHarnessAccounts(false);
     setBusy(false);
-    const added = snapshot?.harnesses
-      .find((h) => h.id === harness.id)
-      ?.accounts?.find((a) => a.config_dir === configDir);
-    if (!added) return;
-    if (canOpenTerminal() && added.auth !== "ok") await signIn(added);
+    const added = accountToSignIn(checked, harness.id, configDir);
+    if (added && canOpenTerminal()) await signIn(added);
   };
   const remove = (account: HarnessAccount) => {
     const used = threads.filter(
@@ -272,12 +275,14 @@ export function AccountsList({ harness }: { harness: Harness }) {
                   </button>
                 </Tooltip>
               </div>
-              <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
-                <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
-                  {accountLoginCommand(account)}
-                </code>
-                <CopyButton text={accountLoginCommand(account)} />
-              </div>
+              {account.auth !== "ok" && (
+                <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
+                  <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
+                    {accountLoginCommand(account)}
+                  </code>
+                  <CopyButton text={accountLoginCommand(account)} />
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -385,7 +390,10 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   const pinned = local && isDefault && harness.enabled;
   const custom = !local && !["codex", "claude-code", "gemini", "opencode", "pi"].includes(harness.id);
   // Sign in stays out of the way once the harness is known to be signed in.
-  const signIn = !local && harness.installed && harness.auth !== "ok" && !result?.ok;
+  // A harness with named accounts signs in per account, in the Accounts list;
+  // its own sign-in button would be the wrong one.
+  const signIn =
+    !local && harness.installed && harness.auth !== "ok" && !result?.ok && !harness.accounts?.length;
   return (
     <div className="flex flex-col gap-2 px-4 py-3">
       <div className="flex items-center gap-3">
@@ -410,7 +418,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         </div>
         {signIn && <SignIn harness={harness} />}
         {harness.installed && harness.enabled && (
-          <Action onClick={() => void check()} disabled={checking || harness.auth === "needs_login"}>
+          <Action onClick={() => void check()} disabled={checking || !!unavailableReason(harness)}>
             {checking && <Spinner size={10} />}
             Check
           </Action>

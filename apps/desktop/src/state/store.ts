@@ -1734,7 +1734,7 @@ async function startSetup(setup: PendingSetup): Promise<string | null> {
       cwd: setup.cwd,
       harness: choice?.harness,
       // The account shown for the new thread: with named accounts, always one of them.
-      account: newThreadAccountOn(harness, s.newThreadAccount),
+      account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
       model: choice?.model,
       effort: choice?.effort,
       worktree: setup.worktree,
@@ -2978,7 +2978,7 @@ export function switchNewThreadHarness(harness: string) {
   set({
     newThread: restoreChoice(snapshot, harness, appChoices(snapshot)),
     // A harness with named accounts never starts on its own sign-in.
-    newThreadAccount: newThreadAccountOn(next, remembered),
+    newThreadAccount: newThreadAccountOn(next, remembered, get().signedOutLogins),
   });
   // Another harness means another login, whose meter may have no numbers yet.
   void refreshPlanCache();
@@ -3637,7 +3637,7 @@ export function accountOn(
   if (!threadId) {
     const harness = harnessOf(s);
     const known = s.harnesses?.harnesses.find((h) => h.id === harness);
-    return newThreadAccountOn(known, s.newThreadAccount);
+    return newThreadAccountOn(known, s.newThreadAccount, s.signedOutLogins);
   }
   const own = s.threads[threadId]?.harness?.account;
   if (own !== undefined) return own ?? null;

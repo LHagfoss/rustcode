@@ -529,6 +529,7 @@ fn snapshot_entry(
     detection: &detect::Detection,
     entries: &[config::HarnessEntry],
     accounts: &[config::HarnessAccount],
+    discovered: &[config::DiscoveredAccount],
     probe: bool,
 ) -> Value {
     let learned = learned_for(&harness.id);
@@ -547,7 +548,7 @@ fn snapshot_entry(
     // directory names only, so Settings can offer `~/.claude` and a
     // `~/.claude-personal` that already exists without anyone typing a path.
     let discovered = if harness.id == "claude-code" {
-        json!(config::discovered_accounts(accounts))
+        json!(discovered)
     } else {
         Value::Null
     };
@@ -560,6 +561,10 @@ fn snapshot_entry(
                 "id": account.id,
                 "name": account.display_name(),
                 "config_dir": account.config_dir,
+                // Whether this is the Mac's own login (`~/.claude`), whatever
+                // path it was written as: the app must set no
+                // `CLAUDE_CONFIG_DIR` for it.
+                "own_dir": config::is_default_dir(&account.resolved_dir()),
                 "auth": detect::account_auth(&account, probe),
             })
         })
@@ -641,10 +646,20 @@ pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Resu
     let accounts = config::load_accounts_in(dir);
     let harnesses = resolve_all(&entries);
     let detections = futures_detect(&harnesses).await;
+    // Reading the home directory's names is blocking work like detection:
+    // keep it off the async runtime the same way.
+    let discovered = {
+        let registered = accounts.clone();
+        tokio::task::spawn_blocking(move || config::discovered_accounts(&registered))
+            .await
+            .unwrap_or_default()
+    };
     let rows = harnesses
         .iter()
         .zip(detections.iter())
-        .map(|(harness, detection)| snapshot_entry(harness, detection, &entries, &accounts, probe))
+        .map(|(harness, detection)| {
+            snapshot_entry(harness, detection, &entries, &accounts, &discovered, probe)
+        })
         .collect::<Vec<_>>();
     Ok(json!({
         "harnesses": rows,
@@ -1155,6 +1170,32 @@ mod tests {
             resolve(&entries, "claude-code").unwrap().command,
             ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
         );
+    }
+
+    #[tokio::test]
+    async fn an_account_on_the_default_directory_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[[harness_accounts]]\nid = \"own\"\nharness = \"claude-code\"\nname = \"Claude\"\nconfig_dir = \"~/.claude\"\n\
+             \n[[harness_accounts]]\nid = \"work\"\nharness = \"claude-code\"\nname = \"Work\"\nconfig_dir = \"/tmp/claude-work\"\n",
+        )
+        .unwrap();
+        let snapshot = snapshot_in(dir.path()).await.unwrap();
+        let row = snapshot["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "claude-code")
+            .unwrap();
+        let accounts = row["accounts"].as_array().unwrap();
+        assert_eq!(accounts[0]["id"], "own");
+        assert_eq!(
+            accounts[0]["own_dir"], true,
+            "~/.claude is the Mac's own login, whatever path it was written as"
+        );
+        assert_eq!(accounts[1]["id"], "work");
+        assert_eq!(accounts[1]["own_dir"], false);
     }
 
     #[tokio::test]

@@ -14,7 +14,13 @@ import { type Harness, Method, projectName } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
-import { accountLabelOf, accountNameOf, accountSignedOut, childAccountFor } from "./logins";
+import {
+  accountLabelOf,
+  accountNameOf,
+  accountSignedOut,
+  childAccountFor,
+  newThreadAccountOn,
+} from "./logins";
 import {
   activeDescendants,
   activityOf,
@@ -98,6 +104,7 @@ import {
   createSession,
   ensureHarnessModels,
   errorText,
+  lastAccountFor,
   markUnread,
   openThread,
   permissionModeOf,
@@ -936,7 +943,12 @@ async function transferSession(caller: RuleThread, id: string, harness: string):
   });
   if (no) return failureJson(no);
   await openThread(target.id);
-  if (!(await switchThreadHarness(target.id, harness))) {
+  // The login a new thread on that harness would start on, as the picker moves
+  // a thread: its remembered account, never a harness login the picker no
+  // longer offers. A harness with no named accounts passes `null`, exactly as
+  // before accounts existed.
+  const account = newThreadAccountOn(to, lastAccountFor(harness), useApp.getState().signedOutLogins);
+  if (!(await switchThreadHarness(target.id, harness, account))) {
     return failureJson(failure("failed", "the thread could not be moved"));
   }
   return { session_id: target.id, harness, moved: true, ...ranWith(target.id) };

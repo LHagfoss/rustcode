@@ -9,7 +9,7 @@
 // account, once one exists, is always the choice for a new thread.
 
 import { harnessPlanKey, planKey, planOf, type UsagePlan } from "../acp/rustcode";
-import type { Harness, HarnessAccount } from "../acp/types";
+import type { Harness, HarnessAccount, HarnessSnapshot } from "../acp/types";
 
 /**
  * The logins the last plan read found signed out, by cache key: the harness
@@ -36,26 +36,62 @@ export function signedOutFrom(plans: UsagePlan[], before: SignedOutLogins = {}):
 }
 
 /**
- * The named account to run on. A login whose credentials are only in the macOS
- * Keychain reads `unknown` until it is looked at, so `unknown` is not "signed
- * out": when none reports `ok`, the first named account stands in.
+ * How good a login is for a thread that must pick one: a sign-in found first,
+ * then one not looked at yet (usually signed in), then one known to be signed
+ * out, whether its own `auth` says so or the plan read did.
  */
-export function firstSignedInAccount(accounts: HarnessAccount[] | undefined): string | null {
+function accountRank(
+  account: HarnessAccount,
+  harness: string | undefined,
+  signedOut: SignedOutLogins,
+): number {
+  if (harness && accountSignedOut(harness, account.id, signedOut)) return 2;
+  if (account.auth === "ok") return 0;
+  if (account.auth === "unknown") return 1;
+  return 2;
+}
+
+/**
+ * The named account to run on, best first: `ok`, then `unknown` (only the
+ * macOS Keychain could tell), then a login known to be signed out. A known
+ * signed-out login is the last resort, never the first pick: the harness's own
+ * sign-in is no longer offered once there is a choice. The list's order
+ * decides between equals.
+ */
+export function firstSignedInAccount(
+  accounts: HarnessAccount[] | undefined,
+  harness?: string,
+  signedOut: SignedOutLogins = {},
+): string | null {
   const list = accounts ?? [];
-  return (list.find((account) => account.auth === "ok") ?? list[0])?.id ?? null;
+  let best: HarnessAccount | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const account of list) {
+    const rank = accountRank(account, harness, signedOut);
+    if (rank < bestRank) {
+      best = account;
+      bestRank = rank;
+    }
+  }
+  return best?.id ?? null;
 }
 
 /**
  * The account a new thread on `harness` starts on: the chosen account while it
- * is still there, else no account at all when the harness has none (it runs on
- * its own sign-in and no account UI is shown), else the first signed-in named
- * account. `null` is never chosen while named accounts exist, whatever was
- * stored: the harness's own login is not offered once there is a choice.
+ * can run (signed in, or not looked at), else no account at all when the
+ * harness has none (it runs on its own sign-in and no account UI is shown),
+ * else the best named account. `null` is never chosen while named accounts
+ * exist, and a login known to be signed out is not chosen over a better one.
  */
-export function newThreadAccountOn(harness: Harness | undefined, chosen: string | null): string | null {
+export function newThreadAccountOn(
+  harness: Harness | undefined,
+  chosen: string | null,
+  signedOut: SignedOutLogins = {},
+): string | null {
   const accounts = harness?.accounts ?? [];
-  if (chosen && accounts.some((account) => account.id === chosen)) return chosen;
-  return firstSignedInAccount(accounts);
+  const found = accounts.find((account) => account.id === chosen);
+  if (found && accountRank(found, harness?.id, signedOut) < 2) return found.id;
+  return firstSignedInAccount(accounts, harness?.id, signedOut);
 }
 
 /**
@@ -66,9 +102,10 @@ export function newThreadAccountOn(harness: Harness | undefined, chosen: string 
 export function childAccountOn(
   harness: Harness | undefined,
   parent: { harness?: string; account?: string | null } | undefined,
+  signedOut: SignedOutLogins = {},
 ): string | null {
   const inherited = parent && parent.harness === harness?.id ? (parent.account ?? null) : null;
-  return newThreadAccountOn(harness, inherited);
+  return newThreadAccountOn(harness, inherited, signedOut);
 }
 
 /** What an account id or display name picked, or why it picked nothing. */
@@ -144,7 +181,7 @@ export function childAccountFor(
   parent: { harness?: string; account?: string | null } | undefined,
   signedOut: SignedOutLogins,
 ): ChildAccount {
-  if (!asked?.trim()) return { account: childAccountOn(harness, parent) };
+  if (!asked?.trim()) return { account: childAccountOn(harness, parent, signedOut) };
   const available = (harness?.accounts ?? []).map((account) => account.id);
   const match = namedAccountOn(harness, asked);
   if (match.kind === "none") {
@@ -178,11 +215,30 @@ export interface UsageRows {
  * app and the engine read those instead, so its row is dropped. The switch that
  * lived in its last row moves to the first Claude group left, once only.
  */
-export function usageRows(plans: UsagePlan[]): UsageRows {
+export function usageRows(plans: UsagePlan[], keepOwnLogin = false): UsageRows {
   const claude = (plan: UsagePlan) => planOf(plan) === "claude-code";
   const isDefault = (plan: UsagePlan) => claude(plan) && !plan.account;
   const named = plans.some((plan) => claude(plan) && !!plan.account);
-  const shown = plans.filter((plan) => !(named && isDefault(plan)));
+  // The thread on screen may still run on the harness's own sign-in ("Original
+  // login"): its row stays so its plan is not lost.
+  const drop = named && !keepOwnLogin;
+  const shown = plans.filter((plan) => !(drop && isDefault(plan)));
   const own = shown.find(isDefault);
   return { plans: shown, switchIn: (own ?? shown.find(claude))?.id };
+}
+
+/**
+ * The account an add still has to sign in, from the check that followed it:
+ * only a look that found no sign-in asks for one. `accounts/add` answers
+ * without probing, so its row alone reads `unknown`.
+ */
+export function accountToSignIn(
+  snapshot: HarnessSnapshot | null,
+  harness: string,
+  configDir: string,
+): HarnessAccount | undefined {
+  const found = snapshot?.harnesses
+    .find((h) => h.id === harness)
+    ?.accounts?.find((account) => account.config_dir === configDir);
+  return found?.auth === "needs_login" ? found : undefined;
 }

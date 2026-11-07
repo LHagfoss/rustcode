@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { UsagePlan } from "../acp/rustcode";
-import type { Harness, HarnessAccount } from "../acp/types";
+import type { Harness, HarnessAccount, HarnessSnapshot } from "../acp/types";
 import {
   accountLabelOf,
   accountNameOf,
   accountSignedOut,
+  accountToSignIn,
   childAccountFor,
   childAccountOn,
   firstSignedInAccount,
@@ -147,6 +148,30 @@ describe("the harness's own login", () => {
     expect(firstSignedInAccount([])).toBeNull();
     expect(firstSignedInAccount(undefined)).toBeNull();
   });
+
+  test("a login the plan read found signed out is the last resort", () => {
+    const h = claude([account("work"), account("home")]);
+    const signedOut = { "claude-code#work": true };
+    // Not looked at beats known signed out, which beats a harness login there is not.
+    expect(firstSignedInAccount([account("a", "unknown"), account("b", "ok")])).toBe("b");
+    expect(
+      firstSignedInAccount([account("a", "unknown"), account("b")], "claude-code", {
+        "claude-code#b": true,
+      }),
+    ).toBe("a");
+    expect(firstSignedInAccount(h.accounts, "claude-code", signedOut)).toBe("home");
+    // A stored choice that is signed out falls to the best other login.
+    expect(newThreadAccountOn(h, "work", signedOut)).toBe("home");
+    // With only a signed-out login left it is still better than nothing.
+    expect(firstSignedInAccount([account("a")], "claude-code", { "claude-code#a": true })).toBe("a");
+  });
+
+  test("does not force a stored bad login on a new thread", () => {
+    const h = claude([{ ...account("work"), auth: "needs_login" }, account("home", "unknown")]);
+    // `needs_login` is last, so the not-looked-at login carries the new thread.
+    expect(newThreadAccountOn(h, "work")).toBe("home");
+    expect(newThreadAccountOn(h, "home")).toBe("home");
+  });
 });
 
 describe("a thread started by another thread", () => {
@@ -158,6 +183,13 @@ describe("a thread started by another thread", () => {
   test("moves off the parent's own login once named accounts exist", () => {
     const h = claude([account("work")]);
     expect(childAccountOn(h, { harness: "claude-code", account: null })).toBe("work");
+  });
+
+  test("does not inherit a login the plan read found signed out", () => {
+    const h = claude([account("work"), account("home")]);
+    expect(childAccountOn(h, { harness: "claude-code", account: "work" }, { "claude-code#work": true })).toBe(
+      "home",
+    );
   });
 
   test("never lends an account to another harness", () => {
@@ -281,6 +313,12 @@ describe("Settings › Usage groups", () => {
     expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
   });
 
+  test("keeps the own-login row while the thread on screen runs on it", () => {
+    const rows = usageRows([plan({ status: "ok" }), plan({ id: "claude:work", account: "work" })], true);
+    expect(rows.plans.map((p) => p.id)).toEqual(["claude", "claude:work"]);
+    expect(rows.switchIn).toBe("claude");
+  });
+
   test("draws only the accounts an answer read", () => {
     // One account at a time: the page's rows are what came back, and the
     // switch lands in the first Claude group that is there.
@@ -300,5 +338,42 @@ describe("Settings › Usage groups", () => {
     ]);
     expect(rows.switchIn).toBe("claude:work");
     expect(rows.plans.filter((p) => p.id === rows.switchIn)).toHaveLength(1);
+  });
+});
+
+describe("adding a discovered login", () => {
+  const snapshot = (accounts: HarnessAccount[]): HarnessSnapshot => ({
+    harnesses: [claude(accounts)],
+    default: { harness: "rustcode", model: null, effort: null },
+    onboarded: true,
+  });
+
+  test("signs in only when the check found no sign-in", () => {
+    const dir = "~/.claude-personal";
+    expect(
+      accountToSignIn(
+        snapshot([{ ...account("personal"), config_dir: dir, auth: "needs_login" }]),
+        "claude-code",
+        dir,
+      )?.id,
+    ).toBe("personal");
+    // `accounts/add` answers `unknown`; only a real look says `needs_login`.
+    expect(
+      accountToSignIn(
+        snapshot([{ ...account("personal"), config_dir: dir, auth: "unknown" }]),
+        "claude-code",
+        dir,
+      ),
+    ).toBeUndefined();
+    expect(
+      accountToSignIn(
+        snapshot([{ ...account("personal"), config_dir: dir, auth: "ok" }]),
+        "claude-code",
+        dir,
+      ),
+    ).toBeUndefined();
+    // A failed look, or a different directory, signs in nothing.
+    expect(accountToSignIn(null, "claude-code", dir)).toBeUndefined();
+    expect(accountToSignIn(snapshot([]), "claude-code", dir)).toBeUndefined();
   });
 });

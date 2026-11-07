@@ -786,6 +786,8 @@ export interface HarnessAccount {
    * macOS Keychain).
    */
   auth: "ok" | "needs_login" | "unknown";
+  /** True for the Mac's own login, `~/.claude`, whatever path it was written as. */
+  own_dir?: boolean;
 }
 
 /** A login directory found on this Mac that no account names yet. */
@@ -923,6 +925,7 @@ export function parseHarnessAccounts(value: Json | undefined): HarnessAccount[] 
         name: str(o.name) ?? id,
         config_dir: str(o.config_dir) ?? "",
         auth: auth === "ok" ? "ok" : auth === "needs_login" ? "needs_login" : "unknown",
+        own_dir: bool(o.own_dir) ?? false,
       },
     ];
   });

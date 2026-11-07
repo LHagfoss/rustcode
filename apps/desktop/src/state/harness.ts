@@ -15,9 +15,30 @@ export type HarnessStatus =
   | { tone: "warn"; label: string }
   | { tone: "off"; label: string };
 
+/**
+ * The sign-in state of a harness with named accounts, from the accounts
+ * themselves: any signed in makes it ready, only all-known-signed-out makes it
+ * blocked, and one not looked at yet is not a reason to block. `undefined`
+ * when it has no named accounts and its own `auth` speaks for it.
+ */
+function accountState(h: Harness): "ok" | "needs_login" | "unknown" | undefined {
+  const accounts = h.accounts ?? [];
+  if (!accounts.length) return undefined;
+  if (accounts.some((account) => account.auth === "ok")) return "ok";
+  if (accounts.every((account) => account.auth === "needs_login")) return "needs_login";
+  return "unknown";
+}
+
 export function harnessStatus(h: Harness): HarnessStatus {
   if (!h.installed) return { tone: "off", label: "Not installed" };
   if (h.error) return { tone: "warn", label: "Error" };
+  // A harness with accounts is as ready as its best login: its own sign-in may
+  // be missing while `Paral 2` is fine, and the accounts say which.
+  const accounts = accountState(h);
+  if (accounts === "ok") return { tone: "ok", label: h.version ? `Ready · ${h.version}` : "Ready" };
+  if (accounts === "needs_login") return { tone: "warn", label: "Sign in an account" };
+  if (accounts === "unknown")
+    return { tone: "ok", label: h.version ? `Installed · ${h.version}` : "Installed" };
   if (h.auth === "needs_login") return { tone: "warn", label: "Sign in needed" };
   if (h.auth === "ok") return { tone: "ok", label: h.version ? `Ready · ${h.version}` : "Ready" };
   return { tone: "ok", label: h.version ? `Installed · ${h.version}` : "Installed" };
@@ -28,6 +49,11 @@ export function unavailableReason(h: Harness): string | undefined {
   if (!h.installed)
     return h.install_hint ? `Not installed. Install with: ${h.install_hint}` : "Not installed";
   if (!h.enabled) return "Turned off in Settings › Agents";
+  // With named accounts, the accounts decide: point at them, never at the
+  // harness's own sign-in button the card no longer shows.
+  const accounts = accountState(h);
+  if (accounts === "needs_login") return "Sign in an account";
+  if (accounts) return undefined;
   if (h.auth === "needs_login") return "Sign in first";
   return undefined;
 }
@@ -51,7 +77,10 @@ export function preferredDefault(snapshot: HarnessSnapshot): {
   model: string | null;
   effort: string | null;
 } {
-  const installed = (h: Harness) => h.installed && h.auth !== "needs_login" && !h.error;
+  const installed = (h: Harness) => {
+    const accounts = accountState(h);
+    return h.installed && (accounts ? accounts !== "needs_login" : h.auth !== "needs_login") && !h.error;
+  };
   const pick =
     orderHarnesses(snapshot.harnesses).find((h) => !h.builtin && installed(h)) ??
     snapshot.harnesses.find((h) => h.builtin && h.enabled) ??

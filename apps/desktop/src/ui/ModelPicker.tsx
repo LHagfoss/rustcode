@@ -7,7 +7,7 @@
 
 import { Check, ChevronUp, Lock, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type ConfigOption, effortLabel, type Harness, modelName } from "../acp/types";
+import { type ConfigOption, effortLabel, type Harness, type HarnessAccount, modelName } from "../acp/types";
 import { clip } from "../lib/clip";
 import { matchModels } from "../lib/modelSearch";
 import {
@@ -17,7 +17,7 @@ import {
   selectOption,
   unavailableReason,
 } from "../state/harness";
-import { newThreadAccountOn } from "../state/logins";
+import { accountSignedOut, newThreadAccountOn } from "../state/logins";
 import {
   ensureHarnessModels,
   lastAccountFor,
@@ -67,6 +67,8 @@ export interface AccountChip {
   selected: boolean;
   /** A login removed from Settings: shown as the thread's state, never pressed. */
   gone?: boolean;
+  /** The plan read found this login signed out: chips say so and are muted. */
+  signedOut?: boolean;
 }
 
 /** One harness's models in the panel, with what the panel needs to offer them. */
@@ -274,7 +276,9 @@ function ModelPanel({
                         key={chip.id ?? chip.name}
                         type="button"
                         aria-pressed={chip.selected}
-                        disabled={accountsDisabled || !!section.group.blocked || chip.gone}
+                        disabled={accountsDisabled || !!section.group.blocked || chip.gone || chip.signedOut}
+                        title={chip.signedOut ? "This account is not signed in" : undefined}
+                        aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
                         onClick={(e) => {
                           e.stopPropagation();
                           if (chip.id === undefined) return;
@@ -285,6 +289,7 @@ function ModelPanel({
                           chip.selected
                             ? "bg-fill-strong font-medium text-fg"
                             : "text-fg-muted hover:bg-fill hover:text-fg",
+                          chip.signedOut && !chip.selected && "text-fg-faint",
                           (accountsDisabled || section.group.blocked) && "opacity-40",
                           chip.gone && "italic",
                         )}
@@ -486,7 +491,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   // A new thread starts on one of the harness's named accounts while it has
   // any (state/logins.ts); an open thread keeps its own, so the picker says
   // what it really runs on.
-  const newAccount = useApp((s) => newThreadAccountOn(harness, s.newThreadAccount));
+  const signedOut = useApp((s) => s.signedOutLogins);
+  const newAccount = useApp((s) => newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins));
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
   const accountName = accounts.find((a) => a.id === account)?.name;
   // A running thread keeps its login, as it keeps its harness.
@@ -532,6 +538,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   /** The chips a harness's header shows: its named logins, and a thread's own login state. */
   const chipsFor = (h: Harness): AccountChip[] => {
     const named = h.accounts ?? [];
+    const chip = (a: HarnessAccount, selected: boolean): AccountChip => ({
+      id: a.id,
+      name: a.name,
+      selected,
+      // A definite `needs_login` is as signed out as a row the plan read saw.
+      signedOut: a.auth === "needs_login" || accountSignedOut(h.id, a.id, signedOut),
+    });
     const own = h.id === providerId ? account : null;
     if (!isNew && h.id === providerId) {
       const chips: AccountChip[] = [];
@@ -544,12 +557,14 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         chips.push({ id: undefined, name: "Removed", selected: true, gone: true });
         if (!named.length) chips.push({ id: null, name: "Harness login", selected: false });
       }
-      for (const a of named) chips.push({ id: a.id, name: a.name, selected: own === a.id });
+      chips.push(...named.map((a) => chip(a, own === a.id)));
       return chips;
     }
-    // A new thread on this harness, or another harness's remembered login.
-    const selected = isNew && h.id === providerId ? own : newThreadAccountOn(h, lastAccountFor(h.id));
-    return named.map((a) => ({ id: a.id, name: a.name, selected: a.id === selected }));
+    // A new thread selects a login; on an open thread another harness's chip
+    // is where a switch would land, not where the thread runs now.
+    if (!isNew) return named.map((a) => chip(a, false));
+    const selected = h.id === providerId ? own : newThreadAccountOn(h, lastAccountFor(h.id), signedOut);
+    return named.map((a) => chip(a, a.id === selected));
   };
 
   // The harnesses worth listing: RustCode turned off in Settings › Agents leaves the list, and a
@@ -603,10 +618,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       // A harness's remembered effort belongs to its own models: the choice normalizes it,
       // and its remembered account goes with it.
       setChoice({ harness: group.harness.id, model: value, effort: null });
-      pickNewThreadAccount(newThreadAccountOn(group.harness, lastAccountFor(group.harness.id)));
+      pickNewThreadAccount(newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut));
     } else if (thread) {
       // The harness's remembered login goes with the model, as a chip would.
-      const account = newThreadAccountOn(group.harness, lastAccountFor(group.harness.id));
+      const account = newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut);
       void switchThreadHarness(thread.id, group.harness.id, account).then((switched) => {
         if (switched) void setConfigOption(thread.id, "model", value);
       });
