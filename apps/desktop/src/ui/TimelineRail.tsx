@@ -5,19 +5,22 @@
 // clicking goes there, and the chevrons step a turn at a time. It renders only
 // when the turns or the ones on screen change, never per scroll frame.
 //
-// A turn a rewind can go back to carries a bead at its strip's left end, the
-// head (the newest, the turn the thread is at) in the accent. The strip stays
-// the one target: the bead is drawn in it, not beside it, so pointing at its
-// height picks that turn as pointing anywhere on the strip does, and the card
-// says which checkpoint it is. A card with a rewind to offer waits a moment
-// before it goes and takes the pointer only then, so moving into it works and
-// a click on the strip still goes to the turn.
+// A turn a rewind can go back to carries a bead a few px in from its strip's
+// left end, the head (the newest, the turn the thread is at) in the accent. The
+// strip stays the one target: the bead is drawn inside its hit area, not beside
+// it, so pointing at its height picks that turn as pointing anywhere on the
+// strip does, and the card says which checkpoint it is. The card sits clear of
+// the strip rather than widening it, waits a moment before it goes and then
+// takes the pointer itself, holding the turn it shows while the pointer is
+// inside: moving into it never re-picks a turn, and a click on its body still
+// goes to the turn.
 
 import { ChevronDown, ChevronUp, History } from "lucide-react";
 import { type MouseEvent, memo, type ReactNode, useEffect, useRef, useState } from "react";
 import type { Checkpoint } from "../acp/v2";
 import { clip } from "../lib/clip";
 import { cx, Pill, Tooltip } from "./primitives";
+import { rewindNote } from "./TurnChanges";
 
 export interface Turn {
   /** The user message's row in the transcript. */
@@ -40,6 +43,13 @@ const STEP = 8;
 const MARGIN = 40;
 /** Where the strip starts in the gutter. */
 const LEFT = 12;
+/** The card's gap from the strip, and how wide it is: it sits clear of the strip's hit area. */
+const CARD_GAP = 8;
+const CARD_WIDTH = 320;
+/** How wide a strip draws (`w-6`), so the card never covers one where the gutter is narrow. */
+const STRIP_WIDTH = 24;
+/** Where a bead sits inside the strip: in from its left end, never hanging into the gutter. */
+const BEAD_LEFT = 3;
 /** How long a card that can be pointed at stays while the pointer crosses to it. */
 const HOVER_INTENT = 160;
 /** From this much gutter the minimap stays visible; with less it shows on hover. */
@@ -56,6 +66,32 @@ export function railHitWidth(width: number): number {
 /** The strip's height for this many turns: their natural spacing, or what the view has room for. */
 export function railHeight(count: number, visible: number): number {
   return Math.max(1, Math.min((count - 1) * STEP, visible - 2 * MARGIN));
+}
+
+/**
+ * The card's box, right of the strip's hit area and of the strips it draws (`left` never lands inside
+ * either): pointing at the card is pointing at the card, not at a turn, so the turn it shows cannot
+ * change under the pointer.
+ */
+export function cardBox(hit: number): { left: number; width: number } {
+  return { left: Math.max(hit, STRIP_WIDTH) + CARD_GAP, width: CARD_WIDTH };
+}
+
+/**
+ * The card's rewind, when that strip has a checkpoint and the thread can go back: disabled while the
+ * thread runs, and saying what the click does, since a checkpointed engine goes back without a confirm.
+ */
+export function rewindOffer(
+  checkpoint: Checkpoint | undefined,
+  offered: boolean,
+  { busy, keep }: { busy: boolean; keep: boolean },
+): { turn: number; disabled: boolean; note: string } | undefined {
+  if (!checkpoint || !offered) return undefined;
+  return {
+    turn: checkpoint.turn,
+    disabled: busy,
+    note: busy ? "Stop the turn first" : rewindNote(true, keep, checkpoint.turn),
+  };
 }
 
 /** Which turn a pointer `y` px down the strip is nearest to. */
@@ -138,6 +174,7 @@ export const TimelineRail = memo(function TimelineRail({
   replyOf,
   nodes = [],
   onRewind,
+  keepsAttempts = false,
   busy = false,
 }: {
   turns: Turn[];
@@ -157,12 +194,18 @@ export const TimelineRail = memo(function TimelineRail({
   nodes?: RailNode[];
   /** Rewind to a checkpoint: the card's button, when the thread can go back. */
   onRewind?: (checkpoint: Checkpoint) => void;
+  /** The engine keeps the state a rewind abandons, so a rewind here needs no confirm. */
+  keepsAttempts?: boolean;
   /** The thread is running, so a rewind waits for it to stop. */
   busy?: boolean;
 }) {
   const [active, setActive] = useState<number | null>(null);
   const strip = useRef<HTMLButtonElement>(null);
   const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The pointer is on the card: the turn it shows holds still and the strip behind it ignores the pointer.
+  const inCard = useRef(false);
+  // A focus the rail asked for itself (Escape, a rewind) must not put the card back.
+  const quietFocus = useRef(false);
   const hit = railHitWidth(width);
   const keepOpen = () => {
     if (closing.current !== null) clearTimeout(closing.current);
@@ -175,6 +218,13 @@ export const TimelineRail = memo(function TimelineRail({
       closing.current = null;
       setActive(null);
     }, HOVER_INTENT);
+  };
+  // Putting focus on the strip without opening the card on the way.
+  const focusStrip = () => {
+    const element = strip.current;
+    if (!element) return;
+    quietFocus.current = document.activeElement !== element;
+    element.focus();
   };
   // A card that is closing when the rail goes does not come back.
   useEffect(
@@ -192,17 +242,19 @@ export const TimelineRail = memo(function TimelineRail({
   const nodeAt = (index: number) => nodes.find((node) => node.at === index);
   const head = nodes.at(-1);
   const hoveredNode = shown === null ? undefined : nodeAt(shown);
-  const checkpoint = hoveredNode?.checkpoint;
-  const rewindHere =
-    checkpoint && onRewind
-      ? {
-          turn: checkpoint.turn,
-          go: () => {
-            setActive(null);
-            onRewind(checkpoint);
-          },
-        }
-      : undefined;
+  const box = cardBox(hit);
+  const rewind = rewindOffer(hoveredNode?.checkpoint, onRewind !== undefined, {
+    busy,
+    keep: keepsAttempts,
+  });
+  const goRewind = () => {
+    if (!hoveredNode || !onRewind) return;
+    inCard.current = false;
+    setActive(null);
+    // The button goes with the card, so the focus lands back on the strip, where the keyboard was.
+    focusStrip();
+    onRewind(hoveredNode.checkpoint);
+  };
   // The turn Enter goes to, so the label says what pressing it does, checkpoint and all.
   const target = shown ?? current;
   const targetTurn = turns[target];
@@ -231,7 +283,15 @@ export const TimelineRail = memo(function TimelineRail({
     >
       <div
         className="pointer-events-auto absolute -translate-y-1/2"
-        style={{ top: "50%", left: LEFT, width: shown === null ? hit : hit + 320, height }}
+        style={{ top: "50%", left: LEFT, width: hit, height }}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || shown === null) return;
+          e.preventDefault();
+          e.stopPropagation();
+          inCard.current = false;
+          setActive(null);
+          focusStrip();
+        }}
         onBlur={(e) => {
           // Focus moving between the strip, the card and the chevrons keeps the card; leaving ends it.
           if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
@@ -250,11 +310,18 @@ export const TimelineRail = memo(function TimelineRail({
           aria-label={ariaLabel}
           className="absolute inset-0 cursor-pointer rounded-xs outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
           onMouseMove={(e) => {
+            if (inCard.current) return;
             keepOpen();
             setActive(indexAt(e));
           }}
           onMouseLeave={closeSoon}
-          onFocus={() => setActive((a) => a ?? current)}
+          onFocus={() => {
+            if (quietFocus.current) {
+              quietFocus.current = false;
+              return;
+            }
+            setActive((a) => a ?? current);
+          }}
           onClick={(e) => {
             const turn = turns[indexAt(e)];
             if (turn) onJump(turn.row);
@@ -300,40 +367,59 @@ export const TimelineRail = memo(function TimelineRail({
                 aria-hidden
                 data-current={atHead}
                 className={cx(
-                  "-translate-x-1/2 -translate-y-1/2 pointer-events-none absolute left-0 rounded-full",
+                  "-translate-y-1/2 pointer-events-none absolute rounded-full",
                   atHead ? "size-[7px] bg-accent" : "size-[5px] bg-fg/35",
                 )}
-                style={{ top: `${percent(node.at)}%` }}
+                style={{ top: `${percent(node.at)}%`, left: BEAD_LEFT }}
               />
             );
           })}
         </button>
         {hovered && (
           <div
-            className="elevated pointer-events-none absolute left-8 z-20 block w-80 p-3 text-left"
+            className="elevated pointer-events-auto absolute z-20 block p-3 text-left"
             style={{
+              left: box.left,
+              width: box.width,
               top: `${percent(shown!)}%`,
               transform: `translateY(${shown === 0 ? "0%" : shown === count - 1 ? "-100%" : "-50%"})`,
             }}
+            onMouseEnter={() => {
+              // Pointing here freezes the turn: the card cannot chase the pointer it is under.
+              inCard.current = true;
+              keepOpen();
+            }}
+            onMouseLeave={() => {
+              inCard.current = false;
+              closeSoon();
+            }}
+            onClick={() => onJump(hovered.row)}
           >
-            <span className="block truncate font-medium text-callout leading-5">{hovered.title}</span>
+            <span aria-hidden className="block truncate font-medium text-callout leading-5">
+              {hovered.title}
+            </span>
             {hoveredNode && (
-              <span className="mt-1 block text-caption text-fg-faint tabular">
+              <span aria-hidden className="mt-1 block text-caption text-fg-faint tabular">
                 Checkpoint · turn {hoveredNode.checkpoint.turn}
                 {head?.at === shown ? " · current" : ""}
               </span>
             )}
-            {reply && <span className="mt-1 line-clamp-3 text-callout text-fg-muted leading-5">{reply}</span>}
-            {rewindHere && (
+            {reply && (
+              <span aria-hidden className="mt-1 line-clamp-3 text-callout text-fg-muted leading-5">
+                {reply}
+              </span>
+            )}
+            {rewind && (
               <Pill
                 size="sm"
-                disabled={busy}
-                onClick={rewindHere.go}
-                onMouseEnter={keepOpen}
-                onMouseLeave={closeSoon}
-                aria-label={`Rewind to before turn ${rewindHere.turn}`}
-                title={busy ? "Stop the turn first" : undefined}
-                className="pointer-events-auto mt-2"
+                disabled={rewind.disabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goRewind();
+                }}
+                aria-label={`Rewind to before turn ${rewind.turn}`}
+                title={rewind.note}
+                className="mt-2"
               >
                 <History size={12} /> Rewind here
               </Pill>

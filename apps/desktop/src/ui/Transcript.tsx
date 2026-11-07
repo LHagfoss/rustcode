@@ -868,6 +868,8 @@ export function Transcript({
     (checkpoint: Checkpoint) => void rewindCheckpoint(thread.id, checkpoint),
     [thread.id],
   );
+  // An engine that keeps what a rewind abandons goes back without a confirm, so the card says so.
+  const keepsAttempts = useApp((s) => !!s.agent?.checkpointAttempts);
 
   // Sending a message follows it down, even from a view scrolled up to read.
   const sentTurns = useRef({ thread: thread.id, count: turns.length });
@@ -1314,6 +1316,7 @@ export function Transcript({
         replyOf={replyOf}
         nodes={checkpointNodes}
         onRewind={rewind ? railRewind : undefined}
+        keepsAttempts={keepsAttempts}
         busy={thread.running}
       />
       <button

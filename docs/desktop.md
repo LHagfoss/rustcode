@@ -673,8 +673,8 @@ composer's keys stay outside the table.
   the message and its answer; clicking jumps there, chevrons step a turn, and
   arrows, Home and End move it from the keyboard. With under 48px of gutter it
   shows on hover. A turn whose checkpoint a rewind can return to carries a bead
-  at its strip's left end, the head (the newest) in the accent, and the hover
-  card names it (`Checkpoint · turn N`, plus `current` for the head) with
+  inside its strip's left end, the head (the newest) in the accent, and the
+  hover card names it (`Checkpoint · turn N`, plus `current` for the head) with
   *Rewind here* when the harness can go back. It reads the virtualizer's row
   offsets on scroll and re-renders only when the turns on screen change
   (`src/ui/TimelineRail.tsx`).
@@ -805,9 +805,10 @@ composer's keys stay outside the table.
   abandoned (`_rustcode/checkpoints/restore` with `keep`). A turn with nothing
   folded keeps its chip in its footer, so every turn that has a checkpoint can
   say what it changed. The minimap beads each turn that has a checkpoint, its
-  head in the accent, and that turn's hover card offers *Rewind here* with the
-  same confirm as the chip. A harness that cannot rewind the conversation gets
-  the files only, after a confirm that says so. The Review screen
+  head in the accent, and that turn's hover card offers *Rewind here*, which is
+  the chip's rewind: one click when the engine keeps the state a rewind
+  abandons, behind its confirm when it does not. A harness that cannot rewind
+  the conversation gets the files only, after a confirm that says so. The Review screen
   (thread menu, header menu or ⌘K) shows the uncommitted changes, the
   worktree branch since its base (the base named beside the file count, as
   `vs main`, with the full ref on hover), one turn, or the branch's open pull

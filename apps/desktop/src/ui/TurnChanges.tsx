@@ -32,6 +32,7 @@ export function TurnChanges({
   const thread = useApp((s) => s.threads[threadId]);
   const running = thread?.running ?? false;
   const rewind = thread ? canRewind(thread) : false;
+  const keep = useApp((s) => !!s.agent?.checkpointAttempts);
   const load = () => {
     if (files) return;
     turnDiff(threadId, checkpoint.turn).then(setFiles, (e) =>
@@ -70,7 +71,7 @@ export function TurnChanges({
               <Pill
                 disabled={running}
                 onClick={rewindTo}
-                title={running ? "Stop the turn first" : rewindNote(rewind, checkpoint.turn)}
+                title={running ? "Stop the turn first" : rewindNote(rewind, keep, checkpoint.turn)}
               >
                 <History size={12} /> Rewind to before turn {checkpoint.turn}
               </Pill>
@@ -98,11 +99,17 @@ export function TurnChanges({
   );
 }
 
-/** What the pill says above it, so the outcome is not a surprise: the conversation goes too, or not. */
-function rewindNote(rewind: boolean, turn: number): string {
-  return rewind
-    ? `Put the files and the conversation back to before turn ${turn}; it and the turns after it stay below as an earlier attempt`
-    : `Put the files back to before turn ${turn}; this harness cannot rewind the conversation`;
+/**
+ * What the rewind does, said above its button so the outcome is not a surprise: the conversation goes
+ * too or it does not, and whether the state it abandons can be come back to. An engine that keeps
+ * that state rewinds on one click; the other two put a confirm in front of it.
+ */
+export function rewindNote(rewind: boolean, keep: boolean, turn: number): string {
+  if (!rewind)
+    return `Put the files back to before turn ${turn}; this harness cannot rewind the conversation`;
+  if (!keep)
+    return `Put the files and the conversation back to before turn ${turn}; this engine cannot keep the state it leaves, so there is no way back to it`;
+  return `Put the files and the conversation back to before turn ${turn}; it and the turns after it stay below as an earlier attempt`;
 }
 
 /** The shape of two changed files: their header line, then the patch's lines. */

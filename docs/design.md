@@ -814,15 +814,21 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   app's, so it lasts while the thread is open (like a question's row): the
   engine's history no longer holds those turns.
   The minimap wears the same idea at thread scale: a turn a rewind can go back
-  to carries a bead at the strip's left end, `fg/35` and 5px (the head, the
-  newest, `accent` at 7px), so the strip stays the one target and the bead is
-  never a hit area of its own. Pointing at it picks that turn as any point on
-  the strip does, and the hover card says `Checkpoint · turn N` (`· current`
-  for the head) and offers *Rewind here*, which asks the same confirm as the
-  Changes chip. The card lingers 160ms before it goes, and only that button
-  takes the pointer, so the pointer can cross into it while a click anywhere on
-  the card still goes to the turn; the checkpoint is in the strip's accessible
-  name too, so the keyboard reaches it.
+  to carries a bead 3px in from its strip's left end, `fg/35` and 5px (the
+  head, the newest, `accent` at 7px), inside the strip's hit area, so the
+  strip stays the one target and the bead is never a hit area of its own.
+  Pointing at it picks that turn as any point on the strip does, and the card
+  beside the strip says `Checkpoint · turn N` (`· current` for the head) and
+  offers *Rewind here*: the same `rewindCheckpoint` the Changes chip runs, which
+  is one click with no confirm when the engine keeps the state it abandons (the
+  button's title says so, as the chip's does) and behind its confirm when it
+  cannot. The card sits clear of the strip rather than widening it, so the
+  pointer only ever picks the turn it is over: it takes the pointer itself,
+  holds the turn it shows while the pointer is inside, and lingers 160ms before
+  it goes, so crossing into it works, while a click on its body still goes to
+  the turn. Escape closes it and puts focus back on the strip, and so does a
+  rewind, since the button goes with the card. The checkpoint is in the strip's
+  accessible name too, so the keyboard reaches it.
   Logic: `state/fold.ts` (`foldTurns`).
 - **Turn trace:** the footer's `Trace` chip, beside Changes, opens a card above it
   (`ui/TurnTrace.tsx`): the turn's own timeline from 0 to its end, one row per

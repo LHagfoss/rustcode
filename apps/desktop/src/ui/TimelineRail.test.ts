@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  cardBox,
   plainPreview,
   railHeight,
   railHitWidth,
   railIndexAt,
   railLabel,
   railScale,
+  rewindOffer,
   turnTitle,
 } from "./TimelineRail";
 
@@ -48,5 +50,38 @@ describe("the timeline minimap", () => {
     );
     expect(turnTitle("   ")).toBe("Message");
     expect(turnTitle("a b c")).toBe("a b c");
+  });
+
+  test("keeps the card out of the strip's hit area", () => {
+    for (const width of [800, 900, 1200, 1400]) {
+      const hit = railHitWidth(width);
+      const box = cardBox(hit);
+      // The strip owns [0, hit); the card starts at or after its right edge, so pointing at the card
+      // never picks a turn and the card cannot chase the pointer it is under.
+      expect(box.left).toBeGreaterThanOrEqual(hit);
+      // ... and past the 24px a strip draws, so a narrow gutter does not put the card over it.
+      expect(box.left).toBeGreaterThanOrEqual(24);
+      expect(box.width).toBe(320);
+    }
+    expect(cardBox(40).left).toBeGreaterThan(40);
+  });
+
+  test("offers the rewind only where the thread can go back", () => {
+    const checkpoint = { turn: 3 } as Parameters<typeof rewindOffer>[0];
+    expect(rewindOffer(checkpoint, false, { busy: false, keep: true })).toBeUndefined();
+    expect(rewindOffer(undefined, true, { busy: false, keep: true })).toBeUndefined();
+    const offer = rewindOffer(checkpoint, true, { busy: false, keep: true });
+    expect(offer?.turn).toBe(3);
+    expect(offer?.disabled).toBe(false);
+    // It says what the click does, because a checkpointed engine goes back without a confirm.
+    expect(offer?.note).toContain("earlier attempt");
+    expect(rewindOffer(checkpoint, true, { busy: false, keep: false })?.note).toContain("no way back");
+  });
+
+  test("waits for the turn to stop before a rewind", () => {
+    const checkpoint = { turn: 4 } as Parameters<typeof rewindOffer>[0];
+    const offer = rewindOffer(checkpoint, true, { busy: true, keep: true });
+    expect(offer?.disabled).toBe(true);
+    expect(offer?.note).toBe("Stop the turn first");
   });
 });
