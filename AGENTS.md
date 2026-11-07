@@ -239,10 +239,20 @@ When an orchestrator thread hands work to other threads (`start_session`,
 `message_session`), and especially to Pi on DeepSeek Flash:
 
 - Give each thread its own worktree and disjoint files, with file:line
-  pointers and concrete target values. Tell it to read this file first: a
-  thread started from another project does not load it on its own.
-- Wrap anything that can block (dev servers, browsers, scripts) in
-  `timeout 120`. A command that never exits stalls the thread for good.
+  pointers, concrete target values and the acceptance criteria. Repeat the
+  repository rules that apply in the prompt and tell it to read this file:
+  a delegate inherits none of this conversation, and a thread started from
+  another project does not load `AGENTS.md` on its own.
+- Never rebase a task branch; merge `origin/main` with `--no-edit` when it
+  needs updating, and pass `-m` to commits. A delegated shell has no TTY, so
+  anything that waits for an editor, a pager or input holds the turn until
+  someone interrupts it.
+- Wrap anything that can block (Git, scripts, browsers, dev servers, checks)
+  in `timeout 120`, with a longer explicit limit for a known long check. A
+  delegated shell has no default timeout, and a timer can keep a one-off
+  script alive after its work is done: make scripts exit and bound them. If a
+  command times out, report it and inspect the worktree before resuming; do
+  not blindly rerun it.
 - Gate on `bun run check` and unit tests. Ask for screenshots only when the
   change needs them; home-made CDP drivers were the main time sink.
 - Name a skill's `SKILL.md` path in the prompt if it matters. Listed skills

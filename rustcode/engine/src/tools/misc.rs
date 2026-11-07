@@ -304,7 +304,7 @@ pub const LIST_SESSIONS: Tool = Tool {
 
 pub const MESSAGE_SESSION: Tool = Tool {
     name: crate::orchestration::MESSAGE_SESSION,
-    description: "Send another thread of this project a message; it answers in a turn of its own, with its own history and approvals. The user is asked once. Returns a link_id for wait_session; the message queues while that thread is busy. Send what it needs: it does not see this conversation.",
+    description: "Send another thread of this project a message; it answers in a turn of its own, with its own history and approvals. The user is asked once. Returns a link_id for wait_session; the message queues while that thread is busy. Send the whole task: it does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout.",
     arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -371,7 +371,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Pass the task itself as prompt: when the user says to start this or the current task in another thread, write that task out; the new thread does not see this conversation. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first. Returns session_id and a link_id for wait_session.",
+    description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Pass the whole task as prompt: the new thread does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first. Returns session_id and a link_id for wait_session.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -399,7 +399,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
+    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass the whole task as the shared prompt: they do not see this conversation. Carry the repository rules (tell each to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

@@ -710,11 +710,14 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
 }
 /// The hard cap before the menu is pruned from the specialised end. The
 /// orchestration tools are the tail and the biggest: a client advertising
-/// version 7 gets the whole built-in menu at 40,892 bytes, 68 under this cap, so
-/// the next tool raises it rather than dropping one. Raising the cap keeps every
-/// version- and setting-gated tool advertised (`schema_budget_tests` keeps it
-/// that way); the 25 KiB budget below still keeps a plain root prompt lean.
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 40 * 1024;
+/// version 7 gets the whole built-in menu at 41,370 bytes, 614 under this cap,
+/// so the next tool raises it rather than dropping one. The cap moved from
+/// 40 KiB when the delegation tool descriptions gained what a stalled
+/// delegate costs (a prompt with no TTY, and no default timeout). Raising the
+/// cap keeps every version- and setting-gated tool advertised
+/// (`schema_budget_tests` keeps it that way); the 25 KiB budget below still
+/// keeps a plain root prompt lean.
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 41 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
