@@ -233,14 +233,16 @@ that change use `tabular`.
 
 - Hover: **in 60ms, out 120ms** (`--rc-hover-in`, `--rc-hover-out`),
   colour only, set once in `index.css` for every button, link, row,
-  switch and menu item. Components never add `transition-colors` or their
-  own hover duration. Press: `active:bg-fill-strong`, no delay. No
-  `transform` on press (no scale): text re-rasterizes and reads as a flash.
+  switch and menu item, and for the row the keyboard lands on. Components
+  never add `transition-colors` or their own hover duration. Press:
+  `active:bg-fill-strong`, no delay. No `transform` on press (no scale): text
+  re-rasterizes and reads as a flash.
 - Hover is pure CSS `:hover` (or Radix's `data-highlighted`). No hover
   state in React (`onMouseEnter` setting an id); a keyboard-driven list may
-  keep a selected index, shown with the same `bg-fill`. Row menus are
-  `modal={false}`, so other rows keep answering the pointer while one is
-  open.
+  keep a selected index, shown with the same `bg-fill`. A popover's menu row
+  has neither hook, so it fills on `:hover` and `:focus-visible` itself. Row
+  menus are `modal={false}`, so other rows keep answering the pointer while
+  one is open.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding
@@ -271,20 +273,42 @@ that change use `tabular`.
 - A message sent from the composer flies instead of rising: it starts a
   little inside the field's card (at 96%) and lands in its row in 220ms
   `--ease-snappy`, `transform` and `opacity` only, so nothing around it moves
-  (`lib/sendFlight.ts`). The composer is found by the marker on its card, and
-  the row travels at most 220px. Only a message typed here flies: a wake, a
-  resume, one another thread or a view sent, and the history a thread opens
-  with keep the plain row rise. The field it left fades back in empty over
-  160ms rather than blinking. `prefers-reduced-motion` gets the fade alone.
-  A message sent from the new-thread screen fades where it lands instead,
-  because the composer itself is on its way to the foot of the chat: the
-  stack's own 500ms move is that send's motion.
+  (`lib/sendFlight.ts`). The composer is found by the marker on its card. It
+  starts at the card whatever the gap above it, so a message whose row rests
+  above the field (its own `Working` line, a reply already streaming) rises
+  into place instead of fading where it stands; the row travels at most 220px.
+  Only a message typed here flies, and only once: the item the app sends from
+  the composer is marked (`thread.ts` `beginTurn`), so a wake, a resume, one
+  another thread or a view sent, and the history a thread opens with keep the
+  plain row rise, and a flight is never replayed by a re-render, a closed
+  turn, or opening the thread again. The field it left fades back in empty
+  over 160ms rather than blinking. `prefers-reduced-motion` gets the fade
+  alone.
+  A message sent from the new-thread screen does not fly: it is drawn where
+  the thread's own first row will keep it (the lane's cap, 20px under the
+  header) and arrives from 8px below over 160ms (`rc-send-in`,
+  `--ease-snappy`), while the composer glides from the middle of the chat to
+  the foot. A session can exist in a single frame, so the thread takes the
+  screen when that entry has played and not before (at most one entry,
+  `PENDING_ENTRY_MS`): the screen it keeps draws the same row in the same
+  place, at rest, so the hand-over itself moves nothing. A harness slower than
+  the entry is already past it and takes the screen the moment its session
+  exists. And each of the send's own updates gets a painted frame of its own
+  (`lib/frame.ts` `afterPaint`): the pending screen is drawn before
+  `session/new` is asked for, and the message's row before its prompt is built,
+  so an in-process harness cannot fold all of it into one frame.
 - A steering note landing in a running turn: the queued row it took from the
   stack glides 14px up toward the transcript and fades there (`rc-steer-away`,
   240ms `--ease-snappy`, `transform` and `opacity` only, and it collapses
   under reduced motion), and the note's marker appears where the turn
   read it — on the plan card's active step, else under its message — without
   moving anything around it.
+- A row mounts at the size the transcript already reserved for it: `estimateSize`
+  is the row's own air (`rowGap`) plus its content, and a measured row keeps
+  both. An estimate that left the gap out, or guessed a live `Working for 12s`
+  at 24px when it draws 35, was corrected a frame after mounting — and a
+  pinned transcript takes that difference back in one step, moving every row
+  above it, the message just sent included.
 - A streaming reply's new words fade in once each (`rc-reveal`, 280ms, from
   `opacity: 0` and a 4px blur, 18ms apart, no word waiting past 180ms).
   `lib/reveal.ts` wraps only the words that arrived in the chunk, and only in

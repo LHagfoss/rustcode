@@ -521,6 +521,7 @@ impl CodexAdapter {
                 name: model.name.clone(),
                 efforts: model.efforts.clone(),
                 default_effort: model.default_effort.clone(),
+                efforts_unknown: false,
             })
             .collect()
     }

@@ -186,6 +186,20 @@ describe("thread reducer", () => {
     expect(s.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "cancelled", elapsedMs: 4000 });
   });
 
+  test("a message typed here is marked as sent, one the app made for it is not", () => {
+    const typed = beginTurn(emptyThread("s", "/p"), "go", 0, undefined, false, false, true);
+    expect(typed.items.at(-1)).toMatchObject({ kind: "user", sent: true });
+    // A wake, a message from another thread or a view, and the message a thread was made for all
+    // reach the transcript without the mark: their rows only rise in, never out of the composer.
+    const sentOf = (state: ReturnType<typeof beginTurn>) => {
+      const last = state.items.at(-1);
+      return last?.kind === "user" ? last.sent : undefined;
+    };
+    expect(sentOf(beginTurn(emptyThread("s", "/p"), "go", 0))).toBeUndefined();
+    expect(sentOf(beginTurn(emptyThread("s", "/p"), "go", 0, undefined, true))).toBeUndefined();
+    expect(sentOf(beginTurn(emptyThread("s", "/p"), "go", 0, undefined, false, true))).toBeUndefined();
+  });
+
   test("unused steers leave the transcript and go back to the front of the queue", () => {
     let s = beginTurn(emptyThread("s", "/p"), "go", 0);
     s = { ...s, queue: [{ id: "q", text: "later" }] };

@@ -62,6 +62,7 @@ import {
   type Worktree,
 } from "../acp/v2";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
+import { afterPaint } from "../lib/frame";
 import {
   APP_COMMANDS,
   bindingOf,
@@ -138,6 +139,7 @@ import {
   sendDecision,
   type TurnState,
 } from "./queue";
+import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
@@ -366,6 +368,14 @@ export interface AppState {
   systemNotifications: boolean;
   /** Those notifications only while the app is in the background (Settings › General). */
   notificationsBackgroundOnly: boolean;
+  /** A recap of what happened while the app was idle (Settings › Notifications). */
+  recapWhileAway: boolean;
+  /** How long the app must be idle before that recap is due, in hours. */
+  recapHours: number;
+  /** When the user left, while a recap is on screen; null when there is none. */
+  recapSince: number | null;
+  /** The recap was dismissed until the next break. */
+  recapDismissed: boolean;
   /** A thread stopped by its plan's limit continues when the limit resets. */
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
@@ -412,6 +422,7 @@ export interface AppState {
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
+    | { kind: "inbox" }
     | { kind: "board" }
     | { kind: "review"; threadId: string }
     | { kind: "compare"; fanOut: string };
@@ -449,6 +460,10 @@ const STORAGE = {
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
   notificationsBackgroundOnly: "rustcode.notificationsBackgroundOnly",
+  recapWhileAway: "rustcode.recapWhileAway",
+  recapHours: "rustcode.recapHours",
+  /** When the app was last used, so a return after hours knows how long the break was. */
+  lastActive: "rustcode.lastActiveAt",
   continueAfterLimit: "rustcode.continueAfterLimit",
   limitWaits: "rustcode.limitWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
@@ -490,6 +505,8 @@ export const SETTINGS_DEFAULTS = {
   resumeAfterRestart: true,
   systemNotifications: true,
   notificationsBackgroundOnly: true,
+  recapWhileAway: true,
+  recapHours: RECAP_HOURS_DEFAULT,
   continueAfterLimit: true,
   orchestration: true,
   threadLimit: MAX_ACTIVE_LINKS,
@@ -562,6 +579,10 @@ export const useApp = create<AppState>((_set, _get, api) => ({
     STORAGE.notificationsBackgroundOnly,
     SETTINGS_DEFAULTS.notificationsBackgroundOnly,
   ),
+  recapWhileAway: storedFlag(STORAGE.recapWhileAway, SETTINGS_DEFAULTS.recapWhileAway),
+  recapHours: parseRecapHours(stored(STORAGE.recapHours)),
+  recapSince: null,
+  recapDismissed: false,
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
@@ -1189,7 +1210,9 @@ async function handleInbound(message: Inbound) {
           return;
         }
         updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
-        if (request.sessionId !== get().selectedId) {
+        // The inbox is the screen that lists this request already: a toast there would
+        // stack over its own first rows. Other toasts (copied, finished) still show.
+        if (request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
           toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
         // The system says the same, so a thread waiting behind another window is not forgotten.
@@ -1708,6 +1731,11 @@ async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtr
   }
   // One update switches the screen and shows the message: nothing waits for the engine.
   set({ pendingSetup: setup });
+  // That update gets its own painted frame before `session/new` is asked for. An in-process harness
+  // answers in a microtask, so both updates would otherwise land in one task and one frame: the
+  // pending screen's message would be drawn for the first time by the thread's own transcript, and
+  // its entry (`rc-send-in`) would never get a frame to play in.
+  await afterPaint();
   return await startSetup(setup);
 }
 
@@ -1781,7 +1809,8 @@ export async function retryPendingSetup(): Promise<boolean> {
   set({ pendingSetup: setup });
   const id = await startSetup(setup);
   if (!id) return false;
-  void runPrompt(id, setup.text, setup.extras ?? emptyExtras);
+  // Its bubble is already on screen, from the setup it keeps through the retry: it does not fly in.
+  void runPrompt(id, setup.text, setup.extras ?? emptyExtras, { alreadyShown: true });
   return true;
 }
 
@@ -1851,6 +1880,27 @@ export function retryMessage(id: string, itemId: string) {
       run: () => void go(),
     });
   } else void go();
+}
+
+/**
+ * Retry a thread's failed turn: the inbox's action for a failure. The thread is
+ * opened first when the app has not read it, because the message to send again
+ * lives in its transcript; its last message is the one the failure answered.
+ */
+export async function retryThread(id: string): Promise<void> {
+  if (!get().threads[id]?.loaded) await openThread(id);
+  const thread = get().threads[id];
+  if (!thread) return;
+  for (let i = thread.items.length - 1; i >= 0; i--) {
+    const item = thread.items[i]!;
+    if (item.kind !== "user") continue;
+    // Retried: the failure is answered, so the inbox and the row stop saying Failed.
+    clearFinished(id);
+    retryMessage(id, item.id);
+    return;
+  }
+  // Nothing to send again (an empty transcript): at least show the thread.
+  selectThread(id);
 }
 
 /** Edit: the message goes back to the composer; sending it rewinds the thread to it first. */
@@ -2103,6 +2153,9 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
       : null;
   if (bare && runCommandAction(bare, get().selectedId)) return true;
   let id = get().selectedId;
+  // The thread is made for this message, so the new-thread screen already draws its row: it must not
+  // fly in again when the thread takes the screen over (lib/sendFlight.ts).
+  const madeHere = !id;
   try {
     if (!id) {
       const started = await createThread(trimmed, extras);
@@ -2167,7 +2220,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     void resumeQueue(id);
     return true;
   }
-  void runPrompt(id, trimmed, extras);
+  void runPrompt(id, trimmed, extras, { alreadyShown: madeHere });
   return true;
 }
 
@@ -2487,6 +2540,11 @@ export async function runPrompt(
     automatic?: boolean;
     /** The turn that continues after a limit: its wait is settled when it ends. */
     limitResume?: boolean;
+    /**
+     * The thread was made for this message, and the new-thread screen already shows its row
+     * (`state/setup.ts`): it does not fly in when the thread takes the screen over.
+     */
+    alreadyShown?: boolean;
   } = {},
 ): Promise<void> {
   const conn = engine();
@@ -2527,11 +2585,17 @@ export async function runPrompt(
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
   if (id in get().snoozed) snoozeThread(id, null);
   const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
+  // A message typed here flies out of the composer on its first sighting; one the new-thread screen
+  // already drew does not (lib/sendFlight.ts).
+  const sent = userTypedPrompt(options) && !options.fromView && !options.alreadyShown;
   // The message is on screen before its blocks are built: a long paste or a 20 MB picture is copied
-  // into the prompt's JSON after the bubble lands, not before it.
+  // into the prompt's JSON after the bubble lands, not before it — and that update gets a painted
+  // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that
+  // follows it, which on a fast harness is the whole rest of the turn's first frame.
   updateThread(id, (t) =>
-    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake),
+    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
   );
+  await afterPaint();
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
     images: acceptsImages(thread),
@@ -3108,6 +3172,43 @@ export function setSystemNotifications(on: boolean) {
 export function setNotificationsBackgroundOnly(on: boolean) {
   set({ notificationsBackgroundOnly: on });
   store(STORAGE.notificationsBackgroundOnly, on ? "1" : "0");
+}
+
+export function setRecapWhileAway(on: boolean) {
+  set({ recapWhileAway: on, ...(on ? {} : { recapSince: null }) });
+  store(STORAGE.recapWhileAway, on ? "1" : "0");
+}
+
+export function setRecapHours(hours: number) {
+  const kept = parseRecapHours(String(hours));
+  set({ recapHours: kept });
+  store(STORAGE.recapHours, String(kept));
+}
+
+/** A return after a long enough break: the recap starts at the moment the user left. */
+export function beginRecap(since: number) {
+  set({ recapSince: since, recapDismissed: false });
+}
+
+/** Puts the card away until the next break; the inbox keeps a row that brings it back. */
+export function dismissRecap() {
+  set({ recapDismissed: true });
+}
+
+export function showRecap() {
+  set({ recapDismissed: false });
+}
+
+/** When the app was last used, from app storage; 0 on a first run. */
+export function lastActiveAt(): number {
+  const raw = stored(STORAGE.lastActive);
+  const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Records that the app was used now, so a later return measured from here. */
+export function markActive(now = Date.now()) {
+  store(STORAGE.lastActive, String(now));
 }
 
 export function setRoundedFont(on: boolean) {

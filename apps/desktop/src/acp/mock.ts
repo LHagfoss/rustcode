@@ -14,6 +14,12 @@ export interface MockOptions {
   scenario?: string;
   /** Milliseconds between streamed chunks; 0 for tests. */
   delayMs?: number;
+  /**
+   * Seed the needs-you inbox: two approvals and a question across threads, one of
+   * them on a thread whose last turn failed. Off by default so a test starts from
+   * silence; the browser mock turns it on unless `?needsYou=0`.
+   */
+  needsYou?: boolean;
   /** Milliseconds the engine takes to start (`?boot=`), to see the slow-start toast. */
   bootMs?: number;
   /** Crash this many ms after the first start (`?crash=`); it comes back after `bootMs`, as the shell restarts it. */
@@ -648,8 +654,20 @@ function seedThreads(): MockThread[] {
         }),
         update("mock-thread-4", {
           sessionUpdate: "agent_message_chunk",
-          content: text("Added `LoginForm` with an email field and a submit button, on `feat/login-form`."),
-          _meta: { rustcode: { turn: { id: "t1", elapsedMs: 52_000, outcome: "completed" } } },
+          content: text(
+            "I wrote `LoginForm`, but the typecheck failed: the form's submit handler expects a `FormEvent` and the field is `unknown`.",
+          ),
+          // The last turn failed, so the inbox has a failed row to offer Retry for.
+          _meta: {
+            rustcode: {
+              turn: {
+                id: "t1",
+                elapsedMs: 52_000,
+                outcome: "failed",
+                endedAt: new Date(minutes(20)).toISOString(),
+              },
+            },
+          },
         }),
       ],
     },
@@ -1045,6 +1063,8 @@ export class MockEngine {
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
   private agents = new Map<string, JsonObject[]>();
+  /** The inbox seed runs once, after the list the app first reads. */
+  private needsYouSeeded = false;
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
@@ -1157,6 +1177,80 @@ export class MockEngine {
     return this.options.delayMs ?? 40;
   }
 
+  /**
+   * The inbox's demo: a question, an approval and a failed turn on threads the
+   * app has not opened, so the list has something to show on first open. Each
+   * request is asked like a live one and answered by the app's own cards.
+   */
+  private seedNeedsYou() {
+    const has = (id: string) => this.threads.some((t) => t.id === id);
+    if (has("mock-thread-1")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-1",
+        toolCall: {
+          toolCallId: "seed-approval-1",
+          title: "bash",
+          kind: "execute",
+          rawInput: { command: "bun test src/ui", summary: "Run the composer tests" },
+        },
+        options: [
+          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "always", name: "Always allow commands", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      });
+    }
+    if (has("mock-thread-claude")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-claude",
+        toolCall: {
+          toolCallId: "seed-question-1",
+          title: "Which tone?",
+          rawInput: {
+            header: "Pricing copy",
+            question: "Which tone should the pricing blurbs use?",
+            options: ["Plain and short", "Warmer, more human", "Keep the current voice"],
+            descriptions: [
+              "Three lines, no adjectives",
+              "Talks to one reader at a time",
+              "Only fix the jargon",
+            ],
+            multiple: false,
+          },
+        },
+        options: [
+          { optionId: "tone-plain", name: "Plain and short", kind: "allow_once" },
+          { optionId: "tone-warm", name: "Warmer, more human", kind: "allow_once" },
+          { optionId: "tone-keep", name: "Keep the current voice", kind: "allow_once" },
+        ],
+        _meta: {
+          rustcode: {
+            kind: "question",
+            version: 2,
+            questionId: "seed-question-1",
+            answerKinds: ["options", "text"],
+          },
+        },
+      });
+    }
+    if (has("mock-thread-4")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-4",
+        toolCall: {
+          toolCallId: "seed-approval-4",
+          title: "edit src/ui/LoginForm.tsx",
+          kind: "edit",
+          rawInput: { path: "src/ui/LoginForm.tsx" },
+        },
+        options: [
+          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "always", name: "Always allow edits", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      });
+    }
+  }
+
   private sleep(ms = this.delay): Promise<void> {
     return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
   }
@@ -1250,7 +1344,11 @@ export class MockEngine {
       // The catalog, for a thread that has no session yet to send it on.
       case "_rustcode/commands":
         return { sessionUpdate: "available_commands_update", availableCommands: COMMANDS };
-      case "session/list":
+      case "session/list": {
+        if (this.options.needsYou && !this.needsYouSeeded) {
+          this.needsYouSeeded = true;
+          setTimeout(() => this.seedNeedsYou(), 500);
+        }
         return {
           sessions: this.threads
             .filter((t) => t.history.length > 0)
@@ -1272,6 +1370,7 @@ export class MockEngine {
               },
             })),
         };
+      }
       case "session/new": {
         const meta = obj(obj(params._meta)?.rustcode);
         const harness = str(meta?.harness) ?? this.harnesses.default.harness;
