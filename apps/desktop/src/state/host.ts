@@ -2274,6 +2274,48 @@ export function linkStarted(id: string) {
   setBook((b) => updateLink(b, id, { state: "working", startedAt: Date.now() }));
 }
 
+/**
+ * The links a resumed turn of `thread` answers: the ones a restart severed while their turn ran
+ * (`orchestration.ts` `interruptActive`). A link the restart caught still queued is not one of
+ * them: its message never reached the thread, and the queue it waited in is read back and run on
+ * its own (`state/queues.ts`), which starts and settles that link as a link turn does.
+ */
+export function interruptedLinks(thread: string): string[] {
+  return book()
+    .links.filter((l) => l.target === thread && l.state === "interrupted" && l.startedAt !== undefined)
+    .map((l) => l.id);
+}
+
+/**
+ * The links a resumed thread's turn answers (`store.ts` `resumeInterrupted`): a
+ * restart severed them (`orchestration.ts` `interruptActive`), and the turn the
+ * app resumes that thread with is the turn they were waiting on. They are left
+ * as {@link linkStarted} leaves a link — working, with the clock set by this
+ * turn — and marked `resumedAt`, so the parent that reads the notice knows the
+ * answer came after a restart, and its work time is not the time it spent
+ * waiting out the quit. A link that is no longer interrupted (a newer one to
+ * the same thread replaced it, or the user stopped it) is left alone.
+ */
+export function linksResumed(ids: readonly string[]): void {
+  if (!ids.length) return;
+  const now = Date.now();
+  setBook((b) => ({
+    ...b,
+    links: b.links.map((link) =>
+      ids.includes(link.id) && link.state === "interrupted"
+        ? {
+            ...link,
+            state: "working" as const,
+            startedAt: now,
+            resumedAt: now,
+            waitingSince: undefined,
+            waitedMs: undefined,
+          }
+        : link,
+    ),
+  }));
+}
+
 /** The harness a settled link ran on, as the notice names it: its id and display name. */
 function linkHarness(thread: string): { harness?: string; harnessName?: string } {
   const s = useApp.getState();
@@ -2310,6 +2352,51 @@ function answerFor(thread: string, items: TranscriptItem[], failed?: string, fal
   return text ? { ...says, text, truncated } : says;
 }
 
+/**
+ * The links' turn ended: their answer is that turn's last reply, never an
+ * earlier one. A turn that ran for several links at once (a thread a restart
+ * interrupted on more than one link, which one resume turn answers) settles
+ * them in one write to the book and one wake tick, so the parents read one
+ * notice and nothing is woken twice.
+ */
+export function linksFinished(
+  ids: readonly string[],
+  thread: string,
+  outcome: "completed" | "cancelled" | "failed",
+  failed: string | undefined,
+  items: TranscriptItem[],
+) {
+  if (!ids.length) return;
+  const now = Date.now();
+  // A stopped link is not an answer: it takes only what its own turn said.
+  const says = answerFor(thread, items, failed, outcome !== "cancelled");
+  const state = outcome === "cancelled" ? "cancelled" : outcome === "failed" ? "failed" : "done";
+  const harness = linkHarness(thread);
+  let settled = false;
+  setBook((b) => ({
+    ...b,
+    links: b.links.map((link) => {
+      if (!ids.includes(link.id)) return link;
+      // A link already settled (stopped by the user, or reported by a newer turn of the thread)
+      // is not settled again: this turn is not the one it was waiting on.
+      if (link.state === "done" || link.state === "failed" || link.state === "cancelled") return link;
+      settled = true;
+      const workedMs = link.startedAt === undefined ? undefined : Math.max(0, now - link.startedAt);
+      return {
+        ...link,
+        state,
+        answer: says.text,
+        truncated: says.truncated,
+        filesChanged: says.filesChanged,
+        settledAt: now,
+        ...harness,
+        ...(workedMs ? { workedMs } : {}),
+      };
+    }),
+  }));
+  if (settled) wakeTick();
+}
+
 /** The link's turn ended: its answer is that turn's last reply, never an earlier one. */
 export function linkFinished(
   id: string,
@@ -2318,23 +2405,7 @@ export function linkFinished(
   failed: string | undefined,
   items: TranscriptItem[],
 ) {
-  const now = Date.now();
-  // A stopped link is not an answer: it takes only what its own turn said.
-  const says = answerFor(thread, items, failed, outcome !== "cancelled");
-  const link = book().links.find((l) => l.id === id);
-  const workedMs = link?.startedAt === undefined ? undefined : Math.max(0, now - link.startedAt);
-  setBook((b) =>
-    updateLink(b, id, {
-      state: outcome === "cancelled" ? "cancelled" : outcome === "failed" ? "failed" : "done",
-      answer: says.text,
-      truncated: says.truncated,
-      filesChanged: says.filesChanged,
-      settledAt: now,
-      ...linkHarness(thread),
-      ...(workedMs ? { workedMs } : {}),
-    }),
-  );
-  wakeTick();
+  linksFinished([id], thread, outcome, failed, items);
 }
 
 /**
@@ -2344,6 +2415,12 @@ export function linkFinished(
  * (host.ts `wait` reads the same link). A link already reported is re-armed once
  * when this turn was started by the wake from the thread's own child, so the
  * real answer reaches the parent too.
+ *
+ * A link a restart severed (`orchestration.ts` `interruptActive`) is not
+ * settled here: only the turn the app resumes that thread with answers it
+ * (`store.ts` `resumeInterrupted` hands the link to that turn, `host.ts`
+ * {@link linksResumed} and {@link linksFinished}). A turn the user starts in
+ * the thread afterwards is their own work, not the branch's result.
  */
 export function threadTurnEnded(
   thread: string,

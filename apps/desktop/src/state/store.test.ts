@@ -10,8 +10,11 @@ import {
   answerOrchestration,
   linkFinished,
   linkStarted,
+  linksFinished,
+  linksResumed,
   orchestrationCallDropped,
   resolveGrant,
+  threadTurnEnded,
   wakeTick,
 } from "./host";
 import { emptyBook, type Link } from "./orchestration";
@@ -61,6 +64,7 @@ import {
   prunePanels,
   prunePlans,
   RESOLVED_APPROVAL_MS,
+  RESUME_TEXT,
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
@@ -73,6 +77,7 @@ import {
   returnToAttempt,
   revokeGrant,
   rewindCheckpoint,
+  runPrompt,
   saveQueuedEdit,
   selectThread,
   sendDecisionFor,
@@ -1374,6 +1379,271 @@ describe("engine controller with the mock engine", () => {
     expect(wakeTurn()).toBe(true);
     expect(useApp.getState().links.links.find((l) => l.id === `${parent}/1`)?.notifiedAt).toBeDefined();
   }, 20_000);
+
+  test("a child a restart interrupted answers its parent once the app resumes it", async () => {
+    // The window was quit with the child mid-turn: the book it saved still says the link works, and
+    // app storage still lists the thread the quit cut off (state/store.ts `interruptedThreads`).
+    const parent = "mock-thread-1";
+    const target = "mock-thread-2";
+    const at = Date.now() - 60_000;
+    const link: Link = {
+      id: `${parent}/1`,
+      orchestrator: parent,
+      target,
+      orchestratorTitle: "Fix the composer focus ring",
+      targetTitle: "Explain the sidecar restart backoff",
+      message: "look into the backoff",
+      state: "working",
+      createdAt: at,
+      startedAt: at,
+    };
+    const book = { links: [link] as unknown as JsonObject[], grants: {}, counters: {}, fanOuts: [] };
+    const transport = new MockTransport({ delayMs: 0, links: book as unknown as JsonObject });
+    const storage = testStorage({
+      "rustcode.threadLinks": JSON.stringify({ ...book, counters: { [parent]: 1 } }),
+      "rustcode.runningThreads": JSON.stringify([target]),
+    });
+    try {
+      setOrchestration(true);
+      await connect(transport);
+      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      setOrchestration(true);
+      const linkOf = () => useApp.getState().links.links.find((l) => l.id === link.id);
+      // The restart severed it on load, and the resume turn the app runs takes it back as its own
+      // (state/host.ts `linksResumed`): from here the link works again, counting from the resume, so
+      // only that turn settles it.
+      await until(() => linkOf()?.resumedAt !== undefined, 8000);
+      expect(linkOf()?.state).toBe("working");
+      expect(linkOf()?.startedAt).toBe(linkOf()?.resumedAt);
+      const resumed = () =>
+        (useApp.getState().threads[target]?.items ?? []).some(
+          (i) => i.kind === "user" && (i as { text?: string }).text === RESUME_TEXT,
+        );
+      await until(resumed, 8000);
+      // The resumed turn asks before it edits, as a real harness does: allow it, so the turn can
+      // end as the branch's answer rather than wait on the user.
+      for (let i = 0; i < 300 && linkOf()?.state === "working"; i++) {
+        const request = useApp.getState().threads[target]?.permissions[0];
+        if (request) answerPermission(request, request.options[0]!);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      // Its continue turn ended as the child's answer, and the parent reads it in a wake.
+      await until(() => wakeTurns(parent).length > 0, 10_000);
+      expect(wakeTurns(parent).join("\n")).toContain("Delegate finished");
+      expect(wakeTurns(parent).join("\n")).toContain("Explain the sidecar restart backoff");
+      expect(linkOf()?.state).toBe("done");
+      expect(linkOf()?.notifiedAt).toBeDefined();
+      // Once. Nothing reports the same branch again on the next tick.
+      wakeTick();
+      await new Promise((r) => setTimeout(r, 500));
+      expect(wakeTurns(parent)).toHaveLength(1);
+    } finally {
+      storage.done();
+    }
+  }, 30_000);
+
+  /**
+   * A book staged in the app, as a restart leaves it: `links` are interrupted links whose turn the
+   * quit cut off, and the threads they name are opened so a wake for one of them lands here.
+   */
+  const stagedRestart = async (links: Link[], open: readonly string[]) => {
+    setOrchestration(true);
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
+    setOrchestration(true);
+    for (const id of open) {
+      selectThread(id);
+      await until(() => selected()?.loaded === true, 5000);
+    }
+    useApp.setState((s) => ({ links: { ...emptyBook(), links, counters: s.links.counters } }));
+    const linkOf = (id: string) => useApp.getState().links.links.find((l) => l.id === id);
+    return { linkOf };
+  };
+
+  /** Answers whatever the mock asks in `threads`, so the turns it runs can end by themselves. */
+  const answerAsking = async (threads: readonly string[], untilDone: () => boolean) => {
+    for (let i = 0; i < 400 && !untilDone(); i++) {
+      for (const id of threads) {
+        const request = useApp.getState().threads[id]?.permissions[0];
+        if (request) answerPermission(request, request.options[0]!);
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+
+  test("the links a resume turn answers settle in one write, and their clock starts at the resume", async () => {
+    // A restart caught this child working on two links: the user had queued a follow-up in one and
+    // an approval had stopped the clock of the other. Both are the resume turn's to answer.
+    const parent = "mock-thread-1";
+    const child = "mock-thread-2";
+    const at = Date.now() - 600_000;
+    const link = (n: number, extra: Partial<Link> = {}): Link => ({
+      id: `${parent}/${n}`,
+      orchestrator: parent,
+      target: child,
+      orchestratorTitle: "Fix the composer focus ring",
+      targetTitle: "Explain the sidecar restart backoff",
+      message: "look into the backoff",
+      state: "interrupted",
+      createdAt: at,
+      startedAt: at,
+      ...extra,
+    });
+    const staged = await stagedRestart([link(1, { waitingSince: at, waitedMs: 30_000 }), link(2)], [parent]);
+    const say = [{ kind: "assistant" as const, id: "m", text: "the resume answered" }];
+    const resumedAt = Date.now();
+    linksResumed([`${parent}/1`, `${parent}/2`]);
+    for (const id of [`${parent}/1`, `${parent}/2`]) {
+      // Working again from the resume, with the clock and the wait the restart left behind cleared.
+      const resumed = staged.linkOf(id);
+      expect(resumed?.state).toBe("working");
+      expect(resumed?.resumedAt).toBeGreaterThanOrEqual(resumedAt);
+      expect(resumed?.startedAt).toBe(resumed?.resumedAt);
+      expect(resumed?.waitingSince).toBeUndefined();
+      expect(resumed?.waitedMs).toBeUndefined();
+    }
+    await new Promise((r) => setTimeout(r, 5));
+    linksFinished([`${parent}/1`, `${parent}/2`], child, "completed", undefined, say);
+    const [first, second] = [`${parent}/1`, `${parent}/2`].map(staged.linkOf);
+    // One turn, one write to the book: both settled together, and each worked from the resume on.
+    expect(first?.state).toBe("done");
+    expect(second?.state).toBe("done");
+    expect(first?.settledAt).toBe(second?.settledAt);
+    expect(first?.workedMs).toBeLessThan(60_000);
+    expect(second?.workedMs).toBe(first?.workedMs);
+    // One coalesced wake, naming both, and the marker that says the answer came after a restart.
+    await until(() => wakeTurns(parent).length === 1, 5000);
+    const told = wakeTurns(parent).join("\n");
+    expect(told).toContain("2 delegates finished");
+    expect(told).toContain(`${parent}/1`);
+    expect(told).toContain(`${parent}/2`);
+    expect(told).toContain("resumed after a restart");
+  }, 30_000);
+
+  test("a turn the user starts later never settles a link a restart interrupted", async () => {
+    const parent = "mock-thread-1";
+    const child = "mock-thread-2";
+    const at = Date.now() - 600_000;
+    const staged = await stagedRestart(
+      [
+        {
+          id: `${parent}/1`,
+          orchestrator: parent,
+          target: child,
+          orchestratorTitle: "Parent",
+          targetTitle: "Child",
+          message: "do it",
+          state: "interrupted",
+          createdAt: at,
+          startedAt: at,
+        },
+      ],
+      [parent],
+    );
+    // The user asks the child something of their own: that turn is their work, not the branch's
+    // answer, so the link stays interrupted and the parent is not woken for it.
+    threadTurnEnded(child, false, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "something the user asked for" },
+    ]);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(staged.linkOf(`${parent}/1`)?.state).toBe("interrupted");
+    expect(staged.linkOf(`${parent}/1`)?.notifiedAt).toBeUndefined();
+    expect(wakeTurns(parent)).toEqual([]);
+  }, 30_000);
+
+  test("a resume that finds the thread busy waits in its queue, and its turn then answers the link", async () => {
+    // The engine outlived the window, so the child's turn still runs when the app resumes it: the
+    // Continue message queues behind that turn, and nothing is settled until a turn carries it.
+    const parent = "mock-thread-1";
+    const child = "mock-thread-2";
+    const at = Date.now() - 60_000;
+    const staged = await stagedRestart(
+      [
+        {
+          id: `${parent}/1`,
+          orchestrator: parent,
+          target: child,
+          orchestratorTitle: "Parent",
+          targetTitle: "Child",
+          message: "do it",
+          state: "interrupted",
+          createdAt: at,
+          startedAt: at,
+        },
+      ],
+      [parent, child],
+    );
+    updateThread(child, (t) => ({ ...t, running: true }));
+    await runPrompt(child, RESUME_TEXT, undefined, { automatic: true, resumeLinks: [`${parent}/1`] });
+    // Not dropped: the row waits behind the turn, with the links it will answer when it starts.
+    const row = useApp.getState().threads[child]?.queue.at(-1);
+    expect(row?.text).toBe(RESUME_TEXT);
+    expect(row?.resume).toEqual([`${parent}/1`]);
+    expect(staged.linkOf(`${parent}/1`)?.state).toBe("interrupted");
+    // That turn ends, the row starts, and from there the link works for it.
+    updateThread(child, (t) => ({ ...t, running: false }));
+    const run = resumeQueue(child);
+    await until(() => staged.linkOf(`${parent}/1`)?.state === "working", 3000);
+    expect(staged.linkOf(`${parent}/1`)?.resumedAt).toBeDefined();
+    for (let i = 0; i < 300 && staged.linkOf(`${parent}/1`)?.state === "working"; i++) {
+      const request = useApp.getState().threads[child]?.permissions[0];
+      if (request) answerPermission(request, request.options[0]!);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await run;
+    expect(staged.linkOf(`${parent}/1`)?.state).toBe("done");
+    await until(() => wakeTurns(parent).length === 1, 5000);
+  }, 30_000);
+
+  test("a resumed middle thread holds its parent back until its own leaf's resume is done", async () => {
+    // Three levels, all cut off by the restart: the top's link to the middle and the middle's own
+    // link to the leaf. The app resumes both; the middle's continue ends first.
+    const top = "mock-thread-1";
+    const middle = "mock-thread-2";
+    const leaf = "mock-thread-3";
+    const at = Date.now() - 600_000;
+    const link = (orchestrator: string, target: string): Link => ({
+      id: `${orchestrator}/${target}`,
+      orchestrator,
+      target,
+      orchestratorTitle: orchestrator,
+      targetTitle: target,
+      message: "go on",
+      state: "interrupted",
+      createdAt: at,
+      startedAt: at,
+    });
+    const staged = await stagedRestart([link(top, middle), link(middle, leaf)], [top, middle, leaf]);
+    linksResumed([`${top}/${middle}`, `${middle}/${leaf}`]);
+    // The middle's resume turn ends: its link to the top settles, and the top hears nothing yet —
+    // the leaf's own resume still runs, and the middle has not finished for its parent.
+    linksFinished([`${top}/${middle}`], middle, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "I am back at it" },
+    ]);
+    threadTurnEnded(middle, false, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "I am back at it" },
+    ]);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(staged.linkOf(`${top}/${middle}`)?.state).toBe("done");
+    expect(wakeTurns(top)).toEqual([]);
+    // The leaf's resume ends too: the middle is told, its wake turn ends, and only then does the
+    // top hear — with the middle's latest answer, once.
+    linksFinished([`${middle}/${leaf}`], leaf, "completed", undefined, [
+      { kind: "assistant", id: "l", text: "the leaf is done" },
+    ]);
+    threadTurnEnded(leaf, false, "completed", undefined, [
+      { kind: "assistant", id: "l", text: "the leaf is done" },
+    ]);
+    wakeTick();
+    await answerAsking([middle, top], () => wakeTurns(top).length > 0);
+    const told = wakeTurns(top).join("\n");
+    expect(told).toContain(`Delegate finished after a restart: ${middle}`);
+    expect(told).toContain("resumed after a restart");
+    // The answer the top reads is the middle's turn after the leaf's result, not "I am back at it".
+    expect(told).not.toContain("I am back at it");
+    expect(staged.linkOf(`${top}/${middle}`)?.notifiedAt).toBeDefined();
+    expect(wakeTurns(top)).toHaveLength(1);
+  }, 30_000);
 
   test("a wake the queue lost in a restart is delivered again, not dropped", async () => {
     const { parent, link, target, linkOf } = await stagedWait();

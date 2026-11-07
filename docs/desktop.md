@@ -527,7 +527,13 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Sidebar.** One list: pinned threads first, then every
+- **Sidebar.** A *Needs you* row above the list opens the inbox
+  (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits
+  on the user: an approval, a question, a failed turn, or a delegate asking.
+  A thread merely marked for review does not count, and the row's count is the
+  inbox's own list. With nothing waiting there is no row at all, so no empty
+  heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
+  and the palette. One list: pinned threads first, then every
   active thread, and Settled as a shelf at the foot: threads marked Settled
   and threads untouched for three days unless they wait
   for review (`idleSettled`), folded by default, 10 at a time then *Show
@@ -770,6 +776,12 @@ composer's keys stay outside the table.
   may name another login without another card. Grants and links are kept in the
   local data store (`data-store.md`), with local storage as the first paint and
   for an older engine, and after a restart active links are *interrupted*.
+  Threads the restart cut off are resumed with a *Continue* message (Settings ›
+  General, on by default), and that resume turn is what answers the links the
+  quit severed: they work again from the resume, and only that turn settles
+  them (a turn the user starts there later does not), so the parent that was
+  waiting is woken with the answer instead of waiting for good
+  (`docs/orchestrator.md`).
   Started threads go through `session/new` with `_meta.rustcode.harness`,
   `.account` (orchestration v5) and `.worktree` and get the prompt as their
   first message, headed

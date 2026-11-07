@@ -115,9 +115,12 @@ import {
 } from "./headerButtons";
 import {
   answerOrchestration,
+  interruptedLinks,
   linkFinished,
   linkStarted,
+  linksFinished,
   linksOf,
+  linksResumed,
   linkWaitEnded,
   linkWaitStarted,
   loadBook,
@@ -2498,9 +2501,12 @@ export async function resumeQueue(id: string): Promise<boolean> {
   await runPrompt(id, next.text, next.extras, {
     fromView: next.fromView,
     link: next.link,
+    resumeLinks: next.resume,
     wake: next.wake,
     wakeLinks: next.wakeLinks,
     wakeAsking: next.wakeAsking,
+    // A resumed row is the app's, not the user's: the thread stays where it was in the sidebar.
+    automatic: next.resume !== undefined,
   });
   return true;
 }
@@ -2600,6 +2606,12 @@ export async function runPrompt(
   options: {
     fromView?: boolean;
     link?: string;
+    /**
+     * The links a restart severed and this resume turn answers (`resumeInterrupted`): started as
+     * working when its turn begins and settled when it ends, as a link's own turn leaves its link
+     * (host.ts `linksResumed`, `linksFinished`).
+     */
+    resumeLinks?: string[];
     wake?: boolean;
     /** The links a queued wake row reports: marked as heard when its turn starts (host.ts). */
     wakeLinks?: string[];
@@ -2638,6 +2650,7 @@ export async function runPrompt(
           extras: hasExtras(extras) ? extras : undefined,
           fromView: options.fromView,
           link: options.link,
+          resume: options.resumeLinks,
           wake: options.wake,
           wakeLinks: options.wakeLinks,
           wakeAsking: options.wakeAsking,
@@ -2648,6 +2661,9 @@ export async function runPrompt(
   }
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
+  // The turn a restart resumes this thread with answers the links the quit severed: they work again
+  // from here, so the parent reads this turn's answer and its time, never the time before the quit.
+  if (options.resumeLinks?.length) linksResumed(options.resumeLinks);
   // A queued wake reports its links now, as its turn starts: late enough that a restart before this
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
@@ -2710,6 +2726,15 @@ export async function runPrompt(
   }
   if (options.link)
     linkFinished(options.link, id, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
+  // The links this resume turn answers settle together: one write, one wake tick (host.ts).
+  if (options.resumeLinks?.length)
+    linksFinished(
+      options.resumeLinks,
+      id,
+      outcome,
+      failure,
+      get().threads[id]?.items.slice(startIndex) ?? [],
+    );
   // Every finished turn of a thread matters to a parent waiting on it: a middle thread's real
   // answer is the one after the work it started (state/host.ts threadTurnEnded).
   threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
@@ -2748,9 +2773,11 @@ export async function runPrompt(
     await runPrompt(id, next.text, next.extras, {
       fromView: next.fromView,
       link: next.link,
+      resumeLinks: next.resume,
       wake: next.wake,
       wakeLinks: next.wakeLinks,
       wakeAsking: next.wakeAsking,
+      automatic: next.resume !== undefined,
     });
   }
 }
@@ -4797,27 +4824,40 @@ function interruptedThreads(): string[] {
 
 /**
  * Each thread a restart cut off is opened and sent {@link RESUME_TEXT}, so it carries on
- * without the user pressing anything. Settings › General turns it off.
+ * without the user pressing anything. Settings › General turns it off. Up to {@link RESUME_MAX}
+ * are resumed, and only the ones that really get a turn count: a thread the app cannot open, or
+ * one whose resume the app could not send, does not use up someone else's slot.
  */
 async function resumeInterrupted(ids: string[]): Promise<void> {
   store(STORAGE.runningThreads, "[]");
   lastRunning = "";
   if (!get().resumeAfterRestart || !ids.length) return;
   const known = new Set(get().sessions.map((x) => x.id));
-  const resumable = ids.filter((id) => known.has(id)).slice(0, RESUME_MAX);
-  for (const id of resumable) {
+  let started = 0;
+  for (const id of ids) {
+    if (started >= RESUME_MAX) break;
+    if (!known.has(id)) continue;
     await openThread(id);
     // The selected thread may already be loading from the handshake: wait for it.
     for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) await new Promise((r) => setTimeout(r, 100));
     const thread = get().threads[id];
-    if (!thread?.loaded || thread.running) continue;
-    void runPrompt(id, RESUME_TEXT, undefined, { automatic: true });
+    if (!thread?.loaded) continue;
+    started++;
+    // The links the restart severed are this turn's to answer, not any later turn's
+    // (state/host.ts `linksResumed`, `linksFinished`): the resume carries them, so a parent that
+    // was waiting reads the answer in a wake instead of waiting for good. A thread whose turn still
+    // runs (the engine outlived the window) takes the resume behind it as a queued row, which then
+    // starts one that carries the links — dropping it would settle nothing again.
+    void runPrompt(id, RESUME_TEXT, undefined, {
+      automatic: true,
+      resumeLinks: interruptedLinks(id),
+    });
   }
-  if (resumable.length) {
+  if (started) {
     toast(
-      resumable.length === 1
+      started === 1
         ? "A thread the restart interrupted is continuing."
-        : `${resumable.length} threads the restart interrupted are continuing.`,
+        : `${started} threads the restart interrupted are continuing.`,
       "success",
     );
   }

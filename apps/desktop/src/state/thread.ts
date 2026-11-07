@@ -231,6 +231,13 @@ export interface QueuedPrompt {
   /** Delivered for another thread (orchestration link id): its answer goes back there. */
   link?: string;
   /**
+   * The row is the app's own restart resume (`store.ts` `resumeInterrupted`), and these are the
+   * links the quit severed: its turn starts them working again and settles them when it ends, the
+   * way a link's own turn does. An empty list is still a resume, so a thread waiting on a turn
+   * that outlived the window carries one.
+   */
+  resume?: string[];
+  /**
    * The thread that queued it for this one (`message_session`), so that thread can list, edit,
    * cancel or steer it while it waits (`manage_queue`, state/host.ts). A row with no `from` is the
    * user's own, or one an older build queued: no caller may touch it.
