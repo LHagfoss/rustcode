@@ -57,6 +57,12 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/ModelPicker.tsx", "Model and effort", "the model pill is a trigger, and not in this pass"],
   ["ui/ModelPicker.tsx", "aria-pressed={chip.selected}", "an account chip, whose fill is its state"],
   ["ui/Settings.tsx", 'role="option"', "a settings result row"],
+  ["ui/ShortcutSettings.tsx", "recording ?", "the keycap button; its fill marks recording"],
+  [
+    "ui/settingsKit.tsx",
+    "enabled:hover:bg-fill enabled:active:bg-fill-strong",
+    "a settings row's Action: one control shape in a card",
+  ],
   ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
 ];
 
@@ -140,6 +146,26 @@ describe("design system", () => {
     }
     expect(found).toEqual([]);
     expect([...used].map(([, , why]) => `allowlist entry no longer matches a tag: ${why}`)).toEqual([]);
+  });
+
+  test("the engine's built-in themes carry the same surfaces", () => {
+    // The app applies a theme's tokens inline, so an engine built-in that still
+    // holds an old fill shadows index.css: the real app shows the theme file's
+    // surface, not this one. Only the surface stack is compared: the engine
+    // resolves every token to #rrggbb, so it flattens the app's translucent
+    // borders and scrollbar, which cannot match byte for byte.
+    const SURFACES = ["bg", "sidebar", "surface", "surface_2", "surface_3"] as const;
+    for (const theme of BUILTIN_THEMES) {
+      const toml = readFileSync(
+        join(SRC, `../../../rustcode/engine/src/themes/builtin/${theme.name}.toml`),
+        "utf8",
+      );
+      const desktop = toml.slice(toml.indexOf("[desktop]"));
+      for (const token of SURFACES) {
+        const value = new RegExp(`^${token} = "([^"]+)"`, "m").exec(desktop)?.[1];
+        expect(value, `${theme.name}.toml desktop.${token}`).toBe(theme.tokens[token]);
+      }
+    }
   });
 
   test("index.css's built-in themes match lib/themes.ts", () => {

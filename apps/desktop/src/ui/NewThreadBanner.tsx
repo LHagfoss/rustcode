@@ -1,8 +1,8 @@
 // The banner over a new thread, after NewThreadBannerView in
 // NewThreadBanner.swift: the chosen picture in coloured text (drawn once on
-// an offscreen canvas, lib/banner.ts) or as is, covering `height` of the top
-// of the chat, cropped to fit, with a soft glow of itself under it, fading
-// toward the composer. A picture seen before shows at once; a new one fades in.
+// an offscreen canvas, lib/banner.ts) or as is, covering the whole pane, cropped
+// to fit, with a soft glow of itself under it. A picture seen before shows at
+// once; a new one fades in.
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { asciiDrawing, charWidth, type Drawing, LINE_HEIGHT, loadBanner } from "../lib/banner";
@@ -29,10 +29,6 @@ function isDark(): boolean {
 export function useDarkScheme(): boolean {
   return useSyncExternalStore(subscribeScheme, isDark);
 }
-
-/** Full at the top, fading out toward the foot, so the middle stays calm under the composer. */
-// design-lint: allow (mask alpha, not a colour)
-const FOOT_FADE = "linear-gradient(to bottom, rgb(0 0 0 / 0.9) 0%, rgb(0 0 0 / 0.6) 45%, transparent 100%)";
 
 export function NewThreadBanner({
   name,
@@ -117,7 +113,7 @@ export function NewThreadBanner({
       ref={root}
       aria-hidden="true"
       className={cx("pointer-events-none relative w-full overflow-hidden", className)}
-      style={{ height, maskImage: FOOT_FADE, WebkitMaskImage: FOOT_FADE }}
+      style={{ height }}
     >
       <div
         className="absolute inset-0 transition-opacity duration-[250ms] ease-out"

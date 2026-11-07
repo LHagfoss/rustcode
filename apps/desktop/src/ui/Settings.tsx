@@ -26,7 +26,7 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -881,12 +881,9 @@ function TokenList() {
         }
       />
       {open && (
-        <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 rounded-xl border border-border-strong bg-surface-2/40 p-3">
+        <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 rounded-xl bg-surface p-3">
           {TOKENS.map((t) => (
-            <div
-              key={t}
-              className="flex items-center gap-2 rounded-lg border border-border-strong bg-surface-2/60 px-2.5 py-1.5"
-            >
+            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2.5 py-1.5">
               <span
                 className="size-4 shrink-0 rounded-xs shadow-1"
                 style={{ background: `var(${cssName(t)})` }}
@@ -944,7 +941,7 @@ function BannerSetting() {
       {banner.name && (
         // As a new thread shows it, at a size that reads.
         <div className="px-4 pb-4">
-          <div className="overflow-hidden rounded-lg border border-border-strong bg-bg">
+          <div className="overflow-hidden rounded-lg bg-bg">
             <NewThreadBanner key={banner.style} name={banner.name} style={banner.style} height={240} />
           </div>
         </div>
@@ -1207,55 +1204,6 @@ export function Settings() {
   useEffect(() => {
     panel.current?.focus({ preventScroll: true });
   }, []);
-  // The page's own sections (its group cards), for the nav under the open page:
-  // they are read from the page's DOM, so a page that loads its rows later still
-  // lists them, and the one being scrolled through is marked as you go.
-  const main = useRef<HTMLElement>(null);
-  const [sections, setSections] = useState<string[]>([]);
-  const [atSection, setAtSection] = useState<string | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the page is what is observed
-  useLayoutEffect(() => {
-    const root = main.current;
-    if (!root) return;
-    let frame = 0;
-    const mark = () => {
-      const top = root.getBoundingClientRect().top;
-      let at: string | null = null;
-      for (const element of root.querySelectorAll<HTMLElement>("section[data-setting]")) {
-        if (element.getBoundingClientRect().top - top <= 24) at = element.dataset.setting ?? null;
-      }
-      setAtSection(at ?? root.querySelector<HTMLElement>("section[data-setting]")?.dataset.setting ?? null);
-    };
-    const collect = () => {
-      setSections(
-        [...root.querySelectorAll<HTMLElement>("section[data-setting]")]
-          .map((element) => element.dataset.setting ?? "")
-          .filter(Boolean),
-      );
-      mark();
-    };
-    const again = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(collect);
-    };
-    const observer = new MutationObserver(again);
-    observer.observe(root, { childList: true, subtree: true });
-    root.addEventListener("scroll", mark, { passive: true });
-    // The page's own sections are in the DOM by now, so a page switch never
-    // shows the page before it under the nav for a frame.
-    collect();
-    return () => {
-      observer.disconnect();
-      root.removeEventListener("scroll", mark);
-      cancelAnimationFrame(frame);
-    };
-  }, [section]);
-
-  /** Scrolls the open page to one of its sections, and marks it at once. */
-  const jump = (title: string) => {
-    findSetting(title)?.scrollIntoView({ block: "start" });
-    setAtSection(title);
-  };
 
   const clear = () => {
     setQuery("");
@@ -1338,12 +1286,12 @@ export function Settings() {
         <div
           ref={panel}
           tabIndex={-1}
-          className="relative flex size-full max-h-[60rem] max-w-[80rem] overflow-hidden rounded-2xl border border-border bg-bg shadow-2 outline-none"
+          className="relative flex size-full max-h-[60rem] max-w-[80rem] overflow-hidden rounded-2xl bg-bg shadow-2 outline-none"
         >
           <RowResets>
             <nav
               aria-label="Settings sections"
-              className="flex w-60 shrink-0 flex-col gap-3 border-border border-e bg-sidebar px-2 py-3"
+              className="flex w-60 shrink-0 flex-col gap-3 bg-sidebar px-2 py-3"
             >
               <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
                 <Search size={16} className="shrink-0 text-fg-faint" />
@@ -1411,42 +1359,21 @@ export function Settings() {
                         </div>
                       )}
                       {group.pages.map((s) => (
-                        <div key={s.id} className="flex flex-col">
-                          <button
-                            type="button"
-                            aria-current={s.id === section ? "page" : undefined}
-                            onClick={() => openSettings(s.id)}
-                            className={cx(
-                              "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
-                              s.id === section
-                                ? "bg-fill text-fg"
-                                : "text-fg-muted hover:bg-fill hover:text-fg",
-                            )}
-                          >
-                            <s.icon size={16} className="shrink-0" />
-                            {s.label}
-                          </button>
-                          {s.id === section && sections.length > 1 && (
-                            <div className="mb-1 ms-3.5 flex flex-col border-border border-s ps-1.5">
-                              {sections.map((title) => (
-                                <button
-                                  key={title}
-                                  type="button"
-                                  aria-current={atSection === title ? "true" : undefined}
-                                  onClick={() => jump(title)}
-                                  className={cx(
-                                    "flex h-7 min-w-0 items-center rounded-sm px-2 text-left text-callout",
-                                    atSection === title
-                                      ? "font-medium text-fg"
-                                      : "text-fg-muted hover:bg-fill hover:text-fg",
-                                  )}
-                                >
-                                  <span className="truncate">{title}</span>
-                                </button>
-                              ))}
-                            </div>
+                        <button
+                          key={s.id}
+                          type="button"
+                          aria-current={s.id === section ? "page" : undefined}
+                          onClick={() => openSettings(s.id)}
+                          className={cx(
+                            "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
+                            s.id === section
+                              ? "bg-fill text-fg"
+                              : "text-fg-muted hover:bg-fill hover:text-fg",
                           )}
-                        </div>
+                        >
+                          <s.icon size={16} className="shrink-0" />
+                          {s.label}
+                        </button>
                       ))}
                     </div>
                   ))
@@ -1455,7 +1382,7 @@ export function Settings() {
             </nav>
             <div className="flex min-w-0 flex-1 flex-col">
               <PanelHeader label={current.label} />
-              <main ref={main} className="scroll-stable min-h-0 flex-1">
+              <main className="scroll-stable min-h-0 flex-1">
                 <div className="@container mx-auto w-full max-w-[760px] px-4 pt-5 pb-24">
                   {section === "general" && <GeneralPage />}
                   {section === "chat" && <ChatPage />}

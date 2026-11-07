@@ -84,7 +84,7 @@ export function Tile({
   // full-width line as Turns; one day is a point, not a line, and draws nothing.
   const path = series.length > 1 ? sparklinePath(sparklineSeries(series), 100, 24) : "";
   return (
-    <div className="flex min-w-0 flex-col rounded-xl border border-border-strong bg-surface-2/40 px-4 py-3.5">
+    <div className="flex min-w-0 flex-col rounded-xl bg-surface px-4 py-3.5">
       <div className="flex min-h-5 items-center gap-2">
         <span className="shrink-0 text-caption text-fg-faint">{label}</span>
         <span className="flex min-w-0 flex-1 justify-end">

@@ -17,9 +17,10 @@ gets its desktop tokens over ACP. Users edit theme files by hand, with
 Themes are matched by `name`, case-insensitively: a project theme overrides a
 user theme of the same name, which overrides a built-in. A user file that is
 byte-identical to a built-in is reported as `builtin`. A copy of a built-in
-written by an older release (the terminal keys alone, unedited) is upgraded to
-the current built-in at startup; an edited copy is never touched. Files that do
-not parse are left out of the list; `rustcode theme validate` says why.
+written by an older release (the terminal keys alone, or an earlier version of
+the whole file, unedited) is upgraded to the current built-in at startup; an
+edited copy is never touched. Files that do not parse are left out of the
+list; `rustcode theme validate` says why.
 
 The active theme is `theme` in the config (`/theme`, `rustcode theme set`,
 `_rustcode/themes/set`). The default is `rustcode`, a neutral graphite dark
@@ -164,8 +165,8 @@ rustcode theme path [<name>]                # user directory, or the theme's fil
       "path": "/Users/me/.config/rustcode/themes/rustcode.toml",
       "mode": "dark",
       "tokens": {
-        "bg": "#0b0b0c", "sidebar": "#131315", "surface": "#18181a",
-        "surface_2": "#1e1e21", "surface_3": "#232327", "border": "#1f1f22",
+        "bg": "#0b0b0c", "sidebar": "#151517", "surface": "#1d1d20",
+        "surface_2": "#242428", "surface_3": "#2a2a2e", "border": "#1f1f22",
         "border_strong": "#2c2c30", "text": "#ededed", "text_muted": "#a1a1a1",
         "text_faint": "#6b6b6b", "accent": "#93a3e8", "accent_text": "#0b0b0c",
         "danger": "#f26d6d", "success": "#5fbf8a", "warning": "#e0b25c",

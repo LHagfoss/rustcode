@@ -1,6 +1,6 @@
 // The composer's one usage meter, after UsageCapsule.swift: the plan's shortest window (5-hour) as
 // a short bar with the percentage left, and the context window as a small ring beside it. One
-// glance, one card (both, with each plan window's reset), and a way on to Settings' Usage page.
+// glance, one hover card (both, with each plan window's reset), one press to Settings' Usage page.
 // It reads the store itself, so the composer never re-renders for usage.
 
 import { HoverCard } from "radix-ui";
@@ -26,6 +26,7 @@ import {
   useApp,
 } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
+import { usagePressTarget } from "../state/usagePage";
 import { cx, Pill, Segments, Tooltip } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
@@ -92,8 +93,9 @@ function ContextGauge({ fraction }: { fraction: number }) {
 /**
  * Everything the composer says about usage, as one meter: the plan's shortest window and the
  * context ring side by side, and one card that carries the plan's windows with their resets and
- * what fills the context. Hover or click the meter to open it; the card links on to Settings' Usage
- * page. Two separate meters (and two cards) said the same thing twice.
+ * what fills the context. A hover opens the card; a press goes on to Settings' Usage page (Enter
+ * and Space too, since the meter is a button). Two separate meters (and two cards) said the same
+ * thing twice.
  */
 export function UsageMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
@@ -143,13 +145,14 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
       <HoverCard.Trigger asChild>
         <button
           type="button"
-          aria-label={`${said.join(", ")}. Shows what fills the context window`}
-          aria-expanded={open}
-          onClick={(event) => {
-            // The card, not Settings: a press is the second way into the breakdown (hover is the
-            // first), and the card links on to the full Usage page.
-            event.preventDefault();
-            setOpen(!open);
+          aria-label={`${said.join(", ")}. Opens Usage in Settings`}
+          aria-pressed={usageOpen}
+          onClick={() => {
+            // A press goes to Settings' Usage page, as it always has (and again closes it); the
+            // card is what a hover shows. Pressing also dismisses the card, since the page is
+            // where the press said to go.
+            setOpen(false);
+            openSettings(usagePressTarget(usageOpen));
           }}
           className="flex h-[30px] cursor-pointer items-center gap-2 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
         >

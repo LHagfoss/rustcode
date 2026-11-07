@@ -19,21 +19,21 @@ import {
 import { Dialog, Popover } from "radix-ui";
 import { useEffect, useMemo } from "react";
 import type { StackAgent, StackState } from "../state/agentStack";
-import {
-  type AgentState,
-  addBranch,
-  branchWord,
-  flattenViews,
-  forestTotal,
-  ownBranch,
-} from "../state/delegates";
+import { addBranch, branchBar, flattenViews, forestTotal, ownBranch } from "../state/delegates";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
-import { isActive, LINK_LABEL, type Link, type LinkState, stripLinks } from "../state/orchestration";
+import {
+  doneLinks,
+  isActive,
+  LINK_LABEL,
+  type Link,
+  type LinkState,
+  stripLinks,
+} from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
 import { emptyCost } from "../state/pricing";
 import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
-import { AgentGroupHeader, LINK_AGENT_STATE, ThreadAgentRow } from "./AgentViews";
+import { AgentGroupHeader, LINK_AGENT_STATE, ThreadAgentRow, useNow } from "./AgentViews";
 import { useDelegateBranch } from "./DelegateTree";
 import { cx, Pill, Tooltip } from "./primitives";
 
@@ -89,6 +89,9 @@ function LinkRow({ link }: { link: Link }) {
   );
 }
 
+/** When a link's turn began, for the strip's live clock: its start, else when it was made. */
+const startedOf = (link: Link) => link.startedAt ?? link.createdAt;
+
 /**
  * Three or more linked threads in the strip fold into one card header, the same
  * header a group of agents has in the transcript: the strip above the composer
@@ -104,13 +107,13 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
   // its count, state and time come from the branch and not from those rows.
   const views = useDelegateBranch(threadId);
   const inTree = new Set(flattenViews(views).map((view) => view.id));
-  const now = Date.now();
+  const at = Date.now();
   const total = links.reduce((sum, link, i) => {
     // A thread the tree already holds, at any depth, is counted there.
     if (inTree.has(link.target)) return sum;
     // One it only messaged: not a delegate, but still a row of this strip.
     const state = LINK_AGENT_STATE[states[i] ?? "done"];
-    const end = link.settledAt ?? now;
+    const end = link.settledAt ?? at;
     const elapsed = {
       ms: Math.max(0, end - link.createdAt),
       live: link.settledAt === undefined,
@@ -118,17 +121,19 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
     };
     return addBranch(sum, ownBranch(state, elapsed, emptyCost()));
   }, forestTotal(views));
-  const state: AgentState = total.counts.needs
-    ? "needs"
-    : total.counts.working
-      ? "working"
-      : total.counts.failed
-        ? "failed"
-        : total.counts.stopped
-          ? "stopped"
-          : "done";
-  // The same stack as the sidebar: what works or needs you first, and once the work is
-  // done, the marks of what did it.
+  // A live clock, not the branch's summed work time: how long the longest thread working now has
+  // been at it. A branch that finished is one quiet count, so nothing ticks there.
+  const now = useNow(total.counts.working > 0);
+  const starts = [
+    ...flattenViews(views).flatMap((view) => (view.state === "working" ? [startedOf(view.link)] : [])),
+    ...links.flatMap((link, i) =>
+      !inTree.has(link.target) && LINK_AGENT_STATE[states[i] ?? "done"] === "working"
+        ? [startedOf(link)]
+        : [],
+    ),
+  ];
+  const bar = branchBar(total, starts, now);
+  // The marks are who works now: the finished ones are the popover's "Done", not a wall of avatars.
   const mark = (view: (typeof views)[number]): StackAgent => ({
     id: view.id,
     state: view.state === "stopped" ? "done" : view.state,
@@ -138,14 +143,15 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
     since: view.link.createdAt,
   });
   const marks: StackAgent[] = [
-    ...flattenViews(views).map(mark),
+    ...flattenViews(views).flatMap((view) => (view.state === "working" ? [mark(view)] : [])),
     ...links.flatMap((link, i): StackAgent[] => {
       if (inTree.has(link.target)) return [];
       const agent = LINK_AGENT_STATE[states[i] ?? "done"];
+      if (agent !== "working") return [];
       return [
         {
           id: link.target,
-          state: (agent === "stopped" ? "done" : agent) as StackState,
+          state: "working" as StackState,
           kind: "thread" as const,
           harness: link.harness,
           label: link.targetTitle,
@@ -154,6 +160,13 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
       ];
     }),
   ];
+  // What settled after the live rows: one row per thread, newest first, capped, with a count for the
+  // rest. A thread the strip still shows above is not listed twice.
+  const book = useApp((s) => s.links.links);
+  const settled = doneLinks(book, threadId);
+  const above = new Set(links.map((link) => link.target));
+  const done = settled.shown.filter((link) => !above.has(link.target));
+  const more = settled.more + (settled.shown.length - done.length);
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -162,11 +175,11 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
           className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
           <AgentGroupHeader
-            agents={marks}
-            state={state}
-            label={`${total.threads} threads`}
-            status={branchWord(total)}
-            elapsedMs={total.ms}
+            agents={marks.length ? marks : undefined}
+            state={bar.state}
+            label={bar.label}
+            status={bar.status}
+            elapsedMs={bar.longestMs}
             open={false}
             chevron="down"
           />
@@ -183,6 +196,15 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
           {links.map((l) => (
             <LinkRow key={l.id} link={l} />
           ))}
+          {done.length > 0 && (
+            <>
+              <div className="px-3 pt-2 pb-1 text-caption text-fg-faint">Done</div>
+              {done.map((l) => (
+                <LinkRow key={l.id} link={l} />
+              ))}
+              {more > 0 && <div className="px-3 py-1 text-caption text-fg-faint">{more} more</div>}
+            </>
+          )}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

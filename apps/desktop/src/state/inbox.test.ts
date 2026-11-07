@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionRequest, SessionSummary } from "../acp/types";
-import { DECIDED_MAX, deriveInbox, foldDecided, groupInbox, type InboxItem } from "./inbox";
+import { DECIDED_MAX, deriveInbox, foldDecided, groupInbox, type InboxItem, showsNeedsYou } from "./inbox";
 import type { Link } from "./orchestration";
 
 const NOW = 1_700_000_000_000;
@@ -133,6 +133,43 @@ describe("the needs-you inbox", () => {
     expect(asking.map((item) => [item.kind, item.threadId, item.title])).toEqual([
       ["delegate", "child", "The delegated one"],
     ]);
+  });
+});
+
+describe("the sidebar's Needs you row", () => {
+  const read = (overrides: Partial<Parameters<typeof deriveInbox>[0]> = {}) =>
+    deriveInbox({ sessions, threads: {}, failed: {}, links: [], ...overrides }, NOW);
+
+  test("is not drawn when nothing waits, so the thread rows start the list", () => {
+    expect(showsNeedsYou(read())).toBe(false);
+  });
+
+  test("a thread marked for review is not something that waits on you", () => {
+    // Review is a mark the user sets to come back to; it asks nothing of them.
+    const review = [{ ...session("three", "Read this later"), status: "review" as const }];
+    expect(showsNeedsYou(read({ sessions: review }))).toBe(false);
+    expect(showsNeedsYou(read({ sessions: [...sessions, ...review] }))).toBe(false);
+  });
+
+  test("is drawn for what the inbox holds, and its count is the rows", () => {
+    const approval = read({ threads: { one: { permissions: [request("one", 1, NOW)] } } });
+    const question = read({
+      threads: {
+        two: {
+          permissions: [
+            request("two", 2, NOW, {
+              question: { header: "Tests", text: "Which runner?", descriptions: [], multiple: false },
+            }),
+          ],
+        },
+      },
+    });
+    const failed = read({ failed: { one: NOW } });
+    const delegate = read({ links: [link()] });
+    for (const items of [approval, question, failed, delegate]) {
+      expect(showsNeedsYou(items)).toBe(true);
+      expect(items).toHaveLength(1);
+    }
   });
 });
 
