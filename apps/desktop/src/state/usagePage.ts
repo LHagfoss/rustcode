@@ -60,11 +60,13 @@ export function usageView(
 }
 
 /**
- * A failed Claude read that a retry can fix: Claude Code renews an expired
- * sign-in, and the user signs in again after a refusal. A denied Keychain
- * prompt is left to an explicit Refresh (asking again would prompt again), a
- * forbidden sign-in to the user (renewing does not change it), and a transient
- * failure to the next poll.
+ * A failed Claude read that a retry can fix: Claude Code renews a lapsed access
+ * token when it runs, and the user signs in again after a refusal. Only a row
+ * with nothing recorded behind it gets here; numbers RustCode recorded for the
+ * login are drawn "as of" instead. A denied Keychain prompt is left to an
+ * explicit Refresh (asking again would prompt again), a forbidden sign-in to
+ * the user (renewing does not change it), and a transient failure to the next
+ * poll.
  */
 function retryable(plan: UsagePlan): boolean {
   return (
@@ -74,13 +76,20 @@ function retryable(plan: UsagePlan): boolean {
   );
 }
 
-/** The words for a plan row that has no numbers: the reason first, then its error. */
+/**
+ * The words for a plan row that has no numbers: the reason first, then its error.
+ */
 export function failureText(plan: UsagePlan): { title: string; subtitle?: string } {
   switch (plan.reason) {
     case "expired":
+      // The access token Claude Code keeps on disk lives for hours and is
+      // renewed only when Claude Code runs; the sign-in itself is still good.
+      // Nothing here refreshes it, so a run on that login is what renews it.
       return {
-        title: "Claude Code's sign-in has expired",
-        subtitle: "Open Claude Code to renew it, then press Refresh.",
+        title: "Claude Code needs to refresh this sign-in",
+        subtitle: plan.account
+          ? "Run a Claude Code thread on this account to refresh its usage."
+          : "Run a Claude Code thread to refresh its usage.",
       };
     case "refused":
       return {

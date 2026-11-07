@@ -172,7 +172,7 @@ export async function defaultTransport(): Promise<Transport> {
       needsYou: q.get("needsYou") !== "0",
       bootMs: Number(q.get("boot")) || undefined,
       crashAfterMs: Number(q.get("crash")) || undefined,
-      claudeUsage: (["expired", "refused", "forbidden", "denied"] as const).find(
+      claudeUsage: (["expired", "refused", "forbidden", "denied", "recorded"] as const).find(
         (f) => f === q.get("claudeUsage"),
       ),
     });

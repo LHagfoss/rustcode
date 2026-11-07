@@ -31,10 +31,11 @@ export interface MockOptions {
    * How the default Claude login's plan reads (`?claudeUsage=`), for looking at
    * the expired and denied states without a Keychain: `expired` is the sign-in
    * RustCode cannot use until Claude Code renews it, `denied` a Keychain prompt
-   * the user declined, `forbidden` Anthropic refusing this sign-in access.
-   * Named accounts stay readable, as their own rows.
+   * the user declined, `forbidden` Anthropic refusing this sign-in access, and
+   * `recorded` a lapsed token answered with the numbers RustCode last read for
+   * that login ("as of" then). Named accounts stay readable, as their own rows.
    */
-  claudeUsage?: "expired" | "refused" | "forbidden" | "denied";
+  claudeUsage?: "expired" | "refused" | "forbidden" | "denied" | "recorded";
   /**
    * The link book the engine keeps: data on disk, so it outlives a restart of the engine (a new
    * `MockEngine` on the same transport). Seeded here when a test starts from a stored book.
@@ -2422,7 +2423,11 @@ export class MockEngine {
         // (and its Refresh tried) without a Keychain. A forced read answers the
         // same: the real engine re-reads and only then knows it is still broken.
         const failure = this.options.claudeUsage;
-        const failed = (reason: NonNullable<MockOptions["claudeUsage"]>) => ({
+        // A lapsed access token that RustCode answered with the numbers it last
+        // read for the login: the row draws them, marked with when.
+        const recorded: JsonObject =
+          failure === "recorded" ? { asOf: Math.floor(Date.now() / 1000) - 3 * 3600 } : {};
+        const failed = (reason: Exclude<NonNullable<MockOptions["claudeUsage"]>, "recorded">) => ({
           id: "claude",
           name: "Claude",
           via: "Claude Code",
@@ -2430,7 +2435,7 @@ export class MockEngine {
           reason,
           error:
             reason === "expired"
-              ? "Claude Code's sign-in has expired. Open Claude Code to renew it, then Refresh."
+              ? "Run a Claude Code thread on this account to refresh its usage."
               : reason === "refused"
                 ? "Claude Code's sign-in was refused. Sign in again in Claude Code, then Refresh."
                 : reason === "forbidden"
@@ -2454,7 +2459,7 @@ export class MockEngine {
         return {
           plans: [
             p?.claude
-              ? failure
+              ? failure && failure !== "recorded"
                 ? failed(failure)
                 : {
                     id: "claude",
@@ -2462,6 +2467,7 @@ export class MockEngine {
                     via: "Claude Code",
                     status: "ok",
                     plan: "max",
+                    ...recorded,
                     windows: [
                       { label: "5-hour", usedPercent: 18, windowMinutes: 300, resetsAt: at(3) },
                       { label: "Weekly", usedPercent: 46, windowMinutes: 10080, resetsAt: at(80) },
@@ -2477,6 +2483,7 @@ export class MockEngine {
               account: a.id,
               status: "ok",
               plan: "max",
+              ...recorded,
               windows: a.windows,
             })),
             {

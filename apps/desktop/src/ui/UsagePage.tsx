@@ -127,6 +127,12 @@ export function UsagePage() {
         >
           {p.status === "ok" && p.windows.length > 0 ? (
             <div className="flex flex-col gap-4 px-4 py-4">
+              {p.asOf !== undefined && (
+                <p className="text-caption text-fg-faint">
+                  as of {relativeAge(p.asOf)} · the last numbers RustCode read for this login; run a Claude
+                  Code thread on it to refresh them.
+                </p>
+              )}
               {p.windows.map((w) => (
                 <PlanWindow key={w.label} window={w} title={w.label} />
               ))}

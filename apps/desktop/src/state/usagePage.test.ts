@@ -147,6 +147,14 @@ describe("what Settings › Usage shows", () => {
     }
   });
 
+  test("a row drawn from recorded numbers is not retried on every open", () => {
+    // Numbers RustCode recorded are numbers: nothing to force a Keychain read
+    // for, and the ordinary background poll refreshes them when Claude Code
+    // renews the token.
+    const cached = answer([{ ...work, status: "ok", asOf: NOW - 3 * 60 * 60 * 1000 }], true);
+    expect(usageView(cached, true, null, NOW)).toMatchObject({ fetch: false, force: false });
+  });
+
   test("a named account's expired row is retried as well", () => {
     const cached = answer(
       [claude, plan({ ...work, status: "unavailable", reason: "expired", error: "no", windows: [] })],
@@ -160,8 +168,14 @@ describe("what a failed row says", () => {
   test("each reason has its own words, and the engine's message wins beside them", () => {
     const failed = (reason: UsagePlan["reason"]) =>
       plan({ status: "unavailable", reason, error: `engine: ${reason ?? "none"}`, windows: [] });
-    expect(failureText(failed("expired")).title).toMatch(/expired/);
-    expect(failureText(failed("expired")).subtitle).toMatch(/Open Claude Code/);
+    // A lapsed access token does not make the sign-in expire: Claude Code
+    // renews it when it runs, so the words ask for a run on that login.
+    expect(failureText(failed("expired")).title).toMatch(/refresh this sign-in/);
+    expect(failureText(failed("expired")).subtitle).toBe("Run a Claude Code thread to refresh its usage.");
+    // An account's row says which account has to run.
+    expect(failureText({ ...failed("expired"), account: "personal", id: "claude:personal" }).subtitle).toBe(
+      "Run a Claude Code thread on this account to refresh its usage.",
+    );
     expect(failureText(failed("refused")).title).toMatch(/did not accept/);
     expect(failureText(failed("forbidden")).title).toMatch(/does not allow/);
     expect(failureText(failed("forbidden")).subtitle).toMatch(/does not change/);

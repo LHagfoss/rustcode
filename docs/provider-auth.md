@@ -75,11 +75,15 @@ Claude Code signs in to with its own command; RustCode names it, starts the
 harness with it, and never reads, copies, stores or proxies its tokens. The
 one exception is the read-only plan-usage lookup: with the user's consent,
 Settings › Usage reads an account's stored sign-in and asks Anthropic for
-that account's windows. It never refreshes a token, so an expired sign-in is
-reported and left to Claude Code. On macOS the Keychain item for a named
+that account's windows. It never refreshes a token: Claude Code renews it when
+it runs, so an account idle since its access token lapsed is answered with the
+numbers RustCode last read for it, marked "as of" when they were read, and
+only a login with nothing recorded asks for a thread on that account. On macOS
+the Keychain item for a named
 account is `Claude Code-credentials-` plus the first 8 hex digits of the
 SHA-256 of its directory path; that name is undocumented, and a missing item
-reads as not signed in. Every account has its own plan and limits, and
+reads as not signed in. The directory's `.credentials.json` is read as well,
+and the copy with the freshest token is used. Every account has its own plan and limits, and
 RustCode never switches or pools them automatically.
 
 ## Add an API-key provider

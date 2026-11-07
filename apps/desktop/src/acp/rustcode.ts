@@ -308,9 +308,11 @@ export type PlanStatus = "ok" | "signedOut" | "notInstalled" | "unavailable" | "
  * Why a plan could not be read, as the engine names it (`_rustcode/usage/plans`
  * `reason`). It decides what the app does next:
  *
- * - `expired` and `refused` are fixed in the CLI itself (Claude Code renews an
- *   expired sign-in, or the user signs in again), so the background read keeps
- *   asking and Settings › Usage offers a forced Refresh.
+ * - `expired` and `refused` are fixed in the CLI itself (Claude Code renews a
+ *   lapsed access token when it runs, and the user signs in again after a
+ *   refusal), so the background read keeps asking and Settings › Usage offers a
+ *   forced Refresh. Only a login with nothing recorded behind it gets here: the
+ *   numbers RustCode read for it last are drawn `asOf` instead.
  * - `forbidden` is Anthropic refusing this sign-in access to the usage endpoint:
  *   renewing it does not change that, so it is not retried on its own.
  * - `denied` is a macOS Keychain prompt the user declined: asking again on every
@@ -335,6 +337,12 @@ export interface UsagePlan {
   error?: string;
   /** Why an `unavailable` row has no numbers; absent from engines before this. */
   reason?: PlanFailure;
+  /**
+   * When the numbers were read, in ms, when they are the last ones RustCode
+   * recorded for this login rather than a read now: its stored access token
+   * lapsed, so they are drawn "as of" then.
+   */
+  asOf?: number;
   windows: (UsageWindow & { label: string })[];
 }
 
@@ -383,6 +391,9 @@ export function parsePlans(result: Json | undefined): UsagePlan[] {
         },
       ];
     });
+    // Numbers the engine recorded before the login's access token lapsed say
+    // when they were read, so the row can say "as of" then.
+    const read = num(o.asOf);
     return [
       {
         id,
@@ -394,6 +405,7 @@ export function parsePlans(result: Json | undefined): UsagePlan[] {
         plan: str(o.plan),
         error: str(o.error),
         reason: planFailure(o.reason),
+        asOf: read ? read * 1000 : undefined,
         windows,
       },
     ];

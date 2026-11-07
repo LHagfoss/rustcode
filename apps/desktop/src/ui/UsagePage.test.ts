@@ -21,8 +21,20 @@ describe("usage plans", () => {
           account: "work",
           status: "unavailable",
           reason: "expired",
-          error: "Open Claude Code to renew it, then Refresh.",
+          error: "Run a Claude Code thread on this account to refresh its usage.",
           windows: [],
+        },
+        // Numbers RustCode recorded before the login's token lapsed say when
+        // they were read, in seconds on the wire and ms in the app.
+        {
+          id: "claude:personal",
+          name: "Personal 1",
+          harness: "claude-code",
+          account: "personal",
+          status: "ok",
+          plan: "pro",
+          asOf: 1_762_500_000,
+          windows: [{ label: "5-hour", usedPercent: 41.5, windowMinutes: 300 }],
         },
         // A reason this app does not know is no reason at all, never a crash.
         { id: "claude:home", name: "Home", status: "unavailable", reason: "brand-new", windows: [] },
@@ -34,6 +46,7 @@ describe("usage plans", () => {
       "claude",
       "codex",
       "claude:work",
+      "claude:personal",
       "claude:home",
       "claude:office",
     ]);
@@ -45,7 +58,11 @@ describe("usage plans", () => {
     });
     expect(plans[1]!.status).toBe("signedOut");
     expect(plans[2]).toMatchObject({ status: "unavailable", reason: "expired", account: "work" });
-    expect(plans[3]!.reason).toBeUndefined();
-    expect(plans[4]!.reason).toBe("forbidden");
+    expect(plans[3]).toMatchObject({ status: "ok", asOf: 1_762_500_000_000 });
+    expect(plans[3]!.windows[0]!.usedPercent).toBe(41.5);
+    expect(plans[4]!.reason).toBeUndefined();
+    expect(plans[5]!.reason).toBe("forbidden");
+    // A row read now carries no as-of, so it is drawn as this minute's.
+    expect(plans[0]!.asOf).toBeUndefined();
   });
 });
