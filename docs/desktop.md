@@ -316,9 +316,10 @@ composer's keys stay outside the table.
   spend against the last. One `_rustcode/data/usage` read grouped by day feeds
   the three figures cards, so the screen asks the engine once. Every card keeps
   one height from the first frame and says what it has in a line when it has
-  nothing, so the field above never moves as the reads land; below `lg` the
+  nothing. A persisted toggle opens the overview below the centred composer,
+  without moving it; the remaining space scrolls. Below `lg` the
   cards are one sideways-scrolling row, and a window shorter than 700px leaves
-  them out rather than push the field off the pane.
+  toggle and cards out.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries
