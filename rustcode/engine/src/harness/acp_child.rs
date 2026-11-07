@@ -226,6 +226,31 @@ fn with_system_prompt(mut params: Value, system_prompt: Option<&Value>) -> Value
     params
 }
 
+/// Claude Code's own subagent tool, under the name it had (`Task`) and the one
+/// it has now (`Agent`). A Claude Code thread RustCode runs delegates through
+/// the orchestrator's MCP tools (`start_session`, `fan_out`) instead, so its
+/// native subagents do not bypass the thread's delegate UI (#3176).
+const CLAUDE_CODE_SUBAGENT_TOOLS: [&str; 2] = ["Task", "Agent"];
+
+/// The `_meta` a harness's `session/new` and `session/load` carry, when it
+/// takes options that way. Only `claude-agent-acp` does: it forwards
+/// `_meta.claudeCode.options` to the Claude Agent SDK and merges
+/// `disallowedTools` into its own list. The rustcode MCP server is untouched,
+/// so the thread keeps `start_session` and `fan_out`.
+fn session_meta(harness: &ResolvedHarness) -> Option<Value> {
+    (harness.id == "claude-code").then(
+        || json!({"claudeCode": {"options": {"disallowedTools": CLAUDE_CODE_SUBAGENT_TOOLS}}}),
+    )
+}
+
+/// `params` with `session_meta`, when the harness takes one.
+fn with_session_meta(mut params: Value, harness: &ResolvedHarness) -> Value {
+    if let Some(meta) = session_meta(harness) {
+        params["_meta"] = meta;
+    }
+    params
+}
+
 /// The MCP servers the child's session gets: the orchestrator when the thread has one, then the
 /// workspace's own servers, so a Claude Code or OpenCode thread has the servers Settings · MCP
 /// shows (docs/configuration.md). A stdio server is `name`/`command`/`args`/`env`, a remote one
@@ -368,7 +393,10 @@ impl AcpAdapter {
                 .request_within(
                     "session/load",
                     with_system_prompt(
-                        json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": mcp_servers}),
+                        with_session_meta(
+                            json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": mcp_servers}),
+                            harness,
+                        ),
                         system_prompt.as_ref(),
                     ),
                     HANDSHAKE_TIMEOUT,
@@ -395,7 +423,10 @@ impl AcpAdapter {
                 .request_within(
                     "session/new",
                     with_system_prompt(
-                        json!({"cwd": cwd_text, "mcpServers": mcp_servers}),
+                        with_session_meta(
+                            json!({"cwd": cwd_text, "mcpServers": mcp_servers}),
+                            harness,
+                        ),
                         system_prompt.as_ref(),
                     ),
                     HANDSHAKE_TIMEOUT,

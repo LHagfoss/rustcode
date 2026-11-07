@@ -74,7 +74,7 @@ pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 /// Added by version 7: the messages this thread queued on another one.
 pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 7;
+pub const VERSION: u8 = 8;
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -148,6 +148,10 @@ pub const PROMPT_HINT_V6: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V6`] for version 7 clients, which can correct what they queued.
 pub const PROMPT_HINT_V7: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
+/// [`PROMPT_HINT_V7`] for version 8 clients: delegation goes through RustCode's
+/// tools, as a Claude Code thread has no native subagent tool (#3176).
+pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and delegate through `start_session` or `fan_out`, even for a quick lookup: a Claude Code thread has no subagent tool. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -158,7 +162,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         4 => PROMPT_HINT_V4,
         5 => PROMPT_HINT_V5,
         6 => PROMPT_HINT_V6,
-        _ => PROMPT_HINT_V7,
+        7 => PROMPT_HINT_V7,
+        _ => PROMPT_HINT_V8,
     }
 }
 
@@ -921,7 +926,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 7);
+        assert_eq!(VERSION, 8);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -971,7 +976,8 @@ mod tests {
         assert_eq!(prompt_hint(5), PROMPT_HINT_V5);
         assert_eq!(prompt_hint(6), PROMPT_HINT_V6);
         assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
-        assert_eq!(prompt_hint(9), PROMPT_HINT_V7);
+        assert_eq!(prompt_hint(8), PROMPT_HINT_V8);
+        assert_eq!(prompt_hint(9), PROMPT_HINT_V8);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -983,7 +989,7 @@ mod tests {
                     .cloned()
                     .unwrap()
             )),
-            7
+            8
         );
         assert_eq!(
             client_meta_version(Some(
@@ -997,16 +1003,17 @@ mod tests {
         // It rides in the root prompt and in the MCP server's instructions, so
         // it is bounded: v4 adds the two data tools, v5 the account line and
         // the line that says a thread an agent starts is its delegate, v6 the
-        // activity read, v7 the queue control.
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V7);
+        // activity read, v7 the queue control, v8 that delegation goes through
+        // RustCode's tools.
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V8);
         println!(
-            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v7 {tokens} tokens",
+            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v8 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V4),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V6)
         );
-        assert!(tokens < 350, "{tokens}");
+        assert!(tokens < 370, "{tokens}");
     }
 
     #[test]

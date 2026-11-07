@@ -150,7 +150,7 @@ describe("management tools", () => {
 describe("orchestration rules", () => {
   test("the app advertises the version whose account argument it answers", () => {
     // The engine strips `account` below this version and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(7);
+    expect(CAPABILITY_VERSION).toBe(8);
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {

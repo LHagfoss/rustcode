@@ -19,6 +19,7 @@
 import type { ThreadStatus } from "../acp/v2";
 import { isActive, type Link, type LinkState, MAX_DEPTH } from "./orchestration";
 import { type CostTotals, emptyCost, formatCost } from "./pricing";
+import { subagentOf, type TranscriptItem } from "./thread";
 
 /** How a node in the tree is doing, the same words the agent rows use. */
 export type AgentState = "working" | "needs" | "done" | "failed" | "stopped";
@@ -371,6 +372,39 @@ export interface DelegateBar {
   label: string;
   /** What follows the count: `5 working · 2 need you`, `2 need you`, `1 failed`; empty when done. */
   status: string;
+}
+
+type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
+
+/** A harness's own agent at work in a thread: `item` is the call that started it. */
+export interface NativeAgent {
+  item: ToolItem;
+  /** The calls made under it, so the row says what it is doing. */
+  steps: ToolItem[];
+}
+
+const working = (item: ToolItem) => item.status === "pending" || item.status === "in_progress";
+
+/**
+ * The harness's own subagents at work in `items`. RustCode's threads delegate
+ * through `start_session` and `fan_out`, so a Claude Code thread RustCode
+ * started has none; another harness or an older session can still send one.
+ * They belong in the one strip above the composer, beside RustCode's delegates
+ * (`ui/Links.tsx`), never in a surface of their own. A finished one is
+ * the transcript's row, not the strip's.
+ */
+export function runningSubagents(items: readonly TranscriptItem[]): NativeAgent[] {
+  const steps = new Map<string, ToolItem[]>();
+  for (const item of items) {
+    if (item.kind !== "tool" || !item.parent || !working(item)) continue;
+    const list = steps.get(item.parent);
+    if (list) list.push(item);
+    else steps.set(item.parent, [item]);
+  }
+  return items.flatMap((item): NativeAgent[] => {
+    if (item.kind !== "tool" || item.parent || !working(item) || !subagentOf(item)) return [];
+    return [{ item, steps: steps.get(item.id) ?? [] }];
+  });
 }
 
 /**

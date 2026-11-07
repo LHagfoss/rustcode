@@ -19,7 +19,14 @@ import {
 import { Dialog, Popover } from "radix-ui";
 import { useEffect, useMemo } from "react";
 import type { StackAgent, StackState } from "../state/agentStack";
-import { addBranch, branchBar, flattenViews, forestTotal, ownBranch } from "../state/delegates";
+import {
+  addBranch,
+  branchBar,
+  flattenViews,
+  forestTotal,
+  ownBranch,
+  runningSubagents,
+} from "../state/delegates";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import {
   doneLinks,
@@ -33,7 +40,7 @@ import { modeLabel } from "../state/permissions";
 import { emptyCost } from "../state/pricing";
 import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
-import { AgentGroupHeader, LINK_AGENT_STATE, ThreadAgentRow, useNow } from "./AgentViews";
+import { AgentGroupHeader, LINK_AGENT_STATE, SubagentRow, ThreadAgentRow, useNow } from "./AgentViews";
 import { useDelegateBranch } from "./DelegateTree";
 import { cx, Pill, Tooltip } from "./primitives";
 
@@ -211,11 +218,14 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
   );
 }
 
-/** Above the composer: the threads this one is working with, and the thread it works for. */
+/** Above the composer: the delegates this one is working with, and the thread it works for. */
 export function LinkedThreads({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
   const items = useApp((s) => s.threads[threadId]?.items);
   const { driving, drivenBy } = linksOf(book, threadId);
+  // A harness's own subagents, from another harness or an older session, read
+  // in this same strip: one surface for everything working under the thread.
+  const natives = useMemo(() => runningSubagents(items ?? []), [items]);
   // A thread this one started reads in the transcript once it settles; the strip is its live
   // place until then, so the two never draw the same thread.
   const shown = useMemo(() => {
@@ -224,14 +234,14 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   }, [items, book.links, threadId]);
   const live = stripLinks(driving, shown);
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
-  if (!live.length && !drivenBy && !fanOuts.length) return null;
+  if (!live.length && !drivenBy && !fanOuts.length && !natives.length) return null;
   return (
     // The one surface this strip shares with the jump-to-latest pill above it and its own group card
     // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
     // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
     <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
       {drivenBy && <WorkingFor link={drivenBy} />}
-      {(live.length > 0 || fanOuts.length > 0) && (
+      {(live.length > 0 || fanOuts.length > 0 || natives.length > 0) && (
         <div className="flex flex-col gap-0.5">
           {live.length > 2 ? (
             <ManyLinks links={live} threadId={threadId} />
@@ -251,6 +261,9 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
               ))}
             </div>
           )}
+          {natives.map(({ item, steps }) => (
+            <SubagentRow key={item.id} item={item} steps={steps} threadId={threadId} />
+          ))}
         </div>
       )}
     </div>
