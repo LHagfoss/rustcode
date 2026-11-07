@@ -16,6 +16,7 @@ import {
   ListChecks,
   type LucideIcon,
   PanelRight,
+  Sparkles,
   SquareTerminal,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
@@ -30,10 +31,12 @@ import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
 import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
+  autoCompactOffFor,
   dismissPendingSetup,
   refreshSessions,
   repairThread,
   retryPendingSetup,
+  setAutoCompactForThread,
   setPanel,
   setTerminalOpen,
   setThreadStatus,
@@ -133,6 +136,7 @@ function PlanButton({ thread }: { thread: ThreadState }) {
 /** The thread's status chip; a click marks it for review, settles or unsettles it. */
 function ThreadStatusMenu({ threadId }: { threadId: string }) {
   const status = useApp((s) => statusOf(s, threadId));
+  const autoCompactOff = useApp((s) => autoCompactOffFor(s, threadId));
   const wt = useApp((s) => worktreeOf(s, threadId));
   return (
     <DropdownMenu.Root>
@@ -180,6 +184,13 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
             <CircleDashed size={13} /> Clear Status
           </DropdownMenu.Item>
         )}
+        <DropdownMenu.Separator className={menuSeparator} />
+        <DropdownMenu.Item
+          className={menuItem}
+          onSelect={() => setAutoCompactForThread(threadId, autoCompactOff)}
+        >
+          <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
+        </DropdownMenu.Item>
       </MenuContent>
     </DropdownMenu.Root>
   );
