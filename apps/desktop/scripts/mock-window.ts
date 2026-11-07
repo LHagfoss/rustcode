@@ -6,7 +6,7 @@
 // `open` leaves the server and window running detached; `close` stops only those
 // two. `scripts/perf.ts` stays headless: it measures performance, not appearance.
 // `MOCK_WINDOW_CDP_PORT` and `MOCK_WINDOW_PROFILE` move this helper to another
-// port and profile, so a second thread can drive a window of its own.
+// port and profile, for testing the helper itself; UI checks share the one window.
 
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync, rmSync } from "node:fs";
