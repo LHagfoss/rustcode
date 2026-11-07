@@ -41,10 +41,7 @@ export function ViewHeader({ title, children }: { title: React.ReactNode; childr
   return (
     <header
       data-tauri-drag-region
-      className={cx(
-        "flex h-[42px] shrink-0 items-center gap-2.5 pt-1.5 pr-2.5 pb-2",
-        !sidebarHidden && "pl-4",
-      )}
+      className={cx("flex h-[42px] shrink-0 items-center gap-2 pt-1.5 pr-2 pb-2", !sidebarHidden && "pl-4")}
       style={sidebarHidden ? { paddingLeft: lightsInset } : undefined}
     >
       {sidebarHidden && (
@@ -93,7 +90,7 @@ function Card({
         e.dataTransfer.setData("text/rustcode-thread", session.id);
         e.dataTransfer.effectAllowed = "move";
       }}
-      className="group rounded-lg bg-surface-2 p-2.5 transition-[background-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:bg-surface-3 hover:shadow-1 rc-in"
+      className="group rounded-lg bg-surface-2 p-2 transition-[background-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:bg-surface-3 hover:shadow-1 rc-in"
     >
       <button type="button" onClick={() => selectThread(session.id)} className="block w-full text-left">
         <span className="line-clamp-2 text-body">{session.title || "New thread"}</span>

@@ -81,7 +81,7 @@ function EarlierAttempt({
   const replyOf = (item: TranscriptItem) => lastReplyBefore(attempt.items, item.id);
   const turns = attemptTurns(attempt.items);
   return (
-    <section aria-label="Earlier attempt" className="flex flex-col gap-3.5">
+    <section aria-label="Earlier attempt" className="flex flex-col gap-3">
       <div className="flex items-center gap-2 text-caption text-fg-faint">
         <span className="h-px flex-1 bg-border" />
         <History size={11} />
@@ -92,7 +92,7 @@ function EarlierAttempt({
         <span className="h-px flex-1 bg-border" />
         <AttemptAction threadId={threadId} attempt={attempt} />
       </div>
-      <div className="flex flex-col gap-3.5 opacity-50">
+      <div className="flex flex-col gap-3 opacity-50">
         {attempt.items.map((item) => (
           <AttemptItem
             key={item.id}

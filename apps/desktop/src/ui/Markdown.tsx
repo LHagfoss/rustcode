@@ -281,8 +281,8 @@ const components: Components = {
   ),
   // Rows inside the table's card are parted by a hairline, the way a card's rows are.
   tr: ({ children }) => <tr className="border-b border-border/60 last:border-0">{children}</tr>,
-  th: ({ children }) => <th className="border-b border-border px-2.5 py-1.5 font-semibold">{children}</th>,
-  td: ({ children }) => <td className="px-2.5 py-1.5 align-top text-pretty">{children}</td>,
+  th: ({ children }) => <th className="border-b border-border px-2 py-1.5 font-semibold">{children}</th>,
+  td: ({ children }) => <td className="px-2 py-1.5 align-top text-pretty">{children}</td>,
   pre: ({ children }) => <>{children}</>,
   code: ({ className, children, node }: ComponentProps<"code"> & { node?: { position?: unknown } }) => {
     const text = String(children ?? "");
@@ -438,7 +438,7 @@ export const Markdown = memo(function Markdown({
       // Replies read at 14px on 1.625 (22.75px), the transcript's own leading; the app's rows keep
       // the body's 19px (docs/design.md › Type).
       className={cx(
-        "selectable flex flex-col gap-2.5 text-body leading-relaxed text-fg/90 break-words",
+        "selectable flex flex-col gap-2 text-body leading-relaxed text-fg/90 break-words",
         className,
       )}
     >

@@ -39,7 +39,7 @@ export function UpdateRow() {
         onClick={() =>
           void applyUpdate().then((error) => error && toast(`The update did not install: ${error}`, "error"))
         }
-        className="flex w-full items-center gap-2 rounded-md bg-accent/12 px-2.5 py-2 text-left text-callout hover:bg-accent/18 disabled:opacity-70"
+        className="flex w-full items-center gap-2 rounded-md bg-accent/12 px-2 py-2 text-left text-callout hover:bg-accent/18 disabled:opacity-70"
       >
         {installing ? <Spinner size={13} /> : <ArrowUpCircle size={15} className="shrink-0 text-accent" />}
         <span className="min-w-0 flex-1">
@@ -75,7 +75,7 @@ export function UpdateRow() {
         <button
           type="button"
           onClick={skip}
-          className="mt-1 w-full rounded px-2.5 py-1 text-left text-caption text-fg-muted hover:text-fg"
+          className="mt-1 w-full rounded px-2 py-1 text-left text-caption text-fg-muted hover:text-fg"
         >
           Skip this beta
         </button>
