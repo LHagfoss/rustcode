@@ -7,17 +7,74 @@ use crate::harness::session::{Adapter, StartOptions};
 use agent_client_protocol::schema::v1::TextContent;
 
 fn options(effort: &str) -> Value {
-    json!([
+    options_for("sonnet", effort)
+}
+
+/// The models the fake agent lists, in its own order.
+const CATALOG: [&str; 5] = ["sonnet", "opus", "haiku", "titan", "nova"];
+
+/// The thought levels `model` offers, in the agent's own (unordered) order.
+fn efforts_of(model: &str) -> Value {
+    match model {
+        "opus" => json!([
+            {"value": "max", "name": "Max"},
+            {"value": "off", "name": "Off"},
+            {"value": "default", "name": "Default"}
+        ]),
+        "haiku" => json!([]),
+        "titan" => json!([
+            {"value": "low", "name": "Low"},
+            {"value": "minimal", "name": "Minimal"}
+        ]),
+        "nova" => json!([
+            {"value": "xhigh", "name": "xHigh"},
+            {"value": "high", "name": "High"}
+        ]),
+        _ => json!([
+            {"value": "high", "name": "High"},
+            {"value": "medium", "name": "Medium"},
+            {"value": "low", "name": "Low"}
+        ]),
+    }
+}
+
+/// The level `model` starts on.
+fn starts_at(model: &str) -> &'static str {
+    match model {
+        "opus" => "default",
+        "haiku" => "",
+        "titan" => "low",
+        "nova" => "high",
+        _ => "medium",
+    }
+}
+
+/// The fake agent's options with `model` running on `effort`, as an ACP agent
+/// reports the thought levels of the model the session runs.
+fn options_for(model: &str, effort: &str) -> Value {
+    let efforts = efforts_of(model);
+    let models = CATALOG
+        .iter()
+        .map(|id| {
+            let name = format!("{}{}", id[..1].to_uppercase(), &id[1..]);
+            json!({"value": id, "name": name})
+        })
+        .collect::<Vec<_>>();
+    let mut options = vec![json!(
         {"id": "model", "name": "Model", "category": "model", "type": "select",
-         "currentValue": "sonnet",
-         "options": [{"value": "sonnet", "name": "Sonnet"}, {"value": "opus", "name": "Opus"}]},
-        {"id": "thinking", "name": "Thinking", "category": "thought_level", "type": "select",
-         "currentValue": effort,
-         "options": [{"value": "low", "name": "Low"}, {"value": "medium", "name": "Medium"},
-                     {"value": "high", "name": "High"}]},
+         "currentValue": model, "options": models}
+    )];
+    if !efforts.as_array().is_some_and(Vec::is_empty) {
+        options.push(json!(
+            {"id": "thinking", "name": "Thinking", "category": "thought_level", "type": "select",
+             "currentValue": effort, "options": efforts}
+        ));
+    }
+    options.push(json!(
         {"id": "mode", "name": "Mode", "type": "select", "currentValue": "default",
          "options": [{"value": "default", "name": "Default"}]}
-    ])
+    ));
+    Value::Array(options)
 }
 
 /// What the fake agent advertises and does.
@@ -50,6 +107,9 @@ async fn fake_agent(
 ) {
     let update = |session: &str, update: Value| json!({"sessionId": session, "update": update});
     let mut cancelled = Vec::new();
+    // The model the session runs: a real agent reports the thought levels of
+    // that model, so an effort change answers with its list, not another's.
+    let mut model = "sonnet".to_owned();
     while let Some(message) = incoming.recv().await {
         let (id, method, params) = match message {
             Incoming::Request { id, method, params } => (Some(id), method, params),
@@ -116,10 +176,18 @@ async fn fake_agent(
                 );
                 peer.respond(id, Ok(json!({"configOptions": options("medium")})));
             }
-            "session/set_config_option" => peer.respond(
-                id,
-                Ok(json!({"configOptions": options(params["value"].as_str().unwrap_or("low"))})),
-            ),
+            "session/set_config_option" => {
+                let value = params["value"].as_str().unwrap_or("low");
+                // Another model, as a real agent answers: its own efforts, and
+                // the level it starts on.
+                let answer = if params["configId"] == "model" {
+                    model = value.to_owned();
+                    options_for(value, starts_at(value))
+                } else {
+                    options_for(&model, value)
+                };
+                peer.respond(id, Ok(json!({"configOptions": answer})))
+            }
             "session/prompt" => {
                 if fake.echo && let Some(echoed) = params["prompt"][0]["text"].as_str() {
                     peer.notify(
@@ -228,7 +296,21 @@ async fn start_with(
     crate::harness::session::test_support::Thread,
     mpsc::UnboundedReceiver<(String, Value)>,
 ) {
-    let harness = harness("fake-acp", HarnessKind::Acp);
+    start_named("fake-acp", fake, choice, options).await
+}
+
+/// A thread on the fake agent under `id`, so tests that read what the engine
+/// learned for a harness do not race each other.
+async fn start_named(
+    id: &str,
+    fake: Fake,
+    choice: Option<&str>,
+    options: StartOptions,
+) -> (
+    crate::harness::session::test_support::Thread,
+    mpsc::UnboundedReceiver<(String, Value)>,
+) {
+    let harness = harness(id, HarnessKind::Acp);
     let ((ours, our_incoming), (theirs, their_incoming)) = pipe();
     let (seen_tx, seen) = mpsc::unbounded_channel();
     tokio::spawn(fake_agent(theirs, their_incoming, seen_tx, fake));
@@ -246,6 +328,35 @@ async fn start_with(
     .expect("the fake agent starts");
     thread.session.attach(adapter).await;
     (thread, seen)
+}
+
+/// The adapter of a session on the fake agent, for what a listing does before
+/// any thread owns it.
+async fn adapter_with(fake: Fake) -> (Adapter, mpsc::UnboundedReceiver<(String, Value)>) {
+    adapter_named("fake-acp-listing", fake).await
+}
+
+async fn adapter_named(
+    id: &str,
+    fake: Fake,
+) -> (Adapter, mpsc::UnboundedReceiver<(String, Value)>) {
+    let harness = harness(id, HarnessKind::Acp);
+    let ((ours, our_incoming), (theirs, their_incoming)) = pipe();
+    let (seen_tx, seen) = mpsc::unbounded_channel();
+    tokio::spawn(fake_agent(theirs, their_incoming, seen_tx, fake));
+    let thread = thread(&harness, None);
+    let adapter = Adapter::connect(
+        &harness,
+        ours,
+        our_incoming,
+        None,
+        &std::env::temp_dir(),
+        StartOptions::default(),
+        thread.session.output(),
+    )
+    .await
+    .expect("the fake agent starts");
+    (adapter, seen)
 }
 
 fn requests(seen: &mut mpsc::UnboundedReceiver<(String, Value)>) -> Vec<(String, Value)> {
@@ -383,6 +494,270 @@ async fn model_and_thought_level_become_model_and_effort() {
     assert!(thread.session.set_config("nope", json!("x")).await.is_err());
     assert_eq!(thread.session.record().effort.as_deref(), Some("low"));
     assert_eq!(thread.session.record().model.as_deref(), Some("sonnet"));
+}
+
+/// The `model` config option switches a listing (or a thread) made.
+fn model_switches(seen: &mut mpsc::UnboundedReceiver<(String, Value)>) -> Vec<Value> {
+    requests(seen)
+        .into_iter()
+        .filter(|(method, params)| {
+            method == "session/set_config_option" && params["configId"] == "model"
+        })
+        .map(|(_, params)| params["value"].clone())
+        .collect()
+}
+
+fn listed(models: &[HarnessModel]) -> Vec<(&str, Vec<String>, Option<String>, bool)> {
+    models
+        .iter()
+        .map(|model| {
+            (
+                model.id.as_str(),
+                model.efforts.clone(),
+                model.default_effort.clone(),
+                model.efforts_unknown,
+            )
+        })
+        .collect()
+}
+
+fn levels(levels: &[&str]) -> Vec<String> {
+    levels.iter().map(|level| (*level).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn the_models_a_listing_probes_get_the_efforts_they_offer() {
+    let (adapter, mut seen) = adapter_with(Fake::default()).await;
+    let models = adapter.probed_models(&[], &[]).await;
+    // ACP reports the thought levels of the model the session runs, so each
+    // other model is selected to read its own; each set is ordered from no
+    // thinking to the most, `default` first.
+    assert_eq!(
+        listed(&models),
+        [
+            (
+                "sonnet",
+                levels(&["low", "medium", "high"]),
+                Some("medium".into()),
+                false
+            ),
+            (
+                "opus",
+                levels(&["default", "off", "max"]),
+                Some("default".into()),
+                false
+            ),
+            ("haiku", Vec::new(), None, false),
+            (
+                "titan",
+                levels(&["minimal", "low"]),
+                Some("low".into()),
+                false
+            ),
+            (
+                "nova",
+                levels(&["high", "xhigh"]),
+                Some("high".into()),
+                false
+            ),
+        ]
+    );
+    // Each model was selected to read its own levels, then the session's went back.
+    assert_eq!(
+        model_switches(&mut seen),
+        [
+            json!("opus"),
+            json!("haiku"),
+            json!("titan"),
+            json!("nova"),
+            json!("sonnet")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_model_a_listing_did_not_reach_carries_the_union_and_says_unknown() {
+    let (adapter, mut seen) = adapter_with(Fake::default()).await;
+    let Adapter::Acp(child) = &adapter else {
+        unreachable!("an ACP agent")
+    };
+    let models = child.probe_models(&[], &[], 2, PROBE_BUDGET).await;
+    // `sonnet` (the model the session runs) and the two the cap allowed
+    // (`opus`, `haiku`) are known; the rest carry the union of those, marked
+    // unknown, so a picker never shows one model's list as another's; their
+    // default is the level the harness runs with, not their own.
+    let union = levels(&["default", "off", "low", "medium", "high", "max"]);
+    assert_eq!(
+        listed(&models),
+        [
+            (
+                "sonnet",
+                levels(&["low", "medium", "high"]),
+                Some("medium".into()),
+                false
+            ),
+            (
+                "opus",
+                levels(&["default", "off", "max"]),
+                Some("default".into()),
+                false
+            ),
+            ("haiku", Vec::new(), None, false),
+            ("titan", union.clone(), Some("medium".into()), true),
+            ("nova", union, Some("medium".into()), true),
+        ]
+    );
+    // The cap stopped the listing after two models, then the session's model went back.
+    assert_eq!(
+        model_switches(&mut seen),
+        [json!("opus"), json!("haiku"), json!("sonnet")]
+    );
+}
+
+#[tokio::test]
+async fn a_listing_with_no_time_left_probes_nothing() {
+    let (adapter, mut seen) = adapter_with(Fake::default()).await;
+    let Adapter::Acp(child) = &adapter else {
+        unreachable!("an ACP agent")
+    };
+    let models = child
+        .probe_models(&[], &[], PROBE_LIMIT, std::time::Duration::ZERO)
+        .await;
+    // Only the model the session runs is known; every other model carries its
+    // levels as the union and says they are not its own.
+    let union = levels(&["low", "medium", "high"]);
+    assert_eq!(
+        listed(&models),
+        [
+            (
+                "sonnet",
+                levels(&["low", "medium", "high"]),
+                Some("medium".into()),
+                false
+            ),
+            ("opus", union.clone(), Some("medium".into()), true),
+            ("haiku", union.clone(), Some("medium".into()), true),
+            ("titan", union.clone(), Some("medium".into()), true),
+            ("nova", union, Some("medium".into()), true),
+        ]
+    );
+    assert!(
+        model_switches(&mut seen).is_empty(),
+        "the budget stopped every probe before it started"
+    );
+}
+
+#[tokio::test]
+async fn a_model_a_listing_already_knew_is_not_probed_again() {
+    let (adapter, mut seen) = adapter_with(Fake::default()).await;
+    let Adapter::Acp(child) = &adapter else {
+        unreachable!("an ACP agent")
+    };
+    let known = [
+        HarnessModel {
+            id: "nova".into(),
+            name: "Nova".into(),
+            efforts: levels(&["high", "xhigh"]),
+            default_effort: Some("xhigh".into()),
+            efforts_unknown: false,
+        },
+        HarnessModel {
+            id: "haiku".into(),
+            name: "Haiku".into(),
+            efforts: Vec::new(),
+            default_effort: None,
+            efforts_unknown: false,
+        },
+    ];
+    let models = child
+        .probe_models(&known, &["nova".to_owned()], 2, PROBE_BUDGET)
+        .await;
+    // What a listing or a thread learned is kept, so `nova` (also a model a
+    // setting names) and `haiku` cost no round trip; the cap went to others.
+    let nova = models.iter().find(|model| model.id == "nova").unwrap();
+    assert_eq!(nova.efforts, levels(&["high", "xhigh"]));
+    assert_eq!(nova.default_effort.as_deref(), Some("xhigh"));
+    let haiku = models.iter().find(|model| model.id == "haiku").unwrap();
+    assert!(haiku.efforts.is_empty() && !haiku.efforts_unknown);
+    let switches = model_switches(&mut seen);
+    assert!(!switches.contains(&json!("nova")));
+    assert!(!switches.contains(&json!("haiku")));
+    assert_eq!(
+        switches.len(),
+        3,
+        "two probes, then the session's model back"
+    );
+}
+
+#[tokio::test]
+async fn a_thread_start_keeps_the_efforts_of_the_model_it_runs() {
+    let id = "fake-acp-lazy-start";
+    crate::harness::forget_learned(id);
+    let (thread, _seen) = start_named(
+        id,
+        Fake::default(),
+        None,
+        StartOptions {
+            model: Some("nova".into()),
+            effort: Some("medium".into()),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    // `nova` takes high and xhigh, so `medium` went out as the closest, `high`.
+    let options = serde_json::to_value(thread.session.config_options().await).unwrap();
+    assert_eq!(options[0]["currentValue"], "nova");
+    assert_eq!(options[1]["currentValue"], "high");
+    let learned = crate::harness::learned_for(id).models.unwrap();
+    let nova = learned.iter().find(|model| model.id == "nova").unwrap();
+    assert_eq!(nova.efforts, levels(&["high", "xhigh"]));
+    assert_eq!(nova.default_effort.as_deref(), Some("high"));
+    assert!(!nova.efforts_unknown);
+    // The model it did not run stays unknown, with the union as its list.
+    let titan = learned.iter().find(|model| model.id == "titan").unwrap();
+    assert!(titan.efforts_unknown);
+    assert_eq!(titan.efforts, levels(&["low", "medium", "high", "xhigh"]));
+}
+
+#[tokio::test]
+async fn switching_a_thread_to_a_model_keeps_that_models_efforts() {
+    let id = "fake-acp-lazy-switch";
+    crate::harness::forget_learned(id);
+    let (thread, _seen) = start_named(id, Fake::default(), None, StartOptions::default()).await;
+    let learned = crate::harness::learned_for(id).models.unwrap();
+    let titan = learned.iter().find(|model| model.id == "titan").unwrap();
+    assert!(titan.efforts_unknown, "nothing has run on it yet");
+
+    thread
+        .session
+        .set_config("model", json!("titan"))
+        .await
+        .expect("the model switches");
+    let learned = crate::harness::learned_for(id).models.unwrap();
+    let titan = learned.iter().find(|model| model.id == "titan").unwrap();
+    assert_eq!(titan.efforts, levels(&["minimal", "low"]));
+    assert_eq!(titan.default_effort.as_deref(), Some("low"));
+    assert!(!titan.efforts_unknown);
+}
+
+#[tokio::test]
+async fn an_effort_the_model_does_not_offer_goes_out_as_the_closest_it_does() {
+    let (thread, mut seen) = start(None, StartOptions::default()).await;
+    // `sonnet` offers low, medium and high; `xhigh` is not one of them.
+    thread
+        .session
+        .set_config("effort", json!("xhigh"))
+        .await
+        .expect("the effort is clamped to high");
+    let sent = requests(&mut seen)
+        .into_iter()
+        .filter(|(method, params)| {
+            method == "session/set_config_option" && params["configId"] == "thinking"
+        })
+        .map(|(_, params)| params["value"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(sent, [json!("high")]);
+    assert_eq!(thread.session.record().effort.as_deref(), Some("high"));
 }
 
 #[tokio::test]
