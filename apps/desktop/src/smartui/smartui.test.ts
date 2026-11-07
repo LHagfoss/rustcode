@@ -542,6 +542,219 @@ describe("smart ui", () => {
     expect(defaults.animation).toBe(false);
   });
 
+  test("the presets draw with the real Chart.js, animation on", async () => {
+    // The page's own globals, borrowed for one test: the library is the bundled
+    // build, a canvas is a stub, and the animation frames are pumped by hand.
+    const g = globalThis as any;
+    const saved = new Map<string, unknown>();
+    for (const key of [
+      "window",
+      "document",
+      "getComputedStyle",
+      "matchMedia",
+      "navigator",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+      "devicePixelRatio",
+      "MutationObserver",
+      "ResizeObserver",
+      "Chart",
+    ])
+      saved.set(key, g[key]);
+    const realNow = Date.now;
+    let clock = realNow();
+
+    const frames: ((at: number) => void)[] = [];
+    const stops: string[] = [];
+    const vars: Record<string, string> = {
+      "--rc-text": "#ededed",
+      "--rc-separator": "#ffffff0f",
+      "--rc-muted": "#a1a1a1",
+      "--rc-font": "sans-serif",
+      ...Object.fromEntries(
+        [1, 2, 3, 4, 5, 6, 7, 8].map((i) => [
+          `--rc-series-${i}`,
+          ["#0a84ff", "#ff9f0a", "#30d158", "#ff453a", "#bf5af2", "#40c8e0", "#ffd60a", "#ff375f"][i - 1]!,
+        ]),
+      ),
+    };
+    const makeCanvas = () => {
+      const ctx: any = {
+        canvas: null,
+        createLinearGradient: () => ({
+          addColorStop: (_at: number, colour: string) => {
+            // A canvas rejects a colour it cannot parse, so the preset must not hint one.
+            expect(colour).toMatch(/^(rgba?\()/);
+            stops.push(colour);
+          },
+        }),
+        measureText: (text: string) => ({ width: String(text).length * 6 }),
+        lineWidth: 1,
+      };
+      for (const method of [
+        "save",
+        "restore",
+        "beginPath",
+        "closePath",
+        "moveTo",
+        "lineTo",
+        "bezierCurveTo",
+        "quadraticCurveTo",
+        "arc",
+        "rect",
+        "roundRect",
+        "clip",
+        "fill",
+        "stroke",
+        "fillRect",
+        "strokeRect",
+        "clearRect",
+        "translate",
+        "rotate",
+        "scale",
+        "setTransform",
+        "resetTransform",
+        "setLineDash",
+        "fillText",
+        "strokeText",
+        "drawImage",
+        "putImageData",
+      ])
+        ctx[method] = () => undefined;
+      ctx.isPointInPath = () => false;
+      ctx.isPointInStroke = () => false;
+      ctx.getImageData = () => ({ data: [] });
+      ctx.createPattern = () => null;
+      const parent = {
+        style: {},
+        ownerDocument: { defaultView: g },
+        getBoundingClientRect: () => ({ width: 720, height: 180, top: 0, left: 0, right: 720, bottom: 180 }),
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      const canvas: any = {
+        width: 300,
+        height: 150,
+        style: {},
+        clientWidth: 720,
+        clientHeight: 180,
+        getAttribute: () => null,
+        setAttribute: () => undefined,
+        removeAttribute: () => undefined,
+        hasAttribute: () => false,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        getContext: () => ctx,
+        parentNode: parent,
+        ownerDocument: { defaultView: g },
+      };
+      ctx.canvas = canvas;
+      return canvas;
+    };
+    const canvases = [makeCanvas(), makeCanvas()];
+    const empty = () => ({
+      style: {},
+      appendChild: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      setAttribute: () => undefined,
+    });
+
+    try {
+      g.window = g;
+      g.document = {
+        documentElement: {},
+        createElement: (name: string) => (name === "canvas" ? makeCanvas() : empty()),
+        createElementNS: empty,
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      g.navigator = { userAgent: "bun" };
+      g.getComputedStyle = () => ({
+        colorScheme: "dark",
+        display: "block",
+        boxSizing: "border-box",
+        position: "relative",
+        maxWidth: "none",
+        maxHeight: "none",
+        getPropertyValue: (name: string) => vars[name] ?? (name.includes("max") ? "none" : "0px"),
+      });
+      g.matchMedia = () => ({ matches: false, addEventListener: () => undefined });
+      g.requestAnimationFrame = (fn: (at: number) => void) => frames.push(fn);
+      g.cancelAnimationFrame = () => undefined;
+      g.devicePixelRatio = 1;
+      g.MutationObserver = class {
+        observe() {}
+        disconnect() {}
+      };
+      g.ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      };
+      // The animator reads the clock, so a pumped frame has to move it on.
+      Date.now = () => clock;
+
+      const library = await Bun.file(
+        new URL("../../node_modules/chart.js/dist/chart.umd.js", import.meta.url),
+      ).text();
+      new Function(library)();
+      const Chart = g.Chart;
+      expect(typeof Chart).toBe("function");
+
+      new Function(
+        "window",
+        "document",
+        "getComputedStyle",
+        "matchMedia",
+        "requestAnimationFrame",
+        "Chart",
+        CHART_THEME_SCRIPT,
+      )(g, g.document, g.getComputedStyle, g.matchMedia, g.requestAnimationFrame, Chart);
+
+      const line: any = new Chart(canvases[0], {
+        type: "line",
+        data: { labels: ["Mon", "Tue", "Wed"], datasets: [{ label: "Runs", data: [1, 2, 3] }] },
+      });
+      const donut: any = new Chart(canvases[1], {
+        type: "doughnut",
+        data: { labels: ["a", "b"], datasets: [{ data: [1, 2] }] },
+      });
+
+      // A stub canvas is not in a document, so tell Chart.js it has a size and is
+      // attached; from here the pipeline is the page's own.
+      for (const chart of [line, donut]) {
+        chart.attached = true;
+        chart.resize(720, 180);
+        chart.update();
+      }
+
+      // Pump the first frames: a colour tween with no interpolator throws right here.
+      for (let at = 0; at < 40 && frames.length; at++) {
+        clock += 20;
+        frames.shift()?.(clock);
+      }
+
+      // Both charts laid out and animated rather than stopping on their first frame.
+      expect(line.chartArea?.width ?? 0).toBeGreaterThan(100);
+      expect(donut.chartArea?.width ?? 0).toBeGreaterThan(100);
+      // The line was filled with a gradient of its own colour.
+      expect(stops.length).toBeGreaterThan(0);
+      expect(stops[0]).toBe("rgba(10, 132, 255, 0.3)");
+      line.destroy();
+      donut.destroy();
+    } finally {
+      Date.now = realNow;
+      for (const [key, value] of saved) {
+        if (value === undefined) delete g[key];
+        else g[key] = value;
+      }
+    }
+  });
+
   test("the chart theme follows the variables, in both themes", () => {
     expect(CHART_THEME_SCRIPT).toContain("--rc-series-");
     expect(CHART_THEME_SCRIPT).toContain("prefers-reduced-motion");

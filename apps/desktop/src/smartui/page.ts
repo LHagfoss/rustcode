@@ -583,6 +583,10 @@ export const CHART_THEME_SCRIPT = `(() => {
     d.resizeDelay = 0;
     // A second of animation in a transcript is noise; reduce motion asks for none.
     d.animation = calm() ? false : { duration: 180 };
+    // Chart.js tweens colours through interpolators keyed by type, and a gradient is
+    // an object with no interpolator: the animator then throws "this._fn is not a
+    // function" on its first tick and the chart never draws. Colours apply at once.
+    if (d.animations) d.animations.colors = false;
     if (d.plugins && d.plugins.colors) d.plugins.colors.enabled = false;
     if (d.scale && d.scale.grid) d.scale.grid.color = v("--rc-separator");
     if (d.plugins && d.plugins.tooltip) {
