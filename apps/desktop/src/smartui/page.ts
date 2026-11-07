@@ -4,6 +4,7 @@
 // the block names `rustcode-lib:chart.js`. The names here are a contract
 // with the engine's `smart-ui` skill (docs/smart-ui.md, "Runtime").
 
+import { KIT_SCRIPT } from "./kit";
 import { stripEmptyTags } from "./parse";
 
 export const PAGE_CSP =
@@ -128,11 +129,20 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--rc-tint, var(--rc-accent)); }
 
 .rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 6px 10px; align-items: center; }
-.rc-bar { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; font-size: 12px; line-height: 16px; }
+.rc-bar { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; position: relative;
+  font-size: 12px; line-height: 16px; }
 .rc-bar::before { content: ""; grid-area: 1 / 2; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-bar > span { grid-area: 1 / 1; color: var(--rc-muted); }
 .rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 2px; height: 6px; border-radius: 999px; background: var(--rc-tint, var(--rc-accent)); }
 .rc-bar > b { grid-area: 1 / 3; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+.rc-bar:hover::before { background: color-mix(in srgb, var(--rc-text) 16%, transparent); }
+.rc-bar:hover > span, .rc-bar:hover > b { color: var(--rc-text); }
+.rc-bar:hover > i { background: color-mix(in srgb, var(--rc-tint, var(--rc-accent)) 82%, var(--rc-text)); }
+.rc-bar[data-rc-tip]::after { content: attr(data-rc-tip); display: block; position: absolute; right: 0; bottom: calc(100% + 2px);
+  z-index: 2; max-width: 100%; padding: 3px 8px; font-size: 11px; line-height: 15px; color: var(--rc-text);
+  background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: 8px; pointer-events: none;
+  opacity: 0; transition: opacity 80ms ease-out; }
+.rc-bar[data-rc-tip]:hover::after { opacity: 1; }
 
 .rc-table { overflow-wrap: normal; font-variant-numeric: tabular-nums; }
 .rc-bars, .rc-list, .rc-steps, .rc-tabs, .rc-table-box { margin-bottom: 12px; }
@@ -142,6 +152,30 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-table th { position: sticky; top: 0; z-index: 1; font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--rc-bg);
   border-bottom: 0; box-shadow: inset 0 -1px var(--rc-separator); }
 .rc-table tbody tr:hover > td { background: color-mix(in srgb, var(--rc-text) 4.5%, transparent); }
+.rc-table[data-rc-sort] th { cursor: pointer; user-select: none; }
+.rc-table[data-rc-sort] th:hover { color: var(--rc-text); }
+.rc-table[data-rc-sort] th:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: -2px; }
+.rc-table th[aria-sort] { color: var(--rc-text); }
+.rc-table th[aria-sort=ascending]::after { content: "\u2191"; margin-left: 3px; color: var(--rc-muted); }
+.rc-table th[aria-sort=descending]::after { content: "\u2193"; margin-left: 3px; color: var(--rc-muted); }
+
+/* A still-streaming fragment runs no script, so its canvases can never draw: a quiet
+   box of the same size says "a chart lands here" instead of an empty one. */
+#rc-stream .rc-chart { border-radius: var(--rc-radius); background: color-mix(in srgb, var(--rc-text) 4%, transparent); }
+#rc-stream .rc-chart > canvas { visibility: hidden; }
+.rc-chart { position: relative; height: 200px; margin-bottom: 12px; }
+.rc-chart:last-child { margin-bottom: 0; }
+.rc-chart > canvas { display: block; }
+.rc-donut-total { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  pointer-events: none; font-variant-numeric: tabular-nums; }
+.rc-donut-total > b { font-size: 20px; line-height: 24px; font-weight: 600; letter-spacing: -0.01em; }
+.rc-donut-total > span { font-size: 11px; line-height: 14px; color: var(--rc-muted); }
+
+.rc-spark { display: inline-block; width: 64px; height: 20px; color: var(--rc-tint, var(--rc-accent)); vertical-align: middle; }
+.rc-spark > svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.rc-spark-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; }
+.rc-spark-area { fill: currentColor; opacity: 0.14; }
 
 .rc-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
 .rc-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0;
@@ -202,7 +236,7 @@ pre.rc-term { white-space: pre-wrap; }
 .rc-tip:hover > span, .rc-tip:focus > span { display: inline-block; }
 .rc-tip:focus-visible, .rc-details > summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
 
-@media (prefers-reduced-motion: reduce) { .rc-details > summary::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .rc-details > summary::before, .rc-bar[data-rc-tip]::after { transition: none; } }
 `;
 
 /**
@@ -279,6 +313,24 @@ export function runtimeScript(token: string, theme: PageTheme): string {
 
   // The kit's behaviour, so a view needs no script for it (docs/smart-ui.md).
   const own = (group, selector) => Array.from(group.querySelectorAll(selector)).filter((el) => el.closest(".rc-tabs") === group);
+${KIT_SCRIPT}
+  // A sortable table sorts a column in place, then says which way in aria-sort.
+  const sortTable = (table, index) => {
+    const head = table.tHead;
+    const body = table.tBodies[0];
+    const header = head && head.rows[0] && head.rows[0].cells[index];
+    if (!body || !header) return;
+    const sort = header.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+    const kind = header.getAttribute("data-rc-sort") === "text" ? "text" : "number";
+    const cell = (row) => { const c = row.cells[index]; return c ? c.textContent : ""; };
+    for (const other of head.querySelectorAll("th")) if (other !== header) other.removeAttribute("aria-sort");
+    header.setAttribute("aria-sort", sort);
+    const rows = Array.from(body.rows).map((row, at) => ({ row, at }));
+    rows.sort((a, b) => (rcCompare(cell(a.row), cell(b.row), kind) || a.at - b.at) * (sort === "ascending" ? 1 : -1));
+    // Rows are moved, not rebuilt: a row's ids and the controls in it survive a sort.
+    body.append(...rows.map((entry) => entry.row));
+    report();
+  };
   const selectTab = (group, name, focus) => {
     for (const tab of own(group, "[data-rc-tab]")) {
       const on = tab.getAttribute("data-rc-tab") === name;
@@ -340,12 +392,26 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     }
     const copy = target.closest("[data-rc-copy]");
     if (copy) { rustcode.copy(copy.getAttribute("data-rc-copy")); flashCopied(copy); }
+    const th = target.closest("th");
+    const sortable = th && th.closest("table.rc-table[data-rc-sort]");
+    // A control in a heading does its own thing: sorting it too would be a surprise.
+    const control = target.closest("[data-rc-send], [data-rc-copy]");
+    if (sortable && !control && sortable.tHead && sortable.tHead.contains(th)) sortTable(sortable, th.cellIndex);
     const tab = target.closest("[data-rc-tab]");
     const group = tab && tab.closest(".rc-tabs");
     if (group) selectTab(group, tab.getAttribute("data-rc-tab"), false);
   });
   document.addEventListener("keydown", (event) => {
-    const tab = event.target instanceof Element ? event.target.closest("[data-rc-tab]") : null;
+    const focused = event.target instanceof Element ? event.target : null;
+    // A sortable heading is a control: Enter or Space sorts it, like a click.
+    const heading = focused && focused.closest("th");
+    const sortable = heading && heading.closest("table.rc-table[data-rc-sort]");
+    if (sortable && (event.key === "Enter" || event.key === " ") && sortable.tHead && sortable.tHead.contains(heading)) {
+      event.preventDefault();
+      sortTable(sortable, heading.cellIndex);
+      return;
+    }
+    const tab = focused ? focused.closest("[data-rc-tab]") : null;
     const group = tab && tab.closest(".rc-tabs");
     if (!group) return;
     const tabs = own(group, "[data-rc-tab]");
@@ -355,8 +421,9 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     event.preventDefault();
     selectTab(group, tabs[(to + tabs.length) % tabs.length].getAttribute("data-rc-tab"), true);
   });
-  // The parts of the kit that need the document: the first tab of each group, and a box
-  // around a wide table so it scrolls by itself on a narrow window (one in .rc-scroll already does).
+  // The parts of the kit that need the document: the first tab of each group, a box
+  // around a wide table so it scrolls by itself on a narrow window (one in .rc-scroll already does),
+  // a sortable table's headings, and an inline sparkline for data-values.
   // Idempotent, so a streamed fragment can be set up again as it grows.
   const kit = () => {
     for (const group of document.querySelectorAll(".rc-tabs")) {
@@ -370,6 +437,28 @@ export function runtimeScript(token: string, theme: PageTheme): string {
       box.className = "rc-table-box";
       table.replaceWith(box);
       box.append(table);
+    }
+    for (const table of document.querySelectorAll("table.rc-table[data-rc-sort]")) {
+      for (const heading of (table.tHead ? table.tHead.rows[0].cells : [])) heading.tabIndex = 0;
+    }
+    for (const spark of document.querySelectorAll(".rc-spark[data-values]")) {
+      if (spark.firstElementChild) continue;
+      const values = rcSparkValues(spark.getAttribute("data-values"));
+      if (values.length < 2) continue;
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("viewBox", "0 0 100 30");
+      svg.setAttribute("preserveAspectRatio", "none");
+      svg.setAttribute("aria-hidden", "true");
+      const points = rcSparkPoints(values, 100, 30);
+      const area = document.createElementNS(ns, "polygon");
+      area.setAttribute("points", "0,30 " + points + " 100,30");
+      area.setAttribute("class", "rc-spark-area");
+      const line = document.createElementNS(ns, "polyline");
+      line.setAttribute("points", points);
+      line.setAttribute("class", "rc-spark-line");
+      svg.append(area, line);
+      spark.prepend(svg);
     }
   };
   // A block that is still streaming: the app injects the fragment as it arrives, already
@@ -407,13 +496,50 @@ export function runtimeScript(token: string, theme: PageTheme): string {
 })();`;
 }
 
-/** After Chart.js: defaults and series colours from the variables, again on every theme change. */
+/**
+ * After Chart.js: the defaults a view would otherwise set by hand. Text, grid
+ * lines and the eight series colours come from the variables, tooltips and the
+ * legend follow them, a line is filled from its own colour to nothing, and a
+ * hover highlights what is under the pointer. A theme change re-applies all of
+ * it to the charts already on the page.
+ *
+ * Chart.js draws on a canvas, which has no font features, so its figures are
+ * never tabular; a number the user scans belongs in `.rc-num` text beside the
+ * chart (docs/smart-ui.md, "Charts").
+ */
 export const CHART_THEME_SCRIPT = `(() => {
   if (!window.Chart) return;
   const v = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const series = () => [1, 2, 3, 4, 5, 6, 7, 8].map((i) => v("--rc-series-" + i));
-  const alpha = (c, a) => "color-mix(in srgb, " + c + " " + Math.round(a * 100) + "%, transparent)";
+  // The series colours are hex; a canvas gradient stop needs rgba().
+  const rgb = (colour) => {
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(colour));
+    if (!hex) return null;
+    const digits = hex[1].length === 3 ? hex[1].replace(/./g, "$&$&") : hex[1];
+    return [0, 2, 4].map((at) => parseInt(digits.slice(at, at + 2), 16));
+  };
+  // A canvas throws on a colour it cannot parse, which would abort the whole draw,
+  // so anything that is not a series hex becomes transparent instead.
+  const alpha = (colour, a) => {
+    const parts = rgb(colour);
+    return parts ? "rgba(" + parts.join(", ") + ", " + a + ")" : "transparent";
+  };
+  // Only reached when a variable is missing, which a page should make impossible; a
+  // chart still has to be visible, and a neutral grey reads in both themes.
+  const NEUTRAL = "#8e8e93";
+  const solid = (colour, fallback) => (rgb(colour) ? colour : fallback);
+  // A line chart is an area chart: filled from the line's colour down to nothing.
+  const wash = (context) => {
+    const chart = context.chart;
+    const area = chart.chartArea;
+    if (!area || !chart.ctx.createLinearGradient) return alpha(context.dataset.borderColor, 0.16);
+    const gradient = chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+    gradient.addColorStop(0, alpha(context.dataset.borderColor, 0.3));
+    gradient.addColorStop(1, alpha(context.dataset.borderColor, 0));
+    return gradient;
+  };
   const radial = (t) => t === "pie" || t === "doughnut" || t === "polarArea";
+  const calm = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   const paint = (chart) => {
     const s = series();
     const type = chart.config.type;
@@ -421,39 +547,85 @@ export const CHART_THEME_SCRIPT = `(() => {
       if (ds.__rc === undefined) ds.__rc = ds.backgroundColor === undefined && ds.borderColor === undefined;
       if (!ds.__rc) return;
       const kind = ds.type || type;
+      const colour = solid(s[i % 8], solid(Chart.defaults.borderColor, NEUTRAL));
       if (radial(kind)) {
-        ds.backgroundColor = (chart.data.labels || ds.data).map((_, j) => s[j % 8]);
+        ds.backgroundColor = (chart.data.labels || ds.data).map((_, j) => solid(s[j % 8], colour));
         ds.borderColor = "transparent";
+      } else if (kind === "line") {
+        ds.borderColor = colour;
+        if (ds.fill === undefined) ds.fill = true;
+        ds.backgroundColor = wash;
       } else {
-        ds.borderColor = s[i % 8];
-        ds.backgroundColor = kind === "line" || kind === "radar" ? alpha(s[i % 8], 0.18) : s[i % 8];
+        ds.borderColor = colour;
+        ds.backgroundColor = colour;
+        // Hover leaves the bar under the pointer a step lighter.
+        ds.hoverBackgroundColor = alpha(colour, 0.8);
       }
     });
+    // A slice answers to the pointer; everything else answers along its axis,
+    // so hovering anywhere in a column shows that column's values.
+    if (!(chart.config.options && chart.config.options.interaction)) {
+      const interaction = radial(type) ? { mode: "nearest", intersect: true } : { mode: "index", intersect: false };
+      // The view's own options win; this reaches the resolver on the next update.
+      if (chart.config.options) chart.config.options.interaction = interaction;
+      else chart.options.interaction = interaction;
+    }
   };
   const apply = () => {
     const d = Chart.defaults;
+    const ink = getComputedStyle(document.documentElement).colorScheme === "dark" ? "#000" : "#fff";
     d.color = v("--rc-muted");
     d.borderColor = v("--rc-separator");
     d.font.family = v("--rc-font");
     d.font.size = 12;
+    d.responsive = true;
     d.maintainAspectRatio = false;
+    d.resizeDelay = 0;
+    // A second of animation in a transcript is noise; reduce motion asks for none.
+    d.animation = calm() ? false : { duration: 180 };
+    // Chart.js tweens colours through interpolators keyed by type, and a gradient is
+    // an object with no interpolator: the animator then throws "this._fn is not a
+    // function" on its first tick and the chart never draws. Colours apply at once.
+    if (d.animations) d.animations.colors = false;
     if (d.plugins && d.plugins.colors) d.plugins.colors.enabled = false;
     if (d.scale && d.scale.grid) d.scale.grid.color = v("--rc-separator");
     if (d.plugins && d.plugins.tooltip) {
-      const ink = getComputedStyle(document.documentElement).colorScheme === "dark" ? "#000" : "#fff";
-      d.plugins.tooltip.backgroundColor = v("--rc-text");
-      d.plugins.tooltip.titleColor = ink;
-      d.plugins.tooltip.bodyColor = ink;
-      d.plugins.tooltip.cornerRadius = 8;
+      const tooltip = d.plugins.tooltip;
+      tooltip.backgroundColor = v("--rc-text");
+      tooltip.titleColor = ink;
+      tooltip.bodyColor = ink;
+      tooltip.cornerRadius = 8;
+      tooltip.padding = 8;
+      // The key next to each value is a dot in its series' own colour.
+      tooltip.usePointStyle = true;
+      tooltip.boxPadding = 3;
     }
-    if (d.plugins && d.plugins.legend) { d.plugins.legend.labels.boxWidth = 10; d.plugins.legend.labels.boxHeight = 10; }
+    if (d.plugins && d.plugins.legend) {
+      d.plugins.legend.labels.usePointStyle = true;
+      d.plugins.legend.labels.boxWidth = 8;
+      d.plugins.legend.labels.boxHeight = 8;
+      // A name in the legend toggles its series; say so with the pointer.
+      d.plugins.legend.onHover = (event, item, legend) => { legend.chart.canvas.style.cursor = item ? "pointer" : ""; };
+      d.plugins.legend.onLeave = (event, item, legend) => { legend.chart.canvas.style.cursor = ""; };
+    }
     d.elements.line.borderWidth = 2;
     d.elements.point.radius = 0;
     d.elements.point.hoverRadius = 4;
+    d.elements.point.hoverBorderWidth = 2;
+    // A line drawn without points is still easy to hover.
+    d.elements.point.hitRadius = 10;
     d.elements.bar.borderRadius = 4;
   };
+  // A view's script runs while the frame is still settling, and a chart measured at
+  // 0 x 0 stays blank until something resizes it. Ask again on the next frames.
+  const refit = (chart) => {
+    const tries = chart.$rcFit || 0;
+    chart.$rcFit = tries + 1;
+    if (tries > 10 || (chart.width > 1 && chart.height > 1)) return;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => chart.resize());
+  };
   apply();
-  Chart.register({ id: "rcSeries", beforeUpdate: paint });
+  Chart.register({ id: "rcSeries", beforeUpdate: paint, afterRender: refit });
   window.__rcThemeCharts = () => {
     apply();
     for (const chart of Object.values(Chart.instances || {})) {
@@ -461,7 +633,12 @@ export const CHART_THEME_SCRIPT = `(() => {
         if (scale.grid) scale.grid.color = v("--rc-separator");
         if (scale.ticks) scale.ticks.color = v("--rc-muted");
       }
-      chart.data.datasets.forEach((ds) => { if (ds.__rc) { delete ds.backgroundColor; delete ds.borderColor; } });
+      for (const ds of chart.data.datasets) {
+        if (!ds.__rc) continue;
+        delete ds.backgroundColor;
+        delete ds.borderColor;
+        delete ds.hoverBackgroundColor;
+      }
       chart.update("none");
     }
   };
@@ -474,6 +651,14 @@ export const usesChart = (source: string) => {
   CHART_TAG.lastIndex = 0;
   return CHART_TAG.test(source);
 };
+
+/**
+ * Whether a block is worth drawing while it is still arriving. A preview page
+ * runs no script and carries no library, so a canvas in it can never draw: a
+ * view whose content is a chart waits for its finished page instead of showing
+ * empty boxes where the charts will be.
+ */
+export const previewable = (source: string) => !usesChart(source);
 
 /** Inline text inside a `<script>` element must not close it. */
 const scriptSafe = (code: string) => code.replace(/<\/script/gi, "<\\/script");
