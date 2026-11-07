@@ -171,6 +171,11 @@ export interface SessionSummary {
   harness?: string;
   /** The worktree the thread runs in (`_meta.rustcode.worktree`). */
   worktree?: Worktree;
+  /**
+   * The repository the thread's folder belongs to (`_meta.rustcode.repo`), so a
+   * main checkout and its worktrees are one project for the orchestration tools.
+   */
+  repo?: string;
   /** The named account the thread runs on (`_meta.rustcode.account`). */
   account?: string;
   /** Engine-reported status (`_meta.rustcode.status`). */
@@ -202,6 +207,7 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
     const parentTitle = str(parent?.title);
     sessions.push({
       worktree: parseWorktree(rc?.worktree),
+      repo: str(rc?.repo),
       status: parseStatus(rc?.status),
       pinned: bool(rc?.pinned),
       account: str(rc?.account),

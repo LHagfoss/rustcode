@@ -75,7 +75,9 @@ import {
   renderRead,
   restateLinks,
   sameProject,
+  sameReach,
   shownState,
+  startedBy,
   type TurnAnswer,
   unheard,
   updateLink,
@@ -328,6 +330,8 @@ function ruleThread(s: AppState, id: string): RuleThread | undefined {
     title: summary?.title ?? thread?.title ?? "Untitled thread",
     folder: thread?.cwd ?? summary?.cwd ?? "",
     worktree: thread?.worktree ?? summary?.worktree,
+    repo: summary?.repo,
+    parent: summary?.parent?.id,
     updatedAt: summary?.updatedAt,
     running: thread?.running ?? false,
     harness: thread?.harness?.id ?? summary?.harness,
@@ -728,7 +732,7 @@ async function searchSessions(
   const said = await searchThreads(query);
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const matches = all
-    .filter((t) => allProjects || sameProject(projectOf(t), projectOf(caller)))
+    .filter((t) => allProjects || sameReach(caller, t))
     .filter((t) => t.id in said || words.every((w) => t.title.toLowerCase().includes(w)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 30);
@@ -746,7 +750,7 @@ async function searchSessions(
 function listWorktrees(all: RuleThread[], caller: RuleThread, allProjects = false): JsonObject {
   return {
     worktrees: all.flatMap((t) =>
-      t.worktree && (allProjects || sameProject(projectOf(t), projectOf(caller)))
+      t.worktree && (allProjects || sameReach(caller, t))
         ? [
             {
               session_id: t.id,
@@ -965,7 +969,7 @@ function listPendingRequests(caller: RuleThread): JsonObject {
   const requests = Object.values(s.threads)
     .filter((t) => t.permissions.length)
     .map((t) => ({ thread: t, rule: ruleThread(s, t.id) }))
-    .filter(({ rule }) => rule && sameProject(projectOf(rule), projectOf(caller)))
+    .filter(({ rule }) => rule && (sameReach(caller, rule) || startedBy(caller, rule)))
     .flatMap(({ thread, rule }) =>
       thread.permissions.map((p) => ({
         session_id: thread.id,

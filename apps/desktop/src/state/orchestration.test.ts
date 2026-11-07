@@ -57,6 +57,7 @@ import {
   restateLinks,
   STALL_NOTICE_MS,
   sameProject,
+  sameReach,
   stripLinks,
   supersededLinks,
   unheard,
@@ -675,6 +676,65 @@ describe("projects", () => {
     expect(sameProject("/private/var/folders/x/", "/var/folders/x")).toBe(true);
     expect(sameProject("/private/tmpx/app", "/tmpx/app")).toBe(false);
     expect(sameProject("/Users/me/a", "/Users/me/b")).toBe(false);
+  });
+
+  const repo = "/Users/me/code/rustcode";
+  const main = thread("main", repo, { repo });
+  const one = thread("one", "/Users/me/.config/rustcode/worktrees/rustcode/fix-a", { repo });
+  const two = thread("two", "/Users/me/.config/rustcode/worktrees/rustcode/fix-b", { repo });
+
+  test("a main checkout and its worktrees are one project", () => {
+    expect(checkManage(main, one)).toBeNull();
+    expect(checkManage(one, main)).toBeNull();
+    // Two worktrees of one repository reach each other too.
+    expect(checkManage(one, two)).toBeNull();
+    expect(checkMessage(one, main, emptyBook())).toBeNull();
+    expect(checkMessage(one, two, emptyBook())).toBeNull();
+  });
+
+  test("a worktree lists the threads of its repository, not the worktree's own folder", () => {
+    const listed = listSessions([main, one, two], one, "").sessions as { session_id: string }[];
+    expect(listed.map((s) => s.session_id)).toEqual(["main", "two"]);
+  });
+
+  test("a worktree RustCode made names its repository without a repo field", () => {
+    const recorded = thread("w", "/Users/me/.config/rustcode/worktrees/rustcode/fix-c", {
+      worktree: {
+        path: "/Users/me/.config/rustcode/worktrees/rustcode/fix-c",
+        branch: "fix/c",
+        repo,
+      },
+    });
+    expect(sameReach(main, recorded)).toBe(true);
+    expect(checkManage(recorded, main)).toBeNull();
+  });
+
+  test("two repositories stay two projects", () => {
+    const other = thread("other", "/Users/me/code/other", { repo: "/Users/me/code/other" });
+    expect(checkManage(main, other)?.code).toBe("not_allowed");
+    expect(checkMessage(main, other, emptyBook())?.code).toBe("not_allowed");
+    expect(listSessions([main, other], main, "").sessions).toEqual([]);
+  });
+
+  test("a folder that is gone falls back to its path", () => {
+    // No repository was resolved for it, so only the same folder is one project.
+    const gone = thread("gone", "/Users/me/gone");
+    expect(checkManage(main, gone)?.code).toBe("not_allowed");
+    expect(checkManage(gone, thread("gone-again", "/Users/me/gone"))).toBeNull();
+    expect(checkManage(gone, two)?.code).toBe("not_allowed");
+  });
+
+  test("a thread reaches the delegate it started, wherever it runs", () => {
+    const other = thread("delegate", "/Users/me/code/other", {
+      repo: "/Users/me/code/other",
+      parent: "a",
+    });
+    const a = thread("a");
+    expect(checkManage(a, other)).toBeNull();
+    expect(checkMessage(a, other, emptyBook())).toBeNull();
+    expect(listSessions([other], a, "").sessions).toHaveLength(1);
+    // Somebody else's delegate in another repository is not on offer.
+    expect(checkManage(thread("b"), other)?.code).toBe("not_allowed");
   });
 });
 

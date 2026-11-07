@@ -231,6 +231,11 @@ fn session_info(
     if let Some(worktree) = crate::worktrees::list_meta(&session_id) {
         extra = crate::worktrees::merge_rustcode_meta(Some(extra), "worktree", worktree);
     }
+    // The repository the thread's folder belongs to: a main checkout and every
+    // worktree of it are one project for the orchestration tools (#3150).
+    if let Some(repo) = crate::worktrees::repo_of(&info.cwd) {
+        extra = crate::worktrees::merge_rustcode_meta(Some(extra), "repo", serde_json::json!(repo));
+    }
     // The thread an agent started this one from, kept in its own metadata so a
     // pruned link cannot turn it into a top-level thread (`thread_parent.rs`).
     if let Some(parent) = metadata.and_then(|metadata| metadata.parent) {

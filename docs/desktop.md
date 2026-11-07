@@ -755,7 +755,9 @@ composer's keys stay outside the table.
   On by default (Settings › Agents turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
-  `start_session` and `fan_out`. Same project only (another project only
+  `start_session` and `fan_out`. Same project only — the repository, so a main
+  checkout and all its worktrees are one project — and a thread it started is
+  always reachable (another project only
   for `start_session`, one the user has opened, with approval), two levels of
   delegation (a top-level thread, its children and their children — no
   deeper, and no message that would close a loop), 4 active links per thread,

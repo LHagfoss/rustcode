@@ -1674,6 +1674,7 @@ export async function createSession(options: NewSession): Promise<string> {
   const worktree: Worktree | undefined = parseWorktree(
     ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
   );
+  const repo = str(((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.repo);
   const cwd = worktree?.path ?? options.cwd;
   const thread: ThreadState = {
     ...emptyThread(id, cwd, options.title),
@@ -1689,6 +1690,7 @@ export async function createSession(options: NewSession): Promise<string> {
     harness: thread.harness?.id ?? options.harness,
     account: thread.harness?.account ?? options.account ?? undefined,
     worktree,
+    repo,
     title: options.title,
     // A thread an agent started is nested from its first frame: without the parent here the
     // sidebar draws it as a row of its own until the engine lists it with the same record, then

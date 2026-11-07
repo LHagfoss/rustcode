@@ -7,8 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 /// The file in a thread's directory naming the worktree it runs in.
@@ -143,7 +145,7 @@ pub(crate) fn toplevel(dir: &Path) -> Option<PathBuf> {
 
 /// The main checkout of the repository `dir` belongs to, so a worktree of
 /// a worktree still files under the repository's name.
-fn main_checkout(dir: &Path) -> Option<PathBuf> {
+pub(crate) fn main_checkout(dir: &Path) -> Option<PathBuf> {
     let common = git_line(
         dir,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -155,6 +157,28 @@ fn main_checkout(dir: &Path) -> Option<PathBuf> {
     } else {
         toplevel(dir)
     }
+}
+
+/// The repository a thread's folder belongs to, worktree or main checkout: the
+/// one project a main checkout and every worktree of it share (#3150).
+///
+/// Asked once per folder, not once per thread: `session/list` lists threads and
+/// a repository does not move, so the answer is cached. A folder that is gone
+/// (or not a repository) answers `None` and the caller falls back to the path.
+pub(crate) fn repo_of(dir: &Path) -> Option<PathBuf> {
+    static SEEN: LazyLock<Mutex<HashMap<PathBuf, Option<PathBuf>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if let Ok(seen) = SEEN.lock()
+        && let Some(found) = seen.get(&key)
+    {
+        return found.clone();
+    }
+    let found = main_checkout(&key);
+    if let Ok(mut seen) = SEEN.lock() {
+        seen.insert(key, found.clone());
+    }
+    found
 }
 
 // ------------------------------------------------------------ storage ----
@@ -827,6 +851,14 @@ fn thread_meta(
     let mut meta = merge_rustcode_meta(meta, "status", json!(status));
     let pinned = crate::thread_status::pinned(session_id);
     meta = merge_rustcode_meta(Some(meta), "pinned", json!(pinned));
+    // The repository the thread's folder belongs to: a main checkout and every
+    // worktree of it are one project for the orchestration tools (#3150).
+    if let Some(repo) = crate::checkpoints::thread_cwd(session_id)
+        .as_deref()
+        .and_then(repo_of)
+    {
+        meta = merge_rustcode_meta(Some(meta), "repo", json!(repo));
+    }
     if let Some(cwd) = crate::checkpoints::thread_cwd(session_id) {
         let available = crate::checkpoints::available(&cwd);
         meta = merge_rustcode_meta(Some(meta), "checkpoints", json!(available));
@@ -930,6 +962,37 @@ pub(crate) mod tests {
         assert_eq!(branch_from_title(""), "feat/thread");
         assert_eq!(branch_from_title("Ärger über 💥"), "feat/rger-ber");
         assert!(branch_from_title(&"word ".repeat(40)).len() <= 45);
+    }
+
+    /// A repository's main checkout and every worktree of it are one project: a
+    /// thread in a worktree has to reach the repository's other threads (#3150).
+    #[test]
+    fn a_worktree_and_its_main_checkout_are_one_repository() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(repo_of(&repo), Some(repo.clone()));
+        assert_eq!(repo_of(&worktree.path), Some(repo.clone()));
+        // A folder inside either is the same repository, and git resolves it again
+        // for a nested directory.
+        std::fs::create_dir_all(worktree.path.join("src")).unwrap();
+        assert_eq!(repo_of(&worktree.path.join("src")), Some(repo.clone()));
+        // Two worktrees of one repository meet here too.
+        let sibling = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Fix the logout form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(repo_of(&sibling.path), Some(repo.clone()));
+        // A folder that is not a repository, or is gone, has none: the caller
+        // falls back to comparing the paths.
+        assert_eq!(repo_of(_dir.path()), None);
+        assert_eq!(repo_of(&_dir.path().join("absent")), None);
     }
 
     #[test]
