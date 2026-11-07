@@ -135,7 +135,7 @@ harnesses. Detection is cached for a minute; `set` and `remove` refresh it.
 | id | kind | command | version from | auth from |
 | --- | --- | --- | --- | --- |
 | `codex` | `codex` | `codex app-server` | `codex --version` | `codex login status` |
-| `claude-code` | `acp` | `npx -y @agentclientprotocol/claude-agent-acp` | `claude --version` | `unknown` |
+| `claude-code` | `acp` | `npx -y @agentclientprotocol/claude-agent-acp` | `claude --version` | `claude auth status --json` |
 | `gemini` | `acp` | `gemini --experimental-acp` | `gemini --version` | `unknown` |
 | `opencode` | `acp` | `opencode acp` | `opencode --version` | `unknown` |
 | `pi` | `acp` | `npx -y pi-acp` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
@@ -144,6 +144,13 @@ Commands are looked up on the engine's `PATH` and then the login shell's, so
 an app started from the Dock finds what the terminal finds. On Windows a bare
 name tries the `PATHEXT` extensions in order, as the shell does: `codex` is
 `codex.exe`, npm's `npx` is `npx.cmd`.
+
+Claude Code's status is the `loggedIn` boolean of `claude auth status --json`;
+a third-party backend (Bedrock, Vertex, Foundry) or an API key source signs in
+without that login, so both count as `ok`. Output that is not that JSON leaves
+`auth` at `unknown`, never `needs_login`: an older CLI without the command is
+no answer, not a sign-out. Probes run in the user's home, so a project's own
+settings cannot decide a harness-wide answer.
 
 Errors (an unknown id, an invalid command, removing a known harness) are
 `invalid_params` with a message for the user.
@@ -286,14 +293,18 @@ thread runs on that account. Threads that ran on it stay readable: they open
 and replay their history, and only their next prompt reports the missing
 account (they can be moved to another named account, or to the harness's own
 sign-in when it has none left). `auth` for an account is `ok` when its own
-credentials exist (`<dir>/.credentials.json`, Codex's `<dir>/auth.json`, or on
-macOS Claude Code's Keychain item its directory names), `needs_login` when a
-look found none, and `unknown` when it was not looked for. `check` (Settings ›
-Agents' own look when its Accounts section opens, and its Refresh) runs the
-harness's own cheap status command with the account's directory (`codex login
-status`) or asks the Keychain only whether the item exists, never reading a
-secret; it does not force a plan read. Nothing is started as a session to
-answer. `own_dir` is true for the Mac's own login, `~/.claude` or `~/.codex`,
+sign-in is there, `needs_login` when a look found none, and `unknown` when it
+was not looked for. `check` (Settings › Agents' own look when its Accounts
+section opens, and its Refresh) runs the harness's own cheap status command
+with the account's directory and with the variables a thread on that account
+would drop (`codex login status`, `claude auth status --json`), then falls back
+to the marker file by name (`<dir>/.credentials.json`, Codex's
+`<dir>/auth.json`) and, on macOS, to whether Claude Code's Keychain item for
+the directory exists. The answer carries no secret and the engine reads none,
+and a status command or Keychain read that could not answer never counts as
+signing out. It does not force a plan read. Nothing is started as a session to
+answer. `own_dir` is true for the
+Mac's own login, `~/.claude` or `~/.codex`,
 whatever path the account was written with.
 
 `discovered_accounts` lists the login directories of that harness on this Mac
@@ -342,9 +353,9 @@ account's `signed_out` flag so an agent can avoid one before asking, and the
 approval card shows the account's display name and id. That argument is
 orchestration version 5: an
 older client is not shown it, and the engine refuses it from one that sends it
-(`docs/orchestrator.md` › "Orchestration tools v5"). Claude Code has no
-cheap sign-in command, so its harness `auth` says `unknown` either way; what
-reports a login as signed out is the plan read described below.
+(`docs/orchestrator.md` › "Orchestration tools v5"). Claude Code's own
+`auth status --json` reports its harness and account `auth`; the plan read
+described below is what reports a login signed out for the usage page.
 
 Plan usage is read per account, one login at a time:
 `_rustcode/usage/plans` with `claudeAccount: "<id>"` returns only that account's

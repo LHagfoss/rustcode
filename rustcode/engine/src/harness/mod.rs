@@ -202,6 +202,28 @@ impl Capabilities {
     }
 }
 
+/// The cheap command that says whether a harness's own login is signed in,
+/// and how to read its answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthProbe {
+    /// `codex login status`: exit 0 is a sign-in, and the CLI's own
+    /// `Not logged in` line is a sign-out; any other failure is no answer.
+    Text(&'static [&'static str]),
+    /// `claude auth status --json`: the JSON's `loggedIn` boolean, where a
+    /// third-party backend or an API key source is a sign-in too. Output that
+    /// is not that JSON is no answer, never a sign-out.
+    Json(&'static [&'static str]),
+}
+
+impl AuthProbe {
+    /// The program to run and its arguments.
+    pub(crate) fn argv(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            Self::Text(argv) | Self::Json(argv) => (argv[0], &argv[1..]),
+        }
+    }
+}
+
 /// A harness RustCode knows how to start without configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KnownHarness {
@@ -213,8 +235,8 @@ pub(crate) struct KnownHarness {
     pub install_hint: Option<&'static str>,
     /// Arguments that print the version, run on `version_program`.
     pub version: Option<(&'static str, &'static [&'static str])>,
-    /// A cheap command whose exit status says whether the user is signed in.
-    pub auth_probe: Option<&'static [&'static str]>,
+    /// A cheap command whose answer says whether the user is signed in.
+    pub auth_probe: Option<AuthProbe>,
 }
 
 pub(crate) const KNOWN: &[KnownHarness] = &[
@@ -226,7 +248,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         login_command: Some(&["codex", "login"]),
         install_hint: Some("brew install codex"),
         version: Some(("codex", &["--version"])),
-        auth_probe: Some(&["codex", "login", "status"]),
+        auth_probe: Some(AuthProbe::Text(&["codex", "login", "status"])),
     },
     KnownHarness {
         id: "claude-code",
@@ -236,7 +258,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         login_command: Some(&["claude", "/login"]),
         install_hint: Some("npm install -g @anthropic-ai/claude-code"),
         version: Some(("claude", &["--version"])),
-        auth_probe: None,
+        auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
     },
     KnownHarness {
         id: "gemini",

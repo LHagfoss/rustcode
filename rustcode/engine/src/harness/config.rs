@@ -424,6 +424,9 @@ pub(crate) struct AccountLayout {
     /// The file a login's directory holds once it is signed in, by name only:
     /// its presence is the cheap sign-in check and its contents are never read.
     pub marker: &'static str,
+    /// Whether macOS also keeps the sign-in in a Keychain item named after the
+    /// directory (Claude Code), so a missing marker file is not a sign-out.
+    pub keychain: bool,
     /// Variables that would override the account's own sign-in.
     pub drop_env: &'static [&'static str],
     /// What makes a directory look like a login directory of this harness.
@@ -446,6 +449,7 @@ const CLAUDE_ACCOUNT: AccountLayout = AccountLayout {
     own_name: "Claude",
     login_command: &["claude", "auth", "login"],
     marker: ".credentials.json",
+    keychain: true,
     drop_env: &[
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
@@ -467,6 +471,7 @@ const CODEX_ACCOUNT: AccountLayout = AccountLayout {
     own_name: "Codex",
     login_command: &["codex", "login"],
     marker: "auth.json",
+    keychain: false,
     drop_env: &["OPENAI_API_KEY", "CODEX_API_KEY"],
     looks_like: &[
         LoginEntry::File("config.toml"),
