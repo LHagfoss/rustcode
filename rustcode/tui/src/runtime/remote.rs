@@ -1798,10 +1798,14 @@ mod tests {
         }
         // A snapshot plus the deltas after it is the response, once. Once the
         // engine has moved the answer to history, a snapshot carries it in
-        // the transcript and leaves the live response empty; nothing follows
-        // it, so the answer is delivered once, not twice.
+        // the transcript and leaves the live response empty; nothing may
+        // follow it, so the answer is delivered once, not twice.
         let mut text = String::new();
         let mut deltas = 0;
+        // Non-empty text published after the snapshot that delivered the
+        // whole answer; there must be none.
+        let mut after_answer = Vec::new();
+        let mut answer_carried = false;
         for message in &received {
             match message {
                 OwnerMessage::Snapshot { snapshot, .. } => {
@@ -1822,11 +1826,18 @@ mod tests {
                         } else {
                             turn.live_response.text.clone()
                         };
+                        if text == PROVIDER_TEXT {
+                            answer_carried = true;
+                            after_answer.clear();
+                        }
                     }
                 }
                 OwnerMessage::Event(frame) => {
                     if let RemoteEvent::TextDelta { text: delta, .. } = &frame.event {
                         deltas += 1;
+                        if !delta.is_empty() {
+                            after_answer.push(delta.clone());
+                        }
                         text.push_str(delta);
                     }
                 }
@@ -1836,6 +1847,10 @@ mod tests {
         assert!(
             text == PROVIDER_TEXT,
             "the response reached the client once: {text:?} in {deltas} deltas"
+        );
+        assert!(
+            !answer_carried || after_answer.is_empty(),
+            "no text followed the snapshot that carried the answer: {after_answer:?}"
         );
 
         let state = runtime.app_state().await;

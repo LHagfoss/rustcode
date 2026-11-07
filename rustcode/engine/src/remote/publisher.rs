@@ -28,7 +28,7 @@ use super::projection::{
 };
 use super::protocol::{
     OwnerHealth, REMOTE_PROTOCOL_VERSION, RemoteEvent, RemoteEventFrame, RemoteSessionInfo,
-    RemoteTurn, ResyncReason,
+    RemoteSnapshot, ResyncReason,
 };
 
 /// Position in the live response up to which text was published.
@@ -44,12 +44,13 @@ struct ResponseCursor {
     /// followed it. A finished response leaves the buffer before its turn's
     /// end event arrives, so what was published may still be that response.
     emptied: bool,
-    /// The last cut was a snapshot whose transcript already held the running
-    /// turn's answer, with an empty live response. The engine writes the
-    /// finished text to history before it empties the live buffer, so a
-    /// snapshot taken between the two delivers the answer only in the
-    /// transcript: the end of that turn then has nothing left to publish.
-    answered_in_transcript: bool,
+    /// Text of the running turn's newest assistant message as the last
+    /// snapshot's transcript carried it, when that snapshot showed an empty
+    /// live response. The engine writes assistant text to history before it
+    /// empties the live buffer and between tool rounds, so such a snapshot
+    /// delivers that text only in its transcript, and the end of the turn
+    /// owes a client only what the transcript did not carry.
+    delivered: Option<String>,
 }
 
 impl ResponseCursor {
@@ -64,7 +65,7 @@ impl ResponseCursor {
             emitted_len: response.len(),
             emitted_hash,
             emptied: false,
-            answered_in_transcript: false,
+            delivered: None,
         }
     }
 
@@ -105,7 +106,7 @@ impl ResponseCursor {
         self.len = response.len();
         if !text.is_empty() {
             // Text published after the cut supersedes the transcript copy.
-            self.answered_in_transcript = false;
+            self.delivered = None;
         }
         (!text.is_empty()).then(|| text.to_owned())
     }
@@ -113,11 +114,19 @@ impl ResponseCursor {
     /// The end of the finished response that was never observed in the live
     /// buffer. A response that rewrote published text yields nothing: a delta
     /// cannot replace, and the transcript carries the final version.
-    fn finish<'a>(&self, final_content: &'a str) -> &'a str {
-        if self.answered_in_transcript {
-            // The last snapshot cut an empty live response and carried this
-            // turn's answer in its transcript, so a client already has it.
-            return "";
+    fn finish<'a>(&mut self, final_content: &'a str) -> &'a str {
+        if let Some(delivered) = self.delivered.take() {
+            // The last snapshot left the live response empty and carried this
+            // text in its transcript, so a client already has that much. The
+            // transcript copy may be cut at the projection's text limit, so
+            // only its prefix is owed back.
+            return if final_content == delivered {
+                ""
+            } else if let Some(rest) = final_content.strip_prefix(delivered.as_str()) {
+                rest
+            } else {
+                final_content
+            };
         }
         let prefix_matches = final_content.get(..self.emitted_len).is_some_and(|prefix| {
             let mut hasher = DefaultHasher::new();
@@ -196,24 +205,32 @@ fn pending_batch_id(state: &AppState) -> Option<&str> {
         .and(state.pending_approval_batch_id.as_deref())
 }
 
-/// Whether a snapshot of a running turn carries that turn's answer in its
-/// transcript instead of its live response.
+/// The text the snapshot's transcript carries for the running turn, when the
+/// snapshot shows no live response text.
 ///
-/// A turn's finished text reaches history before the live buffer is emptied,
-/// so a snapshot taken between the two shows an empty live response while the
-/// transcript already holds the answer. A client that receives it has the
-/// text, and the end of the turn must not publish it a second time.
-fn answer_is_in_transcript(state: &AppState, turn: Option<&RemoteTurn>) -> bool {
-    let Some(turn) = turn.filter(|turn| turn.live_response.text.is_empty()) else {
-        return false;
-    };
-    state
-        .history
+/// Assistant text reaches history before the live buffer is emptied and
+/// between tool rounds, so a snapshot taken in one of those windows carries
+/// the turn's newest assistant text only in its transcript. What a client
+/// received is read back from the snapshot itself: the transcript may have
+/// been shed to fit the frame, and [`History`](crate::app::AppState::history)
+/// then no longer matches what was sent.
+fn delivered_in_transcript(snapshot: &RemoteSnapshot) -> Option<String> {
+    let turn = snapshot.turn.as_ref()?;
+    if !turn.live_response.text.is_empty() {
+        return None;
+    }
+    snapshot
+        .transcript
         .iter()
         .rev()
-        .find(|message| message.role == "assistant")
-        .and_then(|message| message.turn.as_ref())
-        .is_some_and(|recorded| recorded.turn_id == turn.turn_id)
+        .find(|message| {
+            message.role == "assistant"
+                && message
+                    .turn
+                    .as_ref()
+                    .is_some_and(|recorded| recorded.turn_id == turn.turn_id)
+        })
+        .map(|message| message.content.text.clone())
 }
 
 impl SessionPublisher {
@@ -351,8 +368,7 @@ impl SessionPublisher {
             })
         });
         self.response = ResponseCursor::at(state);
-        self.response.answered_in_transcript =
-            answer_is_in_transcript(state, snapshot.turn.as_ref());
+        self.response.delivered = delivered_in_transcript(&snapshot);
         self.question_id = snapshot
             .pending_question
             .as_ref()
@@ -430,7 +446,7 @@ impl SessionPublisher {
                     }
                     if let Some(turn_id) = self.end_of_announced_turn_with_timing(timing.as_ref()) {
                         let content = visible_text(&content);
-                        let rest = self.response.finish(&content);
+                        let rest = self.response.finish(content.as_ref());
                         if rest.len() > self.limits.live_response_bytes {
                             self.request_snapshot();
                         } else if !rest.is_empty() {
@@ -1093,6 +1109,132 @@ mod tests {
                 .iter()
                 .any(|(_, event)| matches!(event, RemoteEvent::TextDelta { .. })),
             "the end of the turn repeats no text: {finished:?}"
+        );
+        assert!(matches!(
+            finished.last(),
+            Some((_, RemoteEvent::TurnFinished { turn_id: Some(ended), .. })) if ended == &turn_id
+        ));
+    }
+
+    fn text_deltas(events: &[(u64, RemoteEvent)]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|(_, event)| match event {
+                RemoteEvent::TextDelta { text, .. } if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_snapshot_between_tool_rounds_leaves_the_answer_to_publish() {
+        let mut state = shared_state();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "do it"));
+        state.current_turn_started_at = Some(std::time::Instant::now());
+        let (mut publisher, _) = register(&state);
+        let turn_id = start_turn(&mut state, &mut publisher);
+        publisher.publish(&state, true);
+
+        // Between tool rounds the engine writes the tool-call segment to
+        // history and empties the live buffer, so a snapshot here carries
+        // that segment only in its transcript.
+        state.history.push(crate::app::ChatMessage::new(
+            "assistant",
+            "checking the logs",
+        ));
+        state.freeze_turn_timing(None);
+        state.clear_current_response();
+        publisher.request_snapshot();
+        let resent = publisher.publish(&state, true);
+        let (snapshot, _) = snapshot_of(&resent);
+        let turn = snapshot.turn.as_ref().expect("the turn is running");
+        assert_eq!(turn.turn_id, turn_id);
+        assert!(turn.live_response.text.is_empty());
+        assert!(
+            snapshot
+                .transcript
+                .iter()
+                .any(|message| message.role == "assistant"
+                    && message.content.text == "checking the logs"),
+            "the snapshot's transcript carries the tool round's text"
+        );
+        assert!(text_deltas(&events(&resent)).is_empty());
+
+        // The answer never reaches the live buffer: the turn's end is the
+        // first place it is published, and it arrives in full.
+        state
+            .history
+            .push(crate::app::ChatMessage::new("assistant", "the answer"));
+        let timing = state
+            .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+            .expect("the turn's timing");
+        state.enter_idle();
+        state.end_turn_identity(&turn_id);
+        publisher.observe(&AgentUiEvent::TurnFinished {
+            content: "the answer".to_owned(),
+            completed: true,
+            timing: Some(timing),
+        });
+        let finished = events(&publisher.publish(&state, true));
+        assert_eq!(
+            text_deltas(&finished),
+            ["the answer"],
+            "the tool round's text is not the answer: {finished:?}"
+        );
+        assert!(matches!(
+            finished.last(),
+            Some((_, RemoteEvent::TurnFinished { turn_id: Some(ended), .. })) if ended == &turn_id
+        ));
+    }
+
+    #[test]
+    fn a_cut_transcript_copy_leaves_the_rest_of_the_answer_to_publish() {
+        let mut state = shared_state();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "do it"));
+        state.current_turn_started_at = Some(std::time::Instant::now());
+        let (mut publisher, _) = register(&state);
+        let turn_id = start_turn(&mut state, &mut publisher);
+        publisher.publish(&state, true);
+
+        // The answer is longer than one transcript entry may carry, so the
+        // snapshot delivers only its start.
+        let answer = format!("{}{}", "cut ".repeat(1200), "the end");
+        state
+            .history
+            .push(crate::app::ChatMessage::new("assistant", answer.clone()));
+        let timing = state
+            .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+            .expect("the turn's timing");
+        state.enter_idle();
+        let sent = publisher.publish(&state, true);
+        let (snapshot, resync) = snapshot_of(&sent);
+        assert_eq!(resync, Some(ResyncReason::HistoryChanged));
+        assert!(text_deltas(&events(&sent)).is_empty());
+        let carried = snapshot
+            .transcript
+            .iter()
+            .rev()
+            .find(|message| message.role == "assistant")
+            .expect("the transcript carries the answer");
+        assert!(carried.content.truncated, "the transcript copy is cut");
+        assert!(answer.starts_with(carried.content.text.as_str()));
+        let delivered = carried.content.text.len();
+
+        state.end_turn_identity(&turn_id);
+        publisher.observe(&AgentUiEvent::TurnFinished {
+            content: answer.clone(),
+            completed: true,
+            timing: Some(timing),
+        });
+        let finished = events(&publisher.publish(&state, true));
+        assert_eq!(
+            text_deltas(&finished).concat(),
+            answer[delivered..],
+            "only the part the transcript did not carry is owed"
         );
         assert!(matches!(
             finished.last(),
