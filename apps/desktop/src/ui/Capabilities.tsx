@@ -85,13 +85,19 @@ const parseCapabilities = (v: Json): Capabilities => {
   };
 };
 
+/** A harness's own folder is read, never written. */
+const HARNESS_SKILLS_NOTE =
+  "Read from Claude Code's own folder; RustCode never writes there. Turning one off stops RustCode from offering it, and tells a new external-harness thread not to use it.";
+
 /** Where a skill was found, in the words people use. */
-const SOURCE: Record<string, { label: string; order: number }> = {
+const SOURCE: Record<string, { label: string; order: number; note?: string }> = {
   workspace: { label: "Project", order: 0 },
-  rustcode: { label: "User", order: 1 },
-  universal: { label: "Shared (~/.agents)", order: 2 },
-  configured: { label: "Configured", order: 3 },
-  builtin: { label: "Built-in", order: 4 },
+  "claude-project": { label: "Claude Code (project)", order: 1, note: HARNESS_SKILLS_NOTE },
+  rustcode: { label: "User", order: 2 },
+  universal: { label: "Shared (~/.agents)", order: 3 },
+  "claude-user": { label: "Claude Code (~/.claude)", order: 4, note: HARNESS_SKILLS_NOTE },
+  configured: { label: "Configured", order: 5 },
+  builtin: { label: "Built-in", order: 6 },
 };
 
 const sourceOf = (s: string) => SOURCE[s] ?? { label: s || "Other", order: 9 };
@@ -471,6 +477,7 @@ function SkillsSection({
         <Group
           key={source}
           title={<span className="font-medium text-body text-fg-muted">{sourceOf(source).label}</span>}
+          footer={sourceOf(source).note}
         >
           {skills.map((s) => (
             <Row

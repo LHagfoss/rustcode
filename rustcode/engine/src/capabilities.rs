@@ -115,6 +115,10 @@ fn root_kind_name(kind: crate::skills::SkillRootKind) -> &'static str {
         SkillRootKind::Universal => "universal",
         SkillRootKind::Rustcode => "rustcode",
         SkillRootKind::Configured => "configured",
+        // A harness's own roots (#2898): listed, read only, and toggling one
+        // only stops RustCode from offering it.
+        SkillRootKind::HarnessProject => "claude-project",
+        SkillRootKind::HarnessUser => "claude-user",
     }
 }
 

@@ -718,8 +718,28 @@ engine passes the enabled `[[mcp_servers]]` entries of the user and project
 config to the harness's own session (ACP `mcpServers`, or Codex's
 `mcp_servers.<name>` config), so Settings → MCP Servers is the one list for
 every harness and nothing is written into the other tools' config files.
-Skills are not passed this way: RustCode discovers them from the roots in
-[configuration.md](configuration.md#skills), and an external harness keeps its
-own skill and tool model. `~/.agents/skills` is the root shared with other
-agents that read it, and `extra_skill_dirs` is how RustCode can also read a
-harness's own root.
+
+Skills are shared in the read direction, and never written into another tool's
+directory (#2898). RustCode scans a harness's own roots next to its own:
+
+| Harness | Skills root it reads itself | What RustCode does |
+| --- | --- | --- |
+| Built-in | RustCode's roots ([configuration.md](configuration.md#skills)) | Discovers and offers them through `list_skills` / `use_skill` |
+| Claude Code | `.claude/skills` in the project, `~/.claude/skills` | Reads both, so Settings › Skills lists what Claude Code installed; Claude Code keeps reading them itself too |
+| Pi | `~/.agents/skills`, `.agents/skills` | Reads the same roots (`universal` and project), so one list covers Pi and RustCode |
+| Codex | No skills directory: `AGENTS.md` and prompts | Gets the note below, naming the roots to read |
+| Gemini CLI | No skills directory: extensions and commands | Gets the note below, naming the roots to read |
+| OpenCode | No skills directory: its own agent/plugin model | Gets the note below, naming the roots to read |
+
+Every external-harness thread's instructions carry one short `# Skills`
+section: the roots that exist on this machine, `read <root>/<name>/SKILL.md`
+with the harness's own tools, and the names turned off in RustCode (do not use
+them, even where the harness's own settings list them). It is bounded to the
+roots and disabled names, never the whole catalog, because that text is paid
+on every request. It is captured when the thread starts, so a toggle made
+later reaches the next external-harness thread, not the running one.
+
+Settings › Skills groups a harness's skills under its own heading and lists
+their paths, and says there that the folder is read only. Nothing is copied,
+linked or removed in `~/.claude` or any other harness directory, and no
+setting has to be turned on for the list to be complete.

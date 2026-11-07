@@ -331,12 +331,19 @@ first definition of a skill name wins:
 2. `RUSTCODE_EXTRA_SKILL_DIRS`, using the platform path-list separator
 3. `<workspace>/.rustcode/skills`
 4. `<workspace>/.agents/skills`
-5. `~/.agents/skills` — the universal root, shared with other agents
-6. `<config dir>/skills` — RustCode's own root (see *Configuration files*)
+5. `<workspace>/.claude/skills` — Claude Code's project root, read only
+6. `~/.agents/skills` — the universal root, shared with other agents
+7. `~/.claude/skills` — Claude Code's user root, read only
+8. `<config dir>/skills` — RustCode's own root (see *Configuration files*)
 
 So a project can override a user-level skill, and an explicitly configured
-root can override both. `.claude/skills` is deliberately **not** scanned; add
-it to `extra_skill_dirs` if you really want Claude Code's skills.
+root can override both. The harness roots (5 and 7) are read so Settings ›
+Skills lists the skills Claude Code has installed, wherever they live, and one
+toggle list covers them. RustCode only reads those directories: it never
+creates, rewrites, symlinks or deletes anything there, and nothing has to be
+moved out of `~/.claude` for the list to be complete. A harness's project root
+comes before RustCode's and the user's other roots, and a project definition
+wins over the user's, exactly as it does inside RustCode's own roots.
 
 Extra roots are a global-only setting — a checked-out `.rustcode/config.toml`
 cannot widen skill discovery:
@@ -380,8 +387,13 @@ OpenCode) gets them in its `session/new`'s `mcpServers`, and Codex gets them as
 `mcp_servers.<name>` overrides on `thread/start`. RustCode spawns nothing
 itself for those threads; the harness starts the server in its own session, and
 the server's name, command and URL are the same as in `Settings → MCP Servers`.
-Skills are RustCode's own: an external harness runs its own skill model, so
-this list does not reach it (see `docs/harnesses.md`).
+
+Skills are shared in the read direction instead. RustCode reads a harness's own
+roots as well as its own (steps 5 and 7 above), so the list is complete, and a
+thread on an external harness is told where the discovered skills are on disk
+and which ones are turned off, so it can read a `SKILL.md` with its own tools.
+That note is fixed when the thread starts: a toggle made later reaches the next
+external-harness thread, not the running one (see `docs/harnesses.md`).
 
 A toggle applies from the next message of every open session in the process
 that made it: the terminal you toggled in, or the macOS app's engine for all of
