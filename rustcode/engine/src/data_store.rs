@@ -475,10 +475,12 @@ pub fn usage_at(
         ),
         GroupBy::Day => ("date(t.started_at) AS day", "1"),
         GroupBy::Project => ("COALESCE(th.project, th.cwd, '') AS project", "1"),
+        // `threads` is joined on its primary key, so `th.model` is one value
+        // per group even though the group is only the thread id.
         GroupBy::Thread => (
             "t.thread_id AS thread, th.title AS title, \
              COALESCE(th.project, th.cwd, '') AS project, COALESCE(th.harness, t.harness) AS harness, \
-             th.parent_id AS parent_id, th.parent_title AS parent_title",
+             th.model AS model, th.parent_id AS parent_id, th.parent_title AS parent_title",
             "1",
         ),
     };
@@ -2866,6 +2868,10 @@ mod tests {
         assert_eq!(first["thread"], "b");
         assert_eq!(first["title"], "Thread b");
         assert_eq!(first["project"], "/repo/b");
+        // The thread's model, so Settings › Statistics can price the row. The
+        // last turn written for it is claude-code's sonnet; `write_turn` keeps
+        // `threads.model` at the model the thread last ran.
+        assert_eq!(first["model"], "sonnet");
         assert_eq!(first["parent_id"], "a");
         assert_eq!(first["parent_title"], "Thread a");
     }

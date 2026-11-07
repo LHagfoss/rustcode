@@ -62,6 +62,16 @@ describe("recorded usage parsing", () => {
     expect(parsed.totals.cost).toBeUndefined();
     expect(parsed.totals.turns).toBe(2);
   });
+
+  test("a thread row carries the thread's model, so it can be priced", () => {
+    const parsed = parseUsageReport({
+      group_by: "thread",
+      rows: [row({ thread: "t", model: "gpt-6-luna" })],
+      totals: {},
+    });
+    expect(parsed.rows[0]!.thread).toBe("t");
+    expect(parsed.rows[0]!.model).toBe("gpt-6-luna");
+  });
 });
 
 describe("by harness and model", () => {
@@ -192,6 +202,112 @@ describe("thread totals including delegates", () => {
 });
 
 describe("thread hierarchy source", () => {
+  test("a thread's cost is its reported cost, or the estimate when none was reported", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "reported",
+          title: "Reported",
+          parent_id: null,
+          parent_title: null,
+          model: "gpt-6-astra",
+          cost_usd: 2.5,
+          turns: 1,
+          turns_without_cost: 0,
+        }),
+        row({
+          thread: "estimated",
+          title: "Estimated",
+          parent_id: null,
+          parent_title: null,
+          model: "gpt-6-luna",
+          input_tokens: 1_000_000,
+          output_tokens: 0,
+          cached_tokens: 0,
+          cost_usd: null,
+          turns: 2,
+          turns_without_cost: 2,
+        }),
+      ],
+      totals: {},
+    });
+    const answer = threadReport(rows, [], []);
+    expect(answer.threads.find((t) => t.id === "reported")!.cost).toMatchObject({
+      usd: 2.5,
+      reportedUsd: 2.5,
+      unknownTurns: 0,
+    });
+    const estimated = answer.threads.find((t) => t.id === "estimated")!.cost;
+    expect(estimated.reportedUsd).toBeUndefined();
+    expect(estimated.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(estimated.usd).toBeCloseTo(0.1, 10);
+  });
+
+  test("a parent's cost includes its delegates, and says part of it is estimated", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "parent",
+          title: "Parent",
+          parent_id: null,
+          parent_title: null,
+          model: "gpt-6-luna",
+          input_tokens: 1_000_000,
+          output_tokens: 0,
+          cached_tokens: 0,
+          cost_usd: null,
+          turns: 2,
+          turns_without_cost: 2,
+        }),
+        row({
+          thread: "child",
+          title: "Child",
+          parent_id: "parent",
+          parent_title: "Parent",
+          model: "gpt-6-astra",
+          cost_usd: 2.5,
+          turns: 1,
+          turns_without_cost: 0,
+        }),
+      ],
+      totals: {},
+    });
+    const answer = threadReport(rows, [], []);
+    const parent = answer.threads[0]!;
+    expect(parent.ownCost.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(parent.cost.reportedUsd).toBe(2.5);
+    expect(parent.cost.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(parent.cost.usd).toBeCloseTo(2.6, 10);
+    expect(parent.delegateCount).toBe(1);
+  });
+
+  test("a thread with no model, or with no price and no reported cost, is unknown", () => {
+    const rows = parseUsageReport({
+      group_by: "thread",
+      rows: [
+        row({
+          thread: "no-model",
+          model: null,
+          cost_usd: null,
+          input_tokens: 1_000,
+          output_tokens: 100,
+          turns: 3,
+        }),
+        row({ thread: "no-price", model: "gpt-9-unknown", cost_usd: null, turns: 4 }),
+      ],
+      totals: {},
+    });
+    const answer = threadReport(rows, [], []);
+    const noModel = answer.threads.find((t) => t.id === "no-model")!.cost;
+    const noPrice = answer.threads.find((t) => t.id === "no-price")!.cost;
+    expect(noModel.usd).toBeUndefined();
+    expect(noModel.unknownTurns).toBe(3);
+    expect(noPrice.usd).toBeUndefined();
+    expect(noPrice.unknownTurns).toBe(4);
+  });
+
   test("parent ids on the rows roll up without a session list", () => {
     const rows = parseUsageReport({
       group_by: "thread",

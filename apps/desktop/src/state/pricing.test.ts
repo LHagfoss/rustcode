@@ -5,8 +5,18 @@
 
 import { describe, expect, test } from "bun:test";
 import type { UsageCounts } from "../acp/rustcode";
-import { estimateAll, estimateGroup, estimateUsd, normalize, PRICE_DATE, priceOf } from "./pricing";
-import type { HarnessTotal, ModelTotal } from "./statistics";
+import {
+  addCost,
+  bestCost,
+  type CostInput,
+  costOf,
+  emptyCost,
+  estimateUsd,
+  normalize,
+  PRICE_DATE,
+  priceOf,
+  rollUpCosts,
+} from "./pricing";
 import { emptyTotals } from "./statistics";
 
 const counts = (over: UsageCounts): UsageCounts => ({
@@ -150,48 +160,73 @@ describe("an estimate never prices raw input_tokens", () => {
   });
 });
 
-describe("a harness row's estimate", () => {
-  const model = (name: string, over: Partial<UsageCounts>, turns: number): ModelTotal => ({
-    model: name,
+describe("a row's best known cost", () => {
+  const spent = (
+    over: Partial<UsageCounts> & { cost?: number; turns?: number },
+    harness = "codex",
+    model: string | undefined = "gpt-6-luna",
+  ): CostInput => ({
+    harness,
+    model,
     totals: {
       ...emptyTotals(),
       ...over,
-      turns,
-      turnsWithoutCost: turns,
+      turns: over.turns ?? 1,
     },
   });
-  const group = (models: ModelTotal[]): HarnessTotal => ({
-    harness: "codex",
-    totals: models[0]!.totals,
-    models,
+
+  test("a reported cost wins and is never altered by the estimate", () => {
+    // The same tokens would price at ~$2, but the harness reported $1.25.
+    const row = spent({ input: 1_000_000, cached: 0, output: 0, cost: 1.25 }, "codex", "gpt-6.1-sol");
+    expect(bestCost(row)).toEqual({ usd: 1.25, source: "reported" });
+    expect(estimateUsd("codex", "gpt-6.1-sol", row.totals)).toBeCloseTo(2, 10);
   });
 
-  test("sums the model rows that can be priced and counts the turns it leaves out", () => {
-    const rows = group([
-      model("gpt-6-luna", { input: 1_000_000, cached: 0, output: 0 }, 2),
-      model("gpt-9-unknown", { input: 1_000_000, cached: 0, output: 0 }, 3),
+  test("a row the harness did not price is estimated", () => {
+    const row = spent({ input: 1_000_000, cached: 0, output: 0 });
+    expect(bestCost(row)).toEqual({ usd: 0.1, source: "estimated" });
+    expect(costOf(row)).toEqual({ usd: 0.1, estimatedUsd: 0.1, unknownTurns: 0 });
+  });
+
+  test("a row with neither is unknown, and its turns are counted not zeroed", () => {
+    const row = spent({ input: 1_000_000, cached: 0, output: 0, turns: 3 }, "codex", "gpt-9-unknown");
+    expect(bestCost(row)).toEqual({ source: "unknown" });
+    expect(costOf(row)).toEqual({ unknownTurns: 3 });
+    // An unknown harness with a priced model is not priced either.
+    expect(bestCost(spent({ input: 1_000, output: 10 }, "gemini"))).toEqual({ source: "unknown" });
+  });
+
+  test("a thread row with no model falls back to unknown", () => {
+    expect(bestCost(spent({ input: 1_000, output: 10 }, "codex", undefined)).source).toBe("unknown");
+  });
+
+  test("the roll-up splits the parts and adds each row only once", () => {
+    const total = rollUpCosts([
+      spent({ input: 1_000, cached: 0, output: 0, cost: 2.5 }, "codex", "gpt-6-luna"),
+      spent({ input: 1_000_000, cached: 0, output: 0 }),
+      spent({ input: 1_000_000, cached: 0, output: 0, turns: 3 }, "codex", "gpt-9-unknown"),
     ]);
-    const estimate = estimateGroup(rows);
-    expect(estimate.usd).toBeCloseTo(0.1, 10);
-    expect(estimate.turnsNotEstimated).toBe(3);
+    expect(total.reportedUsd).toBe(2.5);
+    expect(total.estimatedUsd).toBeCloseTo(0.1, 10);
+    expect(total.usd).toBeCloseTo(2.6, 10);
+    expect(total.unknownTurns).toBe(3);
   });
 
-  test("a harness with nothing priced has no estimate at all", () => {
-    const estimate = estimateGroup(group([model("gpt-9-unknown", { input: 100, output: 1 }, 1)]));
-    expect(estimate.usd).toBeUndefined();
-    expect(estimate.turnsNotEstimated).toBe(1);
+  test("nothing known has no total at all, never $0", () => {
+    expect(rollUpCosts([])).toEqual({ unknownTurns: 0 });
+    expect(rollUpCosts([spent({}, "codex", "gpt-9-unknown")]).usd).toBeUndefined();
   });
 
-  test("the report total adds the priced rows and keeps the rest counted", () => {
-    const codexRows = group([model("gpt-6-luna", { input: 1_000_000, cached: 0, output: 0 }, 1)]);
-    const geminiRows: HarnessTotal = {
-      harness: "gemini",
-      totals: { ...emptyTotals(), input: 500, output: 50, turns: 4 },
-      models: [{ model: "gpt-6-luna", totals: { ...emptyTotals(), input: 500, output: 50, turns: 4 } }],
-    };
-    const all = estimateAll([codexRows, geminiRows]);
-    expect(all.usd).toBeCloseTo(0.1, 10);
-    expect(all.turnsNotEstimated).toBe(4);
-    expect(all.byHarness.get("gemini")?.usd).toBeUndefined();
+  test("adding keeps each part absent until one side has it", () => {
+    expect(addCost(emptyCost(), { usd: 1.5, reportedUsd: 1.5, unknownTurns: 0 })).toEqual({
+      usd: 1.5,
+      reportedUsd: 1.5,
+      unknownTurns: 0,
+    });
+    expect(addCost({ usd: 1, estimatedUsd: 1, unknownTurns: 2 }, { unknownTurns: 1 })).toEqual({
+      usd: 1,
+      estimatedUsd: 1,
+      unknownTurns: 3,
+    });
   });
 });

@@ -1,5 +1,6 @@
-// What Settings › Statistics estimates a row would have cost at API list
-// prices. Harnesses disagree about what `input_tokens` holds, so a raw
+// What Settings › Statistics puts on a row's cost: the USD a harness reported,
+// or, where it reported none, an estimate at API list prices. Harnesses
+// disagree about what `input_tokens` holds, so a raw
 // `input × rate + output × rate` overcounts cache reads (most of an agent's
 // input): see the engine, where the built-in harness and Codex report cached
 // input inside the prompt (`network/anthropic_messages.rs:137` adds
@@ -10,17 +11,22 @@
 // `{uncachedInput, cacheRead, cacheWrite, output}` before any rate is applied,
 // and a harness whose convention is unknown yields no estimate at all.
 //
-// This is an estimate, kept apart from the cost a harness reported: it never
-// replaces, corrects or is added to that number. Prices are public list prices
-// per million tokens, written by hand below on PRICE_DATE; there is no fetch at
+// A harness does not always report what a turn cost: Codex never does, so its
+// rows would otherwise show no cost at all. A row's cost here is the USD the
+// harness reported when it reported one, and otherwise the estimate below; a
+// reported number always wins and is never altered. The page's headline total
+// adds a row's reported cost or its estimate, never both for the same row, and
+// keeps the reported and estimated parts visible beside it. A row with neither
+// is unknown, never $0: a missing price and a free model must not look alike.
+//
+// This is an estimate, not a bill, and prices are public list prices per
+// million tokens, written by hand below on PRICE_DATE; there is no fetch at
 // runtime, so a price change is a one-line edit here (and a new PRICE_DATE). A
-// model the table does not know yields no estimate, never a zero: a missing
-// price and a free model would otherwise look the same.
+// model the table does not know yields no estimate.
 //
 // Pure (no React, no store), so the page and its tests share one answer.
 
 import type { UsageCounts } from "../acp/rustcode";
-import type { HarnessTotal } from "./statistics";
 
 /** The day the prices below were last checked against the providers' list prices. */
 export const PRICE_DATE = "2026-11-06";
@@ -171,47 +177,90 @@ export function estimateUsd(
   );
 }
 
-/** A harness's estimate: the sum of its model rows, and the turns left out of it. */
-export interface GroupEstimate {
-  /** The USD list prices put on this group's turns, or undefined when no model row could be priced. */
+/** Where a row's cost came from: the harness's own number, a list price, or neither. */
+export type CostSource = "reported" | "estimated" | "unknown";
+
+/** A row's best known cost, and which number it is. */
+export interface BestCost {
+  /** The reported cost, else the estimate; absent when the row has neither. */
   usd?: number;
-  /** Turns in rows with no price or with unknown token semantics, which this estimate leaves out. */
-  turnsNotEstimated: number;
+  source: CostSource;
+}
+
+/** A row as the cost functions need it: its counts, its reported cost and its turns. */
+export interface CostInput {
+  harness: string;
+  model?: string;
+  totals: UsageCounts & {
+    /** The USD the harness reported. Never a price RustCode computed. */
+    cost?: number;
+    turns: number;
+    /** Turns that reported no cost, when the row knows it (a usage total does). */
+    turnsWithoutCost?: number;
+  };
 }
 
 /**
- * A harness row priced model by model, since each model has its own rate. A
- * harness whose stores an unpriced model keeps the priced part and counts the
- * rest, rather than dropping the whole row.
+ * A row's best known cost: the USD its harness reported when it reported one,
+ * otherwise its list-price estimate, otherwise nothing. A reported number is
+ * never corrected or replaced by an estimate.
  */
-export function estimateGroup(group: HarnessTotal): GroupEstimate {
-  let usd: number | undefined;
-  let turnsNotEstimated = 0;
-  for (const model of group.models) {
-    const one = estimateUsd(group.harness, model.model, model.totals);
-    if (one === undefined) {
-      turnsNotEstimated += model.totals.turns;
-      continue;
-    }
-    usd = (usd ?? 0) + one;
-  }
-  return { usd, turnsNotEstimated };
+export function bestCost(row: CostInput): BestCost {
+  if (row.totals.cost !== undefined) return { usd: row.totals.cost, source: "reported" };
+  const usd = estimateUsd(row.harness, row.model, row.totals);
+  if (usd === undefined) return { source: "unknown" };
+  return { usd, source: "estimated" };
 }
 
-/** Every harness row's estimate, and the total of the rows that could be priced. */
-export interface ReportEstimate extends GroupEstimate {
-  byHarness: Map<string, GroupEstimate>;
+/** What a set of rows costs: each row's best known number, split by where it came from. */
+export interface CostTotals {
+  /** The sum of each row's best known cost; absent when no row has one. */
+  usd?: number;
+  /** The reported part of `usd`. */
+  reportedUsd?: number;
+  /** The estimated part of `usd`. */
+  estimatedUsd?: number;
+  /** Turns in rows with neither a reported cost nor a price, which `usd` leaves out. */
+  unknownTurns: number;
 }
 
-export function estimateAll(groups: HarnessTotal[]): ReportEstimate {
-  const byHarness = new Map<string, GroupEstimate>();
-  let usd: number | undefined;
-  let turnsNotEstimated = 0;
-  for (const group of groups) {
-    const estimate = estimateGroup(group);
-    byHarness.set(group.harness, estimate);
-    if (estimate.usd !== undefined) usd = (usd ?? 0) + estimate.usd;
-    turnsNotEstimated += estimate.turnsNotEstimated;
+/** No rows yet: nothing known, and nothing left out. */
+export function emptyCost(): CostTotals {
+  return { unknownTurns: 0 };
+}
+
+const addOptional = (one?: number, other?: number): number | undefined =>
+  one === undefined && other === undefined ? undefined : (one ?? 0) + (other ?? 0);
+
+/** Two costs added, each part only when at least one side has it. */
+export function addCost(one: CostTotals, other: CostTotals): CostTotals {
+  return {
+    usd: addOptional(one.usd, other.usd),
+    reportedUsd: addOptional(one.reportedUsd, other.reportedUsd),
+    estimatedUsd: addOptional(one.estimatedUsd, other.estimatedUsd),
+    unknownTurns: one.unknownTurns + other.unknownTurns,
+  };
+}
+
+/** One row's best known cost as a roll-up, so rows and sums share a shape. */
+export function costOf(row: CostInput): CostTotals {
+  const best = bestCost(row);
+  if (best.source === "reported") {
+    return { usd: best.usd, reportedUsd: best.usd, unknownTurns: 0 };
   }
-  return { usd, turnsNotEstimated, byHarness };
+  if (best.source === "estimated") {
+    return { usd: best.usd, estimatedUsd: best.usd, unknownTurns: 0 };
+  }
+  return { unknownTurns: row.totals.turns };
+}
+
+/**
+ * A report's cost, model row by model row: each row contributes its reported
+ * cost or its estimate, never both, and the turns of rows with neither are
+ * counted instead of being shown as $0.
+ */
+export function rollUpCosts(rows: readonly CostInput[]): CostTotals {
+  let total = emptyCost();
+  for (const row of rows) total = addCost(total, costOf(row));
+  return total;
 }
