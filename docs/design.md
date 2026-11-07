@@ -819,31 +819,49 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   being typed in.
   Details lists what a thread is, in titled sections that drop out when
   they have nothing to say: harness, workspace, linked threads, subagents with
-  status and elapsed time, plan and usage.
+  status and elapsed time, plan, the timed approvals still in force
+  (`Allowed`, each with its minutes left and Revoke), and usage.
 - **Switch row:** where a thread's model or effort changed after its first
   message, a quiet divider (`gpt-6-luna → gpt-6-astra · Medium → High`). Picks
   with no message between them are one row; the engine records it in the
   history on harness threads, so it survives a reload.
 - **Approval row:** an approval waits as a row in the transcript, at the call
-  it is about (`ui/AttentionCards.tsx` `ApprovalRow`): the `Hand` in
-  `warning` in the 18px column, `Waiting for approval` in `font-medium`, then
-  the command or title in `font-mono`, with `1 of N` when the turn waits on
-  a batch. Under it, indented 26px, one body at most 160px tall that scrolls:
-  the command in a `bg-fill-subtle` code well (`$ ` in `text-fg-muted`), the
-  change it would make (`DiffView`), and its reason in `warning` when it has
-  one. Then its answers as 24px pills: Decline `esc`, Approve `⏎`,
-  Always allow, and More for the rest. It sits 2px from the call above it,
-  like the tool rows do. An approval whose call is not on screen yet (or is
-  folded away) goes to the foot of the transcript, where it can still be
-  answered.
+  it is about (`ui/AttentionCards.tsx` `ApprovalRow`): the `Hand` in the
+  risk's tone in the 18px column, `Waiting for approval` in `font-medium`, a
+  risk badge, then the command or title in `font-mono`, with `1 of N` when the
+  turn waits on a batch. The risk (`lib/approval.ts` `assessApproval`) tints
+  the icon and badge and nothing else: `success` reads *Read-only*, `warning`
+  *Risky* or *Changes files*, `danger` *Destructive* — a tree deletion, a
+  forced push, a dropped table, sudo, or a write outside the thread's folder.
+  An unknown tool is *Risky*. Under it, indented 26px, one body at most 160px
+  tall that scrolls: for a command, the key–value preview (Command, Folder,
+  Path), then the change it would make (`DiffView`), then its reason when it
+  has one. An edit has no block: its diff header already names the file and
+  its `+N −M`, and a `why` repeating the path is not drawn. Then its answers
+  as 24px pills: Decline `esc`, Approve `⏎` (once), and a Grant menu — *Allow
+  for* *1 hour* or *Always allow*, the engine's other answers, and *Allow all
+  N waiting*. A *Destructive* call offers no grant, here or in the bar or the
+  inbox, whatever the engine listed; it is answered once or declined. It sits
+  2px from the call above it, like the tool rows do. An approval whose call is
+  not on screen yet (or is folded away) goes to the foot of the transcript,
+  where it can still be answered.
 - **Approval bar:** the card over the composer keeps one slim line for the
-  same approval — `Waiting for approval · <title>` with the same answers
-  (`elevated rounded-2xl`, `min-h-[34px]`, `py-1`) — because it is the target
-  for the keys: 1–9 pick an answer in the engine's order (reject, always,
-  allow once), `⏎` approves and `esc` declines, whenever no field, menu or
-  dialog has the keyboard. The body is not repeated there; it is read in the
-  row. A message sent from the composer meanwhile declines it and tells the
-  agent what to do instead.
+  same approval — `Waiting for approval · <subject>`, its risk badge (the
+  icon carries the risk in a tip) and the same answers (`elevated
+  rounded-2xl`, `min-h-[34px]`, `py-1`) — because it is the target for the
+  keys: 1–9 pick a visible answer in the engine's order (reject, hour,
+  always, allow once; a destructive call has only reject and once), `⏎`
+  approves and `esc` declines, whenever no field, menu or dialog has the
+  keyboard. The body is not repeated there; it is read in the row. A message
+  sent from the composer meanwhile declines it and tells the agent what to do
+  instead.
+- **Answered approval:** the bar folds into one settled line where the card
+  was (`ResolvedApprovalBar`, `rc-resolve`, 180 ms): a `CircleCheck` in
+  `success` for an allow or the `Hand` in `text-fg-muted` for a decline, then
+  `Allowed edit src/app.ts · once`, `Allowed cargo test --lib · 1 hour` or
+  `Declined git push --force`. It stays `RESOLVED_APPROVAL_MS` (1.8 s) and
+  leaves, so an answer has a visible result instead of a card vanishing under
+  the pointer.
 - **Question row:** an answered question stays in the transcript
   (`ui/Rows.tsx` `QuestionRow`, `bg-fill-subtle rounded-lg px-3 py-2`): the
   header in `font-medium` after a `MessageCircleQuestion` in accent, the

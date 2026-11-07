@@ -461,6 +461,21 @@
   animation: rc-in 0.2s var(--ease-snappy);
 }
 
+/*
+ * An answered approval settles where its card was (ui/AttentionCards.tsx
+ * ResolvedApprovalBar): the same 34px row, so the card becomes one line
+ * instead of vanishing under the pointer. Off under reduced motion.
+ */
+@keyframes rc-resolve {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+.rc-resolve {
+  animation: rc-resolve 180ms var(--ease-snappy);
+}
+
 /* Something runs in the background: a slow breath, not a spinner. */
 @keyframes rc-breathe {
   0%,

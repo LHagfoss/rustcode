@@ -1,9 +1,10 @@
 // The composer's one usage meter, after UsageCapsule.swift: the plan's shortest window (5-hour) as
 // a short bar with the percentage left, and the context window as a small ring beside it. One
-// glance, one hover card (both, with each plan window's reset), one click (Settings' Usage page).
+// glance, one card (both, with each plan window's reset), and a way on to Settings' Usage page.
 // It reads the store itself, so the composer never re-renders for usage.
 
 import { HoverCard } from "radix-ui";
+import { useState } from "react";
 import {
   leftPercent,
   type PlanUsage,
@@ -13,6 +14,7 @@ import {
   windowTitle,
 } from "../acp/rustcode";
 import type { SessionUsage } from "../acp/types";
+import { layoutTiles } from "../lib/treemap";
 import {
   onlyCachedPlan,
   openSettings,
@@ -24,7 +26,7 @@ import {
   useApp,
 } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
-import { cx, Pill } from "./primitives";
+import { cx, Pill, Segments, Tooltip } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
 function contextTint(fraction: number) {
@@ -37,20 +39,29 @@ function planTint(left: number) {
 }
 
 /**
- * The conversation (what a compaction can shrink) in shades of the accent,
- * the fixed overhead sent with every request in greys.
+ * One fill per category, used by both the bar's segments and the tile map so
+ * they are the same colour (mixed over the raised surface, not transparent,
+ * which would take the colour of whatever each one happens to sit on).
  */
-const CATEGORY_COLOR: Record<string, string> = {
+const CATEGORY_FILL: Record<string, string> = {
   "User messages": "var(--rc-accent)",
-  "Agent responses": "color-mix(in srgb, var(--rc-accent) 72%, transparent)",
-  "Tool calls": "color-mix(in srgb, var(--rc-accent) 50%, transparent)",
-  Subagents: "color-mix(in srgb, var(--rc-accent) 36%, transparent)",
-  "Compacted history": "color-mix(in srgb, var(--rc-accent) 24%, transparent)",
+  "Agent responses": "color-mix(in srgb, var(--rc-accent) 72%, var(--rc-surface-2))",
+  "Tool calls": "color-mix(in srgb, var(--rc-accent) 50%, var(--rc-surface-2))",
+  Subagents: "color-mix(in srgb, var(--rc-accent) 36%, var(--rc-surface-2))",
+  "Compacted history": "color-mix(in srgb, var(--rc-accent) 24%, var(--rc-surface-2))",
   "System prompt": "var(--rc-text-muted)",
-  "System tools": "color-mix(in srgb, var(--rc-text-muted) 65%, transparent)",
-  Skills: "color-mix(in srgb, var(--rc-text-muted) 40%, transparent)",
+  "System tools": "color-mix(in srgb, var(--rc-text-muted) 65%, var(--rc-surface-2))",
+  Skills: "color-mix(in srgb, var(--rc-text-muted) 40%, var(--rc-surface-2))",
 };
-const categoryColor = (name: string) => CATEGORY_COLOR[name] ?? "var(--rc-text-faint)";
+const categoryColor = (name: string) => CATEGORY_FILL[name] ?? "var(--rc-text-faint)";
+
+/** Text on a tile: the pane colour on the opaque fills, the body ink on the
+ * ones that approach the surface. */
+const CATEGORY_INK: Record<string, string> = {
+  "User messages": "var(--rc-bg)",
+  "System prompt": "var(--rc-bg)",
+};
+const categoryInk = (name: string) => CATEGORY_INK[name] ?? "var(--rc-text)";
 
 const percentOf = (part: number, whole: number) =>
   whole > 0 ? `${part / whole < 0.01 && part > 0 ? "<1" : Math.round((part / whole) * 100)}%` : "";
@@ -80,13 +91,21 @@ function ContextGauge({ fraction }: { fraction: number }) {
 
 /**
  * Everything the composer says about usage, as one meter: the plan's shortest window and the
- * context ring side by side, one hover card that carries the plan's windows with their resets and
- * what fills the context, and one click to Settings' Usage page. Two separate meters (and two
- * cards) said the same thing twice.
+ * context ring side by side, and one card that carries the plan's windows with their resets and
+ * what fills the context. Hover or click the meter to open it; the card links on to Settings' Usage
+ * page. Two separate meters (and two cards) said the same thing twice.
  */
 export function UsageMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
   const usageOpen = useApp((s) => s.settings === "usage");
+  const [open, setOpen] = useState(false);
+  // The context as it was when Compact was pressed, so the card can compare it with what the
+  // harness reports afterwards. It is a snapshot, not a second set of numbers.
+  const [compactSnapshot, setCompactSnapshot] = useState<{
+    threadId?: string;
+    usage: SessionUsage;
+  } | null>(null);
+  const before = compactSnapshot && compactSnapshot.threadId === threadId ? compactSnapshot.usage : null;
   // The thread's own account has its own numbers: the meter never shows
   // another login's plan, not even the same harness's default one.
   const cached = useApp((s) => {
@@ -109,10 +128,12 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   ].filter(Boolean);
   return (
     <HoverCard.Root
+      open={open}
       openDelay={60}
       closeDelay={120}
-      onOpenChange={(open) => {
-        if (!open) return;
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) return;
         // The thread's own numbers, when it has any; for a harness that answers
         // none (Claude Code) the plans call is the only way to refresh the cache.
         if (threadId) void refreshPlanUsage(threadId);
@@ -122,9 +143,14 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
       <HoverCard.Trigger asChild>
         <button
           type="button"
-          aria-label={`${said.join(", ")}. Opens Usage in Settings`}
-          aria-pressed={usageOpen}
-          onClick={() => openSettings(usageOpen ? null : "usage")}
+          aria-label={`${said.join(", ")}. Shows what fills the context window`}
+          aria-expanded={open}
+          onClick={(event) => {
+            // The card, not Settings: a press is the second way into the breakdown (hover is the
+            // first), and the card links on to the full Usage page.
+            event.preventDefault();
+            setOpen(!open);
+          }}
           className="flex h-[30px] cursor-pointer items-center gap-2 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
         >
           {left !== null && (
@@ -159,13 +185,23 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="elevated z-40 max-h-[var(--radix-popper-available-height,80vh)] w-[320px] overflow-y-auto p-3 rc-in"
+          style={{ maxHeight: "min(var(--radix-popper-available-height, 70vh), calc(100dvh - 140px))" }}
+          className="elevated z-40 flex w-[320px] flex-col overflow-hidden p-3 rc-in"
         >
           <UsageCard
             plan={plan}
             cached={fromCache}
             usage={usage}
-            onCompact={running ? undefined : () => void submit("/compact")}
+            before={before}
+            openSettings={usageOpen ? undefined : () => openSettings("usage")}
+            onCompact={
+              running || !usage?.size
+                ? undefined
+                : () => {
+                    setCompactSnapshot({ threadId, usage });
+                    void submit("/compact");
+                  }
+            }
           />
         </HoverCard.Content>
       </HoverCard.Portal>
@@ -173,47 +209,113 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   );
 }
 
-/** What fills the context window: a stacked bar, then each category with its share. */
-export function ContextInspector({ usage, onCompact }: { usage: SessionUsage; onCompact?: () => void }) {
-  const detail = usage.context;
+/**
+ * What fills the context window: a stacked bar with the automatic compaction point, a tile map of
+ * the categories, and the biggest items in the category under the pointer. A harness that reports
+ * only a total keeps the total-only view and its one-line explanation; nothing is invented.
+ */
+export function ContextInspector({
+  usage,
+  before,
+  onCompact,
+}: {
+  usage: SessionUsage;
+  before?: SessionUsage | null;
+  onCompact?: () => void;
+}) {
+  const [view, setView] = useState<"before" | "after">("after");
+  const [picked, setPicked] = useState<string | null>(null);
+  const snapshot = view === "before" && before ? before : usage;
+  const detail = snapshot.context;
+  const used = snapshot.used;
   const shown = detail?.categories.filter((c) => c.tokens > 0) ?? [];
-  const free = Math.max(0, detail?.free ?? usage.size - usage.used);
-  const fraction = Math.min(1, usage.used / usage.size);
+  const free = Math.max(0, detail?.free ?? usage.size - used);
+  const fraction = Math.min(1, used / usage.size);
+  const largest = shown.reduce<(typeof shown)[number] | undefined>(
+    (best, category) => (!best || category.tokens > best.tokens ? category : best),
+    undefined,
+  );
+  const active = shown.find((c) => c.name === picked) ?? largest;
+  const pickedCategory = shown.find((c) => c.name === picked);
+  const compactAt = detail?.compactAt;
+  const compactedAfter = !!before && !!before.context && !!detail;
+  const comparable =
+    !!before &&
+    (compactedAfter
+      ? (detail?.compactions ?? 0) > (before.context?.compactions ?? 0) || usage.used < before.used
+      : usage.used < before.used);
+  const tiles = layoutTiles(
+    shown.map((category) => ({ key: category.name, value: category.tokens })),
+    100,
+    100,
+    1.4,
+  );
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <span className="font-semibold text-body">Context</span>
         <span className="text-callout text-fg-muted tabular">
-          <span className="font-medium text-fg">{percentOf(usage.used, usage.size)} used</span>
+          <span className="font-medium text-fg">{percentOf(used, usage.size)} used</span>
           <span className="text-fg-faint">
             {" "}
-            · {formatTokens(usage.used)} of {formatTokens(usage.size)}
+            · {formatTokens(used)} of {formatTokens(usage.size)}
           </span>
         </span>
       </div>
-      <div
-        role="meter"
-        aria-label="Context used"
-        aria-valuemin={0}
-        aria-valuemax={usage.size}
-        aria-valuenow={usage.used}
-        className="flex h-[8px] gap-px overflow-hidden rounded-full bg-fill-strong"
-      >
-        {shown.length ? (
-          shown.map((c) => (
+      {comparable && (
+        <Segments
+          value={view}
+          options={[
+            { value: "before", label: "Before" },
+            { value: "after", label: "After" },
+          ]}
+          onChange={setView}
+          label="Compare the context before and after compaction"
+        />
+      )}
+      <div className="relative">
+        <div
+          role="meter"
+          aria-label="Context used"
+          aria-valuemin={0}
+          aria-valuemax={usage.size}
+          aria-valuenow={used}
+          className="flex h-[8px] gap-px overflow-hidden rounded-full bg-fill-strong"
+        >
+          {shown.length ? (
+            shown.map((c) => {
+              const lit = pickedCategory?.name === c.name;
+              return (
+                <span
+                  key={c.name}
+                  className="h-full transition-[width,opacity] duration-300 ease-snappy first:rounded-l-full"
+                  style={{
+                    width: `${(c.tokens / usage.size) * 100}%`,
+                    background: categoryColor(c.name),
+                    opacity: pickedCategory && !lit ? 0.35 : 1,
+                  }}
+                />
+              );
+            })
+          ) : (
             <span
-              key={c.name}
-              className="h-full transition-[width] duration-300 ease-snappy first:rounded-l-full"
-              style={{ width: `${(c.tokens / usage.size) * 100}%`, background: categoryColor(c.name) }}
+              className="h-full rounded-full transition-[width] duration-300 ease-snappy"
+              style={{ width: `${fraction * 100}%`, background: contextTint(fraction) }}
             />
-          ))
-        ) : (
+          )}
+        </div>
+        {compactAt !== undefined && compactAt > 0 && compactAt < usage.size && (
           <span
-            className="h-full rounded-full transition-[width] duration-300 ease-snappy"
-            style={{ width: `${fraction * 100}%`, background: contextTint(fraction) }}
+            aria-hidden
+            title={`Automatic compaction at ${formatTokens(compactAt)}`}
+            className="absolute inset-y-0 w-px bg-bg/80"
+            style={{ left: `${(compactAt / usage.size) * 100}%` }}
           />
         )}
       </div>
+      {compactAt !== undefined && compactAt > 0 && compactAt < usage.size && (
+        <p className="px-0.5 text-caption text-fg-faint">Compacts itself at {formatTokens(compactAt)}</p>
+      )}
       {shown.length === 0 && (
         <p className="px-0.5 text-caption text-fg-muted">
           This harness reports its totals only, not what fills the window. It compacts on its own when the
@@ -221,16 +323,80 @@ export function ContextInspector({ usage, onCompact }: { usage: SessionUsage; on
         </p>
       )}
       {shown.length > 0 && (
-        <ul className="flex flex-col">
-          {shown.map((c) => (
-            <li key={c.name} className="flex items-center gap-2 px-0.5 py-[3px] text-callout">
-              <span className="size-2 shrink-0 rounded-xs" style={{ background: categoryColor(c.name) }} />
-              <span className="flex-1 truncate">{c.name}</span>
-              <span className="text-fg-muted tabular">{formatTokens(c.tokens)}</span>
-              <span className="w-9 text-right text-fg-faint tabular">{percentOf(c.tokens, usage.size)}</span>
-            </li>
-          ))}
-          <li className="flex items-center gap-2 px-0.5 py-[3px] text-callout">
+        <div className="relative h-[132px] w-full overflow-hidden rounded-lg bg-fill-subtle">
+          {tiles.map((tile) => {
+            const category = shown.find((c) => c.name === tile.key)!;
+            const lit = active?.name === category.name;
+            const share = percentOf(category.tokens, usage.size);
+            // Enough room for the full name and a number under it: otherwise no text, only the
+            // tooltip. A cut-off "Ski…" says less than no label at all.
+            const roomy = tile.height > 26 && tile.width > category.name.length * 2.2 + 6;
+            const label = `${category.name} · ${formatTokens(category.tokens)} · ${share}`;
+            return (
+              <Tooltip key={tile.key} label={roomy ? undefined : label} side="top">
+                <button
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={lit}
+                  onPointerEnter={() => setPicked(category.name)}
+                  onFocus={() => setPicked(category.name)}
+                  onClick={() => setPicked(category.name)}
+                  className={cx(
+                    "absolute cursor-pointer overflow-hidden rounded-xs text-left transition-[left,top,width,height] duration-300 ease-snappy motion-reduce:transition-none",
+                    lit && "z-10 outline outline-1 outline-fg/70",
+                  )}
+                  style={{
+                    left: `${tile.x}%`,
+                    top: `${tile.y}%`,
+                    width: `${tile.width}%`,
+                    height: `${tile.height}%`,
+                    background: categoryColor(category.name),
+                    color: categoryInk(category.name),
+                  }}
+                >
+                  {roomy && (
+                    <span className="pointer-events-none absolute inset-x-1.5 top-1 flex flex-col">
+                      <span className="truncate font-medium text-caption">{category.name}</span>
+                      <span className="truncate text-caption tabular opacity-80">
+                        {formatTokens(category.tokens)}
+                      </span>
+                    </span>
+                  )}
+                </button>
+              </Tooltip>
+            );
+          })}
+        </div>
+      )}
+      {active && (
+        <div className="flex flex-col gap-1 border-border border-t px-0.5 pt-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-callout font-medium">{active.name}</span>
+            <span className="text-caption text-fg-muted tabular">
+              {formatTokens(active.tokens)} · {percentOf(active.tokens, usage.size)}
+            </span>
+          </div>
+          {active.items?.length ? (
+            <ul className="flex max-h-[132px] flex-col overflow-y-auto">
+              {active.items.map((item, index) => (
+                <li key={`${item.name}-${index}`} className="flex items-center gap-2 py-[2px] text-caption">
+                  <span className="flex-1 truncate text-fg-muted" title={item.name}>
+                    {item.name}
+                  </span>
+                  <span className="w-12 text-right text-fg-faint tabular">
+                    {item.tokens === undefined ? "—" : formatTokens(item.tokens)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-caption text-fg-muted">This harness reports the category's total only.</p>
+          )}
+        </div>
+      )}
+      {shown.length > 0 && (
+        <ul className="flex flex-col border-border border-t pt-1">
+          <li className="flex items-center gap-2 px-0.5 py-[2px] text-caption">
             <span className="size-2 shrink-0 rounded-xs bg-fill-strong shadow-[inset_0_0_0_0.5px_var(--rc-border-strong)]" />
             <span className="flex-1 text-fg-muted">Free</span>
             <span className="text-fg-muted tabular">{formatTokens(free)}</span>
@@ -240,14 +406,18 @@ export function ContextInspector({ usage, onCompact }: { usage: SessionUsage; on
       )}
       <ContextFooter usage={usage} />
       {onCompact && (
-        <Pill onClick={onCompact} className="self-start">
-          Compact now
-        </Pill>
+        <div className="flex items-center justify-between gap-2">
+          <Pill onClick={onCompact} className="self-start">
+            Compact now
+          </Pill>
+          <span className="text-caption text-fg-faint">Keeps a summary of the dropped work</span>
+        </div>
       )}
     </div>
   );
 }
 
+/** Everything the card's context section needs, including the comparison snapshot. */
 function ContextFooter({ usage }: { usage: SessionUsage }) {
   const parts = [
     usage.inputTokens !== undefined && `${formatTokens(usage.inputTokens)} in`,
@@ -272,17 +442,21 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
 
 /**
  * The meter's card: every plan window with its reset, then the context window, so one hover answers
- * both questions. A click (anywhere on the meter) opens the full Usage page.
+ * both questions, and a way on to the full Usage page.
  */
 function UsageCard({
   plan,
   cached,
   usage,
+  before,
+  openSettings: onOpenSettings,
   onCompact,
 }: {
   plan?: PlanUsage;
   cached?: boolean;
   usage?: SessionUsage;
+  before?: SessionUsage | null;
+  openSettings?: () => void;
   onCompact?: () => void;
 }) {
   const windows = plan
@@ -294,7 +468,7 @@ function UsageCard({
       : relativeAge(plan.fetchedAt)
     : undefined;
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <span className="font-semibold text-body">Usage</span>
         {plan?.source === "codex" && <span className="text-caption text-fg-faint">from the Codex CLI</span>}
@@ -310,10 +484,18 @@ function UsageCard({
       )}
       {usage?.size ? (
         <div className="border-border border-t pt-3">
-          <ContextInspector usage={usage} onCompact={onCompact} />
+          <ContextInspector usage={usage} before={before} onCompact={onCompact} />
         </div>
       ) : null}
-      <span className="px-0.5 text-caption text-fg-faint">Click the meter to open Usage in Settings</span>
+      {onOpenSettings && (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="cursor-pointer px-0.5 text-left text-caption text-fg-faint hover:text-fg-muted"
+        >
+          Open Usage in Settings
+        </button>
+      )}
     </div>
   );
 }

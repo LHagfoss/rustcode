@@ -5,7 +5,7 @@
 // harness contract in docs/harnesses.md, so the UI works before that lands.
 
 import { BUILTIN_THEMES } from "../lib/themes";
-import { arr, type Json, type JsonObject, obj, str } from "./jsonrpc";
+import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
@@ -65,6 +65,8 @@ interface MockThread {
   /** The thread an agent started this one from, as the engine records it. */
   parent?: { id?: string; title?: string };
   checkpoints: MockCheckpoint[];
+  /** How many times `/compact` ran here, so the card can compare before and after. */
+  compactions?: number;
 }
 
 interface MockWorktree {
@@ -1296,6 +1298,143 @@ const MOCK_REPORTS: Record<string, string[]> = {
   ],
 };
 
+/**
+ * What the mock says fills its own context: enough per category, and enough per item, to show the
+ * card's tile map and its item list the way the engine's breakdown does. `used` scales the canned
+ * categories so the bar, the tiles and the headline agree.
+ */
+const MOCK_CONTEXT: Json[] = [
+  {
+    name: "User messages",
+    tokens: 1_900,
+    items: [
+      { name: "Make the context card show what fills it", tokens: 1_200 },
+      { name: "Add a tile map and a compact comparison", tokens: 700 },
+    ],
+  },
+  {
+    name: "Agent responses",
+    tokens: 3_400,
+    items: [
+      { name: "I will trace the context breakdown through the engine", tokens: 2_100 },
+      { name: "The mock now reports per-category items as well", tokens: 1_300 },
+    ],
+  },
+  {
+    name: "Tool calls",
+    tokens: 5_100,
+    items: [
+      { name: "read src/ui/ComposerUsage.tsx", tokens: 2_200 },
+      { name: "replace_file_content src/ui/ComposerUsage.tsx", tokens: 1_600 },
+      { name: "run_command cargo test", tokens: 800 },
+      { name: "read src/lib/treemap.ts", tokens: 500 },
+    ],
+  },
+  { name: "Compacted history", tokens: 0, items: [] },
+  {
+    name: "System prompt",
+    tokens: 4_200,
+    items: [{ name: "Instructions and hints", tokens: 4_200 }],
+  },
+  {
+    name: "System tools",
+    tokens: 2_900,
+    items: [
+      { name: "replace_file_content", tokens: 1_100 },
+      { name: "run_command", tokens: 800 },
+      { name: "view_file", tokens: 600 },
+      { name: "Tool protocol and examples", tokens: 400 },
+    ],
+  },
+  {
+    name: "Skills",
+    tokens: 900,
+    items: [
+      { name: "impeccable", tokens: 500 },
+      { name: "Skill headings", tokens: 400 },
+    ],
+  },
+  { name: "Subagents", tokens: 0, items: [] },
+];
+
+/** The same categories after a compaction: tool output is gone, a summary took its place. */
+const MOCK_CONTEXT_COMPACTED: Json[] = [
+  {
+    name: "User messages",
+    tokens: 1_200,
+    items: [{ name: "Make the context card show what fills it", tokens: 1_200 }],
+  },
+  {
+    name: "Agent responses",
+    tokens: 1_500,
+    items: [{ name: "I will trace the context breakdown through the engine", tokens: 1_500 }],
+  },
+  {
+    name: "Tool calls",
+    tokens: 1_800,
+    items: [
+      { name: "read src/ui/ComposerUsage.tsx", tokens: 1_100 },
+      { name: "run_command cargo test", tokens: 700 },
+    ],
+  },
+  {
+    name: "Compacted history",
+    tokens: 3_000,
+    items: [{ name: "Compaction summary", tokens: 3_000 }],
+  },
+  {
+    name: "System prompt",
+    tokens: 4_200,
+    items: [{ name: "Instructions and hints", tokens: 4_200 }],
+  },
+  {
+    name: "System tools",
+    tokens: 2_900,
+    items: [{ name: "replace_file_content", tokens: 2_900 }],
+  },
+  { name: "Skills", tokens: 900, items: [{ name: "impeccable", tokens: 900 }] },
+  { name: "Subagents", tokens: 0, items: [] },
+];
+
+/** The context block the engine puts on `usage_update`, scaled to the headline `used`. */
+function mockContext(
+  used: number,
+  compaction?: { count: number; reclaimed: number; before: number },
+): JsonObject {
+  const base = compaction ? MOCK_CONTEXT_COMPACTED : MOCK_CONTEXT;
+  const total = base.reduce<number>((sum, category) => sum + Number(obj(category)?.tokens ?? 0), 0);
+  const scale = total > 0 ? used / total : 1;
+  const categories = base.map((category) => {
+    const fields = obj(category) ?? {};
+    return {
+      ...fields,
+      tokens: Math.round(Number(fields.tokens ?? 0) * scale),
+      items: arr(fields.items).map((item) => {
+        const entry = obj(item) ?? {};
+        return { ...entry, tokens: Math.round(Number(entry.tokens ?? 0) * scale) };
+      }),
+    };
+  });
+  return {
+    model: "gpt-6-luna",
+    window: 272_000,
+    used,
+    free: 272_000 - used,
+    compactAt: { tokens: 199_000 },
+    categories,
+    ...(compaction
+      ? {
+          compaction: {
+            count: compaction.count,
+            reclaimedTokens: compaction.reclaimed,
+            beforeTokens: compaction.before,
+            afterTokens: used,
+          },
+        }
+      : {}),
+  };
+}
+
 const COMMANDS: Json[] = [
   { name: "compact", description: "Summarize the conversation to free context" },
   {
@@ -1417,6 +1556,29 @@ export class MockEngine {
   private activeTheme = "rustcode";
   /** MCP servers the mock restarted through `_rustcode/capabilities/mcp/restart`. */
   private mcpRestarted = new Set<string>();
+  /**
+   * The timed approvals `_rustcode/permissions` lists: one seeded hour so the
+   * details panel has "Allowed for 42m · Revoke" to show, and whatever the user
+   * granted while the mock ran.
+   */
+  private grants: JsonObject[] = [
+    {
+      id: "prefix-v1:bun test",
+      prefix: "bun test",
+      expiresAt: Math.floor(Date.now() / 1000) + 42 * 60,
+      remainingSecs: 42 * 60,
+    },
+  ];
+
+  /** A timed approval the user just gave in the mock: listed and revocable like the engine's. */
+  private addGrant(prefix: string) {
+    const remainingSecs = 60 * 60;
+    const id = `prefix-v1:${prefix}`;
+    this.grants = [
+      { id, prefix, expiresAt: Math.floor(Date.now() / 1000) + remainingSecs, remainingSecs },
+      ...this.grants.filter((grant) => str(grant.id) !== id),
+    ];
+  }
 
   private themesSnapshot(): JsonObject {
     return { active: this.activeTheme, themes: this.themes as unknown as Json };
@@ -1506,18 +1668,54 @@ export class MockEngine {
    */
   private seedNeedsYou() {
     const has = (id: string) => this.threads.some((t) => t.id === id);
+    // One of each risk level, so the card's tint and preview are visible in the mock:
+    // a read-only call, an edit with a diff, and a command that would destroy a tree.
     if (has("mock-thread-1")) {
       void this.ask("session/request_permission", {
         sessionId: "mock-thread-1",
         toolCall: {
           toolCallId: "seed-approval-1",
-          title: "bash",
-          kind: "execute",
-          rawInput: { command: "bun test src/ui", summary: "Run the composer tests" },
+          title: "read src/ui/Composer.tsx",
+          kind: "read",
+          rawInput: {
+            path: "src/ui/Composer.tsx",
+            summary: "Read the composer before changing it",
+          },
         },
         options: [
-          { optionId: "allow", name: "Allow", kind: "allow_once" },
-          { optionId: "always", name: "Always allow commands", kind: "allow_always" },
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          {
+            optionId: "allow_hour",
+            name: "Allow for 1 hour `cat src/ui/Composer.tsx`",
+            kind: "allow_always",
+          },
+          { optionId: "always", name: "Always allow `cat src/ui/Composer.tsx`", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      }).then((answer) => {
+        // An hour granted here is listed and revocable, like the engine's own.
+        if (obj(answer.outcome)?.optionId === "allow_hour") this.addGrant("cat src/ui/Composer.tsx");
+      });
+    }
+    if (has("mock-thread-4")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-4",
+        toolCall: {
+          toolCallId: "seed-approval-destructive",
+          title: "bash",
+          kind: "execute",
+          rawInput: {
+            command: "rm -rf node_modules && bun install",
+            cwd: "/Users/you/.config/rustcode/worktrees/rustcode/feat-login-form",
+            summary: "Start the dependencies over",
+          },
+        },
+        // A harness that offers grants for a destructive command: the app must
+        // show only Allow once and Reject (lib/approval.ts `grantAllowed`).
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "allow_hour", name: "Allow for 1 hour `rm -rf node_modules`", kind: "allow_always" },
+          { optionId: "always", name: "Always allow `rm -rf node_modules`", kind: "allow_always" },
           { optionId: "reject", name: "Reject", kind: "reject_once" },
         ],
       });
@@ -1562,10 +1760,19 @@ export class MockEngine {
           toolCallId: "seed-approval-4",
           title: "edit src/ui/LoginForm.tsx",
           kind: "edit",
-          rawInput: { path: "src/ui/LoginForm.tsx" },
+          content: [
+            {
+              type: "diff",
+              path: "src/ui/LoginForm.tsx",
+              oldText: '  <button type="submit">Sign in</button>',
+              newText: '  <button type="submit" disabled={!email}>Sign in</button>',
+              _meta: { rustcode: { oldStart: 8, newStart: 8 } },
+            },
+          ],
+          rawInput: { path: "src/ui/LoginForm.tsx", summary: "Disable sign-in until the email is typed" },
         },
         options: [
-          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
           { optionId: "always", name: "Always allow edits", kind: "allow_always" },
           { optionId: "reject", name: "Reject", kind: "reject_once" },
         ],
@@ -1769,22 +1976,7 @@ export class MockEngine {
                 inputTokens: 90_000,
                 outputTokens: 3_200,
                 cachedTokens: 61_000,
-                context: {
-                  model: "gpt-6-luna",
-                  window: 272_000,
-                  used: 18_400,
-                  free: 253_600,
-                  categories: [
-                    { name: "User messages", tokens: 1_900 },
-                    { name: "Agent responses", tokens: 3_400 },
-                    { name: "Tool calls", tokens: 5_100 },
-                    { name: "Compacted history", tokens: 0 },
-                    { name: "System prompt", tokens: 4_200 },
-                    { name: "System tools", tokens: 2_900 },
-                    { name: "Skills", tokens: 900 },
-                    { name: "Subagents", tokens: 0 },
-                  ],
-                },
+                context: mockContext(18_400),
               },
             },
           }),
@@ -2452,6 +2644,18 @@ export class MockEngine {
           ],
           mcpServers: this.mcpServers(),
         };
+      case "_rustcode/permissions": {
+        // The same shape `_rustcode/permissions` answers with (engine/src/acp/permissions.rs).
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          grants: this.grants.filter((grant) => num(grant.expiresAt)! > now),
+        };
+      }
+      case "_rustcode/permissions/revoke": {
+        const id = str(params.id);
+        this.grants = this.grants.filter((grant) => str(grant.id) !== id);
+        return { grants: this.grants };
+      }
       case "_rustcode/themes":
         return this.themesSnapshot();
       case "_rustcode/themes/set": {
@@ -2813,6 +3017,37 @@ export class MockEngine {
         }
         return done("end_turn");
       }
+      if (prompt.trim() === "/compact") {
+        thread.compactions = (thread.compactions ?? 0) + 1;
+        const before = 18_400;
+        const after = 15_500;
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text(`Context compacted: reduced from ${before / 1_000}k to ${after / 1_000}k tokens.`),
+          _meta: { rustcode: { kind: "compaction" } },
+        });
+        this.notify(
+          update(sid, {
+            sessionUpdate: "usage_update",
+            used: after,
+            size: 272_000,
+            _meta: {
+              rustcode: {
+                estimated: false,
+                inputTokens: 90_000,
+                outputTokens: 3_200,
+                cachedTokens: 61_000,
+                context: mockContext(after, {
+                  count: thread.compactions,
+                  reclaimed: before - after,
+                  before,
+                }),
+              },
+            },
+          }),
+        );
+        return done("end_turn");
+      }
       if (!thread.title) {
         thread.title = prompt.split("\n")[0]?.slice(0, 60) || "New thread";
         this.notify(update(sid, { sessionUpdate: "session_info_update", title: thread.title }));
@@ -2906,10 +3141,11 @@ export class MockEngine {
       // One usage update per round, as the engine sends it: the session's
       // running totals. The app's Trace subtracts them to price each call, so a
       // mock turn shows where its money went too.
-      const round = (input: number, output: number, cost: number) =>
+      const round = (input: number, output: number, cost: number) => {
+        const used = 24_000 + Math.round((Date.now() - started) / 10);
         push({
           sessionUpdate: "usage_update",
-          used: 24_000 + Math.round((Date.now() - started) / 10),
+          used,
           size: 272_000,
           cost: { amount: cost, currency: "USD" },
           _meta: {
@@ -2918,9 +3154,11 @@ export class MockEngine {
               inputTokens: input,
               outputTokens: output,
               cachedTokens: Math.round(input * 0.55),
+              context: mockContext(used),
             },
           },
         });
+      };
       round(120_000, 4_100, 0.0276);
       // A live call's id never reuses one the replayed history already has: an
       // update keyed the same would replace an old row instead of adding one.

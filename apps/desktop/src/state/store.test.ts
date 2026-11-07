@@ -56,6 +56,7 @@ import {
   plansToCache,
   prunePanels,
   prunePlans,
+  RESOLVED_APPROVAL_MS,
   refreshAgents,
   refreshHarnesses,
   refreshSessions,
@@ -65,6 +66,7 @@ import {
   resetForTests,
   resumeQueue,
   retryPendingSetup,
+  revokeGrant,
   saveQueuedEdit,
   selectThread,
   sendDecisionFor,
@@ -94,6 +96,7 @@ import {
   steerOrSubmit,
   submit,
   switchNewThreadHarness,
+  toast,
   togglePin,
   toggleRightPanel,
   trashThread,
@@ -728,6 +731,44 @@ describe("engine controller with the mock engine", () => {
     } finally {
       resetForTests();
     }
+  });
+
+  test("a timed approval is listed from the engine and can be revoked", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().grants.length > 0);
+    const grant = useApp.getState().grants[0]!;
+    expect(grant.prefix).toBe("bun test");
+    await revokeGrant(grant.id);
+    expect(useApp.getState().grants).toEqual([]);
+  });
+
+  test("an answered approval settles into one line, then leaves", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const thread = selected()!;
+    const once = thread.permissions[0]!.options.find((o) => o.kind === "allow_once")!;
+    answerPermission(thread.permissions[0]!, once);
+    expect(useApp.getState().resolvedApprovals[thread.id]).toMatchObject({
+      text: "Approved edit src/app.ts · once",
+      allowed: true,
+    });
+    await done;
+    await until(() => !useApp.getState().resolvedApprovals[thread.id], RESOLVED_APPROVAL_MS + 1000);
+  });
+
+  test("opening the inbox dismisses the attention toasts it lists", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    toast("A thread needs approval", "info");
+    toast("Copied", "info");
+    setView({ kind: "inbox" });
+    expect(useApp.getState().toasts.find((t) => t.text === "A thread needs approval")?.leaving).toBe(true);
+    expect(useApp.getState().toasts.some((t) => t.text === "Copied")).toBe(true);
+    await until(() => !useApp.getState().toasts.some((t) => t.text === "A thread needs approval"));
   });
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {
