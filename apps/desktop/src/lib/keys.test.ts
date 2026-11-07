@@ -144,6 +144,30 @@ describe("what a binding may be", () => {
     expect(bindingProblem({}, "pin-thread", "mod+b")).toContain("Toggle sidebar");
   });
 
+  test("a list key is one printable character, not a key a row already answers", () => {
+    for (const key of [
+      "tab",
+      "backspace",
+      "delete",
+      "insert",
+      "home",
+      "end",
+      "pageup",
+      "pagedown",
+      "space",
+      "up",
+      "down",
+      "left",
+      "right",
+    ]) {
+      expect(bindingProblem({}, "pin-thread", key)).toContain("function key");
+      expect(bindingProblem({}, "settle-thread", key)).toContain("function key");
+    }
+    // The named keys that are not a row's own are still function keys or modified.
+    expect(bindingProblem({}, "pin-thread", "f6")).toBeNull();
+    expect(bindingProblem({}, "pin-thread", "mod+tab")).toContain("macOS");
+  });
+
   test("refuses the combinations the system owns", () => {
     for (const binding of RESERVED_BINDINGS) {
       expect(bindingProblem({}, "new-thread", binding)).toContain("macOS");
@@ -205,6 +229,15 @@ describe("stored overrides", () => {
     expect(parseOverrides(JSON.stringify({ "new-thread": "q" }))).toEqual({});
     // Its own default is not an override.
     expect(parseOverrides(JSON.stringify({ "settle-thread": "d" }))).toEqual({});
+  });
+
+  test("a stored list key that is not a printable character is dropped", () => {
+    for (const key of ["tab", "space", "backspace", "delete", "home", "end", "pagedown", "up"]) {
+      expect(parseOverrides(JSON.stringify({ "pin-thread": key }))).toEqual({});
+      expect(parseOverrides(JSON.stringify({ "settle-thread": key }))).toEqual({});
+    }
+    // A function key or a modified one stays, as for every other command.
+    expect(parseOverrides(JSON.stringify({ "pin-thread": "f6" }))).toEqual({ "pin-thread": "f6" });
   });
 
   test("a stored binding equal to the default is not kept as an override", () => {

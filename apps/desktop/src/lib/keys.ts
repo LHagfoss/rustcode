@@ -324,6 +324,15 @@ function isFunctionKey(binding: Binding): boolean {
   return /^f([1-9]|1[0-9]|2[0-4])$/.test(binding.key);
 }
 
+/**
+ * A key a row can answer with no modifier held: one printable character, so Enter, Tab, Space and
+ * the arrows stay out of it. Those are how a row is opened, moved over and closed, and typing one
+ * into the list would take the key away from what already answers it.
+ */
+function isPrintableKey(binding: Binding): boolean {
+  return binding.key.length === 1 && binding.key !== " ";
+}
+
 /** The bindings in force: every command's default with the overrides on top. */
 export function bindingsFor(overrides: Readonly<Record<string, string>>): Record<string, string> {
   const out: Record<string, string> = {};
@@ -380,8 +389,9 @@ export function bindingProblem(
   if (RESERVED_BINDINGS.includes(binding)) return `${text} belongs to macOS.`;
   if (RESERVED_EDITING.includes(binding)) return `${text} belongs to copy, paste and undo.`;
   // A list key is typed where nothing else takes it (a row has the keyboard), so a bare letter
-  // is usable for one; every other command needs ⌘/⌥ or a function key.
-  if (!hasModifier(parsed) && !isFunctionKey(parsed) && !isListKey(id)) {
+  // is usable for one; every other command needs ⌘/⌥ or a function key, and so does a list key
+  // that is not a character of its own (Tab, Space, the arrows).
+  if (!hasModifier(parsed) && !isFunctionKey(parsed) && !(isListKey(id) && isPrintableKey(parsed))) {
     return `Add ⌘ to it, or use a function key like F6.`;
   }
   const [taken] = conflictingCommands(overrides, id, binding);
@@ -442,7 +452,7 @@ export function parseOverrides(raw: string | null | undefined): Record<string, s
     if (!parsed) continue;
     const binding = bindingFromParts(parsed);
     if (RESERVED_BINDINGS.includes(binding) || RESERVED_EDITING.includes(binding)) continue;
-    if (!hasModifier(parsed) && !isFunctionKey(parsed) && !command.list) continue;
+    if (!hasModifier(parsed) && !isFunctionKey(parsed) && !(command.list && isPrintableKey(parsed))) continue;
     if (conflictingCommands(out, command.id, binding).length > 0) continue;
     // A bare default is not an override: the table stays the source of it.
     if (binding === command.binding) continue;

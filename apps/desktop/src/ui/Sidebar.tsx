@@ -1798,13 +1798,19 @@ export function Sidebar() {
     return picks.length > 0 && picks.every((x) => statusOf(s, x.id) === "done");
   });
   const clearSelection = useCallback(() => setPicked(NO_PICKS), []);
-  const focusRow = (id: string) =>
-    list.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`)?.focus();
+  const focusRow = (id: string) => {
+    const row = list.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`);
+    row?.focus();
+    return !!row;
+  };
 
   // P pins and D settles the rows the keyboard acts on: a multi-selection when there is one, else
   // the row the keyboard is on. Both are the calls the hover actions and the selection bar make,
   // so a mark means the same thing wherever it is asked for, and both offer the same toast.
   const markRows = (command: string, focused: string) => {
+    // The pending row has no thread yet: there is nothing to pin or settle, as a click and the
+    // row's own menu already know.
+    if (pending && focused === pending.id) return;
     const ids = pickedSessions.length > 1 ? pickedSessions.map((s) => s.id) : [focused];
     if (command === "pin-thread") {
       // The same rule as the selection bar's button: unpin when every row is pinned, else pin.
@@ -1836,8 +1842,17 @@ export function Sidebar() {
       else settleThreads(ids);
     } else return;
     // A mark can move the row to another section, where it is drawn anew: keep the keyboard on it.
+    // D also takes a row out of the list itself, folding it into the shut Settled shelf, and the
+    // row then unmounts with the keyboard on it, which leaves focus on <body>. So read the rows
+    // beside it first, while the list still draws them, and let the row that took its place take
+    // the keyboard when the mark's row is gone: the next one, else the one before.
+    const at = orderIds.indexOf(focused);
+    const beside = at < 0 ? [] : [...orderIds.slice(at + 1), ...orderIds.slice(0, at).reverse()];
     setActiveId(focused);
-    setTimeout(() => focusRow(focused), 0);
+    setTimeout(() => {
+      const on = [focused, ...beside].find((id) => focusRow(id));
+      if (on && on !== focused) setActiveId(on);
+    }, 0);
   };
 
   // ↑ ↓ ⏎ Esc over the rows, and P/D to mark the row the keyboard is on; a section or group
@@ -1853,8 +1868,9 @@ export function Sidebar() {
       editable,
     });
     // The list's marking keys never fire from the window (lib/keys.ts): they are read here, where
-    // a row has the keyboard, so typing one into any field stays typing.
-    const mark = editable ? null : listCommandFor(shortcuts, e);
+    // a row has the keyboard, so typing one into any field stays typing. A key held down repeats,
+    // and a repeated P or D would mark and unmark the row in turns: only the first press counts.
+    const mark = editable || e.repeat ? null : listCommandFor(shortcuts, e);
     if (!action && !mark) return;
     if (action?.kind === "clear") {
       e.preventDefault();
