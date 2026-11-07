@@ -6,7 +6,7 @@ import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { modelName, type PermissionRequest, type PlanEntry } from "../acp/types";
-import { checkpointsByTurn } from "../acp/v2";
+import { type Checkpoint, checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
 import { hasTimeline } from "../lib/trace";
@@ -29,7 +29,7 @@ import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
 import { type PlanClocks, planCardShown, type SteerNote, steerMarks } from "../state/steer";
-import { RESUME_TEXT, shortcutFor, steeringOf, turnState, useApp } from "../state/store";
+import { RESUME_TEXT, rewindCheckpoint, shortcutFor, steeringOf, turnState, useApp } from "../state/store";
 import {
   type QueuedPrompt,
   splitSubagentSteps,
@@ -853,16 +853,21 @@ export function Transcript({
     };
   }
   const turns = turnsKey.current.turns;
-  // Each message you sent that started a turn with a checkpoint: the minimap's checkpoint lane.
+  // Each message you sent that started a turn with a checkpoint: the bead on that turn's strip.
   const checkpointNodes = useMemo(() => {
     const byMessage = checkpointsByMessage(thread.items, turnCheckpoints);
     const nodes: RailNode[] = [];
     turns.forEach((turn, index) => {
       const checkpoint = byMessage[turn.id];
-      if (checkpoint) nodes.push({ at: index, turn: checkpoint.turn });
+      if (checkpoint) nodes.push({ at: index, checkpoint });
     });
     return nodes;
   }, [thread.items, turnCheckpoints, turns]);
+  // The rail's card offers the rewind the turn's Changes chip does, when the harness can go back.
+  const railRewind = useCallback(
+    (checkpoint: Checkpoint) => void rewindCheckpoint(thread.id, checkpoint),
+    [thread.id],
+  );
 
   // Sending a message follows it down, even from a view scrolled up to read.
   const sentTurns = useRef({ thread: thread.id, count: turns.length });
@@ -1308,6 +1313,8 @@ export function Transcript({
         onJump={jumpToTurn}
         replyOf={replyOf}
         nodes={checkpointNodes}
+        onRewind={rewind ? railRewind : undefined}
+        busy={thread.running}
       />
       <button
         type="button"

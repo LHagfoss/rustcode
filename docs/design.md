@@ -783,13 +783,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   kept") rather than offering a button that would pretend. The record is the
   app's, so it lasts while the thread is open (like a question's row): the
   engine's history no longer holds those turns.
-  The minimap's **checkpoint lane** is the same idea at thread scale: one node
-  per turn a rewind can go back to, at that turn's height, joined by a
-  `w-px` hairline and drawn in front of the strips' left edge; the head (the
-  newest) is the one `accent` mark the rail uses, the other nodes are
-  `fg/35`. Pointing at a node's height picks that turn as the strips do, and
-  the hover card adds `Checkpoint N · current` for it. The lane never asks
-  for a click of its own: rewinding is the chip's, behind a confirm.
+  The minimap wears the same idea at thread scale: a turn a rewind can go back
+  to carries a bead at the strip's left end, `fg/35` and 5px (the head, the
+  newest, `accent` at 7px), so the strip stays the one target and the bead is
+  never a hit area of its own. Pointing at it picks that turn as any point on
+  the strip does, and the hover card says `Checkpoint · turn N` (`· current`
+  for the head) and offers *Rewind here*, which asks the same confirm as the
+  Changes chip. The card lingers 160ms before it goes, and only that button
+  takes the pointer, so the pointer can cross into it while a click anywhere on
+  the card still goes to the turn; the checkpoint is in the strip's accessible
+  name too, so the keyboard reaches it.
   Logic: `state/fold.ts` (`foldTurns`).
 - **Turn trace:** the footer's `Trace` chip, beside Changes, opens a card above it
   (`ui/TurnTrace.tsx`): the turn's own timeline from 0 to its end, one row per

@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { plainPreview, railHeight, railHitWidth, railIndexAt, railScale, turnTitle } from "./TimelineRail";
+import {
+  plainPreview,
+  railHeight,
+  railHitWidth,
+  railIndexAt,
+  railLabel,
+  railScale,
+  turnTitle,
+} from "./TimelineRail";
 
 describe("the timeline minimap", () => {
   test("spaces strips naturally, then squeezes them into the view", () => {
@@ -24,6 +32,14 @@ describe("the timeline minimap", () => {
     expect(railHitWidth(768)).toBe(0);
     expect(railHitWidth(800)).toBe(4);
     expect(railHitWidth(1400)).toBe(40);
+  });
+
+  test("names a turn's checkpoint in the rail's own label", () => {
+    expect(railLabel("Fix the rail", undefined, false)).toBe("Jump to message: Fix the rail");
+    expect(railLabel("Fix the rail", 3, false)).toBe("Jump to message: Fix the rail, checkpoint turn 3");
+    expect(railLabel("Fix the rail", 4, true)).toBe(
+      "Jump to message: Fix the rail, checkpoint turn 4, current",
+    );
   });
 
   test("previews read as words", () => {
