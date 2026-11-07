@@ -41,6 +41,7 @@ import {
   PinOff,
   Search,
   ShieldQuestion,
+  Sparkles,
   SquarePen,
   SquareTerminal,
   Trash2,
@@ -97,6 +98,7 @@ import { snoozePresets, wakeLabel } from "../state/snooze";
 import {
   askConfirm,
   askCustomSnooze,
+  autoCompactOffFor,
   dismissPendingSetup,
   featureMissing,
   markUnread,
@@ -105,6 +107,7 @@ import {
   repairThread,
   searchThreads,
   selectThread,
+  setAutoCompactForThread,
   setPanel,
   setPinned,
   setThreadStatus,
@@ -245,6 +248,7 @@ function ThreadMenuItems({
   onClear?: () => void;
 }) {
   const pinned = useApp((s) => s.pinned.includes(session.id));
+  const autoCompactOff = useApp((s) => autoCompactOffFor(s, session.id));
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const statusMissing = useApp((s) => (s.features.status ? null : featureMissing("status")));
@@ -327,7 +331,7 @@ function ThreadMenuItems({
         </Item>
       )}
       {statusMissing && (
-        <div className="px-2.5 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
+        <div className="px-2 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
       )}
       {snoozed ? (
         <Item className={menuItem} onSelect={() => snoozeThread(session.id, null)}>
@@ -364,6 +368,9 @@ function ThreadMenuItems({
       )}
       <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
         <FileDiff size={13} /> Review Changes
+      </Item>
+      <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
+        <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
       </Item>
       <Item className={menuItem} onSelect={() => markUnread(session.id)}>
         <CircleCheck size={13} /> Mark Unread
@@ -408,7 +415,7 @@ function ThreadMenuItems({
       {worktree && (
         <>
           <Separator className={menuSeparator} />
-          <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-muted">
+          <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1 text-caption text-fg-muted">
             <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
           <Item className={menuItem} disabled={!canFiles} onSelect={() => revealPath(worktree.path)}>
@@ -779,7 +786,7 @@ const ThreadRow = memo(function ThreadRow({
             aria-current={selected ? "page" : undefined}
             aria-pressed={picked || undefined}
             title={details.join(" · ")}
-            className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2.5 pl-2.5 text-left"
+            className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2 pl-2 text-left"
           >
             <RowFill selected={lit} picked={picked} radius="rounded-xl" />
             {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
@@ -953,7 +960,7 @@ const PendingRow = memo(function PendingRow({
         onClick={() => selectThread(pending.id)}
         aria-current={selected ? "page" : undefined}
         title={failure ? `${pending.title} · ${failure.text}` : pending.title}
-        className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2.5 pl-2.5 text-left"
+        className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2 pl-2 text-left"
       >
         <RowFill selected={selected} radius="rounded-xl" />
         <span
@@ -1141,7 +1148,7 @@ function SectionHeader({
       onClick={onToggle}
       aria-expanded={open}
       className={cx(
-        "group/h flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle",
+        "group/h flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle",
       )}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
@@ -1201,7 +1208,7 @@ function ProjectHeader({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 text-left font-medium text-body text-fg/90 hover:bg-fill-subtle"
+        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-medium text-body text-fg/90 hover:bg-fill-subtle"
       >
         {open ? (
           <FolderOpen size={14} className="shrink-0 text-fg-muted" />
@@ -1374,7 +1381,7 @@ function SettledRow({
       onClick={onToggle}
       aria-expanded={open}
       disabled={!count}
-      className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
     >
       <span className="min-w-0 flex-1 truncate">Settled</span>
       {!open && <HiddenDot kind={hidden} />}
@@ -2055,7 +2062,7 @@ export function Sidebar() {
         )}
         style={{ width, minWidth: width }}
       >
-        <TitlebarRow className="justify-end pr-2.5">
+        <TitlebarRow className="justify-end pr-2">
           <Cluster>
             <ClusterButton
               label="Hide sidebar"
@@ -2123,7 +2130,7 @@ export function Sidebar() {
         >
           {!sessionsLoaded && <ThreadRowsSkeleton />}
           {sessionsLoaded && !filtered.length && (
-            <div className="px-2.5 py-3 text-callout text-fg-muted">
+            <div className="px-2 py-3 text-callout text-fg-muted">
               {query
                 ? "No matching threads."
                 : onlyProject
@@ -2184,14 +2191,14 @@ export function Sidebar() {
                       <button
                         type="button"
                         onClick={() => setSettledShown((n) => n + 25)}
-                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
                       >
                         <ChevronDown size={14} className="shrink-0" />
                         Show {Math.min(25, section.items.length - settledShown)} more
                       </button>
                     )}
                     {section.id === "settled" && (
-                      <p className="px-2.5 pt-1 pb-2 text-caption text-fg-faint">
+                      <p className="px-2 pt-1 pb-2 text-caption text-fg-faint">
                         Settled, or untouched for 3 days. A new message brings one back.
                       </p>
                     )}
@@ -2282,9 +2289,9 @@ const SKELETON_ROWS = [72, 56, 84, 64, 48, 76, 60];
 function ThreadRowsSkeleton() {
   return (
     <div className="flex flex-col pt-1" role="status" aria-label="Loading threads">
-      <Skeleton className="mx-2.5 mt-2 mb-3 h-2.5 w-16" />
+      <Skeleton className="mx-2 mt-2 mb-3 h-2.5 w-16" />
       {SKELETON_ROWS.map((w, i) => (
-        <div key={i} className="flex flex-col gap-1.5 px-2.5 py-[7px]">
+        <div key={i} className="flex flex-col gap-1.5 px-2 py-[7px]">
           <Skeleton className="h-3" style={{ width: `${w}%` }} />
           <Skeleton className="h-2" style={{ width: `${Math.round(w * 0.55)}%` }} />
         </div>

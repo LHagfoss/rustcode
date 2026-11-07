@@ -33,7 +33,7 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
         <p className="max-w-[460px] text-callout text-fg-muted">
           Your threads keep running. Reload the view to carry on.
         </p>
-        <pre className="selectable m-0 max-w-[560px] overflow-auto rounded-md bg-code-bg p-2.5 text-left font-mono text-caption text-fg-muted">
+        <pre className="selectable m-0 max-w-[560px] overflow-auto rounded-md bg-code-bg p-2 text-left font-mono text-caption text-fg-muted">
           {error.message}
         </pre>
         <Pill prominent size="lg" onClick={softReload}>

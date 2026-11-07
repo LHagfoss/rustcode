@@ -51,8 +51,8 @@ export function MainHeader({
       data-tauri-drag-region
       className={cx(
         // Glass over the content, which scrolls under it (docs/design.md, Header).
-        "rc-header-glass absolute inset-x-0 top-0 z-10 flex h-[42px] items-center gap-2.5 pt-1.5 pb-2 pr-2.5",
-        !underLights && "pl-2.5",
+        "rc-header-glass absolute inset-x-0 top-0 z-10 flex h-[42px] items-center gap-2 pt-1.5 pb-2 pr-2",
+        !underLights && "pl-2",
         className,
       )}
       style={underLights ? { paddingLeft: lightsInset } : undefined}

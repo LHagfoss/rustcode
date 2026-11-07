@@ -93,7 +93,7 @@ const QueuedAttachments = memo(function QueuedAttachments({ list }: { list: Atta
           </button>
         ) : (
           <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
-            <span className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout text-fg-muted">
+            <span className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted">
               <FileText size={12} />
               <span className="max-w-[200px] truncate">{a.name}</span>
             </span>
@@ -300,7 +300,7 @@ export const ResumeQueueRow = memo(function ResumeQueueRow({
   count: number;
 }) {
   return (
-    <div className="flex items-center justify-end gap-2.5">
+    <div className="flex items-center justify-end gap-2">
       <span className="text-caption text-fg-muted">
         {count === 1 ? "1 held message" : count ? `${count} held messages` : "A wake-up held"} · not sent
       </span>

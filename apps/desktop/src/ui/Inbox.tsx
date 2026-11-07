@@ -177,7 +177,7 @@ function RowActions({ item, onRun }: { item: InboxItem; onRun: (action: RowActio
 /** One thread's requests: one header naming it, then a row for each thing it wants. */
 function InboxGroupHeader({ group, onOpen }: { group: InboxGroup; onOpen: () => void }) {
   return (
-    <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-1">
+    <div className="flex items-center gap-2 px-2 pt-2 pb-1">
       <ProjectMark name={projectName(group.project)} size={16} />
       <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left">
         <span className="min-w-0 truncate font-medium text-body hover:text-fg">{group.title}</span>
@@ -214,7 +214,7 @@ function InboxRow({
       data-inbox-key={item.key}
       aria-current={active || undefined}
       className={cx(
-        "group flex items-start gap-2 rounded-lg px-2.5 py-1.5",
+        "group flex items-start gap-2 rounded-lg px-2 py-1.5",
         active ? "bg-fill" : "hover:bg-fill-subtle",
       )}
     >
@@ -267,7 +267,7 @@ function InboxRow({
 /** A row that was handled: faded, still clickable, and what the answer was. */
 function DecidedRow({ item }: { item: DecidedItem }) {
   return (
-    <li className="flex items-center gap-2 rounded-lg px-2.5 py-1.5">
+    <li className="flex items-center gap-2 rounded-lg px-2 py-1.5">
       <ProjectMark name={projectName(item.project)} size={14} />
       <button
         type="button"
@@ -299,7 +299,7 @@ export function NeedsYouRow() {
         onClick={() => setView({ kind: "inbox" })}
         aria-current={here ? "page" : undefined}
         title="Approvals, questions, failed turns and delegates across every thread"
-        className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-body hover:bg-fill"
+        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body hover:bg-fill"
       >
         <Hand size={14} className="shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
         <span className="min-w-0 flex-1 truncate font-medium text-fg">Needs you</span>
@@ -426,7 +426,7 @@ export function Inbox() {
             <button
               type="button"
               onClick={showRecap}
-              className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
             >
               <Sparkles size={13} className="shrink-0 text-accent" />
               <span className="min-w-0 flex-1">Show the while-you-were-away recap</span>
@@ -436,7 +436,7 @@ export function Inbox() {
 
           {items.length > 0 ? (
             <section aria-label="Waiting on you" className="flex flex-col">
-              <span className="px-2.5 pb-1 font-medium text-caption text-fg-faint">Waiting on you</span>
+              <span className="px-2 pb-1 font-medium text-caption text-fg-faint">Waiting on you</span>
               <ul ref={list} className="flex flex-col">
                 {groups.map((group, g) => (
                   <li key={`${group.threadId}:${group.items[0]!.key}`} className="flex flex-col">
@@ -469,7 +469,7 @@ export function Inbox() {
 
           {decided.length > 0 && (
             <section aria-label="Decided" className="flex flex-col opacity-50">
-              <div className="flex items-center gap-2 px-2.5 pb-1">
+              <div className="flex items-center gap-2 px-2 pb-1">
                 <span className="font-medium text-caption text-fg-faint">Decided</span>
                 <button
                   type="button"

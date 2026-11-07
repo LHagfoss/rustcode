@@ -68,7 +68,7 @@ function CardRow({
       {right}
     </>
   );
-  const shape = "flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-body";
+  const shape = "flex h-8 w-full items-center gap-2 rounded-md px-2 text-body";
   return onClick ? (
     <button
       type="button"
@@ -88,7 +88,7 @@ function CardRow({
 /** A fact the card only states: its name on the left, its value at the right. */
 function Fact({ label, value, title }: { label: ReactNode; value: ReactNode; title?: string }) {
   return (
-    <div title={title} className="flex h-8 w-full items-center gap-2.5 px-2.5 text-body">
+    <div title={title} className="flex h-8 w-full items-center gap-2 px-2 text-body">
       <span className="min-w-0 shrink-0 text-fg-muted">{label}</span>
       <span className="min-w-0 flex-1 truncate text-right text-fg tabular">{value}</span>
     </div>
@@ -98,8 +98,8 @@ function Fact({ label, value, title }: { label: ReactNode; value: ReactNode; tit
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <section aria-label={title} className="pt-1 pb-0.5">
-      <h3 className="px-2.5 pt-1.5 pb-1 font-medium text-caption text-fg-faint">{title}</h3>
-      {hint && <p className="px-2.5 pb-1 text-caption text-fg-faint">{hint}</p>}
+      <h3 className="px-2 pt-1.5 pb-1 font-medium text-caption text-fg-faint">{title}</h3>
+      {hint && <p className="px-2 pb-1 text-caption text-fg-faint">{hint}</p>}
       {children}
     </section>
   );
@@ -124,7 +124,7 @@ function GroupHeading({
   hint: string;
 }) {
   return (
-    <div className="px-2.5 pt-1.5 pb-1">
+    <div className="px-2 pt-1.5 pb-1">
       <div className="flex items-baseline gap-1.5 text-caption">
         <span className="font-medium text-fg-muted">{label}</span>
         <span className="text-fg-faint tabular">
@@ -331,7 +331,7 @@ export function ThreadDetails() {
   const project = worktree?.repo ?? thread.cwd;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+    <div className="min-h-0 flex-1 overflow-y-auto p-2">
       <CardRow
         icon={<Folder size={16} className="shrink-0 text-fg-muted" />}
         title={`Show ${thread.cwd} in the file manager`}
@@ -384,7 +384,7 @@ export function ThreadDetails() {
       {allowed.length > 0 && (
         <Section title="Allowed" hint="Commands run without asking, until their hour is up.">
           {allowed.map((grant) => (
-            <div key={grant.id} className="flex h-8 w-full items-center gap-2.5 rounded-md px-2.5">
+            <div key={grant.id} className="flex h-8 w-full items-center gap-2 rounded-md px-2">
               <Clock size={16} className="shrink-0 text-fg-muted" />
               <span className="min-w-0 flex-1 truncate font-mono text-callout text-fg" title={grant.prefix}>
                 {grant.prefix}
@@ -416,7 +416,7 @@ export function ThreadDetails() {
           <Section title="Threads">
             {lineage.parent && (
               <>
-                <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-caption text-fg-faint">
+                <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-caption text-fg-faint">
                   <CornerDownRight size={11} /> {lineage.parent.live ? "Working for" : "Started from"}
                 </div>
                 {lineage.parent.link ? (
@@ -444,7 +444,7 @@ export function ThreadDetails() {
             )}
             {lineage.messagedBy?.link && (
               <>
-                <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-caption text-fg-faint">
+                <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-caption text-fg-faint">
                   <CornerDownRight size={11} /> Messaged by
                 </div>
                 <LinkRow

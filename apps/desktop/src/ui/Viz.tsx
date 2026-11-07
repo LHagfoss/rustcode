@@ -426,7 +426,7 @@ export function VizView({ source, complete }: { source: string; complete: boolea
   const parsed = useMemo(() => (complete ? parseViz(source) : null), [source, complete]);
   if (!complete) {
     return (
-      <div className="rounded-lg bg-fill-subtle px-3 py-2.5 text-callout text-fg-muted rc-shimmer">
+      <div className="rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg-muted rc-shimmer">
         Building visualization…
       </div>
     );

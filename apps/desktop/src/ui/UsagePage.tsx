@@ -211,8 +211,8 @@ function PlansSkeleton() {
   return (
     <div role="status" aria-label="Loading">
       {[0, 1].map((card) => (
-        <section key={card} className="mb-8">
-          <div className="mb-2.5 flex min-h-7 items-center px-3 sm:px-4">
+        <section key={card} className="mb-6">
+          <div className="mb-2 flex min-h-7 items-center px-4">
             <Skeleton className="h-3 w-24" />
           </div>
           <div className="flex flex-col gap-4 rounded-xl bg-surface px-4 py-4">
