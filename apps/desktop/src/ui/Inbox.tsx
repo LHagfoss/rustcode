@@ -16,9 +16,9 @@ import {
   MessageCircleQuestion,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
-import { type DecidedItem, foldDecided, type InboxItem } from "../state/inbox";
+import { type DecidedItem, foldDecided, groupInbox, type InboxGroup, type InboxItem } from "../state/inbox";
 import { useInboxItems } from "../state/inboxRead";
 import {
   answerPermission,
@@ -123,12 +123,19 @@ function KindIcon({ kind }: { kind: InboxItem["kind"] }) {
   return <Hand size={14} className="text-warning" />;
 }
 
+/** The answers, with their digit hints: shown on the row the keyboard is on, or hovered. */
 function RowActions({ item, onRun }: { item: InboxItem; onRun: (action: RowAction) => void }) {
   return (
     <>
       {inboxActions(item).map((action, i) => (
-        <Pill key={`${action.label}-${i}`} size="sm" prominent={action.primary} onClick={() => onRun(action)}>
-          {action.label}
+        <Pill
+          key={`${action.label}-${i}`}
+          size="sm"
+          prominent={action.primary}
+          onClick={() => onRun(action)}
+          className="max-w-full overflow-hidden"
+        >
+          <span className="min-w-0 truncate">{action.label}</span>
           {i < 9 && <Kbd>{i + 1}</Kbd>}
         </Pill>
       ))}
@@ -136,7 +143,26 @@ function RowActions({ item, onRun }: { item: InboxItem; onRun: (action: RowActio
   );
 }
 
-/** One thread waiting on the user: what it is, what it wants, its age and answers. */
+/** One thread's requests: one header naming it, then a row for each thing it wants. */
+function InboxGroupHeader({ group, onOpen }: { group: InboxGroup; onOpen: () => void }) {
+  return (
+    <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-1">
+      <ProjectMark name={projectName(group.project)} size={16} />
+      <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left">
+        <span className="min-w-0 truncate font-medium text-body hover:text-fg">{group.title}</span>
+        {group.items.length > 1 && (
+          <span className="shrink-0 text-caption text-fg-faint">· {group.items.length} requests</span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * One request under its thread's header: what it wants, its age, and one compact
+ * answer at rest. The full answers with their digit keys appear on the row the
+ * keyboard is on, or under the pointer: the list stays scannable at rest.
+ */
 function InboxRow({
   item,
   active,
@@ -150,43 +176,52 @@ function InboxRow({
   onOpen: () => void;
   onRun: (action: RowAction) => void;
 }) {
+  const actions = inboxActions(item);
+  const compact = actions.find((action) => action.primary) ?? actions[0];
   return (
     <li
       data-inbox-key={item.key}
       aria-current={active || undefined}
       className={cx(
-        "flex items-start gap-2.5 rounded-lg px-2.5 py-2",
+        "group flex items-start gap-2 rounded-lg px-2.5 py-1.5",
         active ? "bg-fill" : "hover:bg-fill-subtle",
       )}
     >
-      <span className="mt-0.5">
-        <ProjectMark name={projectName(item.project)} size={18} />
+      <span className="mt-1 shrink-0">
+        <KindIcon kind={item.kind} />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-baseline gap-2">
-          <button
-            type="button"
-            onClick={onOpen}
-            className="min-w-0 flex-1 truncate text-left font-medium text-body hover:text-fg"
-          >
-            {item.title}
-          </button>
-          <span className="shrink-0 text-caption text-fg-faint tabular">{relativeAge(item.at, now)}</span>
-        </div>
-        <div className="flex min-w-0 items-center gap-1.5 text-callout text-fg-muted">
-          <KindIcon kind={item.kind} />
-          <span className="min-w-0 truncate" title={item.detail}>
-            {item.detail}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+        <button
+          type="button"
+          onClick={onOpen}
+          title={item.detail}
+          className="min-w-0 flex-1 truncate text-left text-callout text-fg-muted hover:text-fg"
+        >
+          {item.detail}
+        </button>
+        {item.pending > 1 && (
+          <span className="shrink-0 text-caption text-fg-faint tabular">
+            {item.number} of {item.pending}
           </span>
-          {item.pending > 1 && (
-            <span className="shrink-0 text-caption text-fg-faint tabular">
-              {item.number} of {item.pending}
-            </span>
+        )}
+        <span className="shrink-0 text-caption text-fg-faint tabular">{relativeAge(item.at, now)}</span>
+        {compact && (
+          <span
+            className={cx("shrink-0", active ? "hidden" : "group-hover:hidden group-focus-within:hidden")}
+          >
+            <Pill size="sm" prominent={compact.primary} onClick={() => onRun(compact)}>
+              {compact.label}
+            </Pill>
+          </span>
+        )}
+        <span
+          className={cx(
+            "min-w-0 flex-wrap items-center gap-1.5",
+            active ? "flex" : "hidden group-hover:flex group-focus-within:flex",
           )}
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+        >
           <RowActions item={item} onRun={onRun} />
-        </div>
+        </span>
       </div>
     </li>
   );
@@ -255,16 +290,29 @@ export function Inbox() {
   const recapSince = useApp((s) => s.recapSince);
   const recapDismissed = useApp((s) => s.recapDismissed);
   const now = useNow();
+  const groups = useMemo(() => groupInbox(items), [items]);
+  // Where each group's first row sits in the flat list the keyboard moves through.
+  const starts = useMemo(() => {
+    let at = 0;
+    return groups.map((group) => {
+      const start = at;
+      at += group.items.length;
+      return start;
+    });
+  }, [groups]);
   const [active, setActive] = useState(0);
   const [decided, setDecided] = useState<DecidedItem[]>([]);
   const previous = useRef<InboxItem[]>([]);
   const labels = useRef<Record<string, string>>({});
   const list = useRef<HTMLUListElement>(null);
 
-  // What the inbox had and no longer has was answered, retried or opened.
+  // What the inbox had and no longer has was answered, retried or opened. The
+  // previous list is read before it is replaced: the state updater runs later,
+  // once this effect is done, and would otherwise find the list already moved on.
   useEffect(() => {
-    setDecided((kept) => foldDecided(previous.current, items, kept, { labels: labels.current }));
+    const before = previous.current;
     previous.current = items;
+    setDecided((kept) => foldDecided(before, items, kept, { labels: labels.current }));
   }, [items]);
 
   useEffect(() => {
@@ -357,15 +405,22 @@ export function Inbox() {
             <section aria-label="Waiting on you" className="flex flex-col">
               <span className="px-2.5 pb-1 font-medium text-caption text-fg-faint">Waiting on you</span>
               <ul ref={list} className="flex flex-col">
-                {items.map((item, i) => (
-                  <InboxRow
-                    key={item.key}
-                    item={item}
-                    active={i === active}
-                    now={now}
-                    onOpen={() => selectThread(item.threadId)}
-                    onRun={(action) => run(item, action)}
-                  />
+                {groups.map((group, g) => (
+                  <li key={`${group.threadId}:${group.items[0]!.key}`} className="flex flex-col">
+                    <InboxGroupHeader group={group} onOpen={() => selectThread(group.threadId)} />
+                    <ul className="flex flex-col">
+                      {group.items.map((item, i) => (
+                        <InboxRow
+                          key={item.key}
+                          item={item}
+                          active={starts[g]! + i === active}
+                          now={now}
+                          onOpen={() => selectThread(item.threadId)}
+                          onRun={(action) => run(item, action)}
+                        />
+                      ))}
+                    </ul>
+                  </li>
                 ))}
               </ul>
             </section>

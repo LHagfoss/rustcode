@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionRequest, SessionSummary } from "../acp/types";
-import { DECIDED_MAX, deriveInbox, foldDecided, type InboxItem } from "./inbox";
+import { DECIDED_MAX, deriveInbox, foldDecided, groupInbox, type InboxItem } from "./inbox";
 import type { Link } from "./orchestration";
 
 const NOW = 1_700_000_000_000;
@@ -132,6 +132,29 @@ describe("the needs-you inbox", () => {
     const asking = deriveInbox({ sessions, threads: {}, failed: {}, links: [link()] }, NOW);
     expect(asking.map((item) => [item.kind, item.threadId, item.title])).toEqual([
       ["delegate", "child", "The delegated one"],
+    ]);
+  });
+});
+
+describe("the list's grouping", () => {
+  const row = (threadId: string, at: number): InboxItem => ({
+    key: `${threadId}:${at}`,
+    kind: "approval",
+    threadId,
+    title: threadId === "one" ? "Add the login form" : "Pricing page",
+    project: "/code/app",
+    detail: "Wants to bash",
+    at,
+    pending: 1,
+    number: 1,
+  });
+
+  test("consecutive rows from one thread share a header", () => {
+    const groups = groupInbox([row("one", 4), row("one", 3), row("two", 2), row("one", 1)]);
+    expect(groups.map((group) => [group.threadId, group.title, group.items.length])).toEqual([
+      ["one", "Add the login form", 2],
+      ["two", "Pricing page", 1],
+      ["one", "Add the login form", 1],
     ]);
   });
 });

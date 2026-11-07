@@ -175,6 +175,32 @@ export function deriveInbox(read: InboxRead, now = Date.now()): InboxItem[] {
   return items.sort((a, b) => b.at - a.at);
 }
 
+/** Consecutive rows from one thread, under the header that names it once. */
+export interface InboxGroup {
+  threadId: string;
+  title: string;
+  project: string;
+  items: InboxItem[];
+}
+
+/**
+ * The list as it is drawn: consecutive rows from the same thread share one header
+ * ("Add the login form · 2 requests"). Only consecutive ones: a row that arrives
+ * later sorts above the others, and the header says whose it is again.
+ */
+export function groupInbox(items: readonly InboxItem[]): InboxGroup[] {
+  const groups: InboxGroup[] = [];
+  for (const item of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.threadId === item.threadId) {
+      last.items.push(item);
+      continue;
+    }
+    groups.push({ threadId: item.threadId, title: item.title, project: item.project, items: [item] });
+  }
+  return groups;
+}
+
 /** A row that left the list because it was answered, retried or opened. */
 export interface DecidedItem extends InboxItem {
   /** When it left the list. */

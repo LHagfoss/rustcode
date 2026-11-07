@@ -1207,7 +1207,9 @@ async function handleInbound(message: Inbound) {
           return;
         }
         updateThread(request.sessionId, (t) => ({ ...t, permissions: [...t.permissions, request] }));
-        if (request.sessionId !== get().selectedId) {
+        // The inbox is the screen that lists this request already: a toast there would
+        // stack over its own first rows. Other toasts (copied, finished) still show.
+        if (request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
           toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
         // The system says the same, so a thread waiting behind another window is not forgotten.
