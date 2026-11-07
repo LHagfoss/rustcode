@@ -294,6 +294,65 @@ fn unsettle_restores_active_and_review_is_its_own_status() {
 }
 
 #[test]
+fn unsettle_leaves_a_review_thread_in_review() {
+    let sandbox = Sandbox::new("unsettle-review");
+    sandbox.write_thread(TITLE_ONE, "Fix the parser");
+
+    assert!(
+        sandbox
+            .run(&["threads", "review", TITLE_ONE])
+            .status
+            .success()
+    );
+    let output = sandbox.run(&["threads", "unsettle", TITLE_ONE]);
+    assert!(
+        output.status.success(),
+        "leaving a review thread alone is not a failure: {}",
+        text(&output.stderr)
+    );
+    assert_eq!(lines(&output), [format!("kept {TITLE_ONE} review")]);
+    assert_eq!(sandbox.stored_status(TITLE_ONE).as_deref(), Some("review"));
+
+    // Settled is the state it does move.
+    assert!(
+        sandbox
+            .run(&["threads", "settle", TITLE_ONE])
+            .status
+            .success()
+    );
+    let output = sandbox.run(&["threads", "unsettle", TITLE_ONE]);
+    assert_eq!(
+        lines(&output),
+        [format!("active {TITLE_ONE} Fix the parser")]
+    );
+    assert_eq!(sandbox.stored_status(TITLE_ONE), None);
+}
+
+#[test]
+fn an_exact_id_settles_a_thread_whose_folder_has_no_transcript_yet() {
+    let sandbox = Sandbox::new("no-history");
+    let directory = sandbox.config_dir().join("threads").join(OTHER);
+    std::fs::create_dir_all(&directory).expect("create thread dir");
+    std::fs::write(directory.join("title.txt"), "Started a moment ago").expect("write title");
+
+    let output = sandbox.run(&["threads", "settle", OTHER]);
+    assert!(
+        output.status.success(),
+        "a thread folder with no history is still that thread: {}",
+        text(&output.stderr)
+    );
+    assert_eq!(
+        lines(&output),
+        [format!("settled {OTHER} Started a moment ago")]
+    );
+    assert_eq!(sandbox.stored_status(OTHER).as_deref(), Some("done"));
+
+    // Only a full id reaches it: a prefix would be guessing at a folder no list vouches for.
+    let output = sandbox.run(&["threads", "settle", "018fff"]);
+    assert!(!output.status.success(), "a prefix is not a folder lookup");
+}
+
+#[test]
 fn settle_needs_at_least_one_id() {
     let sandbox = Sandbox::new("no-id");
     let output = sandbox.run(&["threads", "settle"]);

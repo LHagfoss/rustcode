@@ -1456,6 +1456,14 @@ fn run_sessions_set_status(ids: &[String], change: ThreadStatusChange) {
                 continue;
             }
         };
+        if matches!(change, ThreadStatusChange::Unsettle)
+            && rustcode::config::session_status(&id) == "review"
+        {
+            // Settling is the way out of review; un-settling is not that, so a
+            // mark the user has not looked at yet stays.
+            println!("kept {id} review");
+            continue;
+        }
         if let Err(error) = rustcode::config::set_session_status(&id, change.status()) {
             eprintln!("Could not mark `{raw}` {}: {error}", change.word());
             failed = true;
@@ -1478,6 +1486,13 @@ fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, String> {
     }
     if let Some(id) = saved.iter().find(|id| id.as_str() == wanted) {
         return Ok(id.clone());
+    }
+    // A thread the store has a folder for but no transcript yet (settled right
+    // after it was started, or one whose history was lost) is still that
+    // thread: an exact id may name it, as `threads path` does. A prefix may
+    // not, since that would be guessing at a directory that no list vouches for.
+    if rustcode::config::get_active_session_dir(wanted).is_some_and(|dir| dir.is_dir()) {
+        return Ok(wanted.to_owned());
     }
     let matches: Vec<&String> = saved.iter().filter(|id| id.starts_with(wanted)).collect();
     match matches.as_slice() {

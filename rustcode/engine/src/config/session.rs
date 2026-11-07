@@ -371,6 +371,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_ids_is_sorted_and_lists_a_legacy_copy_once() {
+        let root = get_config_dir().expect("config dir");
+        let store = rustcode_session::SessionStore::new(&root);
+        let threads = store.threads_dir();
+        let older = "018f0000-0000-7000-8000-000000000001";
+        let newer = "018f0000-0000-7000-8000-000000000002";
+
+        // `newer` is kept the old way and the canonical way, as a thread that
+        // moved leaves it; `older` only canonically.
+        let legacy = threads.join(newer);
+        fs::create_dir_all(&legacy).expect("legacy thread dir");
+        fs::write(legacy.join("history.json"), "[]").expect("legacy transcript");
+        for id in [older, newer] {
+            let canonical = store.canonical_session_dir(id);
+            fs::create_dir_all(&canonical).expect("canonical thread dir");
+            fs::write(canonical.join("history.json"), "[]").expect("canonical transcript");
+        }
+
+        let ids = session_ids();
+        assert_eq!(ids, [older.to_owned(), newer.to_owned()]);
+        // Sorted neighbours, so a prefix of either picks exactly one thread.
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
     fn history_prefix_archive_is_exact_content_addressed_and_collision_safe() {
         let root = tempfile::tempdir().expect("archive root");
         let history = vec![
@@ -661,15 +686,33 @@ pub fn set_session_status(session_id: &str, status: &str) -> Result<(), String> 
     crate::thread_status::set(session_id, status)
 }
 
-/// Ids of every saved thread, in the store's stable order, without reading a
-/// transcript (`SessionStore::session_history_paths`). `rustcode threads`
-/// resolves an id prefix against these instead of scanning for a directory
-/// that a typo would create.
+/// The status stored for a thread (`done`, `review`, or `idle` when it has
+/// none), for a caller outside the engine such as `rustcode threads unsettle`,
+/// which leaves a `review` thread alone.
+pub fn session_status(session_id: &str) -> String {
+    crate::thread_status::current(session_id)
+        .as_str()
+        .to_owned()
+}
+
+/// Ids of every saved thread, deduped and sorted, without reading a transcript
+/// (`SessionStore::session_history_paths`). `rustcode threads` resolves an id
+/// prefix against these instead of scanning for a directory that a typo would
+/// create.
+///
+/// One thread can be listed twice, once in the legacy `threads/<id>/` layout
+/// and once canonical (`threads/YYYY/MM/DD/<id>/`), so the same id would
+/// otherwise make every prefix of itself ambiguous. Sorted, the two copies are
+/// neighbours and dedup keeps one; ids sort by their leading timestamp, so the
+/// order is the store's.
 pub fn session_ids() -> Vec<String> {
-    session_history_paths()
+    let mut ids: Vec<String> = session_history_paths()
         .iter()
         .filter_map(|path| session_id_from_path(path))
-        .collect()
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// Sessions under `scope` whose user or assistant messages contain `query`

@@ -101,18 +101,22 @@ app's `_rustcode/session/status` and the MCP `update_session` use (#3151):
 
 ```bash
 rustcode threads settle <id>...      # done: Settled in the app
-rustcode threads unsettle <id>...    # idle: back to Active
+rustcode threads unsettle <id>...    # idle: back to Active, from Settled
 rustcode threads review <id>...      # review: needs a look
 ```
 
 Each prints one line per thread (`settled <id> <title>`, `active <id> <title>`,
 `review <id> <title>`), so a script sees which ones changed. Ids may be unique
-prefixes, as in `rustcode threads settle 018f0`; an ambiguous or unknown id is
-reported on stderr and exits non-zero, and the other ids on the line are still
-applied. Only the stored status is written (`status.json` in the thread's
-directory), so a thread with a turn running stays `running`; the app shows the
-change on its next `session/list` refresh (the same read it makes for pins and
-status), and the terminal picker shows it on its next list.
+prefixes, as in `rustcode threads settle 018f0`, or a full id whose thread
+folder exists but holds no `history.json` yet (a settle right after a start); an
+ambiguous or unknown id is reported on stderr and exits non-zero, and the other
+ids on the line are still applied. `unsettle` only moves a thread out of
+Settled: a thread in review is left as it is, and prints `kept <id> review`,
+because settling (or the app's Review board) is what ends a review. Only the
+stored status is written (`status.json` in the thread's directory), so a thread
+with a turn running stays `running`; the app shows the change on its next
+`session/list` refresh (connect, window focus, or after a turn), and the
+terminal picker shows it on its next list.
 
 ## Checkpoints
 

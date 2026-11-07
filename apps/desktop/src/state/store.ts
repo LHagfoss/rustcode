@@ -1351,6 +1351,8 @@ export async function refreshSessions(): Promise<void> {
       if (!cursor) break;
       if (page === 9) capped = true;
     }
+    // The engine's list is the newer truth about a status.
+    reconcileStatusMarks(all);
     set((s) => {
       // Threads started here that the engine does not list yet (it lists a session once it saved history).
       const listed = new Set(all.map((x) => x.id));
@@ -1450,8 +1452,28 @@ export function clearFinished(id: string | null) {
   set((s) => ({ finished: without(s.finished, id), failed: without(s.failed, id) }));
 }
 
+/** The shortest gap between two window-focus list refreshes, see below. */
+const FOCUS_LIST_GAP_MS = 5_000;
+let lastFocusListAt = 0;
+
+/**
+ * A window focus re-lists the threads, at most once per 5 s: a change made outside this window
+ * (`rustcode threads settle` in a terminal, another app) reaches the list with no turn to carry it,
+ * and flapping between windows should not read 500 threads each time. Off until connected, and
+ * `now` is a parameter so it can be felt with a clock in tests.
+ */
+export async function refreshSessionsOnFocus(now = Date.now()): Promise<void> {
+  if (!connection || get().status !== "ready") return;
+  if (now - lastFocusListAt < FOCUS_LIST_GAP_MS) return;
+  lastFocusListAt = now;
+  await refreshSessions();
+}
+
 if (typeof window !== "undefined") {
-  window.addEventListener("focus", () => clearFinished(get().selectedId));
+  window.addEventListener("focus", () => {
+    clearFinished(get().selectedId);
+    void refreshSessionsOnFocus();
+  });
 }
 
 export function selectThread(id: string | null) {
@@ -3571,6 +3593,24 @@ function saveMarks(marks: Record<string, ThreadStatus>) {
   store(STORAGE.statusMarks, JSON.stringify(marks));
 }
 
+/**
+ * Drop the marks the engine contradicts: it reports a status now, so a different one is the newer
+ * truth — a settle or a review from the CLI, or another window — and the row has to say that. A
+ * mark still covers an engine that reports no status at all (an older build, or a thread the list
+ * has not caught up with).
+ */
+function reconcileStatusMarks(listed: SessionSummary[]) {
+  const next = { ...get().statusMarks };
+  let dropped = false;
+  for (const x of listed) {
+    const mark = next[x.id];
+    if (!x.status || mark === undefined || mark === x.status) continue;
+    delete next[x.id];
+    dropped = true;
+  }
+  if (dropped) saveMarks(next);
+}
+
 export function clearStatusMark(id: string) {
   const { [id]: _gone, ...rest } = get().statusMarks;
   if (_gone) saveMarks(rest);
@@ -4556,6 +4596,7 @@ export async function request<T = Json>(
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  lastFocusListAt = 0;
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
   limitTimer = null;

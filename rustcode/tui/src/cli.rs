@@ -512,7 +512,7 @@ pub enum SessionCommands {
         #[arg(required = true, value_name = "ID")]
         ids: Vec<String>,
     },
-    /// Put settled or review threads back to active
+    /// Put settled threads back to active; a thread in review is kept there
     Unsettle {
         /// Thread ids, or unique prefixes of them
         #[arg(required = true, value_name = "ID")]
