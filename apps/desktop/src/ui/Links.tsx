@@ -10,7 +10,6 @@ import {
   CornerDownRight,
   GitBranch,
   Hand,
-  Link2,
   LoaderCircle,
   PauseCircle,
   Rows3,
@@ -380,29 +379,21 @@ export function GrantDialog() {
 }
 
 /**
- * A sidebar badge: this thread works for another (↳), or messaged a thread that
- * still runs (count). Threads it started are the stack on its row, not a count,
- * so they are always left out here: a message to a thread shown elsewhere and
- * the "working for" marker are still news.
+ * A sidebar badge: this thread works for another (↳). It goes in front of the row's cluster of
+ * delegate marks, so both of the row's lines end on the same edge.
+ *
+ * The count of threads it messaged that still run is gone from the row: the threads it started are
+ * the marks beside this, and a messaged thread it waits on is what makes the row's chip say
+ * `Waiting` (`state/waiting.ts` counts those links too). Two counts on one row said the same thing
+ * twice, and neither was readable at 10px.
  */
 export function LinkBadge({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
-  const { driving, drivenBy } = linksOf(book, threadId);
-  const active = driving.filter((l) => isActive(l.state) && !l.started).length;
-  if (drivenBy) {
-    return (
-      <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>
-        <CornerDownRight size={11} className="shrink-0 text-accent" aria-label="Working for another thread" />
-      </Tooltip>
-    );
-  }
-  if (!active) return null;
+  const { drivenBy } = linksOf(book, threadId);
+  if (!drivenBy) return null;
   return (
-    <Tooltip label={`${active} linked thread${active === 1 ? "" : "s"} under way`}>
-      <span className="flex shrink-0 items-center gap-0.5 text-caption text-accent tabular">
-        <Link2 size={10} />
-        {active}
-      </span>
+    <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>
+      <CornerDownRight size={11} className="shrink-0 text-accent" aria-label="Working for another thread" />
     </Tooltip>
   );
 }

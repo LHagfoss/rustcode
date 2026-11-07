@@ -3361,6 +3361,38 @@ export class MockEngine {
         thread.title = prompt.split("\n")[0]?.slice(0, 60) || "New thread";
         this.notify(update(sid, { sessionUpdate: "session_info_update", title: thread.title }));
       }
+      // Two row states that only exist while something happens, so the sidebar's status chip can be
+      // seen without a model: "keep working" leaves a turn running for two minutes (`Working 0:12`
+      // with its clock, then `Waiting`), and "fail this turn" ends it with an error (`Failed` until
+      // the row is opened). `?scenario=delegates` covers `Waiting`, `Needs you` and the stack.
+      if (/\bfail this turn\b/i.test(prompt)) throw new Error("The mock failed this turn, as asked.");
+      if (/\bkeep working\b/i.test(prompt)) {
+        const callId = `live-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: callId,
+          title: "bash",
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { command: "bun test --watch", summary: "Keep the turn running" },
+        });
+        for (let i = 0; i < 60 && !run.cancelled; i++) {
+          await this.sleep(2_000);
+          push({
+            sessionUpdate: "tool_call_update",
+            toolCallId: callId,
+            _meta: { rustcode: { outputDelta: `✓ ${i + 1} tests still passing\n` } },
+          });
+        }
+        if (run.cancelled) return done("cancelled");
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: callId,
+          status: "completed",
+          rawOutput: { content: "✓ 60 pass, 0 fail\n", exitCode: 0 },
+        });
+        return done("end_turn");
+      }
       for (const chunk of [
         "**Reading the request**\n",
         "Checking which files are involved ",
