@@ -443,10 +443,7 @@ export function VizView({ source, complete }: { source: string; complete: boolea
   }
   const { viz } = parsed;
   return (
-    <figure
-      className="group relative m-0 rounded-lg border border-border bg-fill-subtle p-3 rc-in"
-      aria-label={parsed.title}
-    >
+    <figure className="group relative m-0 rounded-lg bg-surface p-3 rc-in" aria-label={parsed.title}>
       <div className="absolute top-2 right-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
         <CopyButton text={`\`\`\`rustcode-viz\n${source}\n\`\`\``} iconOnly label="Copy source" />
       </div>

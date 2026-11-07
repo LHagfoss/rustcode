@@ -217,7 +217,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
     });
   };
   return (
-    <div className="ml-11 flex flex-col gap-2 rounded-lg border border-border/70 px-3 py-2.5">
+    <div className="ml-11 flex flex-col gap-2 rounded-lg bg-surface-2 px-3 py-2.5">
       <div className="flex items-center gap-2">
         <span className="text-caption text-fg-muted">Accounts</span>
         <span className="flex-1" />
@@ -273,7 +273,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
                 </Tooltip>
               </div>
               {account.auth !== "ok" && accountSignIn(harness) && (
-                <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
+                <div className="flex items-center gap-2 rounded-md bg-fill py-1 pr-1 pl-2.5">
                   <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
                     {accountLoginCommand(harness, account)}
                   </code>
@@ -300,7 +300,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
             }}
             placeholder="Name, e.g. Work"
             aria-label="Account name"
-            className="h-7 min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 text-callout outline-none focus:border-accent"
+            className="h-7 min-w-0 flex-1 rounded-md bg-fill px-2 text-callout outline-none focus:bg-fill-strong"
           />
           <Action size="sm" onClick={() => void add()} disabled={busy || !accountSlug(name)}>
             Add and sign in
