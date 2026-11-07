@@ -449,8 +449,11 @@ impl AcpAdapter {
             learned.steer = Some(steering);
             learned.effort = Some(has_effort);
             learned.error = None;
-            if !models.is_empty() {
-                learned.listed(&harness.id, models);
+            // Only the model this thread runs has its own efforts here, so a
+            // list that gives each model its own is left alone; one learned
+            // this way is listed again for the others'.
+            if learned.models.is_none() && !models.is_empty() {
+                learned.listed_for(&harness.id, models, false);
             }
         });
         Ok(adapter)
@@ -585,21 +588,31 @@ impl AcpAdapter {
         (current("model"), current("effort"))
     }
 
+    /// The effort option's own id, the level the session runs with and the
+    /// levels the session's model offers.
+    fn effort_choices(options: &[SessionConfigOption]) -> Option<(String, Vec<String>)> {
+        let index = (0..options.len()).find(|index| our_id(options, *index) == "effort")?;
+        let (current, choices) = select_values(&options[index]);
+        Some((
+            current,
+            choices.into_iter().map(|(value, _)| value).collect(),
+        ))
+    }
+
     pub(crate) fn models(&self) -> Vec<HarnessModel> {
         let options = self.config_options();
-        let find = |id: &str| options.iter().find(|option| option.id.0.as_ref() == id);
-        let (default_effort, efforts) = find("effort")
-            .map(|option| {
-                let (current, choices) = select_values(option);
+        let (default_effort, efforts) = Self::effort_choices(&options)
+            .map(|(current, efforts)| {
                 (
                     Some(current).filter(|current| !current.is_empty()),
-                    choices.into_iter().map(|(value, _)| value).collect(),
+                    super::order_efforts(efforts),
                 )
             })
             .unwrap_or((None, Vec::new()));
-        find("model")
-            .map(|option| {
-                select_values(option)
+        let model_index = (0..options.len()).find(|index| our_id(&options, *index) == "model");
+        model_index
+            .map(|index| {
+                select_values(&options[index])
                     .1
                     .into_iter()
                     .map(|(id, name)| HarnessModel {
@@ -611,6 +624,53 @@ impl AcpAdapter {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Every listed model with the efforts it itself offers.
+    ///
+    /// An ACP agent reports the thought level option of the model the session
+    /// runs, so each other model is selected in turn to read its own; the
+    /// session's model is put back afterwards. A model whose own listing fails
+    /// keeps the efforts the session shows, so a picker never loses a level.
+    pub(crate) async fn probed_models(&self) -> Vec<HarnessModel> {
+        let options = self.config_options();
+        let Some(index) = (0..options.len()).find(|index| our_id(&options, *index) == "model")
+        else {
+            return Vec::new();
+        };
+        let (current, choices) = select_values(&options[index]);
+        let Some((session_effort, session_efforts)) = Self::effort_choices(&options) else {
+            // The harness takes no effort: every model is listed as it is.
+            return self.models();
+        };
+        if choices.len() < 2 {
+            return self.models();
+        }
+        let mut models = Vec::with_capacity(choices.len());
+        for (id, name) in choices {
+            let (efforts, default_effort) = if id == current {
+                (session_efforts.clone(), session_effort.clone())
+            } else {
+                match self.set_config("model", json!(id)).await {
+                    Ok(options) => match Self::effort_choices(&options) {
+                        Some((current, efforts)) => (efforts, current),
+                        // This model takes no effort at all.
+                        None => (Vec::new(), String::new()),
+                    },
+                    Err(_) => (session_efforts.clone(), session_effort.clone()),
+                }
+            };
+            models.push(HarnessModel {
+                id,
+                name,
+                efforts: super::order_efforts(efforts),
+                default_effort: Some(default_effort).filter(|effort| !effort.is_empty()),
+            });
+        }
+        if !current.is_empty() {
+            let _ = self.set_config("model", json!(current)).await;
+        }
+        models
     }
 
     pub(crate) fn kill(&self) {

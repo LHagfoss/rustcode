@@ -33,6 +33,9 @@ pub(crate) struct CachedHarness {
     pub images: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steer: Option<bool>,
+    /// Each model in `models` has the efforts it itself offers.
+    #[serde(default)]
+    pub per_model: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -81,6 +84,7 @@ pub(crate) fn to_learned(entry: CachedHarness) -> Learned {
         effort: entry.effort,
         fetched_at: Some(entry.fetched_at),
         version: entry.version,
+        per_model: entry.per_model,
     }
 }
 
@@ -103,20 +107,23 @@ pub(crate) fn from_learned(learned: &Learned) -> Option<CachedHarness> {
         resume: learned.resume,
         images: learned.images,
         steer: learned.steer,
+        per_model: learned.per_model,
     })
 }
 
 /// Whether a model list learned at `fetched_at` for `version` should be
-/// listed again: too old, or the harness was updated since.
+/// listed again: too old, the harness was updated since, or it holds one
+/// model's efforts for every model (listed at a thread start).
 pub(crate) fn is_stale(
     fetched_at: Option<i64>,
     version: Option<&str>,
     current_version: Option<&str>,
+    per_model: bool,
     now: i64,
 ) -> bool {
     let too_old = fetched_at.is_none_or(|at| now - at > MAX_AGE_SECS);
     let updated = matches!((version, current_version), (Some(was), Some(is)) if was != is);
-    too_old || updated
+    too_old || updated || !per_model
 }
 
 pub(crate) fn now() -> i64 {
@@ -184,16 +191,42 @@ mod tests {
     #[test]
     fn staleness_follows_age_and_version() {
         let now = 10 * MAX_AGE_SECS;
-        assert!(!is_stale(Some(now - 60), Some("1.0"), Some("1.0"), now));
-        assert!(!is_stale(Some(now - 60), None, Some("1.0"), now));
-        assert!(!is_stale(Some(now - 60), Some("1.0"), None, now));
-        assert!(is_stale(Some(now - 60), Some("1.0"), Some("1.1"), now));
+        assert!(!is_stale(
+            Some(now - 60),
+            Some("1.0"),
+            Some("1.0"),
+            true,
+            now
+        ));
+        assert!(!is_stale(Some(now - 60), None, Some("1.0"), true, now));
+        assert!(!is_stale(Some(now - 60), Some("1.0"), None, true, now));
+        assert!(is_stale(
+            Some(now - 60),
+            Some("1.0"),
+            Some("1.1"),
+            true,
+            now
+        ));
         assert!(is_stale(
             Some(now - MAX_AGE_SECS - 1),
             Some("1.0"),
             Some("1.0"),
+            true,
             now
         ));
-        assert!(is_stale(None, None, None, now));
+        assert!(is_stale(None, None, None, true, now));
+    }
+
+    #[test]
+    fn a_list_of_one_models_efforts_is_listed_again() {
+        let now = 10 * MAX_AGE_SECS;
+        // A thread start learns the efforts of the model it runs for every model.
+        assert!(is_stale(
+            Some(now - 60),
+            Some("1.0"),
+            Some("1.0"),
+            false,
+            now
+        ));
     }
 }

@@ -149,9 +149,12 @@ Errors (an unknown id, an invalid command, removing a known harness) are
 Starts the harness briefly if needed to list its models. Codex answers from
 `model/list` (hidden models left out, efforts per model). An ACP harness is
 started in the system temp directory and one session is opened there to read
-its `model` and thought-level options; every model then shows the same
-efforts, and `default_effort` is the harness's own (read before a thread's
-choice is applied).
+its `model` and thought-level options. An ACP agent reports the thought levels
+of the model its session runs, so each other model is selected in turn to read
+its own; every model then offers the efforts it really takes, ordered from no
+thinking to the most (`default` first), and `default_effort` is the level the
+harness puts that model on. That is one round trip per model (a few seconds
+for a catalog of hundreds), which is why the listing is cached.
 
 **Model cache.** Every listing (this request, or a thread starting the
 harness) is kept in memory and in `~/.config/rustcode/harness-models.json`:
@@ -160,9 +163,10 @@ it came from, and the learned `effort`, `resume` and `images` capabilities. A
 restarted engine reads it, so the snapshot, the capabilities and the
 `session/load` answer of a restored thread (its `model` and `effort`
 options, before the harness starts again) are complete. A cached list older
-than 24 hours, or from another harness version, is answered at once and
-listed again in the background. A failed listing is not cached: the next
-request tries again (one listing per harness runs at a time).
+than 24 hours, from another harness version, or holding one model's efforts
+for every model (a thread start only sees the model it runs) is answered at
+once and listed again in the background. A failed listing is not cached: the
+next request tries again (one listing per harness runs at a time).
 
 ### `_rustcode/harnesses/set` → `HarnessSnapshot`
 

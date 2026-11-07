@@ -271,9 +271,11 @@ impl Adapter {
         }
     }
 
-    pub(crate) fn models(&self) -> Vec<HarnessModel> {
+    /// The harness's models with the efforts each one offers. Only an ACP
+    /// harness has to be asked per model; Codex lists them itself.
+    pub(crate) async fn probed_models(&self) -> Vec<HarnessModel> {
         match self {
-            Adapter::Acp(adapter) => adapter.models(),
+            Adapter::Acp(adapter) => adapter.probed_models().await,
             Adapter::Codex(adapter) => adapter.models(),
         }
     }
@@ -308,7 +310,7 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
     });
     let cwd = std::env::temp_dir();
     let adapter = Adapter::start(harness, &cwd, StartOptions::default(), out).await?;
-    let models = adapter.models();
+    let models = adapter.probed_models().await;
     adapter.kill();
     Ok(models)
 }

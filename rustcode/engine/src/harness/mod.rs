@@ -386,14 +386,25 @@ pub(crate) struct Learned {
     pub fetched_at: Option<i64>,
     /// The harness version that listing came from, when known.
     pub version: Option<String>,
+    /// Each model in the list carries the efforts it itself offers. A thread
+    /// starting only sees the model it runs, so its list says `false` and is
+    /// listed again to learn the other models'.
+    pub per_model: bool,
 }
 
 impl Learned {
-    /// The harness `id` just listed `models`.
+    /// The harness `id` just listed `models`, each model with its own efforts.
     pub(crate) fn listed(&mut self, id: &str, models: Vec<HarnessModel>) {
+        self.listed_for(id, models, true);
+    }
+
+    /// The harness `id` listed `models`, where only the model the session
+    /// runs has its own efforts (a thread start) unless `per_model`.
+    pub(crate) fn listed_for(&mut self, id: &str, models: Vec<HarnessModel>, per_model: bool) {
         self.models = Some(models);
         self.fetched_at = Some(cache::now());
         self.version = detect::cached_version(id).or(self.version.take());
+        self.per_model = per_model;
         self.error = None;
     }
 }
@@ -406,6 +417,35 @@ pub(crate) struct HarnessModel {
     pub efforts: Vec<String>,
     #[serde(default)]
     pub default_effort: Option<String>,
+}
+
+/// Where an effort level sits between no thinking and the most: the order the
+/// apps offer them in, whatever order the harness listed them. `default` comes
+/// first because it names no level; an unknown level keeps the harness's place
+/// after the known ones.
+fn effort_rank(effort: &str) -> (u8, &str) {
+    let rank = match effort {
+        "default" => 0,
+        "off" | "none" => 1,
+        "minimal" => 2,
+        "low" => 3,
+        "medium" => 4,
+        "high" => 5,
+        "xhigh" => 6,
+        "max" => 7,
+        "ultra" => 8,
+        _ => 9,
+    };
+    (rank, effort)
+}
+
+/// `efforts` deduplicated and ordered from least to most thinking, as the
+/// model picker shows them.
+pub(crate) fn order_efforts(efforts: Vec<String>) -> Vec<String> {
+    let mut ordered = efforts;
+    ordered.sort_by(|left, right| effort_rank(left).cmp(&effort_rank(right)));
+    ordered.dedup();
+    ordered
 }
 
 fn learned() -> &'static Mutex<HashMap<String, Learned>> {
@@ -1000,6 +1040,7 @@ fn refresh_if_stale(harness: ResolvedHarness) {
             learned.fetched_at,
             learned.version.as_deref(),
             version.as_deref(),
+            learned.per_model,
             cache::now(),
         ) {
             crate::dbg_log!("listing the models of {} again", harness.id);
@@ -1311,6 +1352,29 @@ mod tests {
             efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
             default_effort: default_effort.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn efforts_are_offered_from_no_thinking_to_the_most() {
+        // The order a harness lists them in, deduplicated, `default` first.
+        assert_eq!(
+            order_efforts(
+                ["max", "default", "high", "off", "high", "xhigh", "minimal"]
+                    .map(str::to_owned)
+                    .to_vec()
+            ),
+            ["default", "off", "minimal", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            order_efforts(["none", "low", "medium"].map(str::to_owned).to_vec()),
+            ["none", "low", "medium"]
+        );
+        // A level this engine does not know keeps the harness's place at the end.
+        assert_eq!(
+            order_efforts(["turbo", "low"].map(str::to_owned).to_vec()),
+            ["low", "turbo"]
+        );
+        assert!(order_efforts(Vec::new()).is_empty());
     }
 
     #[test]

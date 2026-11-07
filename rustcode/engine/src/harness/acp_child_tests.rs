@@ -7,17 +7,44 @@ use crate::harness::session::{Adapter, StartOptions};
 use agent_client_protocol::schema::v1::TextContent;
 
 fn options(effort: &str) -> Value {
-    json!([
+    options_for("sonnet", effort)
+}
+
+/// The fake agent's options with `model` running on `effort`: `opus` offers a
+/// different set than `sonnet`, and `haiku` takes no effort at all, as an ACP
+/// agent reports the thought levels of the model the session runs.
+fn options_for(model: &str, effort: &str) -> Value {
+    let efforts = match model {
+        "opus" => json!([
+            {"value": "max", "name": "Max"},
+            {"value": "off", "name": "Off"},
+            {"value": "default", "name": "Default"}
+        ]),
+        "haiku" => json!([]),
+        _ => json!([
+            {"value": "high", "name": "High"},
+            {"value": "medium", "name": "Medium"},
+            {"value": "low", "name": "Low"}
+        ]),
+    };
+    let mut options = vec![json!(
         {"id": "model", "name": "Model", "category": "model", "type": "select",
-         "currentValue": "sonnet",
-         "options": [{"value": "sonnet", "name": "Sonnet"}, {"value": "opus", "name": "Opus"}]},
-        {"id": "thinking", "name": "Thinking", "category": "thought_level", "type": "select",
-         "currentValue": effort,
-         "options": [{"value": "low", "name": "Low"}, {"value": "medium", "name": "Medium"},
-                     {"value": "high", "name": "High"}]},
+         "currentValue": model,
+         "options": [{"value": "sonnet", "name": "Sonnet"},
+                     {"value": "opus", "name": "Opus"},
+                     {"value": "haiku", "name": "Haiku"}]}
+    )];
+    if !efforts.as_array().is_some_and(Vec::is_empty) {
+        options.push(json!(
+            {"id": "thinking", "name": "Thinking", "category": "thought_level", "type": "select",
+             "currentValue": effort, "options": efforts}
+        ));
+    }
+    options.push(json!(
         {"id": "mode", "name": "Mode", "type": "select", "currentValue": "default",
          "options": [{"value": "default", "name": "Default"}]}
-    ])
+    ));
+    Value::Array(options)
 }
 
 /// What the fake agent advertises and does.
@@ -116,10 +143,18 @@ async fn fake_agent(
                 );
                 peer.respond(id, Ok(json!({"configOptions": options("medium")})));
             }
-            "session/set_config_option" => peer.respond(
-                id,
-                Ok(json!({"configOptions": options(params["value"].as_str().unwrap_or("low"))})),
-            ),
+            "session/set_config_option" => {
+                let value = params["value"].as_str().unwrap_or("low");
+                // Another model, as a real agent answers: its own efforts, and
+                // the level it starts on.
+                let answer = if params["configId"] == "model" {
+                    let effort = if value == "opus" { "default" } else { "medium" };
+                    options_for(value, effort)
+                } else {
+                    options_for("sonnet", value)
+                };
+                peer.respond(id, Ok(json!({"configOptions": answer})))
+            }
             "session/prompt" => {
                 if fake.echo && let Some(echoed) = params["prompt"][0]["text"].as_str() {
                     peer.notify(
@@ -246,6 +281,28 @@ async fn start_with(
     .expect("the fake agent starts");
     thread.session.attach(adapter).await;
     (thread, seen)
+}
+
+/// The adapter of a session on the fake agent, for what a listing does before
+/// any thread owns it.
+async fn adapter_with(fake: Fake) -> (Adapter, mpsc::UnboundedReceiver<(String, Value)>) {
+    let harness = harness("fake-acp-listing", HarnessKind::Acp);
+    let ((ours, our_incoming), (theirs, their_incoming)) = pipe();
+    let (seen_tx, seen) = mpsc::unbounded_channel();
+    tokio::spawn(fake_agent(theirs, their_incoming, seen_tx, fake));
+    let thread = thread(&harness, None);
+    let adapter = Adapter::connect(
+        &harness,
+        ours,
+        our_incoming,
+        None,
+        &std::env::temp_dir(),
+        StartOptions::default(),
+        thread.session.output(),
+    )
+    .await
+    .expect("the fake agent starts");
+    (adapter, seen)
 }
 
 fn requests(seen: &mut mpsc::UnboundedReceiver<(String, Value)>) -> Vec<(String, Value)> {
@@ -383,6 +440,59 @@ async fn model_and_thought_level_become_model_and_effort() {
     assert!(thread.session.set_config("nope", json!("x")).await.is_err());
     assert_eq!(thread.session.record().effort.as_deref(), Some("low"));
     assert_eq!(thread.session.record().model.as_deref(), Some("sonnet"));
+}
+
+#[tokio::test]
+async fn every_model_is_listed_with_the_efforts_it_offers() {
+    let (adapter, mut seen) = adapter_with(Fake::default()).await;
+    let models = adapter.probed_models().await;
+    let listed = models
+        .iter()
+        .map(|model| {
+            (
+                model.id.as_str(),
+                model.efforts.clone(),
+                model.default_effort.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    // ACP reports the thought levels of the model the session runs, so `opus`
+    // and `haiku` are read by selecting them; each set is ordered from no
+    // thinking to the most, `default` first.
+    assert_eq!(
+        listed,
+        [
+            (
+                "sonnet",
+                vec!["low".to_owned(), "medium".into(), "high".into()],
+                Some("medium".into())
+            ),
+            (
+                "opus",
+                vec!["default".to_owned(), "off".into(), "max".into()],
+                Some("default".into())
+            ),
+            ("haiku", Vec::new(), None),
+        ]
+    );
+    // Each model was selected to read its own levels, then the session's went back.
+    let switched = requests(&mut seen)
+        .into_iter()
+        .filter(|(method, params)| {
+            method == "session/set_config_option" && params["configId"] == "model"
+        })
+        .map(|(_, params)| params["value"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(switched, [json!("opus"), json!("haiku"), json!("sonnet")]);
+}
+
+#[tokio::test]
+async fn a_model_taking_no_effort_offers_none() {
+    let (adapter, _seen) = adapter_with(Fake::default()).await;
+    let models = adapter.probed_models().await;
+    let haiku = models.iter().find(|model| model.id == "haiku").unwrap();
+    assert!(haiku.efforts.is_empty());
+    assert_eq!(haiku.default_effort, None);
 }
 
 #[tokio::test]
