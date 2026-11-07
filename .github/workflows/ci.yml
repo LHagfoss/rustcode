@@ -285,3 +285,13 @@ jobs:
               run: |
                   read -ra packages <<< "$AFFECTED_PACKAGES"
                   cargo check --locked "${packages[@]}"
+
+            - name: Test the fresh-profile migration checkpoint
+              # The step above only compiles, and migrating user data depends
+              # on the native file semantics: a flush through a reopened
+              # read-only handle failed on Windows with "Access is denied",
+              # which left a fresh profile unmigrated (#3118). One test target
+              # runs that case for real, and it links only the library because
+              # the library's own test modules hold unix-only assertions.
+              if: runner.os == 'Windows'
+              run: cargo test --locked --test storage_migrations_fresh_profile
