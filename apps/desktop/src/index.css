@@ -550,6 +550,22 @@
 }
 
 /*
+/*
+ * A steer takes a queued message out of the stack: it keeps its place and glides up toward the
+ * transcript it was read in, fading as it goes (`ui/QueuedMessages.tsx` `LeavingQueuedRow`,
+ * `state/store.ts` `glideAway`, which holds it this long). Transform and opacity only.
+ */
+@keyframes rc-steer-away {
+  to {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.98);
+  }
+}
+.rc-steer-away {
+  animation: rc-steer-away 240ms var(--ease-snappy) forwards;
+}
+
+/*
  * The first message of a new thread, on the screen that holds it while the session is made: it takes
  * the place the thread's own transcript will keep it, 8px below, in 160ms on the app's ease. Short
  * on purpose: that screen is unmounted the moment the session exists, so this is safe to cut, and

@@ -148,12 +148,15 @@ import {
   appendSteer,
   applyUpdate,
   beginTurn,
+  departQueued,
+  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
   foldingBatch,
   localId,
   messagesAfter,
+  type QueuedPrompt,
   questionItem,
   requeueSteers,
   type ThreadState,
@@ -441,6 +444,12 @@ export const PLAN_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
 
 /** How many threads keep their panel; past this the oldest entry is dropped. */
 export const MAX_PANELS = 500;
+
+/**
+ * The views the panel can show. Declared before the store: `parsePanels` reads it while the store
+ * is created, and a `const` further down is not initialized yet then (a blank window on start).
+ */
+const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 const STORAGE = {
   smartUi: "rustcode.smartUi",
@@ -2398,10 +2407,23 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   }
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
+    glideAway(id, item);
     return true;
   }
   toast(QUEUE_REASON.refused);
   return false;
+}
+
+/** How long a queued row takes to leave the stack, gliding up toward the transcript (index.css). */
+const STEER_GLIDE_MS = 240;
+
+/**
+ * A queued row a steer took keeps the stack's place while it glides out, so the row itself leaves
+ * instead of vanishing from under the reader; it is dropped once the glide is over.
+ */
+function glideAway(id: string, item: QueuedPrompt) {
+  updateThread(id, (t) => departQueued(t, item));
+  setTimeout(() => updateThread(id, (t) => dropDeparted(t, item.id)), STEER_GLIDE_MS);
 }
 
 /**
@@ -3554,9 +3576,6 @@ export function setTerminalOpen(open: boolean) {
 
 /** A panel view: one of the side views, never closed. */
 export type PanelKind = NonNullable<AppState["panel"]>;
-
-/** The views the panel can show. */
-const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 /**
  * The view a thread with no panel open might show: its own overview. Changes,
