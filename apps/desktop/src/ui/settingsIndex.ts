@@ -158,6 +158,25 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "skill agents shared project user edit folder create",
   },
 
+  // ------------------------------------------------------------ Remote access
+  {
+    section: "remote",
+    title: "Share this app's threads",
+    keywords: "remote access gateway phone device share mobile iphone pair on off",
+  },
+  {
+    section: "remote",
+    title: "Gateway address",
+    keywords: "address ip port lan netbird remote gateway network",
+  },
+  {
+    section: "remote",
+    title: "Pair a device",
+    keywords: "pair pairing qr code device phone mobile scan eight digit",
+  },
+  { section: "remote", title: "Paired devices", keywords: "devices paired revoke phone" },
+  { section: "remote", title: "Open threads", keywords: "threads shared open list" },
+
   // ------------------------------------------------------------ Appearance
   { section: "appearance", title: "Light or dark", keywords: "mode theme system" },
   {

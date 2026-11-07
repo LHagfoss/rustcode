@@ -481,6 +481,17 @@ composer's keys stay outside the table.
   name), decoded once, and the text drawn once per size on an offscreen
   canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
   the new one is ready. It fades in, and does not move under Reduce motion.
+- **Remote access.** Settings › Setup › Remote access
+  ([remote.md](remote.md)) starts the remote gateway, shares the threads
+  this app has open with a paired phone, and shows the address, the
+  pairing QR code and the eight-digit code with its countdown, the wrong
+  codes left and a lockout, and the paired devices. It asks the engine's
+  `_rustcode/remote`, `_rustcode/remote/start`, `_rustcode/remote/pair` and
+  `_rustcode/remote/stop` over ACP; the engine owns the gateway, the
+  shares and pairing (`rustcode/engine/src/acp/remote.rs`). The QR code is
+  encoded in the app (`src/lib/qr.ts`), so no pairing material leaves it.
+  A thread opened after remote access was turned on is shared from the
+  page's *Open threads* row.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Window.** The window opens at the size it was last closed with
@@ -1265,7 +1276,8 @@ From the SwiftUI app, still missing or partial:
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, remote pairing.
+  keybinding editor, Discord presence, revoking a paired device (the CLI's
+  `rustcode remote revoke` does it).
 - Terminal tabs (one terminal per folder).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
