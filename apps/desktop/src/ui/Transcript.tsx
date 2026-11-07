@@ -988,7 +988,12 @@ export function Transcript({
                     style={{ paddingTop: turnGap }}
                   >
                     {row.approval ? (
-                      <ApprovalRow request={row.approval} pending={approvals} number={row.approvalNumber} />
+                      <ApprovalRow
+                        request={row.approval}
+                        pending={approvals}
+                        number={row.approvalNumber}
+                        project={thread.cwd}
+                      />
                     ) : row.childRequest ? (
                       <ChildRequestCard
                         request={row.childRequest.request}
@@ -996,6 +1001,7 @@ export function Transcript({
                         pending={row.childRequest.pending}
                         number={row.childRequest.number}
                         keys={row.childKeys}
+                        project={thread.cwd}
                       />
                     ) : row.plan ? (
                       <PlanCard threadId={row.plan.threadId} entries={row.plan.entries} />

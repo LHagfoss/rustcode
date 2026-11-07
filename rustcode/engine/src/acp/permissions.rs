@@ -4,7 +4,6 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use std::sync::Arc;
-
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ApprovalRequirement {
     Allow,
@@ -50,11 +49,16 @@ pub(crate) struct AcpPolicy {
 
 const ALLOW_ONCE: &str = "allow_once";
 const ALLOW_ALWAYS: &str = "allow_always";
+const ALLOW_HOUR: &str = "allow_hour";
 const REJECT_ONCE: &str = "reject_once";
 
+/// How long "Allow for 1 hour" lasts. The desktop offers it between once and
+/// always, so a broad approval can be given without keeping it for good.
+pub(crate) const HOUR_APPROVAL_SECS: u64 = 3_600;
+
 /// The choices offered for one call. A plain `run_command` that the TUI can
-/// remember as a reusable prefix also gets "Always allow"; clients that do
-/// not know the kind just show another option.
+/// remember as a reusable prefix also gets "Always allow" and a timed hour;
+/// clients that do not know the kinds just show another option.
 fn permission_options(call: &crate::tools::ToolCall) -> Vec<PermissionOption> {
     let mut options = vec![PermissionOption::new(
         ALLOW_ONCE,
@@ -62,6 +66,11 @@ fn permission_options(call: &crate::tools::ToolCall) -> Vec<PermissionOption> {
         PermissionOptionKind::AllowOnce,
     )];
     if let Some(prefix) = rememberable_prefix(call) {
+        options.push(PermissionOption::new(
+            ALLOW_HOUR,
+            format!("Allow for 1 hour `{prefix}`"),
+            PermissionOptionKind::AllowAlways,
+        ));
         options.push(PermissionOption::new(
             ALLOW_ALWAYS,
             format!("Always allow `{prefix}`"),
@@ -85,6 +94,7 @@ fn rememberable_prefix(call: &crate::tools::ToolCall) -> Option<String> {
 #[derive(Debug, PartialEq, Eq)]
 enum PermissionChoice {
     AllowOnce,
+    AllowHour,
     AllowAlways,
     Reject,
 }
@@ -93,6 +103,7 @@ fn permission_choice(outcome: &RequestPermissionOutcome) -> PermissionChoice {
     match outcome {
         RequestPermissionOutcome::Selected(selected) => match selected.option_id.0.as_ref() {
             ALLOW_ONCE => PermissionChoice::AllowOnce,
+            ALLOW_HOUR => PermissionChoice::AllowHour,
             ALLOW_ALWAYS => PermissionChoice::AllowAlways,
             _ => PermissionChoice::Reject,
         },
@@ -101,20 +112,29 @@ fn permission_choice(outcome: &RequestPermissionOutcome) -> PermissionChoice {
 }
 
 /// Whether a prefix the user already chose to always allow covers this call,
-/// so it is not asked again (same rule as the interactive policy).
+/// so it is not asked again (same rule as the interactive policy). A timed
+/// approval counts only until its hour is up.
 fn covered_by_saved_prefix(
     config: &crate::config::AppConfig,
     call: &crate::tools::ToolCall,
+    now: u64,
 ) -> bool {
-    crate::tools::approved_command_prefix_covers_call(
+    let granted = crate::tools::approved_command_prefix_covers_call(
         &call.name,
         &call.arguments,
         &config.approved_command_prefixes,
-    ) && !crate::tools::denied_command_prefix_covers_call(
+    ) || crate::tools::timed_approval_covers_call(
         &call.name,
         &call.arguments,
-        &config.denied_command_prefixes,
-    )
+        &config.timed_command_approvals,
+        now,
+    );
+    granted
+        && !crate::tools::denied_command_prefix_covers_call(
+            &call.name,
+            &call.arguments,
+            &config.denied_command_prefixes,
+        )
 }
 
 /// Remember an "Always allow" answer the way the TUI's remember choice does.
@@ -131,6 +151,90 @@ fn remember_approved_prefix(state: &mut crate::app::AppState, call: &crate::tool
         state.config.approved_command_prefixes.push(stored_prefix);
         crate::config::save_entire_config(&state.config);
     }
+}
+
+/// Remember "Allow for 1 hour": the same rule, with the time it stops at. A
+/// repeat extends the hour and never shortens it. Expired entries are dropped
+/// as the list is rewritten.
+fn remember_timed_approval(
+    state: &mut crate::app::AppState,
+    call: &crate::tools::ToolCall,
+    now: u64,
+) {
+    let Some(prefix) = rememberable_prefix(call) else {
+        return;
+    };
+    let stored_prefix = crate::tools::persisted_approved_command_prefix(&prefix);
+    let expires_at = now + HOUR_APPROVAL_SECS;
+    state
+        .config
+        .timed_command_approvals
+        .retain(|approval| approval.expires_at > now && approval.prefix != stored_prefix);
+    state
+        .config
+        .timed_command_approvals
+        .push(crate::config::TimedCommandApproval {
+            prefix: stored_prefix,
+            expires_at,
+        });
+    crate::config::save_entire_config(&state.config);
+}
+
+/// `_rustcode/permissions`: the timed approvals still in force, for the panel
+/// that lists and revokes them.
+pub(crate) fn grants_snapshot(config: &crate::config::AppConfig) -> serde_json::Value {
+    let now = crate::tools::unix_now_secs();
+    let grants: Vec<serde_json::Value> = config
+        .timed_command_approvals
+        .iter()
+        .filter(|approval| approval.expires_at > now)
+        .map(|approval| {
+            serde_json::json!({
+                "id": approval.prefix,
+                "prefix": crate::tools::display_approved_command_prefix(&approval.prefix),
+                "expiresAt": approval.expires_at,
+                "remainingSecs": approval.expires_at - now,
+            })
+        })
+        .collect();
+    serde_json::json!({ "grants": grants })
+}
+
+/// `_rustcode/permissions/revoke`: drop one timed approval and answer with the
+/// list as it stands now. An id that is not there changes nothing.
+pub(crate) fn revoke_grant(config: &mut crate::config::AppConfig, id: &str) -> serde_json::Value {
+    let before = config.timed_command_approvals.len();
+    config
+        .timed_command_approvals
+        .retain(|approval| approval.prefix != id);
+    if config.timed_command_approvals.len() != before {
+        crate::config::save_entire_config(config);
+    }
+    grants_snapshot(config)
+}
+
+/// `_rustcode/permissions`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/permissions", response = serde_json::Value)]
+pub(crate) struct PermissionsRequest {}
+
+/// `_rustcode/permissions/revoke`: `id` is a grant's own `id` from the list.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(
+    method = "_rustcode/permissions/revoke",
+    response = serde_json::Value
+)]
+pub(crate) struct RevokePermissionRequest {
+    pub id: String,
 }
 
 /// Time spent waiting on the client's answer is user wait, not agent work:
@@ -153,6 +257,9 @@ fn confirmation_response(
             crate::app::ToolConfirmationResponse::Approve,
             crate::app::ToolConfirmationResponse::ApproveAndRemember,
         ),
+        // A timed hour is this call's approval plus a memory the turn policy
+        // keeps for an hour; the call path itself is answered like once.
+        PermissionChoice::AllowHour => crate::app::ToolConfirmationResponse::Approve,
         PermissionChoice::Reject => crate::app::ToolConfirmationResponse::Deny,
     }
 }
@@ -249,7 +356,11 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                     crate::tools::AuthorizationDecision::Deny(_) => return false,
                     crate::tools::AuthorizationDecision::RequireConfirmation => {}
                 }
-                if covered_by_saved_prefix(&state.lock().await.config, call) {
+                if covered_by_saved_prefix(
+                    &state.lock().await.config,
+                    call,
+                    crate::tools::unix_now_secs(),
+                ) {
                     crate::dbg_log!("ACP approval skipped: saved prefix covers {}", call.name);
                     continue;
                 }
@@ -308,6 +419,10 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                 );
                 match choice {
                     PermissionChoice::AllowOnce => {}
+                    PermissionChoice::AllowHour => {
+                        let now = crate::tools::unix_now_secs();
+                        remember_timed_approval(&mut *state.lock().await, call, now);
+                    }
                     PermissionChoice::AllowAlways => {
                         remember_approved_prefix(&mut *state.lock().await, call);
                     }
@@ -357,10 +472,10 @@ mod tests {
     }
 
     #[test]
-    fn plain_commands_offer_always_allow_between_once_and_reject() {
+    fn plain_commands_offer_an_hour_and_always_between_once_and_reject() {
         assert_eq!(
             option_ids(&run_command("cargo test --lib")),
-            [ALLOW_ONCE, ALLOW_ALWAYS, REJECT_ONCE]
+            [ALLOW_ONCE, ALLOW_HOUR, ALLOW_ALWAYS, REJECT_ONCE]
         );
         let write = crate::tools::ToolCall {
             name: "write_to_file".to_owned(),
@@ -393,6 +508,10 @@ mod tests {
             Response::ApproveAndRemember(prefix) if !prefix.is_empty()
         ));
         assert!(matches!(
+            confirmation_response(PermissionChoice::AllowHour, &command),
+            Response::Approve
+        ));
+        assert!(matches!(
             confirmation_response(PermissionChoice::AllowAlways, &read),
             Response::Approve
         ));
@@ -412,6 +531,10 @@ mod tests {
             PermissionChoice::AllowOnce
         );
         assert_eq!(
+            permission_choice(&select(ALLOW_HOUR)),
+            PermissionChoice::AllowHour
+        );
+        assert_eq!(
             permission_choice(&select(ALLOW_ALWAYS)),
             PermissionChoice::AllowAlways
         );
@@ -429,17 +552,112 @@ mod tests {
     fn always_allow_remembers_the_prefix_so_it_is_not_asked_again() {
         let mut state = crate::app::AppState::new();
         let call = run_command("cargo test --lib");
-        assert!(!covered_by_saved_prefix(&state.config, &call));
+        let now = 1_000_000;
+        assert!(!covered_by_saved_prefix(&state.config, &call, now));
         remember_approved_prefix(&mut state, &call);
         remember_approved_prefix(&mut state, &call);
         assert_eq!(
             state.config.approved_command_prefixes,
             ["prefix-v1:cargo test --lib"]
         );
-        assert!(covered_by_saved_prefix(&state.config, &call));
+        assert!(covered_by_saved_prefix(&state.config, &call, now));
         assert!(!covered_by_saved_prefix(
             &state.config,
-            &run_command("rm -rf target")
+            &run_command("rm -rf target"),
+            now
+        ));
+    }
+
+    #[test]
+    fn an_hour_approval_covers_the_prefix_until_it_expires() {
+        let mut state = crate::app::AppState::new();
+        let call = run_command("cargo test --lib");
+        let now = 1_000_000;
+        remember_timed_approval(&mut state, &call, now);
+        assert_eq!(state.config.timed_command_approvals.len(), 1);
+        assert_eq!(
+            state.config.timed_command_approvals[0].prefix,
+            "prefix-v1:cargo test --lib"
+        );
+        // Nothing permanent was granted: the hour is all there is.
+        assert!(state.config.approved_command_prefixes.is_empty());
+        assert!(covered_by_saved_prefix(&state.config, &call, now + 60));
+        assert!(covered_by_saved_prefix(
+            &state.config,
+            &call,
+            now + HOUR_APPROVAL_SECS - 1
+        ));
+        assert!(!covered_by_saved_prefix(
+            &state.config,
+            &call,
+            now + HOUR_APPROVAL_SECS
+        ));
+        assert!(!covered_by_saved_prefix(
+            &state.config,
+            &run_command("cargo publish"),
+            now + 60
+        ));
+    }
+
+    #[test]
+    fn an_hour_approval_extends_and_is_not_duplicated() {
+        let mut state = crate::app::AppState::new();
+        let call = run_command("cargo test --lib");
+        remember_timed_approval(&mut state, &call, 1_000_000);
+        remember_timed_approval(&mut state, &call, 1_000_600);
+        assert_eq!(state.config.timed_command_approvals.len(), 1);
+        assert_eq!(
+            state.config.timed_command_approvals[0].expires_at,
+            1_000_600 + HOUR_APPROVAL_SECS
+        );
+    }
+
+    #[test]
+    fn grants_list_what_is_in_force_and_can_be_revoked() {
+        let mut state = crate::app::AppState::new();
+        let now = crate::tools::unix_now_secs();
+        let long = run_command("cargo test --lib");
+        let short = run_command("bun run check");
+        remember_timed_approval(&mut state, &long, now);
+        remember_timed_approval(&mut state, &short, now);
+        assert_eq!(
+            state.config.timed_command_approvals[0].expires_at,
+            now + HOUR_APPROVAL_SECS
+        );
+        let listed = grants_snapshot(&state.config);
+        let grants = listed["grants"].as_array().expect("grants");
+        assert_eq!(grants.len(), 2);
+        assert_eq!(grants[0]["prefix"], "cargo test --lib");
+        let remaining = grants[0]["remainingSecs"].as_u64().expect("remaining");
+        assert!((HOUR_APPROVAL_SECS - 300..=HOUR_APPROVAL_SECS).contains(&remaining));
+
+        let id = grants[0]["id"].as_str().expect("id").to_owned();
+        let after = revoke_grant(&mut state.config, &id);
+        let grants = after["grants"].as_array().expect("grants");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0]["prefix"], "bun run check");
+        assert!(!covered_by_saved_prefix(&state.config, &long, now + 1));
+        assert!(covered_by_saved_prefix(&state.config, &short, now + 1));
+    }
+
+    #[test]
+    fn an_expired_hour_is_left_out_of_the_list() {
+        let mut state = crate::app::AppState::new();
+        let call = run_command("cargo test --lib");
+        // Granted at an epoch far in the past, so it is already over.
+        state
+            .config
+            .timed_command_approvals
+            .push(crate::config::TimedCommandApproval {
+                prefix: "prefix-v1:cargo test --lib".to_owned(),
+                expires_at: 1,
+            });
+        let listed = grants_snapshot(&state.config);
+        assert_eq!(listed["grants"].as_array().expect("grants").len(), 0);
+        assert!(!covered_by_saved_prefix(
+            &state.config,
+            &call,
+            crate::tools::unix_now_secs()
         ));
     }
 

@@ -47,7 +47,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, type ThreadState } from "../state/thread";
-import { AttentionCard } from "./AttentionCards";
+import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
@@ -657,6 +657,8 @@ export function ChatView() {
   }, [isNew, stackHeight, width, height]);
 
   const ownRequest = thread?.permissions[0];
+  // The approval just answered, which stands where its card was for a moment.
+  const resolved = useApp((s) => (thread ? s.resolvedApprovals[thread.id] : undefined));
   const report = useApp((s) => s.report);
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   // The lane's gutter sits outside the cap: `px-3 sm:px-12` on the transcript's scroller (its rows
@@ -763,7 +765,13 @@ export function ChatView() {
                 <AttentionCard
                   request={ownRequest}
                   pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
+                  project={thread?.cwd}
                 />
+              </LaneItem>
+            )}
+            {!ownRequest && resolved && (
+              <LaneItem over>
+                <ResolvedApprovalBar approval={resolved} />
               </LaneItem>
             )}
             <LaneItem over>

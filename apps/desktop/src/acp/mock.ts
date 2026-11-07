@@ -5,7 +5,7 @@
 // harness contract in docs/harnesses.md, so the UI works before that lands.
 
 import { BUILTIN_THEMES } from "../lib/themes";
-import { arr, type Json, type JsonObject, obj, str } from "./jsonrpc";
+import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
@@ -1110,6 +1110,29 @@ export class MockEngine {
   private activeTheme = "rustcode";
   /** MCP servers the mock restarted through `_rustcode/capabilities/mcp/restart`. */
   private mcpRestarted = new Set<string>();
+  /**
+   * The timed approvals `_rustcode/permissions` lists: one seeded hour so the
+   * details panel has "Allowed for 42m · Revoke" to show, and whatever the user
+   * granted while the mock ran.
+   */
+  private grants: JsonObject[] = [
+    {
+      id: "prefix-v1:bun test",
+      prefix: "bun test",
+      expiresAt: Math.floor(Date.now() / 1000) + 42 * 60,
+      remainingSecs: 42 * 60,
+    },
+  ];
+
+  /** A timed approval the user just gave in the mock: listed and revocable like the engine's. */
+  private addGrant(prefix: string) {
+    const remainingSecs = 60 * 60;
+    const id = `prefix-v1:${prefix}`;
+    this.grants = [
+      { id, prefix, expiresAt: Math.floor(Date.now() / 1000) + remainingSecs, remainingSecs },
+      ...this.grants.filter((grant) => str(grant.id) !== id),
+    ];
+  }
 
   private themesSnapshot(): JsonObject {
     return { active: this.activeTheme, themes: this.themes as unknown as Json };
@@ -1184,18 +1207,50 @@ export class MockEngine {
    */
   private seedNeedsYou() {
     const has = (id: string) => this.threads.some((t) => t.id === id);
+    // One of each risk level, so the card's tint and preview are visible in the mock:
+    // a read-only call, an edit with a diff, and a command that would destroy a tree.
     if (has("mock-thread-1")) {
       void this.ask("session/request_permission", {
         sessionId: "mock-thread-1",
         toolCall: {
           toolCallId: "seed-approval-1",
-          title: "bash",
-          kind: "execute",
-          rawInput: { command: "bun test src/ui", summary: "Run the composer tests" },
+          title: "read src/ui/Composer.tsx",
+          kind: "read",
+          rawInput: {
+            path: "src/ui/Composer.tsx",
+            summary: "Read the composer before changing it",
+          },
         },
         options: [
-          { optionId: "allow", name: "Allow", kind: "allow_once" },
-          { optionId: "always", name: "Always allow commands", kind: "allow_always" },
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          {
+            optionId: "allow_hour",
+            name: "Allow for 1 hour `cat src/ui/Composer.tsx`",
+            kind: "allow_always",
+          },
+          { optionId: "always", name: "Always allow `cat src/ui/Composer.tsx`", kind: "allow_always" },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      }).then((answer) => {
+        // An hour granted here is listed and revocable, like the engine's own.
+        if (obj(answer.outcome)?.optionId === "allow_hour") this.addGrant("cat src/ui/Composer.tsx");
+      });
+    }
+    if (has("mock-thread-4")) {
+      void this.ask("session/request_permission", {
+        sessionId: "mock-thread-4",
+        toolCall: {
+          toolCallId: "seed-approval-destructive",
+          title: "bash",
+          kind: "execute",
+          rawInput: {
+            command: "rm -rf node_modules && bun install",
+            cwd: "/Users/you/.config/rustcode/worktrees/rustcode/feat-login-form",
+            summary: "Start the dependencies over",
+          },
+        },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
           { optionId: "reject", name: "Reject", kind: "reject_once" },
         ],
       });
@@ -1240,10 +1295,19 @@ export class MockEngine {
           toolCallId: "seed-approval-4",
           title: "edit src/ui/LoginForm.tsx",
           kind: "edit",
-          rawInput: { path: "src/ui/LoginForm.tsx" },
+          content: [
+            {
+              type: "diff",
+              path: "src/ui/LoginForm.tsx",
+              oldText: '  <button type="submit">Sign in</button>',
+              newText: '  <button type="submit" disabled={!email}>Sign in</button>',
+              _meta: { rustcode: { oldStart: 8, newStart: 8 } },
+            },
+          ],
+          rawInput: { path: "src/ui/LoginForm.tsx", summary: "Disable sign-in until the email is typed" },
         },
         options: [
-          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
           { optionId: "always", name: "Always allow edits", kind: "allow_always" },
           { optionId: "reject", name: "Reject", kind: "reject_once" },
         ],
@@ -2129,6 +2193,18 @@ export class MockEngine {
           ],
           mcpServers: this.mcpServers(),
         };
+      case "_rustcode/permissions": {
+        // The same shape `_rustcode/permissions` answers with (engine/src/acp/permissions.rs).
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          grants: this.grants.filter((grant) => num(grant.expiresAt)! > now),
+        };
+      }
+      case "_rustcode/permissions/revoke": {
+        const id = str(params.id);
+        this.grants = this.grants.filter((grant) => str(grant.id) !== id);
+        return { grants: this.grants };
+      }
       case "_rustcode/themes":
         return this.themesSnapshot();
       case "_rustcode/themes/set": {

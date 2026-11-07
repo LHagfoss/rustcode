@@ -1349,6 +1349,45 @@ pub(crate) fn persisted_approved_command_prefix(prefix: &str) -> String {
     format!("{APPROVED_COMMAND_PREFIX_MARKER}{prefix}")
 }
 
+/// The display form of a stored rule: without the marker that says it is a
+/// reusable prefix rule.
+pub(crate) fn display_approved_command_prefix(stored: &str) -> &str {
+    stored
+        .strip_prefix(APPROVED_COMMAND_PREFIX_MARKER)
+        .unwrap_or(stored)
+}
+
+/// Now, in the seconds a timed approval stores.
+pub(crate) fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+/// The stored rules of the timed approvals that have not expired, ready for
+/// `approved_command_prefix_covers_call`. Expired entries stay in the config
+/// until the next grant or revoke rewrites it; they never match here.
+pub(crate) fn unexpired_timed_prefixes(
+    approvals: &[crate::config::TimedCommandApproval],
+    now: u64,
+) -> Vec<String> {
+    approvals
+        .iter()
+        .filter(|approval| approval.expires_at > now)
+        .map(|approval| approval.prefix.clone())
+        .collect()
+}
+
+/// Whether a timed approval that has not expired covers this call.
+pub(crate) fn timed_approval_covers_call(
+    name: &str,
+    args: &Value,
+    approvals: &[crate::config::TimedCommandApproval],
+    now: u64,
+) -> bool {
+    approved_command_prefix_covers_call(name, args, &unexpired_timed_prefixes(approvals, now))
+}
+
 fn exact_command_rule_matches(rule: &str, command: &str) -> bool {
     let Some(rule_tokens) = reusable_rule_tokens(rule, true) else {
         return false;

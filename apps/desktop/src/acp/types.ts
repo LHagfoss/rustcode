@@ -67,6 +67,9 @@ export const Method = {
   githubLogout: "_rustcode/connections/github/logout",
   accountLogout: "_rustcode/connections/account/logout",
   pulls: "_rustcode/pulls",
+  /** The timed approvals still in force ("Allow for 1 hour"), and revoking one. */
+  permissions: "_rustcode/permissions",
+  permissionsRevoke: "_rustcode/permissions/revoke",
 } as const;
 
 // ---------------------------------------------------------------- initialize

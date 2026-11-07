@@ -61,6 +61,7 @@ import {
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
 import { afterPaint } from "../lib/frame";
 import {
@@ -93,6 +94,7 @@ import {
   splitImageMarkers,
 } from "./compose";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
+import { parseGrants, type TimedGrant } from "./grants";
 import { restoreChoice, selectOption } from "./harness";
 import {
   DEFAULT_HEADER_BUTTONS,
@@ -416,6 +418,13 @@ export interface AppState {
   finished: Record<string, number>;
   /** Threads whose last turn failed while you looked elsewhere, until you open them. */
   failed: Record<string, number>;
+  /** Timed approvals still in force ("Allow for 1 hour"), from `_rustcode/permissions`. */
+  grants: TimedGrant[];
+  /**
+   * The approval each thread just answered, by thread id: its card folds into
+   * this one settled line for a moment instead of vanishing (ui/AttentionCards.tsx).
+   */
+  resolvedApprovals: Record<string, ResolvedApproval>;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -599,6 +608,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   newThreadPermissionMode: null,
   finished: {},
   failed: {},
+  grants: [],
+  resolvedApprovals: {},
   view: { kind: "chat" },
   checkpoints: {},
   newWorktree: { on: false, branch: "", edited: false },
@@ -947,6 +958,7 @@ async function handshake(): Promise<void> {
       probeFeatures(conn),
       refreshThemes(conn),
       refreshCommands(conn),
+      refreshGrants(conn),
     ]);
     // The composer's meter is ready before the first thread opens.
     void refreshPlanCache();
@@ -2710,6 +2722,15 @@ export async function setConfigOption(id: string, configId: string, value: strin
 
 // ---------------------------------------------------------------- approvals
 
+/** One answered approval, kept a moment so its card can settle into a line. */
+export interface ResolvedApproval {
+  rpcId: number | string;
+  /** "Allowed edit src/app.ts · once". */
+  text: string;
+  allowed: boolean;
+  at: number;
+}
+
 /**
  * Answer exactly this request; it leaves the queue before the reply, so a double click cannot
  * answer the next. A question also leaves its answer in the transcript, where the reader can see
@@ -2730,6 +2751,72 @@ export function answerPermission(request: PermissionRequest, option: PermissionO
     option ? permissionSelected(option.id) : permissionCancelled,
     request.question ? (option?.name ?? "Declined") : undefined,
   );
+  if (request.question) return;
+  settleApproval(request, option);
+  // An hour's grant is the engine's to keep: list it again so the panel shows it.
+  if (option && optionScope(option) === "hour") void refreshGrants(connection);
+}
+
+/** How long an answered card stays as one settled line before it leaves. */
+export const RESOLVED_APPROVAL_MS = 1800;
+
+/**
+ * The card an answer just closed folds into one line in place ("Allowed edit
+ * src/app.ts · once") for a moment, so the answer has a visible result instead
+ * of the card vanishing under the pointer.
+ */
+function settleApproval(request: PermissionRequest, option: PermissionOption | null) {
+  const threadId = request.sessionId;
+  const scope = option ? optionScope(option) : "decline";
+  const text = option ? resolvedLine(request, option) : `Declined ${approvalSubject(request)}`;
+  const previous = resolvedTimers.get(threadId);
+  if (previous) clearTimeout(previous);
+  set((s) => ({
+    resolvedApprovals: {
+      ...s.resolvedApprovals,
+      [threadId]: { rpcId: request.rpcId, text, allowed: scope !== "decline", at: Date.now() },
+    },
+  }));
+  const timer = setTimeout(() => {
+    resolvedTimers.delete(threadId);
+    set((s) => {
+      // A later answer replaced it: that one owns the line and its own timer.
+      if (s.resolvedApprovals[threadId]?.rpcId !== request.rpcId) return s;
+      const { [threadId]: _gone, ...rest } = s.resolvedApprovals;
+      return { resolvedApprovals: rest };
+    });
+  }, RESOLVED_APPROVAL_MS);
+  resolvedTimers.set(threadId, timer);
+}
+
+const resolvedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// ---------------------------------------------------------------- timed grants
+
+/**
+ * `_rustcode/permissions`: the "Allow for 1 hour" grants still in force, with
+ * what each covers and when it ends. An engine without the method lists none.
+ */
+export async function refreshGrants(conn: AcpConnection | null = connection): Promise<void> {
+  if (!conn) return;
+  try {
+    const grants = parseGrants(await conn.request(Method.permissions, {}, 10_000));
+    if (connection === conn) set({ grants });
+  } catch {
+    // An older engine has none to list; what is known stays as it is.
+  }
+}
+
+/** Revoke one timed grant; the engine answers with the list as it stands then. */
+export async function revokeGrant(id: string): Promise<void> {
+  const conn = connection;
+  if (!conn) return;
+  try {
+    const grants = parseGrants(await conn.request(Method.permissionsRevoke, { id }, 10_000));
+    if (connection === conn) set({ grants });
+  } catch (error) {
+    toast(`Could not revoke it: ${errorText(error)}`, "error");
+  }
 }
 
 /** Approve every approval the thread waits on (not questions), each with its "allow once" option. */
@@ -3404,6 +3491,18 @@ export function settleThread(id: string): void {
 export function setView(view: AppState["view"]) {
   dismissOverlays();
   set({ view, switcherOpen: false, settings: null });
+  // The inbox lists what those toasts were about, so they have said their piece.
+  if (view.kind === "inbox") dismissAttentionToasts();
+}
+
+/** The toasts that point at a thread needing the user; the inbox lists them all. */
+const ATTENTION_TOASTS = ["A thread needs approval", "A thread has a question"];
+
+/** Dismiss every attention toast already on screen, leaving the rest alone. */
+export function dismissAttentionToasts() {
+  for (const toast of get().toasts) {
+    if (!toast.persist && ATTENTION_TOASTS.includes(toast.text)) dismissToast(toast.id);
+  }
 }
 
 /** The worktree a thread runs in, from the thread or the list. */
