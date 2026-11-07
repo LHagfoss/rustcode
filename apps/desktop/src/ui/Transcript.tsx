@@ -853,7 +853,7 @@ export function Transcript({
     };
   }
   const turns = turnsKey.current.turns;
-  // Each message you sent that started a turn with a checkpoint: the bead on that turn's strip.
+  // Each message you sent that started a turn with a checkpoint: named in that turn's hover card.
   const checkpointNodes = useMemo(() => {
     const byMessage = checkpointsByMessage(thread.items, turnCheckpoints);
     const nodes: RailNode[] = [];
