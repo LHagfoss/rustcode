@@ -1,3 +1,13 @@
+## [v1.18.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.18.0) - 2026-11-07
+
+### Features
+- The new-thread screen has a frosted composer and a row of glass cards under it: recent activity, this project's threads and pull requests, usage and this month's turns and spend. (#3142)
+- Add an Unsettle action for settled threads, in the sidebar, the header, the command palette and above the composer. (#3144)
+- CI: detect a pull request's changed paths from the API instead of cloning the history, and stop re-running PR labeling on every push. (#3143)
+- The selected segment, switch and slider knob are white in both themes, and the Trace popover's axis, bars and row columns line up. (#3145)
+- The model picker remembers the effort each model was last left on (shared by every login of a harness), keeps a new thread's model, effort and login when you open another thread and come back, and draws a smaller card with a white slider thumb that reads on any theme. (#3146)
+- The timeline minimap draws a checkpoint bead inside its own strips instead of a separate lane of dots you could not hover, and the strip's preview card offers Rewind here. (#3147)
+- Fix a flaky TUI test that let a parallel render test overwrite the theme a theme test was asserting on. (#3148)
 ## [v1.17.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.17.1) - 2026-11-07
 
 ### Features
