@@ -20,6 +20,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
 import type { StackAgent } from "../state/agentStack";
+import { AGENT_WORD, type AgentState, LINK_AGENT_STATE } from "../state/delegates";
 import { dismissLink, stateOf } from "../state/host";
 import {
   isActive,
@@ -92,28 +93,12 @@ function useAgentSteps(threadId: string, agentId: number | undefined, active: bo
   return { steps, loading };
 }
 
-export type AgentState = "working" | "needs" | "done" | "failed" | "stopped";
+export { type AgentState, LINK_AGENT_STATE } from "../state/delegates";
 
-export const LINK_AGENT_STATE: Record<LinkState, AgentState> = {
-  queued: "working",
-  working: "working",
-  needs_user: "needs",
-  done: "done",
-  failed: "failed",
-  cancelled: "stopped",
-  interrupted: "stopped",
-};
-
-const AGENT_LABEL: Record<AgentState, string> = {
-  working: "Working",
-  needs: "Needs you",
-  done: "Done",
-  failed: "Failed",
-  stopped: "Stopped",
-};
+const AGENT_LABEL: Record<AgentState, string> = AGENT_WORD;
 
 /** Who is doing the work, and a badge for how it goes. The badge pops in when the state changes. */
-function AgentAvatar({
+export function AgentAvatar({
   harness,
   state,
   className,

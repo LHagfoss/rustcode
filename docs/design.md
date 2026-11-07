@@ -265,11 +265,16 @@ that change use `tabular`.
   something that moves every frame.
 - Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
   in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off
-  in 160ms, and a card shown meanwhile takes the top of the stack.
+  in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
+  the front card is in flow, the ones behind peeking 6px above it; hovering or
+  focusing the stack fans them out 8px apart (`transform` only).
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
-  selection slides (`transform`) to the new segment.
+  selection slides (`transform`) to the new segment. A count that changes rolls
+  its digits vertically in 220ms `--ease-snappy` (`ui/RollingNumber.tsx`),
+  keeping each column's place from the right, so 9 → 10 rolls the units and
+  grows a tens.
 - A message sent from the composer flies instead of rising: it starts a
   little inside the field's card (at 96%) and lands in its row in 220ms
   `--ease-snappy`, `transform` and `opacity` only, so nothing around it moves
@@ -393,9 +398,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
   most one action as a secondary pill (`h-6 bg-fill`), and a close button.
   Progress is a 2px accent bar along its foot. `Toaster` shows at most three
-  (`state/toasts.ts` enforces the queue), newest on top, stacked with 8px
-  between, centred at the top of the chat column 8px under its header (the
-  window's top over Settings). The same message again refreshes its card and
+  (`state/toasts.ts` enforces the queue), newest on top: at rest only the
+  front card is fully shown, the others peeking 6px above it, and hovering or
+  focusing the stack fans them out 8px apart. Centred at the top of the chat
+  column 8px under its header (the window's top over Settings). An
+  auto-dismissing card drains a 1px accent hairline along its foot, which
+  stops with its clock; a card replaced in place from spinner to check settles
+  onto the check. The same message again refreshes its card and
   restarts its time instead of stacking; past three, the oldest is dropped.
   Info and success leave after 3s, errors after 7s. The pointer or focus on
   the stack, a drag, and a window in the background stop every clock, which
@@ -455,9 +464,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   The thread above this one reads `Started from` or `Working for`, or
   `Messaged by`. A row is the thread's own name, its state word, and at its end
   what the sidebar's row for that thread ends with: the review mark when it
-  waits for review, and its age in the same short form (`4m`, `2d`). Its
-  subagents are
-  their own section, said to be helpers inside this thread and not threads.
+  waits for review, and its age in the same short form (`4m`, `2d`). `Started`
+  draws its delegates as a tree (`ui/DelegateTree.tsx`, the rules in
+  `state/delegates.ts`): the threads it started and the threads those started,
+  each row a harness mark, its name, its state word, the work time and the
+  best-known cost of its branch, indented under a tree line. A parent's figures
+  are the sum of its whole branch; time counts only while a thread works, so a
+  wait on an approval holds the clock still, and a cost no turn reported is `—`,
+  never a zero (`≈` marks an estimate). A branch that finished folds to one
+  line, opening a node folds the one open beside it, and its reply button shows
+  the last answer in place. A Board card carries the same tree as one line
+  (`3 delegates · 1 working · $8.71`). Its subagents are their own section, said
+  to be helpers inside this thread and not threads.
 - **Sidebar selection:** one tab stop for the whole list, on the row the
   keyboard is on (the open thread — an open delegate is a row of its own while
   it is open — else the first): ↑ ↓ move it through the rows on screen,
@@ -582,7 +600,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
   them is a pill whose panel opens off the pill itself, 8px away from it,
-  `top` by default. The project picker is pinned above its pill whatever the
+  `top` by default. The usage meter's percentage shimmers while its turn runs
+  and settles on the number when the turn ends, so a live number is not read
+  as a final one. The project picker is pinned above its pill whatever the
   room below, the list belonging to the card above it; the other strip menus
   open downward when the window has room under the strip and upward when it
   does not, and shrink to the room they have (at least 280px below, else
@@ -674,7 +694,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   type over the same hairline, which a divider right above it already draws
   (so it drops its own). The duration lives here and nowhere else; a red
   `CircleX` marks only a turn that itself failed, and a step that failed
-  keeps its own count inside. A turn that wrote no answer keeps its time in
+  keeps its own count inside. The running header (`Working for 12s`) holds
+  its place for 400ms after a completed turn, settling on a green check and
+  `Worked for 12s` before that divider replaces it; the live line at the foot
+  settles the same way when no reply is under it. A turn that wrote no answer keeps its time in
   the header (`Worked for 4s · 09:55 PM`) and has no footer, since there is
   nothing under it to copy or fork. A turn with no steps folds nothing and
   so has no header, and its duration goes with it: a short direct answer
