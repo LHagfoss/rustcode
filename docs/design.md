@@ -449,9 +449,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   The thread above this one reads `Started from` or `Working for`, or
   `Messaged by`. A row is the thread's own name, its state word, and at its end
   what the sidebar's row for that thread ends with: the review mark when it
-  waits for review, and its age in the same short form (`4m`, `2d`). Its
-  subagents are
-  their own section, said to be helpers inside this thread and not threads.
+  waits for review, and its age in the same short form (`4m`, `2d`). `Started`
+  draws its delegates as a tree (`ui/DelegateTree.tsx`, the rules in
+  `state/delegates.ts`): the threads it started and the threads those started,
+  each row a harness mark, its name, its state word, the work time and the
+  best-known cost of its branch, indented under a tree line. A parent's figures
+  are the sum of its whole branch; time counts only while a thread works, so a
+  wait on an approval holds the clock still, and a cost no turn reported is `—`,
+  never a zero (`≈` marks an estimate). A branch that finished folds to one
+  line, opening a node folds the one open beside it, and its reply button shows
+  the last answer in place. A Board card carries the same tree as one line
+  (`3 delegates · 1 working · $8.71`). Its subagents are their own section, said
+  to be helpers inside this thread and not threads.
 - **Sidebar selection:** one tab stop for the whole list, on the row the
   keyboard is on (the open thread — an open delegate is a row of its own while
   it is open — else the first): ↑ ↓ move it through the rows on screen,

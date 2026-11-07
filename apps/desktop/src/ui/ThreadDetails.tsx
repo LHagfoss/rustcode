@@ -28,6 +28,7 @@ import { isActive, LINK_LABEL, type Link } from "../state/orchestration";
 import { selectThread, showPanel, statusOf, toast, useApp, worktreeOf } from "../state/store";
 import { formatDuration, formatTokens, shortAge } from "../state/thread";
 import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
+import { DelegatedThreads, delegateBranchCount } from "./DelegateTree";
 import { HarnessIcon } from "./HarnessIcon";
 import { copyText, cx } from "./primitives";
 import { DiffCount } from "./Rows";
@@ -258,7 +259,10 @@ export function ThreadDetails() {
     return !!parent?.id && s.sessions.some((x) => x.id === parent.id);
   });
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
+  const delegateLinks = useApp((s) => s.links.links);
   const changes = useChanges(thread?.cwd, !!thread?.running);
+  // The whole branch, not only the threads it started itself: the tree nests them.
+  const delegates = useMemo(() => (id ? delegateBranchCount(id, delegateLinks) : 0), [id, delegateLinks]);
 
   const subagents = useMemo(() => subagentLines(thread?.items ?? [], agents), [thread?.items, agents]);
   const working = subagents.some((s) => s.state === "working");
@@ -357,10 +361,7 @@ export function ThreadDetails() {
         />
       )}
 
-      {(lineage.parent ||
-        lineage.messagedBy ||
-        lineage.started.length > 0 ||
-        lineage.messaged.length > 0) && (
+      {(lineage.parent || lineage.messagedBy || delegates > 0 || lineage.messaged.length > 0) && (
         <>
           {hairline}
           <Section title="Threads">
@@ -405,23 +406,14 @@ export function ThreadDetails() {
                 />
               </>
             )}
-            {lineage.started.length > 0 && (
+            {delegates > 0 && (
               <>
                 <GroupHeading
                   label="Started"
-                  count={lineage.started.length}
-                  hint="New threads it handed a task to."
+                  count={delegates}
+                  hint="New threads it handed a task to, and the threads those started."
                 />
-                {lineage.started.map((group) => (
-                  <LinkRow
-                    key={group.links[0]!.id}
-                    link={group.link}
-                    id={group.link.target}
-                    now={now}
-                    relationship="Thread it started"
-                    count={group.links.length}
-                  />
-                ))}
+                <DelegatedThreads threadId={id} />
               </>
             )}
             {lineage.messaged.length > 0 && (
