@@ -38,11 +38,47 @@ describe("the folder picker's rows", () => {
     const paths = rows.map((row) => row.path);
     expect(paths).toContain(REPO);
     expect(paths).toContain(TAURI);
-    // `apps/desktop` is a container by name and holds a project: it is not a row.
-    expect(paths).not.toContain(APPS);
+    // `apps/desktop` sits inside a project, not in a place: a folder called `desktop` there is a
+    // folder of the project's own, so it keeps its row.
+    expect(paths).toContain(APPS);
     expect(
       folderRows([{ cwd: REPO }, { cwd: TAURI }], { filter: "rustcode" }).map((row) => row.path),
     ).toEqual([REPO, TAURI]);
+  });
+
+  test("a container is a place only when it sits in one", () => {
+    const API = "/Users/ada/work/api";
+    const rows = folderRows([{ cwd: "/Users/ada/work" }, { cwd: API }, { cwd: "/Users/ada/code/work" }]);
+    // `~/work` holds a project and sits in the home folder: a place, not a row.
+    expect(rows.map((row) => row.path)).toEqual([API, "/Users/ada/code/work"]);
+    // A container name deep inside a project is that project's own folder.
+    const deep = folderRows([{ cwd: `${REPO}/src` }, { cwd: `${REPO}/src/app` }]);
+    expect(deep.map((row) => row.path)).toEqual([`${REPO}/src/app`, `${REPO}/src`]);
+  });
+
+  test("a repo's worktrees never crowd out the other projects", () => {
+    const branches = Array.from({ length: 40 }, (_, i) => {
+      const path = `${WORKTREES}/rustcode/branch-${i}`;
+      return { cwd: path, worktree: { path, repo: REPO, branch: `branch-${i}` }, updatedAt: NOW - i * DAY };
+    });
+    const others = Array.from({ length: 5 }, (_, i) => ({ cwd: `/tmp/project-${i}` }));
+    const rows = folderRows([{ cwd: REPO }, ...branches, ...others], { now: NOW });
+    const projects = rows.filter((row) => !row.repo);
+    expect(projects).toHaveLength(6);
+    expect(projects.map((row) => row.path)).toContain(REPO);
+    for (let i = 0; i < 5; i++) expect(projects.map((row) => row.path)).toContain(`/tmp/project-${i}`);
+    // Three branches stand in for the forty, the most recently used ones.
+    const shown = rows.filter((row) => row.repo === REPO).map((row) => row.name);
+    expect(shown).toEqual(["branch-0", "branch-1", "branch-2"]);
+    // A search asks for everything: all forty are there.
+    expect(
+      folderRows([{ cwd: REPO }, ...branches], { filter: "rustcode", now: NOW, limit: 100 }),
+    ).toHaveLength(41);
+  });
+
+  test("a worktree that names itself as its repo is one row, not two", () => {
+    const rows = folderRows([{ cwd: CUT, worktree: { path: CUT, repo: CUT, branch: "feat/composer" } }]);
+    expect(rows).toEqual([{ path: CUT, name: "feat/composer", repo: undefined }]);
   });
 
   test("the newer folder first, once each", () => {

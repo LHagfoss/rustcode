@@ -60,6 +60,9 @@ const CONTAINER_NAMES = new Set([
 
 const DAY_MS = 86_400_000;
 
+/** How many of a repo's worktrees the list shows while it is not being searched. */
+const WORKTREE_ROWS = 3;
+
 /** The last segment, which is what a folder is called. */
 function nameOf(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -73,16 +76,26 @@ function holds(parent: string, child: string): boolean {
   return child.startsWith(`${parent}/`);
 }
 
+/** The folder a path sits in: `/Users/ada/code` is in `/Users/ada`, which is in `/`. */
+function parentOf(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at > 0 ? path.slice(0, at) : "/";
+}
+
 /**
  * Whether `path` is a place projects live rather than a project: the root, a home folder, or a
- * folder named like a container that holds another candidate. A real project that happens to hold
- * a nested project's threads (`rustcode` and `rustcode/apps/desktop/src-tauri`) keeps its row.
+ * container-named folder (`code`, `dev`, `work`) that sits in a place itself and holds another
+ * candidate. `~/code` and `~/code/work` are places; `rustcode/apps/desktop` is a folder inside a
+ * project, so it keeps its row, and so does a real project that holds a nested project's threads
+ * (`rustcode` and `rustcode/apps/desktop/src-tauri`).
  */
 function isPlace(path: string, projects: readonly string[]): boolean {
   if (path === "/") return true;
   if (HOME_FOLDER.test(path)) return true;
-  const name = nameOf(path).toLowerCase();
-  return CONTAINER_NAMES.has(name) && projects.some((other) => holds(path, other));
+  if (!CONTAINER_NAMES.has(nameOf(path).toLowerCase())) return false;
+  // A container only groups the projects under it when it is itself in a place: a folder called
+  // `desktop` or `src` deep inside a project is that project's own business.
+  return projects.some((other) => holds(path, other)) && isPlace(parentOf(path), projects);
 }
 
 /** The repo a worktree path names, when the app cut it (`<root>/<repo>/<branch>`). */
@@ -110,13 +123,15 @@ export function folderScore(
 /**
  * The picker's rows, most used project first, each followed by the worktrees cut from it.
  *
- * A folder that is only a place projects live is left out: the root, a home folder, and a folder
- * named like a container (`~/code`, `~/dev`) that holds another project. A worktree's repo is a
- * project even when no thread ran in the repo itself, so a repo only used through worktrees appears
- * with them nested beneath it. A worktree whose repo is unknown stays a row of its own, after the
- * projects, so a thread that only ever ran in a worktree can still be started again. With a
- * `filter`, rows match on their name or their path; a worktree also stays under a repo whose name
- * matches, so searching for the repo still shows its branches.
+ * A folder that is only a place projects live is left out: the root, a home folder, and a
+ * container-named folder (`~/code`, `~/dev`, `~/code/work`) that sits in a place and holds another
+ * project. A worktree's repo is a project even when no thread ran in the repo itself, so a repo only
+ * used through worktrees appears with them nested beneath it. A worktree whose repo is unknown stays
+ * a row of its own, after the projects, so a thread that only ever ran in a worktree can still be
+ * started again. Without a `filter` a repo shows its three most recently used worktrees, so forty of
+ * them cannot push every other project past `limit`; with one, rows match on their name or their
+ * path and a worktree also stays under a repo whose name matches, so searching for the repo still
+ * shows every branch it has.
  */
 export function folderRows(
   sources: readonly FolderSource[],
@@ -153,10 +168,13 @@ export function folderRows(
       projects.push(path);
     }
   }
-  // A repo used only through its worktrees is a project too: its worktrees belong under it.
+  // A repo used only through its worktrees is a project too: its worktrees belong under it. A
+  // worktree that names itself as its repo is not: it is already a row under the project it was
+  // cut from, and promoting it would put the same path on screen twice.
+  const worktreePaths = new Set(worktrees.map((worktree) => worktree.path));
   for (const worktree of worktrees) {
     const repo = worktree.repo;
-    if (repo && !projects.includes(repo)) projects.push(repo);
+    if (repo && !worktreePaths.has(repo) && !projects.includes(repo)) projects.push(repo);
   }
   // What is left of the projects: no root, no home folder, nothing that only holds other projects.
   const real = projects.filter((path) => !isPlace(path, projects));
@@ -197,15 +215,23 @@ export function folderRows(
     const byUse = folderScore(use.get(b)!, now) - folderScore(use.get(a)!, now);
     return byUse || nameOf(a).localeCompare(nameOf(b));
   });
+  // A repo's branches, most recently used first: the ones with a date go by it, the rest keep the
+  // order they came in.
+  const recentFirst = (children: readonly FolderRow[]) =>
+    [...children].sort((a, b) => (newest.get(b.path) ?? 0) - (newest.get(a.path) ?? 0));
+  const asked = filter.trim().toLowerCase();
   const rows: FolderRow[] = [];
   for (const path of ranked) {
     const row: FolderRow = { path, name: nameOf(path) };
     rows.push(row);
-    for (const child of nested.get(path) ?? []) rows.push(child);
+    const children = nested.get(path) ?? [];
+    // Without a search the list is a summary, not an inventory: a repo with forty worktrees would
+    // push every other project past the cap, so its newest three branches stand in for it. A
+    // search asks for everything that matches, so it keeps them all.
+    for (const child of asked ? children : recentFirst(children).slice(0, WORKTREE_ROWS)) rows.push(child);
   }
   for (const row of loose) rows.push(row);
 
-  const asked = filter.trim().toLowerCase();
   if (!asked) return rows.slice(0, limit);
   const matches = (name: string, path: string) =>
     name.toLowerCase().includes(asked) || path.toLowerCase().includes(asked);

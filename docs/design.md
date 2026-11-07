@@ -177,8 +177,8 @@ rather than a `hover:bg-…` utility a class rule would beat.
 The composer floats over the transcript as one card: the field, and under it one control row with
 every control the send needs. Its slash and `@` menus are an opaque drawer attached to the box's top
 edge. Everything in the card starts on one left edge: the field, the chips, the thumbnails and the
-hint rows at 16px (`px-4`); the tray at 8px, because its round controls carry 8px of their own, which
-puts their icons on that same edge.
+hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round controls carry 8px of their
+own, which puts their icons on that same edge.
 
 The composer is its own, lighter pair, because it is the one surface text
 scrolls under all day: `surface-2` at **75%** (84% focused), its own
