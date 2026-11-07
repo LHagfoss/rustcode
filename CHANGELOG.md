@@ -1,3 +1,20 @@
+## [v1.19.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.19.0) - 2026-11-07
+
+### Features
+- Add the missing execution-graph decision note (`docs/architecture/execution-graph.md`), which several docs already linked to. (#3156)
+- The new thread screen is just the field and a see-through dashboard of cards, over a picture that covers the whole pane; a press on the usage meter opens Settings' Usage again. (#3158)
+- The remote gateway accepts the mobile app; it used to refuse every WebSocket upgrade that carried an `Origin` header (#3157)
+- The desktop sidebar marks threads from the keyboard: P pins or unpins, D settles or unsettles, and Shift+F10 (or the ContextMenu key) opens the row's menu. (#3160)
+- The desktop app drops its card borders: settings groups, panels and popovers separate by their fill, and the Settings sidebar is a flat list of pages. (#3159)
+- Remove the checkpoint dots from the desktop chat's timeline rail, keeping the checkpoint and *Rewind here* in the strip's hover card. (#3164)
+- The composer's delegate strip counts only the threads working now, shows the longest running one's time instead of a sum of every finished delegate, and no longer toasts each time a delegate finishes. (#3165)
+- Show the sidebar's Needs you row only when a thread actually waits on you, not as an empty heading over the thread list. (#3166)
+- Wake a parent thread when a delegate the app resumed after a restart answers: an orchestrator no longer stays silent after reopening the app. (#3167)
+- Let a thread running in a git worktree reach its repository's threads, and the threads it started, through the agent orchestration tools. (#3162)
+- `rustcode threads settle`, `unsettle` and `review` change thread status from the CLI, accepting several ids or unique id prefixes. (#3163)
+- Skills installed for Claude Code (`.claude/skills` in a project, `~/.claude/skills`) now appear in Settings › Skills, read only, and threads on external harnesses are told where the discovered skills are. (#3161)
+- A device that attaches during a turn no longer receives the answer twice. (#3168)
+- Settings › Usage no longer calls a named Claude Code account expired when only its stored access token has lapsed: it reads both copies of that login's sign-in, and draws the numbers RustCode recorded for it last, marked as of when they were read. (#3172)
 ## [v1.18.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.18.0) - 2026-11-07
 
 ### Features
