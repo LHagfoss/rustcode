@@ -103,9 +103,13 @@ All methods are on the client's existing `rustcode --acp` connection.
     "accounts": [{              // named logins of this harness; [] for most
       "id": "paral-2", "name": "Paral 2",
       "config_dir": "~/.claude-paral-2", "auth": "ok" | "needs_login" | "unknown",
-      "own_dir": false          // true for the Mac's own login, ~/.claude
+      "own_dir": false          // true for the Mac's own login, ~/.claude or ~/.codex
     }],
-    "discovered_accounts": [{   // Claude Code only: logins on this Mac no account names yet
+    // How a client adds and signs in a named login, from the engine; null for
+    // a harness without named logins (Claude Code and Codex have them).
+    "account_env": "CLAUDE_CONFIG_DIR",           // the variable naming its directory
+    "account_login_command": ["claude", "auth", "login"],  // run in a terminal
+    "discovered_accounts": [{   // logins on this Mac no account names yet
       "config_dir": "~/.claude-personal", "suggested_name": "Personal"
     }],
     "error": null               // last detection/start error, if any
@@ -200,15 +204,27 @@ new threads start on; that stays `[harness_defaults].harness`. A known
 harness without an entry gets one with `enabled = false` (as it was);
 `rustcode` gets an entry of its own. An unknown harness is `invalid_params`.
 
-### Named accounts (Claude Code)
+### Named accounts (Claude Code and Codex)
 
-A harness may have named logins, each only a config directory of its own; for
-Claude Code that is `CLAUDE_CONFIG_DIR`. RustCode names the directory and
-starts the harness with it. It never reads, copies, stores or proxies the
-tokens in it, except the read-only plan-usage lookup below. Accounts are
-chosen by hand per thread: there is no automatic switching, rotation or
-pooling, and each login keeps its own plan and limits. Only `claude-code` has
-accounts for now; `[[harness_accounts]]` is shaped for others.
+A harness may have named logins, each only a config directory of its own:
+`CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for Codex. RustCode names the
+directory and starts the harness with it. It never reads, copies, stores or
+proxies the tokens in it, except the read-only plan-usage lookup below.
+Accounts are chosen by hand per thread: there is no automatic switching,
+rotation or pooling, and each login keeps its own plan and limits. Only
+`claude-code` and `codex` have accounts; Pi, OpenCode, Gemini and a custom
+harness run on their own single sign-in.
+
+Each harness's facts are one `AccountLayout` in
+`rustcode/engine/src/harness/config.rs`: its variable, default directory
+(`.claude`, `.codex`), the prefix a named directory is created under
+(`.claude-`, `.codex-`), its sign-in command (`claude auth login`,
+`codex login`), the file a signed-in directory holds (`.credentials.json`,
+`auth.json`), the variables that would override the login
+(`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`CLAUDE_CODE_OAUTH_TOKEN`,
+`OPENAI_API_KEY`/`CODEX_API_KEY`), and the names that make a directory look
+like one of its logins. Everything else in the account code reads that
+description, so a new harness needs one constant and no branch.
 
 ```toml
 [[harness_accounts]]
@@ -216,12 +232,22 @@ id = "paral-2"                 # letters, digits, '-', '_' or '.'
 harness = "claude-code"
 name = "Paral 2"
 config_dir = "~/.claude-paral-2"  # optional; defaults to ~/.claude-<id>
+                                  # (or ~/.codex-<id> for Codex)
 ```
 
-The engine creates the directory when it is missing. `~/.claude` may be an
-account too: it is registered like any other, and a thread on it runs as the
-Mac's own Claude Code login, with no `CLAUDE_CONFIG_DIR` set (macOS keys that
-login's Keychain item on the variable, so setting it would look signed out).
+The engine creates the directory when it is missing. `~/.claude` and
+`~/.codex` may be accounts too: they are registered like any other, and a
+thread on one runs as the Mac's own login, with no `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME` set (macOS keys Claude Code's Keychain item on the variable, so
+setting it would look signed out; Codex reads `~/.codex` with none).
+
+A Codex account's directory *replaces* the Codex home: `CODEX_HOME` makes the
+CLI read that directory's `config.toml`, `AGENTS.md` and `[mcp_servers]`
+instead of `~/.codex`'s. So a new account starts without the user's profiles,
+model providers and MCP servers, and RustCode copies and links nothing: what an
+account should have goes in its directory by hand. `~/.codex` itself, registered
+or not, is never written to. Settings › Agents' Codex Accounts section says
+"Each account has its own Codex settings." for the same reason.
 The section is read from the user config only: a checked-out project cannot
 choose where a thread signs in.
 
@@ -237,20 +263,27 @@ thread runs on that account. Threads that ran on it stay readable: they open
 and replay their history, and only their next prompt reports the missing
 account (they can be moved to another named account, or to the harness's own
 sign-in when it has none left). `auth` for an account is `ok` when its own
-credentials exist (`<dir>/.credentials.json`, or on macOS the Keychain item its
-directory names), `needs_login` when a look found none, and `unknown` when it
-was not looked for. `check` (Settings › Agents' own look when its Accounts
-section opens, and its Refresh) probes the Keychain, asking only whether the
-item exists and never reading the secret; it does not force a plan read.
-Nothing is started to answer either. `own_dir` is true for the Mac's own login,
-the directory `~/.claude`, whatever path the account was written with.
+credentials exist (`<dir>/.credentials.json`, Codex's `<dir>/auth.json`, or on
+macOS Claude Code's Keychain item its directory names), `needs_login` when a
+look found none, and `unknown` when it was not looked for. `check` (Settings ›
+Agents' own look when its Accounts section opens, and its Refresh) runs the
+harness's own cheap status command with the account's directory (`codex login
+status`) or asks the Keychain only whether the item exists, never reading a
+secret; it does not force a plan read. Nothing is started as a session to
+answer. `own_dir` is true for the Mac's own login, `~/.claude` or `~/.codex`,
+whatever path the account was written with.
 
-`discovered_accounts` lists the Claude login directories on this Mac that no
-account names yet: `~/.claude` and `~/.claude-*` that hold `.claude.json`,
-`.credentials.json`, `settings.json` or `projects/`. Only names are read, never
-file contents, and `suggested_name` is the title-cased suffix (`Personal` for
-`~/.claude-personal`, `Claude` for `~/.claude`). Settings' *Found on this Mac*
-registers one with `_rustcode/harnesses/accounts/add` and its `config_dir`.
+`discovered_accounts` lists the login directories of that harness on this Mac
+that no account names yet: `~/.claude` and `~/.claude-*` that hold
+`.claude.json`, `.credentials.json`, `settings.json` or `projects/`, or
+`~/.codex` and `~/.codex-*` that hold `config.toml`, `auth.json` or
+`sessions/`. Only names are read, never file contents, and `suggested_name` is
+the title-cased suffix (`Personal` for `~/.claude-personal`, `Paral` for
+`~/.codex-paral`) or the harness's own name for its default directory. Settings'
+*Found on this Mac* registers one with `_rustcode/harnesses/accounts/add` and
+its `config_dir`. `account_env` and `account_login_command` say how the client
+runs one: the variable to set and the harness's own command to run in a
+terminal.
 
 A thread picks an account in `session/new`'s `_meta.rustcode.account`, next
 to `harness`, or on `_rustcode/session/harness` when it moves to another
@@ -543,7 +576,8 @@ kind = "acp"
 command = ["my-agent", "--acp"]
 enabled = true
 
-# A named login of a harness, each its own config directory (Claude Code only).
+# A named login of a harness, each its own config directory
+# (Claude Code and Codex).
 [[harness_accounts]]
 id = "paral-2"
 harness = "claude-code"
@@ -573,7 +607,14 @@ every reaper pass, a minute apart, so a change applies without a restart.
 
 Named accounts are chosen by hand. There is no pooling or rotation: a
 thread uses the account it was given until the user picks another, and
-limits are that account's own.
+limits are that account's own. Token totals need no account handling: Codex
+and Claude Code report them over the harness protocol, and the log scans in
+`harness_usage.rs` already take the account's own directory for the harnesses
+that keep a log (Claude Code, Pi). Codex plan windows are the account's own:
+`provider_auth/codex_usage.rs` starts the Codex CLI with that account's
+`CODEX_HOME` and keeps one answer per home, so a thread on `~/.codex-paral`
+shows its own windows. Settings › Usage's ChatGPT row is the Mac's own
+`~/.codex` login.
 
 The terminal UI starts every thread on the built-in harness with its own
 `[default]` model and does not read the per-harness choice; it has no

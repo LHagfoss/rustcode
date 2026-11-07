@@ -202,7 +202,19 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         login_command: ["codex", "login"],
         install_hint: "brew install codex",
         capabilities: CODEX_CAPS,
-        accounts: [],
+        // How a named Codex login is run, as the engine describes it.
+        account_env: "CODEX_HOME",
+        account_login_command: ["codex", "login"],
+        accounts: [
+          {
+            id: "paral",
+            name: "Paral",
+            config_dir: "~/.codex-paral",
+            auth: "ok",
+          },
+        ],
+        // The Mac's own Codex home, which no account names yet.
+        discovered_accounts: [{ config_dir: "~/.codex", suggested_name: "Codex" }],
         models: [],
         error: null,
       },
@@ -219,6 +231,8 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         login_command: ["claude", "/login"],
         install_hint: "npm install -g @zed-industries/claude-agent-acp",
         capabilities: CLAUDE_CAPS,
+        account_env: "CLAUDE_CONFIG_DIR",
+        account_login_command: ["claude", "auth", "login"],
         accounts: [
           {
             id: "paral-2",
@@ -1906,7 +1920,8 @@ export class MockEngine {
           throw Object.assign(new Error(`there is already a ${harness} account '${id}'`), {
             code: -32602,
           });
-        const config_dir = str(params.config_dir) ?? `~/.claude-${id}`;
+        const prefix = h.account_env === "CODEX_HOME" ? "~/.codex-" : "~/.claude-";
+        const config_dir = str(params.config_dir) ?? `${prefix}${id}`;
         h.accounts = [
           ...(h.accounts ?? []),
           {

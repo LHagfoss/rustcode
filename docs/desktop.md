@@ -194,28 +194,34 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   card per harness with its mark, status and version, *Sign in* only until
   the harness is known to be signed in, *Check* (lists the models, the
   cheapest proof it runs) and the on/off switch; turning a harness on
-  checks it. The command and what it supports fold under *Details*. On the
-  Claude Code card, *Accounts* opens with one real sign-in check and lists
-  each named login (its own `CLAUDE_CONFIG_DIR`) as *Signed in*, *Not signed
-  in* or *Not checked*, with a remove that says the directory stays on disk.
-  *Add account* asks only for a name and its *Add and sign in* creates
-  `~/.claude-<id>` and runs Claude Code's login in Terminal under it; the row
-  says *Waiting for sign-in…* and checks again every three seconds for up to
-  five minutes, then offers *Sign in*. The copyable
-  `mkdir -p … && CLAUDE_CONFIG_DIR=… claude auth login` stays as the second
-  way. *Found on this Mac* lists the Claude logins the engine found
-  (`~/.claude`, `~/.claude-personal`), each added by its own path. RustCode
-  never reads or copies those tokens. Every harness's sticky header in the
+  checks it. The command and what it supports fold under *Details*. On a card whose
+  harness has named logins (Claude Code, Codex), *Accounts* opens with one real
+  sign-in check and lists each named login (its own `CLAUDE_CONFIG_DIR` or
+  `CODEX_HOME`) as *Signed in*, *Not signed in* or *Not checked*, with a remove
+  that says the directory stays on disk. *Add account* asks only for a name and
+  its *Add and sign in* creates `~/.claude-<id>` (or `~/.codex-<id>`) and runs
+  the harness's own login in Terminal under it; the row says *Waiting for
+  sign-in…* and checks again every three seconds for up to five minutes, then
+  offers *Sign in*. The copyable `mkdir -p … && CLAUDE_CONFIG_DIR=… claude auth
+  login` (or `CODEX_HOME=… codex login`) stays as the second way. Both the
+  variable and the command come from the engine's snapshot (`account_env`,
+  `account_login_command`), so the app holds no per-harness copy of them.
+  *Found on this Mac* lists the logins the engine found for that harness
+  (`~/.claude`, `~/.claude-personal`; `~/.codex`, `~/.codex-paral`), each added
+  by its own path. RustCode never reads or copies those tokens. Every harness's sticky header in the
   model picker shows its named accounts as chips, so all of them are visible
   without the thread already running on that harness: a chip starts a new
   thread on it, moves an idle thread with the conversation so far as a
   summary, and a running thread shows the chips disabled with *Stop the turn
   to switch account*. A thread from before accounts shows its own login as
   *Original login*. The composer's model pill names the account whenever the
-  harness has any. Settings › Usage and the composer's plan meter show one
-  row (or meter) per account: a thread's meter never shows another login's
-  numbers. Separate accounts are chosen by hand, limits stay per account, and
-  there is no pooling.
+  harness has any. The composer's plan meter shows one meter per account: a
+  thread's meter never shows another login's numbers, for Claude Code or
+  Codex (the Codex CLI is asked with that account's `CODEX_HOME`). Settings ›
+  Usage lists one row per Claude Code account; its ChatGPT row is the Mac's
+  own `~/.codex` login. For Codex the section says each account has its own
+  Codex settings, because `CODEX_HOME` replaces `~/.codex`. Separate accounts
+  are chosen by hand, limits stay per account, and there is no pooling.
 - **UI** (`src/ui/`): every colour, radius and shadow is a token from
   [design.md](design.md), defined once in `src/index.css` (the Tailwind
   `@theme` maps `--rc-*` variables to classes; the palette is switched
@@ -336,7 +342,8 @@ composer's keys stay outside the table.
 - **Settings › Usage.** Every subscription this machine is signed in to, with
   no thread open: `_rustcode/usage/plans` (engine `acp/usage.rs`) answers
   `{plans: [{id, name, via, status, plan?, error?, reason?, windows}]}`. ChatGPT
-  comes from the Codex CLI's `account/rateLimits/read` (as the composer meter);
+  comes from the Codex CLI's `account/rateLimits/read` for the Mac's own
+  `~/.codex` login (a thread's meter asks with its own account's `CODEX_HOME`);
   Claude from Claude Code's OAuth sign-in (Keychain `Claude Code-credentials`,
   else `~/.claude/.credentials.json`) against `api.anthropic.com/api/oauth/usage`
   (5-hour, weekly, weekly per model), read-only and never refreshed

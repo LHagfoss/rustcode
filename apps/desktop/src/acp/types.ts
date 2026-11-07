@@ -775,7 +775,7 @@ export interface HarnessModel {
   default_effort?: string;
 }
 
-/** A named login of a harness: a config directory of its own (`CLAUDE_CONFIG_DIR`). */
+/** A named login of a harness: a config directory of its own (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). */
 export interface HarnessAccount {
   id: string;
   name: string;
@@ -786,7 +786,7 @@ export interface HarnessAccount {
    * macOS Keychain).
    */
   auth: "ok" | "needs_login" | "unknown";
-  /** True for the Mac's own login, `~/.claude`, whatever path it was written as. */
+  /** True for the Mac's own login (`~/.claude`, `~/.codex`), whatever path it was written as. */
   own_dir?: boolean;
 }
 
@@ -814,7 +814,14 @@ export interface Harness {
   last?: HarnessLast | null;
   /** Named logins of this harness (`[[harness_accounts]]`); empty for most harnesses. */
   accounts?: HarnessAccount[];
-  /** Login directories on this Mac the engine found; only Claude Code lists any. */
+  /**
+   * The variable naming a named login's directory (`CLAUDE_CONFIG_DIR`,
+   * `CODEX_HOME`), and the harness's own command that signs one in. Both are
+   * null for a harness without named logins.
+   */
+  account_env?: string | null;
+  account_login_command?: string[] | null;
+  /** Login directories on this Mac the engine found; only a harness with named logins lists any. */
   discovered_accounts?: DiscoveredAccount[];
   error?: string | null;
 }
@@ -979,6 +986,10 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         models: parseHarnessModels(o.models),
         last: parseHarnessLast(o.last),
         accounts: parseHarnessAccounts(o.accounts),
+        account_env: str(o.account_env) ?? null,
+        account_login_command: Array.isArray(o.account_login_command)
+          ? arr(o.account_login_command).flatMap((c) => (typeof c === "string" ? [c] : []))
+          : null,
         discovered_accounts: parseDiscoveredAccounts(o.discovered_accounts),
         error: str(o.error) ?? null,
       },

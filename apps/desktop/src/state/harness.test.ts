@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type Harness, type HarnessSnapshot } from "../acp/types";
 import {
+  accountLoginCommand,
+  accountSignIn,
   capabilityRows,
   commandLine,
   controlDisabledReason,
@@ -125,6 +127,38 @@ describe("harness logic", () => {
   test("quotes a login command for copying", () => {
     expect(commandLine(["claude", "/login"])).toBe("claude /login");
     expect(commandLine(["sh", "-c", "a b"])).toBe("sh -c 'a b'");
+  });
+
+  test("a named login is signed in with its own harness command and variable", () => {
+    const codex: Harness = {
+      ...base,
+      account_env: "CODEX_HOME",
+      account_login_command: ["codex", "login"],
+    };
+    const claude: Harness = {
+      ...base,
+      id: "claude-code",
+      name: "Claude Code",
+      account_env: "CLAUDE_CONFIG_DIR",
+      account_login_command: ["claude", "auth", "login"],
+    };
+    expect(accountSignIn(codex)).toEqual({ env: "CODEX_HOME", command: ["codex", "login"] });
+    expect(accountSignIn(claude)).toEqual({
+      env: "CLAUDE_CONFIG_DIR",
+      command: ["claude", "auth", "login"],
+    });
+    // The copyable line names the account's directory, and nothing when it is
+    // the harness's own login.
+    expect(accountLoginCommand(codex, { config_dir: "~/.codex-paral", own_dir: false })).toBe(
+      "mkdir -p ~/.codex-paral && CODEX_HOME=~/.codex-paral codex login",
+    );
+    expect(accountLoginCommand(claude, { config_dir: "~/.claude-paral-2", own_dir: false })).toBe(
+      "mkdir -p ~/.claude-paral-2 && CLAUDE_CONFIG_DIR=~/.claude-paral-2 claude auth login",
+    );
+    expect(accountLoginCommand(claude, { config_dir: "~/.claude", own_dir: true })).toBe("claude auth login");
+    // A harness with no named logins has nothing to sign in.
+    expect(accountSignIn(base)).toBeUndefined();
+    expect(accountLoginCommand(base, { config_dir: "/tmp/x", own_dir: false })).toBe("");
   });
 
   test("a harness's remembered choice is restored, and a stale one falls back quietly", () => {

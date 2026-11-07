@@ -1593,8 +1593,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             return responder
                                 .respond_with_error(unknown_session(&request.session_id));
                         };
+                        let session_id = request.session_id.clone();
                         return connection.spawn(async move {
-                            responder.respond(usage::harness_limits(&harness).await)?;
+                            // A named account's own login, so the meter never
+                            // shows another home's numbers.
+                            let home = usage::account_home(&session_id, &harness);
+                            responder
+                                .respond(usage::harness_limits(&harness, home.as_deref()).await)?;
                             Ok(())
                         });
                     };

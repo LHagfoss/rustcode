@@ -4,6 +4,7 @@
 import type {
   ConfigOption,
   Harness,
+  HarnessAccount,
   HarnessCapabilities,
   HarnessLast,
   HarnessModel,
@@ -14,6 +15,41 @@ export type HarnessStatus =
   | { tone: "ok"; label: string }
   | { tone: "warn"; label: string }
   | { tone: "off"; label: string };
+
+/** How one named login is run: the variable naming its directory, and the harness's own sign-in command. */
+export interface AccountSignIn {
+  env: string;
+  command: string[];
+}
+
+/**
+ * How `harness` signs a named login in, from the engine's own description of
+ * it (`account_env`, `account_login_command`): `undefined` for a harness that
+ * has no named logins (Pi, OpenCode, Gemini, a custom harness).
+ */
+export function accountSignIn(
+  h: Pick<Harness, "account_env" | "account_login_command">,
+): AccountSignIn | undefined {
+  if (!h.account_env || !h.account_login_command?.length) return undefined;
+  return { env: h.account_env, command: h.account_login_command };
+}
+
+/**
+ * The copyable line that signs one named login in under its own directory:
+ * the harness's own login command, prefixed with the assignment that points it
+ * at the directory (nothing at all for the harness's own login, which runs
+ * without one). Empty for a harness without named logins.
+ */
+export function accountLoginCommand(
+  h: Pick<Harness, "account_env" | "account_login_command">,
+  account: Pick<HarnessAccount, "config_dir" | "own_dir">,
+): string {
+  const signIn = accountSignIn(h);
+  if (!signIn) return "";
+  const command = commandLine(signIn.command);
+  if (account.own_dir === true) return command;
+  return `mkdir -p ${account.config_dir} && ${signIn.env}=${account.config_dir} ${command}`;
+}
 
 /**
  * The sign-in state of a harness with named accounts, from the accounts
