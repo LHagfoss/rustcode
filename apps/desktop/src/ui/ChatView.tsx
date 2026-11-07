@@ -71,7 +71,7 @@ import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
 import { UserRow } from "./Rows";
 import { StatusChip } from "./Status";
-import { Transcript } from "./Transcript";
+import { FIRST_ROW_PAD, Transcript } from "./Transcript";
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -512,15 +512,18 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
   const shown = composedText(pending.text, extras);
   const attachments = sentAttachments(extras);
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 [scrollbar-gutter:stable_both-edges] sm:px-12">
+    // Absolute like the composer's stack beside it: the column holds nothing above this view, and
+    // taking it out of the flow keeps it that way, so no sibling that mounts during a send can push
+    // the message down. `overflow-anchor: none` and `overscroll-contain` are the transcript's own
+    // scroller settings: nothing here may scroll or be scrolled by the browser on our behalf.
+    <div className="absolute inset-0 overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges] sm:px-12">
       <div
-        // The row takes the place the transcript's first row keeps: the lane's own cap, the same
-        // 20px under the glass header (`Transcript` `paddingStart`), so the thread takes the screen
-        // over without moving it. It is drawn at rest and never animated in: this view is unmounted
-        // the moment the session exists, so anything it started would stop halfway. What moves on a
-        // send from here is the composer, gliding down from the middle to the foot of the chat.
-        className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5"
-        style={{ paddingTop: HEADER_HEIGHT + 20 }}
+        // The row takes the place the transcript's first row keeps — the lane's cap, the same 20px
+        // under the glass header (`FIRST_ROW_PAD`), so the thread takes the screen over without
+        // moving it — and arrives in 160ms from 8px below, which is short enough to be cut: the
+        // thread's own row draws it at rest, in the same place, the moment the session exists.
+        className="rc-send-in mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5"
+        style={{ paddingTop: FIRST_ROW_PAD + HEADER_HEIGHT }}
       >
         <UserRow
           item={{

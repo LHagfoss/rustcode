@@ -284,10 +284,18 @@ that change use `tabular`.
   alone.
   A message sent from the new-thread screen does not fly: it is drawn where
   the thread's own first row will keep it (the lane's cap, 20px under the
-  header), at rest, because the composer itself is on its way from the middle
-  of the chat to the foot. The stack's own 500ms move is that send's motion,
-  and the thread's transcript takes the screen over without moving the bubble
-  (`ui/ChatView.tsx` `PendingSetupView`).
+  header) and arrives from 8px below over 160ms (`rc-send-in`,
+  `--ease-snappy`), while the composer glides from the middle of the chat to
+  the foot. That entry is safe to be cut, because the screen is unmounted the
+  moment the session exists: the thread's transcript draws the same row at the
+  same place, at rest, so nothing is left half-way and nothing moves at the
+  hand-over (`ui/ChatView.tsx` `PendingSetupView`).
+- A row mounts at the size the transcript already reserved for it: `estimateSize`
+  is the row's own air (`rowGap`) plus its content, and a measured row keeps
+  both. An estimate that left the gap out, or guessed a live `Working for 12s`
+  at 24px when it draws 35, was corrected a frame after mounting — and a
+  pinned transcript takes that difference back in one step, moving every row
+  above it, the message just sent included.
 - A streaming reply's new words fade in once each (`rc-reveal`, 280ms, from
   `opacity: 0` and a 4px blur, 18ms apart, no word waiting past 180ms).
   `lib/reveal.ts` wraps only the words that arrived in the chunk, and only in
