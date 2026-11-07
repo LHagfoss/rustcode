@@ -8804,6 +8804,53 @@ async fn scripted_turn(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_model_configuration_stops_the_turn_before_any_request() {
+    // `models = []` used to resolve to the compiled profiles, which name a
+    // private host: the turn then failed with a connection error the user
+    // could not act on. It must stop here with a message that says what to do.
+    let (endpoint, bodies) = scripted_provider(vec![chat_sse("must not be reached", "stop")]).await;
+    let mut app = AppState::new();
+    app.api_base_url = endpoint;
+    app.model_name = "unconfigured".into();
+    app.config.models.clear();
+    app.history.push(ChatMessage::new("user", "Hello there."));
+    let state = Arc::new(Mutex::new(app));
+    let ctx = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        run_agent_turn(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &Arc::new(super::policy::InteractivePolicy),
+            &Arc::new(Mutex::new(StreamBuffer::new())),
+        ),
+    )
+    .await
+    .expect("turn finishes");
+
+    assert_eq!(
+        ctx.lifecycle.stop_reason,
+        Some(lifecycle::StopReason::ProviderError(None))
+    );
+    let notice = ctx
+        .response
+        .provider_error_notice
+        .as_deref()
+        .expect("the notice reaches the transcript");
+    assert!(notice.contains("No model is configured"), "{notice}");
+    let history = state.lock().await.history.as_slice().to_vec();
+    assert!(
+        history.iter().any(|message| message.role == "system"
+            && message.content.contains("No model is configured")),
+        "{history:#?}"
+    );
+    assert!(
+        bodies.lock().unwrap().is_empty(),
+        "no request reached a provider"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_long_answer_survives_repeated_length_stops_without_the_recovery_clamp() {
     // #2118: the second length stop ended the turn, and the one continuation
     // on Chat Completions was clamped to 1024 tokens.

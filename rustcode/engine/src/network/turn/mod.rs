@@ -249,6 +249,25 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 ) -> bool {
     dbg_log!("Starting agent loop round {}", ctx.budget.tool_rounds);
 
+    // An explicitly empty model configuration is a configuration error, not a
+    // reason to reach for the compiled profiles: those name a host this
+    // install does not own, so the turn would fail opaquely. Stop before any
+    // request (or capability probe) is sent and leave a message the user can
+    // act on.
+    if !cancel_token.is_cancelled() {
+        let mut app = state.lock().await;
+        if let Some(error) = app.config.model_configuration_error() {
+            app.history.push(ChatMessage::new("system", error.clone()));
+            ctx.response.provider_error_notice = Some(error);
+            ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(None));
+            crate::logger::operational_event(
+                "turn.model_configuration_missing",
+                serde_json::json!({ "session_id": turn_session_id }),
+            );
+            return false;
+        }
+    }
+
     // Phase 1: enforce lifecycle budgets and prepare the provider request.
     super::renew_token_window_if_productive(ctx);
     if !cancel_token.is_cancelled()
