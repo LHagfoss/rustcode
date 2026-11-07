@@ -425,7 +425,8 @@ next start installs it with the current environment.
   `rustcode remote stop` ends access for every device (see
   [Revoking and stopping](#revoking-and-stopping)).
 - **Browsers** cannot reach the gateway: an upgrade request with an `Origin`
-  header is refused.
+  header is refused, except the exact `rustcode-mobile://app` a native phone
+  app sends, which no browser can produce.
 
 ## How it holds together
 
@@ -484,9 +485,11 @@ delays the terminal or another device.
 | Mutation receipts per registration | 1024; more mutations are refused with `receipt_capacity` |
 | Silence before a device connection is closed | 90 s; any frame or WebSocket ping from the device counts (the gateway pings every 30 s) |
 
-An upgrade request with an `Origin` header is refused with 403: browsers
-send one and the native client does not, so a web page cannot reach the
-gateway.
+An upgrade request with an `Origin` header is refused with 403, unless it is
+exactly `rustcode-mobile://app`: browsers send an `http(s)` origin and a page
+cannot set headers on a WebSocket, so a web page cannot reach the gateway. The
+native app sends that value because React Native always adds an `Origin`
+header; see [the connection step](remote-protocol/README.md#connection).
 
 ## Not covered yet
 
