@@ -101,10 +101,11 @@ pub(crate) enum Adapter {
 }
 
 /// The variables a harness's process is started with, and the ones it must
-/// not inherit. A named account is only a `CLAUDE_CONFIG_DIR`: the harness
-/// keeps its own sign-in there. HOME stays untouched, which would hide the
-/// macOS Keychain login, and the login shell's API keys are dropped so they
-/// cannot override the chosen login.
+/// not inherit. A named account is only a config directory of its own
+/// (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`): the harness keeps its own sign-in
+/// there. HOME stays untouched, which would hide the macOS Keychain login, and
+/// the login shell's API keys are dropped so they cannot override the chosen
+/// login.
 fn launch_env(
     harness: &ResolvedHarness,
     options: &StartOptions,
@@ -121,24 +122,19 @@ fn launch_env(
         .account
         .as_ref()
         .filter(|account| account.harness == harness.id);
-    if let Some(account) = account {
+    if let Some(account) = account
+        && let Some(layout) = super::config::account_layout(&harness.id)
+    {
         let dir = account.resolved_dir();
-        if super::config::is_default_dir(&dir) {
-            // The Mac's own login: no `CLAUDE_CONFIG_DIR` at all. macOS keys the
-            // sign-in's Keychain item on that variable, so setting it to the
-            // default directory would read as signed out.
-            remove.push("CLAUDE_CONFIG_DIR");
-        } else {
-            env.push((
-                "CLAUDE_CONFIG_DIR".to_owned(),
-                dir.to_string_lossy().into_owned(),
-            ));
+        match super::config::login_env(&harness.id, &dir) {
+            // The Mac's own login: no variable at all. macOS keys Claude Code's
+            // sign-in's Keychain item on `CLAUDE_CONFIG_DIR`, so setting it to
+            // the default directory would read as signed out, and `~/.codex`
+            // is what the harness reads with none.
+            None => remove.push(layout.env_var),
+            Some((name, value)) => env.push((name.to_owned(), value)),
         }
-        remove.extend([
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-        ]);
+        remove.extend(layout.drop_env.iter().copied());
     }
     (env, remove)
 }
@@ -1542,6 +1538,67 @@ mod launch_tests {
         ] {
             assert!(remove.contains(&name), "{name} must not reach the child");
         }
+    }
+
+    #[test]
+    fn a_codex_account_launch_sets_its_home_and_drops_ambient_keys() {
+        let harness = test_support::harness("codex", HarnessKind::Codex);
+        let options = StartOptions {
+            account: Some(account("codex", "/tmp/codex-paral")),
+            ..Default::default()
+        };
+        let (env, remove) = launch_env(&harness, &options);
+        assert_eq!(
+            env,
+            vec![("CODEX_HOME".to_owned(), "/tmp/codex-paral".to_owned())]
+        );
+        for name in ["OPENAI_API_KEY", "CODEX_API_KEY"] {
+            assert!(remove.contains(&name), "{name} must not reach the child");
+        }
+        assert!(
+            !remove.contains(&"CLAUDE_CONFIG_DIR"),
+            "a Codex account says nothing about Claude Code's variable"
+        );
+        assert!(
+            remove.iter().all(|name| *name != "HOME"),
+            "HOME stays: a login may still read it"
+        );
+    }
+
+    #[test]
+    fn a_codex_account_on_the_default_home_sets_no_variable() {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let harness = test_support::harness("codex", HarnessKind::Codex);
+        let options = StartOptions {
+            account: Some(account("codex", &home.join(".codex").to_string_lossy())),
+            ..Default::default()
+        };
+        let (env, remove) = launch_env(&harness, &options);
+        assert!(env.is_empty(), "~/.codex runs with no CODEX_HOME at all");
+        assert!(
+            remove.contains(&"CODEX_HOME"),
+            "an inherited CODEX_HOME must be dropped"
+        );
+        for name in ["OPENAI_API_KEY", "CODEX_API_KEY"] {
+            assert!(remove.contains(&name), "{name} must not reach the child");
+        }
+    }
+
+    #[test]
+    fn a_claude_account_never_sets_the_codex_home() {
+        let harness = test_support::harness("claude-code", HarnessKind::Acp);
+        let options = StartOptions {
+            account: Some(account("claude-code", "/tmp/claude-paral-2")),
+            ..Default::default()
+        };
+        let (env, remove) = launch_env(&harness, &options);
+        assert!(
+            env.iter().all(|(name, _)| name != "CODEX_HOME"),
+            "one harness's variable never points at another's login"
+        );
+        assert!(!remove.contains(&"CODEX_HOME") && !remove.contains(&"OPENAI_API_KEY"));
     }
 
     #[test]

@@ -101,9 +101,8 @@ fn shell_quote(word: &str) -> String {
 }
 
 /// The environment a harness login may run with: only the variable naming the
-/// login's own directory. Another harness's (`CODEX_HOME`) is added here when
-/// its accounts arrive.
-const LOGIN_ENV: &[&str] = &["CLAUDE_CONFIG_DIR"];
+/// login's own directory (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`).
+const LOGIN_ENV: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME"];
 
 /// Runs a harness's own login command in a new Terminal window, where the
 /// user signs in directly with the harness. `env` is the login's directory,
@@ -792,6 +791,34 @@ mod tests {
             Some(vec![("PATH".into(), "/tmp".into())])
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_codex_account_signs_in_with_its_own_home() {
+        // `codex login` is a known login tool, and CODEX_HOME its directory.
+        assert_eq!(
+            login_line(
+                &["codex".into(), "login".into()],
+                &[("CODEX_HOME".into(), "/Users/me/.codex-paral".into())],
+            ),
+            "CODEX_HOME=/Users/me/.codex-paral codex login"
+        );
+        assert_eq!(
+            login_line(
+                &["codex".into(), "login".into()],
+                &[("CODEX_HOME".into(), "/Users/me/my codex".into())],
+            ),
+            "CODEX_HOME='/Users/me/my codex' codex login"
+        );
+        assert!(LOGIN_TOOLS.contains(&"codex"));
+        assert!(LOGIN_ENV.contains(&"CODEX_HOME"));
+        // Another variable, or a tool that is not a harness, is still refused.
+        assert!(open_login_terminal(
+            vec!["codex".into(), "login".into()],
+            Some(vec![("OPENAI_API_KEY".into(), "sk-test".into())])
+        )
+        .is_err());
+        assert!(open_login_terminal(vec!["sh".into()], None).is_err());
     }
 
     #[test]

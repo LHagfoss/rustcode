@@ -8,6 +8,8 @@ import { useEffect, useMemo, useState } from "react";
 import { effortLabel, type Harness, type HarnessAccount, type HarnessSnapshot } from "../acp/types";
 import { canOpenTerminal, openInTerminal } from "../lib/native";
 import {
+  accountLoginCommand,
+  accountSignIn,
   capabilityRows,
   commandLine,
   harnessStatus,
@@ -86,36 +88,33 @@ function SignIn({ harness }: { harness: Harness }) {
 }
 
 /**
- * Whether the account is the Mac's own login (`~/.claude`), which runs with no
- * `CLAUDE_CONFIG_DIR` at all: macOS keys its Keychain item on the variable, so
- * setting one would look signed out. The engine decides it on the resolved
- * path, so an account written as an absolute path is still the own login.
+ * Whether the account is the harness's own login (`~/.claude`, `~/.codex`),
+ * which runs with no `CLAUDE_CONFIG_DIR`/`CODEX_HOME` at all: macOS keys
+ * Claude Code's Keychain item on the variable, so setting one would look signed
+ * out. The engine decides it on the resolved path, so an account written as an
+ * absolute path is still the own login.
  */
 export function isOwnLoginDir(account: Pick<HarnessAccount, "own_dir">): boolean {
   return account.own_dir === true;
 }
 
-/** The command that signs Claude Code in under the account's own directory. */
-export function accountLoginCommand(account: Pick<HarnessAccount, "config_dir" | "own_dir">): string {
-  if (isOwnLoginDir(account)) return "claude auth login";
-  return `mkdir -p ${account.config_dir} && CLAUDE_CONFIG_DIR=${account.config_dir} claude auth login`;
-}
-
 /** What the engine last read about an account's sign-in. */
 function accountStatus(account: HarnessAccount): string {
   if (account.auth === "ok") return "Signed in";
-  // A look found the Keychain item or the credentials file missing.
+  // A look found no credentials file, Keychain item or status command behind it.
   if (account.auth === "needs_login") return "Not signed in";
-  // Not looked for yet: only a Refresh probes the macOS Keychain.
+  // Not looked for yet: only a Refresh probes.
   return "Not checked";
 }
 
-/** Signs the account in: Claude Code's own command, under the account's own directory. */
-function accountSignIn(account: Pick<HarnessAccount, "config_dir" | "own_dir">): Promise<boolean> {
-  return openInTerminal(
-    ["claude", "auth", "login"],
-    isOwnLoginDir(account) ? [] : [["CLAUDE_CONFIG_DIR", account.config_dir]],
-  );
+/** Signs the account in: the harness's own command, under the account's own directory. */
+function signAccountIn(
+  harness: Pick<Harness, "account_env" | "account_login_command">,
+  account: Pick<HarnessAccount, "config_dir" | "own_dir">,
+): Promise<boolean> {
+  const signIn = accountSignIn(harness);
+  if (!signIn) return Promise.resolve(false);
+  return openInTerminal(signIn.command, isOwnLoginDir(account) ? [] : [[signIn.env, account.config_dir]]);
 }
 
 /** How long an added account's sign-in is waited for, three seconds at a time. */
@@ -124,7 +123,7 @@ const SIGN_IN_WAIT_MS = 5 * 60_000;
 /**
  * A harness's named logins: each its own config directory, added and removed
  * by hand (`docs/harnesses.md`). RustCode never reads or copies their tokens;
- * "Sign in" is Claude Code's own command, run in a terminal.
+ * "Sign in" is the harness's own login command, run in a terminal.
  */
 export function AccountsList({ harness }: { harness: Harness }) {
   const accounts = harness.accounts ?? [];
@@ -169,7 +168,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
   }, [waiting, harness.id]);
   const signIn = async (account: HarnessAccount) => {
     setGaveUp(null);
-    await accountSignIn(account);
+    await signAccountIn(harness, account);
     setWaiting(account.id);
   };
   const refresh = async () => {
@@ -278,9 +277,9 @@ export function AccountsList({ harness }: { harness: Harness }) {
               {account.auth !== "ok" && (
                 <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
                   <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
-                    {accountLoginCommand(account)}
+                    {accountLoginCommand(harness, account)}
                   </code>
-                  <CopyButton text={accountLoginCommand(account)} />
+                  <CopyButton text={accountLoginCommand(harness, account)} />
                 </div>
               )}
             </li>
@@ -288,7 +287,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
         </ul>
       ) : (
         <p className="text-caption text-fg-muted">
-          Runs on Claude Code's own sign-in. Add an account to choose between subscriptions.
+          Runs on {harness.name}'s own sign-in. Add an account to choose between subscriptions.
         </p>
       )}
       {adding ? (
@@ -454,9 +453,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           <CopyButton text={harness.install_hint} />
         </div>
       )}
-      {(harness.id === "claude-code" || (harness.accounts?.length ?? 0) > 0) && (
-        <AccountsList harness={harness} />
-      )}
+      {accountSignIn(harness) && <AccountsList harness={harness} />}
       {(result || harness.error) && (
         <div
           className={cx(

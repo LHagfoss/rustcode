@@ -117,13 +117,14 @@ impl HarnessEntry {
     }
 }
 
-/// One `[[harness_accounts]]` entry: a named `CLAUDE_CONFIG_DIR` for a
-/// harness, so a thread can run on another login of the same tool. RustCode
-/// only names the directory; the harness keeps its own sign-in there.
+/// One `[[harness_accounts]]` entry: a named config directory for a harness
+/// (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so a thread can run on another login of
+/// the same tool. RustCode only names the directory; the harness keeps its own
+/// sign-in there.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessAccount {
     pub id: String,
-    /// The harness this account belongs to (`claude-code` for now).
+    /// The harness this account belongs to (`claude-code` or `codex`).
     pub harness: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -403,32 +404,128 @@ pub(crate) fn account_for_load(
     )
 }
 
-/// Whether `config_dir` is the harness's own default sign-in, `~/.claude`.
+/// How one harness keeps named logins: every fact that differs between Claude
+/// Code and Codex, in one place, so the account code stays generic.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AccountLayout {
+    /// The harness this describes.
+    pub harness: &'static str,
+    /// The variable the harness reads its config directory from.
+    pub env_var: &'static str,
+    /// The directory under the home the harness's own sign-in lives in.
+    pub dir_name: &'static str,
+    /// The prefix a named account's directory is suggested under.
+    pub dir_prefix: &'static str,
+    /// The name `~/.<dir_name>` is suggested as when it is discovered.
+    pub own_name: &'static str,
+    /// The harness's own command that signs a login in, run by the user in a
+    /// terminal (never by RustCode).
+    pub login_command: &'static [&'static str],
+    /// The file a login's directory holds once it is signed in, by name only:
+    /// its presence is the cheap sign-in check and its contents are never read.
+    pub marker: &'static str,
+    /// Variables that would override the account's own sign-in.
+    pub drop_env: &'static [&'static str],
+    /// Names whose presence makes a directory look like a login directory of
+    /// this harness (files or directories).
+    pub looks_like: &'static [&'static str],
+}
+
+const CLAUDE_ACCOUNT: AccountLayout = AccountLayout {
+    harness: "claude-code",
+    env_var: "CLAUDE_CONFIG_DIR",
+    dir_name: ".claude",
+    dir_prefix: ".claude-",
+    own_name: "Claude",
+    login_command: &["claude", "auth", "login"],
+    marker: ".credentials.json",
+    drop_env: &[
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ],
+    looks_like: &[
+        ".claude.json",
+        ".credentials.json",
+        "settings.json",
+        "projects",
+    ],
+};
+
+const CODEX_ACCOUNT: AccountLayout = AccountLayout {
+    harness: "codex",
+    env_var: "CODEX_HOME",
+    dir_name: ".codex",
+    dir_prefix: ".codex-",
+    own_name: "Codex",
+    login_command: &["codex", "login"],
+    marker: "auth.json",
+    drop_env: &["OPENAI_API_KEY", "CODEX_API_KEY"],
+    looks_like: &["config.toml", "auth.json", "sessions"],
+};
+
+/// The harnesses with named logins. Pi, OpenCode, Gemini and a custom harness
+/// have none: they run on their own single sign-in.
+const ACCOUNT_LAYOUTS: &[AccountLayout] = &[CLAUDE_ACCOUNT, CODEX_ACCOUNT];
+
+/// Every harness with named logins, in Settings' order.
+pub(crate) fn account_layouts() -> impl Iterator<Item = &'static AccountLayout> {
+    ACCOUNT_LAYOUTS.iter()
+}
+
+/// How `harness` keeps named logins, or `None` when it has none.
+pub(crate) fn account_layout(harness: &str) -> Option<&'static AccountLayout> {
+    ACCOUNT_LAYOUTS
+        .iter()
+        .find(|layout| layout.harness == harness)
+}
+
+/// Whether `config_dir` is the harness's own default sign-in, `~/.claude` or
+/// `~/.codex`.
 ///
 /// Such an account is a normal entry, but it runs as the login with no
-/// `CLAUDE_CONFIG_DIR` at all: the macOS Keychain items are keyed on that
-/// variable, so setting it would look signed out (`harness/session.rs`).
-pub(crate) fn is_default_dir(dir: &Path) -> bool {
+/// `CLAUDE_CONFIG_DIR`/`CODEX_HOME` at all: macOS keys Claude Code's Keychain
+/// items on that variable, so setting it would look signed out, and Codex's
+/// `~/.codex` is the login a thread on no account already runs on
+/// (`harness/session.rs`).
+pub(crate) fn is_default_dir(harness: &str, dir: &Path) -> bool {
+    let Some(layout) = account_layout(harness) else {
+        return false;
+    };
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return false;
     };
-    dir == home.join(".claude")
+    dir == home.join(layout.dir_name)
 }
 
-/// A Claude login directory found on this Mac that no account names yet.
+/// The environment that points a harness at one login's own directory: the
+/// variable and its value, or `None` for the harness's own default directory,
+/// which runs with no variable set (`is_default_dir`).
+pub(crate) fn login_env(harness: &str, dir: &Path) -> Option<(&'static str, String)> {
+    let layout = account_layout(harness)?;
+    if is_default_dir(harness, dir) {
+        return None;
+    }
+    Some((layout.env_var, dir.to_string_lossy().into_owned()))
+}
+
+/// A login directory found on this Mac that no account names yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct DiscoveredAccount {
     pub config_dir: String,
     pub suggested_name: String,
 }
 
-/// The Claude login directories on this Mac that no named account uses yet:
-/// `~/.claude` and `~/.claude-*`. A cheap read of names only: no file is
-/// opened, and only a directory that looks like a Claude config dir counts
-/// (`.claude.json`, `.credentials.json`, `settings.json` or `projects/`).
-pub(crate) fn discovered_accounts(registered: &[HarnessAccount]) -> Vec<DiscoveredAccount> {
+/// The login directories of `harness` on this Mac that no named account uses
+/// yet: `~/.claude` and `~/.claude-*`, or `~/.codex` and `~/.codex-*`. A cheap
+/// read of names only: no file is opened, and only a directory that looks like
+/// one of its login directories counts (`looks_like`).
+pub(crate) fn discovered_accounts(
+    harness: &str,
+    registered: &[HarnessAccount],
+) -> Vec<DiscoveredAccount> {
     match std::env::var_os("HOME").map(PathBuf::from) {
-        Some(home) => discovered_accounts_in(&home, registered),
+        Some(home) => discovered_accounts_in(&home, harness, registered),
         None => Vec::new(),
     }
 }
@@ -436,16 +533,20 @@ pub(crate) fn discovered_accounts(registered: &[HarnessAccount]) -> Vec<Discover
 /// [`discovered_accounts`] against an explicit home, for tests.
 pub(crate) fn discovered_accounts_in(
     home: &Path,
+    harness: &str,
     registered: &[HarnessAccount],
 ) -> Vec<DiscoveredAccount> {
+    let Some(layout) = account_layout(harness) else {
+        return Vec::new();
+    };
     let known: Vec<PathBuf> = registered
         .iter()
-        .filter(|account| account.harness == "claude-code")
+        .filter(|account| account.harness == harness)
         .map(HarnessAccount::resolved_dir)
         .collect();
     let mut found = Vec::new();
-    let default = home.join(".claude");
-    if looks_like_claude_dir(&default) {
+    let default = home.join(layout.dir_name);
+    if looks_like_login_dir(layout, &default) {
         found.push(default);
     }
     let mut profiles: Vec<PathBuf> = std::fs::read_dir(home)
@@ -456,43 +557,40 @@ pub(crate) fn discovered_accounts_in(
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".claude-"))
+                .is_some_and(|name| name.starts_with(layout.dir_prefix))
         })
         .collect();
     profiles.sort();
     found.extend(
         profiles
             .into_iter()
-            .filter(|path| looks_like_claude_dir(path)),
+            .filter(|path| looks_like_login_dir(layout, path)),
     );
     found
         .into_iter()
         .filter(|path| !known.iter().any(|known| known == path))
         .map(|path| DiscoveredAccount {
-            suggested_name: suggested_account_name(&path),
+            suggested_name: suggested_account_name(layout, &path),
             config_dir: tilde_path(&path, home),
         })
         .collect()
 }
 
-/// Whether `dir` looks like a Claude config directory, by names only.
-fn looks_like_claude_dir(dir: &Path) -> bool {
-    dir.is_dir()
-        && (dir.join(".claude.json").is_file()
-            || dir.join(".credentials.json").is_file()
-            || dir.join("settings.json").is_file()
-            || dir.join("projects").is_dir())
+/// Whether `dir` looks like one of the harness's login directories, by names
+/// only: no file is opened.
+fn looks_like_login_dir(layout: &AccountLayout, dir: &Path) -> bool {
+    dir.is_dir() && layout.looks_like.iter().any(|name| dir.join(name).exists())
 }
 
-/// The name a discovered directory is suggested under: the suffix after
-/// `.claude-`, title-cased (`~/.claude-personal` is "Personal"), and "Claude"
-/// for `~/.claude` itself.
-fn suggested_account_name(dir: &Path) -> String {
+/// The name a discovered directory is suggested under: the suffix after the
+/// harness's prefix, title-cased (`~/.claude-personal` is "Personal"), and the
+/// harness's own name for its default directory.
+fn suggested_account_name(layout: &AccountLayout, dir: &Path) -> String {
     let name = dir
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    let suffix = name.strip_prefix(".claude-").unwrap_or_default();
+    let suffix = name.strip_prefix(layout.dir_prefix).unwrap_or_default();
     let words: Vec<String> = suffix
         .split(['-', '_', '.'])
         .filter(|word| !word.is_empty())
@@ -505,7 +603,7 @@ fn suggested_account_name(dir: &Path) -> String {
         })
         .collect();
     if words.is_empty() {
-        "Claude".to_owned()
+        layout.own_name.to_owned()
     } else {
         words.join(" ")
     }
@@ -521,19 +619,20 @@ fn tilde_path(path: &Path, home: &Path) -> String {
 }
 
 /// Where an account's own directory goes when the client names none.
-pub(crate) fn default_config_dir(id: &str) -> String {
-    format!("~/.claude-{id}")
+pub(crate) fn default_config_dir(layout: &AccountLayout, id: &str) -> String {
+    format!("~/{}{id}", layout.dir_prefix)
 }
 
 /// Add an account to the user config. Validates it, derives
-/// `~/.claude-<id>` when no directory is given, and creates the directory.
+/// `~/.claude-<id>` (or the harness's own prefix) when no directory is given,
+/// and creates the directory.
 pub(crate) fn add_account_in(dir: &Path, change: AccountChange) -> Result<HarnessAccount, String> {
     let harness = change.harness.trim().to_owned();
-    if harness != "claude-code" {
+    let Some(layout) = account_layout(&harness) else {
         return Err(format!(
-            "{harness} has no named logins yet; only Claude Code does"
+            "{harness} has no named logins; use Claude Code or Codex"
         ));
-    }
+    };
     let id = change.id.trim().to_owned();
     if !valid_id(&id) {
         return Err(format!(
@@ -549,7 +648,7 @@ pub(crate) fn add_account_in(dir: &Path, change: AccountChange) -> Result<Harnes
         .config_dir
         .map(|dir| dir.trim().to_owned())
         .filter(|dir| !dir.is_empty())
-        .unwrap_or_else(|| default_config_dir(&id));
+        .unwrap_or_else(|| default_config_dir(layout, &id));
     let account = HarnessAccount {
         id,
         harness,
@@ -1008,22 +1107,59 @@ config_dir = "~/.claude-paral-2"
             add_account_in(
                 dir.path(),
                 AccountChange {
-                    harness: "codex".into(),
+                    harness: "gemini".into(),
                     id: "work-5".into(),
                     name: Some("Work 5".into()),
                     config_dir: Some(own.to_string_lossy().into_owned()),
                 },
             )
             .is_err(),
-            "only Claude Code has named logins for now"
+            "Gemini CLI has no named logins"
         );
-        assert_eq!(default_config_dir("paral-2"), "~/.claude-paral-2");
+        assert_eq!(
+            default_config_dir(&CLAUDE_ACCOUNT, "paral-2"),
+            "~/.claude-paral-2"
+        );
+        assert_eq!(
+            default_config_dir(&CODEX_ACCOUNT, "paral"),
+            "~/.codex-paral"
+        );
 
         let removed = remove_account_in(dir.path(), "claude-code", "work").unwrap();
         assert_eq!(removed.id, "work");
         assert!(own.is_dir(), "removing an account never deletes its login");
         assert_eq!(load_accounts_in(dir.path()).len(), 1);
         assert!(remove_account_in(dir.path(), "claude-code", "work").is_err());
+    }
+
+    #[test]
+    fn a_codex_account_gets_its_own_directory_and_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let added = add_account_in(
+            dir.path(),
+            AccountChange {
+                harness: "codex".into(),
+                id: "paral".into(),
+                name: Some("Paral".into()),
+                config_dir: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(added.config_dir, "~/.codex-paral");
+        assert!(
+            added.resolved_dir().is_dir(),
+            "the account's directory is created"
+        );
+        let accounts = load_accounts_in(dir.path());
+        assert_eq!(
+            find_account(&accounts, "codex", "paral").unwrap().id,
+            "paral"
+        );
+        assert!(
+            find_account(&accounts, "claude-code", "paral").is_err(),
+            "a Codex account is not a Claude Code one"
+        );
+        assert!(!is_default_dir("codex", &added.resolved_dir()));
     }
 
     #[test]
@@ -1034,7 +1170,15 @@ config_dir = "~/.claude-paral-2"
         // The engine still treats this directory as the login with no
         // `CLAUDE_CONFIG_DIR` (harness/session.rs), but it is a normal account
         // now, so a thread can move on and off the Mac's own Claude login.
-        assert!(is_default_dir(&home.join(".claude")));
+        assert!(is_default_dir("claude-code", &home.join(".claude")));
+        assert!(
+            is_default_dir("codex", &home.join(".codex")),
+            "each harness has a default directory of its own"
+        );
+        assert!(
+            !is_default_dir("codex", &home.join(".claude")),
+            "another harness's default directory is not this one's"
+        );
         let dir = tempfile::tempdir().unwrap();
         let own = dir.path().join(".claude");
         std::fs::create_dir_all(&own).unwrap();
@@ -1083,7 +1227,7 @@ config_dir = "~/.claude-paral-2"
             name: Some("Paral 2".into()),
             config_dir: dir(".claude-personal").to_string_lossy().into_owned(),
         }];
-        let found = discovered_accounts_in(home.path(), &registered);
+        let found = discovered_accounts_in(home.path(), "claude-code", &registered);
         assert_eq!(
             found,
             vec![DiscoveredAccount {
@@ -1092,7 +1236,7 @@ config_dir = "~/.claude-paral-2"
             }]
         );
         // A second profile is suggested under its title-cased suffix.
-        let found = discovered_accounts_in(home.path(), &[]);
+        let found = discovered_accounts_in(home.path(), "claude-code", &[]);
         assert_eq!(
             found
                 .iter()
@@ -1103,18 +1247,78 @@ config_dir = "~/.claude-paral-2"
     }
 
     #[test]
+    fn discovery_is_per_harness() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = |name: &str| home.path().join(name);
+        std::fs::create_dir_all(dir(".claude/projects")).unwrap();
+        std::fs::create_dir_all(dir(".codex/sessions")).unwrap();
+        std::fs::create_dir_all(dir(".codex-paral")).unwrap();
+        std::fs::write(dir(".codex-paral/auth.json"), "{}").unwrap();
+        // A Codex home that holds only its config still counts.
+        std::fs::create_dir_all(dir(".codex-work")).unwrap();
+        std::fs::write(dir(".codex-work/config.toml"), "").unwrap();
+        // One harness's directories are never offered for the other.
+        assert_eq!(
+            discovered_accounts_in(home.path(), "codex", &[]),
+            vec![
+                DiscoveredAccount {
+                    config_dir: "~/.codex".to_owned(),
+                    suggested_name: "Codex".to_owned(),
+                },
+                DiscoveredAccount {
+                    config_dir: "~/.codex-paral".to_owned(),
+                    suggested_name: "Paral".to_owned(),
+                },
+                DiscoveredAccount {
+                    config_dir: "~/.codex-work".to_owned(),
+                    suggested_name: "Work".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(
+            discovered_accounts_in(home.path(), "claude-code", &[])
+                .iter()
+                .map(|a| a.config_dir.as_str())
+                .collect::<Vec<_>>(),
+            vec!["~/.claude"]
+        );
+        // A registered Codex account's directory is not offered again, and a
+        // harness with no named logins discovers nothing at all.
+        let registered = [HarnessAccount {
+            id: "paral".into(),
+            harness: "codex".into(),
+            name: Some("Paral".into()),
+            config_dir: dir(".codex-paral").to_string_lossy().into_owned(),
+        }];
+        assert!(
+            discovered_accounts_in(home.path(), "codex", &registered)
+                .iter()
+                .all(|a| a.config_dir != "~/.codex-paral")
+        );
+        assert!(discovered_accounts_in(home.path(), "gemini", &[]).is_empty());
+    }
+
+    #[test]
     fn a_discovered_name_is_title_cased_from_its_suffix() {
         assert_eq!(
-            suggested_account_name(Path::new("/Users/me/.claude")),
+            suggested_account_name(&CLAUDE_ACCOUNT, Path::new("/Users/me/.claude")),
             "Claude"
         );
         assert_eq!(
-            suggested_account_name(Path::new("/Users/me/.claude-paral-2")),
+            suggested_account_name(&CLAUDE_ACCOUNT, Path::new("/Users/me/.claude-paral-2")),
             "Paral 2"
         );
         assert_eq!(
-            suggested_account_name(Path::new("/Users/me/.claude-work_account")),
+            suggested_account_name(&CLAUDE_ACCOUNT, Path::new("/Users/me/.claude-work_account")),
             "Work Account"
+        );
+        assert_eq!(
+            suggested_account_name(&CODEX_ACCOUNT, Path::new("/Users/me/.codex")),
+            "Codex"
+        );
+        assert_eq!(
+            suggested_account_name(&CODEX_ACCOUNT, Path::new("/Users/me/.codex-paral-2")),
+            "Paral 2"
         );
     }
 

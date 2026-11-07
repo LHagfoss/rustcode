@@ -366,7 +366,7 @@ where
     let mut named = Vec::new();
     for account in accounts {
         let dir = account.resolved_dir();
-        let row = if crate::harness::config::is_default_dir(&dir) {
+        let row = if crate::harness::config::is_default_dir(&account.harness, &dir) {
             match default {
                 Some(row) => row.clone(),
                 None => read(None, freshness).await,

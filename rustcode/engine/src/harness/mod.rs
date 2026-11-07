@@ -529,11 +529,12 @@ fn snapshot_entry(
     detection: &detect::Detection,
     entries: &[config::HarnessEntry],
     accounts: &[config::HarnessAccount],
-    discovered: &[config::DiscoveredAccount],
+    discovered: Option<&[config::DiscoveredAccount]>,
     probe: bool,
 ) -> Value {
     let learned = learned_for(&harness.id);
     let builtin = harness.kind == HarnessKind::Builtin;
+    let layout = config::account_layout(&harness.id);
     let models = if builtin {
         builtin_models()
     } else {
@@ -544,16 +545,8 @@ fn snapshot_entry(
         .find(|entry| entry.id == harness.id)
         .filter(|entry| entry.model.is_some() || entry.effort.is_some())
         .map(|entry| json!({ "model": entry.model, "effort": entry.effort }));
-    // Claude logins on this Mac that no account names yet. A cheap read of
-    // directory names only, so Settings can offer `~/.claude` and a
-    // `~/.claude-personal` that already exists without anyone typing a path.
-    let discovered = if harness.id == "claude-code" {
-        json!(discovered)
-    } else {
-        Value::Null
-    };
     // A named login is only a directory; whether it is signed in is read from
-    // its own credentials, never by starting the harness.
+    // its own credentials or a status command, never by starting the harness.
     let accounts = config::accounts_of(accounts, &harness.id)
         .into_iter()
         .map(|account| {
@@ -561,10 +554,10 @@ fn snapshot_entry(
                 "id": account.id,
                 "name": account.display_name(),
                 "config_dir": account.config_dir,
-                // Whether this is the Mac's own login (`~/.claude`), whatever
-                // path it was written as: the app must set no
-                // `CLAUDE_CONFIG_DIR` for it.
-                "own_dir": config::is_default_dir(&account.resolved_dir()),
+                // Whether this is the Mac's own login (`~/.claude`, `~/.codex`),
+                // whatever path it was written as: the app must set no
+                // `CLAUDE_CONFIG_DIR`/`CODEX_HOME` for it.
+                "own_dir": config::is_default_dir(&harness.id, &account.resolved_dir()),
                 "auth": detect::account_auth(&account, probe),
             })
         })
@@ -586,7 +579,12 @@ fn snapshot_entry(
         // The model and effort last chosen for a new thread on it.
         "last": last,
         "accounts": accounts,
-        // Only Claude Code has logins to discover on this Mac.
+        // How a named login is run, for a client that offers one: the variable
+        // naming its directory and the harness's own sign-in command. Null for
+        // a harness without named logins.
+        "account_env": layout.map(|layout| layout.env_var),
+        "account_login_command": layout.map(|layout| layout.login_command),
+        // Logins on this Mac that no account names yet (`discovered_accounts`).
         "discovered_accounts": discovered,
         "error": learned.error.or_else(|| detection.error.clone()),
     })
@@ -647,18 +645,29 @@ pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Resu
     let harnesses = resolve_all(&entries);
     let detections = futures_detect(&harnesses).await;
     // Reading the home directory's names is blocking work like detection:
-    // keep it off the async runtime the same way.
+    // keep it off the async runtime the same way. Each harness with named
+    // logins is discovered by the directories it knows (`~/.claude*`,
+    // `~/.codex*`), a cheap read of names only.
     let discovered = {
         let registered = accounts.clone();
-        tokio::task::spawn_blocking(move || config::discovered_accounts(&registered))
-            .await
-            .unwrap_or_default()
+        let layouts: Vec<&'static str> = config::account_layouts()
+            .map(|layout| layout.harness)
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            layouts
+                .into_iter()
+                .map(|harness| (harness, config::discovered_accounts(harness, &registered)))
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .await
+        .unwrap_or_default()
     };
     let rows = harnesses
         .iter()
         .zip(detections.iter())
         .map(|(harness, detection)| {
-            snapshot_entry(harness, detection, &entries, &accounts, &discovered, probe)
+            let found = discovered.get(harness.id.as_str()).map(Vec::as_slice);
+            snapshot_entry(harness, detection, &entries, &accounts, found, probe)
         })
         .collect::<Vec<_>>();
     Ok(json!({
@@ -1178,23 +1187,33 @@ mod tests {
         std::fs::write(
             dir.path().join("config.toml"),
             "[[harness_accounts]]\nid = \"own\"\nharness = \"claude-code\"\nname = \"Claude\"\nconfig_dir = \"~/.claude\"\n\
-             \n[[harness_accounts]]\nid = \"work\"\nharness = \"claude-code\"\nname = \"Work\"\nconfig_dir = \"/tmp/claude-work\"\n",
+             \n[[harness_accounts]]\nid = \"work\"\nharness = \"claude-code\"\nname = \"Work\"\nconfig_dir = \"/tmp/claude-work\"\n\
+             \n[[harness_accounts]]\nid = \"home\"\nharness = \"codex\"\nname = \"Codex\"\nconfig_dir = \"~/.codex\"\n\
+             \n[[harness_accounts]]\nid = \"paral\"\nharness = \"codex\"\nname = \"Paral\"\nconfig_dir = \"/tmp/codex-paral\"\n",
         )
         .unwrap();
         let snapshot = snapshot_in(dir.path()).await.unwrap();
-        let row = snapshot["harnesses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["id"] == "claude-code")
-            .unwrap();
-        let accounts = row["accounts"].as_array().unwrap();
+        let row = |id: &str| {
+            snapshot["harnesses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id)
+                .unwrap()
+        };
+        let accounts = row("claude-code")["accounts"].as_array().unwrap();
         assert_eq!(accounts[0]["id"], "own");
         assert_eq!(
             accounts[0]["own_dir"], true,
             "~/.claude is the Mac's own login, whatever path it was written as"
         );
         assert_eq!(accounts[1]["id"], "work");
+        assert_eq!(accounts[1]["own_dir"], false);
+        // Each harness decides which directory is its own.
+        let accounts = row("codex")["accounts"].as_array().unwrap();
+        assert_eq!(accounts[0]["id"], "home");
+        assert_eq!(accounts[0]["own_dir"], true);
+        assert_eq!(accounts[1]["id"], "paral");
         assert_eq!(accounts[1]["own_dir"], false);
     }
 
@@ -1231,6 +1250,24 @@ mod tests {
         }
         assert_eq!(codex["kind"], "codex");
         assert_eq!(codex["command"], json!(["codex", "app-server"]));
+        // How a client signs a named login in and runs it: the engine says, so
+        // the app holds no per-harness copy of it.
+        assert_eq!(codex["account_env"], "CODEX_HOME");
+        assert_eq!(codex["account_login_command"], json!(["codex", "login"]));
+        let claude = rows.iter().find(|row| row["id"] == "claude-code").unwrap();
+        assert_eq!(claude["account_env"], "CLAUDE_CONFIG_DIR");
+        assert_eq!(
+            claude["account_login_command"],
+            json!(["claude", "auth", "login"])
+        );
+        // Logins on this Mac are listed for a harness with named logins, and
+        // null for one without.
+        assert!(claude["discovered_accounts"].is_array());
+        assert!(codex["discovered_accounts"].is_array());
+        let rustcode = rows.iter().find(|row| row["id"] == "rustcode").unwrap();
+        assert_eq!(rustcode["account_env"], Value::Null);
+        assert_eq!(rustcode["account_login_command"], Value::Null);
+        assert_eq!(rustcode["discovered_accounts"], Value::Null);
     }
 
     fn listed(id: &str, efforts: &[&str], default_effort: Option<&str>) -> HarnessModel {

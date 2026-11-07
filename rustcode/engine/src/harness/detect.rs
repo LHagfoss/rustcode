@@ -46,26 +46,50 @@ pub(crate) fn forget(id: &str) {
         .remove(id);
 }
 
-/// Whether a named account's config directory holds a sign-in: its own
-/// `.credentials.json`, else (when `probe`) the macOS Keychain item Claude
-/// Code keeps for that directory. An account on the default directory is the
-/// login with no `CLAUDE_CONFIG_DIR`, so it reads as that login does. Nothing
-/// is started and no token is read. `ok` is a sign-in found, `needs_login` one
-/// looked for and not found (only after `probe`), `unknown` not looked for.
+/// Whether a named account's config directory holds a sign-in.
+///
+/// A `probe` look runs the harness's own cheap status command with the
+/// account's directory (`codex login status`), which is authoritative about a
+/// sign-in that expired behind `auth.json` and prints no secret. Failing that
+/// (a harness without such a command, or one that is not installed), the
+/// login's own credentials file is looked for by name (`.credentials.json`,
+/// Codex's `auth.json`) and never opened; Claude Code's macOS Keychain item,
+/// named after the directory, is asked for existence too. An account on the
+/// harness's default directory is the login with no variable set, so it reads
+/// as that login does. Nothing is started as a session and no token is read.
+/// `ok` is a sign-in found, `needs_login` one looked for and not found (only
+/// after `probe`), `unknown` not looked for.
 pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool) -> &'static str {
+    let Some(layout) = super::config::account_layout(&account.harness) else {
+        return "unknown";
+    };
     let dir = account.resolved_dir();
-    if dir.join(".credentials.json").is_file() {
+    if probe && let Some(args) = super::known(&account.harness).and_then(|known| known.auth_probe) {
+        let env = super::config::login_env(&account.harness, &dir);
+        let env: Vec<(&str, &std::path::Path)> = env
+            .as_ref()
+            .map(|(name, value)| (*name, std::path::Path::new(value)))
+            .into_iter()
+            .collect();
+        if let Some((success, output)) = run_quick_env(args[0], &args[1..], &env) {
+            let found = success && !output.to_ascii_lowercase().contains("not logged in");
+            return if found { "ok" } else { "needs_login" };
+        }
+    }
+    if dir.join(layout.marker).is_file() {
         return "ok";
     }
-    if probe {
-        let found = if super::config::is_default_dir(&dir) {
-            crate::provider_auth::claude_usage::default_keychain_item_exists()
-        } else {
-            crate::provider_auth::claude_usage::keychain_item_exists(&dir)
-        };
-        return if found { "ok" } else { "needs_login" };
+    if !probe {
+        return "unknown";
     }
-    "unknown"
+    // Claude Code has no status command: on macOS its sign-in is a Keychain
+    // item named after the directory, and the default login's after none.
+    let found = if super::config::is_default_dir(&account.harness, &dir) {
+        crate::provider_auth::claude_usage::default_keychain_item_exists()
+    } else {
+        crate::provider_auth::claude_usage::keychain_item_exists(&dir)
+    };
+    if found { "ok" } else { "needs_login" }
 }
 
 /// The version the last detection of `id` found, without running anything.
@@ -159,15 +183,24 @@ pub(crate) fn parse_version(output: &str) -> Option<String> {
 /// Run `program args` with no input, for at most a few seconds. Returns
 /// whether it succeeded and its stdout and stderr.
 fn run_quick(program: &str, args: &[&str]) -> Option<(bool, String)> {
+    run_quick_env(program, args, &[])
+}
+
+/// [`run_quick`] with environment variables added, for a harness status
+/// command that has to look at one login's own directory.
+fn run_quick_env(program: &str, args: &[&str], env: &[(&str, &Path)]) -> Option<(bool, String)> {
     let path = resolve_program(program)?;
-    let mut child = std::process::Command::new(path)
+    let mut command = std::process::Command::new(path);
+    command
         .args(args)
         .env("PATH", search_path())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .ok()?;
+        .stderr(std::process::Stdio::piped());
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().ok()?;
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -253,18 +286,34 @@ mod tests {
     }
 
     #[test]
-    fn missing_programs_are_not_installed() {
-        let harness = ResolvedHarness {
-            id: "ghost".into(),
-            name: "Ghost".into(),
-            kind: HarnessKind::Acp,
-            command: vec!["rustcode-no-such-harness-binary".into()],
-            enabled: true,
-            known: None,
+    fn an_accounts_sign_in_is_read_by_name_and_never_by_starting_the_harness() {
+        use crate::harness::config::HarnessAccount;
+        let dir = tempfile::tempdir().unwrap();
+        let account = |harness: &str, config_dir: &str| HarnessAccount {
+            id: "paral".into(),
+            harness: harness.into(),
+            name: Some("Paral".into()),
+            config_dir: config_dir.into(),
         };
-        let detection = detect(&harness);
-        assert!(!detection.installed);
-        assert_eq!(detection.auth, "unknown");
-        assert!(resolve_program("sh").is_some());
+        let codex = account("codex", &dir.path().to_string_lossy());
+        assert_eq!(
+            account_auth(&codex, false),
+            "unknown",
+            "a cheap look reads no file, so an empty Codex home is not looked at"
+        );
+        std::fs::write(dir.path().join("auth.json"), "{}").unwrap();
+        assert_eq!(
+            account_auth(&codex, false),
+            "ok",
+            "auth.json's presence is a sign-in, by name only"
+        );
+        // Claude Code reads its own credentials file the same way.
+        let claude_dir = tempfile::tempdir().unwrap();
+        let claude = account("claude-code", &claude_dir.path().to_string_lossy());
+        assert_eq!(account_auth(&claude, false), "unknown");
+        std::fs::write(claude_dir.path().join(".credentials.json"), "").unwrap();
+        assert_eq!(account_auth(&claude, false), "ok");
+        // A harness with no named logins answers nothing about one.
+        assert_eq!(account_auth(&account("gemini", "/tmp/x"), true), "unknown");
     }
 }
