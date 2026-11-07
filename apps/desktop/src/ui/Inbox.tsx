@@ -89,6 +89,9 @@ export function inboxActions(item: InboxItem): RowAction[] {
   const request: PermissionRequest | undefined = item.request;
   if (!request) return [open];
   if (request.question) {
+    // A multiple-choice question needs the thread's own form: one inline answer could
+    // send half of it.
+    if (request.question.multiple) return [open];
     const answers = request.options.filter((option) => isAllow(option.kind) || !option.kind);
     const actions = answers.slice(0, 3).map(
       (option, i): RowAction => ({
