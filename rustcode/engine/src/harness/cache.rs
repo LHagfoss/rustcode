@@ -33,9 +33,9 @@ pub(crate) struct CachedHarness {
     pub images: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steer: Option<bool>,
-    /// Each model in `models` has the efforts it itself offers.
+    /// The list came from a listing that probed the models a person can see.
     #[serde(default)]
-    pub per_model: bool,
+    pub probed: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -84,7 +84,7 @@ pub(crate) fn to_learned(entry: CachedHarness) -> Learned {
         effort: entry.effort,
         fetched_at: Some(entry.fetched_at),
         version: entry.version,
-        per_model: entry.per_model,
+        probed: entry.probed,
     }
 }
 
@@ -107,23 +107,23 @@ pub(crate) fn from_learned(learned: &Learned) -> Option<CachedHarness> {
         resume: learned.resume,
         images: learned.images,
         steer: learned.steer,
-        per_model: learned.per_model,
+        probed: learned.probed,
     })
 }
 
 /// Whether a model list learned at `fetched_at` for `version` should be
-/// listed again: too old, the harness was updated since, or it holds one
-/// model's efforts for every model (listed at a thread start).
+/// listed again: too old, the harness was updated since, or it was learned at
+/// a thread start, which sees one model's efforts alone.
 pub(crate) fn is_stale(
     fetched_at: Option<i64>,
     version: Option<&str>,
     current_version: Option<&str>,
-    per_model: bool,
+    probed: bool,
     now: i64,
 ) -> bool {
     let too_old = fetched_at.is_none_or(|at| now - at > MAX_AGE_SECS);
     let updated = matches!((version, current_version), (Some(was), Some(is)) if was != is);
-    too_old || updated || !per_model
+    too_old || updated || !probed
 }
 
 pub(crate) fn now() -> i64 {
@@ -140,6 +140,7 @@ mod tests {
             name: id.into(),
             efforts: vec!["low".into(), "high".into()],
             default_effort: Some("high".into()),
+            efforts_unknown: false,
         }
     }
 
@@ -218,9 +219,9 @@ mod tests {
     }
 
     #[test]
-    fn a_list_of_one_models_efforts_is_listed_again() {
+    fn a_list_from_a_thread_start_is_listed_again() {
         let now = 10 * MAX_AGE_SECS;
-        // A thread start learns the efforts of the model it runs for every model.
+        // A thread start knows the efforts of the model it runs alone.
         assert!(is_stale(
             Some(now - 60),
             Some("1.0"),

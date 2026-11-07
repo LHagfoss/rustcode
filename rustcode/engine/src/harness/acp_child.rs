@@ -26,6 +26,13 @@ use tokio::sync::{mpsc, oneshot};
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(90);
 /// The client waits this long (10 s) for `_rustcode/steer`; answer before it.
 const STEER_TIMEOUT: Duration = Duration::from_secs(8);
+/// How many models a listing asks for their own thought levels: the models a
+/// person can see, the one a setting or a thread uses, and no more. Each is one
+/// round trip, so this is what bounds a listing's cost.
+pub(crate) const PROBE_LIMIT: usize = 30;
+/// How long a listing spends asking models; the rest of the catalog keeps the
+/// union of the levels learned so far (`HarnessModel::efforts_unknown`).
+pub(crate) const PROBE_BUDGET: Duration = Duration::from_secs(5);
 
 /// What is left of a `user_message_chunk` once RustCode's own setup block is
 /// taken out of it; `None` drops the chunk. Some agents (pi-acp, OpenCode) echo
@@ -440,7 +447,13 @@ impl AcpAdapter {
         if let Some(model) = options.model {
             let _ = adapter.set_config("model", json!(model)).await;
         }
-        if let Some(effort) = options.effort {
+        // The model the thread runs now answers with its own thought levels:
+        // clamped to them, and kept for the next listing.
+        let running = adapter.effort_levels();
+        if let Some(effort) = options.effort.as_deref() {
+            let offered = running.as_ref().map(|(_, efforts, _)| efforts.as_slice());
+            let effort = super::clamp_effort(effort, offered.unwrap_or_default())
+                .unwrap_or_else(|| effort.to_owned());
             let _ = adapter.set_config("effort", json!(effort)).await;
         }
         super::learn(&harness.id, |learned| {
@@ -450,10 +463,13 @@ impl AcpAdapter {
             learned.effort = Some(has_effort);
             learned.error = None;
             // Only the model this thread runs has its own efforts here, so a
-            // list that gives each model its own is left alone; one learned
-            // this way is listed again for the others'.
+            // list from a listing is left alone; one learned this way is
+            // listed again for the others'.
             if learned.models.is_none() && !models.is_empty() {
                 learned.listed_for(&harness.id, models, false);
+            }
+            if let Some((model, efforts, default_effort)) = running {
+                learned.set_model_efforts(&model, efforts, default_effort);
             }
         });
         Ok(adapter)
@@ -542,6 +558,21 @@ impl AcpAdapter {
                 state.options.is_empty() && state.legacy_models.is_some(),
             )
         };
+        // The levels this model really takes: a level it does not offer (it
+        // was picked from the union while the model was still unknown) goes
+        // out as the closest one it does.
+        let value = match (id, value.as_str()) {
+            ("effort", Some(effort)) => {
+                let offered = Self::effort_choices(&self.config_options())
+                    .map(|(_, offered)| offered)
+                    .unwrap_or_default();
+                match super::clamp_effort(effort, &offered) {
+                    Some(clamped) => json!(clamped),
+                    None => value,
+                }
+            }
+            _ => value,
+        };
         if let Some(theirs) = theirs {
             let mut params =
                 json!({"sessionId": self.native_id, "configId": theirs, "value": value});
@@ -588,6 +619,15 @@ impl AcpAdapter {
         (current("model"), current("effort"))
     }
 
+    /// Keep the efforts of the model this session runs (`docs/harnesses.md`):
+    /// a model a thread started or switched to knows its own levels from now
+    /// on, without the listing asking for it.
+    pub(crate) fn learn_efforts(&self, harness: &str) {
+        if let Some((model, efforts, default_effort)) = self.effort_levels() {
+            super::learn_model_efforts(harness, &model, efforts, default_effort);
+        }
+    }
+
     /// The effort option's own id, the level the session runs with and the
     /// levels the session's model offers.
     fn effort_choices(options: &[SessionConfigOption]) -> Option<(String, Vec<String>)> {
@@ -599,77 +639,160 @@ impl AcpAdapter {
         ))
     }
 
-    pub(crate) fn models(&self) -> Vec<HarnessModel> {
+    /// The model the session runs and the efforts it itself offers, as the
+    /// harness just reported them: an empty list means it takes no effort.
+    fn effort_levels(&self) -> Option<(String, Vec<String>, Option<String>)> {
         let options = self.config_options();
-        let (default_effort, efforts) = Self::effort_choices(&options)
-            .map(|(current, efforts)| {
-                (
-                    Some(current).filter(|current| !current.is_empty()),
-                    super::order_efforts(efforts),
-                )
-            })
-            .unwrap_or((None, Vec::new()));
-        let model_index = (0..options.len()).find(|index| our_id(&options, *index) == "model");
-        model_index
-            .map(|index| {
-                select_values(&options[index])
-                    .1
-                    .into_iter()
-                    .map(|(id, name)| HarnessModel {
-                        id,
-                        name,
-                        efforts: efforts.clone(),
-                        default_effort: default_effort.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let model = self.model_and_effort().0?;
+        let (efforts, default_effort) = match Self::effort_choices(&options) {
+            Some((current, efforts)) => (
+                super::order_efforts(efforts),
+                Some(current).filter(|current| !current.is_empty()),
+            ),
+            None => (Vec::new(), None),
+        };
+        Some((model, efforts, default_effort))
     }
 
-    /// Every listed model with the efforts it itself offers.
-    ///
-    /// An ACP agent reports the thought level option of the model the session
-    /// runs, so each other model is selected in turn to read its own; the
-    /// session's model is put back afterwards. A model whose own listing fails
-    /// keeps the efforts the session shows, so a picker never loses a level.
-    pub(crate) async fn probed_models(&self) -> Vec<HarnessModel> {
+    /// Note `efforts` as the ones `model` offers.
+    fn mark_efforts(
+        models: &mut [HarnessModel],
+        model: &str,
+        efforts: Vec<String>,
+        default_effort: Option<String>,
+    ) {
+        if let Some(entry) = models.iter_mut().find(|entry| entry.id == model) {
+            entry.efforts = super::order_efforts(efforts);
+            entry.default_effort = default_effort;
+            entry.efforts_unknown = false;
+        }
+    }
+
+    /// The catalog as a session that has just started or switched model
+    /// describes it: the model it runs with its own efforts, the others with
+    /// the union of what the harness is known to offer (`efforts_unknown`).
+    pub(crate) fn models(&self) -> Vec<HarnessModel> {
         let options = self.config_options();
         let Some(index) = (0..options.len()).find(|index| our_id(&options, *index) == "model")
         else {
             return Vec::new();
         };
         let (current, choices) = select_values(&options[index]);
-        let Some((session_effort, session_efforts)) = Self::effort_choices(&options) else {
-            // The harness takes no effort: every model is listed as it is.
-            return self.models();
-        };
-        if choices.len() < 2 {
-            return self.models();
-        }
-        let mut models = Vec::with_capacity(choices.len());
-        for (id, name) in choices {
-            let (efforts, default_effort) = if id == current {
-                (session_efforts.clone(), session_effort.clone())
-            } else {
-                match self.set_config("model", json!(id)).await {
-                    Ok(options) => match Self::effort_choices(&options) {
-                        Some((current, efforts)) => (efforts, current),
-                        // This model takes no effort at all.
-                        None => (Vec::new(), String::new()),
-                    },
-                    Err(_) => (session_efforts.clone(), session_effort.clone()),
-                }
-            };
-            models.push(HarnessModel {
+        let mut models = choices
+            .into_iter()
+            .map(|(id, name)| HarnessModel {
                 id,
                 name,
-                efforts: super::order_efforts(efforts),
-                default_effort: Some(default_effort).filter(|effort| !effort.is_empty()),
-            });
+                efforts: Vec::new(),
+                default_effort: None,
+                efforts_unknown: true,
+            })
+            .collect::<Vec<_>>();
+        match self.effort_levels() {
+            Some((model, efforts, default_effort)) => {
+                Self::mark_efforts(&mut models, &model, efforts, default_effort);
+            }
+            // The model runs with no thought level beside it: it takes none.
+            None => Self::mark_efforts(&mut models, &current, Vec::new(), None),
         }
-        if !current.is_empty() {
+        super::refresh_unknown_efforts(&mut models, self.model_and_effort().1.as_deref());
+        models
+    }
+
+    /// The catalog with the models the app shows asked for their own efforts.
+    ///
+    /// An ACP agent reports the thought level option of the model the session
+    /// runs, so a model is selected to read its own; the session's model goes
+    /// back afterwards. Probing is bounded ([`PROBE_LIMIT`] models,
+    /// [`PROBE_BUDGET`]): the model the session runs, then `preferred` (the
+    /// model a setting or a thread uses), then the catalog in the order the
+    /// picker shows it, skipping what `known` already knows. A model left
+    /// unprobed says `efforts_unknown` and carries the union of the known
+    /// levels; a thread that picks it learns its own then. The session is the
+    /// engine's scratch listing session ([`super::session::list_models`]),
+    /// never a user's thread.
+    pub(crate) async fn probed_models(
+        &self,
+        known: &[HarnessModel],
+        preferred: &[String],
+    ) -> Vec<HarnessModel> {
+        self.probe_models(known, preferred, PROBE_LIMIT, PROBE_BUDGET)
+            .await
+    }
+
+    async fn probe_models(
+        &self,
+        known: &[HarnessModel],
+        preferred: &[String],
+        limit: usize,
+        budget: std::time::Duration,
+    ) -> Vec<HarnessModel> {
+        let options = self.config_options();
+        let Some(index) = (0..options.len()).find(|index| our_id(&options, *index) == "model")
+        else {
+            return Vec::new();
+        };
+        let (current, choices) = select_values(&options[index]);
+        let mut models = choices
+            .into_iter()
+            .map(|(id, name)| HarnessModel {
+                id,
+                name,
+                efforts: Vec::new(),
+                default_effort: None,
+                efforts_unknown: true,
+            })
+            .collect::<Vec<_>>();
+        // What a listing or a model a thread ran already knows is kept.
+        for entry in models.iter_mut() {
+            let previous = known
+                .iter()
+                .find(|previous| previous.id == entry.id && !previous.efforts_unknown);
+            if let Some(previous) = previous {
+                entry.efforts = super::order_efforts(previous.efforts.clone());
+                entry.default_effort = previous.default_effort.clone();
+                entry.efforts_unknown = false;
+            }
+        }
+        if let Some((model, efforts, default_effort)) = self.effort_levels() {
+            Self::mark_efforts(&mut models, &model, efforts, default_effort);
+        }
+        let mut want = vec![current.clone()];
+        want.extend(preferred.iter().cloned());
+        want.extend(models.iter().map(|entry| entry.id.clone()));
+        let started = std::time::Instant::now();
+        let mut probed = 0;
+        for model in want {
+            if probed >= limit || started.elapsed() >= budget {
+                break;
+            }
+            let unknown = models
+                .iter()
+                .find(|entry| entry.id == model)
+                .is_some_and(|entry| entry.efforts_unknown && entry.id != current);
+            if !unknown {
+                continue;
+            }
+            probed += 1;
+            let Ok(options) = self.set_config("model", json!(model)).await else {
+                continue;
+            };
+            let (efforts, default_effort) = match Self::effort_choices(&options) {
+                Some((current, efforts)) => (efforts, Some(current)),
+                None => (Vec::new(), None),
+            };
+            Self::mark_efforts(
+                &mut models,
+                &model,
+                efforts,
+                default_effort.filter(|effort| !effort.is_empty()),
+            );
+        }
+        if probed > 0 && !current.is_empty() {
             let _ = self.set_config("model", json!(current)).await;
         }
+        // The level the session runs with now, for the models still unknown.
+        super::refresh_unknown_efforts(&mut models, self.model_and_effort().1.as_deref());
         models
     }
 

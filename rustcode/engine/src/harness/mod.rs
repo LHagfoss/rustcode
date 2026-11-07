@@ -386,26 +386,52 @@ pub(crate) struct Learned {
     pub fetched_at: Option<i64>,
     /// The harness version that listing came from, when known.
     pub version: Option<String>,
-    /// Each model in the list carries the efforts it itself offers. A thread
-    /// starting only sees the model it runs, so its list says `false` and is
-    /// listed again to learn the other models'.
-    pub per_model: bool,
+    /// The list came from a listing, which probed the models a person can see
+    /// for the efforts they themselves offer. A thread start only sees the one
+    /// model it runs, so its list says `false` and is listed again.
+    pub probed: bool,
 }
 
 impl Learned {
-    /// The harness `id` just listed `models`, each model with its own efforts.
+    /// The harness `id` just listed `models`.
     pub(crate) fn listed(&mut self, id: &str, models: Vec<HarnessModel>) {
         self.listed_for(id, models, true);
     }
 
-    /// The harness `id` listed `models`, where only the model the session
-    /// runs has its own efforts (a thread start) unless `per_model`.
-    pub(crate) fn listed_for(&mut self, id: &str, models: Vec<HarnessModel>, per_model: bool) {
+    /// The harness `id` listed `models`; `probed` says whether the listing
+    /// could give each model its own efforts or only the one it ran.
+    pub(crate) fn listed_for(&mut self, id: &str, models: Vec<HarnessModel>, probed: bool) {
         self.models = Some(models);
         self.fetched_at = Some(cache::now());
         self.version = detect::cached_version(id).or(self.version.take());
-        self.per_model = per_model;
+        self.probed = probed;
         self.error = None;
+    }
+
+    /// The model `model` runs with `efforts`: a thread that started or switched
+    /// to it just read them from the harness (`docs/harnesses.md`), so the
+    /// cache knows that model ever after.
+    pub(crate) fn set_model_efforts(
+        &mut self,
+        model: &str,
+        efforts: Vec<String>,
+        default_effort: Option<String>,
+    ) {
+        let Some(models) = self.models.as_mut() else {
+            return;
+        };
+        let Some(entry) = models.iter_mut().find(|listed| listed.id == model) else {
+            return;
+        };
+        entry.efforts = order_efforts(efforts);
+        entry.default_effort = default_effort;
+        entry.efforts_unknown = false;
+        // The other unknown models keep the level the harness runs with now.
+        let running = models
+            .iter()
+            .find(|listed| listed.id == model)
+            .and_then(|listed| listed.default_effort.clone());
+        refresh_unknown_efforts(models, running.as_deref());
     }
 }
 
@@ -417,6 +443,35 @@ pub(crate) struct HarnessModel {
     pub efforts: Vec<String>,
     #[serde(default)]
     pub default_effort: Option<String>,
+    /// `efforts` is the union of what the harness's models are known to offer,
+    /// not this model's own: it has not been used or probed yet, so the level
+    /// sent to it for this model is clamped to what the harness takes.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub efforts_unknown: bool,
+}
+
+pub(crate) fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Every model whose own efforts are unknown gets the union of the ones that
+/// are known, so a picker offers a sensible list before the model is used, and
+/// `default_effort` (the level the harness runs with) when that union has it.
+pub(crate) fn refresh_unknown_efforts(models: &mut [HarnessModel], default_effort: Option<&str>) {
+    let union = order_efforts(
+        models
+            .iter()
+            .filter(|model| !model.efforts_unknown)
+            .flat_map(|model| model.efforts.iter().cloned())
+            .collect(),
+    );
+    let default_effort = default_effort
+        .filter(|effort| union.iter().any(|level| level == effort))
+        .map(str::to_owned);
+    for model in models.iter_mut().filter(|model| model.efforts_unknown) {
+        model.efforts = union.clone();
+        model.default_effort = default_effort.clone();
+    }
 }
 
 /// Where an effort level sits between no thinking and the most: the order the
@@ -431,6 +486,8 @@ fn effort_rank(effort: &str) -> (u8, &str) {
         "low" => 3,
         "medium" => 4,
         "high" => 5,
+        // OpenCode offers `thinking` for some models: the deep end, unnamed.
+        "thinking" => 5,
         "xhigh" => 6,
         "max" => 7,
         "ultra" => 8,
@@ -446,6 +503,40 @@ pub(crate) fn order_efforts(efforts: Vec<String>) -> Vec<String> {
     ordered.sort_by(|left, right| effort_rank(left).cmp(&effort_rank(right)));
     ordered.dedup();
     ordered
+}
+
+/// `requested` when `offered` has it, else the closest level offered (a tie
+/// goes to the deeper one); `None` when the harness offers no levels, so the
+/// value goes out as it is.
+pub(crate) fn clamp_effort(requested: &str, offered: &[String]) -> Option<String> {
+    if offered.is_empty() {
+        return None;
+    }
+    if offered.iter().any(|level| level == requested) {
+        return Some(requested.to_owned());
+    }
+    let (want, _) = effort_rank(requested);
+    offered
+        .iter()
+        .min_by_key(|level| {
+            let (rank, _) = effort_rank(level);
+            let distance = u8::abs_diff(rank, want);
+            (distance, u8::MAX - rank)
+        })
+        .cloned()
+}
+
+/// Record the efforts `model` runs with, read from a session that started or
+/// switched to it.
+pub(crate) fn learn_model_efforts(
+    id: &str,
+    model: &str,
+    efforts: Vec<String>,
+    default_effort: Option<String>,
+) {
+    learn(id, |learned| {
+        learned.set_model_efforts(model, efforts, default_effort)
+    });
 }
 
 fn learned() -> &'static Mutex<HashMap<String, Learned>> {
@@ -643,6 +734,7 @@ fn profile_models(profiles: &[crate::config::ModelProfile]) -> Vec<HarnessModel>
                 name: profile.name.clone(),
                 efforts,
                 default_effort,
+                efforts_unknown: false,
             }
         })
         .collect()
@@ -1040,7 +1132,7 @@ fn refresh_if_stale(harness: ResolvedHarness) {
             learned.fetched_at,
             learned.version.as_deref(),
             version.as_deref(),
-            learned.per_model,
+            learned.probed,
             cache::now(),
         ) {
             crate::dbg_log!("listing the models of {} again", harness.id);
@@ -1351,6 +1443,7 @@ mod tests {
             name: id.into(),
             efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
             default_effort: default_effort.map(str::to_owned),
+            efforts_unknown: false,
         }
     }
 
@@ -1369,12 +1462,87 @@ mod tests {
             order_efforts(["none", "low", "medium"].map(str::to_owned).to_vec()),
             ["none", "low", "medium"]
         );
+        // `thinking` is a deep level OpenCode names for some models.
+        assert_eq!(
+            order_efforts(
+                ["thinking", "max", "default", "none", "high"]
+                    .map(str::to_owned)
+                    .to_vec()
+            ),
+            ["default", "none", "high", "thinking", "max"]
+        );
         // A level this engine does not know keeps the harness's place at the end.
         assert_eq!(
             order_efforts(["turbo", "low"].map(str::to_owned).to_vec()),
             ["low", "turbo"]
         );
         assert!(order_efforts(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn an_effort_is_clamped_to_the_closest_one_the_model_takes() {
+        let sonnet = ["low", "medium", "high"].map(str::to_owned).to_vec();
+        assert_eq!(clamp_effort("medium", &sonnet).as_deref(), Some("medium"));
+        // `xhigh` is not offered: the nearest level is `high`.
+        assert_eq!(clamp_effort("xhigh", &sonnet).as_deref(), Some("high"));
+        // `off` is not offered either, and a tie goes to the deeper level.
+        assert_eq!(clamp_effort("off", &sonnet).as_deref(), Some("low"));
+        let level = ["default", "off", "max"].map(str::to_owned).to_vec();
+        assert_eq!(clamp_effort("low", &level).as_deref(), Some("off"));
+        // A harness that lists no level is asked as it was given.
+        assert_eq!(clamp_effort("medium", &[]), None);
+    }
+
+    #[test]
+    fn a_model_whose_levels_are_unknown_offers_the_union() {
+        let mut models = vec![
+            listed("sonnet", &["low", "medium", "high"], Some("medium")),
+            listed("haiku", &[], None),
+            HarnessModel {
+                efforts_unknown: true,
+                ..listed("nova", &["low"], None)
+            },
+            HarnessModel {
+                efforts_unknown: true,
+                ..listed("titan", &["low"], Some("low"))
+            },
+        ];
+        refresh_unknown_efforts(&mut models, Some("medium"));
+        assert_eq!(models[0].efforts, ["low", "medium", "high"]);
+        assert_eq!(models[2].efforts, ["low", "medium", "high"]);
+        assert_eq!(
+            models[2].default_effort.as_deref(),
+            Some("medium"),
+            "the level the harness runs with, not this model's own"
+        );
+        assert!(models[2].efforts_unknown);
+    }
+
+    #[test]
+    fn a_model_a_thread_ran_keeps_its_own_efforts_in_the_cache() {
+        let mut learned = Learned {
+            models: Some(vec![
+                listed("sonnet", &["low", "medium", "high"], Some("medium")),
+                HarnessModel {
+                    efforts_unknown: true,
+                    ..listed("nova", &[], None)
+                },
+            ]),
+            probed: true,
+            ..Learned::default()
+        };
+        learned.set_model_efforts(
+            "nova",
+            vec!["xhigh".into(), "high".into()],
+            Some("high".into()),
+        );
+        let models = learned.models.clone().unwrap();
+        assert_eq!(models[1].efforts, ["high", "xhigh"]);
+        assert_eq!(models[1].default_effort.as_deref(), Some("high"));
+        assert!(!models[1].efforts_unknown);
+        // A model the cache does not list is not invented.
+        learned.set_model_efforts("gone", vec!["low".into()], None);
+        assert_eq!(learned.models.unwrap().len(), 2);
     }
 
     #[test]
