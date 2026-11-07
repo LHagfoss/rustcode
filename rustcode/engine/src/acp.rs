@@ -1249,6 +1249,7 @@ pub(crate) struct PullStateRequest {
     serde::Deserialize,
     agent_client_protocol::JsonRpcRequest,
 )]
+#[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/pulls/merge", response = serde_json::Value)]
 pub(crate) struct PullMergeRequest {
     pub cwd: std::path::PathBuf,
@@ -1271,9 +1272,16 @@ pub(crate) struct PullMergeRequest {
     serde::Deserialize,
     agent_client_protocol::JsonRpcRequest,
 )]
+#[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/worktrees/cleanup", response = serde_json::Value)]
 pub(crate) struct WorktreeCleanupRequest {
     pub path: std::path::PathBuf,
+    /// The branch the caller read the pull request for, checked against HEAD.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// The commit the pull request was merged at.
+    #[serde(default)]
+    pub head_sha: Option<String>,
     #[serde(default)]
     pub merged: bool,
 }
@@ -2362,10 +2370,29 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             async move |request: PullStateRequest, responder, connection| {
                 connection.spawn(async move {
-                    let branch = request
+                    let asked = request
                         .branch
-                        .filter(|branch| !branch.trim().is_empty())
-                        .or_else(|| crate::pull_requests::current_branch(&request.cwd));
+                        .filter(|branch| !branch.trim().is_empty());
+                    let branch = match asked {
+                        Some(branch) => Some(branch),
+                        // Resolving HEAD runs git, so it does not hold an async worker.
+                        None => {
+                            let cwd = request.cwd.clone();
+                            match tokio::task::spawn_blocking(move || {
+                                crate::pull_requests::current_branch(&cwd)
+                            })
+                            .await
+                            {
+                                Ok(branch) => branch,
+                                Err(error) => {
+                                    return responder.respond_with_error(
+                                        agent_client_protocol::Error::internal_error()
+                                            .data(error.to_string()),
+                                    );
+                                }
+                            }
+                        }
+                    };
                     let Some(branch) = branch else {
                         return responder.respond(serde_json::json!({
                             "branch": null,
@@ -2386,11 +2413,23 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             async move |request: PullMergeRequest, responder, connection| {
                 connection.spawn(async move {
-                    let branch = request
+                    let branch = match request
                         .branch
                         .clone()
                         .filter(|branch| !branch.trim().is_empty())
-                        .or_else(|| crate::pull_requests::current_branch(&request.cwd));
+                    {
+                        Some(branch) => Some(branch),
+                        // Resolving HEAD runs git, so it does not hold an async worker.
+                        None => {
+                            let cwd = request.cwd.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::pull_requests::current_branch(&cwd)
+                            })
+                            .await
+                            .ok()
+                            .flatten()
+                        }
+                    };
                     let number = match (request.number, branch.as_deref()) {
                         (Some(number), _) => Some(number),
                         (None, Some(branch)) => {
@@ -2432,9 +2471,21 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             async move |request: WorktreeCleanupRequest, responder, connection| {
                 connection.spawn(async move {
-                    match crate::worktrees::cleanup(&request.path, request.merged) {
-                        Ok(cleanup) => responder.respond(serde_json::json!({ "cleanup": cleanup }))?,
-                        Err(error) => responder.respond_with_error(error.into_acp())?,
+                    let cleaned = tokio::task::spawn_blocking(move || {
+                        crate::worktrees::cleanup(
+                            &request.path,
+                            request.branch.as_deref(),
+                            request.head_sha.as_deref(),
+                            request.merged,
+                        )
+                    })
+                    .await;
+                    match cleaned {
+                        Ok(Ok(cleanup)) => responder.respond(serde_json::json!({ "cleanup": cleanup }))?,
+                        Ok(Err(error)) => responder.respond_with_error(error.into_acp())?,
+                        Err(error) => responder.respond_with_error(
+                            agent_client_protocol::Error::internal_error().data(error.to_string()),
+                        )?,
                     }
                     Ok(())
                 })

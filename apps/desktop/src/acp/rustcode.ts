@@ -177,6 +177,8 @@ export interface DelegatePull {
   draft: boolean;
   url?: string;
   branch: string;
+  /** The commit the pull request is at; cleanup proves the worktree's commits are part of it. */
+  headSha: string;
   /** `none` when the pull request has no checks at all. */
   ci: "none" | "passing" | "pending" | "failing";
   /** The checks that failed, by name. */
@@ -211,6 +213,7 @@ export function parsePullState(result: Json | undefined): {
             draft: bool(p.draft) ?? false,
             url: str(p.url),
             branch: str(p.branch) ?? "",
+            headSha: str(p.headSha) ?? "",
             ci: (ci && CI_STATES.has(ci) ? ci : "none") as DelegatePull["ci"],
             failing: arr(p.failing).flatMap((name) => (typeof name === "string" ? [name] : [])),
             pending: num(p.pending) ?? 0,
@@ -224,7 +227,7 @@ export function parsePullState(result: Json | undefined): {
 /** What `_rustcode/pulls/merge` did: merged, or why it stopped. */
 export interface MergeOutcome {
   number: number;
-  state: "merged" | "failing" | "closed" | "pending" | "failed";
+  state: "merged" | "failing" | "closed" | "no_checks" | "pending" | "failed";
   merged: boolean;
   failing: string[];
   url?: string;
@@ -240,7 +243,11 @@ export function parseMergeOutcome(result: Json | undefined): MergeOutcome | null
   return {
     number,
     state:
-      state === "merged" || state === "failing" || state === "closed" || state === "pending"
+      state === "merged" ||
+      state === "failing" ||
+      state === "closed" ||
+      state === "no_checks" ||
+      state === "pending"
         ? state
         : "failed",
     merged: bool(m.merged) ?? false,

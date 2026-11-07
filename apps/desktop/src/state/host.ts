@@ -63,6 +63,7 @@ import {
   linksLeft,
   listSessions,
   MAX_ACTIVE_LINKS,
+  MAX_DELEGATES,
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
   MAX_QUEUE_ITEMS,
@@ -859,25 +860,31 @@ async function delegatePull(
   }
 }
 
-/** The delegates a thread has: the targets of its links, newest first, one row each. */
-function delegateTargets(caller: RuleThread): RuleThread[] {
+/**
+ * The delegates a thread has: the targets of its links, newest first, one row
+ * each, capped so the gh reads stay well inside the request timeout.
+ */
+function delegateTargets(caller: RuleThread): { targets: RuleThread[]; omitted: number } {
   const ids = new Set(
     book()
       .links.filter((link) => link.orchestrator === caller.id)
       .map((l) => l.target),
   );
   ids.delete(caller.id);
-  return [...ids].reverse().flatMap((id) => ruleThread(useApp.getState(), id) ?? []);
+  const all = [...ids].reverse().flatMap((id) => ruleThread(useApp.getState(), id) ?? []);
+  return { targets: all.slice(0, MAX_DELEGATES), omitted: Math.max(0, all.length - MAX_DELEGATES) };
 }
 
 /**
  * `thread_status`: where each delegate stands — worktree, branch, pull request
  * and checks — in one call, instead of combining read_session, list_pull_requests
- * and a shell poll of `gh pr checks`. A read: no approval, same project.
+ * and a shell poll of `gh pr checks`. A read: no approval, same project. The
+ * delegates are read concurrently, so a dozen do not add up to a timeout.
  */
 async function threadStatus(caller: RuleThread, target?: string): Promise<JsonObject> {
-  const targets = target ? [manageTarget(caller, target)] : delegateTargets(caller);
-  const delegates: JsonObject[] = [];
+  const asked = target ? undefined : delegateTargets(caller);
+  const targets = target ? [manageTarget(caller, target)] : (asked?.targets ?? []);
+  const entries: RuleThread[] = [];
   for (const entry of targets) {
     if (isFailure(entry)) return failureJson(entry);
     if (entry.id === caller.id) {
@@ -885,7 +892,18 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
         failure("not_allowed", "a thread reports its own pull request through list_pull_requests"),
       );
     }
-    const state = await delegatePull(entry);
+    entries.push(entry);
+  }
+  const settled = await Promise.allSettled(
+    entries.map(async (entry) => ({ entry, state: await delegatePull(entry) })),
+  );
+  const delegates: JsonObject[] = [];
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      delegates.push({ error: { code: "failed", message: errorText(result.reason) } });
+      continue;
+    }
+    const { entry, state } = result.value;
     delegates.push({
       session_id: entry.id,
       title: entry.title,
@@ -901,6 +919,7 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
             merged: state.pull.merged,
             draft: state.pull.draft,
             branch: state.pull.branch,
+            head_sha: state.pull.headSha,
             ci: state.pull.ci,
             failing: state.pull.failing,
             pending: state.pull.pending,
@@ -913,6 +932,7 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
   }
   return {
     delegates,
+    ...(asked?.omitted ? { omitted_delegates: asked.omitted } : {}),
     ...(delegates.length === 0 ? { note: "this thread has no delegates; start one with start_session" } : {}),
   };
 }
@@ -948,7 +968,7 @@ async function mergeWhenGreen(
       ...(pull.url ? { url: pull.url } : {}),
     };
   }
-  const no = await permitted(caller, `merge:${target.id}`, {
+  const no = await permitted(caller, `merge:${target.id}:${pull.number}`, {
     kind: "merge",
     caller: caller.id,
     callerTitle: caller.title,
@@ -1023,11 +1043,24 @@ async function cleanupWorktree(
   if (no) return failureJson(no);
   let result: Json;
   try {
-    result = await request(V2Method.worktreeCleanup, { path: target.worktree.path, merged }, 120_000);
+    result = await request(
+      V2Method.worktreeCleanup,
+      {
+        path: target.worktree.path,
+        branch,
+        headSha: state.pull?.headSha ?? "",
+        merged,
+      },
+      120_000,
+    );
   } catch (error) {
     if (error instanceof RpcError) {
       const reason = cleanupRefusal(error.data);
-      if (reason) return failureJson(failure("conflict", `${reason}: ${error.message}`));
+      if (reason) {
+        // "unknown" is not a refusal to fix but a git that could not answer.
+        const code = reason === "unknown" ? "target_unavailable" : "conflict";
+        return failureJson(failure(code, error.message));
+      }
     }
     return failureJson(failure("failed", `the worktree could not be cleaned up: ${errorText(error)}`));
   }

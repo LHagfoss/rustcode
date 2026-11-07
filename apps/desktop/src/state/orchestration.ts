@@ -322,6 +322,8 @@ export const MAX_MERGE_MS = DEFAULT_MERGE_MS;
 /** Pull requests listed, and projects: an agent's context pays for each. */
 export const MAX_PULL_REQUESTS = 30;
 export const MAX_PROJECTS = 50;
+/** Delegates `thread_status` reports in one answer: one gh read each, run together. */
+export const MAX_DELEGATES = 12;
 
 const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
 /** `all_projects`: the user's threads in every project, when the setting allows it. */

@@ -2612,6 +2612,7 @@ export class MockEngine {
             draft: false,
             url: "https://github.com/LHagfoss/rustcode/pull/2790",
             branch,
+            headSha: "58961fc5aa",
             ci: "pending",
             failing: [],
             pending: 1,

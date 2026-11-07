@@ -641,9 +641,9 @@ out, and a v7 app has neither the code nor the engine methods.
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing`, and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others | None: a read, this project's threads, like `read_session` |
-| `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 80 minutes, 240 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed` or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>` |
-| `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `no_base` or `not_managed`) and, for unmerged commits, their subjects | Asked, allowed by Full access, grant `cleanup:<session id>` |
+| `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: a read, this project's threads, like `read_session` |
+| `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 80 minutes, 240 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
+| `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
 
 `thread_status` asks the engine `_rustcode/pulls/state` `{ cwd, branch? }`
 (`engine/src/pull_requests.rs` `for_branch`): the worktree's branch when there is
@@ -658,16 +658,25 @@ quiet rounds so a path-filtered job that registers late is still caught, stops
 before anything merges on a failing check, and then runs
 `gh pr merge <n> --squash --delete-branch`. Nothing is forced and no other
 repository is touched. `cleanup_worktree` asks `_rustcode/worktrees/cleanup`
-(`engine/src/worktrees.rs` `cleanup`), which refuses a worktree that is not
-under the config directory, a dirty one, and commits `git cherry <base>
-<branch>` marks `+` — unless the pull request merged or the branch's tree
-already equals the base (`git diff --quiet <base> <branch>`), which is how a
-squash merge whose local `main` has not caught up is not mistaken for lost work.
-It then runs `git worktree remove`, `worktree prune` and `branch -D`, moves the
-threads that ran there back to the repository, and removes the worktree record;
-the app settles the thread afterwards (`_rustcode/session/status`), like
-`rustcode threads settle`. A running thread is refused, and so is the calling
-thread's own checkout.
+(`engine/src/worktrees.rs` `cleanup`), on a blocking thread like
+`_rustcode/worktrees/remove`. It sends the branch it read the pull request for
+and the pull request's `head_sha`; the engine refuses if the worktree's `HEAD`
+is on another branch, so a delegate that switched branches cannot take the new
+one down. It also refuses a worktree that is not under the config directory, one
+on the base or default branch (the branch delete would otherwise remove it), a
+dirty one, ignored files that are not known build output (`target/`,
+`node_modules/`, `dist/`, `.turbo/`, …; `.env.local` or notes are refused and
+listed), and commits `git cherry -v <base> <branch>` marks `+` — unless the
+branch's tree already equals the base, or every one of those commits is an
+ancestor of the pull request's head (so a squash merge whose local `main` has
+not caught up is not mistaken for lost work, while a commit made after the
+merge still blocks). A git that cannot answer (a failed `status`, `cherry` or
+tree read) refuses with `unknown` instead of assuming clean. It then runs `git
+worktree remove`, `worktree prune` and `branch -D`, moves the threads that ran
+there back to the repository, and removes the worktree record; the app settles
+the thread afterwards (`_rustcode/session/status`), like `rustcode threads
+settle`. A running thread is refused, and so is the calling thread's own
+checkout.
 
 A delegated thread writes temporary files in its own directory under
 `$TMPDIR/rustcode/<session id>`, never a shared `/tmp/pr-body.md`: two delegates

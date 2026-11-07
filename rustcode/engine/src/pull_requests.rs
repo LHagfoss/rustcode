@@ -458,6 +458,9 @@ pub struct DelegatePull {
     pub draft: bool,
     pub url: String,
     pub branch: String,
+    /// The exact commit the pull request is at: cleanup proves the worktree's
+    /// commits are part of it before honouring a merge.
+    pub head_sha: String,
     pub ci: CiState,
     /// The checks that failed, by name: what the orchestrator tells the delegate.
     pub failing: Vec<String>,
@@ -468,7 +471,12 @@ pub struct DelegatePull {
 /// A pull request from a `gh pr list --json` answer, with its checks mapped.
 pub fn delegate_pull(value: &Value) -> Option<DelegatePull> {
     let summary = summary(value)?;
-    let checks = checks(value);
+    // The advisory portability jobs never hold a merge, so they are not part of
+    // the state either: a failing one would contradict `merge_when_green`.
+    let checks: Vec<Check> = checks(value)
+        .into_iter()
+        .filter(|check| !advisory_check(&check.name))
+        .collect();
     Some(DelegatePull {
         number: summary.number,
         title: summary.title,
@@ -477,6 +485,7 @@ pub fn delegate_pull(value: &Value) -> Option<DelegatePull> {
         draft: summary.draft,
         url: summary.url,
         branch: summary.head_ref,
+        head_sha: summary.head_sha,
         ci: ci_state(&checks),
         failing: failing_checks(&checks),
         pending: checks
@@ -541,7 +550,8 @@ pub const MAX_MERGE_WAIT_SECS: u64 = 240 * 20;
 #[serde(rename_all = "camelCase")]
 pub struct MergeOutcome {
     pub number: u64,
-    /// `merged`, `failing`, `closed`, `pending` (still waiting when the time ran out) or `failed`.
+    /// `merged`, `failing`, `closed`, `no_checks`, `pending` (still waiting when
+    /// the time ran out) or `failed`.
     pub state: &'static str,
     pub merged: bool,
     /// The checks that failed, when `state` is `failing`.
@@ -551,10 +561,58 @@ pub struct MergeOutcome {
     pub message: String,
 }
 
+/// What one look at the checks says to do next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PollAction {
+    Wait,
+    Merge,
+    StopFailing,
+    StopNoChecks,
+}
+
+/// The polling rules of `scripts/pr-merge.sh`, as a state machine: two quiet
+/// rounds catch a path-filtered job that registers late, a failing check stops
+/// it, and a pull request with no checks stops after two empty rounds instead
+/// of waiting out the whole budget for checks that will never appear.
+#[derive(Debug, Default)]
+pub(crate) struct MergePoll {
+    quiet: u32,
+    empty: u32,
+}
+
+impl MergePoll {
+    pub(crate) fn observe(&mut self, checks: &[Check]) -> PollAction {
+        if checks.iter().any(|check| check.status == "failed") {
+            return PollAction::StopFailing;
+        }
+        if checks.is_empty() {
+            self.quiet = 0;
+            self.empty += 1;
+            return if self.empty >= 2 {
+                PollAction::StopNoChecks
+            } else {
+                PollAction::Wait
+            };
+        }
+        self.empty = 0;
+        if checks.iter().any(|check| check.status == "pending") {
+            self.quiet = 0;
+            return PollAction::Wait;
+        }
+        self.quiet += 1;
+        if self.quiet >= 2 {
+            PollAction::Merge
+        } else {
+            PollAction::Wait
+        }
+    }
+}
+
 /// Wait for every check except the advisory ones, then squash-merge and delete
 /// the branch, as `scripts/pr-merge.sh` does. Two quiet rounds in a row are
 /// needed, so a path-filtered job that registers late is still caught. A
-/// failing check stops it before anything merges.
+/// failing check stops it before anything merges, and so does a pull request
+/// with no checks at all.
 pub async fn merge_when_green(
     cwd: &Path,
     number: u64,
@@ -565,7 +623,7 @@ pub async fn merge_when_green(
         Duration::from_secs(MERGE_POLL_SECS),
         Duration::from_secs(MAX_MERGE_WAIT_SECS),
     );
-    let mut quiet = 0u32;
+    let mut poll = MergePoll::default();
     loop {
         let value = watch_view(cwd, number).await?;
         let Some(detail) = detail(&value) else {
@@ -614,12 +672,8 @@ pub async fn merge_when_green(
                 message: "a check failed; nothing was merged".to_owned(),
             });
         }
-        let pending = checks.iter().any(|check| check.status == "pending");
-        if checks.is_empty() || pending {
-            quiet = 0;
-        } else {
-            quiet += 1;
-            if quiet >= 2 {
+        match poll.observe(&checks) {
+            PollAction::Merge => {
                 let number_text = number.to_string();
                 gh(
                     cwd,
@@ -637,6 +691,19 @@ pub async fn merge_when_green(
                     message: "squash-merged and the branch was deleted".to_owned(),
                 });
             }
+            PollAction::StopNoChecks => {
+                return Ok(MergeOutcome {
+                    number,
+                    state: "no_checks",
+                    merged: false,
+                    failing: Vec::new(),
+                    url: detail.summary.url,
+                    waited_secs: started.elapsed().as_secs(),
+                    message: "the pull request has no checks to wait for; nothing was merged"
+                        .to_owned(),
+                });
+            }
+            PollAction::StopFailing | PollAction::Wait => {}
         }
         let elapsed = started.elapsed();
         if elapsed + Duration::from_secs(MERGE_POLL_SECS) > wait {
@@ -707,31 +774,56 @@ fn check_status(check: &Value) -> &'static str {
     match text(check, "conclusion").to_uppercase().as_str() {
         "SUCCESS" | "NEUTRAL" => "passed",
         "SKIPPED" => "skipped",
-        "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
+        // A cancelled run is not a failing one: a newer run superseded it, or
+        // someone stopped it, and `scripts/pr-merge.sh` does not block on it.
+        "CANCELLED" => "skipped",
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
         _ => "pending",
     }
 }
 
+/// When a check ran, for telling a superseded run from the newest one.
+fn check_time(check: &Value) -> String {
+    ["completedAt", "startedAt"]
+        .iter()
+        .find_map(|key| Some(text(check, key)).filter(|time| !time.is_empty()))
+        .unwrap_or_default()
+}
+
 fn checks(value: &Value) -> Vec<Check> {
-    value
+    // A re-run leaves two entries under one name: the latest one is the state,
+    // the older one is history. `statusCheckRollup` need not be sorted, so the
+    // timestamp decides, and an entry without one never replaces a newer one.
+    let mut latest: Vec<(String, Check)> = Vec::new();
+    for check in value
         .get("statusCheckRollup")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|check| {
-            let name = Some(text(check, "name"))
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| text(check, "context"));
-            let url = Some(text(check, "detailsUrl"))
-                .filter(|url| !url.is_empty())
-                .or_else(|| Some(text(check, "targetUrl")).filter(|url| !url.is_empty()));
-            Check {
-                name,
-                status: check_status(check),
-                url,
+    {
+        let name = Some(text(check, "name"))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| text(check, "context"));
+        let url = Some(text(check, "detailsUrl"))
+            .filter(|url| !url.is_empty())
+            .or_else(|| Some(text(check, "targetUrl")).filter(|url| !url.is_empty()));
+        let at = check_time(check);
+        let mapped = Check {
+            name: name.clone(),
+            status: check_status(check),
+            url,
+        };
+        match latest.iter().position(|(_, check)| check.name == name) {
+            Some(index) => {
+                if at >= latest[index].0 {
+                    latest[index].0 = at;
+                    latest[index].1 = mapped;
+                }
             }
-        })
-        .collect()
+            None => latest.push((at, mapped)),
+        }
+    }
+    latest.into_iter().map(|(_, check)| check).collect()
 }
 
 fn summary(value: &Value) -> Option<PullSummary> {
@@ -938,6 +1030,65 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_run_is_not_a_failing_check() {
+        let value = json!({
+            "number": 1, "state": "OPEN", "statusCheckRollup": [
+                {"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "CANCELLED"}
+            ]
+        });
+        let state = delegate_pull(&value).unwrap();
+        assert_eq!(state.failing, Vec::<String>::new());
+        assert_eq!(state.ci, CiState::Passing);
+    }
+
+    #[test]
+    fn a_superseded_check_run_of_the_same_name_uses_the_latest() {
+        let value = json!({"statusCheckRollup": [
+            {"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE",
+             "completedAt": "2026-10-30T15:00:00Z"},
+            {"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS",
+             "completedAt": "2026-10-30T16:00:00Z"}
+        ]});
+        let checks = checks(&value);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].status, "passed");
+    }
+
+    #[test]
+    fn advisory_checks_are_not_part_of_the_reported_state() {
+        let mut value = pull();
+        value["statusCheckRollup"] = json!([
+            {"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"__typename": "CheckRun", "name": "Windows and macOS portability coverage",
+             "status": "COMPLETED", "conclusion": "FAILURE"}
+        ]);
+        let state = delegate_pull(&value).unwrap();
+        assert_eq!(state.ci, CiState::Passing);
+        assert_eq!(state.failing, Vec::<String>::new());
+        assert_eq!(state.passed, 1);
+    }
+
+    #[test]
+    fn a_pull_request_with_no_checks_stops_instead_of_waiting() {
+        let mut poll = MergePoll::default();
+        assert_eq!(poll.observe(&[]), PollAction::Wait);
+        assert_eq!(poll.observe(&[]), PollAction::StopNoChecks);
+        // A failing check stops at once.
+        let mut poll = MergePoll::default();
+        assert_eq!(
+            poll.observe(&[check("test", "failed")]),
+            PollAction::StopFailing
+        );
+        // Pending resets the quiet rounds; two quiet rounds merge.
+        let mut poll = MergePoll::default();
+        assert_eq!(poll.observe(&[check("test", "passed")]), PollAction::Wait);
+        assert_eq!(poll.observe(&[check("test", "pending")]), PollAction::Wait);
+        assert_eq!(poll.observe(&[check("test", "passed")]), PollAction::Wait);
+        assert_eq!(poll.observe(&[check("test", "passed")]), PollAction::Merge);
+    }
+
+    #[test]
     fn advisory_checks_never_hold_a_merge() {
         assert!(advisory_check("Windows and macOS portability coverage"));
         assert!(advisory_check("portability coverage (windows)"));
@@ -955,6 +1106,7 @@ mod tests {
         assert_eq!(state.ci, CiState::Failing);
         assert_eq!(state.failing, ["lint"]);
         assert_eq!((state.passed, state.pending), (1, 2));
+        assert_eq!(state.head_sha, "da4593b");
         let mut merged = pull();
         merged["state"] = json!("MERGED");
         let merged = delegate_pull(&merged).unwrap();
