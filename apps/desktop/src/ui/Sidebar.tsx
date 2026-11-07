@@ -122,6 +122,7 @@ import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "..
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
+import { NeedsYouRow } from "./Inbox";
 import { LinkBadge } from "./Links";
 import { SettingsButton } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
@@ -1941,6 +1942,9 @@ export function Sidebar() {
           >
             <SquarePen size={14} />
           </ClusterButton>
+        </div>
+        <div className="shrink-0 px-2 pb-1">
+          <NeedsYouRow />
         </div>
         <nav
           ref={list}

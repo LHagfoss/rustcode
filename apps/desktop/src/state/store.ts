@@ -138,6 +138,7 @@ import {
   sendDecision,
   type TurnState,
 } from "./queue";
+import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
@@ -363,6 +364,14 @@ export interface AppState {
   systemNotifications: boolean;
   /** Those notifications only while the app is in the background (Settings › General). */
   notificationsBackgroundOnly: boolean;
+  /** A recap of what happened while the app was idle (Settings › Notifications). */
+  recapWhileAway: boolean;
+  /** How long the app must be idle before that recap is due, in hours. */
+  recapHours: number;
+  /** When the user left, while a recap is on screen; null when there is none. */
+  recapSince: number | null;
+  /** The recap was dismissed until the next break. */
+  recapDismissed: boolean;
   /** A thread stopped by its plan's limit continues when the limit resets. */
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
@@ -409,6 +418,7 @@ export interface AppState {
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
+    | { kind: "inbox" }
     | { kind: "board" }
     | { kind: "review"; threadId: string }
     | { kind: "compare"; fanOut: string };
@@ -446,6 +456,10 @@ const STORAGE = {
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
   notificationsBackgroundOnly: "rustcode.notificationsBackgroundOnly",
+  recapWhileAway: "rustcode.recapWhileAway",
+  recapHours: "rustcode.recapHours",
+  /** When the app was last used, so a return after hours knows how long the break was. */
+  lastActive: "rustcode.lastActiveAt",
   continueAfterLimit: "rustcode.continueAfterLimit",
   limitWaits: "rustcode.limitWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
@@ -487,6 +501,8 @@ export const SETTINGS_DEFAULTS = {
   resumeAfterRestart: true,
   systemNotifications: true,
   notificationsBackgroundOnly: true,
+  recapWhileAway: true,
+  recapHours: RECAP_HOURS_DEFAULT,
   continueAfterLimit: true,
   orchestration: true,
   threadLimit: MAX_ACTIVE_LINKS,
@@ -559,6 +575,10 @@ export const useApp = create<AppState>((_set, _get, api) => ({
     STORAGE.notificationsBackgroundOnly,
     SETTINGS_DEFAULTS.notificationsBackgroundOnly,
   ),
+  recapWhileAway: storedFlag(STORAGE.recapWhileAway, SETTINGS_DEFAULTS.recapWhileAway),
+  recapHours: parseRecapHours(stored(STORAGE.recapHours)),
+  recapSince: null,
+  recapDismissed: false,
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
@@ -1850,6 +1870,27 @@ export function retryMessage(id: string, itemId: string) {
   } else void go();
 }
 
+/**
+ * Retry a thread's failed turn: the inbox's action for a failure. The thread is
+ * opened first when the app has not read it, because the message to send again
+ * lives in its transcript; its last message is the one the failure answered.
+ */
+export async function retryThread(id: string): Promise<void> {
+  if (!get().threads[id]?.loaded) await openThread(id);
+  const thread = get().threads[id];
+  if (!thread) return;
+  for (let i = thread.items.length - 1; i >= 0; i--) {
+    const item = thread.items[i]!;
+    if (item.kind !== "user") continue;
+    // Retried: the failure is answered, so the inbox and the row stop saying Failed.
+    clearFinished(id);
+    retryMessage(id, item.id);
+    return;
+  }
+  // Nothing to send again (an empty transcript): at least show the thread.
+  selectThread(id);
+}
+
 /** Edit: the message goes back to the composer; sending it rewinds the thread to it first. */
 export function editMessage(id: string, itemId: string) {
   const thread = get().threads[id];
@@ -3092,6 +3133,43 @@ export function setSystemNotifications(on: boolean) {
 export function setNotificationsBackgroundOnly(on: boolean) {
   set({ notificationsBackgroundOnly: on });
   store(STORAGE.notificationsBackgroundOnly, on ? "1" : "0");
+}
+
+export function setRecapWhileAway(on: boolean) {
+  set({ recapWhileAway: on, ...(on ? {} : { recapSince: null }) });
+  store(STORAGE.recapWhileAway, on ? "1" : "0");
+}
+
+export function setRecapHours(hours: number) {
+  const kept = parseRecapHours(String(hours));
+  set({ recapHours: kept });
+  store(STORAGE.recapHours, String(kept));
+}
+
+/** A return after a long enough break: the recap starts at the moment the user left. */
+export function beginRecap(since: number) {
+  set({ recapSince: since, recapDismissed: false });
+}
+
+/** Puts the card away until the next break; the inbox keeps a row that brings it back. */
+export function dismissRecap() {
+  set({ recapDismissed: true });
+}
+
+export function showRecap() {
+  set({ recapDismissed: false });
+}
+
+/** When the app was last used, from app storage; 0 on a first run. */
+export function lastActiveAt(): number {
+  const raw = stored(STORAGE.lastActive);
+  const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Records that the app was used now, so a later return measured from here. */
+export function markActive(now = Date.now()) {
+  store(STORAGE.lastActive, String(now));
 }
 
 export function setRoundedFont(on: boolean) {
