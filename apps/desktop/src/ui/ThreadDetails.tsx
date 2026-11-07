@@ -100,13 +100,25 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
  * thread it *messaged* was already running. The hint says which, once per group,
  * so the heading stays short at a narrow pane.
  */
-function GroupHeading({ label, count, hint }: { label: string; count: number; hint: string }) {
+function GroupHeading({
+  label,
+  count,
+  nested = 0,
+  hint,
+}: {
+  label: string;
+  count: number;
+  /** How many of the count were started by the threads it started, not by it. */
+  nested?: number;
+  hint: string;
+}) {
   return (
     <div className="px-2.5 pt-1.5 pb-1">
       <div className="flex items-baseline gap-1.5 text-caption">
         <span className="font-medium text-fg-muted">{label}</span>
         <span className="text-fg-faint tabular">
           {count} {count === 1 ? "thread" : "threads"}
+          {nested > 0 ? `, ${nested} nested` : ""}
         </span>
       </div>
       <p className="text-caption text-fg-faint">{hint}</p>
@@ -411,6 +423,7 @@ export function ThreadDetails() {
                 <GroupHeading
                   label="Started"
                   count={delegates}
+                  nested={Math.max(0, delegates - lineage.started.length)}
                   hint="New threads it handed a task to, and the threads those started."
                 />
                 <DelegatedThreads threadId={id} />

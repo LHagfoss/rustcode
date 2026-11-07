@@ -198,42 +198,55 @@ function DelegateRow({
             {view.title}
           </button>
         </Tooltip>
-        <span className={cx("shrink-0 text-caption", STATE_TINT[view.state] ?? "text-fg-muted")}>
+        {/* A fixed width as well as fixed time and cost columns: "Done" is not "Needs you",
+            and the numbers after it must not move with the word. */}
+        <span
+          className={cx(
+            "w-16 shrink-0 truncate text-right text-caption",
+            STATE_TINT[view.state] ?? "text-fg-muted",
+          )}
+        >
           {AGENT_WORD[view.state]}
         </span>
         <span className="w-12 shrink-0 text-right text-caption text-fg-faint tabular">{time}</span>
         <span className="w-14 shrink-0 text-right text-caption text-fg-faint tabular">{cost}</span>
-        {answer && (
-          <Tooltip label={showAnswer ? "Hide its last answer" : "Show its last answer"}>
+        {/* Both slots are on every row, used or not: a leaf's time and cost must land on the
+            same columns as its siblings' and its parent's, at every depth. */}
+        <span className="flex size-[22px] shrink-0 items-center justify-center">
+          {answer && (
+            <Tooltip label={showAnswer ? "Hide its last answer" : "Show its last answer"}>
+              <button
+                type="button"
+                aria-label={showAnswer ? `Hide ${view.title}'s answer` : `Show ${view.title}'s answer`}
+                aria-expanded={showAnswer}
+                onClick={() => onAnswer(view.id)}
+                className={cx(
+                  "flex size-[22px] items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg",
+                  !showAnswer && "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+                )}
+              >
+                <MessageSquareText size={12} />
+              </button>
+            </Tooltip>
+          )}
+        </span>
+        <span className="flex size-[22px] shrink-0 items-center justify-center">
+          {hasChildren && (
             <button
               type="button"
-              aria-label={showAnswer ? `Hide ${view.title}'s answer` : `Show ${view.title}'s answer`}
-              aria-expanded={showAnswer}
-              onClick={() => onAnswer(view.id)}
-              className={cx(
-                "flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg",
-                !showAnswer && "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
-              )}
+              aria-label={open ? `Fold ${view.title}` : `Unfold ${view.title}`}
+              aria-expanded={open}
+              onClick={() => onOpen(view.id, ancestors)}
+              className="flex size-[22px] items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
             >
-              <MessageSquareText size={12} />
+              <ChevronRight
+                size={14}
+                aria-hidden
+                className={cx("transition-transform duration-200", open && "rotate-90")}
+              />
             </button>
-          </Tooltip>
-        )}
-        {hasChildren && (
-          <button
-            type="button"
-            aria-label={open ? `Fold ${view.title}` : `Unfold ${view.title}`}
-            aria-expanded={open}
-            onClick={() => onOpen(view.id, ancestors)}
-            className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
-          >
-            <ChevronRight
-              size={14}
-              aria-hidden
-              className={cx("transition-transform duration-200", open && "rotate-90")}
-            />
-          </button>
-        )}
+          )}
+        </span>
       </div>
       {showAnswer && answer && (
         <div className="rc-expand mb-1 ml-8 max-h-48 overflow-y-auto rounded-lg bg-fill-subtle p-2.5">
@@ -293,6 +306,15 @@ function DelegateTip({ views }: { views: readonly DelegateView[] }) {
  * Board card (`compact`). The costs are read once by the caller that draws many
  * of them, so a board of cards is one read, not one per card.
  */
+/**
+ * A thread's delegates as the tree draws them, without reading their costs:
+ * for a surface that needs the branch's count, state and time (the strip above
+ * the composer), not its rows.
+ */
+export function useDelegateBranch(threadId: string): DelegateView[] {
+  return useDelegateViews(threadId, undefined);
+}
+
 export function DelegateTree({
   threadId,
   compact = false,
