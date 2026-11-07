@@ -87,6 +87,8 @@ import {
   checkIfStale,
   checkNow,
   installProgress,
+  loadChannels,
+  offersUpdate,
   setUpdateChannel,
   showWhatsNew,
   useUpdates,
@@ -958,6 +960,7 @@ function BannerSetting() {
  */
 function AppVersion() {
   const info = useUpdates((s) => s.info);
+  const channel = useUpdates((s) => s.channel);
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
   const background = useUpdates((s) => s.error);
@@ -965,6 +968,7 @@ function AppVersion() {
   const [error, setError] = useState<string | null>(null);
   const shellVersion = useUpdates((s) => s.version);
   const version = info?.current ?? shellVersion ?? APP_VERSION;
+  const offered = info !== null && offersUpdate(info, channel);
   useEffect(() => checkIfStale(), []);
   const check = async () => {
     setChecking(true);
@@ -975,7 +979,7 @@ function AppVersion() {
     setChecking(false);
   };
   const install = async () => {
-    if (!info?.canInstall) {
+    if (!offered || !info?.canInstall) {
       if (info?.page) openExternal(info.page);
       return;
     }
@@ -1025,7 +1029,7 @@ function AppVersion() {
       {canUpdate() && <Action onClick={() => void showWhatsNew(version)}>What's New</Action>}
       {!canUpdate() ? (
         <Info size={14} className="text-fg-faint" />
-      ) : info?.available && info.latest ? (
+      ) : offered && info.latest ? (
         <Action prominent disabled={installing} onClick={() => void install()}>
           {installing ? (
             <span className="flex items-center gap-1.5">
@@ -1186,12 +1190,16 @@ function AboutPage() {
  * Settings › About › Update channel: Stable follows releases only; Beta also
  * offers the betas of the next version, which show in the same row and install
  * the same way. Betas build the macOS app alone, so the row is hidden where
- * there is no beta to install.
+ * there is no beta to install. The channels come from the shell without a
+ * release check, so the row is there before one answers and when it fails.
  */
 function UpdateChannelRow() {
-  const info = useUpdates((s) => s.info);
+  const channels = useUpdates((s) => s.channels);
   const channel = useUpdates((s) => s.channel);
-  if (!canUpdate() || !info?.channels.includes("beta")) return null;
+  useEffect(() => {
+    if (canUpdate()) void loadChannels();
+  }, []);
+  if (!canUpdate() || !channels.includes("beta")) return null;
   return (
     <Row
       title="Update channel"

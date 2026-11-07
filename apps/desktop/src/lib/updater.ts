@@ -17,11 +17,21 @@ export interface UpdateInfo {
   page: string | null;
   /** The channels this build offers: `beta` only where a beta has an app. */
   channels: UpdateChannel[];
+  /** The channel this answer is for, so an answer to the old setting is not shown. */
+  channel: UpdateChannel;
 }
 
 /** Only the app updates; the browser UI has nothing to replace. */
 export function canUpdate(): boolean {
   return isTauri();
+}
+
+/**
+ * The channels this build offers, with no release check: Settings can offer the
+ * picker before a check answers, and when one fails for being offline.
+ */
+export function updateChannels(): Promise<UpdateChannel[]> {
+  return shellCall<UpdateChannel[]>("update_channels");
 }
 
 /** One check on `channel`, hiding the beta named `skipped` (a skipped beta only). */

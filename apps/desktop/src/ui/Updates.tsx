@@ -11,6 +11,7 @@ import {
   closeWhatsNew,
   installProgress,
   isPrerelease,
+  offersUpdate,
   skipBeta,
   useUpdates,
 } from "../state/updates";
@@ -19,9 +20,11 @@ import { cx, Pill, Spinner } from "./primitives";
 
 export function UpdateRow() {
   const info = useUpdates((s) => s.info);
+  const channel = useUpdates((s) => s.channel);
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
-  if (!info?.available || !info.latest || info.development) return null;
+  // The offer is the selected channel's, and a dev build never shows the row.
+  if (!info?.latest || info.development || !offersUpdate(info, channel)) return null;
   const beta = isPrerelease(info.latest);
   const { fraction, step } = installProgress(progress);
   const skip = () => {

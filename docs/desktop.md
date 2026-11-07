@@ -1227,11 +1227,16 @@ reads the release feed (`releases.atom`, which lists the prereleases
 `releases/latest` never points at) and offers the newest version of either
 kind, so `1.21.0-beta.3` is offered above `1.20.0` but `1.21.0` takes over
 when it ships. Both compare versions as semver does, prereleases included
-(`1.20.0-beta.2 < 1.20.0`), and only a release whose app zip and
-`SHA256SUMS` are uploaded is offered, so a tagged beta with nothing to
-install yet stays hidden. A beta ships the macOS app only, so the channel
-row is hidden on platforms without one, and switching back to Stable never
-offers a downgrade (a beta is already newer than the release before it). On Beta the row reads **Update to
+(`1.20.0-beta.2 < 1.20.0`) and with build metadata ignored, and only a release
+whose app zip and `SHA256SUMS` are uploaded is offered, so a tagged beta with
+nothing to install yet stays hidden. The picker asks the shell for the
+channels it offers (`update_channels`, no release check), so it is there
+before a check answers and when one fails offline; a change re-checks, and an
+answer for the previous channel is dropped rather than shown, which is why
+the row only draws an offer whose `channel` is the selected one. A beta ships
+the macOS app only, so the channel row is hidden on platforms without one,
+and switching back to Stable never offers a downgrade (a beta is already newer
+than the release before it). On Beta the row reads **Update to
 1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
 the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
 as usual. On macOS **Update to X** downloads

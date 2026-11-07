@@ -28,6 +28,23 @@ describe("updates", () => {
     expect(isPrerelease("1.21.0")).toBe(false);
   });
 
+  test("a longer prerelease suffix is newer, in both directions", () => {
+    expect(compareVersions("1.0.0-alpha", "1.0.0-alpha.1")).toBe(-1);
+    expect(compareVersions("1.0.0-alpha.1", "1.0.0-alpha")).toBe(1);
+    expect(compareVersions("1.0.0-alpha.1", "1.0.0-alpha.2")).toBe(-1);
+    expect(compareVersions("1.0.0-alpha.2", "1.0.0-alpha.1")).toBe(1);
+    expect(compareVersions("1.0.0-1", "1.0.0-alpha")).toBe(-1);
+    expect(compareVersions("1.0.0-alpha", "1.0.0-1")).toBe(1);
+  });
+
+  test("build metadata takes no part in ordering", () => {
+    expect(compareVersions("1.21.0+build.7", "1.21.0")).toBe(0);
+    expect(newerVersion("v1.21.0+build.7", "1.20.0")).toBe(true);
+    expect(newerVersion("1.21.0-beta.2+sha.abc", "1.21.0-beta.1")).toBe(true);
+    expect(isPrerelease("1.21.0+build.7")).toBe(false);
+    expect(isPrerelease("1.21.0-beta.2+build.7")).toBe(true);
+  });
+
   test("a stored channel reads back, and anything unknown is Stable", () => {
     expect(readChannel("beta")).toBe("beta");
     expect(readChannel("stable")).toBe("stable");

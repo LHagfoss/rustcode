@@ -17,6 +17,7 @@ import {
   isDevBuild,
   type UpdateChannel,
   type UpdateInfo,
+  updateChannels,
 } from "../lib/updater";
 
 /** How often the app checks while its window is in front: a HEAD request to the release page. */
@@ -37,6 +38,8 @@ interface UpdatesState {
   info: UpdateInfo | null;
   /** What checks look for: every release, or the betas of the next one too. */
   channel: UpdateChannel;
+  /** The channels this build offers, from the shell (no network): `beta` only where a beta has an app. */
+  channels: UpdateChannel[];
   /** The beta hidden from the row and from Settings, when one was skipped. */
   skipped: string | null;
   /** Why the last check failed, for Settings › Advanced; null after a good check. */
@@ -53,6 +56,7 @@ export const useUpdates = create<UpdatesState>(() => ({
   version: null,
   info: null,
   channel: readChannel(read(CHANNEL_KEY)),
+  channels: ["stable"],
   skipped: read(SKIPPED_KEY),
   error: null,
   checkedAt: null,
@@ -68,12 +72,16 @@ export function readChannel(value: string | null): UpdateChannel {
 
 /** Whether a version is a prerelease: a beta, as `1.21.0-beta.2`. */
 export function isPrerelease(version: string): boolean {
-  return version.includes("-");
+  return versionParts(version)[1].length > 0;
 }
 
-/** The version and its prerelease fields: `1.21.0-beta.10` is `[[1,21,0],["beta",10]]`. */
+/**
+ * The version and its prerelease fields: `1.21.0-beta.10` is
+ * `[[1,21,0],["beta",10]]`. Build metadata (`1.21.0+build.7`) takes no part in
+ * ordering, so it is dropped.
+ */
 function versionParts(version: string): [number[], string[]] {
-  const text = version.trim().replace(/^v/, "");
+  const text = version.trim().replace(/^v/, "").split("+")[0] ?? "";
   const dash = text.indexOf("-");
   const core = (dash === -1 ? text : text.slice(0, dash)).split(".");
   const pre =
@@ -104,12 +112,17 @@ export function compareVersions(a: string, b: string): number {
     const right = coreB[i] ?? 0;
     if (left !== right) return left > right ? 1 : -1;
   }
-  if (preA.length !== preB.length) return preA.length ? -1 : 1;
-  for (let i = 0; i < preA.length; i++) {
+  // A release is newer than any prerelease of it.
+  if (preA.length === 0 || preB.length === 0) {
+    return preA.length === preB.length ? 0 : preA.length ? -1 : 1;
+  }
+  // Field by field up to the shorter suffix, then the longer one is newer:
+  // `1.0.0-alpha` is older than `1.0.0-alpha.1`, and the order holds both ways.
+  for (let i = 0; i < Math.min(preA.length, preB.length); i++) {
     const order = compareIdentifier(preA[i]!, preB[i]!);
     if (order !== 0) return order;
   }
-  return 0;
+  return Math.sign(preA.length - preB.length);
 }
 
 /** `0.116.0` is newer than `0.115.2`; a beta is older than the release it leads to. */
@@ -194,20 +207,33 @@ export function checkIfStale() {
 
 async function runCheck(): Promise<void> {
   clearTimeout(retry);
-  let info: UpdateInfo;
-  try {
-    // The store's own channel and skipped beta: a change of either re-checks.
+  // The channel and the skipped beta are what the request was made with. A
+  // change while it is in flight makes its answer stale, so it is dropped and
+  // the check runs again with what the store says now: a Beta answer can never
+  // land after the switch back to Stable and offer a beta.
+  for (;;) {
     const { channel, skipped } = useUpdates.getState();
-    info = await checkForUpdate(channel, skipped);
-  } catch (error) {
-    // Offline, GitHub busy, or the shell refused: say so in Settings and try again soon.
-    useUpdates.setState({ error: error instanceof Error ? error.message : String(error) });
-    retry = setTimeout(() => void checkNow(), retryDelay);
-    retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
+    let info: UpdateInfo;
+    try {
+      info = await checkForUpdate(channel, skipped);
+    } catch (error) {
+      // Offline, GitHub busy, or the shell refused: say so in Settings and try again soon.
+      useUpdates.setState({ error: error instanceof Error ? error.message : String(error) });
+      retry = setTimeout(() => void checkNow(), retryDelay);
+      retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
+      return;
+    }
+    const now = useUpdates.getState();
+    if (now.channel !== channel || now.skipped !== skipped) continue;
+    retryDelay = RETRY_FIRST_MS;
+    useUpdates.setState({
+      info,
+      error: null,
+      checkedAt: Date.now(),
+      channels: info.channels,
+    });
     return;
   }
-  retryDelay = RETRY_FIRST_MS;
-  useUpdates.setState({ info, error: null, checkedAt: Date.now() });
 }
 
 /** How far an install is, for the sidebar row and Settings: a fraction when the size is known. */
@@ -230,6 +256,25 @@ export function installProgress(progress: InstallProgress | null): {
 
 let started = false;
 
+/**
+ * The channels this build offers, asked of the shell once: the picker in
+ * Settings needs no release check, so it is there before one answers and when
+ * one fails offline. The browser has no shell and no updates.
+ */
+export function loadChannels(): Promise<UpdateChannel[]> {
+  return updateChannels()
+    .then((channels) => {
+      useUpdates.setState({ channels });
+      return channels;
+    })
+    .catch(() => useUpdates.getState().channels);
+}
+
+/** Whether `info` offers an update on the channel now selected, not the one before it. */
+export function offersUpdate(info: UpdateInfo | null, channel: UpdateChannel): boolean {
+  return !!info?.available && info.latest !== null && info.channel === channel;
+}
+
 /** Starts the checks once per app run; the browser UI has nothing to update. */
 export function startUpdateChecks() {
   // `?updatePreview` in a dev browser: the row and What's New with sample data, for screenshots.
@@ -243,7 +288,9 @@ export function startUpdateChecks() {
         development: false,
         page: null,
         channels: ["stable", "beta"],
+        channel: "stable",
       },
+      channels: ["stable", "beta"],
       whatsNew: {
         version: "0.116.0",
         notes:
@@ -254,6 +301,7 @@ export function startUpdateChecks() {
   }
   if (started || !canUpdate()) return;
   started = true;
+  void loadChannels();
   void appVersion().then((version) => version && useUpdates.setState({ version }));
   void whatsNewOnLaunch();
   setTimeout(() => void checkNow(), 5_000);
@@ -276,7 +324,8 @@ export function startUpdateChecks() {
 /** The sidebar row's action: install in place where the app can, else the release page. */
 export async function applyUpdate(): Promise<string | null> {
   const { info, channel, skipped } = useUpdates.getState();
-  if (!info?.available) return null;
+  // Only an offer from the channel now selected, never the one before it.
+  if (!info || !offersUpdate(info, channel)) return null;
   if (!info.canInstall) {
     if (info.page) openExternal(info.page);
     return null;
@@ -295,15 +344,15 @@ export async function applyUpdate(): Promise<string | null> {
 
 /**
  * Pick the update channel (Settings › About): Stable is every release, Beta also
- * offers the betas of the next one. Checking again at once shows what it finds,
- * and drops the previous channel's offer so a stable setting never lures anyone
- * into a beta. Switching to Stable never offers a downgrade: the shell only
- * offers a version newer than this one.
+ * offers the betas of the next one. The offer on screen belongs to the channel
+ * it came from, so it stops showing as one (the row compares `info.channel`)
+ * until the check with the new channel answers. Switching to Stable never
+ * offers a downgrade: the shell only offers a version newer than this one.
  */
 export function setUpdateChannel(channel: UpdateChannel) {
   if (channel === useUpdates.getState().channel) return;
   write(CHANNEL_KEY, channel);
-  useUpdates.setState({ channel, info: null, checkedAt: null });
+  useUpdates.setState({ channel, checkedAt: null });
   void checkNow();
 }
 

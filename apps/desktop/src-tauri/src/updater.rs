@@ -44,6 +44,9 @@ pub struct UpdateInfo {
     page: Option<String>,
     /// The channels this build offers: `beta` only where a beta has an app.
     channels: Vec<&'static str>,
+    /// The channel this answer was for, so an answer to the previous setting is
+    /// never shown as the current one.
+    channel: &'static str,
 }
 
 /// Which releases the app offers: stable ones, or prereleases too.
@@ -63,6 +66,15 @@ fn channel_of(name: Option<&str>) -> ReleaseChannel {
     match (name.map(str::trim), offers_beta()) {
         (Some("beta"), true) => ReleaseChannel::Beta,
         _ => ReleaseChannel::Stable,
+    }
+}
+
+impl ReleaseChannel {
+    fn name(self) -> &'static str {
+        match self {
+            ReleaseChannel::Stable => "stable",
+            ReleaseChannel::Beta => "beta",
+        }
     }
 }
 
@@ -142,9 +154,12 @@ impl fmt::Display for Version {
     }
 }
 
-/// `X.Y.Z[-pre]`, with or without the `v` the tags carry.
+/// `X.Y.Z[-pre]`, with or without the `v` the tags carry. Build metadata
+/// (`+…`) takes no part in ordering, so it is dropped: `1.21.0+build.7` is
+/// `1.21.0`.
 fn parse_version(version: &str) -> Option<Version> {
     let version = version.trim().trim_start_matches('v');
+    let version = version.split('+').next().unwrap_or(version);
     let (core, pre) = match version.split_once('-') {
         Some((core, pre)) => (core, Some(pre)),
         None => (version, None),
@@ -157,7 +172,8 @@ fn parse_version(version: &str) -> Option<Version> {
     let mut fields = Vec::new();
     if let Some(pre) = pre {
         for field in pre.split('.') {
-            if field.is_empty() {
+            // The identifiers semver allows: alphanumerics and hyphens.
+            if field.is_empty() || !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
                 return None;
             }
             fields.push(match field.parse::<u64>() {
@@ -195,15 +211,19 @@ fn candidates(tags: &[String], channel: ReleaseChannel, skipped: Option<&str>) -
 /// Every release tag a `releases.atom` feed names, in feed order. The feed is
 /// the release list without the API's rate limit (a check runs every 30 s),
 /// and unlike `releases/latest` it includes prereleases.
+///
+/// Only the entries' own `<link>` elements count, and only a href that names
+/// `…/releases/tag/vX.Y.Z[-pre]`: a release body is quoted HTML that links the
+/// releases mentioned in its notes, and those are not this release's tag.
 fn tags_in_feed(feed: &str) -> Vec<String> {
-    const TAG: &str = "/releases/tag/";
-    feed.match_indices(TAG)
+    const PATH: &str = "/releases/tag/";
+    feed.match_indices("<link")
         .filter_map(|(at, _)| {
-            let rest = feed.get(at + TAG.len()..)?;
-            let end = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
-                .unwrap_or(rest.len());
-            Some(rest[..end].to_string())
+            let element = feed.get(at..)?.split_once('>')?.0;
+            let href = element.split_once("href=\"")?.1.split_once('"')?.0;
+            let tag = href.split_once(PATH)?.1;
+            // A tag with build metadata is skipped rather than compared wrongly.
+            (parse_version(tag).is_some() && !tag.contains('+')).then(|| tag.to_string())
         })
         .collect()
 }
@@ -385,7 +405,16 @@ async fn check(
         development,
         page: Some(page),
         channels: channel_names(),
+        channel: channel.name(),
     })
+}
+
+/// The update channels this build offers, without a release check: Settings
+/// shows the picker before, and without, any answer from GitHub (a check can
+/// fail offline, which must not take the picker away).
+#[tauri::command]
+pub fn update_channels() -> Vec<&'static str> {
+    channel_names()
 }
 
 /// A release's notes (its GitHub body, Markdown), for What's New. `None` when
@@ -743,14 +772,45 @@ mod tests {
     <id>tag:github.com,2008:Repository/1290807019/v1.20.0-beta.2</id>
     <link rel="alternate" type="text/html" href="https://github.com/LHagfoss/rustcode/releases/tag/v1.20.0-beta.2"/>
     <title>v1.20.0-beta.2</title>
+    <content type="html">&lt;p&gt;Includes &lt;a href=&quot;https://github.com/LHagfoss/rustcode/releases/tag/v1.9.0&quot;&gt;v1.9.0&lt;/a&gt;.&lt;/p&gt;</content>
   </entry>
   <entry>
     <link rel="alternate" type="text/html" href="https://github.com/LHagfoss/rustcode/releases/tag/v1.19.0"/>
   </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/LHagfoss/rustcode/releases/tag/nightly"/>
+  </entry>
   <link type="text/html" rel="alternate" href="https://github.com/LHagfoss/rustcode/releases"/>
 </feed>"#;
+        // The tag quoted in the notes is not this release's tag, and a tag that
+        // is not a version is not one either.
         assert_eq!(tags_in_feed(feed), tags(&["v1.20.0-beta.2", "v1.19.0"]));
         assert!(tags_in_feed("").is_empty());
+    }
+
+    #[test]
+    fn build_metadata_takes_no_part_in_ordering() {
+        assert_eq!(
+            parse_version("v1.21.0+build.7").unwrap().to_string(),
+            "1.21.0"
+        );
+        assert_eq!(
+            parse_version("1.21.0-beta.2+sha.abc").unwrap().to_string(),
+            "1.21.0-beta.2"
+        );
+        assert!(!newer("1.21.0+build.7", "1.21.0"));
+        assert_eq!(
+            candidates(
+                &tags(&["v1.21.0+build.7", "v1.20.0"]),
+                ReleaseChannel::Stable,
+                None
+            ),
+            tags(&["1.21.0", "1.20.0"])
+        );
+        // A tag that is not three numbers and an optional prerelease is no version.
+        assert!(parse_version("1.21").is_none());
+        assert!(parse_version("nightly").is_none());
+        assert!(parse_version("1.21.0-beta 2").is_none());
     }
 
     #[test]
