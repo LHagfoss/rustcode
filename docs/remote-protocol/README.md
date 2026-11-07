@@ -86,8 +86,20 @@ current iOS app asks for thread names.
 
 ## Connection
 
-1. Open a WebSocket to `ws://<address>/` without an `Origin` header (a request
-   that carries one is refused with HTTP 403).
+1. Open a WebSocket to `ws://<address>/` with no `Origin` header, or with
+   exactly `Origin: rustcode-mobile://app`. Any other `Origin` is refused
+   with HTTP 403, so a web page open on the host or the LAN cannot reach the
+   gateway. A React Native client cannot omit the header (both platforms add
+   one on the upgrade), so it must send the app origin explicitly through the
+   WebSocket `headers` option:
+   `new WebSocket(url, undefined, { headers: { Origin: 'rustcode-mobile://app' } })`.
+   Android adds a default `Origin` from the URL unless the caller passes one
+   (React Native `WebSocketModule.kt`, `connect`), and iOS lets a
+   `request.allHTTPHeaderFields` value replace SocketRocket's own origin
+   (`SRHTTPConnectMessage.m`, reached from `RCTWebSocketModule.mm`). Browsers
+   can never send a custom-scheme origin — a page cannot set headers on a
+   WebSocket it opens — so accepting exactly this value does not reopen the
+   gateway to browsers.
 2. Send exactly one handshake frame, `pair` or `authenticate`, within 10
    seconds. Nothing is sent to an unauthenticated socket except the answer to
    that frame.

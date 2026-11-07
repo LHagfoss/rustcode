@@ -216,10 +216,10 @@ async function attachmentsFromPaths(
 
 /** Re-render for what the composer shows, not for every streamed chunk (`items` is read live). */
 function sameComposer(
-  a: { thread?: ThreadState; compact?: boolean },
-  b: { thread?: ThreadState; compact?: boolean },
+  a: { thread?: ThreadState; compact?: boolean; className?: string },
+  b: { thread?: ThreadState; compact?: boolean; className?: string },
 ): boolean {
-  if (a.compact !== b.compact) return false;
+  if (a.compact !== b.compact || a.className !== b.className) return false;
   if (a.thread === b.thread) return true;
   if (!a.thread || !b.thread) return false;
   for (const key of Object.keys(b.thread) as (keyof ThreadState)[]) {
@@ -236,9 +236,12 @@ const FILES_FRESH_MS = 30_000;
 export const Composer = memo(function Composer({
   thread,
   compact,
+  className,
 }: {
   thread?: ThreadState;
   compact?: boolean;
+  /** A modifier for the box itself: `rc-composer-over` on a new thread's picture (ui/ChatView.tsx). */
+  className?: string;
 }) {
   const key = thread?.id ?? "new";
   const draft = useApp((s) => s.drafts[key] ?? "");
@@ -695,7 +698,7 @@ export const Composer = memo(function Composer({
   }, [drawer]);
 
   return (
-    <div ref={shell} className="rc-composer-shell relative @container/composer">
+    <div ref={shell} className={cx("rc-composer-shell relative @container/composer", className)}>
       {thread && <QueuedAnnouncer threadId={thread.id} />}
       {/* The box: the field and how it is sent. The drawer tucks under its top, the tray under its
           foot, so the three read as one floating surface over the transcript. */}

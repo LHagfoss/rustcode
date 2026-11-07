@@ -554,7 +554,7 @@ function NewSkill({ onDone }: { onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand mb-8 flex flex-col gap-2.5 rounded-xl border border-border-strong bg-surface-2/40 p-4">
+    <div className="rc-expand mb-8 flex flex-col gap-2.5 rounded-xl bg-surface p-4">
       <input
         autoFocus
         value={name}

@@ -540,7 +540,12 @@ composer's keys stay outside the table.
   (red) until you open the thread (`finished`/`failed` in the store; *Mark
   Unread* in the menu brings Done back). What wants you reads in medium
   weight; what works, waits or is settled recedes. Hovering swaps the slot for
-  Pin, Settle (or Unsettle) and the menu, so nothing shifts.
+  Pin, Settle (or Unsettle) and the menu, so nothing shifts, each on a
+  26px target. ↑ ↓ move through the rows without opening them, ⏎ opens the
+  one the keyboard is on, and P pins (or unpins) it while D settles (or
+  unsettles) it — the picked rows when there are several — with the same
+  toast and Undo; Shift+F10 and the ContextMenu key open the row's menu, and
+  the keys are rebindable in Settings › Keyboard.
   Double-click or F2 renames. Settling is marking a thread Settled, with an
   Undo toast (the row, the selection bar, the chat's menu, the palette and the
   board all offer it); a new message brings it back. Settling the selected
@@ -679,12 +684,11 @@ composer's keys stay outside the table.
   read brighter. Hovering widens the strips around the pointer and previews
   the message and its answer; clicking jumps there, chevrons step a turn, and
   arrows, Home and End move it from the keyboard. With under 48px of gutter it
-  shows on hover. A turn whose checkpoint a rewind can return to carries a bead
-  inside its strip's left end, the head (the newest) in the accent, and the
-  hover card names it (`Checkpoint · turn N`, plus `current` for the head) with
-  *Rewind here* when the harness can go back. It reads the virtualizer's row
-  offsets on scroll and re-renders only when the turns on screen change
-  (`src/ui/TimelineRail.tsx`).
+  shows on hover. A turn whose checkpoint a rewind can return to is named in
+  its hover card (`Checkpoint · turn N`, plus `current` for the head, the
+  newest) with *Rewind here* when the harness can go back; the strips carry no
+  mark of their own. It reads the virtualizer's row offsets on scroll and
+  re-renders only when the turns on screen change (`src/ui/TimelineRail.tsx`).
 - **Harness marks.** `HarnessIcon` draws each harness's real mark, inline
   (no fetch, no dependency), in the model pill, the harness picker and list
   (onboarding, Settings), the composer's footer, the sidebar's rows and the thread's
@@ -811,11 +815,11 @@ composer's keys stay outside the table.
   attempt whose *Go back to this attempt* restores the state the rewind
   abandoned (`_rustcode/checkpoints/restore` with `keep`). A turn with nothing
   folded keeps its chip in its footer, so every turn that has a checkpoint can
-  say what it changed. The minimap beads each turn that has a checkpoint, its
-  head in the accent, and that turn's hover card offers *Rewind here*, which is
-  the chip's rewind: one click when the engine keeps the state a rewind
-  abandons, behind its confirm when it does not. A harness that cannot rewind
-  the conversation gets the files only, after a confirm that says so. The Review screen
+  say what it changed. The minimap names each turn that has a checkpoint in
+  that turn's hover card, with *Rewind here*, which is the chip's rewind: one
+  click when the engine keeps the state a rewind abandons, behind its confirm
+  when it does not. A harness that cannot rewind the conversation gets the
+  files only, after a confirm that says so. The Review screen
   (thread menu, header menu or ⌘K) shows the uncommitted changes, the
   worktree branch since its base (the base named beside the file count, as
   `vs main`, with the full ref on hover), one turn, or the branch's open pull
