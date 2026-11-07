@@ -286,10 +286,15 @@ that change use `tabular`.
   the thread's own first row will keep it (the lane's cap, 20px under the
   header) and arrives from 8px below over 160ms (`rc-send-in`,
   `--ease-snappy`), while the composer glides from the middle of the chat to
-  the foot. That entry is safe to be cut, because the screen is unmounted the
-  moment the session exists: the thread's transcript draws the same row at the
-  same place, at rest, so nothing is left half-way and nothing moves at the
-  hand-over (`ui/ChatView.tsx` `PendingSetupView`).
+  the foot. A session can exist in a single frame, so the thread takes the
+  screen when that entry has played and not before (at most one entry,
+  `PENDING_ENTRY_MS`): the screen it keeps draws the same row in the same
+  place, at rest, so the hand-over itself moves nothing. A harness slower than
+  the entry is already past it and takes the screen the moment its session
+  exists. And each of the send's own updates gets a painted frame of its own
+  (`lib/frame.ts` `afterPaint`): the pending screen is drawn before
+  `session/new` is asked for, and the message's row before its prompt is built,
+  so an in-process harness cannot fold all of it into one frame.
 - A row mounts at the size the transcript already reserved for it: `estimateSize`
   is the row's own air (`rowGap`) plus its content, and a measured row keeps
   both. An estimate that left the gap out, or guessed a live `Working for 12s`

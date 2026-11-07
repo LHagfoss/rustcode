@@ -24,6 +24,7 @@ import { STATUS_LABEL } from "../acp/v2";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import { observeSize } from "../lib/resize";
+import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
@@ -520,8 +521,8 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
       <div
         // The row takes the place the transcript's first row keeps — the lane's cap, the same 20px
         // under the glass header (`FIRST_ROW_PAD`), so the thread takes the screen over without
-        // moving it — and arrives in 160ms from 8px below, which is short enough to be cut: the
-        // thread's own row draws it at rest, in the same place, the moment the session exists.
+        // moving it — and arrives in 160ms from 8px below. The thread waits for that entry before it
+        // takes the screen (`PENDING_ENTRY_MS`), because a session can exist in one frame.
         className="rc-send-in mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5"
         style={{ paddingTop: FIRST_ROW_PAD + HEADER_HEIGHT }}
       >
@@ -608,11 +609,36 @@ export function ChatView() {
     return observeSize(el, measure);
   }, []);
 
+  // The message's arrival on the new-thread screen (`rc-send-in`) is 160ms, and a session can exist
+  // in a single frame: the thread must not take the screen over mid-entry, or the entry is cut to
+  // one frame that reads as no motion at all. The screen it keeps is the same picture — the same row,
+  // in the same place, at rest — so the hand-over itself moves nothing; a harness slower than the
+  // entry is already past it and takes the screen the moment its session exists.
+  const [arrived, setArrived] = useState(false);
+  const shownSetup = useRef<PendingSetup | null>(null);
+  if (pending) shownSetup.current = pending;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new setup (a retry) starts its own entry
+  useEffect(() => {
+    if (!pending) return;
+    setArrived(false);
+    // Nothing to wait for where motion is off: the entry is instant, so the thread may be too.
+    const timer = setTimeout(() => setArrived(true), motionAllowed() ? PENDING_ENTRY_MS : 0);
+    return () => clearTimeout(timer);
+  }, [pending?.id]);
+  // Which thread the setup became: the one selected as the setup went. A later selection (the reader
+  // picking another thread in the sidebar) ends any hold at once, so the screen never keeps a thread
+  // the reader has left.
+  const became = useRef<string | null>(null);
+  if (pending && !selectedId) became.current = null;
+  if (!pending && selectedId && !became.current && shownSetup.current) became.current = selectedId;
+  // Held after its thread exists, until the entry has played. No thread, no hold: a dismissed or
+  // failed setup leaves nothing behind.
+  const held = !pending && thread && !arrived && became.current === selectedId ? shownSetup.current : null;
+  const setup = pending ?? held;
   // A thread setting up owns the new-thread screen until its session exists: the chat keeps its
   // message and the composer sits at the foot, where the thread's own will be.
-  const showsPending = !!pending && !selectedId;
+  const showsPending = !!setup && (!selectedId || !!held);
   const isNew = !selectedId && !showsPending;
-
   // Toasts sit centred at the top of the chat column, under its header (ui/Toaster.tsx).
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-place when the column resizes, which opening the right panel also does
   useEffect(() => {
@@ -647,7 +673,7 @@ export function ChatView() {
           className="!absolute top-0 left-0 rc-fade-in"
         />
       )}
-      <Header thread={thread} pending={showsPending ? pending : undefined} overBanner={showsBanner} />
+      <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
         The chat column and the right panel share one row, so the panel is docked beside
         the chat rather than floating over it: the column is `flex-1` and narrows by the
@@ -656,7 +682,11 @@ export function ChatView() {
       */}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-          {thread && !thread.loading ? (
+          {showsPending && setup ? (
+            // Preferred over the thread: while its message is still arriving, the screen that has it
+            // is this one, and the row it draws is the row the transcript draws (`FIRST_ROW_PAD`).
+            <PendingSetupView pending={setup} />
+          ) : thread && !thread.loading ? (
             // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
             <Transcript
               key={thread.id}
@@ -666,8 +696,6 @@ export function ChatView() {
             />
           ) : thread?.loading ? (
             <TranscriptSkeleton />
-          ) : showsPending && pending ? (
-            <PendingSetupView pending={pending} />
           ) : (
             <div className="flex-1" />
           )}

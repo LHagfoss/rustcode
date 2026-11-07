@@ -9,6 +9,11 @@ const SEND_EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
 export const SEND_MS = 220;
 /** A fade alone, for a reader who asked for less motion. */
 const SEND_FADE_MS = 160;
+/**
+ * The new-thread screen's message arriving (`rc-send-in` in index.css): one 160ms breath, which the
+ * thread may not take the screen over before it has played (`ui/ChatView.tsx`).
+ */
+export const PENDING_ENTRY_MS = SEND_FADE_MS;
 /** How far a row may travel: past this a long message would swing too far to read as one move. */
 export const MAX_RISE = 220;
 /** How far into the card a sent row starts: behind the glass, so the bubble comes out of the field. */

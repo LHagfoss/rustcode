@@ -62,6 +62,7 @@ import {
   type Worktree,
 } from "../acp/v2";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
+import { afterPaint } from "../lib/frame";
 import {
   APP_COMMANDS,
   bindingOf,
@@ -1705,6 +1706,11 @@ async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtr
   }
   // One update switches the screen and shows the message: nothing waits for the engine.
   set({ pendingSetup: setup });
+  // That update gets its own painted frame before `session/new` is asked for. An in-process harness
+  // answers in a microtask, so both updates would otherwise land in one task and one frame: the
+  // pending screen's message would be drawn for the first time by the thread's own transcript, and
+  // its entry (`rc-send-in`) would never get a frame to play in.
+  await afterPaint();
   return await startSetup(setup);
 }
 
@@ -2524,10 +2530,13 @@ export async function runPrompt(
   // already drew does not (lib/sendFlight.ts).
   const sent = userTypedPrompt(options) && !options.fromView && !options.alreadyShown;
   // The message is on screen before its blocks are built: a long paste or a 20 MB picture is copied
-  // into the prompt's JSON after the bubble lands, not before it.
+  // into the prompt's JSON after the bubble lands, not before it — and that update gets a painted
+  // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that
+  // follows it, which on a fast harness is the whole rest of the turn's first frame.
   updateThread(id, (t) =>
     beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
   );
+  await afterPaint();
   const harness = threadHarness(thread);
   const prompt = promptBlocks(text, extras, {
     images: acceptsImages(thread),
