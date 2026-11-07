@@ -205,7 +205,7 @@ the wait is released the same way.
 | `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
 | `read_session` | `{ session_id, last_turns?: 1..10, offset?: bytes }` (default 3 turns, offset 0) | `{ session_id, title, status, project, offset, text, next_offset?, complete }`: the rendered answer as text, one page at a time (16 KiB); when `next_offset` is present, pass it as `offset` for the rest. Pages join with nothing lost or repeated, cut on a UTF-8 character boundary. Any project's thread |
 
-| `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path, client_request_id? }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left, replayed? }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
+| `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path, client_request_id? }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left, replayed? }` — `links_left` is the smaller of this thread's room and the app's total — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
 | `message_session` | M1 + `client_request_id?` | M1 + `replayed: true` when the call was answered from its receipt |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
@@ -245,18 +245,19 @@ timed out leaves the worktree mid-state, so inspect it before rerunning.
 
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
-at most 8 distinct threads working for one thread at once by default, set to 2
-to 16 in Settings › Agents (a `busy` refusal says `links_left` and that
-`wait_session` on one comes first). A message to a thread it already works
-with is a follow-up: it queues on that thread and takes no slot, though its
-link is still created and waitable. Delegation goes two levels deep — a
-top-level thread may start children, and they may start grandchildren, while a
-thread at that depth is refused with the limit in the reason (`MAX_DEPTH` in
-`state/orchestration.ts`); a whole delegation tree holds at most twice the
-setting in active threads, 16 by default and whatever their depth (a `busy`
-refusal says how many slots the tree has left); a message that would close a
-loop — to a thread that already works for the caller, directly or further up —
-is refused; the user can stop any link;
+at most 8 delegates working for one thread at once by default, set to 2 to 32
+in Settings › Agents, and at most 16 delegates running at once across this app
+instance, set to 2 to 64 (a `busy` refusal names the limit it hit and the
+current count, says `links_left` and that `wait_session` on one comes first).
+The CLI and TUI start no delegates, so the total is one app's own. A message
+to a thread it already works with is a follow-up: it queues on that thread and
+takes no slot, though its link is still created and waitable. Delegation
+goes two levels deep — a top-level thread may start children, and they may
+start grandchildren, while a thread at that depth is refused with the limit in
+the reason (`MAX_DEPTH` in `state/orchestration.ts`); both limits count live
+delegates at every depth and free a slot as soon as one finishes; a message
+that would close a loop — to a thread that already works for the caller,
+directly or further up — is refused; the user can stop any link;
 nothing starts without the user's approval (*Allow for This Thread* / *Allow
 Once* / *Don't Allow*). A delegated thread's login is never chosen silently when
 the agent named one: an `account` that harness does not list is refused with

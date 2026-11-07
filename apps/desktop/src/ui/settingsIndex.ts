@@ -128,8 +128,18 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
-    title: "Threads one thread can run at once",
-    keywords: "orchestration delegation parallel slots limit concurrent children tree",
+    title: "Delegation",
+    keywords: "orchestration delegates delegate slots limit concurrent children total",
+  },
+  {
+    section: "agents",
+    title: "Delegates across all threads",
+    keywords: "orchestration delegation total machine wide global slots limit concurrent running at once",
+  },
+  {
+    section: "agents",
+    title: "Delegates one thread can run at once",
+    keywords: "orchestration delegation per thread parallel slots limit concurrent children",
   },
   {
     section: "agents",
