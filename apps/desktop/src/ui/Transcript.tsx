@@ -5,7 +5,7 @@
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PermissionRequest, PlanEntry } from "../acp/types";
+import { modelName, type PermissionRequest, type PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
@@ -658,7 +658,10 @@ export function Transcript({
   }, [changeLines, lastEnd, thread.id]);
 
   // The thread's model names its Trace's model calls (state/thread.ts TurnUsage).
-  const model = useMemo(() => selectOption(thread.configOptions, "model")?.current, [thread.configOptions]);
+  const model = useMemo(
+    () => modelName(selectOption(thread.configOptions, "model")?.current),
+    [thread.configOptions],
+  );
 
   // Each finished turn's own rows, for its Trace chip: everything since the
   // turn before it, so a wake turn (which has no message of its own) comes out
