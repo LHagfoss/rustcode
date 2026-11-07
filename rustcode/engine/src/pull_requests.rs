@@ -384,6 +384,276 @@ pub async fn post_review(
     })
 }
 
+// ------------------------------------------------ a delegate's pull request
+
+/// The checks a merge never waits for: the advisory portability jobs in the
+/// repository's CI, which run on another platform and never block a merge.
+/// `scripts/pr-merge.sh` skips the same jobs.
+pub const ADVISORY_CHECKS: [&str; 1] = ["portability coverage"];
+
+/// Whether `name` is one of the advisory jobs a merge ignores.
+pub fn advisory_check(name: &str) -> bool {
+    let name = name.to_lowercase();
+    ADVISORY_CHECKS
+        .iter()
+        .any(|advisory| name.contains(advisory))
+}
+
+/// The state of a delegate's checks, as one word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiState {
+    /// The pull request has no checks at all.
+    NoChecks,
+    Passing,
+    Pending,
+    Failing,
+}
+
+impl CiState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoChecks => "none",
+            Self::Passing => "passing",
+            Self::Pending => "pending",
+            Self::Failing => "failing",
+        }
+    }
+}
+
+/// What the checks say: failing beats pending beats passing, and a pull
+/// request with no checks is neither.
+pub fn ci_state(checks: &[Check]) -> CiState {
+    if checks.is_empty() {
+        return CiState::NoChecks;
+    }
+    if checks.iter().any(|check| check.status == "failed") {
+        return CiState::Failing;
+    }
+    if checks.iter().any(|check| check.status == "pending") {
+        return CiState::Pending;
+    }
+    CiState::Passing
+}
+
+/// The names of the checks that failed, in the order the host listed them.
+pub fn failing_checks(checks: &[Check]) -> Vec<String> {
+    checks
+        .iter()
+        .filter(|check| check.status == "failed")
+        .map(|check| check.name.clone())
+        .collect()
+}
+
+/// A delegate's pull request, as `thread_status` reports it: which one it is,
+/// where it stands, and what its checks say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegatePull {
+    pub number: u64,
+    pub title: String,
+    /// `open`, `closed` or `merged`.
+    pub state: PullState,
+    pub merged: bool,
+    pub draft: bool,
+    pub url: String,
+    pub branch: String,
+    pub ci: CiState,
+    /// The checks that failed, by name: what the orchestrator tells the delegate.
+    pub failing: Vec<String>,
+    pub pending: usize,
+    pub passed: usize,
+}
+
+/// A pull request from a `gh pr list --json` answer, with its checks mapped.
+pub fn delegate_pull(value: &Value) -> Option<DelegatePull> {
+    let summary = summary(value)?;
+    let checks = checks(value);
+    Some(DelegatePull {
+        number: summary.number,
+        title: summary.title,
+        state: summary.state,
+        merged: summary.state == PullState::Merged,
+        draft: summary.draft,
+        url: summary.url,
+        branch: summary.head_ref,
+        ci: ci_state(&checks),
+        failing: failing_checks(&checks),
+        pending: checks
+            .iter()
+            .filter(|check| check.status == "pending")
+            .count(),
+        passed: checks
+            .iter()
+            .filter(|check| check.status == "passed")
+            .count(),
+    })
+}
+
+/// The branch a folder is on, or `None` when it is not a git checkout.
+pub fn current_branch(cwd: &Path) -> Option<String> {
+    crate::worktrees::git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok()
+        .map(|branch| branch.trim().to_owned())
+        .filter(|branch| !branch.is_empty() && branch != "HEAD")
+}
+
+/// The newest pull request whose head is `branch`: an open one first (a branch
+/// reused after its old pull request merged), then a merged one, then closed.
+pub async fn for_branch(cwd: &Path, branch: &str) -> Result<Option<DelegatePull>, PullError> {
+    let value = gh_json(
+        cwd,
+        &[
+            "pr",
+            "list",
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--limit",
+            "10",
+            "--json",
+            LIST_FIELDS,
+        ],
+    )
+    .await?;
+    let pulls: Vec<Value> = value.as_array().cloned().unwrap_or_default();
+    let rank = |value: &Value| match text(value, "state").to_uppercase().as_str() {
+        "OPEN" => 0,
+        "MERGED" => 1,
+        _ => 2,
+    };
+    let chosen = pulls
+        .iter()
+        .enumerate()
+        .min_by_key(|(index, value)| (rank(value), *index))
+        .map(|(_, value)| value.clone());
+    Ok(chosen.and_then(|value| delegate_pull(&value)))
+}
+
+/// How often a merge re-reads the checks, and how long it waits for them, as
+/// `scripts/pr-merge.sh` does (240 rounds of 20 s).
+pub const MERGE_POLL_SECS: u64 = 20;
+pub const MAX_MERGE_WAIT_SECS: u64 = 240 * 20;
+
+/// What `merge_when_green` did: merged, or why it stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeOutcome {
+    pub number: u64,
+    /// `merged`, `failing`, `closed`, `pending` (still waiting when the time ran out) or `failed`.
+    pub state: &'static str,
+    pub merged: bool,
+    /// The checks that failed, when `state` is `failing`.
+    pub failing: Vec<String>,
+    pub url: String,
+    pub waited_secs: u64,
+    pub message: String,
+}
+
+/// Wait for every check except the advisory ones, then squash-merge and delete
+/// the branch, as `scripts/pr-merge.sh` does. Two quiet rounds in a row are
+/// needed, so a path-filtered job that registers late is still caught. A
+/// failing check stops it before anything merges.
+pub async fn merge_when_green(
+    cwd: &Path,
+    number: u64,
+    wait: Duration,
+) -> Result<MergeOutcome, PullError> {
+    let started = std::time::Instant::now();
+    let wait = wait.clamp(
+        Duration::from_secs(MERGE_POLL_SECS),
+        Duration::from_secs(MAX_MERGE_WAIT_SECS),
+    );
+    let mut quiet = 0u32;
+    loop {
+        let value = watch_view(cwd, number).await?;
+        let Some(detail) = detail(&value) else {
+            return Err(PullError {
+                code: "failed",
+                message: "gh answered without a pull request".to_owned(),
+            });
+        };
+        let waited_secs = started.elapsed().as_secs();
+        if detail.summary.state == PullState::Merged {
+            return Ok(MergeOutcome {
+                number,
+                state: "merged",
+                merged: true,
+                failing: Vec::new(),
+                url: detail.summary.url,
+                waited_secs,
+                message: "it was already merged".to_owned(),
+            });
+        }
+        if detail.summary.state == PullState::Closed {
+            return Ok(MergeOutcome {
+                number,
+                state: "closed",
+                merged: false,
+                failing: Vec::new(),
+                url: detail.summary.url,
+                waited_secs,
+                message: "the pull request was closed without merging".to_owned(),
+            });
+        }
+        let checks: Vec<Check> = detail
+            .check_runs
+            .into_iter()
+            .filter(|check| !advisory_check(&check.name))
+            .collect();
+        let failing = failing_checks(&checks);
+        if !failing.is_empty() {
+            return Ok(MergeOutcome {
+                number,
+                state: "failing",
+                merged: false,
+                failing,
+                url: detail.summary.url,
+                waited_secs,
+                message: "a check failed; nothing was merged".to_owned(),
+            });
+        }
+        let pending = checks.iter().any(|check| check.status == "pending");
+        if checks.is_empty() || pending {
+            quiet = 0;
+        } else {
+            quiet += 1;
+            if quiet >= 2 {
+                let number_text = number.to_string();
+                gh(
+                    cwd,
+                    &["pr", "merge", &number_text, "--squash", "--delete-branch"],
+                    None,
+                )
+                .await?;
+                return Ok(MergeOutcome {
+                    number,
+                    state: "merged",
+                    merged: true,
+                    failing: Vec::new(),
+                    url: detail.summary.url,
+                    waited_secs: started.elapsed().as_secs(),
+                    message: "squash-merged and the branch was deleted".to_owned(),
+                });
+            }
+        }
+        let elapsed = started.elapsed();
+        if elapsed + Duration::from_secs(MERGE_POLL_SECS) > wait {
+            return Ok(MergeOutcome {
+                number,
+                state: "pending",
+                merged: false,
+                failing: Vec::new(),
+                url: detail.summary.url,
+                waited_secs: elapsed.as_secs(),
+                message: format!("checks were still pending after {} s", elapsed.as_secs()),
+            });
+        }
+        tokio::time::sleep(Duration::from_secs(MERGE_POLL_SECS)).await;
+    }
+}
+
 /// The error `gh` printed, with the cases the app explains on its own.
 fn classify(stderr: &str) -> PullError {
     let message = stderr.trim().to_owned();
@@ -632,6 +902,64 @@ mod tests {
         let json = serde_json::to_value(&detail).unwrap();
         assert_eq!(json["number"], 2701);
         assert_eq!(json["checkRuns"][0]["name"], "label");
+    }
+
+    fn check(name: &str, status: &'static str) -> Check {
+        Check {
+            name: name.to_owned(),
+            status,
+            url: None,
+        }
+    }
+
+    #[test]
+    fn a_delegates_checks_map_to_pending_passing_and_failing() {
+        assert_eq!(ci_state(&[]), CiState::NoChecks);
+        assert_eq!(ci_state(&[]).as_str(), "none");
+        assert_eq!(ci_state(&[check("test", "passed")]), CiState::Passing);
+        assert_eq!(
+            ci_state(&[check("test", "passed"), check("docs", "skipped")]),
+            CiState::Passing,
+            "a skipped check is not pending"
+        );
+        assert_eq!(
+            ci_state(&[check("test", "passed"), check("build", "pending")]),
+            CiState::Pending
+        );
+        // Failing wins over pending, so the names are reported at once.
+        let mixed = [
+            check("lint", "failed"),
+            check("build", "pending"),
+            check("test", "failed"),
+        ];
+        assert_eq!(ci_state(&mixed), CiState::Failing);
+        assert_eq!(failing_checks(&mixed), ["lint", "test"]);
+        assert_eq!(ci_state(&mixed).as_str(), "failing");
+    }
+
+    #[test]
+    fn advisory_checks_never_hold_a_merge() {
+        assert!(advisory_check("Windows and macOS portability coverage"));
+        assert!(advisory_check("portability coverage (windows)"));
+        assert!(!advisory_check("cargo test --workspace"));
+        assert!(!advisory_check("clippy"));
+    }
+
+    #[test]
+    fn a_delegates_pull_reports_its_state_and_failing_checks() {
+        let state = delegate_pull(&pull()).unwrap();
+        assert_eq!(state.number, 2701);
+        assert_eq!(state.state, PullState::Open);
+        assert!(!state.merged);
+        assert_eq!(state.branch, "feat/x");
+        assert_eq!(state.ci, CiState::Failing);
+        assert_eq!(state.failing, ["lint"]);
+        assert_eq!((state.passed, state.pending), (1, 2));
+        let mut merged = pull();
+        merged["state"] = json!("MERGED");
+        let merged = delegate_pull(&merged).unwrap();
+        assert_eq!(merged.state, PullState::Merged);
+        assert!(merged.merged);
     }
 
     #[test]

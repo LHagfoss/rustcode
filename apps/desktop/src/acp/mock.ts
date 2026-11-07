@@ -2559,6 +2559,47 @@ export class MockEngine {
             ],
           },
         };
+      case "_rustcode/pulls/state": {
+        const branch = str(obj(params)?.branch) || "feat/delegate-pull";
+        return {
+          branch,
+          pull: {
+            number: 2790,
+            title: "feat(mcp): report and finish delegate pull requests",
+            state: "open",
+            merged: false,
+            draft: false,
+            url: "https://github.com/LHagfoss/rustcode/pull/2790",
+            branch,
+            ci: "pending",
+            failing: [],
+            pending: 1,
+            passed: 5,
+          },
+        };
+      }
+      case "_rustcode/pulls/merge":
+        return {
+          merge: {
+            number: num(obj(params)?.number) ?? 2790,
+            state: "merged",
+            merged: true,
+            failing: [],
+            url: "https://github.com/LHagfoss/rustcode/pull/2790",
+            waitedSecs: 42,
+            message: "squash-merged and the branch was deleted",
+          },
+        };
+      case "_rustcode/worktrees/cleanup":
+        return {
+          cleanup: {
+            removed: true,
+            branch: str(obj(params)?.branch) ?? "feat/delegate-pull",
+            branch_removed: true,
+            base: "main",
+            commit_count: 0,
+          },
+        };
       case "_rustcode/pulls/view":
         return {
           pull: {

@@ -1222,6 +1222,62 @@ pub(crate) struct PullViewRequest {
     pub number: u64,
 }
 
+/// One delegate's pull request and its checks, by branch (the worktree's) or
+/// the branch the folder is on. Answers `{branch, pull}` or `{error}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/pulls/state", response = serde_json::Value)]
+pub(crate) struct PullStateRequest {
+    pub cwd: std::path::PathBuf,
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
+/// Merge a pull request once every check passes, as `scripts/pr-merge.sh` does
+/// (#3153). Answers `{merge}` or `{error}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/pulls/merge", response = serde_json::Value)]
+pub(crate) struct PullMergeRequest {
+    pub cwd: std::path::PathBuf,
+    #[serde(default)]
+    pub number: Option<u64>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+/// Remove a merged delegate's worktree and branch (#3153). `merged` is what
+/// the app read for its pull request; the engine still checks the worktree is
+/// clean and its commits are not lost. Answers `{cleanup}` or `{error}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/worktrees/cleanup", response = serde_json::Value)]
+pub(crate) struct WorktreeCleanupRequest {
+    pub path: std::path::PathBuf,
+    #[serde(default)]
+    pub merged: bool,
+}
+
 /// A pull request's diff. Answers `{diff, truncated}` or `{error}`.
 #[derive(
     Debug,
@@ -2298,6 +2354,88 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         Ok(pull) => serde_json::json!({ "pull": pull }),
                         Err(error) => serde_json::json!({ "error": error }),
                     })?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullStateRequest, responder, connection| {
+                connection.spawn(async move {
+                    let branch = request
+                        .branch
+                        .filter(|branch| !branch.trim().is_empty())
+                        .or_else(|| crate::pull_requests::current_branch(&request.cwd));
+                    let Some(branch) = branch else {
+                        return responder.respond(serde_json::json!({
+                            "branch": null,
+                            "pull": null,
+                            "error": { "code": "not_a_repository", "message": "the folder is not on a git branch" }
+                        }));
+                    };
+                    let answer = match crate::pull_requests::for_branch(&request.cwd, &branch).await {
+                        Ok(pull) => serde_json::json!({ "branch": branch, "pull": pull }),
+                        Err(error) => serde_json::json!({ "branch": branch, "error": error }),
+                    };
+                    responder.respond(answer)?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullMergeRequest, responder, connection| {
+                connection.spawn(async move {
+                    let branch = request
+                        .branch
+                        .clone()
+                        .filter(|branch| !branch.trim().is_empty())
+                        .or_else(|| crate::pull_requests::current_branch(&request.cwd));
+                    let number = match (request.number, branch.as_deref()) {
+                        (Some(number), _) => Some(number),
+                        (None, Some(branch)) => {
+                            match crate::pull_requests::for_branch(&request.cwd, branch).await {
+                                Ok(pull) => pull.map(|pull| pull.number),
+                                Err(error) => {
+                                    return responder
+                                        .respond(serde_json::json!({ "error": error }));
+                                }
+                            }
+                        }
+                        (None, None) => None,
+                    };
+                    let Some(number) = number else {
+                        return responder.respond(serde_json::json!({
+                            "error": {
+                                "code": "not_found",
+                                "message": "no pull request matches this thread's branch; open one first"
+                            }
+                        }));
+                    };
+                    let wait = std::time::Duration::from_millis(
+                        request
+                            .timeout_ms
+                            .unwrap_or(crate::pull_requests::MAX_MERGE_WAIT_SECS * 1000)
+                            .max(1000),
+                    );
+                    let answer =
+                        match crate::pull_requests::merge_when_green(&request.cwd, number, wait).await {
+                            Ok(outcome) => serde_json::json!({ "merge": outcome }),
+                            Err(error) => serde_json::json!({ "error": error }),
+                        };
+                    responder.respond(answer)?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: WorktreeCleanupRequest, responder, connection| {
+                connection.spawn(async move {
+                    match crate::worktrees::cleanup(&request.path, request.merged) {
+                        Ok(cleanup) => responder.respond(serde_json::json!({ "cleanup": cleanup }))?,
+                        Err(error) => responder.respond_with_error(error.into_acp())?,
+                    }
                     Ok(())
                 })
             },

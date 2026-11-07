@@ -12,7 +12,7 @@ import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 7;
+export const CAPABILITY_VERSION = 8;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -286,7 +286,10 @@ export type Call =
       queueId?: string;
       /** What it says instead, for `edit`. */
       text?: string;
-    };
+    }
+  | { tool: "thread_status"; target?: string }
+  | { tool: "merge_when_green"; target: string; timeoutMs: number }
+  | { tool: "cleanup_worktree"; target: string; settle: boolean };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -311,6 +314,10 @@ const QUEUE_ACTIONS: readonly string[] = ["list", "edit", "cancel", "steer"];
 export const MAX_QUEUE_ITEMS = 50;
 /** How much of a queued message a list shows: enough to know which one it is. */
 export const QUEUE_PREVIEW_CHARS = 200;
+
+/** How long `merge_when_green` waits for checks by default, and at most: the same 80 minutes as `scripts/pr-merge.sh`. */
+export const DEFAULT_MERGE_MS = 240 * 20 * 1000;
+export const MAX_MERGE_MS = DEFAULT_MERGE_MS;
 
 /** Pull requests listed, and projects: an agent's context pays for each. */
 export const MAX_PULL_REQUESTS = 30;
@@ -380,6 +387,30 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (!sql) return failure("invalid", "sql is required");
       const asked = typeof args.limit === "number" ? Math.floor(args.limit) : MAX_DATA_ROWS;
       return { tool: "query_data", sql, limit: Math.min(Math.max(asked, 1), MAX_DATA_ROWS) };
+    }
+    case "thread_status": {
+      const target = s(args.session_id)?.trim() || undefined;
+      return { tool: "thread_status", target };
+    }
+    case "merge_when_green": {
+      const target = s(args.session_id) ?? "";
+      if (!target) return failure("invalid", "session_id is required");
+      const asked = typeof args.timeout_ms === "number" ? Math.floor(args.timeout_ms) : DEFAULT_MERGE_MS;
+      return {
+        tool: "merge_when_green",
+        target,
+        timeoutMs: Math.min(Math.max(asked, 1), MAX_MERGE_MS),
+      };
+    }
+    case "cleanup_worktree": {
+      const target = s(args.session_id) ?? "";
+      if (!target) return failure("invalid", "session_id is required");
+      // Settling after cleanup is the default; a caller can keep the thread as it is.
+      return {
+        tool: "cleanup_worktree",
+        target,
+        settle: typeof args.settle === "boolean" ? args.settle : true,
+      };
     }
     case "read_activity": {
       const target = s(args.session_id) ?? "";
@@ -1939,7 +1970,17 @@ export function wakeMessage(wake: Wake, now: number): string {
 
 /** What the user is asked, in words. */
 export interface GrantAsk {
-  kind: "message" | "read" | "start" | "fan_out" | "organize" | "interrupt" | "transfer" | "configure";
+  kind:
+    | "message"
+    | "read"
+    | "start"
+    | "fan_out"
+    | "organize"
+    | "interrupt"
+    | "transfer"
+    | "configure"
+    | "merge"
+    | "cleanup";
   caller: string;
   callerTitle: string;
   /** The thread messaged or read, or the new thread's title. */
