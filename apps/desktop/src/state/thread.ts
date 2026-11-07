@@ -165,7 +165,7 @@ export const withWakeMark = (text: string) => `${text}\n\n${WAKE_MARK}`;
 /** Whether a watched marker is the wake message's. */
 export const isWakeMessage = (text: string) => text.includes(WAKE_MARK);
 
-/** A wake message's first line: its compact summary ("2 children finished · 1 needs you"). */
+/** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
 
 export interface ThreadState {

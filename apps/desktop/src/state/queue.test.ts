@@ -41,13 +41,13 @@ describe("the end of a thread's queue", () => {
     const view = queueView(
       thread([
         item("a"),
-        item("w", { text: "2 children finished · 1 needs you\n\nFinished:", wake: true }),
+        item("w", { text: "2 delegates finished · Delegate asks: Review PR\n\nFinished:", wake: true }),
         item("l", { link: "a/b" }),
       ]),
     );
     expect(view.messages.map((q) => q.id)).toEqual(["a", "l"]);
     // Its first line is its summary, which is what the transcript shows.
-    expect(view.wake).toBe("2 children finished · 1 needs you");
+    expect(view.wake).toBe("2 delegates finished · Delegate asks: Review PR");
     expect(isQueuedMessage(item("w", { wake: true }))).toBe(false);
     // Only the user's own message is editable in the composer.
     expect(isOwnQueued(item("a"))).toBe(true);
@@ -96,19 +96,19 @@ describe("what the live region says", () => {
   });
 
   test("a wake is announced as waiting, and an edit says where it is", () => {
-    const view = queueView(thread([item("w", { text: "1 child finished", wake: true })]));
-    expect(queuedAnnouncement(view, false)).toBe("a wake-up waiting: 1 child finished");
+    const view = queueView(thread([item("w", { text: "Delegate finished: Fix the composer", wake: true })]));
+    expect(queuedAnnouncement(view, false)).toBe("a wake-up waiting: Delegate finished: Fix the composer");
     // A wake folded into an earlier one keeps its row but not its line: the new summary is announced.
     const folded = queueView(
       thread([
         item("w", {
-          text: "2 children finished\n\nFinished:\n- link_id a/b · done",
+          text: "2 delegates finished\n\nFinished:\n- link_id a/b · done",
           wake: true,
           wakeLinks: ["a/b", "a/c"],
         }),
       ]),
     );
-    expect(queuedAnnouncement(folded, false)).toBe("a wake-up waiting: 2 children finished");
+    expect(queuedAnnouncement(folded, false)).toBe("a wake-up waiting: 2 delegates finished");
     expect(queuedAnnouncement(queueView(thread([item("a")])), true)).toBe(
       "1 message queued · Editing a queued message in the composer",
     );

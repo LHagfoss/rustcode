@@ -585,9 +585,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   never in a field of its own: its pencil, or ↑ at the start of an empty
   composer, loads its text, command, links and attachments there, ⏎ saves it
   back in the queue and Esc leaves it. A held queue ends with Resume, which
-  starts its first message. A wake turn the app sends is one quiet line (its
-  first line, in the notice divider's style), never a bubble; a message another
-  thread sent says `From “…”` and is not the user's to edit.
+  starts its first message. A wake turn the app sends is one quiet line in the
+  notice divider's style (`Delegate finished · Fix composer focus · Pi · 3m 49s`
+  for one, the working delegate's harness marks and the longest time for
+  several), never a bubble; a message another thread sent says `From “…”` and is
+  not the user's to edit.
 - **Jump to latest:** the pill over the composer's control row (`shadow-1`,
   `.rc-glass-overlay` — the strip below it shares that surface — 30px)
   says `Latest` and, while a turn runs, what

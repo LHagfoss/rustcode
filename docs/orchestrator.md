@@ -331,10 +331,11 @@ they finish or ask, instead of having to poll with sleeps.
   through the leaf's result and the wake turn that follows, and is told the
   middle's **latest** answer: a settled, not-yet-reported link takes the answer
   and `settledAt` of each later turn of its target (`restateLinks`). The message
-  names each child: `link_id`, status, title, child `session`, files changed,
-  how long ago, and its answer cut to 1 KiB each (`WAKE_ANSWER_CHARS`); a link
-  that settled without one (its reply's rows reached the app a moment later) is
-  completed from the child's last reply before anyone reads it, and a later turn
+  names each delegate: `link_id`, status, title, harness, how long it worked,
+  its `session`, files changed, how long ago, and its answer cut to 1 KiB each
+  (`WAKE_ANSWER_CHARS`); a link that settled without one (its reply's rows
+  reached the app a moment later) is completed from the child's last reply
+  before anyone reads it, and a later turn
   that answers nothing never erases an answer; it says
   the rest is in `read_session` on the child's session or `wait_session` on a
   `link_id`, and that the message is the notification. A child that was
@@ -407,10 +408,13 @@ they finish or ask, instead of having to poll with sleeps.
   restored row as on any other. Settings' *Threads can start and message other
   threads* turns the waking half off with the rest of orchestration; the queue
   itself is kept either way.
-- **In the transcript** a wake turn is a quiet divider row ("2 children finished ·
-  1 needs you"), not a message that reads as the user's own; a wake steered into
-  a running turn is a steer row there, which says the turn reads it after its
-  current step.
+- **In the transcript** a wake turn is a quiet divider row built from the
+  message, not a message that reads as the user's own. Its first line names the
+  delegate ("Delegate finished: Fix composer focus") and its detail lines add
+  the harness and how long it worked; the row shows all of it. Several
+  delegates show up to three harness marks, their titles and the longest worked
+  time. A wake steered into a running turn is a steer row there, which says the
+  turn reads it after its current step.
 
 ## Orchestration tools v3
 
