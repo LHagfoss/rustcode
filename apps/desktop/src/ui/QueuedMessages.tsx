@@ -105,53 +105,25 @@ const QueuedAttachments = memo(function QueuedAttachments({ list }: { list: Atta
 });
 
 /**
- * One queued message, at the end of the thread: right-aligned like a sent one, with a dashed edge
- * instead of a fill so it reads as waiting. Under it its state, and on hover or focus what can be
- * done with it: send it into the running turn, edit it in the composer, move it, remove it.
+ * The bubble itself: a sent message's card, told apart by its dashed edge — the text waits here, it
+ * was not said. While the composer has it open, the edge takes the accent. Shared with the row a
+ * steer just took, so it leaves looking exactly as it looked while it waited.
  */
-export const QueuedMessageRow = memo(function QueuedMessageRow({
-  threadId,
+const QueuedBubble = memo(function QueuedBubble({
   item,
-  index,
-  count,
-  held,
-  steering,
-  turn,
-  from,
+  editing,
 }: {
-  threadId: string;
   item: QueuedPrompt;
-  index: number;
-  count: number;
-  held: boolean;
-  /** The harness's steering record and the turn's state: the send rule's other half. */
-  steering: SteeringCapabilities;
-  turn: TurnState;
-  /** The thread that sent it, for a message delivered for another thread. */
-  from?: string;
+  editing?: boolean;
 }) {
-  // Only this one row listens for "this is the message the composer has open".
-  const editing = useApp((s) => s.queuedEdit?.queuedId === item.id);
-  const own = isOwnQueued(item);
   const attachments = item.extras?.attachments ?? [];
   const command = item.extras?.command;
   const links = item.extras?.links ?? [];
-  const state = held ? "Held" : "Queued";
-  const label = `${state} message ${index + 1} of ${count}, not sent`;
-  // The same rule ⌘⏎ and `sendQueuedNow` follow: the arrow is active whenever it says steer — for
-  // pictures too, on a harness that takes them mid-turn — and otherwise says exactly why it waits.
-  const send = sendDecision(item.extras, steering, turn);
-  const why = send.action === "queue" ? QUEUE_REASON[send.reason] : "Stops this turn and sends this one";
   return (
-    <div className="group flex flex-col items-end" role="group" aria-label={label}>
-      {/* A message another thread sent is that thread's, not the user's: it says whose it is, and
-          it cannot be edited here. */}
-      {from && <p className="mb-1 text-caption text-fg-faint">From “{from}”</p>}
+    <>
       {attachments.length > 0 && <QueuedAttachments list={attachments} />}
       <div
         className={cx(
-          // A bubble like a sent message's, told apart by its dashed edge: the text waits here, it was
-          // not said. While the composer has it open, the edge takes the accent.
           "max-w-[80%] rounded-2xl border border-border-strong border-dashed bg-message/40 p-3 text-fg",
           editing && "border-accent/50",
         )}
@@ -182,6 +154,65 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
           <p className="text-callout text-fg-muted">Attachments only</p>
         )}
       </div>
+    </>
+  );
+});
+
+/**
+ * A queued row the turn just read as a steer: it leaves the stack by gliding up toward the
+ * transcript it was read in, and fades there (`index.css` `rc-steer-away`). `state/thread.ts`
+ * `departing` holds it for the length of that glide, so the rows under it do not jump while the
+ * reader watches it go. It takes no pointer and answers no key: it is on its way out.
+ */
+export const LeavingQueuedRow = memo(function LeavingQueuedRow({ item }: { item: QueuedPrompt }) {
+  return (
+    <div aria-hidden className="rc-steer-away flex flex-col items-end pointer-events-none select-none">
+      <QueuedBubble item={item} />
+    </div>
+  );
+});
+
+/**
+ * One queued message, at the end of the thread: right-aligned like a sent one, with a dashed edge
+ * instead of a fill so it reads as waiting. Under it its state, and on hover or focus what can be
+ * done with it: send it into the running turn, edit it in the composer, move it, remove it.
+ */
+export const QueuedMessageRow = memo(function QueuedMessageRow({
+  threadId,
+  item,
+  index,
+  count,
+  held,
+  steering,
+  turn,
+  from,
+}: {
+  threadId: string;
+  item: QueuedPrompt;
+  index: number;
+  count: number;
+  held: boolean;
+  /** The harness's steering record and the turn's state: the send rule's other half. */
+  steering: SteeringCapabilities;
+  turn: TurnState;
+  /** The thread that sent it, for a message delivered for another thread. */
+  from?: string;
+}) {
+  // Only this one row listens for "this is the message the composer has open".
+  const editing = useApp((s) => s.queuedEdit?.queuedId === item.id);
+  const own = isOwnQueued(item);
+  const state = held ? "Held" : "Queued";
+  const label = `${state} message ${index + 1} of ${count}, not sent`;
+  // The same rule ⌘⏎ and `sendQueuedNow` follow: the arrow is active whenever it says steer — for
+  // pictures too, on a harness that takes them mid-turn — and otherwise says exactly why it waits.
+  const send = sendDecision(item.extras, steering, turn);
+  const why = send.action === "queue" ? QUEUE_REASON[send.reason] : "Stops this turn and sends this one";
+  return (
+    <div className="group flex flex-col items-end" role="group" aria-label={label}>
+      {/* A message another thread sent is that thread's, not the user's: it says whose it is, and
+          it cannot be edited here. */}
+      {from && <p className="mb-1 text-caption text-fg-faint">From “{from}”</p>}
+      <QueuedBubble item={item} editing={editing} />
       {/* Its state, and what can be done with it, in one reveal: hidden at rest (the dashed edge says
           it waits) and in together on hover of the row or keyboard focus inside it. A held queue says
           Held at rest, since that is why nothing runs; one being edited says so at rest too. A wake is
