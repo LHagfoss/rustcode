@@ -320,9 +320,11 @@ pub(crate) fn named_claude_accounts<'a>(
 }
 
 /// Answer `_rustcode/usage/plans`: `{plans: [{id, name, status, plan?, error?,
-/// reason?, windows: [{label, usedPercent, windowMinutes, resetsAt}]}]}`, where
-/// status is `ok`, `signedOut`, `notInstalled`, `unavailable` or `notAsked`,
-/// and an `unavailable` Claude row's `reason` is `expired`, `refused`,
+/// reason?, asOf?, windows: [{label, usedPercent, windowMinutes, resetsAt}]}]}`,
+/// where status is `ok`, `signedOut`, `notInstalled`, `unavailable` or
+/// `notAsked`, a `ok` row's `asOf` is when the numbers were read when they are
+/// the last ones RustCode recorded rather than a read now (their access token
+/// lapsed), and an `unavailable` Claude row's `reason` is `expired`, `refused`,
 /// `forbidden`, `denied` or `transient` (see `claude_usage::NoUsage`).
 pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     let window = |label: &str, window: &crate::provider_auth::RateLimitWindow| {
@@ -458,7 +460,11 @@ fn claude_row(
         })
     };
     match usage {
-        ClaudeUsage::Windows { plan, windows } => {
+        ClaudeUsage::Windows {
+            plan,
+            windows,
+            as_of,
+        } => {
             let windows: Vec<_> = windows
                 .iter()
                 .map(|w| {
@@ -470,7 +476,14 @@ fn claude_row(
                     })
                 })
                 .collect();
-            row("ok", None, plan.as_deref(), windows)
+            let mut value = row("ok", None, plan.as_deref(), windows);
+            // Numbers recorded before this login's access token lapsed are
+            // still its numbers, marked with when they were read so the app can
+            // say "as of" instead of drawing them as this minute's.
+            if as_of.is_some() {
+                value["asOf"] = serde_json::json!(as_of);
+            }
+            value
         }
         ClaudeUsage::NotSignedIn => row("signedOut", None, None, vec![]),
         // `reason` is what tells the app whether to retry on its own: an
@@ -559,6 +572,7 @@ mod tests {
     ) -> crate::provider_auth::claude_usage::ClaudeUsage {
         crate::provider_auth::claude_usage::ClaudeUsage::Windows {
             plan: Some("max".into()),
+            as_of: None,
             windows: vec![crate::provider_auth::claude_usage::LabelledWindow {
                 label: "5-hour",
                 window: crate::provider_auth::RateLimitWindow {
@@ -656,6 +670,33 @@ mod tests {
         );
         assert_eq!(denied["account"], "work");
         assert_eq!(denied["reason"], "denied");
+    }
+
+    /// Numbers that were read now say nothing about when; numbers RustCode
+    /// recorded before this login's access token lapsed carry `asOf`, so the
+    /// app can show them "as of" then instead of as this minute's.
+    #[test]
+    fn recorded_numbers_say_when_they_were_read() {
+        let fresh = super::claude_row(
+            "claude:work",
+            "Work",
+            Some("work"),
+            claude_windows(4.0, 300),
+        );
+        assert_eq!(fresh["status"], "ok");
+        assert!(fresh.get("asOf").is_none());
+        let mut recorded = claude_windows(41.5, 10_080);
+        if let crate::provider_auth::claude_usage::ClaudeUsage::Windows { as_of, .. } =
+            &mut recorded
+        {
+            *as_of = Some(1_762_500_000);
+        }
+        let value = super::claude_row("claude:work", "Work", Some("work"), recorded);
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["asOf"], 1_762_500_000);
+        assert_eq!(value["windows"][0]["usedPercent"], 41.5);
+        assert_eq!(value["account"], "work");
+        assert!(value.get("reason").is_none());
     }
 
     /// `force` is what Settings › Usage's Refresh sends, and an older app that

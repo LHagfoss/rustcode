@@ -15,10 +15,23 @@
 //! some failures and not others: an expired or refused sign-in is renewed in
 //! Claude Code and must be read again, while a Keychain prompt the user denied
 //! must not be raised again on its own.
+//!
+//! Claude Code keeps a login in the Keychain item for its config directory and
+//! may also keep `<config dir>/.credentials.json`; both are read, and the copy
+//! with the freshest token is used, since one can lag the other.
+//!
+//! Its access token lives for hours and is renewed only when Claude Code runs:
+//! the refresh token beside it stays valid for weeks. An account nobody ran a
+//! thread on since the access token lapsed therefore still reads as signed in
+//! while its stored token has expired. Nothing here refreshes it, so instead of
+//! only saying so the read answers with the last windows RustCode recorded for
+//! that login (`claude-usage.json`), which the app shows "as of" when they were
+//! read; the plain expiry is the answer only when there is nothing recorded yet.
 
 use super::rate_limits::RateLimitWindow;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -43,6 +56,11 @@ pub(crate) enum ClaudeUsage {
     Windows {
         plan: Option<String>,
         windows: Vec<LabelledWindow>,
+        /// Unix seconds of the read that recorded these numbers, when they are
+        /// the last ones RustCode read for this login rather than a read made
+        /// now: the stored access token has lapsed and Claude Code has not run
+        /// since. The app shows them "as of" then.
+        as_of: Option<i64>,
     },
     /// No Claude Code sign-in on this machine.
     NotSignedIn,
@@ -243,35 +261,82 @@ fn remember(key: Option<PathBuf>, started: Instant, usage: &ClaudeUsage) {
     }
 }
 
-/// A login's stored sign-in, and how it was reached.
+/// A login's stored sign-ins, and how they were reached.
 struct Stored {
-    /// The credentials as stored (`claudeAiOauth` and the rest).
-    value: Value,
-    /// macOS refused the Keychain item, so this came from the credentials
-    /// file instead. If the file's sign-in is no use either, the refusal is
-    /// what the user must act on: reported as an expiry, the app would retry
-    /// on every poll, and every retry would ask macOS for the item again.
+    /// Every copy of the sign-in found for this login, in the order they were
+    /// read: the Keychain item first, then `<config dir>/.credentials.json`.
+    /// Claude Code writes back whichever store it could open, so one copy can
+    /// lag the other; the copy with the freshest token is the one used.
+    copies: Vec<Value>,
+    /// macOS refused the Keychain item, so what there is came from the
+    /// credentials file. If no copy is usable either, the refusal is what the
+    /// user must act on: reported as an expiry, the app would retry on every
+    /// poll, and every retry would ask macOS for the item again.
     keychain_denied: bool,
 }
 
-/// The token to use, or why the stored sign-in cannot be used. A Keychain
-/// refusal that the credentials file did not make up for stays a refusal,
-/// never an expiry.
-fn usable_token(stored: &Stored, now_ms: i64) -> Result<&str, ClaudeUsage> {
-    match sign_in(&stored.value, now_ms) {
-        SignIn::Fresh(token) => Ok(token),
-        SignIn::Expired | SignIn::Unreadable if stored.keychain_denied => {
-            Err(ClaudeUsage::unavailable(NoUsage::Denied, KEYCHAIN_REFUSED))
+/// When a copy's access token expires, when it says (unix milliseconds).
+fn expires_at(credentials: &Value) -> Option<i64> {
+    credentials.get("claudeAiOauth")?.get("expiresAt")?.as_i64()
+}
+
+/// The freshest usable sign-in among the copies Claude Code keeps, and its
+/// token: the copy whose token expires last, never mind which store it came
+/// from. `Err` is why there is none, in words the user can act on; a Keychain
+/// refusal that no copy made up for stays a refusal, never an expiry.
+fn usable_sign_in(
+    stored: &Stored,
+    now_ms: i64,
+    named: bool,
+) -> Result<(&Value, &str), ClaudeUsage> {
+    let mut best: Option<(&Value, &str, i64)> = None;
+    let mut expired = false;
+    for copy in &stored.copies {
+        match sign_in(copy, now_ms) {
+            SignIn::Fresh(token) => {
+                // A copy that does not say when it expires counts as the
+                // oldest: one that does is the better bet when picking.
+                let at = expires_at(copy).unwrap_or(0);
+                if best.is_none_or(|(_, _, known)| at > known) {
+                    best = Some((copy, token, at));
+                }
+            }
+            SignIn::Expired => expired = true,
+            SignIn::Unreadable => {}
         }
-        SignIn::Expired => Err(ClaudeUsage::unavailable(
-            NoUsage::Expired,
-            "Claude Code's sign-in has expired. Open Claude Code to renew it, then Refresh.",
-        )),
-        SignIn::Unreadable => Err(ClaudeUsage::unavailable(
-            NoUsage::Transient,
-            "Claude Code's stored sign-in could not be read. Ask Claude Code to sign in again.",
+    }
+    match best {
+        Some((copy, token, _)) => Ok((copy, token)),
+        None => Err(failure_without_sign_in(
+            stored.keychain_denied,
+            expired,
+            named,
         )),
     }
+}
+
+/// Why no stored copy could be used. A refusal macOS gave outranks the copies'
+/// own state, and a lapsed access token is not the user signing out: Claude
+/// Code renews it the next time it runs, so the message asks for that instead
+/// of asking them to sign in again.
+fn failure_without_sign_in(keychain_denied: bool, expired: bool, named: bool) -> ClaudeUsage {
+    if keychain_denied {
+        return ClaudeUsage::unavailable(NoUsage::Denied, KEYCHAIN_REFUSED);
+    }
+    if expired {
+        return ClaudeUsage::unavailable(
+            NoUsage::Expired,
+            if named {
+                EXPIRED_ACCOUNT
+            } else {
+                EXPIRED_DEFAULT
+            },
+        );
+    }
+    ClaudeUsage::unavailable(
+        NoUsage::Transient,
+        "Claude Code's stored sign-in could not be read. Ask Claude Code to sign in again.",
+    )
 }
 
 async fn read(config_dir: Option<&Path>, freshness: Freshness) -> ClaudeUsage {
@@ -282,17 +347,24 @@ async fn read(config_dir: Option<&Path>, freshness: Freshness) -> ClaudeUsage {
             return ClaudeUsage::unavailable(reason, message);
         }
     };
-    match usable_token(&stored, chrono::Utc::now().timestamp_millis()) {
-        Ok(token) => request_failure(&stored, fetch(&stored, token).await),
-        Err(failure) => failure,
+    match usable_sign_in(
+        &stored,
+        chrono::Utc::now().timestamp_millis(),
+        config_dir.is_some(),
+    ) {
+        Ok((copy, token)) => {
+            let answered = request_failure(&stored, fetch(copy, token).await);
+            record_read(config_dir, &answered);
+            answered
+        }
+        Err(failure) => recorded_instead(config_dir, failure),
     }
 }
 
 /// Asks Anthropic for the plan windows with `token`: the windows, or why the
 /// request did not produce them.
-async fn fetch(stored: &Stored, token: &str) -> ClaudeUsage {
-    let plan = stored
-        .value
+async fn fetch(sign_in: &Value, token: &str) -> ClaudeUsage {
+    let plan = sign_in
         .pointer("/claudeAiOauth/subscriptionType")
         .and_then(Value::as_str)
         .map(str::to_owned);
@@ -324,6 +396,7 @@ async fn fetch(stored: &Stored, token: &str) -> ClaudeUsage {
         Ok(body) => ClaudeUsage::Windows {
             plan,
             windows: parse(&body),
+            as_of: None,
         },
         Err(_) => {
             ClaudeUsage::unavailable(NoUsage::Transient, "Anthropic's answer could not be read.")
@@ -431,6 +504,13 @@ const KEYCHAIN_REFUSED: &str =
 /// The item was printed but held no sign-in.
 const KEYCHAIN_UNREADABLE: &str = "Claude Code's sign-in in the Keychain could not be read.";
 
+/// Why a login has no numbers when its stored access token has lapsed: Claude
+/// Code renews that token the next time it runs, and nothing here refreshes it
+/// (a refresh would rotate it under Claude Code). The refresh token beside the
+/// access token is still good, so the sign-in did not expire.
+const EXPIRED_ACCOUNT: &str = "Run a Claude Code thread on this account to refresh its usage.";
+const EXPIRED_DEFAULT: &str = "Run a Claude Code thread to refresh its usage.";
+
 /// What a failed `security find-generic-password -w` means for a login.
 ///
 /// `security` exits with the low byte of the Security framework's `OSStatus`, and
@@ -466,7 +546,8 @@ fn keychain_outcome(
 }
 
 /// Claude Code's stored sign-in, as JSON, for `config_dir` (the default login
-/// when `None`).
+/// when `None`): every copy of it, since Claude Code keeps one in the Keychain
+/// item for the directory and may keep `<config dir>/.credentials.json` too.
 async fn credentials(
     config_dir: Option<&Path>,
     freshness: Freshness,
@@ -475,13 +556,14 @@ async fn credentials(
     #[cfg(target_os = "macos")]
     {
         let key = config_dir.map(Path::to_path_buf);
-        // A refusal macOS already gave is not repeated on its own: the file is
-        // read instead. Only an explicit look asks the Keychain again, which is
-        // the user saying they want to allow it.
-        let skipped = skip_keychain(freshness, keychain_blocked(&key));
-        let miss = if skipped {
-            NoCredentials::Unavailable(NoUsage::Denied, KEYCHAIN_REFUSED)
-        } else {
+        let mut copies = Vec::new();
+        // Why the Keychain gave no copy, when it gave none. A refusal macOS
+        // already gave is not repeated on its own: the file is read instead,
+        // and only an explicit look asks the Keychain again.
+        let mut miss = skip_keychain(freshness, keychain_blocked(&key)).then_some(
+            NoCredentials::Unavailable(NoUsage::Denied, KEYCHAIN_REFUSED),
+        );
+        if miss.is_none() {
             let item = config_dir.map_or_else(
                 || DEFAULT_KEYCHAIN_ITEM.to_owned(),
                 |dir| keychain_item_name(dir),
@@ -491,9 +573,8 @@ async fn credentials(
                 .stdin(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .output()
-                .await
-                .map_err(|_| NoCredentials::Unavailable(NoUsage::Denied, KEYCHAIN_REFUSED));
-            let miss = match output {
+                .await;
+            let failure = match output {
                 Ok(output) => match keychain_outcome(
                     output.status.success(),
                     output.status.code(),
@@ -502,32 +583,41 @@ async fn credentials(
                     Ok(value) => {
                         // macOS handed it over: nothing is blocked any more.
                         remember_keychain_denial(&key, false);
-                        return Ok(Stored {
-                            value,
-                            keychain_denied: false,
-                        });
+                        copies.push(value);
+                        None
                     }
-                    Err(miss) => miss,
+                    Err(miss) => Some(miss),
                 },
-                Err(miss) => miss,
+                // `security` could not be run at all: not a sign-out, and not
+                // a read worth repeating without the user asking.
+                Err(_) => Some(NoCredentials::Unavailable(
+                    NoUsage::Denied,
+                    KEYCHAIN_REFUSED,
+                )),
             };
-            remember_keychain_denial(&key, is_denial(&miss));
-            miss
-        };
-        // The credentials file may still hold the sign-in (and does elsewhere),
-        // so it has its chance before a failed lookup is called a sign-out. A
-        // refusal macOS gave is remembered: if the file cannot stand in, the
-        // user must allow the Keychain, not read an expiry that retries it.
-        let denied = is_denial(&miss);
+            if let Some(refused) = failure {
+                remember_keychain_denial(&key, is_denial(&refused));
+                miss = Some(refused);
+            }
+        }
+        // Both stores can hold a sign-in, and Claude Code writes back to
+        // whichever it could open: the file is read even when the Keychain
+        // answered, and the freshest token among them is the one used. A
+        // refusal macOS gave is remembered: if no copy is usable, the user must
+        // allow the Keychain, not read an expiry that retries it.
+        let denied = miss.as_ref().is_some_and(is_denial);
         if let Some(dir) = file()
             && let Some(value) = read_credentials_file(dir).await
         {
-            return Ok(Stored {
-                value,
-                keychain_denied: denied,
-            });
+            copies.push(value);
         }
-        Err(miss)
+        if copies.is_empty() {
+            return Err(miss.unwrap_or(NoCredentials::None));
+        }
+        Ok(Stored {
+            copies,
+            keychain_denied: denied,
+        })
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -536,7 +626,7 @@ async fn credentials(
             Some(dir) => read_credentials_file(dir)
                 .await
                 .map(|value| Stored {
-                    value,
+                    copies: vec![value],
                     keychain_denied: false,
                 })
                 .ok_or(NoCredentials::None),
@@ -557,6 +647,166 @@ async fn read_credentials_file(dir: PathBuf) -> Option<Value> {
         .await
         .ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// The last windows RustCode read for one login, kept across engine restarts in
+/// `claude-usage.json` in the config directory.
+///
+/// Claude Code renews an access token only when it runs, so a signed-in account
+/// that has been idle for longer than the token's lifetime reads as expired.
+/// Rather than leaving the user with only that, a read that finds no usable
+/// token answers with what was recorded here, which the app shows "as of" when
+/// it was read. Written only when a read answered, and never mistaken for a
+/// fresh read (it carries `as_of`).
+const HISTORY_FILE: &str = "claude-usage.json";
+
+/// One login's last numbers, as written.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct RecordedPlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plan: Option<String>,
+    /// Unix seconds of the read that recorded them.
+    #[serde(default)]
+    read_at: i64,
+    windows: Vec<RecordedWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct RecordedWindow {
+    label: String,
+    used_percent: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    window_minutes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct HistoryFile {
+    /// One entry per login: the config directory, or `""` for the default one.
+    #[serde(default)]
+    logins: BTreeMap<String, RecordedPlan>,
+}
+
+/// A login's key in the history file: its config directory, and `""` for the
+/// login that runs with no `CLAUDE_CONFIG_DIR`.
+fn history_key(config_dir: Option<&Path>) -> String {
+    config_dir
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn history_path(dir: &Path) -> PathBuf {
+    dir.join(HISTORY_FILE)
+}
+
+fn read_history(dir: &Path) -> HistoryFile {
+    std::fs::read_to_string(history_path(dir))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// What was recorded for the login in `config_dir` (the default login for
+/// `None`), as the windows to answer with, `as_of` included. `None` when this
+/// login was never read, or what was recorded holds no window of ours.
+fn recorded_in(dir: &Path, config_dir: Option<&Path>) -> Option<ClaudeUsage> {
+    let record = read_history(dir).logins.remove(&history_key(config_dir))?;
+    let windows: Vec<LabelledWindow> = record
+        .windows
+        .iter()
+        .filter_map(|window| {
+            Some(LabelledWindow {
+                label: label_for(&window.label)?,
+                window: RateLimitWindow {
+                    used_percent: window.used_percent,
+                    window_minutes: window.window_minutes,
+                    resets_at: window.resets_at,
+                },
+            })
+        })
+        .collect();
+    (!windows.is_empty()).then_some(ClaudeUsage::Windows {
+        plan: record.plan,
+        windows,
+        as_of: Some(record.read_at),
+    })
+}
+
+/// Keeps the numbers of a read that answered, for the next time this login's
+/// stored access token has lapsed. A read that is itself recorded numbers is
+/// not written again.
+fn record_in(dir: &Path, config_dir: Option<&Path>, usage: &ClaudeUsage) {
+    let ClaudeUsage::Windows {
+        plan,
+        windows,
+        as_of: None,
+    } = usage
+    else {
+        return;
+    };
+    if windows.is_empty() {
+        return;
+    }
+    let record = RecordedPlan {
+        plan: plan.clone(),
+        read_at: chrono::Utc::now().timestamp(),
+        windows: windows
+            .iter()
+            .map(|window| RecordedWindow {
+                label: window.label.to_owned(),
+                used_percent: window.window.used_percent,
+                window_minutes: window.window.window_minutes,
+                resets_at: window.window.resets_at,
+            })
+            .collect(),
+    };
+    let mut history = read_history(dir);
+    let key = history_key(config_dir);
+    if history.logins.get(&key) == Some(&record) {
+        return;
+    }
+    history.logins.insert(key, record);
+    if let Ok(text) = serde_json::to_string(&history) {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = crate::worktrees::write_atomic(&history_path(dir), text.as_bytes());
+    }
+}
+
+/// The numbers recorded for the login in `config_dir`, if any.
+fn last_recorded(config_dir: Option<&Path>) -> Option<ClaudeUsage> {
+    recorded_in(&crate::harness::config::config_dir().ok()?, config_dir)
+}
+
+/// Keeps a read's numbers, when there is a config directory to keep them in.
+fn record_read(config_dir: Option<&Path>, usage: &ClaudeUsage) {
+    if let Ok(dir) = crate::harness::config::config_dir() {
+        record_in(&dir, config_dir, usage);
+    }
+}
+
+/// What to answer when no stored sign-in is usable. Only a lapsed access token
+/// is answered from the history: it is the account being idle, not the user
+/// signing out, and Claude Code renews the token the next time it runs. Every
+/// other failure keeps its own reason, which the app acts on.
+fn recorded_instead(config_dir: Option<&Path>, failure: ClaudeUsage) -> ClaudeUsage {
+    with_recorded(last_recorded(config_dir), failure)
+}
+
+/// [`recorded_instead`] with the recorded numbers passed in, so the choice is
+/// tested without a config directory.
+fn with_recorded(last: Option<ClaudeUsage>, failure: ClaudeUsage) -> ClaudeUsage {
+    let lapsed = matches!(
+        failure,
+        ClaudeUsage::Unavailable {
+            reason: NoUsage::Expired,
+            ..
+        }
+    );
+    if !lapsed {
+        return failure;
+    }
+    last.unwrap_or(failure)
 }
 
 /// What the credentials file's sign-in is good for.
@@ -586,34 +836,46 @@ fn sign_in(credentials: &Value, now_ms: i64) -> SignIn<'_> {
     }
 }
 
+/// The plan windows Anthropic reports: the JSON key, the label the app shows,
+/// and the window's length in minutes.
+const WINDOWS: [(&str, &str, u64); 4] = [
+    ("five_hour", "5-hour", 300),
+    ("seven_day", "Weekly", 10_080),
+    ("seven_day_opus", "Weekly · Opus", 10_080),
+    ("seven_day_sonnet", "Weekly · Sonnet", 10_080),
+];
+
+/// The label of a window whose name was recorded, if it is one of ours.
+fn label_for(name: &str) -> Option<&'static str> {
+    WINDOWS
+        .iter()
+        .find(|(_, label, _)| *label == name)
+        .map(|(_, label, _)| *label)
+}
+
 /// `{five_hour, seven_day, seven_day_opus, seven_day_sonnet}` windows of
 /// `{utilization (percent), resets_at (RFC 3339)}`.
 fn parse(body: &Value) -> Vec<LabelledWindow> {
-    [
-        ("five_hour", "5-hour", 300),
-        ("seven_day", "Weekly", 10_080),
-        ("seven_day_opus", "Weekly · Opus", 10_080),
-        ("seven_day_sonnet", "Weekly · Sonnet", 10_080),
-    ]
-    .into_iter()
-    .filter_map(|(key, label, minutes)| {
-        let window = body.get(key)?;
-        let used_percent = window.get("utilization")?.as_f64()?.clamp(0.0, 100.0);
-        let resets_at = window
-            .get("resets_at")
-            .and_then(Value::as_str)
-            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
-            .map(|at| at.timestamp());
-        Some(LabelledWindow {
-            label,
-            window: RateLimitWindow {
-                used_percent,
-                window_minutes: Some(minutes),
-                resets_at,
-            },
+    WINDOWS
+        .into_iter()
+        .filter_map(|(key, label, minutes)| {
+            let window = body.get(key)?;
+            let used_percent = window.get("utilization")?.as_f64()?.clamp(0.0, 100.0);
+            let resets_at = window
+                .get("resets_at")
+                .and_then(Value::as_str)
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .map(|at| at.timestamp());
+            Some(LabelledWindow {
+                label,
+                window: RateLimitWindow {
+                    used_percent,
+                    window_minutes: Some(minutes),
+                    resets_at,
+                },
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 #[cfg(test)]
@@ -650,6 +912,7 @@ mod tests {
             &ClaudeUsage::Windows {
                 plan: Some("max".into()),
                 windows: Vec::new(),
+                as_of: None,
             },
         );
         remember(second.clone(), started, &ClaudeUsage::NotSignedIn);
@@ -702,6 +965,7 @@ mod tests {
         let fresh = ClaudeUsage::Windows {
             plan: None,
             windows: Vec::new(),
+            as_of: None,
         };
         remember(key.clone(), late, &fresh);
         remember(
@@ -810,13 +1074,27 @@ mod tests {
         ));
     }
 
-    /// The reason `usable_token` refuses a stored sign-in with, for the tests
-    /// below.
+    /// The reason `usable_sign_in` refuses the copies it was given with, for
+    /// the tests below.
     fn refusal(stored: &Stored, now: i64) -> NoUsage {
-        match usable_token(stored, now) {
+        match usable_sign_in(stored, now, true) {
             Err(ClaudeUsage::Unavailable { reason, .. }) => reason,
             other => panic!("{other:?}"),
         }
+    }
+
+    /// One login's stored copies, the Keychain item first, as `credentials`
+    /// hands them over.
+    fn stored(copies: Vec<Value>) -> Stored {
+        Stored {
+            copies,
+            keychain_denied: false,
+        }
+    }
+
+    /// A sign-in with `expiresAt`, as Claude Code writes it.
+    fn sign_in_at(token: &str, expires: i64) -> Value {
+        json!({"claudeAiOauth": {"accessToken": token, "expiresAt": expires, "subscriptionType": "max"}})
     }
 
     /// A denied Keychain whose credentials-file fallback holds an expired
@@ -826,18 +1104,18 @@ mod tests {
     fn a_denied_keychain_stays_denied_when_the_file_is_no_use() {
         let now = 1_000_000;
         let expired = Stored {
-            value: json!({"claudeAiOauth": {"accessToken": "t", "expiresAt": now - 1}}),
+            copies: vec![sign_in_at("t", now - 1)],
             keychain_denied: true,
         };
         assert_eq!(refusal(&expired, now), NoUsage::Denied);
         // The copy is the Keychain one, which says how to allow the read.
         assert!(matches!(
-            usable_token(&expired, now),
+            usable_sign_in(&expired, now, true),
             Err(ClaudeUsage::Unavailable { message, .. }) if message == KEYCHAIN_REFUSED
         ));
         // A file with no usable token at all is no stand-in either.
         let unreadable = Stored {
-            value: json!({}),
+            copies: vec![json!({})],
             keychain_denied: true,
         };
         assert_eq!(refusal(&unreadable, now), NoUsage::Denied);
@@ -850,20 +1128,237 @@ mod tests {
     fn a_denied_keychain_still_uses_a_fresh_file_sign_in() {
         let now = 1_000_000;
         let fresh = Stored {
-            value: json!({"claudeAiOauth": {"accessToken": "t", "expiresAt": now + 3_600_000}}),
+            copies: vec![sign_in_at("t", now + 3_600_000)],
             keychain_denied: true,
         };
-        assert_eq!(usable_token(&fresh, now), Ok("t"));
-        let expired = Stored {
-            value: json!({"claudeAiOauth": {"accessToken": "t", "expiresAt": now - 1}}),
-            keychain_denied: false,
-        };
+        assert!(matches!(usable_sign_in(&fresh, now, true), Ok((_, "t"))));
+        let expired = stored(vec![sign_in_at("t", now - 1)]);
         assert_eq!(refusal(&expired, now), NoUsage::Expired);
-        let unreadable = Stored {
-            value: json!({}),
-            keychain_denied: false,
-        };
+        let unreadable = stored(vec![json!({})]);
         assert_eq!(refusal(&unreadable, now), NoUsage::Transient);
+    }
+
+    /// Claude Code writes back to whichever store it could open, so one copy
+    /// can lag the other. A lapsed Keychain item must not hide the renewed
+    /// token in the config directory's credentials file (#2845).
+    #[test]
+    fn the_freshest_stored_copy_is_the_one_used() {
+        let now = 1_000_000;
+        // The Keychain item was last written before this account ran again; the
+        // file has the token Claude Code renewed since.
+        let account = stored(vec![
+            sign_in_at("stale", now - 1),
+            sign_in_at("renewed", now + 3_600_000),
+        ]);
+        assert!(matches!(
+            usable_sign_in(&account, now, true),
+            Ok((_, "renewed"))
+        ));
+        // Two usable copies: the one that lives longer is used, so a copy
+        // written a moment ago does not beat the account's own renewed one.
+        let both = stored(vec![
+            sign_in_at("short", now + 60_000),
+            sign_in_at("long", now + 7_200_000),
+        ]);
+        assert!(matches!(usable_sign_in(&both, now, true), Ok((_, "long"))));
+        // A copy that does not say when it expires counts as the oldest.
+        let unknown = stored(vec![
+            json!({"claudeAiOauth": {"accessToken": "unknown"}}),
+            sign_in_at("dated", now + 3_600_000),
+        ]);
+        assert!(matches!(
+            usable_sign_in(&unknown, now, true),
+            Ok((_, "dated"))
+        ));
+        // Neither copy usable is still the expiry, not a sign-out.
+        assert_eq!(
+            refusal(&stored(vec![sign_in_at("a", now - 1), json!({})]), now),
+            NoUsage::Expired
+        );
+    }
+
+    /// A lapsed access token is the account being idle, not the user signing
+    /// out: its message asks for a thread on that account, which is what
+    /// renews the token, instead of claiming the sign-in has expired.
+    #[test]
+    fn a_lapsed_token_asks_for_a_thread_on_that_account() {
+        let account = failure_without_sign_in(false, true, true);
+        assert!(matches!(
+            &account,
+            ClaudeUsage::Unavailable { reason: NoUsage::Expired, message }
+                if message == EXPIRED_ACCOUNT && message.contains("thread on this account")
+        ));
+        let default = failure_without_sign_in(false, true, false);
+        assert!(matches!(
+            &default,
+            ClaudeUsage::Unavailable { message, .. } if message == EXPIRED_DEFAULT
+        ));
+        // A refusal macOS gave still outranks it, and nothing usable at all is
+        // still the retryable unreadable sign-in.
+        assert!(matches!(
+            failure_without_sign_in(true, true, true),
+            ClaudeUsage::Unavailable {
+                reason: NoUsage::Denied,
+                ..
+            }
+        ));
+        assert!(matches!(
+            failure_without_sign_in(false, false, true),
+            ClaudeUsage::Unavailable {
+                reason: NoUsage::Transient,
+                ..
+            }
+        ));
+    }
+
+    /// The numbers a read recorded are what a lapsed token answers with, marked
+    /// with when they were read; every other failure keeps its reason.
+    #[test]
+    fn a_lapsed_token_answers_with_the_recorded_numbers() {
+        let recorded = ClaudeUsage::Windows {
+            plan: Some("max".into()),
+            windows: vec![labelled("5-hour", 12.0, Some(300), Some(1_793_660_400))],
+            as_of: Some(1_762_500_000),
+        };
+        let expired = ClaudeUsage::unavailable(NoUsage::Expired, EXPIRED_ACCOUNT);
+        assert_eq!(
+            with_recorded(Some(recorded.clone()), expired.clone()),
+            recorded
+        );
+        // Nothing recorded yet: the expiry stands, and the app can act on it.
+        assert_eq!(with_recorded(None, expired.clone()), expired);
+        // A refusal, a 403 or a denied Keychain is not answered with old
+        // numbers: their reason is what the app has to act on.
+        for failure in [
+            ClaudeUsage::unavailable(NoUsage::Refused, "refused"),
+            ClaudeUsage::unavailable(NoUsage::Forbidden, "forbidden"),
+            ClaudeUsage::unavailable(NoUsage::Denied, KEYCHAIN_REFUSED),
+            ClaudeUsage::unavailable(NoUsage::Transient, "transient"),
+            ClaudeUsage::NotSignedIn,
+        ] {
+            assert_eq!(
+                with_recorded(Some(recorded.clone()), failure.clone()),
+                failure
+            );
+        }
+    }
+
+    fn labelled(
+        label: &'static str,
+        used_percent: f64,
+        window_minutes: Option<u64>,
+        resets_at: Option<i64>,
+    ) -> LabelledWindow {
+        LabelledWindow {
+            label,
+            window: RateLimitWindow {
+                used_percent,
+                window_minutes,
+                resets_at,
+            },
+        }
+    }
+
+    /// A read that answered is kept per login, and read back as numbers marked
+    /// with when they were read — never as a fresh read.
+    #[test]
+    fn a_read_that_answered_is_kept_for_its_own_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = Some(Path::new("/tmp/claude-usage-work"));
+        let home = Some(Path::new("/tmp/claude-usage-home"));
+        // Nothing recorded yet: no answer to fall back on.
+        assert_eq!(recorded_in(dir.path(), work), None);
+        let answered = ClaudeUsage::Windows {
+            plan: Some("max".into()),
+            windows: vec![labelled("5-hour", 12.0, Some(300), Some(1_793_660_400))],
+            as_of: None,
+        };
+        record_in(dir.path(), work, &answered);
+        let before = chrono::Utc::now().timestamp();
+        let recorded = recorded_in(dir.path(), work).expect("the read was kept");
+        let after = chrono::Utc::now().timestamp();
+        let ClaudeUsage::Windows {
+            plan,
+            windows,
+            as_of,
+        } = recorded
+        else {
+            panic!("{recorded:?}");
+        };
+        assert_eq!(plan.as_deref(), Some("max"));
+        assert_eq!(
+            windows,
+            vec![labelled("5-hour", 12.0, Some(300), Some(1_793_660_400))]
+        );
+        let as_of = as_of.expect("recorded numbers say when they were read");
+        assert!((before..=after).contains(&as_of), "{as_of}");
+        // Another login has its own entry, and the default login its own.
+        assert_eq!(recorded_in(dir.path(), home), None);
+        assert_eq!(recorded_in(dir.path(), None), None);
+        record_in(
+            dir.path(),
+            None,
+            &ClaudeUsage::Windows {
+                plan: None,
+                windows: vec![labelled("Weekly", 41.5, Some(10_080), None)],
+                as_of: None,
+            },
+        );
+        assert!(matches!(
+            recorded_in(dir.path(), None),
+            Some(ClaudeUsage::Windows { windows, .. }) if windows[0].window.used_percent == 41.5
+        ));
+        // Recording numbers that are themselves recorded ones changes nothing.
+        let stored_before = std::fs::read_to_string(history_path(dir.path())).unwrap();
+        record_in(dir.path(), work, &recorded_in(dir.path(), work).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(history_path(dir.path())).unwrap(),
+            stored_before
+        );
+    }
+
+    /// A record whose labels this build no longer knows, or whose windows are
+    /// all unknown, is no answer at all — never an empty row pretending to be
+    /// numbers.
+    #[test]
+    fn a_record_without_a_known_window_is_no_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = Some(Path::new("/tmp/claude-usage-odd"));
+        std::fs::write(
+            history_path(dir.path()),
+            json!({
+                "logins": {
+                    "/tmp/claude-usage-odd": {
+                        "plan": "max",
+                        "read_at": 1_762_500_000,
+                        "windows": [
+                            {"label": "Weekly · Haiku", "used_percent": 3.0},
+                            {"label": "Weekly", "used_percent": 41.5, "window_minutes": 10_080},
+                        ],
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            recorded_in(dir.path(), key),
+            Some(ClaudeUsage::Windows {
+                plan: Some("max".into()),
+                windows: vec![labelled("Weekly", 41.5, Some(10_080), None)],
+                as_of: Some(1_762_500_000),
+            })
+        );
+        std::fs::write(
+            history_path(dir.path()),
+            json!({"logins": {"/tmp/claude-usage-odd": {"read_at": 1, "windows": [{"label": "nope", "used_percent": 1.0}]}}})
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(recorded_in(dir.path(), key), None);
+        // A file that is not ours at all is no answer either.
+        std::fs::write(history_path(dir.path()), "not json").unwrap();
+        assert_eq!(recorded_in(dir.path(), key), None);
     }
 
     /// A fallback whose request failed — a 401, a 500, no answer at all — must
@@ -873,7 +1368,7 @@ mod tests {
     #[test]
     fn a_failed_request_on_a_denied_fallback_stays_denied() {
         let stored = Stored {
-            value: json!({}),
+            copies: vec![json!({})],
             keychain_denied: true,
         };
         for failure in [
@@ -897,7 +1392,7 @@ mod tests {
     #[test]
     fn a_failed_request_without_a_denial_keeps_its_reason() {
         let stored = Stored {
-            value: json!({}),
+            copies: vec![json!({})],
             keychain_denied: false,
         };
         let reason = |failure| match request_failure(&stored, failure) {
@@ -914,12 +1409,13 @@ mod tests {
     #[test]
     fn a_denied_fallback_that_answers_keeps_its_windows() {
         let stored = Stored {
-            value: json!({}),
+            copies: vec![json!({})],
             keychain_denied: true,
         };
         let answered = ClaudeUsage::Windows {
             plan: Some("max".into()),
             windows: Vec::new(),
+            as_of: None,
         };
         assert_eq!(request_failure(&stored, answered.clone()), answered);
     }
@@ -938,12 +1434,13 @@ mod tests {
             // The file's numbers still come through: a successful fallback is a
             // read, not a failure.
             let stored = Stored {
-                value: json!({}),
+                copies: vec![json!({})],
                 keychain_denied: true,
             };
             let answered = ClaudeUsage::Windows {
                 plan: Some("max".into()),
                 windows: Vec::new(),
+                as_of: None,
             };
             assert_eq!(request_failure(&stored, answered.clone()), answered);
         }

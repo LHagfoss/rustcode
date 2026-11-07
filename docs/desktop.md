@@ -365,19 +365,30 @@ composer's keys stay outside the table.
   `{plans: [{id, name, via, status, plan?, error?, reason?, windows}]}`. ChatGPT
   comes from the Codex CLI's `account/rateLimits/read` for the Mac's own
   `~/.codex` login (a thread's meter asks with its own account's `CODEX_HOME`);
-  Claude from Claude Code's OAuth sign-in (Keychain `Claude Code-credentials`,
-  else `~/.claude/.credentials.json`) against `api.anthropic.com/api/oauth/usage`
-  (5-hour, weekly, weekly per model), read-only and never refreshed
-  (`provider_auth/claude_usage.rs`). Claude is read only after the user
+  Claude from Claude Code's OAuth sign-in (the Keychain item for that login's
+  config directory — `Claude Code-credentials`, or
+  `Claude Code-credentials-` plus the first 8 hex digits of the directory
+  path's SHA-256 for a named account — and `<config dir>/.credentials.json`,
+  the copy with the freshest token winning) against
+  `api.anthropic.com/api/oauth/usage` (5-hour, weekly, weekly per model),
+  read-only and never refreshed (`provider_auth/claude_usage.rs`). Claude is
+  read only after the user
   presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
   allow Keychain access. Each source is cached a minute. Showing the page
   reads every Claude login; the background reads one at a time, the account
   of the thread on screen (`claudeAccount`).
+  A Claude access token lives hours and is renewed only when Claude Code runs,
+  so a login nobody ran a thread on since reads as lapsed. The row then draws
+  the numbers RustCode last read for that login, from `claude-usage.json` in
+  the config directory, marked `asOf` with when they were read and drawn as
+  "as of" then; only a login with nothing recorded is `unavailable`.
   A Claude row that has no numbers is `unavailable` and says why: `expired`
-  (the stored token passed its expiry), `refused` (Anthropic answered 401),
-  `forbidden` (Anthropic answered 403: renewing the same sign-in does not grant
-  the usage read), `denied` (macOS would not hand the Keychain item over) or
-  `transient` (no answer). The page retries `expired` and `refused` on its own
+  (the stored token passed its expiry and nothing was recorded yet — run a
+  Claude Code thread on that account, which renews it), `refused` (Anthropic
+  answered 401), `forbidden` (Anthropic answered 403: renewing the same sign-in
+  does not grant the usage read), `denied` (macOS would not hand the Keychain
+  item over) or `transient` (no answer). The page retries `expired` and `refused`
+  on its own
   and sends `force: true` then, which reads again instead of answering from the
   engine's minute of cache — so a sign-in renewed in Claude Code shows on return
   to the page, and the background poll picks it up within its three minutes. A

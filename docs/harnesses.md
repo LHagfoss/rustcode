@@ -367,9 +367,21 @@ An id that names no `claude-code` account of the config reads nothing, so an
 unseen account's Keychain item is never read in the background. On macOS a
 named account's Keychain item is `Claude Code-credentials-` plus the first 8
 hex digits of the SHA-256 of its directory path; that name is undocumented, and
-a missing item is reported as not signed in rather than guessed at. A Claude
+a missing item is reported as not signed in rather than guessed at. Both copies
+Claude Code can keep are read — that item and `<config dir>/.credentials.json`
+— and the one whose access token expires last is used, since Claude Code writes
+back to whichever store it could open and one can lag the other.
+A Claude
 row that could not be read is `unavailable` with a `reason` beside its `error`:
-`expired`, `refused`, `forbidden`, `denied` or `transient`. A read that a denied
+`expired`, `refused`, `forbidden`, `denied` or `transient`. An access token
+lives hours and Claude Code renews it only when it runs, so a login nobody ran
+a thread on since lapses while staying signed in: instead of only saying so, the
+read answers with the windows RustCode recorded last for that login (in
+`claude-usage.json` in the config directory) and marks them `asOf` with when
+they were read, which the app draws "as of" then. Only a login with nothing
+recorded is `expired`, whose message asks for a thread on that account, which
+is what renews the token.
+A read that a denied
 Keychain prompt stops pauses that one login (a signed-out login is not read
 again in the background either); Settings › Usage, Refresh and
 Check in Settings › Agents read it again. A Keychain item macOS refused whose
