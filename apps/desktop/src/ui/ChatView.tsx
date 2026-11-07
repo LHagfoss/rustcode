@@ -53,6 +53,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
+import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
 import { ProjectMark } from "./ProjectMark";
 import {
   Callout,
@@ -590,6 +591,7 @@ function LaneItem({ over = false, children }: { over?: boolean; children: ReactN
 
 export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
+  const projectCwd = useApp((s) => s.projectCwd);
   const pending = useApp((s) => s.pendingSetup);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   const stackRef = useRef<HTMLDivElement>(null);
@@ -792,6 +794,16 @@ export function ChatView() {
             <LaneItem over>
               <Composer thread={thread} compact={width < 600} />
             </LaneItem>
+            {/* The cards under an empty thread's field: what this Mac recorded lately, the
+                project's recent threads and pull requests. They join the stack rather than float
+                beside it, so the whole group centres together and the cards keep the field's lane.
+                A short window leaves them out: the stack is bottom-anchored, and a column that
+                could not hold the cards would push the field's top off the pane. */}
+            {isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && (
+              <LaneItem>
+                <NewThreadWidgets project={projectCwd} />
+              </LaneItem>
+            )}
           </div>
         </div>
         <RightPanel />
