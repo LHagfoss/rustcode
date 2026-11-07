@@ -133,39 +133,71 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     git_with(dir, args, &[], Duration::from_secs(60))
 }
 
+/// A lookup that only reads (which repository a folder belongs to) runs off
+/// the create/remove path, so it must never hold a caller for long.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
 fn git_line(dir: &Path, args: &[&str]) -> Result<String, String> {
-    git(dir, args).map(|out| out.trim().to_owned())
+    git_line_within(dir, args, Duration::from_secs(60))
+}
+
+fn git_line_within(dir: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    git_with(dir, args, &[], timeout).map(|out| out.trim().to_owned())
 }
 
 /// The top level of the git work tree holding `dir`.
 pub(crate) fn toplevel(dir: &Path) -> Option<PathBuf> {
-    let top = git_line(dir, &["rev-parse", "--show-toplevel"]).ok()?;
+    toplevel_within(dir, Duration::from_secs(60))
+}
+
+fn toplevel_within(dir: &Path, timeout: Duration) -> Option<PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let top = git_line_within(dir, &["rev-parse", "--show-toplevel"], timeout).ok()?;
     std::fs::canonicalize(top).ok()
 }
 
 /// The main checkout of the repository `dir` belongs to, so a worktree of
 /// a worktree still files under the repository's name.
 pub(crate) fn main_checkout(dir: &Path) -> Option<PathBuf> {
-    let common = git_line(
+    main_checkout_within(dir, Duration::from_secs(60))
+}
+
+fn main_checkout_within(dir: &Path, timeout: Duration) -> Option<PathBuf> {
+    // A folder that is gone is not a repository, and must not cost a git
+    // process to learn that.
+    if !dir.is_dir() {
+        return None;
+    }
+    let common = git_line_within(
         dir,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        timeout,
     )
     .ok()?;
     let common = std::fs::canonicalize(common).ok()?;
     if common.file_name().is_some_and(|name| name == ".git") {
         common.parent().map(Path::to_path_buf)
     } else {
-        toplevel(dir)
+        toplevel_within(dir, timeout)
     }
 }
+
+/// How many folders `repo_of` remembers without asking git again.
+const REPO_CACHE_LIMIT: usize = 512;
 
 /// The repository a thread's folder belongs to, worktree or main checkout: the
 /// one project a main checkout and every worktree of it share (#3150).
 ///
-/// Asked once per folder, not once per thread: `session/list` lists threads and
-/// a repository does not move, so the answer is cached. A folder that is gone
-/// (or not a repository) answers `None` and the caller falls back to the path.
+/// Asked once per folder, not once per thread, with a short timeout: this runs
+/// when a thread is created, never from `session/list` (#3162). A folder that
+/// is gone (or not a repository) answers `None` and the caller falls back to
+/// the path.
 pub(crate) fn repo_of(dir: &Path) -> Option<PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
     static SEEN: LazyLock<Mutex<HashMap<PathBuf, Option<PathBuf>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
     let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
@@ -174,8 +206,15 @@ pub(crate) fn repo_of(dir: &Path) -> Option<PathBuf> {
     {
         return found.clone();
     }
-    let found = main_checkout(&key);
-    if let Ok(mut seen) = SEEN.lock() {
+    let found = main_checkout_within(&key, LOOKUP_TIMEOUT);
+    // A miss is not remembered: the folder may become a repository, and asking
+    // again costs one short lookup rather than a permanently wrong answer.
+    if found.is_some()
+        && let Ok(mut seen) = SEEN.lock()
+    {
+        if seen.len() >= REPO_CACHE_LIMIT {
+            seen.clear();
+        }
         seen.insert(key, found.clone());
     }
     found
@@ -752,6 +791,9 @@ pub(crate) fn attach(session_id: &str, worktree: &Worktree) {
         let _ = std::fs::create_dir_all(&dir);
         let _ = write_atomic(&dir.join(THREAD_FILE), text.as_bytes());
     }
+    // The worktree knows its repository without asking git, so record it on
+    // the thread now: `session/list` reads it later (#3162).
+    crate::config::save_session_repo(session_id, Some(&worktree.repo));
     let mut record = load_record(&worktree.path).unwrap_or_else(|| Record {
         worktree: worktree.clone(),
         session_ids: Vec::new(),
@@ -817,6 +859,35 @@ pub(crate) fn list_meta(session_id: &str) -> Option<Value> {
     })
 }
 
+/// The repository recorded on a thread, without asking git: its session
+/// metadata, else the worktree record beside it. `session/list` calls this for
+/// every listed thread, so it must stay a file read (#3162).
+pub(crate) fn recorded_repo(
+    session_id: &str,
+    metadata: Option<&rustcode_session::SessionMetadata>,
+) -> Option<PathBuf> {
+    if let Some(repo) = metadata.and_then(|metadata| metadata.repo.clone()) {
+        return Some(repo);
+    }
+    of_session(session_id).map(|worktree| worktree.repo)
+}
+
+/// The repository recorded on a thread, resolving and recording it once when it
+/// is missing: at creation, or the first load of a thread older than this
+/// record. `session/list` never calls this.
+pub(crate) fn session_repo(session_id: &str) -> Option<PathBuf> {
+    if let Some(repo) = crate::config::load_session_repo(session_id) {
+        return Some(repo);
+    }
+    if let Some(worktree) = of_session(session_id) {
+        crate::config::save_session_repo(session_id, Some(&worktree.repo));
+        return Some(worktree.repo);
+    }
+    let repo = repo_of(&crate::checkpoints::thread_cwd(session_id)?)?;
+    crate::config::save_session_repo(session_id, Some(&repo));
+    Some(repo)
+}
+
 /// `session/new` with `_meta.rustcode.worktree`: create the worktree and
 /// make its path the session's cwd. Other requests pass through.
 pub(crate) fn prepare_new(
@@ -852,11 +923,10 @@ fn thread_meta(
     let pinned = crate::thread_status::pinned(session_id);
     meta = merge_rustcode_meta(Some(meta), "pinned", json!(pinned));
     // The repository the thread's folder belongs to: a main checkout and every
-    // worktree of it are one project for the orchestration tools (#3150).
-    if let Some(repo) = crate::checkpoints::thread_cwd(session_id)
-        .as_deref()
-        .and_then(repo_of)
-    {
+    // worktree of it are one project for the orchestration tools (#3150). It
+    // is recorded once here, so `session/list` reads it instead of running git
+    // per thread (#3162).
+    if let Some(repo) = session_repo(session_id) {
         meta = merge_rustcode_meta(Some(meta), "repo", json!(repo));
     }
     if let Some(cwd) = crate::checkpoints::thread_cwd(session_id) {
@@ -993,6 +1063,60 @@ pub(crate) mod tests {
         // falls back to comparing the paths.
         assert_eq!(repo_of(_dir.path()), None);
         assert_eq!(repo_of(&_dir.path().join("absent")), None);
+    }
+
+    #[test]
+    fn a_folder_that_becomes_a_repository_is_asked_again() {
+        // A miss is not cached for good: the folder may become a repository.
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(repo_of(&path), None);
+        git(&path, &["init", "-q", "-b", "main"]).unwrap();
+        assert_eq!(repo_of(&path), Some(path.clone()));
+    }
+
+    #[test]
+    fn a_new_thread_records_its_repository_so_listing_needs_no_git() {
+        let (_dir, repo) = repo();
+        let id = crate::config::create_detached_session();
+        assert!(!id.is_empty(), "a test config dir holds sessions");
+        crate::config::save_session_workspace(
+            &id,
+            &rustcode_session::SessionWorkspace {
+                cwd: repo.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let answer = finish_new(
+            agent_client_protocol::schema::v1::NewSessionResponse::new(id.clone()),
+            None,
+        );
+        assert_eq!(crate::config::load_session_repo(&id), Some(repo.clone()));
+        let meta = answer.meta.expect("thread meta");
+        assert_eq!(meta["rustcode"]["repo"], json!(repo));
+        // The record answers on its own, when the repository is gone and git
+        // has nothing left to ask.
+        std::fs::remove_dir_all(&repo).unwrap();
+        assert_eq!(
+            recorded_repo(&id, crate::config::load_session_metadata(&id).as_ref()),
+            Some(repo)
+        );
+    }
+
+    #[test]
+    fn attaching_a_worktree_records_its_repository_on_the_thread() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let id = crate::config::create_detached_session();
+        assert!(!id.is_empty(), "a test config dir holds sessions");
+        attach(&id, &worktree);
+        assert_eq!(crate::config::load_session_repo(&id), Some(repo));
     }
 
     #[test]

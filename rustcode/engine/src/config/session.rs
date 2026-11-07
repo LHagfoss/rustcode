@@ -756,6 +756,23 @@ pub fn load_session_parent(session_id: &str) -> Option<rustcode_session::Session
     store()?.load_session_parent(session_id)
 }
 
+/// Record the repository a thread's folder belongs to (`None` forgets it), so
+/// `session/list` can report it without running git per thread (#3162).
+pub fn save_session_repo(session_id: &str, repo: Option<&Path>) {
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_session_repo(session_id, repo.map(Path::to_path_buf))
+    {
+        crate::dbg_log!("failed to record the repository for session {session_id}: {error}");
+    }
+}
+
+pub fn load_session_repo(session_id: &str) -> Option<PathBuf> {
+    store()?.load_session_repo(session_id)
+}
+
 pub fn load_session_model(session_id: &str) -> Option<rustcode_session::SessionModel> {
     store()?.load_session_model(session_id)
 }

@@ -53,6 +53,7 @@ import {
   queueWake,
   quietTree,
   type RuleThread,
+  reachesThread,
   renderRead,
   restateLinks,
   STALL_NOTICE_MS,
@@ -735,6 +736,22 @@ describe("projects", () => {
     expect(listSessions([other], a, "").sessions).toHaveLength(1);
     // Somebody else's delegate in another repository is not on offer.
     expect(checkManage(thread("b"), other)?.code).toBe("not_allowed");
+  });
+
+  test("search and worktree listings reach a delegate in another repository", () => {
+    const a = thread("a");
+    const delegate = thread("delegate", "/Users/me/code/other", {
+      repo: "/Users/me/code/other",
+      parent: "a",
+      worktree: {
+        path: "/Users/me/code/other",
+        branch: "fix/other",
+        repo: "/Users/me/code/other",
+      },
+    });
+    // `search_sessions` and `list_worktrees` both filter with this predicate.
+    expect(reachesThread(a, delegate)).toBe(true);
+    expect(reachesThread(thread("b"), delegate)).toBe(false);
   });
 });
 

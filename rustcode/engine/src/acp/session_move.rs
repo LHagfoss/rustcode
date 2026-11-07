@@ -36,6 +36,11 @@ pub(crate) fn move_session(
     };
     crate::config::save_session_workspace(session_id, &workspace)
         .map_err(|error| invalid(format!("could not record the new folder: {error}")))?;
+    // The repository the chat belongs to follows its folder, recorded now so a
+    // later listing never runs git for it (#3162). A folder outside a
+    // repository forgets the old one rather than keeping a stale scope.
+    let repo = crate::worktrees::repo_of(&cwd);
+    crate::config::save_session_repo(session_id, repo.as_deref());
     // A thread on an external harness loads from its own record, which checks
     // the folder too: move it there as well, or the next `session/load` fails.
     // The harness's own session id stays; a harness that cannot resume it in
@@ -51,6 +56,23 @@ pub(crate) fn move_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_move_records_the_repository_of_the_new_folder() {
+        let store = rustcode_session::SessionStore::new(crate::config::get_config_dir().unwrap());
+        let (_dir, repo) = crate::worktrees::tests::repo();
+        let id = "acp-move-repo";
+        let history = vec![
+            crate::app::ChatMessage::new("user", "Move me"),
+            crate::app::ChatMessage::new("assistant", "Moved"),
+        ];
+        store.ensure_session(id);
+        store.save_session_history(id, &history);
+        rustcode_session::flush_history();
+
+        move_session(&id, repo.clone()).unwrap();
+        assert_eq!(crate::config::load_session_repo(&id), Some(repo));
+    }
 
     #[test]
     fn moves_only_the_chats_recorded_folder() {

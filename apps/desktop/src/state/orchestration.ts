@@ -546,11 +546,18 @@ export const sameReach = (a: RuleThread, b: RuleThread) => sameProject(reachOf(a
 export const startedBy = (caller: RuleThread, target: RuleThread) =>
   !!target.parent && target.parent === caller.id;
 
+/**
+ * Whether a caller's orchestration tools may see `target` at all: the same
+ * project, or a thread the caller started wherever it runs.
+ */
+export const reachesThread = (caller: RuleThread, target: RuleThread) =>
+  sameReach(caller, target) || startedBy(caller, target);
+
 /** `list_sessions`: the other threads of the caller's project, newest first, metadata only. */
 /** Why a thread may not manage `target`, the project rule every management tool shares. */
 export function checkManage(caller: RuleThread, target: RuleThread | undefined): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
-  if (!startedBy(caller, target) && !sameReach(caller, target)) {
+  if (!reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
@@ -572,7 +579,7 @@ export function listSessions(
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = threads
     .filter((t) => t.id !== caller.id)
-    .filter((t) => allProjects || sameReach(caller, t) || startedBy(caller, t))
+    .filter((t) => allProjects || reachesThread(caller, t))
     .filter((t) => words.every((w) => t.title.toLowerCase().includes(w)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 50);
@@ -611,7 +618,7 @@ export function checkMessage(
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!(read && acrossProjects) && !startedBy(caller, target) && !sameReach(caller, target)) {
+  if (!(read && acrossProjects) && !reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
