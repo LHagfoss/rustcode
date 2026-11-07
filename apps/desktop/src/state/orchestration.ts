@@ -154,6 +154,12 @@ export interface Link {
   createdAt: number;
   /** When the turn this link waits on started working, for the notice's time. */
   startedAt?: number;
+  /**
+   * When a restart severed this link and the app resumed its target (`store.ts`
+   * `resumeInterrupted`): the turn it settles on began there, and the notice says
+   * so (`resumed after a restart`).
+   */
+  resumedAt?: number;
   /** How long that turn worked, from its start to the link settling. Absent when not recorded. */
   workedMs?: number;
   /** When it settled (done or failed), for the coalescing window. */
@@ -1816,7 +1822,10 @@ export function wakeSummary(wake: Wake): string {
     const failed = wake.settled.filter((link) => link.state === "failed").length;
     if (wake.settled.length === 1) {
       const link = wake.settled[0]!;
-      parts.push(`Delegate ${link.state === "failed" ? "failed" : "finished"}: ${link.targetTitle}`);
+      const how = link.state === "failed" ? "failed" : "finished";
+      parts.push(
+        `Delegate ${how}${link.resumedAt !== undefined ? " after a restart" : ""}: ${link.targetTitle}`,
+      );
     } else if (failed === wake.settled.length) {
       parts.push(`${wake.settled.length} delegates failed`);
     } else {
@@ -1844,6 +1853,8 @@ const preview = (text: string, max: number): string =>
 /** One delegate, as the wake message names it: link id, status, title, harness, worked time, thread, changes. */
 const linkLine = (link: Link, state: LinkState, now: number) => {
   const bits = [`link_id ${link.id}`, state, `“${link.targetTitle}”`];
+  // The turn this settled on began with the restart resume, not with the work before the quit.
+  if (link.resumedAt !== undefined) bits.push("resumed after a restart");
   const harness = link.harnessName ?? link.harness;
   if (harness) bits.push(harness);
   if (link.workedMs) bits.push(`worked ${formatDuration(link.workedMs)}`);

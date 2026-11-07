@@ -362,8 +362,26 @@ they finish or ask, instead of having to poll with sleeps.
   that answers nothing never erases an answer; it says
   the rest is in `read_session` on the child's session or `wait_session` on a
   `link_id`, and that the message is the notification. A child that was
-  stopped or interrupted is no result to wait for: nothing ever reports it, so
-  it does not hold its parent back.
+  stopped, or interrupted and left interrupted, is no result to wait for:
+  nothing ever reports it, so it does not hold its parent back.
+- **After a restart.** A restart resumes the threads it cut off
+  (`state/store.ts` `resumeInterrupted`), and the resume is what answers the
+  links the quit severed: it is tied to that one turn, never to a turn that
+  merely happens later. As the resume turn starts, each interrupted link to
+  that thread goes back to `working` with its clock, its wait and a `resumedAt`
+  mark reset from the resume (`host.ts` `linksResumed`), and the turn carries
+  the links, so the ordinary link path settles them when it ends
+  (`linksFinished`) — the parent that was waiting reads the answer in a wake,
+  and the time it says the branch worked is the time after the restart, not
+  the time before the quit. Several links one resume turn answers settle in one
+  write to the book and one wake tick, so a parent hears about them in one
+  message that says each was *resumed after a restart* (`orchestration.ts`
+  `linkLine`). A user's own turn in the child never settles an interrupted
+  link; one whose message the quit caught still queued is no resume's (its row
+  is read back and run on its own, see *Across a restart*). A thread whose own
+  turn outlived the window takes the resume behind it as a queued row, which
+  starts a turn that does carry the links, and at most 8 resumes are started.
+  A resumed turn the user stops is a stopped link, and reports nothing.
 - **Waiting on the user.** A child that goes `needs_user` (an approval or a
   question) is reported the same way, once per pending request (its rpc id):
   the parent is told to use `list_pending_requests` and that the user answers,
