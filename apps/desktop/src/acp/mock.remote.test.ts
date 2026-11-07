@@ -4,11 +4,11 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Json, JsonObject } from "./jsonrpc";
-import { MockTransport } from "./mock";
+import { type MockOptions, MockTransport } from "./mock";
 import { parseRemoteStatus } from "./remote";
 
-function mockEngine() {
-  const transport = new MockTransport({ delayMs: 0 });
+function mockEngine(options: MockOptions = {}) {
+  const transport = new MockTransport({ delayMs: 0, ...options });
   const waiting = new Map<number, (value: Json) => void>();
   let nextId = 1;
   let opened: (() => void) | null = null;
@@ -88,10 +88,12 @@ describe("mock remote access", () => {
       expect(paired.offer?.expiresInSecs).toBeGreaterThan(0);
       expect(paired.offer?.qrPayload).toContain('"protocol_version":1');
 
-      // A session that is not shared is refused with a reason, not an RPC error.
+      // A session that is not shared is refused with a reason, not an RPC error,
+      // in exactly the engine's shape (`acp/remote.rs` › `pair`).
       const refused = (await engine.request("_rustcode/remote/pair", {
         sessionId: "mock-thread-4",
       })) as JsonObject;
+      expect(Object.keys(refused).sort()).toEqual(["available", "error", "shared"]);
       expect(refused.shared).toBe(false);
       expect(refused.error).toBe("this session is not shared");
 
@@ -101,6 +103,38 @@ describe("mock remote access", () => {
       expect(stopped.shared).toBe(false);
       expect(stopped.enabled).toBe(false);
       expect(stopped.gateway).toBeUndefined();
+    } finally {
+      await engine.done();
+    }
+  });
+
+  test("an expired code is dropped and reported as expired", async () => {
+    const engine = mockEngine({ remote: "expired" });
+    try {
+      await engine.request("_rustcode/remote/start", { sessionId: "mock-thread-1", pair: false });
+      const paired = parseRemoteStatus(
+        await engine.request("_rustcode/remote/pair", { sessionId: "mock-thread-1" }),
+      );
+      expect(paired.pairingExpired).toBe(true);
+      expect(paired.offer).toBeUndefined();
+    } finally {
+      await engine.done();
+    }
+  });
+
+  test("a disconnected gateway keeps the share but says it is not connected", async () => {
+    const engine = mockEngine({ remote: "disconnected" });
+    try {
+      const started = parseRemoteStatus(
+        await engine.request("_rustcode/remote/start", {
+          sessionId: "mock-thread-1",
+          pair: false,
+        }),
+      );
+      expect(started.shared).toBe(true);
+      expect(started.gateway?.connected).toBe(false);
+      expect(started.gateway?.attachedDevices).toBe(0);
+      expect(started.gateway?.connectedDevices).toBe(0);
     } finally {
       await engine.done();
     }

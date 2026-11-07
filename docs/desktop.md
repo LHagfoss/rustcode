@@ -483,15 +483,19 @@ composer's keys stay outside the table.
   the new one is ready. It fades in, and does not move under Reduce motion.
 - **Remote access.** Settings › Setup › Remote access
   ([remote.md](remote.md)) starts the remote gateway, shares the threads
-  this app has open with a paired phone, and shows the address, the
-  pairing QR code and the eight-digit code with its countdown, the wrong
-  codes left and a lockout, and the paired devices. It asks the engine's
-  `_rustcode/remote`, `_rustcode/remote/start`, `_rustcode/remote/pair` and
+  this app has open on the built-in harness with a paired phone, and shows
+  the address, the pairing QR code and the eight-digit code with its
+  countdown, the fixed five-wrong-codes allowance, and the paired devices.
+  A new device appears as *Paired ‹name›* and the used code is taken down,
+  not left until it expires. It asks the engine's `_rustcode/remote`,
+  `_rustcode/remote/start`, `_rustcode/remote/pair` and
   `_rustcode/remote/stop` over ACP; the engine owns the gateway, the
-  shares and pairing (`rustcode/engine/src/acp/remote.rs`). The QR code is
-  encoded in the app (`src/lib/qr.ts`), so no pairing material leaves it.
-  A thread opened after remote access was turned on is shared from the
-  page's *Open threads* row.
+  shares and pairing (`rustcode/engine/src/acp/remote.rs`). An external
+  harness thread (Claude Code, Codex, Pi) keeps no ACP session, so it is
+  listed but not shareable. The QR code is encoded in the app
+  (`src/lib/qr.ts`), so no pairing material leaves it. A thread opened
+  after remote access was turned on is shared from the page's *Open
+  threads* row, which also says how many devices are attached.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Window.** The window opens at the size it was last closed with

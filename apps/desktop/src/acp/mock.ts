@@ -47,6 +47,12 @@ export interface MockOptions {
    * `links`, since surviving one is the point of a receipt.
    */
   receipts?: JsonObject;
+  /**
+   * Remote access the mock starts in (`?remote=`): `disconnected` shares with
+   * the gateway unreachable, `expired` issues a pairing code that has already
+   * run out. The default starts idle.
+   */
+  remote?: "disconnected" | "expired";
 }
 
 interface MockThread {
@@ -2089,8 +2095,8 @@ export class MockEngine {
   private remoteStatus(sessionId: string): Json {
     const shared = this.remote.shared.has(sessionId);
     const stored = obj(this.remote.offer);
-    const offer = stored && (num(stored.expiresAt) ?? 0) > Date.now() ? stored : null;
-    if (!offer) this.remote.offer = null;
+    const expired = stored !== undefined && (num(stored.expiresAt) ?? 0) <= Date.now();
+    const offer = stored && !expired ? stored : null;
     return {
       available: true,
       enabled: this.remote.enabled,
@@ -2112,7 +2118,7 @@ export class MockEngine {
           }
         : {}),
       pairingPending: shared && this.remote.pairingDue,
-      pairingExpired: false,
+      pairingExpired: shared && expired,
       ...(this.remote.pairingError ? { pairingError: this.remote.pairingError } : {}),
       pairedDevices: this.remote.devices.length,
       devices: this.remote.devices,
@@ -2122,12 +2128,13 @@ export class MockEngine {
   /** A fresh pairing challenge: the QR payload carries the credential, the code is typed by hand. */
   private issueRemoteOffer() {
     const address = "192.168.1.24:17879";
+    const connected = this.options.remote !== "disconnected";
     this.remote.gateway = {
-      connected: true,
+      connected,
       advertisedAddress: address,
       loopbackOnly: false,
-      attachedDevices: 1,
-      connectedDevices: 1,
+      attachedDevices: connected ? 1 : 0,
+      connectedDevices: connected ? 1 : 0,
     };
     this.remote.offer = {
       qrPayload: JSON.stringify({
@@ -2139,7 +2146,7 @@ export class MockEngine {
       }),
       code: "4927-3318",
       address,
-      expiresAt: Date.now() + 120_000,
+      expiresAt: Date.now() + (this.options.remote === "expired" ? -1_000 : 120_000),
       loopbackOnly: false,
       gatewayId: "9f2c1d0b4a6e8c7d5b3a1908f7e6d5c4",
       challenge: 17,
@@ -2688,12 +2695,13 @@ export class MockEngine {
       case "_rustcode/remote/start": {
         const thread = this.thread(params.sessionId);
         this.remote.enabled = true;
+        const connected = this.options.remote !== "disconnected";
         this.remote.gateway = {
-          connected: true,
+          connected,
           advertisedAddress: "192.168.1.24:17879",
           loopbackOnly: false,
-          attachedDevices: this.remote.devices.length ? 1 : 0,
-          connectedDevices: this.remote.devices.length ? 1 : 0,
+          attachedDevices: connected && this.remote.devices.length ? 1 : 0,
+          connectedDevices: connected && this.remote.devices.length ? 1 : 0,
         };
         this.remote.shared.add(thread.id);
         if (params.pair === true) this.issueRemoteOffer();
@@ -2702,11 +2710,10 @@ export class MockEngine {
       case "_rustcode/remote/pair": {
         const sessionId = str(params.sessionId) ?? "";
         if (!this.remote.shared.has(sessionId)) {
-          // The engine answers a request on a session it does not share with a reason, not an error.
+          // The engine's exact answer on a session it does not share (acp/remote.rs).
           return {
             available: true,
             shared: false,
-            sessionId,
             error: "this session is not shared",
           };
         }

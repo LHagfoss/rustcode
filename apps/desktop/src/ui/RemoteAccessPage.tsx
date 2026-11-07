@@ -15,9 +15,25 @@ import { Action, Chip, Group, Loading, Row } from "./settingsKit";
 /** The page keeps itself current while it is open: pairing counts down in the engine. */
 const POLL_MS = 2500;
 
+/**
+ * How long the page waits for the gateway's pairing answer before it says the
+ * gateway did not answer. The engine's own wait is 15 s (`acp/remote.rs`).
+ */
+const PAIR_DEADLINE_MS = 20_000;
+
+/** Wrong codes one challenge tolerates (`remote_gateway/pairing.rs`). */
+const WRONG_CODES_ALLOWED = 5;
+
 interface Reading {
   status: RemoteStatus;
   readAt: number;
+}
+
+interface OpenThread {
+  id: string;
+  title: string;
+  /** The harness the thread runs on; only the built-in one is an ACP session. */
+  harness: string;
 }
 
 export function RemoteAccessPage() {
@@ -28,25 +44,35 @@ export function RemoteAccessPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [paired, setPaired] = useState<{ name: string } | null>(null);
+  const [pendingSince, setPendingSince] = useState<number | null>(null);
   const readToken = useRef(0);
 
-  // The app's open threads are ACP sessions, and only those can be shared;
-  // their titles come from the session list the app already has.
-  const open = useMemo(
+  // The app's open threads, with the harness each runs on. Only the built-in
+  // harness keeps an ACP session (`server.sessions`); an external harness
+  // thread lives in `server.external`, which `_rustcode/remote/start` does
+  // not share.
+  const open = useMemo<OpenThread[]>(
     () =>
       sessions
         .filter((session) => threads[session.id]?.loaded)
-        .map((session) => ({ id: session.id, title: session.title || "Untitled thread" })),
+        .map((session) => ({
+          id: session.id,
+          title: session.title || "Untitled thread",
+          harness: threads[session.id]?.harness?.id ?? session.harness ?? "",
+        })),
     [sessions, threads],
   );
+  const shareable = open.filter((thread) => thread.harness === "rustcode");
+  const external = open.filter((thread) => thread.harness !== "rustcode");
   // With no thread open, the newest saved one still answers the machine-wide
   // part of the status (the gateway, the devices); it shares nothing.
-  const ids = open.length ? open.map((session) => session.id) : sessions.slice(0, 1).map((s) => s.id);
+  const ids = open.length ? open.map((thread) => thread.id) : sessions.slice(0, 1).map((s) => s.id);
   const idsKey = ids.join("|");
 
   const refresh = useCallback(async () => {
-    const ids = idsKey ? idsKey.split("|") : [];
-    if (!ids.length) {
+    const asking = idsKey ? idsKey.split("|") : [];
+    if (!asking.length) {
       setReadings({});
       setError(null);
       return;
@@ -54,7 +80,7 @@ export function RemoteAccessPage() {
     const token = ++readToken.current;
     try {
       const entries = await Promise.all(
-        ids.map(async (id) => {
+        asking.map(async (id) => {
           const value = await request<Json>(RemoteMethod.status, { sessionId: id }, 10_000);
           return [id, { status: parseRemoteStatus(value), readAt: Date.now() }] as const;
         }),
@@ -93,39 +119,105 @@ export function RemoteAccessPage() {
   const enabled = list.some((reading) => reading.status.enabled);
   const on = shared.length > 0;
   // Pairing answers on one shared session; a new offer replaces the previous one.
-  const target = shared[0]?.status.sessionId ?? open[0]?.id;
+  const target = shared[0]?.status.sessionId ?? shareable[0]?.id;
+
+  // A used offer stays in the engine's answer until it expires, so the page
+  // watches for a device it did not know when the offer arrived: that is the
+  // phone pairing. A new offer starts the known list again.
+  const devicesKey = devices.map((device) => device.id).join("|");
+  const offerKey = offer ? String(offer.challenge ?? offer.qrPayload) : "";
+  const knownDevices = useRef<{ offer: string; ids: string[] } | null>(null);
+  // The devices just before a code is asked for: a phone that pairs at once
+  // is new against that list, not against the answer that already has it.
+  const baselineDevices = useRef<string[] | null>(null);
+  useEffect(() => {
+    if (!offer) {
+      knownDevices.current = null;
+      return;
+    }
+    const known = devicesKey ? devicesKey.split("|") : [];
+    if (knownDevices.current?.offer !== offerKey) {
+      knownDevices.current = { offer: offerKey, ids: baselineDevices.current ?? known };
+      baselineDevices.current = null;
+      setPaired(null);
+      return;
+    }
+    const fresh = known.find((id) => !knownDevices.current!.ids.includes(id));
+    if (!fresh) return;
+    knownDevices.current.ids.push(fresh);
+    const name = devices.find((device) => device.id === fresh)?.name ?? fresh;
+    setPaired((current) => (current?.name === name ? current : { name }));
+  }, [offer, offerKey, devices, devicesKey]);
+
+  useEffect(() => {
+    setPendingSince((current) => (pending ? (current ?? Date.now()) : null));
+  }, [pending]);
+
+  // Remote access can end from a terminal too: drop a "Paired" note then.
+  useEffect(() => {
+    if (!enabled && !on) setPaired(null);
+  }, [enabled, on]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
     setBusy(label);
     try {
       await action();
-      await refresh();
     } catch (e) {
       toast(errorText(e), "error");
     } finally {
+      await refresh();
       setBusy(null);
     }
   };
 
-  const start = (ids: string[], pair: boolean) =>
-    Promise.all(ids.map((sessionId) => request(RemoteMethod.start, { sessionId, pair }, 30_000)));
+  /**
+   * Share each thread. The first start also brings the gateway up (it can take
+   * seconds), so it goes alone; the rest register on the running gateway in
+   * parallel, and one refusal does not hide the others.
+   */
+  const start = async (sessionIds: string[], pair: boolean) => {
+    const [first, ...rest] = sessionIds;
+    if (!first) return;
+    await request(RemoteMethod.start, { sessionId: first, pair }, 30_000);
+    const settled = await Promise.allSettled(
+      rest.map((sessionId) => request(RemoteMethod.start, { sessionId, pair: false }, 30_000)),
+    );
+    const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
+  };
+
+  const stop = () => {
+    if (!target) return;
+    void run("stop", () => request(RemoteMethod.stop, { sessionId: target }, 30_000));
+    setPaired(null);
+  };
 
   const toggle = (next: boolean) => {
     if (next)
       void run("start", () =>
         start(
-          open.map((session) => session.id),
+          shareable.map((thread) => thread.id),
           false,
         ),
       );
-    else if (target) void run("stop", () => request(RemoteMethod.stop, { sessionId: target }, 30_000));
+    else stop();
   };
 
   const pair = () => {
     if (!target) return;
-    void run("pair", () =>
-      shared.length ? request(RemoteMethod.pair, { sessionId: target }, 30_000) : start([target], true),
-    );
+    setPaired(null);
+    baselineDevices.current = devices.map((device) => device.id);
+    setPendingSince(Date.now());
+    void run("pair", async () => {
+      const value = await request<Json>(RemoteMethod.pair, { sessionId: target }, 30_000);
+      const answer = parseRemoteStatus(value);
+      // A refusal is an answer, not an error: `{available, shared: false, error}`.
+      if (answer.error) throw new Error(answer.error);
+      setReadings((current) => ({
+        ...current,
+        [target]: { status: answer, readAt: Date.now() },
+      }));
+    });
   };
 
   if (engine !== "ready" || (!list.length && ids.length > 0)) {
@@ -137,9 +229,9 @@ export function RemoteAccessPage() {
     : ended
       ? ended
       : on
-        ? shared.length === open.length
+        ? shared.length === shareable.length
           ? `Sharing ${shared.length === 1 ? "this thread" : `these ${shared.length} threads`} with paired devices.`
-          : `Sharing ${shared.length} of ${open.length} open threads.`
+          : `Sharing ${shared.length} of ${shareable.length} shareable threads.`
         : enabled
           ? "The gateway is on for this Mac, but this app shares nothing yet."
           : "Nothing is shared from this app.";
@@ -156,13 +248,13 @@ export function RemoteAccessPage() {
       >
         <Row
           title="Share this app's threads"
-          subtitle="Starts the gateway and lists the threads this app has open in the phone app. Threads opened later can be shared from the list below."
+          subtitle="Starts the gateway and lists the threads this app has open on the built-in harness in the phone app. Turning it off stops remote access for this Mac, including a share a terminal started; paired devices stay paired."
           status={status}
         >
           <Switch
             label="Remote access"
             checked={on}
-            disabled={!open.length || unavailable || busy !== null}
+            disabled={!shareable.length || unavailable || busy !== null}
             onChange={toggle}
           />
         </Row>
@@ -171,7 +263,12 @@ export function RemoteAccessPage() {
           subtitle="The address a phone on this network dials. The terminal's `/remote status` shows the same one."
           status={
             gateway?.advertisedAddress ? (
-              <span className="font-mono">{gateway.advertisedAddress}</span>
+              <span className="font-mono">
+                {gateway.advertisedAddress}
+                {gateway.connected
+                  ? ` · ${gateway.connectedDevices} device${gateway.connectedDevices === 1 ? "" : "s"} connected`
+                  : ""}
+              </span>
             ) : on ? (
               "The gateway has not announced an address yet."
             ) : (
@@ -193,12 +290,12 @@ export function RemoteAccessPage() {
         </Row>
         <Row
           title="Pair a device"
-          subtitle="Shows a QR code and an eight-digit code for the phone's Scan QR. The code lasts two minutes and works once; a new one replaces it."
+          subtitle={`Shows a QR code and an eight-digit code for the phone's Scan QR. The code lasts two minutes and works once; a new one replaces it. ${WRONG_CODES_ALLOWED} wrong codes are allowed.`}
           status={
             unavailable
               ? "Remote access needs the remote gateway, which this host does not build."
-              : !open.length
-                ? "Open a thread first: pairing happens through a shared thread."
+              : !shareable.length
+                ? "Open a built-in harness thread first: pairing happens through a shared thread."
                 : pending
                   ? "Asking the gateway for a code…"
                   : expired
@@ -206,25 +303,43 @@ export function RemoteAccessPage() {
                     : undefined
           }
         >
-          <Action prominent disabled={!open.length || unavailable || busy !== null} onClick={pair}>
+          <Action prominent disabled={!shareable.length || unavailable || busy !== null} onClick={pair}>
             {busy === "pair" ? <Spinner /> : <Smartphone size={13} />}
             Pair a device
           </Action>
         </Row>
       </Group>
 
-      {(offer || pending || pairingError) && (
+      {paired ? (
         <Group title="Pairing">
-          <PairingCard
-            offer={offer}
-            pending={pending}
-            error={pairingError}
-            now={now}
-            readAt={offerReading?.readAt ?? now}
-            busy={busy === "pair"}
-            onRenew={pair}
-          />
+          <div className="flex flex-wrap items-center gap-3 px-4 py-4">
+            <Chip tone="ok">Paired</Chip>
+            <p className="m-0 min-w-0 flex-1 text-callout text-fg">
+              <span className="font-medium">{paired.name}</span> can now open the shared threads.
+            </p>
+            <Action disabled={busy !== null} onClick={pair}>
+              {busy === "pair" ? <Spinner /> : <Smartphone size={12} />}
+              Pair another device
+            </Action>
+          </div>
         </Group>
+      ) : (
+        (offer || pending || pairingError || busy === "pair") && (
+          <Group title="Pairing">
+            <PairingCard
+              offer={offer}
+              // The request itself can wait for the gateway: say so from the press.
+              pending={pending || busy === "pair"}
+              error={pairingError}
+              now={now}
+              readAt={offerReading?.readAt ?? now}
+              overdue={pending && pendingSince !== null && now - pendingSince > PAIR_DEADLINE_MS}
+              busy={busy === "pair"}
+              onRenew={pair}
+              onStop={stop}
+            />
+          </Group>
+        )
       )}
 
       <Group
@@ -247,24 +362,39 @@ export function RemoteAccessPage() {
 
       <Group title="Open threads">
         {open.length ? (
-          open.map((session) => {
-            const reading = readings[session.id]?.status;
+          open.map((thread) => {
+            const reading = readings[thread.id]?.status;
             const isShared = reading?.shared === true;
+            const attached = reading?.gateway?.attachedDevices ?? 0;
+            const shares = thread.harness === "rustcode";
             return (
               <Row
-                key={session.id}
-                title={session.title}
+                key={thread.id}
+                title={thread.title}
                 status={reading?.error ?? undefined}
-                subtitle={isShared ? "Visible in the phone app." : "Not shared with paired devices."}
+                subtitle={
+                  !shares
+                    ? `Runs on ${thread.harness || "another harness"}, which keeps no ACP session: only threads on the built-in harness can be shared.`
+                    : isShared
+                      ? attached > 0
+                        ? `${attached} device${attached === 1 ? "" : "s"} attached.`
+                        : "Visible in the phone app; no device is attached right now."
+                      : "Not shared with paired devices."
+                }
               >
-                {isShared ? (
-                  <Chip tone="ok">Shared</Chip>
+                {!shares ? (
+                  <Chip>Not shareable</Chip>
+                ) : isShared ? (
+                  <>
+                    <Chip tone="ok">Shared</Chip>
+                    {attached > 0 && <Chip>{attached} attached</Chip>}
+                  </>
                 ) : (
                   <Action
-                    disabled={(!enabled && !on) || unavailable || busy !== null}
-                    onClick={() => void run(`start:${session.id}`, () => start([session.id], false))}
+                    disabled={unavailable || busy !== null}
+                    onClick={() => void run(`start:${thread.id}`, () => start([thread.id], false))}
                   >
-                    {busy === `start:${session.id}` ? <Spinner /> : null}
+                    {busy === `start:${thread.id}` ? <Spinner /> : null}
                     Share
                   </Action>
                 )}
@@ -278,6 +408,13 @@ export function RemoteAccessPage() {
           />
         )}
       </Group>
+
+      {external.length > 0 && shareable.length === 0 && (
+        <p className="m-0 text-caption text-fg-faint">
+          This app has no thread on the built-in harness open, so there is nothing for the remote gateway to
+          share yet.
+        </p>
+      )}
     </>
   );
 }
@@ -290,8 +427,9 @@ function mmss(seconds: number): string {
 
 /**
  * The pairing offer as the terminal panel shows it: the QR code for the
- * camera, the address and eight-digit code for typing, the countdown and the
- * wrong codes left, and the row's own error when asking failed.
+ * camera, the address and eight-digit code for typing, and the countdown.
+ * The gateway publishes no live wrong-codes count through ACP, so the page
+ * states the fixed allowance and never counts a lockout down.
  */
 function PairingCard({
   offer,
@@ -299,19 +437,22 @@ function PairingCard({
   error,
   now,
   readAt,
+  overdue,
   busy,
   onRenew,
+  onStop,
 }: {
   offer?: RemoteOffer;
   pending: boolean;
   error?: string;
   now: number;
   readAt: number;
+  overdue: boolean;
   busy: boolean;
   onRenew: () => void;
+  onStop: () => void;
 }) {
   const left = offer ? Math.max(0, Math.ceil((readAt + offer.expiresInSecs * 1000 - now) / 1000)) : 0;
-  const locked = offer?.lockedForSecs;
   return (
     <div className="px-4 py-4">
       {offer ? (
@@ -347,6 +488,7 @@ function PairingCard({
             </div>
             <div className="flex flex-wrap items-center gap-2 pt-3 text-caption text-fg-faint">
               {left > 0 ? <span className="tabular">Expires in {mmss(left)}</span> : <span>Expired</span>}
+              <span>{WRONG_CODES_ALLOWED} wrong codes allowed</span>
               {offer.lockedForSecs !== undefined && <Chip tone="warn">Pairing locked</Chip>}
               {offer.loopbackOnly && <Chip tone="warn">This Mac only</Chip>}
               <Action quiet size="sm" disabled={busy} onClick={onRenew}>
@@ -354,10 +496,10 @@ function PairingCard({
                 New code
               </Action>
             </div>
-            {locked !== undefined && (
+            {offer.lockedForSecs !== undefined && (
               <p className="m-0 pt-2 text-caption text-warning">
-                Too many wrong codes on this host: pairing is locked for {mmss(locked)}, and even the right
-                code is refused until then.
+                Too many wrong codes on this host: pairing is locked, and even the right code is refused until
+                the lockout ends.
               </p>
             )}
             {offer.loopbackOnly && (
@@ -369,10 +511,25 @@ function PairingCard({
           </div>
         </div>
       ) : pending ? (
-        <div className="flex items-center gap-3 text-callout text-fg-muted">
-          <Spinner />
-          Asking the remote gateway for a pairing code…
-        </div>
+        overdue ? (
+          <div className="flex flex-col gap-3 text-callout text-fg-muted">
+            <p className="m-0">
+              The gateway did not answer in time. It may be starting, or another program holds it. Try again,
+              or turn remote access off for this Mac.
+            </p>
+            <div className="flex items-center gap-2">
+              <Action onClick={onRenew}>
+                <RefreshCw size={12} /> Pair again
+              </Action>
+              <Action onClick={onStop}>Turn off remote access</Action>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-callout text-fg-muted">
+            <Spinner />
+            Asking the remote gateway for a pairing code…
+          </div>
+        )
       ) : null}
       {error && <p className={cx("m-0 text-callout text-warning", offer && "pt-3")}>{error}</p>}
     </div>
