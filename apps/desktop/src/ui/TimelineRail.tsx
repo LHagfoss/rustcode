@@ -5,12 +5,11 @@
 // clicking goes there, and the chevrons step a turn at a time. It renders only
 // when the turns or the ones on screen change, never per scroll frame.
 //
-// A turn a rewind can go back to carries a bead a few px in from its strip's
-// left end, the head (the newest, the turn the thread is at) in the accent. The
-// strip stays the one target: the bead is drawn inside its hit area, not beside
-// it, so pointing at its height picks that turn as pointing anywhere on the
-// strip does, and the card says which checkpoint it is. The card sits clear of
-// the strip rather than widening it, waits a moment before it goes and then
+// A turn a rewind can go back to is named in its hover card instead of marked on
+// the strip: the card says which checkpoint it is (the head, the newest, the turn
+// the thread is at, is current) and offers the rewind the turn's Changes chip
+// does, so the strips stay plain marks with no dot on them. The card sits clear
+// of the strip rather than widening it, waits a moment before it goes and then
 // takes the pointer itself, holding the turn it shows while the pointer is
 // inside: moving into it never re-picks a turn, and a click on its body still
 // goes to the turn.
@@ -30,7 +29,7 @@ export interface Turn {
   title: string;
 }
 
-/** A turn with a checkpoint, by its index in `turns`: the bead on that turn's strip. */
+/** A turn with a checkpoint, by its index in `turns`: the card names it and offers the rewind. */
 export interface RailNode {
   at: number;
   /** The checkpoint a rewind from that turn goes back to. */
@@ -48,8 +47,6 @@ const CARD_GAP = 8;
 const CARD_WIDTH = 320;
 /** How wide a strip draws (`w-6`), so the card never covers one where the gutter is narrow. */
 const STRIP_WIDTH = 24;
-/** Where a bead sits inside the strip: in from its left end, never hanging into the gutter. */
-const BEAD_LEFT = 3;
 /** How long a card that can be pointed at stays while the pointer crosses to it. */
 const HOVER_INTENT = 160;
 /** From this much gutter the minimap stays visible; with less it shows on hover. */
@@ -190,7 +187,7 @@ export const TimelineRail = memo(function TimelineRail({
   onJump: (row: number) => void;
   /** How a turn was answered, read only for the one hovered. */
   replyOf: (row: number) => string | undefined;
-  /** The turns that have a checkpoint: each draws a bead, the last one the head, marked current. */
+  /** The turns that have a checkpoint: the last one is the head, which the card marks current. */
   nodes?: RailNode[];
   /** Rewind to a checkpoint: the card's button, when the thread can go back. */
   onRewind?: (checkpoint: Checkpoint) => void;
@@ -356,21 +353,6 @@ export const TimelineRail = memo(function TimelineRail({
                   top: `${percent(index)}%`,
                   transform: `translateY(-50%) scaleX(${railScale(shown === null ? null : Math.abs(index - shown))})`,
                 }}
-              />
-            );
-          })}
-          {nodes.map((node, index) => {
-            const atHead = index === nodes.length - 1;
-            return (
-              <span
-                key={`node-${node.checkpoint.turn}`}
-                aria-hidden
-                data-current={atHead}
-                className={cx(
-                  "-translate-y-1/2 pointer-events-none absolute rounded-full",
-                  atHead ? "size-[7px] bg-accent" : "size-[5px] bg-fg/35",
-                )}
-                style={{ top: `${percent(node.at)}%`, left: BEAD_LEFT }}
               />
             );
           })}

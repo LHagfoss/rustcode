@@ -89,12 +89,14 @@
   color-scheme: light;
   --rc-bg: #ffffff;
   --rc-sidebar: #f7f7f8;
-  --rc-surface: #f0f0f1;
+  --rc-surface: #eaeaea;
   --rc-surface-2: #ffffff;
-  --rc-surface-3: #e8e8ea;
+  --rc-surface-3: #e4e4e6;
   /* The composer is glass on the raised surface (see `Glass` in index.css). */
   --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 66%, transparent);
   --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 78%, transparent);
+  /* Over a new thread's picture (`.rc-composer-over`): a panel, not another window on it. */
+  --rc-composer-bg-over: color-mix(in srgb, var(--rc-surface-2) 85%, transparent);
   --rc-composer-filter: saturate(1.12) blur(22px);
   --rc-composer-outline: #00000012;
   --rc-composer-highlight: transparent;
@@ -120,10 +122,10 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --rc-bg: #0b0b0c;
-    --rc-sidebar: #131315;
-    --rc-surface: #18181a;
-    --rc-surface-2: #1e1e21;
-    --rc-surface-3: #232327;
+    --rc-sidebar: #151517;
+    --rc-surface: #1d1d20;
+    --rc-surface-2: #242428;
+    --rc-surface-3: #2a2a2e;
     /* A step lighter than the raised surface it is drawn from, so the glass reads as light over a
        dark pane rather than as a darker slab over it. */
     --rc-composer-bg: color-mix(
@@ -134,6 +136,11 @@
     --rc-composer-bg-focus: color-mix(
       in srgb,
       color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 70%,
+      transparent
+    );
+    --rc-composer-bg-over: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 85%,
       transparent
     );
     --rc-composer-filter: saturate(1.18) blur(28px);
@@ -160,10 +167,10 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --rc-bg: #0b0b0c;
-  --rc-sidebar: #131315;
-  --rc-surface: #18181a;
-  --rc-surface-2: #1e1e21;
-  --rc-surface-3: #232327;
+  --rc-sidebar: #151517;
+  --rc-surface: #1d1d20;
+  --rc-surface-2: #242428;
+  --rc-surface-3: #2a2a2e;
   --rc-composer-bg: color-mix(
     in srgb,
     color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 58%,
@@ -172,6 +179,11 @@
   --rc-composer-bg-focus: color-mix(
     in srgb,
     color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 70%,
+    transparent
+  );
+  --rc-composer-bg-over: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 85%,
     transparent
   );
   --rc-composer-filter: saturate(1.18) blur(28px);
@@ -957,6 +969,7 @@
 :root {
   --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
   --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) 93%, transparent);
+  --rc-glass-faint-bg: color-mix(in srgb, var(--rc-surface-2) 34%, transparent);
   --rc-glass-filter: saturate(1.2) blur(13px);
 }
 
@@ -967,13 +980,15 @@
 }
 
 /*
- * The composer's lighter pair on the cards that sit under it on a new thread (ui/NewThreadWidgets.tsx):
- * the same recipe, not a third one, so the cards and the field read as one material.
+ * A new thread's cards (ui/NewThreadWidgets.tsx): a third of the surface and the shared glass
+ * filter, with no edge ring, so the screen's picture runs on behind them instead of stopping at a
+ * slab. See-through on purpose: they are the quiet part of that screen, and the field above them is
+ * the solid one.
  */
-.rc-glass-soft {
-  background: var(--rc-composer-bg);
-  backdrop-filter: var(--rc-composer-filter);
-  -webkit-backdrop-filter: var(--rc-composer-filter);
+.rc-glass-faint {
+  background: var(--rc-glass-faint-bg);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
 }
 
 /* A day of the activity heatmap's grid: 2px, under the smallest radius step, on a 7px cell. */
@@ -1137,6 +1152,19 @@
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
 }
+/*
+ * A new thread draws its picture behind the whole screen, so the field there is a step more opaque
+ * than its usual glass (`--rc-composer-bg-over`, 85%): it reads as the panel the screen is about,
+ * while the cards under it stay see-through. Set on the shell (Composer.tsx `className`), the pair
+ * the card and the strip read carries down to both, so neither needs a rule of its own. It does not
+ * step on focus: it is already the solid thing on that screen, so the picture never shows through
+ * mid-typing.
+ */
+.rc-composer-over {
+  --rc-composer-bg: var(--rc-composer-bg-over);
+  --rc-composer-bg-focus: var(--rc-composer-bg-over);
+  --rc-composer-footer-bg: color-mix(in srgb, var(--rc-text) 4%, var(--rc-composer-bg-over));
+}
 /* The chat's bottom edge: a short fade to the pane, pinned behind the composer (ui/ChatView.tsx).
    The card floats over it, so text shows through its glass higher up and fades at the very bottom
    rather than stopping on a hard edge. */
@@ -1280,9 +1308,11 @@
   :root {
     --rc-glass-bg: var(--rc-surface-2);
     --rc-glass-bg-strong: var(--rc-surface-2);
+    --rc-glass-faint-bg: var(--rc-surface-2);
     --rc-glass-filter: none;
     --rc-composer-bg: var(--rc-surface-2);
     --rc-composer-bg-focus: var(--rc-surface-2);
+    --rc-composer-bg-over: var(--rc-surface-2);
     --rc-composer-filter: none;
   }
   :root,
@@ -1296,9 +1326,11 @@
 :root.reduce-transparency {
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
+  --rc-glass-faint-bg: var(--rc-surface-2);
   --rc-glass-filter: none;
   --rc-composer-bg: var(--rc-surface-2);
   --rc-composer-bg-focus: var(--rc-surface-2);
+  --rc-composer-bg-over: var(--rc-surface-2);
   --rc-composer-filter: none;
 }
 :root.reduce-transparency .rc-composer:focus-within {

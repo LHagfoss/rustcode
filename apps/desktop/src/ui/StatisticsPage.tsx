@@ -985,10 +985,7 @@ function StatisticsSkeleton({
         />
         <div role="status" aria-label="Loading" className="grid grid-cols-2 gap-3 @min-[44rem]:grid-cols-4">
           {[0, 1, 2, 3].map((tile) => (
-            <div
-              key={tile}
-              className="flex flex-col gap-2 rounded-xl border border-border-strong bg-surface-2/40 px-4 py-3.5"
-            >
+            <div key={tile} className="flex flex-col gap-2 rounded-xl bg-surface px-4 py-3.5">
               <Skeleton className="h-2 w-16" />
               <Skeleton className="h-6 w-24" />
               <Skeleton className="h-2 w-28" />
@@ -1002,7 +999,7 @@ function StatisticsSkeleton({
           <div className="mb-2.5 flex min-h-7 items-center px-3 sm:px-4">
             <Skeleton className="h-3 w-32" />
           </div>
-          <div className="flex flex-col gap-3 rounded-xl border border-border-strong bg-surface-2/40 px-4 py-4">
+          <div className="flex flex-col gap-3 rounded-xl bg-surface px-4 py-4">
             <Skeleton className="h-3 w-40" />
             <Skeleton className="h-32 w-full" />
           </div>

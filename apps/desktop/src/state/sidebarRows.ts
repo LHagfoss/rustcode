@@ -119,6 +119,15 @@ export function rowKeyAction(e: {
 }
 
 /**
+ * Whether a key opens a row's menu: Shift+F10 and the ContextMenu key, the two every desktop list
+ * answers, so the whole action list is reachable without a pointer. F10 alone belongs to the
+ * window's own menu.
+ */
+export function opensRowMenu(e: { key: string; shiftKey?: boolean }): boolean {
+  return (e.key === "F10" && !!e.shiftKey) || e.key === "ContextMenu";
+}
+
+/**
  * What a thread's calls changed, from the diffs the app already read (`_rustcode/rewind`
  * history, replayed when the thread is opened). Null when it has none to count: a thread never
  * opened in this run has no items, and shows no totals.

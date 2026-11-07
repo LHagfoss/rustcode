@@ -152,3 +152,13 @@ export function answeredPlans(shown: UsagePlan[], answer: UsagePlan[], full: boo
   }
   return next;
 }
+
+/**
+ * What a press on the composer's usage meter opens: Settings' Usage page, and a press while that
+ * page is already open closes it, the way a press on its trigger does elsewhere. The meter's hover
+ * card is the glance; the page is where the press goes (a press that toggled the card left the
+ * page reachable only from the card's own link).
+ */
+export function usagePressTarget(usageOpen: boolean): "usage" | null {
+  return usageOpen ? null : "usage";
+}

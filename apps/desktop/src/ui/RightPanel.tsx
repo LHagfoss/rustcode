@@ -61,8 +61,12 @@ const CARD_GAP = 12;
 const HANDLE = 8;
 /** The surface a card of the right panel is drawn on: the details card and a pane alike. */
 const CARD_SURFACE = "rc-glass rc-glass-strong rounded-2xl shadow-2";
-/** A sheet is opaque: it opens over a scrim that is already blurred, and one filter never stacks on another. */
-const SHEET_SURFACE = "bg-surface shadow-2";
+/**
+ * A sheet is opaque: it opens over a scrim that is already blurred, and one filter never stacks on
+ * another. It sits on the chat's own `bg-bg`, as the settings panel does, so a card or a picture
+ * inside it (`bg-surface`, Viz, an agent's steps) still steps off the sheet instead of vanishing.
+ */
+const SHEET_SURFACE = "bg-bg shadow-2";
 
 const PANE_ID = "rc-side-panel";
 
