@@ -28,7 +28,7 @@ use super::projection::{
 };
 use super::protocol::{
     OwnerHealth, REMOTE_PROTOCOL_VERSION, RemoteEvent, RemoteEventFrame, RemoteSessionInfo,
-    ResyncReason,
+    RemoteTurn, ResyncReason,
 };
 
 /// Position in the live response up to which text was published.
@@ -44,6 +44,12 @@ struct ResponseCursor {
     /// followed it. A finished response leaves the buffer before its turn's
     /// end event arrives, so what was published may still be that response.
     emptied: bool,
+    /// The last cut was a snapshot whose transcript already held the running
+    /// turn's answer, with an empty live response. The engine writes the
+    /// finished text to history before it empties the live buffer, so a
+    /// snapshot taken between the two delivers the answer only in the
+    /// transcript: the end of that turn then has nothing left to publish.
+    answered_in_transcript: bool,
 }
 
 impl ResponseCursor {
@@ -58,6 +64,7 @@ impl ResponseCursor {
             emitted_len: response.len(),
             emitted_hash,
             emptied: false,
+            answered_in_transcript: false,
         }
     }
 
@@ -96,6 +103,10 @@ impl ResponseCursor {
         self.emitted_hash.write(text.as_bytes());
         self.revision = revision;
         self.len = response.len();
+        if !text.is_empty() {
+            // Text published after the cut supersedes the transcript copy.
+            self.answered_in_transcript = false;
+        }
         (!text.is_empty()).then(|| text.to_owned())
     }
 
@@ -103,6 +114,11 @@ impl ResponseCursor {
     /// buffer. A response that rewrote published text yields nothing: a delta
     /// cannot replace, and the transcript carries the final version.
     fn finish<'a>(&self, final_content: &'a str) -> &'a str {
+        if self.answered_in_transcript {
+            // The last snapshot cut an empty live response and carried this
+            // turn's answer in its transcript, so a client already has it.
+            return "";
+        }
         let prefix_matches = final_content.get(..self.emitted_len).is_some_and(|prefix| {
             let mut hasher = DefaultHasher::new();
             hasher.write(prefix.as_bytes());
@@ -178,6 +194,26 @@ fn pending_batch_id(state: &AppState) -> Option<&str> {
         .as_ref()
         .filter(|confirmations| !confirmations.is_empty())
         .and(state.pending_approval_batch_id.as_deref())
+}
+
+/// Whether a snapshot of a running turn carries that turn's answer in its
+/// transcript instead of its live response.
+///
+/// A turn's finished text reaches history before the live buffer is emptied,
+/// so a snapshot taken between the two shows an empty live response while the
+/// transcript already holds the answer. A client that receives it has the
+/// text, and the end of the turn must not publish it a second time.
+fn answer_is_in_transcript(state: &AppState, turn: Option<&RemoteTurn>) -> bool {
+    let Some(turn) = turn.filter(|turn| turn.live_response.text.is_empty()) else {
+        return false;
+    };
+    state
+        .history
+        .iter()
+        .rev()
+        .find(|message| message.role == "assistant")
+        .and_then(|message| message.turn.as_ref())
+        .is_some_and(|recorded| recorded.turn_id == turn.turn_id)
 }
 
 impl SessionPublisher {
@@ -315,6 +351,8 @@ impl SessionPublisher {
             })
         });
         self.response = ResponseCursor::at(state);
+        self.response.answered_in_transcript =
+            answer_is_in_transcript(state, snapshot.turn.as_ref());
         self.question_id = snapshot
             .pending_question
             .as_ref()
@@ -998,6 +1036,68 @@ mod tests {
                 }
             )]
         );
+    }
+
+    #[test]
+    fn a_snapshot_that_moved_the_answer_into_the_transcript_does_not_repeat_it() {
+        let mut state = shared_state();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "do it"));
+        let (mut publisher, _) = register(&state);
+        let turn_id = start_turn(&mut state, &mut publisher);
+        state.append_current_response("hello from provider");
+        publisher.publish(&state, true);
+
+        // The turn ends while a device is attached: the engine writes the
+        // answer to history, which changes the transcript, and empties the
+        // live buffer, all before the turn's end event is observed.
+        state.history.push(crate::app::ChatMessage::new(
+            "assistant",
+            "hello from provider",
+        ));
+        let timing = state
+            .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+            .expect("the turn's timing");
+        state.clear_current_response();
+        state.enter_idle();
+
+        // The changed transcript publishes a snapshot: it holds the answer in
+        // its transcript and an empty live response.
+        let published = publisher.publish(&state, true);
+        let (snapshot, resync) = snapshot_of(&published);
+        assert_eq!(resync, Some(ResyncReason::HistoryChanged));
+        let turn = snapshot.turn.as_ref().expect("the turn is running");
+        assert_eq!(turn.turn_id, turn_id);
+        assert!(turn.live_response.text.is_empty());
+        assert!(
+            snapshot
+                .transcript
+                .iter()
+                .any(|message| message.role == "assistant"
+                    && message.content.text == "hello from provider"),
+            "the snapshot's transcript carries the answer"
+        );
+        assert!(events(&published).is_empty(), "no live text is repeated");
+
+        // The end of the turn adds nothing a client does not already have.
+        state.end_turn_identity(&turn_id);
+        publisher.observe(&AgentUiEvent::TurnFinished {
+            content: "hello from provider".to_owned(),
+            completed: true,
+            timing: Some(timing),
+        });
+        let finished = events(&publisher.publish(&state, true));
+        assert!(
+            !finished
+                .iter()
+                .any(|(_, event)| matches!(event, RemoteEvent::TextDelta { .. })),
+            "the end of the turn repeats no text: {finished:?}"
+        );
+        assert!(matches!(
+            finished.last(),
+            Some((_, RemoteEvent::TurnFinished { turn_id: Some(ended), .. })) if ended == &turn_id
+        ));
     }
 
     #[test]

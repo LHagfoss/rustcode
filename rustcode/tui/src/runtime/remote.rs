@@ -1796,24 +1796,47 @@ mod tests {
         } else {
             assert!(started == 0 && announced_by_snapshot, "{published:?}");
         }
-        // Snapshot text plus the deltas after it is the response, once.
+        // A snapshot plus the deltas after it is the response, once. Once the
+        // engine has moved the answer to history, a snapshot carries it in
+        // the transcript and leaves the live response empty; nothing follows
+        // it, so the answer is delivered once, not twice.
         let mut text = String::new();
+        let mut deltas = 0;
         for message in &received {
             match message {
                 OwnerMessage::Snapshot { snapshot, .. } => {
                     if let Some(turn) = &snapshot.turn {
-                        text = turn.live_response.text.clone();
+                        text = if turn.live_response.text.is_empty() {
+                            snapshot
+                                .transcript
+                                .iter()
+                                .rev()
+                                .find(|message| {
+                                    message.role == "assistant"
+                                        && message.turn.as_ref().is_some_and(|recorded| {
+                                            recorded.turn_id == turn.turn_id
+                                        })
+                                })
+                                .map(|message| message.content.text.clone())
+                                .unwrap_or_default()
+                        } else {
+                            turn.live_response.text.clone()
+                        };
                     }
                 }
                 OwnerMessage::Event(frame) => {
                     if let RemoteEvent::TextDelta { text: delta, .. } = &frame.event {
+                        deltas += 1;
                         text.push_str(delta);
                     }
                 }
                 _ => {}
             }
         }
-        assert_eq!(text, PROVIDER_TEXT);
+        assert!(
+            text == PROVIDER_TEXT,
+            "the response reached the client once: {text:?} in {deltas} deltas"
+        );
 
         let state = runtime.app_state().await;
         assert_eq!(provider.requests(), 1, "the prompt ran exactly once");
