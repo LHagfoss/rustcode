@@ -24,6 +24,7 @@ import {
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
+import { type PlanClocks, planCardShown, type SteerNote, steerMarks } from "../state/steer";
 import { RESUME_TEXT, shortcutFor, steeringOf, turnState, useApp } from "../state/store";
 import {
   type QueuedPrompt,
@@ -41,7 +42,7 @@ import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
-import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
+import { LeavingQueuedRow, QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
 import {
   AssistantRow,
   CompletionCard,
@@ -61,6 +62,7 @@ import {
   WorkingRow,
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
+import { SteerMark } from "./SteerMark";
 import { plainPreview, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
@@ -87,8 +89,14 @@ export type Row = {
   approval?: PermissionRequest;
   /** Which of the thread's waiting approvals it is, from 1: `2 of 3`. */
   approvalNumber?: number;
-  /** The plan a paused thread keeps to, at the foot. */
-  plan?: { threadId: string; entries: PlanEntry[] };
+  /** The plan a thread keeps to, at the foot: the one a turn works through, and the one it waits on. */
+  plan?: {
+    threadId: string;
+    entries: PlanEntry[];
+    running: boolean;
+    steers: SteerNote[];
+    clocks: PlanClocks;
+  };
   /** A message waiting for the thread, at the end of it. */
   queued?: {
     item: QueuedPrompt;
@@ -102,6 +110,10 @@ export type Row = {
   };
   /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
   queueWake?: { line: string; text: string };
+  /** A steering note the plan cannot hold, drawn under the message it was sent as. */
+  steerNote?: SteerNote;
+  /** A queued row a steer just took: it is gliding out of the stack on its way to the transcript. */
+  leaving?: QueuedPrompt;
   /** Resume, under a queue a stopped or failed turn held. */
   resume?: { threadId: string; count: number };
 };
@@ -433,10 +445,20 @@ export function Transcript({
         childKeys: ownKeys && i === 0,
       });
     });
-    // The plan a paused thread still has work on, at the foot: what is left, and Implement. A
-    // finished plan, or one a running turn is working through, is not repeated here.
-    if (!thread.running && thread.plan.some((e) => e.status !== "completed"))
-      out.push({ key: "plan", plan: { threadId: thread.id, entries: thread.plan } });
+    // The plan a thread works to, at the foot: while a turn runs it is live (the step it is on, and
+    // the notes it was handed there), and once the thread waits on you it keeps what is left and
+    // Implement. A plan with nothing left still shows where a steering note landed.
+    if (planCardShown(thread.plan, thread.steers))
+      out.push({
+        key: "plan",
+        plan: {
+          threadId: thread.id,
+          entries: thread.plan,
+          running: thread.running,
+          steers: thread.steers,
+          clocks: thread.planClocks,
+        },
+      });
     // What waits for the thread comes after all of it: its queued messages, the one quiet line a
     // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
     // the transcript, and the pinned view follows them like any other row.
@@ -462,6 +484,15 @@ export function Transcript({
     });
     if (queue.resumable)
       out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
+    // Rows a steer just took keep the stack's place while they glide up toward the transcript.
+    for (const item of thread.departing ?? []) out.push({ key: `leaving-${item.id}`, leaving: item });
+    // A steering note the plan does not hold says where it took effect, under the message it was
+    // sent as. It is its own row, outside the turn's fold, so it stays readable once that folds.
+    for (const note of steerMarks(thread.steers, thread.plan).inline) {
+      const at = out.findIndex((r) => r.item?.id === note.id);
+      if (at >= 0) out.splice(at + 1, 0, { key: `steer-${note.id}`, steerNote: note });
+      else out.push({ key: `steer-${note.id}`, steerNote: note });
+    }
     return out;
   }, [visible, subagentSteps, started, links, thread, open, searching, wait, childRequests]);
   // Footers of folded turns: their time is in the summary row, not repeated.
@@ -998,7 +1029,17 @@ export function Transcript({
                         keys={row.childKeys}
                       />
                     ) : row.plan ? (
-                      <PlanCard threadId={row.plan.threadId} entries={row.plan.entries} />
+                      <PlanCard
+                        threadId={row.plan.threadId}
+                        entries={row.plan.entries}
+                        running={row.plan.running}
+                        steers={row.plan.steers}
+                        clocks={row.plan.clocks}
+                      />
+                    ) : row.steerNote ? (
+                      <SteerMark note={row.steerNote} />
+                    ) : row.leaving ? (
+                      <LeavingQueuedRow item={row.leaving} />
                     ) : row.agents ? (
                       <SubagentGroupRow
                         items={row.agents.items}

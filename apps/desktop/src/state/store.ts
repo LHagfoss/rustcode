@@ -146,12 +146,15 @@ import {
   appendSteer,
   applyUpdate,
   beginTurn,
+  departQueued,
+  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
   foldingBatch,
   localId,
   messagesAfter,
+  type QueuedPrompt,
   questionItem,
   requeueSteers,
   type ThreadState,
@@ -2394,10 +2397,23 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   }
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
+    glideAway(id, item);
     return true;
   }
   toast(QUEUE_REASON.refused);
   return false;
+}
+
+/** How long a queued row takes to leave the stack, gliding up toward the transcript (index.css). */
+const STEER_GLIDE_MS = 240;
+
+/**
+ * A queued row a steer took keeps the stack's place while it glides out, so the row itself leaves
+ * instead of vanishing from under the reader; it is dropped once the glide is over.
+ */
+function glideAway(id: string, item: QueuedPrompt) {
+  updateThread(id, (t) => departQueued(t, item));
+  setTimeout(() => updateThread(id, (t) => dropDeparted(t, item.id)), STEER_GLIDE_MS);
 }
 
 /**
