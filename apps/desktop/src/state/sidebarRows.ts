@@ -127,6 +127,64 @@ export function opensRowMenu(e: { key: string; shiftKey?: boolean }): boolean {
   return (e.key === "F10" && !!e.shiftKey) || e.key === "ContextMenu";
 }
 
+/** What a row's one status chip says: the states worth words rather than an age. */
+export type RowStatusKind = "needs" | "working" | "waiting" | "failed" | "review";
+
+/** The chip a row's first line ends with (`ui/Sidebar.tsx` draws it). */
+export interface RowStatus {
+  kind: RowStatusKind;
+  /** The chip's words: `Needs you`, `Working`, `Waiting`, `Failed`, `Review`. */
+  label: string;
+  /** What the chip says on hover, when its words leave something out. */
+  title?: string;
+  /** The permission is an approval of a call, not a question the agent asked. */
+  approval?: boolean;
+}
+
+/** What {@link rowStatus} reads of a row: the caller resolves each flag. */
+export interface RowStatusRead {
+  /** The permission it waits on: the oldest of its requests. */
+  request?: { title: string; question?: { text: string } };
+  /** A turn of its own runs. */
+  running: boolean;
+  /** Background work it handed out and still waits on (`state/waiting.ts`). */
+  waiting?: { label: string; title: string };
+  /** Its last turn failed while the row was not open. */
+  failed?: boolean;
+  /** The thread is listed as waiting for review. */
+  review?: boolean;
+}
+
+/**
+ * The one chip a row shows. One state at a time, in the order the reader needs it: what it asks of
+ * you, then that it works, then that it waits on work it handed out, then a failure, then a review.
+ * Nothing when it is idle or settled: the row then shows how long ago it moved, as it always has.
+ * The clock beside `Working` is the running turn's own, so a row ticks in exactly one place.
+ */
+export function rowStatus(read: RowStatusRead): RowStatus | undefined {
+  const request = read.request;
+  if (request) {
+    return {
+      kind: "needs",
+      label: "Needs you",
+      title: request.question ? request.question.text : `Approval: ${request.title}`,
+      approval: !request.question,
+    };
+  }
+  if (read.running) return { kind: "working", label: "Working" };
+  if (read.waiting) {
+    const waiting = read.waiting;
+    return {
+      kind: "waiting",
+      label: "Waiting",
+      title: waiting.title ? `${waiting.label}: ${waiting.title}` : waiting.label,
+    };
+  }
+  if (read.failed) return { kind: "failed", label: "Failed", title: "Its last turn failed" };
+  if (read.review) return { kind: "review", label: "Review", title: "It waits for your review" };
+  return undefined;
+}
+
 /**
  * What a thread's calls changed, from the diffs the app already read (`_rustcode/rewind`
  * history, replayed when the thread is opened). Null when it has none to count: a thread never

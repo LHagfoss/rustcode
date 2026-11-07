@@ -2,10 +2,11 @@
 // filter and the buttons that make a thread or a project, then one list:
 // pinned threads first, then every active thread (by project when asked). A row
 // runs two lines: where it runs, its branch and what the branch's pull request
-// became, above its title and the mark of the harness that runs it. What it is
-// doing (Working, Approval, Input, Failed, Done until you open it) takes the
-// time's slot on the top line, the threads it started show as a stack of marks
-// on the second line, and Settled (threads settled) opens from the foot.
+// became, above its title and the threads it works with. One status chip
+// (`Working 57:13`, `Waiting`, `Needs you`, `Failed`, `Review`) ends the top
+// line, the threads it started end the second as a stack of marks, and a row
+// that is idle or settled shows its age there instead (state/sidebarRows.ts
+// `rowStatus`). Settled (threads settled) opens from the foot.
 // The app's own pages (settings, pull requests) are buttons in the toolbar's
 // titlebar row.
 
@@ -85,8 +86,11 @@ import {
   type OrderRow,
   type OrderSection,
   opensRowMenu,
+  type RowStatus,
+  type RowStatusKind,
   rangeRows,
   rowKeyAction,
+  rowStatus,
   threadDiff,
   visibleRows,
 } from "../state/sidebarRows";
@@ -152,7 +156,6 @@ import {
   Tooltip,
 } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
-import { StatusChip } from "./Status";
 import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
 
@@ -472,6 +475,55 @@ function Elapsed({ since }: { since: number }) {
   return <>{formatClock(now - since)}</>;
 }
 
+/** The tint a row's status chip takes, by what it says: the page's own tone tokens, never a new one. */
+const CHIP_TINT: Record<RowStatusKind, string> = {
+  needs: "bg-warning/14 text-warning",
+  working: "bg-accent/12 text-accent",
+  waiting: "bg-fill-subtle text-fg-muted",
+  failed: "bg-danger/12 text-danger",
+  review: "bg-accent/16 text-accent",
+};
+
+/**
+ * The one chip a row's first line ends with: what the thread is doing, or why it waits. Its
+ * spinner is the row's only one, and the clock beside `Working` is the running turn's own; a row
+ * that shows its age instead has no chip at all (state/sidebarRows.ts `rowStatus`).
+ */
+function RowStatusChip({ status, startedAt }: { status: RowStatus; startedAt?: number }) {
+  const kind = status.kind;
+  return (
+    <span
+      // The long form goes in the title, which the app reads out as the row's label
+      // (lib/quietNative.ts); the words in the chip are what the eye gets.
+      title={status.title}
+      className={cx(
+        "inline-flex h-[18px] shrink-0 items-center gap-1 rounded-full px-1.5 font-medium text-caption",
+        CHIP_TINT[kind],
+      )}
+    >
+      {kind === "working" ? (
+        <Spinner size={9} />
+      ) : kind === "needs" ? (
+        status.approval ? (
+          <ShieldQuestion size={10} />
+        ) : (
+          <MessageCircleQuestion size={10} />
+        )
+      ) : kind === "failed" ? (
+        <CircleAlert size={10} />
+      ) : kind === "review" ? (
+        <Eye size={10} />
+      ) : null}
+      <span>{status.label}</span>
+      {kind === "working" && startedAt !== undefined && (
+        <span className="tabular">
+          <Elapsed since={startedAt} />
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** A small icon button in a row's hover slot: 26px so the pointer finds it without aiming. */
 function RowAction({
   label,
@@ -638,6 +690,15 @@ const ThreadRow = memo(function ThreadRow({
   // Done or Failed while you were elsewhere, until you open it.
   const fresh = !!finishedAt && !selected;
   const failed = !!failedAt && !selected;
+  // What the row's one status chip says, or nothing when it shows its age instead
+  // (state/sidebarRows.ts `rowStatus`).
+  const chip = rowStatus({
+    request,
+    running,
+    waiting: wait && { label: waitingLabel(wait), title: waitingTitle(wait) },
+    failed,
+    review: status === "review",
+  });
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   /** The menu was opened with Shift+F10 or the ContextMenu key: the row takes the keyboard back. */
@@ -757,55 +818,12 @@ const ThreadRow = memo(function ThreadRow({
               )}
               {pull && <PullMark pull={pull} />}
               <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
-                {request ? (
-                  <>
-                    {request.question ? (
-                      <MessageCircleQuestion size={12} className="text-accent" />
-                    ) : (
-                      <ShieldQuestion size={12} className="text-warning" />
-                    )}
-                    <span className={cx("font-medium", request.question ? "text-accent" : "text-warning")}>
-                      {request.question ? "Input" : "Approval"}
-                    </span>
-                  </>
-                ) : running ? (
-                  <>
-                    <Spinner size={11} />
-                    <span className="text-accent">
-                      {startedAt ? <Elapsed since={startedAt} /> : "Working"}
-                    </span>
-                  </>
-                ) : wait ? (
-                  // The titles go in the title, which the app reads out as the row's label (lib/quietNative.ts).
-                  <span
-                    className="flex items-center gap-1 text-fg-muted"
-                    title={
-                      waitingTitle(wait) ? `${waitingLabel(wait)}: ${waitingTitle(wait)}` : waitingLabel(wait)
-                    }
-                  >
-                    <span className="relative flex size-2 items-center justify-center">
-                      <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
-                      <span className="size-1.5 rounded-full bg-accent" />
-                    </span>
-                    Waiting
-                  </span>
-                ) : failed ? (
-                  <>
-                    <CircleAlert size={12} className="text-danger" />
-                    <span className="font-medium text-danger">Failed</span>
-                  </>
-                ) : fresh ? (
-                  <>
-                    <CircleCheck size={12} className="text-success" />
-                    <span className="font-medium text-success">Done</span>
-                  </>
+                {chip ? (
+                  <RowStatusChip status={chip} startedAt={startedAt} />
                 ) : (
-                  <>
-                    {status === "review" && <StatusChip status={status} compact />}
-                    <span className="text-fg-muted">
-                      {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
-                    </span>
-                  </>
+                  <span className="text-fg-muted">
+                    {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
+                  </span>
                 )}
               </span>
             </span>
@@ -825,19 +843,24 @@ const ThreadRow = memo(function ThreadRow({
               >
                 {session.title || "New thread"}
               </span>
-              <LinkBadge threadId={session.id} />
-              {stack?.length ? (
-                <AgentStack agents={stack} />
-              ) : (
-                external && (
-                  <HarnessIcon
-                    id={session.harness!}
-                    name={harness?.name}
-                    size={13}
-                    className="shrink-0 text-fg-muted"
-                  />
-                )
-              )}
+              {/* Who else it is working with, and where: one cluster, ending on the same right
+                  edge as the chip above. The ↳ (it works for another thread) leads it, and a row
+                  with no delegates keeps its harness mark alone instead. */}
+              <span className="flex min-w-0 shrink-0 items-center gap-1">
+                <LinkBadge threadId={session.id} />
+                {stack?.length ? (
+                  <AgentStack agents={stack} />
+                ) : (
+                  external && (
+                    <HarnessIcon
+                      id={session.harness!}
+                      name={harness?.name}
+                      size={13}
+                      className="shrink-0 text-fg-muted"
+                    />
+                  )
+                )}
+              </span>
             </span>
             {/* What it asks of you; while searching, the words around the match; or which thread a
                 delegated one without a parent row above it belongs under. */}

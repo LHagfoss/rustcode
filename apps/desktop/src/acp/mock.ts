@@ -238,6 +238,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "RustCode",
         kind: "builtin",
         builtin: true,
+        known: true,
         enabled: true,
         command: [],
         installed: true,
@@ -257,6 +258,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "Codex",
         kind: "codex",
         builtin: false,
+        known: true,
         enabled: onboarded,
         command: ["codex", "app-server"],
         installed: true,
@@ -286,6 +288,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "Claude Code",
         kind: "acp",
         builtin: false,
+        known: true,
         enabled: false,
         command: ["claude-agent-acp"],
         installed: true,
@@ -318,6 +321,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "Gemini CLI",
         kind: "acp",
         builtin: false,
+        known: true,
         enabled: false,
         command: ["gemini", "--experimental-acp"],
         installed: false,
@@ -334,6 +338,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "OpenCode",
         kind: "acp",
         builtin: false,
+        known: true,
         enabled: false,
         command: ["opencode", "acp"],
         installed: true,
@@ -341,6 +346,42 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         auth: "unknown",
         login_command: ["opencode", "auth", "login"],
         install_hint: "brew install opencode",
+        capabilities: ACP_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+      // A standard harness that is not installed: it still lists, with its
+      // install hint and a switch that cannot be turned on.
+      {
+        id: "pi",
+        name: "Pi",
+        kind: "acp",
+        builtin: false,
+        known: true,
+        enabled: false,
+        command: ["npx", "-y", "pi-acp"],
+        installed: false,
+        auth: "unknown",
+        login_command: ["pi"],
+        install_hint: "npm install -g @earendil-works/pi-coding-agent",
+        capabilities: ACP_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+      // A harness the user wrote into config.toml by hand.
+      {
+        id: "local-agent",
+        name: "Local Agent",
+        kind: "acp",
+        builtin: false,
+        known: false,
+        enabled: true,
+        command: ["local-agent", "--acp"],
+        installed: true,
+        version: "0.3.1",
+        auth: "unknown",
         capabilities: ACP_CAPS,
         accounts: [],
         models: [],
@@ -2751,6 +2792,7 @@ export class MockEngine {
             name: str(params.name) ?? id,
             kind: "acp",
             builtin: false,
+            known: false,
             enabled: true,
             command: arr(params.command).map(String),
             installed: true,
@@ -2770,11 +2812,7 @@ export class MockEngine {
         return this.snapshot();
       }
       case "_rustcode/harnesses/remove": {
-        this.harnesses.harnesses = this.harnesses.harnesses.filter(
-          (h) =>
-            h.id !== params.id ||
-            ["rustcode", "codex", "claude-code", "gemini", "opencode", "pi"].includes(h.id),
-        );
+        this.harnesses.harnesses = this.harnesses.harnesses.filter((h) => h.id !== params.id || h.known);
         return this.snapshot();
       }
       case "_rustcode/harnesses/default":
@@ -3322,6 +3360,38 @@ export class MockEngine {
       if (!thread.title) {
         thread.title = prompt.split("\n")[0]?.slice(0, 60) || "New thread";
         this.notify(update(sid, { sessionUpdate: "session_info_update", title: thread.title }));
+      }
+      // Two row states that only exist while something happens, so the sidebar's status chip can be
+      // seen without a model: "keep working" leaves a turn running for two minutes (`Working 0:12`
+      // with its clock, then `Waiting`), and "fail this turn" ends it with an error (`Failed` until
+      // the row is opened). `?scenario=delegates` covers `Waiting`, `Needs you` and the stack.
+      if (/\bfail this turn\b/i.test(prompt)) throw new Error("The mock failed this turn, as asked.");
+      if (/\bkeep working\b/i.test(prompt)) {
+        const callId = `live-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: callId,
+          title: "bash",
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { command: "bun test --watch", summary: "Keep the turn running" },
+        });
+        for (let i = 0; i < 60 && !run.cancelled; i++) {
+          await this.sleep(2_000);
+          push({
+            sessionUpdate: "tool_call_update",
+            toolCallId: callId,
+            _meta: { rustcode: { outputDelta: `✓ ${i + 1} tests still passing\n` } },
+          });
+        }
+        if (run.cancelled) return done("cancelled");
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: callId,
+          status: "completed",
+          rawOutput: { content: "✓ 60 pass, 0 fail\n", exitCode: 0 },
+        });
+        return done("end_turn");
       }
       for (const chunk of [
         "**Reading the request**\n",
