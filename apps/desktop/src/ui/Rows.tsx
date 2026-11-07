@@ -38,6 +38,7 @@ import { effortLabel, modelName } from "../acp/types";
 import { clip } from "../lib/clip";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
+import { hasTimeline } from "../lib/trace";
 import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
@@ -453,6 +454,35 @@ function inputWithoutSummary(input: Json | undefined): string | undefined {
   return Object.keys(rest).length ? JSON.stringify(rest, null, 2) : undefined;
 }
 
+/**
+ * A tool call's detail: its diffs, or the input and output it read and printed.
+ * Shared by the tool row's expander and a turn's Trace, so both format a call
+ * the same way and both offer Copy.
+ */
+export function ToolDetail({
+  item,
+  className,
+}: {
+  item: Item<"tool">;
+  /** Padding around the detail, for a host that draws its own indent. */
+  className?: string;
+}) {
+  const input = inputWithoutSummary(item.input);
+  return (
+    <div className={cx("flex flex-col gap-2", className)}>
+      {item.diffs.length > 0 ? (
+        item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
+      ) : (
+        <>
+          {input && <TextBox label="Input" text={input} />}
+          {item.output && <TextBox label="Output" text={item.output} />}
+          {!input && !item.output && <span className="text-caption text-fg-faint">No output</span>}
+        </>
+      )}
+    </div>
+  );
+}
+
 export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">; cwd: string }) {
   const kind = inferToolKind(item);
   const [open, setOpen] = useState(kind === "edit" && item.diffs.length > 0 && item.diffs.length <= 2);
@@ -480,7 +510,6 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   const tailLines =
     running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
-  const input = inputWithoutSummary(item.input);
   return (
     <div>
       <div className="group flex items-center gap-0.5">
@@ -567,16 +596,8 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         </pre>
       )}
       {open && (
-        <div className="rc-expand mt-1.5 mb-1 ml-[26px] flex flex-col gap-2">
-          {item.diffs.length > 0 ? (
-            item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
-          ) : (
-            <>
-              {input && <TextBox label="Input" text={input} />}
-              {item.output && <TextBox label="Output" text={item.output} />}
-              {!input && !item.output && <span className="text-caption text-fg-faint">No output</span>}
-            </>
-          )}
+        <div className="rc-expand mt-1.5 mb-1 ml-[26px]">
+          <ToolDetail item={item} />
         </div>
       )}
     </div>
@@ -912,6 +933,7 @@ export function TurnEndRow({
   reply,
   completion,
   changes,
+  trace,
   folded,
   timeInFold,
   threadId,
@@ -927,6 +949,8 @@ export function TurnEndRow({
   completion?: TurnCompletion | null;
   /** The turn's checkpoint chip (Changes), when the harness reported no completion. */
   changes?: ReactNode;
+  /** The turn's Trace chip, when the app watched it run. */
+  trace?: ReactNode;
   /** The thread, so the footer's fork can copy its conversation. */
   threadId?: string;
 }) {
@@ -934,10 +958,18 @@ export function TurnEndRow({
   // chip. It is the turn's only action row (nothing hovers in, nothing holds room): the reply
   // above it draws none, and a turn still running has no footer yet.
   const row = turnActions({ text: reply, at: item.at, threadId });
+  const traced = hasTimeline(item) && !!trace;
   // An empty turn that folded its work: its header already says the time, and there is no reply
   // to copy or fork, so a footer row of icons would sit over nothing.
   if (
-    turnFooterHidden({ folded, reply, completion: !!completion, changes: !!changes, outcome: item.outcome })
+    turnFooterHidden({
+      folded,
+      reply,
+      completion: !!completion,
+      changes: !!changes,
+      trace: traced,
+      outcome: item.outcome,
+    })
   )
     return null;
   // The outcome, in words, and the time. How long the turn took is the fold header's to say.
@@ -961,6 +993,7 @@ export function TurnEndRow({
             {row.fork && <ReplyForkButton threadId={threadId!} />}
           </span>
         )}
+        {traced && trace}
         {changes}
       </div>
     </div>

@@ -22,6 +22,8 @@ import {
   idleSettled,
   messageTime,
   requeueSteers,
+  settledWait,
+  settleEveryWait,
   shortAge,
   splitSubagentSteps,
   startedLinks,
@@ -30,6 +32,7 @@ import {
   subagentTitle,
   type TranscriptItem,
   thoughtHeadings,
+  waitingOn,
   wakeLine,
   wakeTurn,
   withWakeMark,
@@ -269,6 +272,114 @@ describe("thread reducer", () => {
       usage: { used: 1 },
       configOptions: [{ id: "model" }],
     });
+  });
+});
+
+describe("a call that waits on the user", () => {
+  const tool = (id: string) => ({ kind: "toolCall" as const, id, title: "edit src/app.ts", diffs: [] });
+
+  test("an approval holds the call until the answer, then the wait closes", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = applyUpdate(s, tool("call-1"), 2_000);
+    s = waitingOn(s, "call-1", 3_000);
+    const waiting = s.items.find((item) => item.kind === "tool" && item.id === "call-1");
+    expect(waiting?.kind === "tool" ? waiting.waits : undefined).toEqual([{ from: 3_000 }]);
+    s = settledWait(s, "call-1", 41_000);
+    const settled = s.items.find((item) => item.kind === "tool" && item.id === "call-1");
+    expect(settled?.kind === "tool" ? settled.waits : undefined).toEqual([{ from: 3_000, to: 41_000 }]);
+  });
+
+  test("an approval that arrives before its call starts the wait on the call", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = {
+      ...s,
+      permissions: [
+        {
+          rpcId: 1,
+          sessionId: "s",
+          toolCallId: "call-9",
+          title: "edit src/app.ts",
+          options: [],
+          diffs: [],
+          at: 2_500,
+        },
+      ],
+    };
+    s = applyUpdate(s, tool("call-9"), 2_600);
+    const item = s.items.find((i) => i.kind === "tool" && i.id === "call-9");
+    expect(item?.kind === "tool" ? item.waits : undefined).toEqual([{ from: 2_500 }]);
+  });
+
+  test("a turn that ends while the approval waits closes it there", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = applyUpdate(s, tool("call-1"), 2_000);
+    s = waitingOn(s, "call-1", 3_000);
+    s = finishTurn(s, "cancelled", 9_000);
+    const item = s.items.find((i) => i.kind === "tool" && i.id === "call-1");
+    expect(item?.kind === "tool" ? item.waits : undefined).toEqual([{ from: 3_000, to: 9_000 }]);
+  });
+
+  test("every open wait closes when the thread stops", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 1_000);
+    s = applyUpdate(s, tool("call-1"), 2_000);
+    s = applyUpdate(s, tool("call-2"), 2_100);
+    s = waitingOn(s, "call-1", 3_000);
+    s = waitingOn(s, "call-2", 3_500);
+    const settled = settleEveryWait(s, 8_000);
+    const waits = settled.items.flatMap((i) => (i.kind === "tool" ? (i.waits ?? []) : []));
+    expect(waits).toEqual([
+      { from: 3_000, to: 8_000 },
+      { from: 3_500, to: 8_000 },
+    ]);
+  });
+});
+
+describe("a turn's usage samples", () => {
+  const usage = (inputTokens: number, outputTokens: number, cost: number) => ({
+    kind: "usage" as const,
+    usage: { used: inputTokens, size: 200_000, estimated: false, inputTokens, outputTokens, cost },
+  });
+
+  test("what the engine reported while a turn ran is kept on its footer", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "hi", 1_000);
+    s = applyUpdate(s, usage(1_000, 100, 0.01), 1_500);
+    s = applyUpdate(s, usage(1_900, 180, 0.03), 2_500);
+    s = finishTurn(s, "completed", 4_000);
+    const end = s.items.at(-1)!;
+    expect(end).toMatchObject({ kind: "turnEnd", startedAt: 1_000, at: 4_000, elapsedMs: 3_000 });
+    const turn = end.kind === "turnEnd" ? end.usage : undefined;
+    expect(turn?.samples.map((sample) => sample.at)).toEqual([1_500, 2_500]);
+    expect(turn?.samples[1]?.usage.inputTokens).toBe(1_900);
+  });
+
+  test("a thread with no earlier usage starts its first turn from zero", () => {
+    const s = finishTurn(beginTurn(emptyThread("s", "/p"), "hi", 1_000), "completed", 2_000);
+    const end = s.items.at(-1);
+    expect(end?.kind === "turnEnd" ? end.usage?.before : undefined).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+    });
+  });
+
+  test("a loaded thread starts from the usage it already had", () => {
+    let state = emptyThread("s", "/p");
+    state = {
+      ...state,
+      usage: { used: 10, size: 200_000, estimated: false, inputTokens: 60_000, outputTokens: 2_000 },
+    };
+    state = finishTurn(beginTurn(state, "one", 1_000), "completed", 2_000);
+    let s = beginTurn(state, "two", 3_000);
+    s = finishTurn(s, "completed", 4_000);
+    const end = s.items.at(-1);
+    expect(end?.kind === "turnEnd" ? end.usage?.before?.inputTokens : undefined).toBe(60_000);
+  });
+
+  test("a usage update outside a turn is the session's, not a turn's", () => {
+    let s = emptyThread("s", "/p");
+    s = applyUpdate(s, usage(1_000, 100, 0.01), 1_500);
+    expect(s.turnUsage).toBeUndefined();
+    expect(s.usage?.inputTokens).toBe(1_000);
   });
 });
 

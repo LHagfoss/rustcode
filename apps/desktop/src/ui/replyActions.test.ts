@@ -49,10 +49,11 @@ describe("a finished turn's footer that adds nothing", () => {
     expect(turnFooterHidden({ folded: true, outcome: "completed" })).toBe(true);
   });
 
-  test("an answer, a completion card or a changes chip keeps the footer", () => {
+  test("an answer, a completion card, a changes chip or a Trace keeps the footer", () => {
     expect(turnFooterHidden({ folded: true, reply: "Done.", outcome: "completed" })).toBe(false);
     expect(turnFooterHidden({ folded: true, completion: true, outcome: "completed" })).toBe(false);
     expect(turnFooterHidden({ folded: true, changes: true, outcome: "completed" })).toBe(false);
+    expect(turnFooterHidden({ folded: true, trace: true, outcome: "completed" })).toBe(false);
   });
 
   test("a turn that failed or was stopped always says so", () => {
