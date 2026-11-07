@@ -208,6 +208,12 @@ it says what the tools make a thread: one started with `start_session` or
 whole task, while a quick read-only lookup belongs to the harness's own
 subagents.
 
+Delegates do not inherit the caller's full conversation. Include the relevant
+repository instructions and acceptance criteria in each coding prompt, and
+have the delegate read `AGENTS.md`. Keep commands noninteractive: merge branch
+updates instead of rebasing, use `GIT_EDITOR=true` for Git operations that may
+open an editor, and bound commands that can block with `timeout`.
+
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
 at most 8 distinct threads working for one thread at once by default, set to 2
