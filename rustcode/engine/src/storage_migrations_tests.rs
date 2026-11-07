@@ -283,6 +283,46 @@ fn a_held_lock_leaves_the_work_to_its_holder() {
 }
 
 #[test]
+fn a_fresh_profile_records_its_checkpoint_and_a_restart_reruns_nothing() {
+    // Windows fresh-profile reproduction: every genuine step ran, then the
+    // checkpoint failed to persist because it was flushed through a reopened
+    // read-only handle ("Access is denied (os error 5)").
+    let parent = tempfile::tempdir().unwrap();
+    let fresh = parent.path().join("fresh-profile");
+    fs::create_dir_all(&fresh).unwrap();
+
+    let applied: Vec<String> = match run_pending_with(&fresh, MIGRATIONS, LOCK_GRACE) {
+        RunOutcome::Applied(applied) => applied,
+        other => panic!("a fresh profile must run the shipped steps, got {other:?}"),
+    };
+    let shipped: Vec<String> = MIGRATIONS.iter().map(|m| m.id.to_owned()).collect();
+    assert_eq!(applied, shipped);
+    assert_eq!(completed_ids(&fresh), shipped);
+    assert_eq!(
+        status_with(&fresh, MIGRATIONS).0.checkpoint,
+        CheckpointState::Current
+    );
+    let recorded = checkpoint_text(&fresh);
+
+    // The temporary file was published, not left next to the checkpoint.
+    let leftovers: Vec<String> = fs::read_dir(fresh.join(STORAGE_DIR))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "left behind {leftovers:?}");
+
+    // A clean restart on the same profile: no step runs and nothing is
+    // rewritten, so the checkpoint did persist.
+    assert_eq!(
+        run_pending_with(&fresh, MIGRATIONS, LOCK_GRACE),
+        RunOutcome::UpToDate
+    );
+    assert_eq!(checkpoint_text(&fresh), recorded);
+    assert_eq!(status_with(&fresh, MIGRATIONS).0.pending().count(), 0);
+}
+
+#[test]
 fn a_checkpoint_from_a_newer_format_blocks_without_rewriting() {
     static RUNS: AtomicUsize = AtomicUsize::new(0);
     fn step(_: &Path) -> Result<(), String> {
