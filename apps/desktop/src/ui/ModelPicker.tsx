@@ -1,8 +1,9 @@
 // The composer's model pill and its panel: one list, every harness's models under a sticky header
-// with the current one on top, a search that opens focused, the current model checked with its
-// effort steps on its own row, and Fast mode and the account under the list. Nothing drills into
-// another pane, so changing a model, an effort or a harness is one move in one place. What the
-// thread's harness cannot do is greyed out with the reason, from capability flags.
+// with the current one on top, its accounts as chips on the right of that header, a search that
+// opens focused, the current model checked with its effort steps on its own row, and Fast mode
+// under the list. Nothing drills into another pane, so changing a model, an effort, an account or
+// a harness is one move in one place. What the thread's harness cannot do is greyed out with the
+// reason, from capability flags.
 
 import { Check, ChevronUp, Lock, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -16,12 +17,14 @@ import {
   selectOption,
   unavailableReason,
 } from "../state/harness";
-import { defaultLoginGone, newThreadAccountOn } from "../state/logins";
+import { newThreadAccountOn } from "../state/logins";
 import {
   ensureHarnessModels,
+  lastAccountFor,
   type NewThreadChoice,
   newThreadChoice,
   pickNewThreadAccount,
+  pickNewThreadAccountOn,
   pickNewThreadChoice,
   setConfigOption,
   switchThreadAccount,
@@ -31,7 +34,7 @@ import {
 import type { ThreadState } from "../state/thread";
 import { CardPopover } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
-import { cx, MenuSearchField, Skeleton, Tooltip } from "./primitives";
+import { cx, MenuSearchField, Skeleton } from "./primitives";
 
 interface Choice {
   value: string;
@@ -56,12 +59,24 @@ export function orderEfforts(efforts: string[]): string[] {
     .map((entry) => entry.value);
 }
 
+/** One login chip in a harness's header: a named account, or a thread's own state. */
+export interface AccountChip {
+  /** The account to run on; `null` is the harness's own sign-in, `undefined` a login that is gone. */
+  id: string | null | undefined;
+  name: string;
+  selected: boolean;
+  /** A login removed from Settings: shown as the thread's state, never pressed. */
+  gone?: boolean;
+}
+
 /** One harness's models in the panel, with what the panel needs to offer them. */
 interface ModelGroup {
   harness: Harness;
   /** Why none of them can be chosen now: not installed, or a running turn keeps its harness. */
   blocked?: string;
   models: Choice[];
+  /** Its named logins, right-aligned in the group's sticky header; empty when it has none. */
+  accounts: AccountChip[];
   /** The effort steps one of its models offers, lowest first. */
   effortsOf: (value: string) => string[];
 }
@@ -115,14 +130,18 @@ function ModelPanel({
   groups,
   current,
   effort,
+  accountsDisabled,
   onPick,
   onEffort,
+  onPickAccount,
 }: {
   groups: ModelGroup[];
   current?: string | null;
   effort?: string | null;
+  accountsDisabled?: boolean;
   onPick: (group: ModelGroup, value: string) => void;
   onEffort: (value: string) => void;
+  onPickAccount: (harness: Harness, account: string | null) => void;
 }) {
   const [filter, setFilter] = useState("");
   const [active, setActive] = useState(0);
@@ -174,6 +193,9 @@ function ModelPanel({
     <div
       className="flex min-h-0 flex-1 flex-col"
       onKeyDown={(e) => {
+        // A chip in a harness's header presses itself; the panel's keys are for the list.
+        if (e.target instanceof HTMLElement && e.target.closest("[data-menu-chips]") && e.key !== "Escape")
+          return;
         if (e.key === "Escape") {
           // A search clears first; the second Escape closes the panel (Radix's own dismiss).
           if (!filter) return;
@@ -234,16 +256,48 @@ function ModelPanel({
         {sections.map((section) => (
           <div key={section.group.harness.id}>
             {!searching && (
-              <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-surface-2 px-3 pt-1.5 pb-1 text-caption text-fg-faint">
+              <div className="sticky top-0 z-10 -mx-1 flex items-start gap-1.5 bg-surface-2 px-3 pt-1.5 pb-1 text-caption text-fg-faint">
                 <HarnessIcon
                   id={section.group.harness.id}
                   name={section.group.harness.name}
                   size={12}
-                  className="shrink-0"
+                  className="mt-0.5 shrink-0"
                 />
-                <span className="truncate">{section.group.harness.name}</span>
+                <span className="min-w-0 truncate py-0.5">{section.group.harness.name}</span>
+                {section.group.accounts.length ? (
+                  <div
+                    data-menu-chips
+                    className="ms-auto flex min-w-0 flex-wrap items-center justify-end gap-1"
+                  >
+                    {section.group.accounts.map((chip) => (
+                      <button
+                        key={chip.id ?? chip.name}
+                        type="button"
+                        aria-pressed={chip.selected}
+                        disabled={accountsDisabled || !!section.group.blocked || chip.gone}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (chip.id === undefined) return;
+                          onPickAccount(section.group.harness, chip.id);
+                        }}
+                        className={cx(
+                          "h-5 max-w-[112px] shrink-0 truncate rounded-full px-1.5 text-caption",
+                          chip.selected
+                            ? "bg-fill-strong font-medium text-fg"
+                            : "text-fg-muted hover:bg-fill hover:text-fg",
+                          (accountsDisabled || section.group.blocked) && "opacity-40",
+                          chip.gone && "italic",
+                        )}
+                      >
+                        {chip.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 {section.group.blocked && (
-                  <span className="ms-auto shrink-0 truncate text-fg-faint">{section.group.blocked}</span>
+                  <span className={cx("shrink-0 truncate", !section.group.accounts.length && "ms-auto")}>
+                    {section.group.blocked}
+                  </span>
                 )}
               </div>
             )}
@@ -429,22 +483,14 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   );
   const caps = isNew ? harness?.capabilities : thread?.harness?.capabilities;
   const accounts = harness?.accounts ?? [];
-  // A new thread on a signed-out default login starts on a named account instead (state/logins.ts);
-  // an open thread keeps its own, so it says what it really runs on.
-  const defaultGone = useApp((s) => defaultLoginGone(harness, s.signedOutLogins));
-  const newAccount = useApp((s) => newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins));
+  // A new thread starts on one of the harness's named accounts while it has
+  // any (state/logins.ts); an open thread keeps its own, so the picker says
+  // what it really runs on.
+  const newAccount = useApp((s) => newThreadAccountOn(harness, s.newThreadAccount));
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
   const accountName = accounts.find((a) => a.id === account)?.name;
-  // A thread keeps its account id when that login is removed from Settings:
-  // it stays readable, and the picker says which one is gone.
-  const accountRemoved = !isNew && !!account && !accountName;
-  // "Default login" is not offered once it is known to be signed out, unless an
-  // open thread is on it already (hiding it would misstate where that thread runs)
-  // or on an account that was removed, where it is the way back.
-  const defaultOffered = !defaultGone || accountRemoved || (!isNew && !account);
   // A running thread keeps its login, as it keeps its harness.
-  const accountBlocked = (accounts.length > 0 || accountRemoved) && !isNew && !!thread?.running;
-  const accountCount = accounts.length + (defaultOffered || accountRemoved ? 1 : 0);
+  const accountBlocked = !isNew && !!thread?.running;
   const engineReady = useApp((s) => s.status === "ready");
 
   const { models, efforts, model, effort } = pickerModels(thread, harness, effective, knownConfig);
@@ -463,18 +509,47 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     else setChoice({ effort: value });
   };
   /**
-   * The login a thread runs on. A new thread keeps the choice for its next
-   * one; an idle thread moves to the other account with the conversation so
-   * far as a summary, exactly as switching harness does.
+   * A login chip. A new thread keeps the choice for its next one; an idle
+   * thread moves to it with the conversation so far as a summary, exactly as
+   * switching harness does. A chip of another harness moves there first.
    */
-  const pickAccount = (id: string | null) => {
-    if (isNew) {
-      pickNewThreadAccount(id);
-      return true;
+  const pickAccount = (target: Harness, id: string | null) => {
+    if (target.id === providerId) {
+      if (isNew) pickNewThreadAccount(id);
+      // The chip of the login the thread is already on asks nothing of the engine.
+      else if (thread && !thread.running && (thread.harness?.account ?? null) !== id)
+        void switchThreadAccount(thread.id, id);
+      else return;
+    } else if (isNew) {
+      if (id) pickNewThreadAccountOn(target.id, id);
+      else return;
+    } else if (thread && !thread.running) {
+      void switchThreadHarness(thread.id, target.id, id);
+    } else return;
+    setOpen(false);
+  };
+
+  /** The chips a harness's header shows: its named logins, and a thread's own login state. */
+  const chipsFor = (h: Harness): AccountChip[] => {
+    const named = h.accounts ?? [];
+    const own = h.id === providerId ? account : null;
+    if (!isNew && h.id === providerId) {
+      const chips: AccountChip[] = [];
+      // A thread from before this harness had accounts keeps its own sign-in:
+      // it stays readable and is only moved by hand.
+      if (!own && named.length) chips.push({ id: null, name: "Original login", selected: true });
+      // Its login was removed from Settings; without another, its way back is
+      // the harness's own sign-in.
+      if (own && !named.some((a) => a.id === own)) {
+        chips.push({ id: undefined, name: "Removed", selected: true, gone: true });
+        if (!named.length) chips.push({ id: null, name: "Harness login", selected: false });
+      }
+      for (const a of named) chips.push({ id: a.id, name: a.name, selected: own === a.id });
+      return chips;
     }
-    if (!thread || thread.running) return false;
-    void switchThreadAccount(thread.id, id);
-    return true;
+    // A new thread on this harness, or another harness's remembered login.
+    const selected = isNew && h.id === providerId ? own : newThreadAccountOn(h, lastAccountFor(h.id));
+    return named.map((a) => ({ id: a.id, name: a.name, selected: a.id === selected }));
   };
 
   // The harnesses worth listing: RustCode turned off in Settings › Agents leaves the list, and a
@@ -503,6 +578,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       harness: h,
       blocked: unavailableReason(h) ?? (isCurrent || canSwitch ? undefined : "Stop the turn to switch"),
       models: isCurrent ? models : listed,
+      accounts: chipsFor(h),
       effortsOf,
     };
   });
@@ -524,10 +600,14 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       if (thread) void setConfigOption(thread.id, "model", value);
       else setChoice({ model: value });
     } else if (isNew) {
-      // A harness's remembered effort belongs to its own models: the choice normalizes it.
+      // A harness's remembered effort belongs to its own models: the choice normalizes it,
+      // and its remembered account goes with it.
       setChoice({ harness: group.harness.id, model: value, effort: null });
+      pickNewThreadAccount(newThreadAccountOn(group.harness, lastAccountFor(group.harness.id)));
     } else if (thread) {
-      void switchThreadHarness(thread.id, group.harness.id).then((switched) => {
+      // The harness's remembered login goes with the model, as a chip would.
+      const account = newThreadAccountOn(group.harness, lastAccountFor(group.harness.id));
+      void switchThreadHarness(thread.id, group.harness.id, account).then((switched) => {
         if (switched) void setConfigOption(thread.id, "model", value);
       });
     }
@@ -535,10 +615,11 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   };
 
   const label = pillLabel(model, effortReason ? null : effort, compact);
-  const accountOptions = [
-    ...(defaultOffered || accountRemoved ? [{ id: null as string | null, name: "Default login" }] : []),
-    ...accounts.map((a) => ({ id: a.id as string | null, name: a.name })),
-  ];
+  // The pill names the login whenever the harness has named accounts, even
+  // when there is one: which subscription a thread spends is worth a word.
+  // A thread from before accounts says which login it is really on.
+  const accountLabel = accountName ?? (!isNew && !account && accounts.length ? "Original login" : undefined);
+  const chipsShown = groups.some((g) => g.accounts.length > 0);
 
   // Nothing to show until the engine lists harnesses (or the thread its options): a placeholder pill.
   if (!harnesses && !thread?.configOptions.length) {
@@ -572,11 +653,11 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           {fast?.currentBool && <Zap size={11} className="shrink-0 text-fg" fill="currentColor" />}
           <span className="min-w-0 truncate">{label.name}</span>
           {label.effort && <span className="shrink-0 text-fg-faint">{effortLabel(label.effort)}</span>}
-          {accountName && accountCount > 1 && (
+          {accountLabel && (
             // The account is a hint, not a second model label: capped and ellipsized so a long
             // login never takes the width the model's own name needs.
             <span className="min-w-0 max-w-[72px] truncate text-caption text-fg-faint @max-lg/composer:hidden">
-              {accountName}
+              {accountLabel}
             </span>
           )}
           <ChevronUp
@@ -592,8 +673,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           groups={groups}
           current={model}
           effort={effort}
+          accountsDisabled={accountBlocked}
           onPick={pickModel}
           onEffort={pickEffort}
+          onPickAccount={pickAccount}
         />
         {effortReason && efforts.length > 0 && (
           <div className="flex shrink-0 items-center gap-1.5 px-2.5 pb-1 text-caption text-fg-faint">
@@ -602,7 +685,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           </div>
         )}
         {modelReason && <p className="shrink-0 px-2.5 pb-1 text-caption text-fg-faint">{modelReason}</p>}
-        {(fast || accountCount > 1 || accountRemoved) && (
+        {(fast || (accountBlocked && chipsShown)) && (
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-border border-t px-1.5 py-1">
             {fast && (
               <FastToggle
@@ -610,37 +693,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                 onChange={(on) => thread && void setConfigOption(thread.id, "fast", on)}
               />
             )}
-            {(accountCount > 1 || accountRemoved) && (
-              <div className="ms-auto flex min-w-0 items-center gap-1">
-                <span className="ps-1 text-caption text-fg-faint">
-                  {accountRemoved ? "Removed" : "Account"}
-                </span>
-                {accountOptions.map((option) => {
-                  const current = (option.id ?? null) === (account ?? null);
-                  return (
-                    <Tooltip
-                      key={option.id ?? "default"}
-                      label={accountBlocked ? "Stop the turn to switch account" : undefined}
-                    >
-                      <button
-                        type="button"
-                        aria-pressed={current}
-                        disabled={accountBlocked}
-                        onClick={() => pickAccount(option.id) && setOpen(false)}
-                        className={cx(
-                          "h-6 max-w-[140px] shrink-0 truncate rounded-full px-2 text-caption",
-                          current
-                            ? "bg-fill-strong font-medium text-fg"
-                            : "text-fg-muted hover:bg-fill hover:text-fg",
-                          accountBlocked && "opacity-40",
-                        )}
-                      >
-                        {option.name}
-                      </button>
-                    </Tooltip>
-                  );
-                })}
-              </div>
+            {accountBlocked && chipsShown && (
+              <span className="ms-auto px-1 text-caption text-fg-faint">Stop the turn to switch account</span>
             )}
           </div>
         )}

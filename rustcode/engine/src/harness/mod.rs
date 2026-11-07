@@ -543,6 +543,14 @@ fn snapshot_entry(
         .find(|entry| entry.id == harness.id)
         .filter(|entry| entry.model.is_some() || entry.effort.is_some())
         .map(|entry| json!({ "model": entry.model, "effort": entry.effort }));
+    // Claude logins on this Mac that no account names yet. A cheap read of
+    // directory names only, so Settings can offer `~/.claude` and a
+    // `~/.claude-personal` that already exists without anyone typing a path.
+    let discovered = if harness.id == "claude-code" {
+        json!(config::discovered_accounts(accounts))
+    } else {
+        Value::Null
+    };
     // A named login is only a directory; whether it is signed in is read from
     // its own credentials, never by starting the harness.
     let accounts = config::accounts_of(accounts, &harness.id)
@@ -573,6 +581,8 @@ fn snapshot_entry(
         // The model and effort last chosen for a new thread on it.
         "last": last,
         "accounts": accounts,
+        // Only Claude Code has logins to discover on this Mac.
+        "discovered_accounts": discovered,
         "error": learned.error.or_else(|| detection.error.clone()),
     })
 }

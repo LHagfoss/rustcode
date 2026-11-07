@@ -84,44 +84,120 @@ function SignIn({ harness }: { harness: Harness }) {
   );
 }
 
+/**
+ * Whether the account's directory is Claude Code's own `~/.claude`, the login
+ * that runs with no `CLAUDE_CONFIG_DIR` at all: macOS keys its Keychain item
+ * on the variable, so an account on it must not set one.
+ */
+export function isOwnLoginDir(account: Pick<HarnessAccount, "config_dir">): boolean {
+  return account.config_dir.replace(/\/+$/, "") === "~/.claude";
+}
+
 /** The command that signs Claude Code in under the account's own directory. */
 export function accountLoginCommand(account: Pick<HarnessAccount, "config_dir">): string {
+  if (isOwnLoginDir(account)) return "claude auth login";
   return `mkdir -p ${account.config_dir} && CLAUDE_CONFIG_DIR=${account.config_dir} claude auth login`;
 }
 
-/** The accounts' sign-in state, as the engine last read it. */
+/** What the engine last read about an account's sign-in. */
 function accountStatus(account: HarnessAccount): string {
-  return account.auth === "ok" ? "Signed in" : "Sign-in not found";
+  if (account.auth === "ok") return "Signed in";
+  // A look found the Keychain item or the credentials file missing.
+  if (account.auth === "needs_login") return "Not signed in";
+  // Not looked for yet: only a Refresh probes the macOS Keychain.
+  return "Not checked";
 }
 
+/** Signs the account in: Claude Code's own command, under the account's own directory. */
+function accountSignIn(account: Pick<HarnessAccount, "config_dir">): Promise<boolean> {
+  return openInTerminal(
+    ["claude", "auth", "login"],
+    isOwnLoginDir(account) ? [] : [["CLAUDE_CONFIG_DIR", account.config_dir]],
+  );
+}
+
+/** How long an added account's sign-in is waited for, three seconds at a time. */
+const SIGN_IN_WAIT_MS = 5 * 60_000;
+
 /**
- * A harness's named logins: each its own config directory, added and
- * removed by hand (`docs/harnesses.md`). RustCode never reads or copies their
- * tokens; "Sign in" is Claude Code's own command, run in a terminal.
+ * A harness's named logins: each its own config directory, added and removed
+ * by hand (`docs/harnesses.md`). RustCode never reads or copies their tokens;
+ * "Sign in" is Claude Code's own command, run in a terminal.
  */
 export function AccountsList({ harness }: { harness: Harness }) {
   const accounts = harness.accounts ?? [];
+  const discovered = harness.discovered_accounts ?? [];
   // Threads the list already knows about: no request, just a count for the
   // remove dialog.
   const threads = useApp((s) => s.sessions);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // The account whose sign-in the app is waiting for, and one it gave up on.
+  const [waiting, setWaiting] = useState<string | null>(null);
+  const [gaveUp, setGaveUp] = useState<string | null>(null);
+  // One real look when the section opens: an account reads `unknown` until
+  // the Keychain is asked, which only a Refresh did.
+  useEffect(() => {
+    void checkHarnessAccounts();
+  }, []);
+  // The waiting row asks again every three seconds, for at most five minutes
+  // while this section is mounted.
+  useEffect(() => {
+    if (!waiting) return;
+    const deadline = Date.now() + SIGN_IN_WAIT_MS;
+    const timer = setInterval(() => {
+      if (Date.now() > deadline) {
+        setWaiting(null);
+        setGaveUp(waiting);
+        return;
+      }
+      void checkHarnessAccounts(false).then((snapshot) => {
+        const found = snapshot?.harnesses
+          .find((h) => h.id === harness.id)
+          ?.accounts?.find((a) => a.id === waiting);
+        if (found?.auth === "ok") {
+          setWaiting(null);
+          setGaveUp(null);
+        }
+      });
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [waiting, harness.id]);
+  const signIn = async (account: HarnessAccount) => {
+    setGaveUp(null);
+    await accountSignIn(account);
+    setWaiting(account.id);
+  };
+  const refresh = async () => {
+    setBusy(true);
+    await checkHarnessAccounts();
+    setBusy(false);
+  };
   const add = async () => {
     const id = accountSlug(name);
     if (!id) return;
     setBusy(true);
     const snapshot = await addHarnessAccount(harness.id, id, name.trim());
     setBusy(false);
-    if (snapshot) {
-      setAdding(false);
-      setName("");
-    }
+    if (!snapshot) return;
+    setAdding(false);
+    setName("");
+    const added = snapshot.harnesses.find((h) => h.id === harness.id)?.accounts?.find((a) => a.id === id);
+    if (!added) return;
+    if (canOpenTerminal()) await signIn(added);
+    else setGaveUp(id);
   };
-  const refresh = async () => {
+  const addFound = async (configDir: string, suggested: string) => {
+    const id = accountSlug(suggested) || accountSlug(configDir.replace(/^.*[./]/, "")) || "account";
     setBusy(true);
-    await checkHarnessAccounts();
+    const snapshot = await addHarnessAccount(harness.id, id, suggested, configDir);
     setBusy(false);
+    const added = snapshot?.harnesses
+      .find((h) => h.id === harness.id)
+      ?.accounts?.find((a) => a.config_dir === configDir);
+    if (!added) return;
+    if (canOpenTerminal() && added.auth !== "ok") await signIn(added);
   };
   const remove = (account: HarnessAccount) => {
     const used = threads.filter(
@@ -153,14 +229,38 @@ export function AccountsList({ harness }: { harness: Harness }) {
             <li key={account.id} className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-body">{account.name}</span>
-                <span
-                  className={cx(
-                    "shrink-0 text-caption",
-                    account.auth === "ok" ? "text-success" : "text-fg-faint",
-                  )}
-                >
-                  {accountStatus(account)}
-                </span>
+                {waiting === account.id ? (
+                  <span className="flex shrink-0 items-center gap-1 text-caption text-fg-muted">
+                    <Spinner size={10} />
+                    Waiting for sign-in…
+                  </span>
+                ) : (
+                  <span
+                    className={cx(
+                      "shrink-0 text-caption",
+                      account.auth === "ok"
+                        ? "text-success"
+                        : account.auth === "needs_login" || gaveUp === account.id
+                          ? "text-warning"
+                          : "text-fg-faint",
+                    )}
+                  >
+                    {gaveUp === account.id ? "Not signed in" : accountStatus(account)}
+                  </span>
+                )}
+                {account.auth !== "ok" && waiting !== account.id && (
+                  <Tooltip label={canOpenTerminal() ? undefined : "Only the app can open Terminal"}>
+                    <span>
+                      <Action
+                        size="sm"
+                        disabled={!canOpenTerminal() || busy}
+                        onClick={() => void signIn(account)}
+                      >
+                        Sign in
+                      </Action>
+                    </span>
+                  </Tooltip>
+                )}
                 <Tooltip label="Remove from RustCode; the directory stays">
                   <button
                     type="button"
@@ -183,8 +283,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
         </ul>
       ) : (
         <p className="text-caption text-fg-muted">
-          One login at a time. Add an account to run a thread on another Claude login; each keeps its own plan
-          and limits.
+          Runs on Claude Code's own sign-in. Add an account to choose between subscriptions.
         </p>
       )}
       {adding ? (
@@ -202,7 +301,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
             className="h-7 min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 text-callout outline-none focus:border-accent"
           />
           <Action size="sm" onClick={() => void add()} disabled={busy || !accountSlug(name)}>
-            Add
+            Add and sign in
           </Action>
           <Action size="sm" quiet onClick={() => setAdding(false)}>
             Cancel
@@ -217,6 +316,27 @@ export function AccountsList({ harness }: { harness: Harness }) {
           <Plus size={11} />
           Add account
         </button>
+      )}
+      {discovered.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-border/70 border-t pt-2">
+          <span className="text-caption text-fg-muted">Found on this Mac</span>
+          {discovered.map((found) => (
+            <div key={found.config_dir} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-caption text-fg-muted">
+                {found.config_dir}
+              </span>
+              <span className="shrink-0 text-caption text-fg-faint">{found.suggested_name}</span>
+              <Action
+                size="sm"
+                quiet
+                disabled={busy}
+                onClick={() => void addFound(found.config_dir, found.suggested_name)}
+              >
+                Add
+              </Action>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

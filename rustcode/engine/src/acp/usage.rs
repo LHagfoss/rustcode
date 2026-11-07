@@ -339,7 +339,14 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
         .unwrap_or_default();
     let mut named = Vec::new();
     for account in named_claude_accounts(&request, &known) {
-        let read = usage(Some(&account.resolved_dir()), freshness).await;
+        // An account on ~/.claude is the login with no CLAUDE_CONFIG_DIR: read
+        // it as that login, whose Keychain item is the default one.
+        let dir = account.resolved_dir();
+        let read = if crate::harness::config::is_default_dir(&dir) {
+            usage(None, freshness).await
+        } else {
+            usage(Some(&dir), freshness).await
+        };
         named.push((account, read));
     }
     plans_answer(default, &named, codex)

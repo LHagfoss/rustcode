@@ -25,10 +25,10 @@ export async function pickFolder(start?: string): Promise<string | null> {
   return typed?.trim() || null;
 }
 
-/** Runs a harness's own login command in Terminal. Only the shell can, and it accepts only known harness tools. */
-export async function openInTerminal(command: string[]): Promise<boolean> {
+/** Runs a harness's own login command in Terminal. Only the shell can, and it accepts only known harness tools. `env` is a login directory, for a named account. */
+export async function openInTerminal(command: string[], env?: [string, string][]): Promise<boolean> {
   if (!isTauri()) return false;
-  await invoke("open_login_terminal", { command });
+  await invoke("open_login_terminal", { command, env: env ?? null });
   return true;
 }
 

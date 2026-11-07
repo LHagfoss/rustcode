@@ -100,10 +100,21 @@ fn shell_quote(word: &str) -> String {
     }
 }
 
+/// The environment a harness login may run with: only the variable naming the
+/// login's own directory. Another harness's (`CODEX_HOME`) is added here when
+/// its accounts arrive.
+const LOGIN_ENV: &[&str] = &["CLAUDE_CONFIG_DIR"];
+
 /// Runs a harness's own login command in a new Terminal window, where the
-/// user signs in directly with the harness. RustCode never sees the result.
+/// user signs in directly with the harness. `env` is the login's directory,
+/// for an account added in RustCode: it is validated here and prefixed to the
+/// command, never run through a shell of its own. RustCode never sees the
+/// result.
 #[tauri::command(async)]
-pub fn open_login_terminal(command: Vec<String>) -> Result<(), String> {
+pub fn open_login_terminal(
+    command: Vec<String>,
+    env: Option<Vec<(String, String)>>,
+) -> Result<(), String> {
     let tool = command.first().ok_or("No command.")?;
     let name = Path::new(tool)
         .file_name()
@@ -115,11 +126,16 @@ pub fn open_login_terminal(command: Vec<String>) -> Result<(), String> {
     if command.iter().any(|w| w.contains('\n') || w.contains('\r')) {
         return Err("Invalid command.".into());
     }
-    let line = command
-        .iter()
-        .map(|w| shell_quote(w))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let env = env.unwrap_or_default();
+    for (key, value) in &env {
+        if !LOGIN_ENV.contains(&key.as_str()) {
+            return Err(format!("{key} is not a harness login directory."));
+        }
+        if value.contains('\n') || value.contains('\r') {
+            return Err("Invalid environment.".into());
+        }
+    }
+    let line = login_line(&command, &env);
     #[cfg(target_os = "macos")]
     {
         // AppleScript string: escape backslashes and quotes.
@@ -142,6 +158,17 @@ pub fn open_login_terminal(command: Vec<String>) -> Result<(), String> {
                 .into(),
         )
     }
+}
+
+/// The shell line a login runs: quoted environment assignments, then the
+/// quoted command.
+fn login_line(command: &[String], env: &[(String, String)]) -> String {
+    let mut words: Vec<String> = env
+        .iter()
+        .map(|(key, value)| format!("{key}={}", shell_quote(value)))
+        .collect();
+    words.extend(command.iter().map(|word| shell_quote(word)));
+    words.join(" ")
 }
 
 #[derive(Serialize)]
@@ -738,9 +765,33 @@ mod tests {
 
     #[test]
     fn refuses_unknown_login_tools() {
-        assert!(open_login_terminal(vec!["rm".into(), "-rf".into()]).is_err());
-        assert!(open_login_terminal(vec!["/tmp/codex".into()]).is_err());
-        assert!(open_login_terminal(vec![]).is_err());
+        assert!(open_login_terminal(vec!["rm".into(), "-rf".into()], None).is_err());
+        assert!(open_login_terminal(vec!["/tmp/codex".into()], None).is_err());
+        assert!(open_login_terminal(vec![], None).is_err());
+    }
+
+    #[test]
+    fn only_a_login_directory_reaches_the_command_line() {
+        // The account's directory is validated and quoted, never spliced in raw.
+        assert_eq!(
+            login_line(
+                &["claude".into(), "auth".into(), "login".into()],
+                &[("CLAUDE_CONFIG_DIR".into(), "/Users/me/.claude-work".into())],
+            ),
+            "CLAUDE_CONFIG_DIR=/Users/me/.claude-work claude auth login"
+        );
+        assert_eq!(
+            login_line(
+                &["claude".into(), "auth".into(), "login".into()],
+                &[("CLAUDE_CONFIG_DIR".into(), "/Users/me/my login".into())],
+            ),
+            "CLAUDE_CONFIG_DIR='/Users/me/my login' claude auth login"
+        );
+        assert!(open_login_terminal(
+            vec!["claude".into()],
+            Some(vec![("PATH".into(), "/tmp".into())])
+        )
+        .is_err());
     }
 
     #[test]

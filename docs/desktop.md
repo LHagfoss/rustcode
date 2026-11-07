@@ -193,19 +193,27 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   the harness is known to be signed in, *Check* (lists the models, the
   cheapest proof it runs) and the on/off switch; turning a harness on
   checks it. The command and what it supports fold under *Details*. On the
-  Claude Code card, *Accounts* lists each named login (its own
-  `CLAUDE_CONFIG_DIR`) with its sign-in state, a copyable
-  `mkdir -p … && CLAUDE_CONFIG_DIR=… claude auth login`, *Refresh*, and a
-  remove that says the directory stays on disk. *Add account* asks only for a
-  name; the engine derives `~/.claude-<id>`. RustCode never reads or copies
-  those tokens. The model picker's *Account* row picks *Default login* or an
-  account for the thread: a new thread starts there, an idle thread moves to
-  it with the conversation so far as a summary, and a running thread shows it
-  disabled with the reason. The composer's model pill names the account when
-  it is not the default. Settings › Usage and the composer's plan meter show
-  one row (or meter) per account: a thread's meter never shows another
-  login's numbers. Separate accounts are chosen by hand, limits stay per
-  account, and there is no pooling.
+  Claude Code card, *Accounts* opens with one real sign-in check and lists
+  each named login (its own `CLAUDE_CONFIG_DIR`) as *Signed in*, *Not signed
+  in* or *Not checked*, with a remove that says the directory stays on disk.
+  *Add account* asks only for a name and its *Add and sign in* creates
+  `~/.claude-<id>` and runs Claude Code's login in Terminal under it; the row
+  says *Waiting for sign-in…* and checks again every three seconds for up to
+  five minutes, then offers *Sign in*. The copyable
+  `mkdir -p … && CLAUDE_CONFIG_DIR=… claude auth login` stays as the second
+  way. *Found on this Mac* lists the Claude logins the engine found
+  (`~/.claude`, `~/.claude-personal`), each added by its own path. RustCode
+  never reads or copies those tokens. Every harness's sticky header in the
+  model picker shows its named accounts as chips, so all of them are visible
+  without the thread already running on that harness: a chip starts a new
+  thread on it, moves an idle thread with the conversation so far as a
+  summary, and a running thread shows the chips disabled with *Stop the turn
+  to switch account*. A thread from before accounts shows its own login as
+  *Original login*. The composer's model pill names the account whenever the
+  harness has any. Settings › Usage and the composer's plan meter show one
+  row (or meter) per account: a thread's meter never shows another login's
+  numbers. Separate accounts are chosen by hand, limits stay per account, and
+  there is no pooling.
 - **UI** (`src/ui/`): every colour, radius and shadow is a token from
   [design.md](design.md), defined once in `src/index.css` (the Tailwind
   `@theme` maps `--rc-*` variables to classes; the palette is switched

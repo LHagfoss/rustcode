@@ -780,8 +780,18 @@ export interface HarnessAccount {
   id: string;
   name: string;
   config_dir: string;
-  /** Whether its own credentials were found; `unknown` when they cannot be read cheaply. */
-  auth: "ok" | "unknown";
+  /**
+   * `ok` when its own credentials were found, `needs_login` when a look found
+   * none, `unknown` when they were not looked for (only a Refresh probes the
+   * macOS Keychain).
+   */
+  auth: "ok" | "needs_login" | "unknown";
+}
+
+/** A login directory found on this Mac that no account names yet. */
+export interface DiscoveredAccount {
+  config_dir: string;
+  suggested_name: string;
 }
 
 export interface Harness {
@@ -802,6 +812,8 @@ export interface Harness {
   last?: HarnessLast | null;
   /** Named logins of this harness (`[[harness_accounts]]`); empty for most harnesses. */
   accounts?: HarnessAccount[];
+  /** Login directories on this Mac the engine found; only Claude Code lists any. */
+  discovered_accounts?: DiscoveredAccount[];
   error?: string | null;
 }
 
@@ -910,9 +922,18 @@ export function parseHarnessAccounts(value: Json | undefined): HarnessAccount[] 
         id,
         name: str(o.name) ?? id,
         config_dir: str(o.config_dir) ?? "",
-        auth: auth === "ok" ? "ok" : "unknown",
+        auth: auth === "ok" ? "ok" : auth === "needs_login" ? "needs_login" : "unknown",
       },
     ];
+  });
+}
+
+export function parseDiscoveredAccounts(value: Json | undefined): DiscoveredAccount[] {
+  return arr(value).flatMap((entry) => {
+    const o = obj(entry);
+    const config_dir = str(o?.config_dir);
+    if (!o || !config_dir) return [];
+    return [{ config_dir, suggested_name: str(o.suggested_name) ?? config_dir }];
   });
 }
 
@@ -955,6 +976,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         models: parseHarnessModels(o.models),
         last: parseHarnessLast(o.last),
         accounts: parseHarnessAccounts(o.accounts),
+        discovered_accounts: parseDiscoveredAccounts(o.discovered_accounts),
         error: str(o.error) ?? null,
       },
     ];

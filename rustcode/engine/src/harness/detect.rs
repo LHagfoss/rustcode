@@ -48,14 +48,22 @@ pub(crate) fn forget(id: &str) {
 
 /// Whether a named account's config directory holds a sign-in: its own
 /// `.credentials.json`, else (when `probe`) the macOS Keychain item Claude
-/// Code keeps for that directory. Nothing is started and no token is read.
+/// Code keeps for that directory. An account on the default directory is the
+/// login with no `CLAUDE_CONFIG_DIR`, so it reads as that login does. Nothing
+/// is started and no token is read. `ok` is a sign-in found, `needs_login` one
+/// looked for and not found (only after `probe`), `unknown` not looked for.
 pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool) -> &'static str {
     let dir = account.resolved_dir();
     if dir.join(".credentials.json").is_file() {
         return "ok";
     }
-    if probe && crate::provider_auth::claude_usage::keychain_item_exists(&dir) {
-        return "ok";
+    if probe {
+        let found = if super::config::is_default_dir(&dir) {
+            crate::provider_auth::claude_usage::default_keychain_item_exists()
+        } else {
+            crate::provider_auth::claude_usage::keychain_item_exists(&dir)
+        };
+        return if found { "ok" } else { "needs_login" };
     }
     "unknown"
 }

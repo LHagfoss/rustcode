@@ -688,7 +688,7 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
         id: h.id,
         name: h.name,
         available: !reason,
-        // The logins start_session and fan_out may name; the default login has no id.
+        // The logins start_session and fan_out may name; the harness's own sign-in has no id.
         ...(h.accounts?.length
           ? {
               accounts: h.accounts.map((a) => ({
@@ -1288,7 +1288,7 @@ function accountFor(caller: RuleThread, harness: Harness, asked?: string): strin
         "invalid",
         refusal.available.length
           ? `${harness.name} has no account “${refusal.asked}”; its named accounts are ${refusal.available.join(", ")}`
-          : `${harness.name} has no named accounts; it runs on its default login, so leave account out`,
+          : `${harness.name} has no named accounts; it runs on its own sign-in, so leave account out`,
       );
   }
 }

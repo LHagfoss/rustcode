@@ -102,7 +102,10 @@ All methods are on the client's existing `rustcode --acp` connection.
     "last": { "model": "gpt-6-luna", "effort": "high" },  // last new-thread choice, or null
     "accounts": [{              // named logins of this harness; [] for most
       "id": "paral-2", "name": "Paral 2",
-      "config_dir": "~/.claude-paral-2", "auth": "ok" | "unknown"
+      "config_dir": "~/.claude-paral-2", "auth": "ok" | "needs_login" | "unknown"
+    }],
+    "discovered_accounts": [{   // Claude Code only: logins on this Mac no account names yet
+      "config_dir": "~/.claude-personal", "suggested_name": "Personal"
     }],
     "error": null               // last detection/start error, if any
   }],
@@ -214,9 +217,12 @@ name = "Paral 2"
 config_dir = "~/.claude-paral-2"  # optional; defaults to ~/.claude-<id>
 ```
 
-The engine creates the directory when it is missing and refuses `~/.claude`
-(the default login is not an account). The section is read from the user
-config only: a checked-out project cannot choose where a thread signs in.
+The engine creates the directory when it is missing. `~/.claude` may be an
+account too: it is registered like any other, and a thread on it runs as the
+Mac's own Claude Code login, with no `CLAUDE_CONFIG_DIR` set (macOS keys that
+login's Keychain item on the variable, so setting it would look signed out).
+The section is read from the user config only: a checked-out project cannot
+choose where a thread signs in.
 
 | request | answer |
 | --- | --- |
@@ -228,16 +234,25 @@ config only: a checked-out project cannot choose where a thread signs in.
 conversations in it, stays on disk, and the request is refused while a live
 thread runs on that account. Threads that ran on it stay readable: they open
 and replay their history, and only their next prompt reports the missing
-account (they can be moved to another account or the default login). `auth` for an account means its own credentials
-exist (`<dir>/.credentials.json`, or on macOS the Keychain item its directory
-names); `unknown` means they could not be found cheaply. `check` looks the
-macOS item up too, without reading the secret. Nothing is started to answer
-either.
+account (they can be moved to another named account, or to the harness's own
+sign-in when it has none left). `auth` for an account is `ok` when its own
+credentials exist (`<dir>/.credentials.json`, or on macOS the Keychain item its
+directory names), `needs_login` when a look found none, and `unknown` when it
+was not looked for. Only `check` (Settings' Refresh) probes the Keychain, and
+it asks whether the item exists without reading the secret. Nothing is started
+to answer either.
+
+`discovered_accounts` lists the Claude login directories on this Mac that no
+account names yet: `~/.claude` and `~/.claude-*` that hold `.claude.json`,
+`.credentials.json`, `settings.json` or `projects/`. Only names are read, never
+file contents, and `suggested_name` is the title-cased suffix (`Personal` for
+`~/.claude-personal`, `Claude` for `~/.claude`). Settings' *Found on this Mac*
+registers one with `_rustcode/harnesses/accounts/add` and its `config_dir`.
 
 A thread picks an account in `session/new`'s `_meta.rustcode.account`, next
 to `harness`, or on `_rustcode/session/harness` when it moves to another
 login. An unknown account id is an error, never a quiet fall back to the
-default login. Moving an idle thread to another account is exactly a harness
+harness's own login. Moving an idle thread to another account is exactly a harness
 switch: its native session id is cleared, the handoff marker is recorded, the
 new account's process starts, and the next prompt carries the conversation so
 far as a summary (the conversation lives in the other directory). A running
@@ -249,12 +264,14 @@ would hide the macOS Keychain login) and `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are removed from that
 child, so a login-shell variable cannot override the chosen login.
 
-With named accounts, the app picks that account itself where nothing else
-does, so no thread starts on a default login that is signed out: the picker
-leaves out "Default login", a new thread starts on the first named login that
-is signed in, and a thread started by another thread (`start_session`,
-`fan_out`) runs on its parent's account when it uses the same harness, else on
-that same first login (`apps/desktop/src/state/logins.ts`). Either tool also
+With named accounts, a new thread always starts on one of them: the picker
+offers no harness login, and the account is the one chosen for that harness
+while it is still there, else the first named login that is signed in. A
+thread started by another thread (`start_session`, `fan_out`) runs on its
+parent's account when it uses the same harness, else on that same first login
+(`apps/desktop/src/state/logins.ts`). A thread that started on the harness's
+own sign-in before accounts existed keeps running on it, shows as "Original
+login", and moves to a named account through the same switch below. Either tool also
 takes an explicit `account` naming one of that harness's accounts (an id, or a
 display name; `list_harnesses` lists them), which wins over the inherited
 choice. An exact id wins over a display name, so an id stays reachable when
@@ -316,7 +333,8 @@ Marks first-run onboarding done (`onboarded: true`).
 ```
 
 For a harness with named accounts, `"account": "paral-2"` picks one; without
-it the harness's default login runs, exactly as before accounts existed.
+it the harness's own login runs, exactly as before accounts existed (the app
+always names one when the harness has any).
 
 No `harness` (or `"rustcode"`) starts a built-in thread, exactly as before.
 A missing `model` or `effort` falls back, in order, to the harness's last

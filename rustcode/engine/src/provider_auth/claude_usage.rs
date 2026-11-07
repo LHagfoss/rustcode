@@ -384,14 +384,20 @@ pub(crate) fn keychain_item_name(config_dir: &Path) -> String {
 /// Whether the Keychain holds a sign-in for `config_dir`. Reads no secret:
 /// only asks whether the item exists.
 pub(crate) fn keychain_item_exists(config_dir: &Path) -> bool {
+    keychain_item_named(&keychain_item_name(config_dir))
+}
+
+/// Whether the Keychain holds the default login's sign-in, the item Claude Code
+/// uses with no `CLAUDE_CONFIG_DIR`. Reads no secret.
+pub(crate) fn default_keychain_item_exists() -> bool {
+    keychain_item_named(DEFAULT_KEYCHAIN_ITEM)
+}
+
+fn keychain_item_named(item: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
         return std::process::Command::new("/usr/bin/security")
-            .args([
-                "find-generic-password",
-                "-s",
-                &keychain_item_name(config_dir),
-            ])
+            .args(["find-generic-password", "-s", item])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -400,7 +406,7 @@ pub(crate) fn keychain_item_exists(config_dir: &Path) -> bool {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = config_dir;
+        let _ = item;
         false
     }
 }

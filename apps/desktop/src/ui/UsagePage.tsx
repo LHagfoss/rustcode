@@ -100,7 +100,7 @@ export function UsagePage() {
   if (view.plans === null) {
     return view.fatal ? <p className="text-callout text-warning">{view.fatal}</p> : <PlansSkeleton />;
   }
-  // The default login's row is dropped when it is signed out and named accounts are there; the
+  // The harness's own login row is dropped whenever named accounts are there; the
   // composer's switch moves to the first Claude group left (state/logins.ts).
   const rows = usageRows(view.plans);
   return (

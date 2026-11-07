@@ -227,6 +227,12 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
             auth: "ok",
           },
         ],
+        // Logins the engine finds on this Mac that no account names yet, so
+        // Settings › Agents' "Found on this Mac" can be seen and tried.
+        discovered_accounts: [
+          { config_dir: "~/.claude", suggested_name: "Claude" },
+          { config_dir: "~/.claude-personal", suggested_name: "Personal" },
+        ],
         models: [],
         error: null,
       },
@@ -1886,15 +1892,20 @@ export class MockEngine {
           throw Object.assign(new Error(`there is already a ${harness} account '${id}'`), {
             code: -32602,
           });
+        const config_dir = str(params.config_dir) ?? `~/.claude-${id}`;
         h.accounts = [
           ...(h.accounts ?? []),
           {
             id,
             name: str(params.name) ?? id,
-            config_dir: `~/.claude-${id}`,
+            config_dir,
             auth: "unknown",
           },
         ];
+        // A login found on this Mac is no longer offered as a discovery.
+        h.discovered_accounts = (h.discovered_accounts ?? []).filter(
+          (found) => found.config_dir !== config_dir,
+        );
         return this.snapshot();
       }
       case "_rustcode/harnesses/accounts/remove": {
