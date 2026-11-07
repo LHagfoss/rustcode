@@ -321,6 +321,10 @@ that change use `tabular`.
   twice, and a finished reply has no spans and no animation. The blur is the
   one `filter` that animates: 280ms on a handful of words, never on a box that
   moves. Settings › Appearance turns it off; reduced motion does too.
+- A value that changes in the Statistics tiles when the period does rolls
+  instead of blinking: a count digit by digit (`RollingNumber`), a cost or a
+  compact token total up into place once (`rc-roll`, 240ms, `transform` and
+  `opacity` only).
 - Skeletons sweep once every 1.6s (`transform` only, on the compositor).
 - `prefers-reduced-motion`: all durations collapse to ~0; shimmer and the
   skeleton sweep stop.
@@ -378,6 +382,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Select:** `Select` for one choice from a list, native `<select>` never: a
   pill trigger with a chevron, opening a menu with a check on the current
   option. `Segments` when two to four short options should all show.
+- **Slider:** `Slider` (settingsKit) for a whole number in a short range, such
+  as the threads one thread may run at once: the native range (so arrows, Home
+  and End work), the value beside it and the ends of the range under it.
+- **Chip:** `Chip` for a row's short state — signed in, not signed in, active,
+  stale — tinted 12% in its tone, never a coloured border.
 - **Input:** `h-8 rounded-md bg-fill-subtle px-3 text-callout`,
   placeholder `text-fg-faint`, no ring until `:focus-visible`.
 - **Chip:** `h-6 rounded-full bg-fill px-2 text-callout text-fg-muted`;
@@ -519,10 +528,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   muted) at its start, "Restore defaults" and the close button at its end —
   with a hairline under it, and the page scrolls beneath. One page shows at a
   time in a centred `max-w-[760px]` column, `pt-5`, its rows keeping the
-  `px-4` inset the section titles share. "Restore defaults" shows only while
-  a row on that page differs from its default, and puts back every changed
-  row at once with one toast. Picking a result opens its page and lights the
-  row it found (`rc-setting-hit`, a `fill` fading out over 1.2s).
+  `px-4` inset the section titles share. Under the open page the nav lists
+  that page's sections, marking the one the content is scrolled to and
+  scrolling to another on a press; a page of one section lists none.
+  "Restore defaults" shows only while a row on that page differs from its
+  default, and puts back every changed row at once with one toast. Picking a
+  result opens its page and lights the row it found (`rc-setting-hit`, a
+  `fill` fading out over 1.2s).
 - **Settings section and row:** a section is its name in `text-base
   font-semibold text-fg`, `px-3`/`px-4`, `space-y-2.5` above one group card,
   and `32px` of gap before the next section. The card is `rounded-xl` with a

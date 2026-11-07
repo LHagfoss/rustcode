@@ -1342,17 +1342,70 @@ const sumKnown = (values: (number | null)[]): number | null => {
   return known.length ? known.reduce((sum, value) => sum + value, 0) : null;
 };
 
-/** A day in the last 30 for a mock thread, so the daily chart has gaps and variation. */
-function mockUsageDay(index: number): string {
-  const offset = [0, 1, 1, 3, 6, 11, 18, 24][index % 8] ?? 0;
-  return new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+/** The days in the last month a mock thread worked, so the daily chart has gaps and variation. */
+const MOCK_DAY_OFFSETS = [0, 1, 1, 3, 6, 11, 18, 24];
+
+function mockUsageDays(index: number): string[] {
+  const count = 1 + (index % 3);
+  const days = new Set<string>();
+  for (let step = 0; step < count; step++) {
+    const offset = MOCK_DAY_OFFSETS[(index + step * 3) % MOCK_DAY_OFFSETS.length] ?? 0;
+    days.add(new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10));
+  }
+  return [...days];
 }
 
-/** `_rustcode/data/usage`, grouped like the engine groups the store (`engine/src/acp/data.rs`). */
-function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
+/** A thread's spend split over the days it worked, so a window of days keeps what it holds. */
+function mockUsageParts(spend: MockSpend, index: number): { day: string; spend: MockSpend }[] {
+  const days = mockUsageDays(index);
+  const parts = days.length;
+  // Counts are whole; the last part takes the remainder so the parts add up to the thread.
+  const count = (value: number | null, at: number): number | null =>
+    value === null
+      ? null
+      : at === parts - 1
+        ? value - Math.floor(value / parts) * (parts - 1)
+        : Math.floor(value / parts);
+  // A cost is a fraction of a dollar: share it evenly.
+  const usd = (value: number | null): number | null => (value === null ? null : value / parts);
+  return days.map((day, at) => ({
+    day,
+    spend: {
+      input: count(spend.input, at)!,
+      output: count(spend.output, at)!,
+      cached: count(spend.cached, at)!,
+      cacheWrite: count(spend.cacheWrite, at),
+      cost: usd(spend.cost),
+      turns: count(spend.turns, at)!,
+      withoutTokens: count(spend.withoutTokens, at)!,
+      withoutAny: count(spend.withoutAny, at)!,
+      withoutInput: count(spend.withoutInput, at)!,
+      withoutOutput: count(spend.withoutOutput, at)!,
+      withoutCached: count(spend.withoutCached, at)!,
+      withoutCacheWrite: count(spend.withoutCacheWrite, at)!,
+      withoutCost: count(spend.withoutCost, at)!,
+    },
+  }));
+}
+
+/**
+ * `_rustcode/data/usage`, grouped like the engine groups the store
+ * (`engine/src/acp/data.rs`). `since` keeps only the days it names, as the
+ * engine's own comparison does, so the period switch has something to switch.
+ */
+function mockUsage(threads: MockThread[], groupBy: string, since?: string): JsonObject {
   const groups = new Map<string, { keys: JsonObject; spends: MockSpend[] }>();
   for (const [index, thread] of threads.entries()) {
-    const spend = spendOf(thread, index);
+    const parts = mockUsageParts(spendOf(thread, index), index).filter((part) => !since || part.day >= since);
+    if (!parts.length) continue;
+    if (groupBy === "day") {
+      for (const part of parts) {
+        const group = groups.get(part.day) ?? { keys: { day: part.day }, spends: [] };
+        group.spends.push(part.spend);
+        groups.set(part.day, group);
+      }
+      continue;
+    }
     let key: string;
     let keys: JsonObject;
     switch (groupBy) {
@@ -1360,12 +1413,6 @@ function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
         key = `${thread.harness}\u0000${thread.model}`;
         keys = { harness: thread.harness, model: thread.model };
         break;
-      case "day": {
-        const day = mockUsageDay(index);
-        key = day;
-        keys = { day };
-        break;
-      }
       case "project":
         key = thread.cwd;
         keys = { project: thread.cwd };
@@ -1389,7 +1436,7 @@ function mockUsage(threads: MockThread[], groupBy: string): JsonObject {
         keys = { harness: thread.harness };
     }
     const group = groups.get(key) ?? { keys, spends: [] };
-    group.spends.push(spend);
+    for (const part of parts) group.spends.push(part.spend);
     groups.set(key, group);
   }
   const rows = [...groups.values()]
@@ -2293,8 +2340,8 @@ export class MockEngine {
       }
       case "_rustcode/data/usage": {
         // The same shape engine/src/acp/data.rs answers with.
-        const by = (params as { groupBy?: string } | undefined)?.groupBy ?? "harness";
-        return mockUsage(this.threads, by);
+        const ask = params as { groupBy?: string; since?: string } | undefined;
+        return mockUsage(this.threads, ask?.groupBy ?? "harness", ask?.since);
       }
       case "_rustcode/data/query":
         return {

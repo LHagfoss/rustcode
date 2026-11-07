@@ -37,7 +37,7 @@ import {
 import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
 import { cx, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
-import { Action, Select, type SelectOption } from "./settingsKit";
+import { Action, Chip, Choice, Select, type SelectOption } from "./settingsKit";
 
 function StatusDot({ tone }: { tone: "ok" | "warn" | "off" }) {
   return (
@@ -241,19 +241,12 @@ export function AccountsList({ harness }: { harness: Harness }) {
                     <Spinner size={10} />
                     Waiting for sign-in…
                   </span>
+                ) : gaveUp === account.id || account.auth === "needs_login" ? (
+                  <Chip tone="warn">Not signed in</Chip>
+                ) : account.auth === "ok" ? (
+                  <Chip tone="ok">Signed in</Chip>
                 ) : (
-                  <span
-                    className={cx(
-                      "shrink-0 text-caption",
-                      account.auth === "ok"
-                        ? "text-success"
-                        : account.auth === "needs_login" || gaveUp === account.id
-                          ? "text-warning"
-                          : "text-fg-faint",
-                    )}
-                  >
-                    {gaveUp === account.id ? "Not signed in" : accountStatus(account)}
-                  </span>
+                  <Chip>{accountStatus(account)}</Chip>
                 )}
                 {account.auth !== "ok" && waiting !== account.id && accountSignIn(harness) && (
                   <Tooltip label={canOpenTerminal() ? undefined : "Only the app can open Terminal"}>
@@ -659,6 +652,17 @@ export function DefaultsForm({
           <span className="text-body">Effort</span>
           {harness && !harness.capabilities.effort ? (
             <span className="text-callout text-fg-faint">{harness.name} has no effort setting</span>
+          ) : efforts.length && (value.effort ? efforts.length <= 4 : efforts.length < 4) ? (
+            // Two to four efforts are all named at once, so the choice reads without a menu.
+            <Choice
+              label="Effort"
+              value={value.effort ?? ""}
+              onChange={(effort) => set({ effort: effort || null })}
+              options={[
+                ...(value.effort ? [] : [{ value: "", label: "Default" }]),
+                ...efforts.map((e) => ({ value: e, label: effortLabel(e) })),
+              ]}
+            />
           ) : efforts.length ? (
             <Select
               label="Effort"

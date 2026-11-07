@@ -589,7 +589,6 @@
 }
 
 /*
-/*
  * A steer takes a queued message out of the stack: it keeps its place and glides up toward the
  * transcript it was read in, fading as it goes (`ui/QueuedMessages.tsx` `LeavingQueuedRow`,
  * `state/store.ts` `glideAway`, which holds it this long). Transform and opacity only.
@@ -618,6 +617,21 @@
 }
 .rc-send-in {
   animation: rc-send-in 160ms var(--ease-snappy) both;
+}
+
+/*
+ * A number that changes (the Statistics tiles when the period does): it rolls
+ * up into place instead of blinking. Transform and opacity only, once; the
+ * global reduced-motion rule collapses it.
+ */
+@keyframes rc-roll {
+  from {
+    opacity: 0;
+    transform: translateY(40%);
+  }
+}
+.rc-roll {
+  animation: rc-roll 240ms var(--ease-snappy) both;
 }
 
 /*
