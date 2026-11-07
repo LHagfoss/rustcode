@@ -10,6 +10,7 @@
 
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { count } from "../lib/plural";
 import { type DayPoint, sparklinePath, type Trend } from "../state/period";
 import { cx } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
@@ -79,16 +80,26 @@ export function Tile({
   series: (number | undefined)[];
   seriesLabel: string;
 }) {
-  const path = sparklinePath(series, 100, 24);
+  // One or two reported days would draw a lone dash: with fewer than three,
+  // the whole period is drawn and its empty days sit on the zero baseline, the
+  // way the Turns tile always reads.
+  const known = series.filter((value) => value !== undefined).length;
+  const drawn = known >= 3 ? series : series.map((value) => value ?? 0);
+  // One day is a point, not a line: the tile keeps its shape but draws nothing.
+  const path = series.length > 1 ? sparklinePath(drawn, 100, 24) : "";
   return (
     <div className="flex min-w-0 flex-col rounded-xl border border-border-strong bg-surface-2/40 px-4 py-3.5">
       <div className="flex min-h-5 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-caption text-fg-faint">{label}</span>
-        {trend ? (
-          <TrendPill trend={trend} compare={compare} />
-        ) : (
-          <span className="shrink-0 text-caption text-fg-faint">{compare}</span>
-        )}
+        <span className="shrink-0 text-caption text-fg-faint">{label}</span>
+        <span className="flex min-w-0 flex-1 justify-end">
+          {trend ? (
+            <TrendPill trend={trend} compare={compare} />
+          ) : (
+            <span className="truncate text-caption text-fg-faint" title={compare}>
+              {compare}
+            </span>
+          )}
+        </span>
       </div>
       <div className="pt-0.5 font-semibold text-title2 text-fg" title={exact}>
         {count === undefined ? (
@@ -97,7 +108,7 @@ export function Tile({
           <RollingNumber value={count} className="font-semibold text-title2 text-fg" />
         )}
       </div>
-      <div className="min-h-4 truncate text-caption text-fg-faint" title={note}>
+      <div className="line-clamp-2 min-h-8 text-balance text-caption text-fg-faint leading-4" title={note}>
         {note ?? "\u00a0"}
       </div>
       <svg
@@ -205,7 +216,7 @@ export function DailyChart({
             </span>
           ) : (
             <span>
-              {points.length} {points.length === 1 ? "day" : "days"} · peak {format(peak || undefined)}
+              {count(points.length, "day")} · peak {format(peak || undefined)}
             </span>
           )}
         </span>
@@ -273,19 +284,13 @@ export function DailyChart({
               {" "}
               {values[active.index] === undefined ? "unknown" : format(values[active.index])}
             </span>
-            <span className="block text-fg-faint">
-              {shown.turns} {shown.turns === 1 ? "turn" : "turns"}
-            </span>
+            <span className="block text-fg-faint">{count(shown.turns, "turn")}</span>
           </div>
         )}
       </div>
       <div className="flex items-center justify-between text-caption text-fg-faint tabular">
         <span>{points[0] ? shortDay(points[0].day) : ""}</span>
-        <span>
-          {metric === "cost"
-            ? "Cost is what harnesses reported; estimates are on the tiles"
-            : `peak ${format(peak || undefined)}`}
-        </span>
+        <span>{points.length ? shortDay(points[Math.floor((points.length - 1) / 2)]!.day) : ""}</span>
         <span>{points.length ? shortDay(points[points.length - 1]!.day) : ""}</span>
       </div>
     </div>

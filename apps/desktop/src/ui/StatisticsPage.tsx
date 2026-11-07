@@ -18,6 +18,7 @@ import { ChevronRight, RefreshCw } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { parseUsageReport, type UsageRow, type UsageTotals, windowTitle } from "../acp/rustcode";
 import { type Harness, Method } from "../acp/types";
+import { count } from "../lib/plural";
 import {
   dailySeries,
   previousRows,
@@ -162,7 +163,7 @@ export function StatisticsPage() {
     return previousRows(before.data.rows, current.data?.rows ?? []);
   }, [period, before.data, current.data?.rows]);
   // The comparison period's cost is priced from the rows it had on its own.
-  const beforeCost = useMemo(() => (beforeRows ? costsOf(beforeRows) : undefined), [beforeRows]);
+  const beforeCostTotals = useMemo(() => (beforeRows ? costsOf(beforeRows) : undefined), [beforeRows]);
 
   const rolled = useMemo(
     () => (threads.data ? threadReport(threads.data, sessions, links, sessionsCapped) : null),
@@ -209,13 +210,16 @@ export function StatisticsPage() {
 
   const totals = sumRows(current.data.rows);
   const previousTotals = beforeRows ? sumRows(beforeRows) : undefined;
+  // A period that recorded no turns spent nothing: its zero is a number, not a
+  // blank, so the tile can say "up" instead of falling back to the comparison.
+  const previousEmpty = previousTotals?.turns === 0;
+  const beforeCost = previousEmpty ? 0 : beforeCostTotals?.usd;
+  const beforeTokens = previousEmpty ? 0 : previousTotals ? used(previousTotals) : undefined;
   const activeDays = points.filter((point) => point.turns > 0).length;
   const beforeActiveDays = beforePoints.filter((point) => point.turns > 0).length;
   const change = (now?: number, was?: number) => (period === "all" ? undefined : trend(now, was));
   const activeCompare =
-    period === "all"
-      ? `${points.length} days recorded`
-      : `of ${range.days} day${range.days === 1 ? "" : "s"}`;
+    period === "all" ? `${count(points.length, "day")} recorded` : `of ${count(range.days, "day")}`;
 
   return (
     <>
@@ -242,7 +246,7 @@ export function StatisticsPage() {
             value={costValue(usage.total)}
             exact={costExact(usage.total)}
             note={costNote(usage.total)}
-            trend={change(usage.total.usd, beforeCost?.usd)}
+            trend={change(usage.total.usd, beforeCost)}
             compare={compare}
             series={points.map((point) => point.cost)}
             seriesLabel="Reported cost per day; estimates are not in the line"
@@ -252,7 +256,7 @@ export function StatisticsPage() {
             value={tokensLabel(used(totals))}
             exact={exact(used(totals))}
             note={`${tokensLabel(totals.input)} in · ${tokensLabel(totals.output)} out`}
-            trend={change(used(totals), previousTotals ? used(previousTotals) : undefined)}
+            trend={change(used(totals), beforeTokens)}
             compare={compare}
             series={points.map((point) => point.tokens)}
             seriesLabel="Input and output tokens per day"
@@ -263,8 +267,8 @@ export function StatisticsPage() {
             count={totals.turns}
             note={
               totals.turnsWithoutAnyTokens > 0
-                ? `${totals.turnsWithoutAnyTokens} with missing counts`
-                : `${totals.turns === 1 ? "turn" : "turns"} recorded`
+                ? `${count(totals.turnsWithoutAnyTokens, "turn")} with missing counts`
+                : `${count(totals.turns, "turn")} recorded`
             }
             trend={change(totals.turns, previousTotals?.turns)}
             compare={compare}
@@ -377,7 +381,7 @@ export function StatisticsPage() {
         </Group>
       )}
 
-      <PlanLimits />
+      <PlanLimits names={names} />
 
       {rolled && rolled.threads.length > 0 && (
         <Group
@@ -442,10 +446,8 @@ function costValue(cost: CostTotals): string {
 function costNote(cost: CostTotals): string {
   const parts: string[] = [];
   if (cost.reportedUsd !== undefined) parts.push(`${formatCost(cost.reportedUsd)} reported`);
-  if (cost.estimatedUsd !== undefined) parts.push(`${formatCost(cost.estimatedUsd)} estimated`);
-  if (cost.unknownTurns > 0) {
-    parts.push(`${cost.unknownTurns} ${cost.unknownTurns === 1 ? "turn" : "turns"} unknown`);
-  }
+  if (cost.estimatedUsd !== undefined) parts.push(`${formatCost(cost.estimatedUsd)} est.`);
+  if (cost.unknownTurns > 0) parts.push(`${count(cost.unknownTurns, "turn")} unknown`);
   return parts.length ? parts.join(" · ") : "nothing reported or priced";
 }
 
@@ -734,7 +736,7 @@ function useNow(every = 30_000): number {
  * reads (`_rustcode/usage/plans`): each window's used bar and when it resets.
  * Nothing is asked for here — Settings › Usage and the background poll read it.
  */
-function PlanLimits() {
+function PlanLimits({ names }: { names: Map<string, string> }) {
   const cache = useApp((s) => s.planCache);
   const now = useNow();
   const plans = useMemo(
@@ -769,7 +771,7 @@ function PlanLimits() {
             >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 flex-1 truncate font-medium text-body">
-                  {plan.name ?? plan.harness ?? plan.source}
+                  {plan.name ?? (plan.harness ? (names.get(plan.harness) ?? plan.harness) : plan.source)}
                 </span>
                 {plan.plan && (
                   <span className="shrink-0 text-caption text-fg-faint capitalize">{plan.plan}</span>
@@ -799,7 +801,7 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
   const delegates = thread.delegateCount;
   const notes = [
     thread.total.turnsWithoutAnyTokens > 0
-      ? `${thread.total.turnsWithoutAnyTokens} turns with missing counts`
+      ? `${count(thread.total.turnsWithoutAnyTokens, "turn")} with missing counts`
       : "",
     thread.unlinked ? "Parent recorded by title only; counted on its own" : "",
   ].filter(Boolean);
@@ -813,8 +815,8 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
         </span>
       }
       subtitle={`${harness} · own ${own} in+out${
-        delegates > 0 ? ` + ${delegates} delegated ${delegates === 1 ? "thread" : "threads"}` : ""
-      } · ${thread.total.turns} turns`}
+        delegates > 0 ? ` + ${count(delegates, "delegated thread")}` : ""
+      } · ${count(thread.total.turns, "turn")}`}
       status={notes.length ? notes.join(" · ") : undefined}
     >
       <div className="text-right leading-tight">
@@ -929,13 +931,14 @@ function UsageFootnote({
         </span>
         {totals.turnsWithoutAnyTokens > 0 && (
           <span className="block">
-            {totals.turnsWithoutAnyTokens} of {totals.turns} turns are missing at least one token count
+            {count(totals.turnsWithoutAnyTokens, "turn")} of {count(totals.turns, "turn")}{" "}
+            {totals.turnsWithoutAnyTokens === 1 ? "is" : "are"} missing at least one token count
             {missingColumns(totals)}.
           </span>
         )}
         {totals.turnsWithoutCost > 0 && (
           <span className="block">
-            {totals.turnsWithoutCost} of {totals.turns} turns reported no cost
+            {count(totals.turnsWithoutCost, "turn")} of {count(totals.turns, "turn")} reported no cost
             {cost.unknownTurns > 0 ? `; ${cost.unknownTurns} have no cost we can show` : ""}.
           </span>
         )}
