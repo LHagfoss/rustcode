@@ -1,5 +1,9 @@
 # Live terminal sessions from an iOS client
 
+> Superseded in part: the phone app is now an Expo (React Native) app in its own
+> repository, built against this gateway. See [docs/mobile.md](../mobile.md) for
+> the current state; this document stays as the design record.
+
 Status: proposed implementation plan; this document adds no remote runtime.
 Reviewed against main commit `39cbac19c0eb0c97dbbc7ff886985708ebc70c6b`.
 
