@@ -140,11 +140,15 @@ instructions for work in this repository.
   scale, and reuses both on the next call, so there is one shared window rather
   than one browser per agent. Then `bun run mock-window eval "<js>"` evaluates
   in the page, `bun run mock-window screenshot <file.png>` saves a PNG of it,
-  and `bun run mock-window close` stops only that window and server. Agents
-  must not launch their own Chrome for UI checks; when several threads work
-  concurrently, only the orchestrating thread drives the window, and the others
-  gate on `bun run check` and unit tests. Do not open browser panes in the
-  user's terminal.
+  and `bun run mock-window close` stops only that window and server. For
+  anything a user does, prefer `click "<css>"` (with `--at <x>,<y>` for a
+  partly covered element), `type "<text>"` and `press <key>` over `eval`: they
+  send real input and focus, so the check exercises what the user does and the
+  window shows it. Keep the window open for the whole check, and close only
+  when finished. Agents must not launch their own Chrome for UI checks; when
+  several threads work concurrently, only the orchestrating thread drives the
+  window, and the others gate on `bun run check` and unit tests. Do not open
+  browser panes in the user's terminal.
 - To stage a state the mock does not reach (a finished thread, an update in
   progress, a Settings page), evaluate `await import("/src/state/store.ts")`
   (or `updates.ts`) in the page and set state on it. The window is long-lived,
