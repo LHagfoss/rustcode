@@ -92,6 +92,11 @@ is not a blank "Building an interactive view…" for a whole turn.
 - When the fence closes, the finished page replaces the preview in the same
   frame slot: Chart.js inlined, the script run once, the height kept. Anything
   typed into the preview is lost with it, since a preview runs no script.
+- A block that names `rustcode-lib:chart.js` is **not** previewed: a preview
+  runs no script and carries no library, so its canvases could only be empty
+  boxes where the chart is the content. It shows the one-line "Building an
+  interactive view…" until its finished page is ready (`previewable`). A
+  canvas in any other preview is a quiet box of the same size, not a blank one.
 
 The limits and the sandbox are the same for both: 64 KB, 5,000 elements, an
 opaque origin, and the policy in [Security model](#security-model).
@@ -352,6 +357,11 @@ The host (`apps/desktop/src/ui/SmartUIView.tsx`, `src/smartui/host.ts`) runs
   frame per run lets the old one go.
 - A page out of sight for 30 s is torn down, and runs again when it comes back.
   The Stop button tears it down at once.
+- A page whose script throws is stopped with the reason in place of the view,
+  like any failure, so a broken view never sits on screen as blank space. The
+  runtime posts `error` for a `window.onerror` or an unhandled rejection, and
+  the app shows what it said alongside the source. If the bundled library
+  itself cannot be loaded, the view says so instead of guessing.
 - While the page fits the card, wheel events pass to the transcript, so
   scrolling over a card scrolls the chat.
 

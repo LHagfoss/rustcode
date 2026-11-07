@@ -159,6 +159,10 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-table th[aria-sort=ascending]::after { content: "\u2191"; margin-left: 3px; color: var(--rc-muted); }
 .rc-table th[aria-sort=descending]::after { content: "\u2193"; margin-left: 3px; color: var(--rc-muted); }
 
+/* A still-streaming fragment runs no script, so its canvases can never draw: a quiet
+   box of the same size says "a chart lands here" instead of an empty one. */
+#rc-stream .rc-chart { border-radius: var(--rc-radius); background: color-mix(in srgb, var(--rc-text) 4%, transparent); }
+#rc-stream .rc-chart > canvas { visibility: hidden; }
 .rc-chart { position: relative; height: 200px; margin-bottom: 12px; }
 .rc-chart:last-child { margin-bottom: 0; }
 .rc-chart > canvas { display: block; }
@@ -514,10 +518,16 @@ export const CHART_THEME_SCRIPT = `(() => {
     const digits = hex[1].length === 3 ? hex[1].replace(/./g, "$&$&") : hex[1];
     return [0, 2, 4].map((at) => parseInt(digits.slice(at, at + 2), 16));
   };
+  // A canvas throws on a colour it cannot parse, which would abort the whole draw,
+  // so anything that is not a series hex becomes transparent instead.
   const alpha = (colour, a) => {
     const parts = rgb(colour);
-    return parts ? "rgba(" + parts.join(", ") + ", " + a + ")" : String(colour);
+    return parts ? "rgba(" + parts.join(", ") + ", " + a + ")" : "transparent";
   };
+  // Only reached when a variable is missing, which a page should make impossible; a
+  // chart still has to be visible, and a neutral grey reads in both themes.
+  const NEUTRAL = "#8e8e93";
+  const solid = (colour, fallback) => (rgb(colour) ? colour : fallback);
   // A line chart is an area chart: filled from the line's colour down to nothing.
   const wash = (context) => {
     const chart = context.chart;
@@ -537,27 +547,28 @@ export const CHART_THEME_SCRIPT = `(() => {
       if (ds.__rc === undefined) ds.__rc = ds.backgroundColor === undefined && ds.borderColor === undefined;
       if (!ds.__rc) return;
       const kind = ds.type || type;
+      const colour = solid(s[i % 8], solid(Chart.defaults.borderColor, NEUTRAL));
       if (radial(kind)) {
-        ds.backgroundColor = (chart.data.labels || ds.data).map((_, j) => s[j % 8]);
+        ds.backgroundColor = (chart.data.labels || ds.data).map((_, j) => solid(s[j % 8], colour));
         ds.borderColor = "transparent";
       } else if (kind === "line") {
-        ds.borderColor = s[i % 8];
+        ds.borderColor = colour;
         if (ds.fill === undefined) ds.fill = true;
         ds.backgroundColor = wash;
       } else {
-        ds.borderColor = s[i % 8];
-        ds.backgroundColor = s[i % 8];
+        ds.borderColor = colour;
+        ds.backgroundColor = colour;
         // Hover leaves the bar under the pointer a step lighter.
-        ds.hoverBackgroundColor = alpha(s[i % 8], 0.8);
+        ds.hoverBackgroundColor = alpha(colour, 0.8);
       }
     });
     // A slice answers to the pointer; everything else answers along its axis,
     // so hovering anywhere in a column shows that column's values.
     if (!(chart.config.options && chart.config.options.interaction)) {
       const interaction = radial(type) ? { mode: "nearest", intersect: true } : { mode: "index", intersect: false };
-      // The view's own options win; otherwise this applies now and survives the next update.
-      chart.options.interaction = interaction;
+      // The view's own options win; this reaches the resolver on the next update.
       if (chart.config.options) chart.config.options.interaction = interaction;
+      else chart.options.interaction = interaction;
     }
   };
   const apply = () => {
@@ -601,8 +612,16 @@ export const CHART_THEME_SCRIPT = `(() => {
     d.elements.point.hitRadius = 10;
     d.elements.bar.borderRadius = 4;
   };
+  // A view's script runs while the frame is still settling, and a chart measured at
+  // 0 x 0 stays blank until something resizes it. Ask again on the next frames.
+  const refit = (chart) => {
+    const tries = chart.$rcFit || 0;
+    chart.$rcFit = tries + 1;
+    if (tries > 10 || (chart.width > 1 && chart.height > 1)) return;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => chart.resize());
+  };
   apply();
-  Chart.register({ id: "rcSeries", beforeUpdate: paint });
+  Chart.register({ id: "rcSeries", beforeUpdate: paint, afterRender: refit });
   window.__rcThemeCharts = () => {
     apply();
     for (const chart of Object.values(Chart.instances || {})) {
@@ -628,6 +647,14 @@ export const usesChart = (source: string) => {
   CHART_TAG.lastIndex = 0;
   return CHART_TAG.test(source);
 };
+
+/**
+ * Whether a block is worth drawing while it is still arriving. A preview page
+ * runs no script and carries no library, so a canvas in it can never draw: a
+ * view whose content is a chart waits for its finished page instead of showing
+ * empty boxes where the charts will be.
+ */
+export const previewable = (source: string) => !usesChart(source);
 
 /** Inline text inside a `<script>` element must not close it. */
 const scriptSafe = (code: string) => code.replace(/<\/script/gi, "<\\/script");
