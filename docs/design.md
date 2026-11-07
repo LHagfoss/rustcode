@@ -233,14 +233,16 @@ that change use `tabular`.
 
 - Hover: **in 60ms, out 120ms** (`--rc-hover-in`, `--rc-hover-out`),
   colour only, set once in `index.css` for every button, link, row,
-  switch and menu item. Components never add `transition-colors` or their
-  own hover duration. Press: `active:bg-fill-strong`, no delay. No
-  `transform` on press (no scale): text re-rasterizes and reads as a flash.
+  switch and menu item, and for the row the keyboard lands on. Components
+  never add `transition-colors` or their own hover duration. Press:
+  `active:bg-fill-strong`, no delay. No `transform` on press (no scale): text
+  re-rasterizes and reads as a flash.
 - Hover is pure CSS `:hover` (or Radix's `data-highlighted`). No hover
   state in React (`onMouseEnter` setting an id); a keyboard-driven list may
-  keep a selected index, shown with the same `bg-fill`. Row menus are
-  `modal={false}`, so other rows keep answering the pointer while one is
-  open.
+  keep a selected index, shown with the same `bg-fill`. A popover's menu row
+  has neither hook, so it fills on `:hover` and `:focus-visible` itself. Row
+  menus are `modal={false}`, so other rows keep answering the pointer while
+  one is open.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
 - Nothing animates layout on hover. Height transitions only for folding

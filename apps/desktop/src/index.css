@@ -639,8 +639,10 @@
 
 /*
  * Hover timing, shared by every control: in at once (60 ms), out in 120 ms,
- * so moving along a list never leaves the last item looking hovered.
- * Components do not set their own hover durations.
+ * so moving along a list never leaves the last item looking hovered. A row the
+ * keyboard lands on answers at the same speed as the pointer, so a menu driven
+ * by `data-highlighted` (Radix) and one driven by focus (a popover's rows) feel
+ * alike. Components do not set their own hover durations.
  */
 :root {
   --rc-hover-in: 60ms;
@@ -672,7 +674,7 @@
     [role="radio"],
     [role="tab"],
     summary
-  ):is(:hover, [data-highlighted]) {
+  ):is(:hover, [data-highlighted], :focus-visible) {
     transition-duration: var(--rc-hover-in);
   }
 }
