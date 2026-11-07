@@ -8,7 +8,7 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
-import { flyInFromComposer } from "../lib/sendFlight";
+import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
 import {
   foldEnds,
   foldTurns,
@@ -808,22 +808,20 @@ export function Transcript({
     if (!at.has(key)) at.set(key, nowMs);
     return nowMs - at.get(key)! < 300;
   };
-  // The message just sent, when the row that holds it is new: it rises out of the composer instead
-  // of only rising in (lib/sendFlight.ts). A wake, a resume and a message another thread or a view
-  // sent are not messages typed here, so they keep the plain row rise.
-  const sentRow = rows.findLast((r) => {
-    const item = r.item;
-    return item?.kind === "user" && !item.wake && !item.fromView && item.text !== RESUME_TEXT && fresh(r.key);
-  });
-  const sent = useRef<string | undefined>(undefined);
+  // The message the composer just sent: it rises out of the field rather than only rising in
+  // (lib/sendFlight.ts). The item says so itself (thread.ts `beginTurn`), so a thread's history, a
+  // wake, a resume, a message from another thread or a view keep the plain row rise, and the flight
+  // log keeps one flight per message when the row is redrawn or the thread is opened again.
+  const sentRow = rows.findLast((r) => r.item?.kind === "user" && r.item.sent);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the row's key is its item's id, and `rows.length` retries a flight whose row the virtualizer had not drawn yet
   useLayoutEffect(() => {
     const key = sentRow?.key;
-    if (!key || sent.current === key) return;
-    sent.current = key;
-    flyInFromComposer(
-      innerRef.current?.querySelector<HTMLElement>(`[data-rc-row="${CSS.escape(key)}"]`) ?? null,
-    );
-  }, [sentRow?.key]);
+    const el = key
+      ? (innerRef.current?.querySelector<HTMLElement>(`[data-rc-row="${CSS.escape(key)}"]`) ?? null)
+      : null;
+    if (!el || !takesFlight(sentRow?.item?.id)) return;
+    flyInFromComposer(el);
+  }, [sentRow?.key, rows.length]);
 
   return (
     <div className="relative min-h-0 flex-1">

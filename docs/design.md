@@ -271,14 +271,23 @@ that change use `tabular`.
 - A message sent from the composer flies instead of rising: it starts a
   little inside the field's card (at 96%) and lands in its row in 220ms
   `--ease-snappy`, `transform` and `opacity` only, so nothing around it moves
-  (`lib/sendFlight.ts`). The composer is found by the marker on its card, and
-  the row travels at most 220px. Only a message typed here flies: a wake, a
-  resume, one another thread or a view sent, and the history a thread opens
-  with keep the plain row rise. The field it left fades back in empty over
-  160ms rather than blinking. `prefers-reduced-motion` gets the fade alone.
-  A message sent from the new-thread screen fades where it lands instead,
-  because the composer itself is on its way to the foot of the chat: the
-  stack's own 500ms move is that send's motion.
+  (`lib/sendFlight.ts`). The composer is found by the marker on its card. It
+  starts at the card whatever the gap above it, so a message whose row rests
+  above the field (its own `Working` line, a reply already streaming) rises
+  into place instead of fading where it stands; the row travels at most 220px.
+  Only a message typed here flies, and only once: the item the app sends from
+  the composer is marked (`thread.ts` `beginTurn`), so a wake, a resume, one
+  another thread or a view sent, and the history a thread opens with keep the
+  plain row rise, and a flight is never replayed by a re-render, a closed
+  turn, or opening the thread again. The field it left fades back in empty
+  over 160ms rather than blinking. `prefers-reduced-motion` gets the fade
+  alone.
+  A message sent from the new-thread screen does not fly: it is drawn where
+  the thread's own first row will keep it (the lane's cap, 20px under the
+  header), at rest, because the composer itself is on its way from the middle
+  of the chat to the foot. The stack's own 500ms move is that send's motion,
+  and the thread's transcript takes the screen over without moving the bubble
+  (`ui/ChatView.tsx` `PendingSetupView`).
 - A streaming reply's new words fade in once each (`rc-reveal`, 280ms, from
   `opacity: 0` and a 4px blur, 18ms apart, no word waiting past 180ms).
   `lib/reveal.ts` wraps only the words that arrived in the chunk, and only in

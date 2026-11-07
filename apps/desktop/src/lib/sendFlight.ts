@@ -15,14 +15,33 @@ export const MAX_RISE = 220;
 export const SEND_INSET = 24;
 
 /**
- * How far a sent row travels to arrive: from the row's bottom edge, resting just above the field, to
- * a little inside the composer's card, so the bubble comes out of the field however tall it is.
- * Measured downwards, never negative: a row already above the composer (a tall stack of cards over
- * it, or a composer still on its way to the foot of the chat) stays where it is and only fades.
+ * How far a sent row travels to arrive: it starts a little inside the composer's card, whatever the gap
+ * between the field and its row, so the bubble always comes out of the field. Negative when the row
+ * rests above the card (a turn's own `Working` line under the message, and a reply already
+ * streaming): it then starts that far below its place and rises into it, instead of sitting still
+ * and only fading. Bounded both ways, so a row can never swing in from across the screen.
  */
 export function sendRise(composerTop: number, rowBottom: number): number {
-  return Math.round(Math.max(0, Math.min(composerTop + SEND_INSET - rowBottom, MAX_RISE)));
+  const rise = composerTop + SEND_INSET - rowBottom;
+  return Math.round(Math.max(-MAX_RISE, Math.min(rise, MAX_RISE)));
 }
+
+/**
+ * Which sent messages have already flown. One flight per message, however many times its row is
+ * drawn: the transcript remounts when a thread is reopened, and a streaming reply re-renders it on
+ * every chunk, so the log lives beside the app rather than in a component.
+ */
+export function flightLog(): (id: string | undefined) => boolean {
+  const flown = new Set<string>();
+  return (id) => {
+    if (!id || flown.has(id)) return false;
+    flown.add(id);
+    return true;
+  };
+}
+
+/** The app's own log: a message sent here flies on its row's first sighting, and never again. */
+export const takesFlight = flightLog();
 
 /** Whether motion is wanted at all: a reader who asked for less gets none of it. */
 export function motionAllowed(): boolean {
