@@ -585,9 +585,9 @@ the composer's model picker › Harness switches an open thread.
 
 ## Compaction
 
-Each harness compacts its own context; RustCode does not compact on a
-threshold of its own. `/compact` on its own asks for a
-compaction now: the Codex adapter calls Codex's `thread/compact/start`
+Each harness compacts its own context with its own command; the desktop app
+decides when to ask, but it never writes the summary itself. `/compact` on its
+own asks for a compaction now: the Codex adapter calls Codex's `thread/compact/start`
 instead of sending the text to the model, and an ACP harness (Claude Code,
 OpenCode) gets `/compact` as its prompt and runs its own command. Codex's
 `contextCompaction` item, whether asked for or automatic mid-turn, becomes
@@ -596,12 +596,12 @@ the desktop app shows as one quiet "Context compacted" row. The context
 panel has *Compact now*, which sends `/compact`.
 
 The desktop app can also decide to compact on its own (#3170): after a turn
-above its size threshold, and about 4.5 minutes after a turn when the context
-is above 60k and the prompt cache is about to expire. It sends the same
-`/compact`, so each harness compacts with its own command. Claude Code uses
-both rules, Codex only the cache rule (it already compacts inside a turn), and
-the built-in harness keeps its own pre-request compaction. An ACP agent that
-does not advertise `/compact` is skipped.
+above its size threshold, and in the minute after a prompt cache is due to
+expire (about 4.5 minutes after a turn) when the context is above 60k. It
+sends the same `/compact`, so each harness compacts with its own command.
+Claude Code uses both rules, Codex only the cache rule (it already compacts
+inside a turn), and the built-in harness keeps its own pre-request compaction.
+An ACP agent that does not advertise `/compact` is skipped.
 
 ## Configuration
 

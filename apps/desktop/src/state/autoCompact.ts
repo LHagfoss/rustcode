@@ -42,6 +42,11 @@ export const AUTO_COMPACT_CACHE_THRESHOLD = 60_000;
 /** Claude Code's prompt cache expires after about five minutes; 4.5 leaves room for the request. */
 export const AUTO_COMPACT_CACHE_IDLE_MS = 4.5 * 60_000;
 /**
+ * Rule 2 is a window, not "any time after the deadline": a restart, a wake
+ * from sleep or an old thread opened later must not compact with a cold cache.
+ */
+export const AUTO_COMPACT_CACHE_WINDOW_MS = 60_000;
+/**
  * Rule 2 pays one cache-warm read and a summary. A thread nobody has followed
  * up for an hour is finished in practice, so it does not pay for that summary.
  */
@@ -113,6 +118,12 @@ export interface AutoCompactInput {
   running: boolean;
   queued: number;
   approvals: number;
+  /** Background commands or a parked turn keep the thread from being idle. */
+  waiting: boolean;
+  /** The thread waits for its plan's limit to reset. */
+  limitWaiting: boolean;
+  /** The thread was snoozed by the user. */
+  snoozed: boolean;
   /** The user has started typing in the thread since it went idle. */
   typing: boolean;
   /** An automatic compaction already ran in this idle period. */
@@ -139,6 +150,9 @@ export function autoCompactDecision(input: AutoCompactInput): AutoCompactDecisio
   if (input.running || input.status === "running") return NONE("turn running");
   if (input.status === "needs_input" || input.approvals > 0) return NONE("approval pending");
   if (input.queued > 0) return NONE("message queued");
+  if (input.waiting) return NONE("background task running");
+  if (input.limitWaiting) return NONE("usage limit wait pending");
+  if (input.snoozed) return NONE("thread snoozed");
   if (input.typing) return NONE("user typing");
   if (input.status === "done") return NONE("thread settled");
   if (input.delegated && !input.orchestratorTalking) return NONE("orchestrator is not talking to it");
@@ -158,8 +172,9 @@ export function autoCompactDecision(input: AutoCompactInput): AutoCompactDecisio
     // A thread nobody followed up within the hour does not pay for a summary.
     if (input.now - input.idleSince > AUTO_COMPACT_FOLLOW_UP_MS) return NONE("no follow-up within the hour");
     const at = input.idleSince + AUTO_COMPACT_CACHE_IDLE_MS;
-    if (input.now >= at) return { action: "compact", rule: "cache", before };
-    return { action: "wait", rule: "cache", at, before };
+    if (input.now < at) return { action: "wait", rule: "cache", at, before };
+    if (input.now > at + AUTO_COMPACT_CACHE_WINDOW_MS) return NONE("cache window passed");
+    return { action: "compact", rule: "cache", before };
   }
 
   return NONE("below the threshold");

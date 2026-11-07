@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AUTO_COMPACT_CACHE_IDLE_MS,
   AUTO_COMPACT_CACHE_THRESHOLD,
+  AUTO_COMPACT_CACHE_WINDOW_MS,
   AUTO_COMPACT_DEFAULT_THRESHOLD,
   AUTO_COMPACT_FOLLOW_UP_MS,
   type AutoCompactInput,
@@ -26,6 +27,9 @@ const input = (over: Partial<AutoCompactInput> = {}): AutoCompactInput => ({
   running: false,
   queued: 0,
   approvals: 0,
+  waiting: false,
+  limitWaiting: false,
+  snoozed: false,
   typing: false,
   compactedThisIdle: false,
   delegated: false,
@@ -94,6 +98,18 @@ describe("rule 1: the context size after a turn", () => {
       action: "none",
       reason: "approval pending",
     });
+    expect(autoCompactDecision(input({ waiting: true, usedTokens: 200_000 }))).toMatchObject({
+      action: "none",
+      reason: "background task running",
+    });
+    expect(autoCompactDecision(input({ limitWaiting: true, usedTokens: 200_000 }))).toMatchObject({
+      action: "none",
+      reason: "usage limit wait pending",
+    });
+    expect(autoCompactDecision(input({ snoozed: true, usedTokens: 200_000 }))).toMatchObject({
+      action: "none",
+      reason: "thread snoozed",
+    });
   });
 
   test("stops for the user, a settled thread, a delegate nobody talks to, and a second time", () => {
@@ -145,6 +161,28 @@ describe("rule 2: before the prompt cache expires", () => {
         input({ idleSince, now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS, usedTokens: 80_000 }),
       ),
     ).toEqual({ action: "compact", rule: "cache", before: 80_000 });
+  });
+
+  test("the deadline is a window, so a late wake does not compact with a cold cache", () => {
+    const idleSince = NOW;
+    expect(
+      autoCompactDecision(
+        input({
+          idleSince,
+          now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS + AUTO_COMPACT_CACHE_WINDOW_MS,
+          usedTokens: 80_000,
+        }),
+      ),
+    ).toMatchObject({ action: "compact", rule: "cache" });
+    expect(
+      autoCompactDecision(
+        input({
+          idleSince,
+          now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS + AUTO_COMPACT_CACHE_WINDOW_MS + 1,
+          usedTokens: 80_000,
+        }),
+      ),
+    ).toMatchObject({ action: "none", reason: "cache window passed" });
   });
 
   test("the cache threshold is the smaller 60k even when the size threshold is larger", () => {

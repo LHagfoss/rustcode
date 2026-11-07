@@ -177,6 +177,7 @@ import {
   appendNotice,
   appendSteer,
   applyUpdate,
+  beginQuietTurn,
   beginTurn,
   departQueued,
   dropDeparted,
@@ -1331,6 +1332,7 @@ function onSessionUpdate(params: JsonObject) {
   // the meter keeps (`autoCompactBeforeUsage`).
   if (update.kind === "compaction" && autoCompactInFlight.has(sessionId)) {
     autoCompactCardSeen.add(sessionId);
+    autoCompactPendingNotice.delete(sessionId);
     update = { ...update, text: automaticCompactionText(update.text) };
   }
   if (update.kind === "commands") {
@@ -2147,12 +2149,16 @@ export async function trashThread(id: string): Promise<boolean> {
   const archived = { ...get().archived };
   delete archived[id];
   const pinned = get().pinned.filter((x) => x !== id);
+  const autoCompactOff = { ...get().autoCompactOff };
+  delete autoCompactOff[id];
+  forgetAutoCompact(id);
   set((s) => {
     const peeking = s.peekId === id;
     return {
       threads,
       archived,
       pinned,
+      autoCompactOff,
       sessions: s.sessions.filter((x) => x.id !== id),
       links: forget(s.links, id),
       // A thread in the panel's Thread tab that no longer exists is not shown,
@@ -2165,6 +2171,7 @@ export async function trashThread(id: string): Promise<boolean> {
   wakeTick();
   store(STORAGE.archived, JSON.stringify(archived));
   store(STORAGE.pinned, JSON.stringify(pinned));
+  store(STORAGE.autoCompactOff, JSON.stringify(autoCompactOff));
 
   if (get().selectedId === id) startNewThread();
   return true;
@@ -2699,7 +2706,7 @@ export async function runPrompt(
   // sent, and neither is the turn that continues after a usage limit.
   if (userTypedPrompt(options)) markMessaged(id);
   // Whoever starts a turn now moots the wait, and if this one hits the limit too it waits again.
-  if (!options.limitResume && !thread?.running) dropLimitWait(id);
+  if (!options.limitResume && !options.autoCompact && !thread?.running) dropLimitWait(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can
   // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
   // message typed meanwhile, and starts when this turn ends.
@@ -2736,7 +2743,7 @@ export async function runPrompt(
   // A queued wake reports its links now, as its turn starts: late enough that a restart before this
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
-  if (id in get().snoozed) snoozeThread(id, null);
+  if (!options.autoCompact && id in get().snoozed) snoozeThread(id, null);
   const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
   // A message typed here flies out of the composer on its first sighting; one the new-thread screen
   // already drew does not (lib/sendFlight.ts).
@@ -2746,7 +2753,9 @@ export async function runPrompt(
   // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that
   // follows it, which on a fast harness is the whole rest of the turn's first frame.
   updateThread(id, (t) =>
-    beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
+    options.autoCompact
+      ? beginQuietTurn(t)
+      : beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
   );
   await afterPaint();
   const harness = threadHarness(thread);
@@ -2757,15 +2766,17 @@ export async function runPrompt(
   });
   // A new prompt starts a new report, if it is one.
   if (get().report?.threadId === id) set({ report: null });
-  set((s) => ({
-    sessions: byActivity(
-      s.sessions.map((x) =>
-        x.id === id
-          ? { ...x, updatedAt: Date.now(), title: x.title ?? (titleFrom(shown, 80) || "Image") }
-          : x,
+  if (!options.autoCompact) {
+    set((s) => ({
+      sessions: byActivity(
+        s.sessions.map((x) =>
+          x.id === id
+            ? { ...x, updatedAt: Date.now(), title: x.title ?? (titleFrom(shown, 80) || "Image") }
+            : x,
+        ),
       ),
-    ),
-  }));
+    }));
+  }
   let outcome: "completed" | "cancelled" | "failed" = "completed";
   let failure: string | undefined;
   let unused: string[] = [];
@@ -2782,9 +2793,14 @@ export async function runPrompt(
     outcome = "failed";
     failure = errorText(error);
   }
-  updateThread(id, (t) => requeueSteers(finishTurn(t, outcome, Date.now(), failure), unused));
+  updateThread(id, (t) =>
+    requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
+  );
   // The limit is settled first: a turn it stopped is reported as the limit, not twice.
-  const waiting = settleLimitWait(id, outcome, failure, startIndex);
+  // An automatic compaction must leave a pending wait alone, not settle it.
+  const waiting = options.autoCompact
+    ? (get().limitWaits[id] ?? null)
+    : settleLimitWait(id, outcome, failure, startIndex);
   // An automatic compaction is not a turn the user waits for: it is not "Done"
   // news, and it must not wake the thread's parent as if its work finished.
   if (!options.autoCompact) {
@@ -2812,7 +2828,9 @@ export async function runPrompt(
   if (!options.autoCompact) {
     threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
   }
-  void refreshSessions();
+  // An automatic compaction must not move the thread in the sidebar: no list
+  // refresh that would read the turn as new activity.
+  if (!options.autoCompact) void refreshSessions();
   void refreshPlanUsage(id);
   // A window's numbers move with the turn, and so does the account's own row:
   // the thread on screen asks again as it ends.
@@ -2854,7 +2872,7 @@ export async function runPrompt(
       automatic: next.resume !== undefined,
     });
   }
-  scheduleAutoCompact(id);
+  if (outcome === "completed") scheduleAutoCompact(id);
 }
 
 export async function cancel(id = get().selectedId): Promise<void> {
@@ -3698,6 +3716,8 @@ export function clearStatusMark(id: string) {
 
 // ---------------------------------------------------------------- auto-compaction
 
+/** How recently a delegate's parent must have worked for it to still count as talking to it. */
+const DELEGATE_PARENT_ACTIVE_MS = 10 * 60_000;
 /** One timer per thread: the next cache deadline, or an immediate size rule. */
 const autoCompactTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** Threads that already auto-compacted in this idle period, until the next turn starts. */
@@ -3705,6 +3725,11 @@ const autoCompactedIdle = new Set<string>();
 /** The thread an auto-compaction runs in, so its card can say it ran on its own. */
 const autoCompactInFlight = new Set<string>();
 const autoCompactCardSeen = new Set<string>();
+/** A compaction with no card waits this long for the usage that proves it moved. */
+const AUTO_COMPACT_USAGE_WAIT_MS = 10_000;
+/** Compactions whose notice waits for the post-compaction usage update. */
+const autoCompactPendingNotice = new Set<string>();
+const autoCompactNoticeTimers = new Set<ReturnType<typeof setTimeout>>();
 /** The context before each automatic compaction, for the inspector's before → after. */
 const autoCompactBefore = new Map<string, SessionUsage>();
 
@@ -3791,9 +3816,11 @@ function autoCompactInput(s: AppState, id: string, now: number) {
   const parentId = sessionById(s, id)?.parent?.id;
   const parent = parentId ? s.sessions.find((x) => x.id === parentId) : undefined;
   const delegated = !!parentId || links.drivenBy !== undefined;
-  // A delegate is kept only while its orchestrator is still around: a parent
-  // waiting on it, or a parent thread that has not been settled.
-  const orchestratorTalking = links.drivenBy !== undefined || (!!parent && statusOf(s, parent.id) !== "done");
+  // A delegate is kept only while its orchestrator is still talking to it: a
+  // live link, or a parent turn/wake in the last ten minutes. A settled or
+  // merely existing parent is not enough.
+  const parentActive = parent?.updatedAt !== undefined && now - parent.updatedAt <= DELEGATE_PARENT_ACTIVE_MS;
+  const orchestratorTalking = links.drivenBy !== undefined || parentActive;
   return {
     settings: autoCompactSettingsFor(s, id),
     policy: autoCompactPolicyFor(s, id),
@@ -3805,11 +3832,37 @@ function autoCompactInput(s: AppState, id: string, now: number) {
     running: thread?.running ?? false,
     queued: thread?.queue.length ?? 0,
     approvals: thread?.permissions.length ?? 0,
+    waiting: (thread?.waiting ?? 0) > 0,
+    limitWaiting: s.limitWaits[id] !== undefined,
+    snoozed: id in s.snoozed,
     typing: !!(s.drafts[id] ?? "").trim() || hasExtras(s.extras[id]),
     compactedThisIdle: autoCompactedIdle.has(id),
     delegated,
     orchestratorTalking,
   };
+}
+
+/** Whether a usage gauge shows the compaction the app asked for. */
+function contextMoved(before: SessionUsage | undefined, after: SessionUsage | undefined): boolean {
+  return (
+    !!after &&
+    (!before ||
+      after.used < before.used ||
+      (after.context?.compactions ?? 0) > (before.context?.compactions ?? 0))
+  );
+}
+
+/**
+ * The quiet row for a compaction whose harness sends no card (Claude Code).
+ * It waits for the usage update that proves the context moved, so it does not
+ * race the turn's reply.
+ */
+function settleAutoCompactNotice(id: string): void {
+  if (!autoCompactPendingNotice.has(id)) return;
+  autoCompactPendingNotice.delete(id);
+  const before = autoCompactBefore.get(id);
+  if (autoCompactCardSeen.has(id) || !contextMoved(before, get().threads[id]?.usage)) return;
+  updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
 }
 
 function runAutoCompact(id: string): void {
@@ -3821,22 +3874,28 @@ function runAutoCompact(id: string): void {
   if (before) autoCompactBefore.set(id, before);
   autoCompactInFlight.add(id);
   autoCompactCardSeen.delete(id);
+  autoCompactPendingNotice.delete(id);
   void runPrompt(id, "/compact", emptyExtras, { automatic: true, autoCompact: true })
     .catch(() => undefined)
     .finally(() => {
       autoCompactInFlight.delete(id);
-      // A harness that compacts with no card of its own (Claude Code's plain
-      // reply) still leaves one quiet row, but only if the context really moved.
-      const after = get().threads[id]?.usage;
-      const compacted =
-        !before ||
-        (after !== undefined &&
-          (after.used < before.used ||
-            (after.context?.compactions ?? 0) > (before.context?.compactions ?? 0)));
-      if (!autoCompactCardSeen.has(id) && compacted) {
-        updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
+      if (autoCompactCardSeen.has(id)) {
+        autoCompactPendingNotice.delete(id);
+        autoCompactCardSeen.delete(id);
+        return;
       }
-      autoCompactCardSeen.delete(id);
+      if (contextMoved(before, get().threads[id]?.usage)) {
+        updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
+        return;
+      }
+      // The harness may send its usage just after the prompt returns: wait for
+      // that event, bounded, instead of reading a stale gauge.
+      autoCompactPendingNotice.add(id);
+      const timer = setTimeout(() => {
+        autoCompactNoticeTimers.delete(timer);
+        settleAutoCompactNotice(id);
+      }, AUTO_COMPACT_USAGE_WAIT_MS);
+      autoCompactNoticeTimers.add(timer);
     });
 }
 
@@ -3894,6 +3953,28 @@ function rescheduleAutoCompact(): void {
 /** The context an automatic compaction started from, for the inspector's comparison. */
 export function autoCompactBeforeUsage(id: string): SessionUsage | undefined {
   return autoCompactBefore.get(id);
+}
+
+/** Drop every timer and per-thread record, for tests and when a thread is trashed. */
+function forgetAutoCompact(id?: string): void {
+  if (id === undefined) {
+    for (const timer of autoCompactTimers.values()) clearTimeout(timer);
+    for (const timer of autoCompactNoticeTimers) clearTimeout(timer);
+    autoCompactTimers.clear();
+    autoCompactNoticeTimers.clear();
+    autoCompactedIdle.clear();
+    autoCompactInFlight.clear();
+    autoCompactCardSeen.clear();
+    autoCompactPendingNotice.clear();
+    autoCompactBefore.clear();
+    return;
+  }
+  clearAutoCompactTimer(id);
+  autoCompactedIdle.delete(id);
+  autoCompactInFlight.delete(id);
+  autoCompactCardSeen.delete(id);
+  autoCompactPendingNotice.delete(id);
+  autoCompactBefore.delete(id);
 }
 
 /** Mark a thread for review, done, or back to idle; stored by the engine when it can, else by the app. */
@@ -4884,6 +4965,7 @@ export function resetForTests() {
   clearPageCache();
   stopPlanPolling();
   resetWaits();
+  forgetAutoCompact();
   engineWatch?.();
   engineWatch = undefined;
   crashed = false;
