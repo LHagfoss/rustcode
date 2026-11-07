@@ -440,6 +440,12 @@ export const PLAN_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
 /** How many threads keep their panel; past this the oldest entry is dropped. */
 export const MAX_PANELS = 500;
 
+/**
+ * The views the panel can show. Declared before the store: `parsePanels` reads it while the store
+ * is created, and a `const` further down is not initialized yet then (a blank window on start).
+ */
+const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
+
 const STORAGE = {
   smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
@@ -3547,9 +3553,6 @@ export function setTerminalOpen(open: boolean) {
 
 /** A panel view: one of the side views, never closed. */
 export type PanelKind = NonNullable<AppState["panel"]>;
-
-/** The views the panel can show. */
-const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 
 /**
  * The view a thread with no panel open might show: its own overview. Changes,
