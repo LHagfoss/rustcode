@@ -538,6 +538,22 @@
 }
 
 /*
+ * The first message of a new thread, on the screen that holds it while the session is made: it takes
+ * the place the thread's own transcript will keep it, 8px below, in 160ms on the app's ease. Short
+ * on purpose: that screen is unmounted the moment the session exists, so this is safe to cut, and
+ * the transcript draws the same row at rest in the same place (`ui/ChatView.tsx` PendingSetupView).
+ */
+@keyframes rc-send-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.rc-send-in {
+  animation: rc-send-in 160ms var(--ease-snappy) both;
+}
+
+/*
  * The idle meta under a message — its time, what can be done with it, and the `Queued` under a
  * queued one — hidden at rest and in on hover of its row or on keyboard focus inside it, so the
  * transcript reads calm and the row keeps its height either way (no layout on hover). A coarse
