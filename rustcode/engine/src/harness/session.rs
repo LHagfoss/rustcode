@@ -1749,6 +1749,17 @@ pub(crate) mod test_support {
         record: HarnessRecord,
         choice: Option<&str>,
     ) -> Thread {
+        with_record_named(harness, "test-thread", record, choice)
+    }
+
+    /// The same, under a session id of its own: a test that reads the thread's
+    /// status must not see a test running beside it on the shared id.
+    pub(crate) fn with_record_named(
+        harness: &ResolvedHarness,
+        session_id: &str,
+        record: HarnessRecord,
+        choice: Option<&str>,
+    ) -> Thread {
         let (updates_tx, updates) = mpsc::unbounded_channel();
         let (permissions_tx, permissions) = mpsc::unbounded_channel();
         let sink = Arc::new(ChannelSink {
@@ -1757,7 +1768,7 @@ pub(crate) mod test_support {
             choice: choice.map(str::to_owned),
         });
         let session = ExternalSession::new(
-            "test-thread".to_owned(),
+            session_id.to_owned(),
             harness.clone(),
             record,
             Vec::new(),
@@ -1777,6 +1788,7 @@ pub(crate) mod test_support {
     /// device does.
     pub(crate) fn thread_with_pending_client(
         harness: &ResolvedHarness,
+        session_id: &str,
         wrap: impl FnOnce(Arc<dyn ClientSink>) -> Arc<dyn ClientSink>,
     ) -> Thread {
         let (updates_tx, updates) = mpsc::unbounded_channel();
@@ -1788,7 +1800,7 @@ pub(crate) mod test_support {
         let sink = wrap(recording);
         let record = HarnessRecord::new(&harness.id, std::env::temp_dir());
         let session = ExternalSession::new(
-            "test-thread".to_owned(),
+            session_id.to_owned(),
             harness.clone(),
             record,
             Vec::new(),

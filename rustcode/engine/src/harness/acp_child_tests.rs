@@ -320,11 +320,31 @@ async fn start_named(
     crate::harness::session::test_support::Thread,
     mpsc::UnboundedReceiver<(String, Value)>,
 ) {
+    start_thread(id, "test-thread", fake, choice, options).await
+}
+
+/// `start_named` on a thread with a session id of its own, for a test that
+/// reads the thread's status while others run beside it.
+pub(crate) async fn start_thread(
+    id: &str,
+    session_id: &str,
+    fake: Fake,
+    choice: Option<&str>,
+    options: StartOptions,
+) -> (
+    crate::harness::session::test_support::Thread,
+    mpsc::UnboundedReceiver<(String, Value)>,
+) {
     let harness = harness(id, HarnessKind::Acp);
     let ((ours, our_incoming), (theirs, their_incoming)) = pipe();
     let (seen_tx, seen) = mpsc::unbounded_channel();
     tokio::spawn(fake_agent(theirs, their_incoming, seen_tx, fake));
-    let thread = thread(&harness, choice);
+    let thread = crate::harness::session::test_support::with_record_named(
+        &harness,
+        session_id,
+        crate::harness::store::HarnessRecord::new(&harness.id, std::env::temp_dir()),
+        choice,
+    );
     let adapter = Adapter::connect(
         &harness,
         ours,
@@ -344,6 +364,7 @@ async fn start_named(
 /// answers where the client itself does not (a paired device).
 pub(crate) async fn start_shared(
     id: &str,
+    session_id: &str,
     fake: Fake,
     wrap: impl FnOnce(
         Arc<dyn crate::harness::session::ClientSink>,
@@ -353,7 +374,9 @@ pub(crate) async fn start_shared(
     let ((ours, our_incoming), (theirs, their_incoming)) = pipe();
     let (seen_tx, _seen) = mpsc::unbounded_channel();
     tokio::spawn(fake_agent(theirs, their_incoming, seen_tx, fake));
-    let thread = crate::harness::session::test_support::thread_with_pending_client(&harness, wrap);
+    let thread = crate::harness::session::test_support::thread_with_pending_client(
+        &harness, session_id, wrap,
+    );
     let adapter = Adapter::connect(
         &harness,
         ours,

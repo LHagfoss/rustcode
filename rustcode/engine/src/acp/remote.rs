@@ -1792,10 +1792,20 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_prompt_from_a_device_runs_on_the_harness_and_shows_in_the_mirror() {
-        use crate::harness::acp_child::tests::start;
-        let (thread, _seen) = start(Some("allow"), Default::default()).await;
+        use crate::harness::acp_child::tests::start_thread;
+        // A session id of this test's own: the turn status is process-wide,
+        // and tests run beside this one.
+        let session_id = "remote-device-prompt";
+        let (thread, _seen) = start_thread(
+            "fake-acp-prompt",
+            session_id,
+            Default::default(),
+            Some("allow"),
+            Default::default(),
+        )
+        .await;
         let mirror = Arc::new(crate::remote::harness::HarnessMirror::new(
-            "test-thread".to_owned(),
+            session_id.to_owned(),
             "fake-acp".to_owned(),
             thread.session.cwd.clone(),
             "sonnet".to_owned(),
@@ -1812,19 +1822,19 @@ mod tests {
             }
         });
         let share = Arc::new(HarnessShare {
-            session_id: "test-thread".to_owned(),
+            session_id: session_id.to_owned(),
             external: Arc::clone(&thread.session),
             mirror: Arc::clone(&mirror),
         });
         let registration = SessionRegistration {
-            session_id: "test-thread".to_owned(),
+            session_id: session_id.to_owned(),
             registration_epoch: 1,
         };
         let request = RemoteRequest {
             authenticated_device_id: None,
             protocol_version: crate::remote::REMOTE_PROTOCOL_VERSION,
             request_id: "r1".to_owned(),
-            session_id: Some("test-thread".to_owned()),
+            session_id: Some(session_id.to_owned()),
             registration_epoch: Some(1),
             operation: RemoteOperation::SubmitPrompt {
                 prompt: "write notes".to_owned(),
@@ -1842,7 +1852,7 @@ mod tests {
         // What the share loop does every pass: follow the turn, then publish.
         let mut texts = Vec::new();
         for _ in 0..400 {
-            mirror.sync_turn(crate::thread_status::is_running("test-thread"));
+            mirror.sync_turn(crate::thread_status::is_running(session_id));
             let snapshot = mirror.snapshot(&registration, 1, &ProjectionLimits::default());
             texts = snapshot
                 .transcript
@@ -1955,9 +1965,10 @@ mod tests {
             }
         }
 
+        let session_id = "remote-device-answer";
         let mirror = Arc::new(crate::remote::harness::HarnessMirror::new(
-            "test-thread".to_owned(),
-            "fake-acp".to_owned(),
+            session_id.to_owned(),
+            "fake-acp-answer".to_owned(),
             std::env::temp_dir(),
             "sonnet".to_owned(),
             "A thread".to_owned(),
@@ -1965,12 +1976,17 @@ mod tests {
         ));
         let tee_mirror = Arc::clone(&mirror);
         // The app never answers: only the device does.
-        let thread = start_shared("fake-acp-answer", Fake::echo(false), move |inner| {
-            Arc::new(Tee {
-                inner,
-                mirror: tee_mirror,
-            }) as Arc<dyn ClientSink>
-        })
+        let thread = start_shared(
+            "fake-acp-answer",
+            session_id,
+            Fake::echo(false),
+            move |inner| {
+                Arc::new(Tee {
+                    inner,
+                    mirror: tee_mirror,
+                }) as Arc<dyn ClientSink>
+            },
+        )
         .await;
 
         let session = Arc::clone(&thread.session);
@@ -1980,7 +1996,7 @@ mod tests {
                 .await
         });
         let registration = SessionRegistration {
-            session_id: "test-thread".to_owned(),
+            session_id: session_id.to_owned(),
             registration_epoch: 1,
         };
         let mut batch = None;
