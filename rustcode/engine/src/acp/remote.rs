@@ -865,14 +865,25 @@ impl RemoteManager {
     }
 
     pub(crate) async fn status(&self, session_id: &str) -> Value {
-        idle_status(session_id)
+        json!({
+            "available": false,
+            "enabled": false,
+            "shared": false,
+            "sessionId": session_id,
+            "pairedDevices": 0,
+            "devices": [],
+            "error": "remote access is not available on this host",
+        })
     }
 
     pub(crate) async fn pair(&self, session_id: &str) -> Value {
         json!({
             "available": false,
+            "enabled": false,
             "shared": false,
             "sessionId": session_id,
+            "pairedDevices": 0,
+            "devices": [],
             "error": "remote access is not available on this host",
         })
     }
