@@ -1249,8 +1249,12 @@ export class MockEngine {
             summary: "Start the dependencies over",
           },
         },
+        // A harness that offers grants for a destructive command: the app must
+        // show only Allow once and Reject (lib/approval.ts `grantAllowed`).
         options: [
           { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "allow_hour", name: "Allow for 1 hour `rm -rf node_modules`", kind: "allow_always" },
+          { optionId: "always", name: "Always allow `rm -rf node_modules`", kind: "allow_always" },
           { optionId: "reject", name: "Reject", kind: "reject_once" },
         ],
       });

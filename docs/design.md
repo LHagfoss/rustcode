@@ -777,22 +777,25 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   *Risky* or *Changes files*, `danger` *Destructive* — a tree deletion, a
   forced push, a dropped table, sudo, or a write outside the thread's folder.
   An unknown tool is *Risky*. Under it, indented 26px, one body at most 160px
-  tall that scrolls: the key–value preview (Command, Folder, Path, and an
-  edit's file with its `+N −M`), then the change it would make (`DiffView`),
-  and its reason in `warning` when it has one. Then its answers as 24px
-  pills: Decline `esc`, Approve `⏎` (once), and a Grant menu — *Allow for*
-  *1 hour* or *Always allow*, the engine's other answers, and *Allow all N
-  waiting*. It sits 2px from the call above it, like the tool rows do. An
-  approval whose call is not on screen yet (or is folded away) goes to the
-  foot of the transcript, where it can still be answered.
+  tall that scrolls: for a command, the key–value preview (Command, Folder,
+  Path), then the change it would make (`DiffView`), then its reason when it
+  has one. An edit has no block: its diff header already names the file and
+  its `+N −M`, and a `why` repeating the path is not drawn. Then its answers
+  as 24px pills: Decline `esc`, Approve `⏎` (once), and a Grant menu — *Allow
+  for* *1 hour* or *Always allow*, the engine's other answers, and *Allow all
+  N waiting*. A *Destructive* call offers no grant, here or in the bar or the
+  inbox, whatever the engine listed; it is answered once or declined. It sits
+  2px from the call above it, like the tool rows do. An approval whose call is
+  not on screen yet (or is folded away) goes to the foot of the transcript,
+  where it can still be answered.
 - **Approval bar:** the card over the composer keeps one slim line for the
   same approval — `Waiting for approval · <subject>`, its risk badge (the
   icon carries the risk in a tip) and the same answers (`elevated
   rounded-2xl`, `min-h-[34px]`, `py-1`) — because it is the target for the
-  keys: 1–9 pick an answer in the engine's order (reject, hour, always,
-  allow once), `⏎` approves and `esc` declines, whenever no field, menu or
-  dialog has the keyboard. The body is not repeated there; it is read in the
-  row.
+  keys: 1–9 pick a visible answer in the engine's order (reject, hour,
+  always, allow once; a destructive call has only reject and once), `⏎`
+  approves and `esc` declines, whenever no field, menu or dialog has the
+  keyboard. The body is not repeated there; it is read in the row.
 - **Answered approval:** the bar folds into one settled line where the card
   was (`ResolvedApprovalBar`, `rc-resolve`, 180 ms): a `CircleCheck` in
   `success` for an allow or the `Hand` in `text-fg-muted` for a decline, then

@@ -469,10 +469,13 @@ composer's keys stay outside the table.
   and its input; anything unknown is risky), then *Decline* and *Approve*
   (prominent, once). *Grant* says how long an approval lasts: *1 hour* or
   *Always allow*, the engine's other answers and, when a turn waits on
-  several, *Allow all N waiting*. The row in the transcript adds the
-  key–value preview of what would run: the command whole, the paths it
-  touches, the folder, and an edit's file with its `+N −M`. An answered card
-  settles into one line (`Allowed edit src/app.ts · once`) for a moment.
+  several, *Allow all N waiting*. A *Destructive* call — a tree deletion, a
+  forced push, sudo, a write outside the folder — gets neither grant, in the
+  card, the bar or the inbox: only Allow once and Decline. The row in the
+  transcript adds the key–value preview of what would run (command, folder,
+  paths); an edit needs none, since its diff header names the file and its
+  `+N −M`. An answered card settles into one line (`Allowed edit src/app.ts ·
+  once`) for a moment.
   A timed grant is kept by the engine beside the permanent always-allow
   rules and listed with its minutes left under Details › Allowed, where
   Revoke drops it. Keys 1–9 still pick in the engine's order. A child thread's approval or question

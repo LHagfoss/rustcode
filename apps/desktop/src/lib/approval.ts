@@ -5,7 +5,6 @@
 // are tested without a window.
 
 import type { PermissionOption, PermissionRequest } from "../acp/types";
-import { diffCounts } from "../state/thread";
 import { displayCommand } from "./command";
 
 /** What a call can do, worst first. Unknown calls are `risky`, never `safe`. */
@@ -344,7 +343,9 @@ export function assessApproval(request: PermissionRequest, project = ""): RiskAs
     };
   }
   if (knownWrite || request.diffs.length > 0) {
-    return { level: "risky", label: "Changes files", why: paths[0] };
+    // The file is named by the card's title and by the diff header; a `why`
+    // repeating it would be the same path a third time.
+    return { level: "risky", label: "Changes files" };
   }
   if (knownRead) return { level: "safe", label: "Read-only" };
   return { level: "risky", label: "Risky" };
@@ -358,22 +359,18 @@ export interface PreviewRow {
   wrap?: boolean;
 }
 
-/** An edit's size, in the diff summary the transcript already draws: `+12 −3`, or `new file`. */
-export function diffSummary(diffs: PermissionRequest["diffs"]): string {
-  if (diffs.length === 1 && diffs[0]!.oldText === undefined) return "new file";
-  const { added, removed } = diffCounts(diffs);
-  if (added === 0 && removed === 0) return "no line change";
-  return [added > 0 ? `+${added}` : "", removed > 0 ? `−${removed}` : ""].filter(Boolean).join(" ");
-}
-
-/** The key–value facts of a request: exactly what would run, on what, and where. */
-export function approvalPreview(request: PermissionRequest, project = ""): PreviewRow[] {
-  const rows: PreviewRow[] = [];
+/**
+ * The key–value facts of a request, for a command: what would run, its folder
+ * and the paths it names. An edit has none — its diff header already names the
+ * file and its `+N −M`, and repeating them under the card says nothing new.
+ */
+export function approvalPreview(request: PermissionRequest): PreviewRow[] {
   const command = commandOf(request);
-  if (command) rows.push({ label: "Command", value: command, mono: true, wrap: true });
+  if (!command) return [];
+  const rows: PreviewRow[] = [{ label: "Command", value: command, mono: true, wrap: true }];
   const cwd = approvalCwd(request);
   if (cwd) rows.push({ label: "Folder", value: cwd, mono: true, wrap: true });
-  const paths = approvalPaths(request);
+  const paths = approvalPaths(request).filter((path) => !request.diffs.some((d) => d.path === path));
   if (paths.length) {
     rows.push({
       label: paths.length === 1 ? "Path" : "Paths",
@@ -382,12 +379,29 @@ export function approvalPreview(request: PermissionRequest, project = ""): Previ
       wrap: true,
     });
   }
-  for (const diff of request.diffs) {
-    rows.push({ label: "Edit", value: `${diff.path} · ${diffSummary([diff])}`, mono: true, wrap: true });
-  }
-  const outside = paths.find((path) => leavesFolder(path, cwd, project));
-  if (project && outside) rows.push({ label: "Note", value: "Outside the thread's folder." });
   return rows;
+}
+
+/**
+ * Whether the card shows the request's raw input. Only an unknown tool needs
+ * it: a command has its preview, and a file tool's title names its path.
+ */
+export function showsRawInput(request: PermissionRequest): boolean {
+  if (request.input === undefined || request.diffs.length > 0) return false;
+  const tool = request.title.trim().split(/\s/)[0] ?? "";
+  if (READ_ONLY_TOOLS.has(tool) || WRITING_TOOLS.has(tool)) return false;
+  return (
+    !request.toolKind ||
+    !["read", "search", "think", "edit", "delete", "move", "execute"].includes(request.toolKind)
+  );
+}
+
+/**
+ * Whether an approval may be held down at all. A destructive call is answered
+ * once, every time: no "1 hour", no "Always", in any surface.
+ */
+export function grantAllowed(risk: RiskAssessment): boolean {
+  return risk.level !== "destructive";
 }
 
 /** Which answer a grant offers: the engine's `allow_hour` sits between once and always. */

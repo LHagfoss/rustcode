@@ -27,9 +27,11 @@ import {
   approvalPreview,
   approvalSubject,
   assessApproval,
+  grantAllowed,
   optionScope,
   type PreviewRow,
   type RiskAssessment,
+  showsRawInput,
 } from "../lib/approval";
 import {
   answerPermission,
@@ -104,20 +106,29 @@ function useApprovalKeys(decline?: () => void, approve?: () => void) {
  * own (reject, approve once, and the grant menu for an hour or always), and whatever else the
  * engine offered (always-reject, "Allow all"). Shared by the timeline row and the bar over the
  * composer, so both offer the same answers in the same order.
+ *
+ * A destructive call offers no grant at all, whatever the engine listed: the answers are Approve
+ * once and Decline, and a digit key cannot pick the hidden ones either.
  */
-function useApproval(request: PermissionRequest) {
+function useApproval(request: PermissionRequest, risk: RiskAssessment) {
   const options = useMemo(() => orderedOptions(request.options), [request.options]);
+  const grants = grantAllowed(risk);
+  const isGrant = (option: PermissionOption) =>
+    optionScope(option) === "hour" || optionScope(option) === "always";
   const pick = (i: number) => {
     const option = options[i];
-    if (option) answerPermission(request, option);
+    if (!option || (!grants && isGrant(option))) return;
+    answerPermission(request, option);
   };
   const byScope = (scope: ReturnType<typeof optionScope>) => options.find((o) => optionScope(o) === scope);
   const decline = byScope("decline");
-  const hour = byScope("hour");
-  const always = byScope("always");
+  const hour = grants ? byScope("hour") : undefined;
+  const always = grants ? byScope("always") : undefined;
   // Approve answers this call once; an engine that only offers a standing answer gets that.
   const allow = byScope("once") ?? always;
-  const other = options.filter((o) => o !== decline && o !== hour && o !== always && o !== allow);
+  const other = options.filter(
+    (o) => o !== decline && o !== hour && o !== always && o !== allow && (grants || !isGrant(o)),
+  );
   return { options, pick, decline, hour, always, allow, other };
 }
 
@@ -267,12 +278,15 @@ export function ApprovalRow({
   /** The thread's folder: a path outside it is called out as destructive. */
   project?: string;
 }) {
-  const answers = useApproval(request);
-  const inBar = number === 1;
   const risk = assessApproval(request, project);
-  const rows = approvalPreview(request, project);
+  const answers = useApproval(request, risk);
+  const inBar = number === 1;
+  const rows = approvalPreview(request);
   const note = field(request.input, "reason");
   const tone = RISK_TONE[risk.level];
+  // For a command the block is useful; an edit's diff header already names the file.
+  const showBody = rows.length > 0 || request.diffs.length > 0;
+  const showInput = rows.length === 0 && showsRawInput(request);
   return (
     <div className="flex flex-col gap-1.5" role="group" aria-label="Approval needed">
       <div className="flex items-center gap-2">
@@ -290,16 +304,15 @@ export function ApprovalRow({
           </span>
         )}
       </div>
-      {(rows.length > 0 || request.diffs.length > 0 || request.input !== undefined) && (
+      {(showBody || showInput) && (
         // One body, at most 160px: what it would run and the change it would make, then it scrolls.
         <div className="ml-[26px] flex max-h-[160px] flex-col gap-2 overflow-y-auto">
-          {rows.length > 0 ? (
-            <Preview rows={rows} />
-          ) : request.input !== undefined ? (
+          {rows.length > 0 && <Preview rows={rows} />}
+          {showInput && (
             <pre className="selectable m-0 rounded-md bg-fill-subtle p-2.5 font-mono text-caption">
               {JSON.stringify(request.input, null, 2)}
             </pre>
-          ) : null}
+          )}
           {request.diffs.map((diff, i) => (
             <DiffView key={i} diff={diff} />
           ))}
@@ -343,9 +356,9 @@ export function ApprovalNotice({
   /** The thread's folder: a path outside it is called out as destructive. */
   project?: string;
 }) {
-  const answers = useApproval(request);
-  const { options, pick, decline, allow } = answers;
   const risk = assessApproval(request, project);
+  const answers = useApproval(request, risk);
+  const { options, pick, decline, allow } = answers;
   const tone = RISK_TONE[risk.level];
   useDigitKeys(keys ? options.length : 0, pick);
   useApprovalKeys(

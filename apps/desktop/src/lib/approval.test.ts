@@ -1,5 +1,6 @@
 // The approval rules: what a call can do, what the preview says it will run,
-// which answer is a timed grant, and how an answered card reads.
+// which answer is a timed grant, when no grant may be offered, and how an
+// answered card reads.
 
 import { describe, expect, test } from "bun:test";
 import type { PermissionOption, PermissionRequest } from "../acp/types";
@@ -9,10 +10,11 @@ import {
   approvalPreview,
   approvalSubject,
   assessApproval,
-  diffSummary,
+  grantAllowed,
   leavesFolder,
   optionScope,
   resolvedLine,
+  showsRawInput,
 } from "./approval";
 
 const PROJECT = "/Users/me/code/app";
@@ -112,7 +114,6 @@ describe("preview", () => {
         toolKind: "execute",
         input: { command: "cargo test --lib", cwd: PROJECT, path: "src/app.ts" },
       }),
-      PROJECT,
     );
     expect(rows).toEqual([
       { label: "Command", value: "cargo test --lib", mono: true, wrap: true },
@@ -121,29 +122,35 @@ describe("preview", () => {
     ]);
   });
 
-  test("an edit names its file and its size", () => {
-    const rows = approvalPreview(
-      request({
-        title: "write_to_file",
-        toolKind: "edit",
-        input: { path: "src/app.ts" },
-        diffs: [{ path: "src/app.ts", oldText: "a\nb", newText: "a\nB\nc", oldStart: 1, newStart: 1 }],
-      }),
-      PROJECT,
-    );
-    expect(rows).toEqual([
-      { label: "Path", value: "src/app.ts", mono: true, wrap: true },
-      { label: "Edit", value: "src/app.ts · +2 −1", mono: true, wrap: true },
-    ]);
+  test("an edit has no key–value block: its diff header names the file and the counts", () => {
+    const edit = request({
+      title: "write_to_file",
+      toolKind: "edit",
+      input: { path: "src/app.ts" },
+      diffs: [{ path: "src/app.ts", oldText: "a\nb", newText: "a\nB\nc", oldStart: 1, newStart: 1 }],
+    });
+    expect(approvalPreview(edit)).toEqual([]);
+    // And its risk carries no `why`: the path is already in the title.
+    expect(assessApproval(edit, PROJECT)).toEqual({ level: "risky", label: "Changes files" });
   });
 
-  test("a new file has no removals, and a foreign path is called out", () => {
-    expect(diffSummary([{ path: "a.ts", newText: "x\ny", oldStart: 1, newStart: 1 }])).toBe("new file");
-    const rows = approvalPreview(
-      request({ title: "write_to_file", toolKind: "edit", input: { path: "/etc/hosts" } }),
-      PROJECT,
+  test("an edit with no diff still has no block", () => {
+    expect(
+      approvalPreview(request({ title: "delete_file", toolKind: "delete", input: { path: "a.ts" } })),
+    ).toEqual([]);
+  });
+
+  test("only an unknown tool shows its raw input", () => {
+    expect(showsRawInput(request({ title: "mcp__jira__create_issue", input: { project: "APP" } }))).toBe(
+      true,
     );
-    expect(rows.at(-1)).toEqual({ label: "Note", value: "Outside the thread's folder." });
+    expect(
+      showsRawInput(request({ title: "write_to_file", toolKind: "edit", input: { path: "a.ts" } })),
+    ).toBe(false);
+    expect(showsRawInput(request({ title: "read_file", toolKind: "read", input: { path: "a.ts" } }))).toBe(
+      false,
+    );
+    expect(showsRawInput(request({ input: { command: "ls" } }))).toBe(false);
   });
 
   test("paths and folder come from the input", () => {
@@ -158,6 +165,15 @@ describe("answers", () => {
     id,
     name,
     kind,
+  });
+
+  test("a destructive call is never offered a grant", () => {
+    expect(grantAllowed(assessApproval(command("rm -rf node_modules"), PROJECT))).toBe(false);
+    expect(grantAllowed(assessApproval(command("git push --force"), PROJECT))).toBe(false);
+    expect(grantAllowed(assessApproval(command("cargo test --lib"), PROJECT))).toBe(true);
+    expect(grantAllowed(assessApproval(command("bun install"), PROJECT))).toBe(true);
+    // Unknown is risky, not destructive: it may still be granted.
+    expect(grantAllowed(assessApproval(request({ title: "mystery_tool" }), PROJECT))).toBe(true);
   });
 
   test("an hour sits between once and always", () => {

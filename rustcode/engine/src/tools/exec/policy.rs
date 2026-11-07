@@ -388,6 +388,64 @@ fn destructive_git_scope(segment: &str) -> Option<String> {
     Some(format!("git {subcommand}: {scope}"))
 }
 
+/// Why a command is too destructive to ever be remembered as a reusable
+/// approval, if it is: it deletes a tree, rewrites git state, runs as root,
+/// writes a disk, drops data, or runs a downloaded script. The desktop also
+/// hides the timed and standing grants for these, so neither side can turn one
+/// into a held-down "Allow".
+pub(crate) fn destructive_command_reason(command: &str) -> Option<&'static str> {
+    let lowered = command.to_ascii_lowercase();
+    if ["drop table", "drop database", "drop schema"]
+        .iter()
+        .any(|drop| lowered.contains(drop))
+    {
+        return Some("drops data");
+    }
+    let downloaded_pipe = lowered.split('|').next().is_some_and(|head| {
+        (head.contains("curl") || head.contains("wget"))
+            && lowered
+                .split('|')
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .is_some_and(|first| {
+                    matches!(
+                        command_basename(first).to_ascii_lowercase().as_str(),
+                        "sh" | "bash" | "zsh" | "python" | "python3"
+                    )
+                })
+    });
+    if downloaded_pipe {
+        return Some("runs a downloaded script");
+    }
+    for segment in split_command_segments(&without_null_redirects(command)) {
+        let tokens = segment.split_whitespace().collect::<Vec<_>>();
+        let Some(first) = tokens.first() else {
+            continue;
+        };
+        let binary = command_basename(first).to_ascii_lowercase();
+        match binary.as_str() {
+            "sudo" | "doas" | "mkfs" | "dd" | "shred" | "wipefs" | "fdisk" | "sfdisk"
+            | "parted" | "diskutil" | "killall" | "truncate" => return Some("changes the machine"),
+            "rm" => {
+                let recursive = tokens.iter().skip(1).any(|token| {
+                    *token == "--recursive"
+                        || (token.starts_with('-') && (token.contains('r') || token.contains('R')))
+                });
+                if recursive {
+                    return Some("deletes a tree");
+                }
+            }
+            "git" => {
+                if destructive_git_scope(&segment).is_some() {
+                    return Some("rewrites git state");
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn is_read_only_git(tokens: &[&str]) -> bool {
     let Some((subcommand, subcommand_index)) = git_subcommand(tokens) else {
         return false;

@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
-import { optionScope } from "../lib/approval";
+import { assessApproval, grantAllowed, optionScope } from "../lib/approval";
 import { type DecidedItem, foldDecided, groupInbox, type InboxGroup, type InboxItem } from "../state/inbox";
 import { useInboxItems } from "../state/inboxRead";
 import {
@@ -109,11 +109,14 @@ export function inboxActions(item: InboxItem): RowAction[] {
     return [...actions, open];
   }
   // The answer the row leads with is a single call; a grant is a choice of how
-  // long it lasts, the same one the thread's own card offers.
+  // long it lasts, the same one the thread's own card offers. A destructive
+  // call gets neither: it is answered once, or declined.
   const options = orderedOptions(request.options);
   const scopeOf = (scope: ReturnType<typeof optionScope>) =>
     options.find((option) => optionScope(option) === scope);
-  const actions: RowAction[] = (["once", "hour", "always"] as const).flatMap((scope) => {
+  const grants = grantAllowed(assessApproval(request, item.project));
+  const scopes: ("once" | "hour" | "always")[] = grants ? ["once", "hour", "always"] : ["once"];
+  const actions: RowAction[] = scopes.flatMap((scope) => {
     const option = scopeOf(scope);
     return option
       ? [
