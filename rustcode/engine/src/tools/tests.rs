@@ -5076,7 +5076,7 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         "rustcode-lib:chart.js",
         "--rc-series-1…8",
         ".rc-num",
-        ".rc-stat-note",
+        ".rc-stat-label",
         "--rc-separator",
         "Default to a view for anything structured",
         "A report to another thread stays plain Markdown",
@@ -5097,6 +5097,10 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         "data-rc-copy",
         "data-rc-tab",
         "data-rc-panel",
+        "data-rc-sort",
+        ".rc-spark",
+        ".rc-chart",
+        "legend toggles",
         "No outer border",
         "no vh",
         "smart_ui_check",
@@ -5130,8 +5134,11 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         crate::network::compaction::estimate_tokens(super::schema::SMART_UI_OFF_PROMPT_HINT),
     );
     assert!(bytes < 4_096, "{bytes} bytes");
+    // 1,983 bytes: the "pick by question" rule and the kit's chart, sparkline,
+    // sortable-table and hover pieces cost about 390 over the 1,592 it was, paid
+    // on every turn of every external thread, so it stays under 2,000.
     assert!(
-        SMART_UI_HARNESS_HINT.len() < 1_600,
+        SMART_UI_HARNESS_HINT.len() < 2_000,
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );

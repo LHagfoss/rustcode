@@ -125,6 +125,70 @@ fn line_problem(line: &str, in_script: bool) -> Option<String> {
     None
 }
 
+/// The value of `name` in one tag, unquoted when it is quoted.
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    // `to_ascii_lowercase` keeps every byte offset, so the offsets index `tag` too.
+    let at = tag.to_ascii_lowercase().find(name)?;
+    let rest = tag[at + name.len()..]
+        .trim_start()
+        .strip_prefix('=')?
+        .trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return Some(rest.split_whitespace().next().unwrap_or(""));
+    }
+    Some(rest[1..].split(quote).next().unwrap_or(""))
+}
+
+/// The tag that carries a class or attribute at `at`: from the `<` before it
+/// to the `>` after it, or the rest of the line when the tag has not closed yet.
+fn tag_at(line: &str, at: usize) -> &str {
+    let start = line[..at].rfind('<').unwrap_or(0);
+    let end = line[at..].find('>').map_or(line.len(), |end| at + end + 1);
+    &line[start..end]
+}
+
+/// Kit markup that does nothing as written: a sparkline with no numbers, or a
+/// sortable table with nothing to click. Both are quiet until the user tries.
+fn kit_problems(line: &str) -> Vec<String> {
+    let lower = line.to_ascii_lowercase();
+    let mut problems = Vec::new();
+    if let Some(at) = lower.find("rc-spark") {
+        let tag = tag_at(line, at);
+        // Only an element that carries the class: a rule in the view's own <style> is not one.
+        let element = tag.starts_with('<')
+            && tag[1..].starts_with(|c: char| c.is_ascii_alphabetic())
+            && tag.to_ascii_lowercase().contains("class");
+        if element {
+            match attribute(tag, "data-values") {
+                None => problems.push(
+                    "`.rc-spark` needs `data-values=\"1,4,2,8\"`: the runtime draws the line from it"
+                        .to_owned(),
+                ),
+                Some(values) => {
+                    let numbers = values
+                        .split(|c: char| c == ',' || c.is_whitespace())
+                        .filter(|part| !part.is_empty() && part.parse::<f64>().is_ok())
+                        .count();
+                    if numbers < 2 {
+                        problems.push(
+                            "`.rc-spark` needs at least two numbers in `data-values`".to_owned(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // The runtime sorts on a click in a heading of a table that asked for it.
+    if lower.contains("data-rc-sort") && !lower.contains("<table") && !lower.contains("<th") {
+        problems.push(
+            "`data-rc-sort` goes on `table.rc-table` (every heading then sorts), or on one `th`; here nothing sorts"
+                .to_owned(),
+        );
+    }
+    problems
+}
+
 /// A static check of one block: its size, the elements it builds, the
 /// libraries it names and everything the sandbox will refuse, each with its
 /// line. It does not run the page, so it reports no script errors and no
@@ -146,6 +210,9 @@ pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
     for (index, line) in html.lines().enumerate() {
         let lower = line.to_ascii_lowercase();
         if let Some(problem) = line_problem(line, in_script) {
+            problems.push(format!("line {}: {problem}", index + 1));
+        }
+        for problem in kit_problems(line) {
             problems.push(format!("line {}: {problem}", index + 1));
         }
         // Only the bundled library loads; any other name stays as written and is blocked.
@@ -643,6 +710,40 @@ mod tests {
         let text = &output.content;
         assert!(text.contains("CanvasText"), "{text}");
         assert!(text.contains("<style> tag is not closed"), "{text}");
+    }
+
+    #[test]
+    fn the_check_knows_the_kit_s_hover_pieces() {
+        // A sortable table, a bar with its hover text and a sparkline with numbers.
+        let clean = checked(
+            "<title>Runs</title>\n\
+             <div class=\"rc-bars\"><div class=\"rc-bar\" data-rc-tip=\"7 failed\"><span>auth</span>\
+             <i style=\"width:25%\"></i><b>10.5 s</b></div></div>\n\
+             <table class=\"rc-table\" data-rc-sort><thead><tr><th>Suite</th><th class=\"rc-num\">Time</th></tr></thead>\
+             <tbody><tr><td>engine</td><td class=\"rc-num\">42 s</td></tr></tbody></table>\n\
+             <span class=\"rc-spark\" data-values=\"1,4,2,8\"></span>\n\
+             <style>.rc-spark { width: 64px; }</style>",
+        );
+        assert!(
+            clean.content.starts_with("No problems found"),
+            "{}",
+            clean.content
+        );
+
+        // A sparkline with no numbers draws nothing, and data-rc-sort here sorts nothing.
+        let broken = checked(
+            "<title>Runs</title>\n\
+             <span class=\"rc-spark\">no numbers</span>\n\
+             <span class=\"rc-spark\" data-values=\"7\"></span>\n\
+             <td data-rc-sort>Suite</td>",
+        );
+        let text = &broken.content;
+        assert!(text.contains("line 2:"), "{text}");
+        assert!(text.contains("`data-values"), "{text}");
+        assert!(text.contains("line 3:"), "{text}");
+        assert!(text.contains("at least two numbers"), "{text}");
+        assert!(text.contains("line 4:"), "{text}");
+        assert!(text.contains("nothing sorts"), "{text}");
     }
 
     #[test]

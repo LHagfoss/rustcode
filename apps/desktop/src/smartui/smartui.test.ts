@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MOCK_KIT } from "../acp/mock";
+import { MOCK_CHARTS, MOCK_KIT } from "../acp/mock";
 import {
   AutoRun,
   claimLive,
@@ -13,7 +13,17 @@ import {
   SendGate,
   StreamPump,
 } from "./host";
-import { BASE_CSS, buildPage, buildStreamPage, PAGE_CSP, pageTheme, runtimeScript, usesChart } from "./page";
+import { kitHelpers } from "./kit";
+import {
+  BASE_CSS,
+  buildPage,
+  buildStreamPage,
+  CHART_THEME_SCRIPT,
+  PAGE_CSP,
+  pageTheme,
+  runtimeScript,
+  usesChart,
+} from "./page";
 import {
   blockProblem,
   blockTitle,
@@ -268,6 +278,13 @@ describe("smart ui", () => {
       ".rc-chip",
       ".rc-tabs",
       ".rc-tip",
+      ".rc-chart",
+      ".rc-donut-total",
+      ".rc-spark",
+      ".rc-spark-line",
+      "data-rc-sort",
+      "data-rc-tip",
+      "aria-sort",
     ]) {
       expect(BASE_CSS).toContain(name);
     }
@@ -292,6 +309,12 @@ describe("smart ui", () => {
       "[data-rc-tab]",
       "[data-rc-panel]",
       '"Copied"',
+      "sortTable",
+      "data-rc-sort",
+      "rcSparkValues",
+      "rcSparkPoints",
+      ".rc-spark[data-values]",
+      "aria-sort",
     ]) {
       expect(script).toContain(part);
     }
@@ -350,6 +373,71 @@ describe("smart ui", () => {
     expect(part?.complete).toBe(true);
     expect(blockProblem(part?.source ?? "")).toBeNull();
     expect(new TextEncoder().encode(part?.source).length).toBeLessThan(64 * 1024);
+  });
+
+  test("the mock's chart and hover view fits a block", () => {
+    const [part] = splitReply(MOCK_CHARTS.join("")).filter((p) => p.kind === "ui");
+    expect(part?.complete).toBe(true);
+    expect(blockProblem(part?.source ?? "")).toBeNull();
+    // It uses the pieces this change adds, and nothing the page has not got.
+    for (const name of ["rc-chart", "rc-donut-total", "rc-spark", "data-rc-sort", "data-rc-tip"]) {
+      expect(part?.source).toContain(name);
+    }
+    expect(new TextEncoder().encode(part?.source).length).toBeLessThan(64 * 1024);
+  });
+
+  test("the chart theme follows the variables, in both themes", () => {
+    expect(CHART_THEME_SCRIPT).toContain("--rc-series-");
+    expect(CHART_THEME_SCRIPT).toContain("prefers-reduced-motion");
+    expect(CHART_THEME_SCRIPT).toContain("usePointStyle");
+    expect(CHART_THEME_SCRIPT).toContain("hoverBackgroundColor");
+    expect(CHART_THEME_SCRIPT).toContain("createLinearGradient");
+    expect(CHART_THEME_SCRIPT).toContain("__rcThemeCharts");
+    // No raw colour but the tooltip's ink over --rc-text: the lines, bars and
+    // slices are painted from a variable.
+    expect(CHART_THEME_SCRIPT.replace(/"#000"|"#fff"/g, "")).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(() => new Function(CHART_THEME_SCRIPT)).not.toThrow();
+  });
+
+  test("a cell is a measurement only when it is one", () => {
+    const { rcMeasure } = kitHelpers();
+    expect(rcMeasure("1,234")).toEqual({ value: 1234, unit: "" });
+    expect(rcMeasure("41 s")).toEqual({ value: 41, unit: "s" });
+    expect(rcMeasure("12.5%")).toEqual({ value: 12.5, unit: "%" });
+    expect(rcMeasure("\u22123")).toEqual({ value: -3, unit: "" });
+    for (const not of ["n/a", "", "2026-11-02", "beta", "1 m 4 s"]) expect(rcMeasure(not)).toBeNull();
+  });
+
+  test("a sortable column compares numbers, then text, and falls back by column", () => {
+    const { rcCompare } = kitHelpers();
+    expect(rcCompare("9 s", "10 s", "number")).toBeLessThan(0);
+    expect(rcCompare("1,234", "999", "number")).toBeGreaterThan(0);
+    // A column with a non-measurement in it still sorts, by the locale's order.
+    expect(rcCompare("v1.9", "v1.10", "number")).toBeLessThan(0);
+    expect(rcCompare("Beta", "alpha", "text")).toBeGreaterThan(0);
+    expect(rcCompare("7 s", "alpha", "number")).toBeLessThan(0);
+    expect(rcCompare("same", "same", "number")).toBe(0);
+  });
+
+  test("a sparkline reads its numbers from the attribute, commas or spaces", () => {
+    const { rcSparkValues } = kitHelpers();
+    expect(rcSparkValues("1,4,2,8")).toEqual([1, 4, 2, 8]);
+    expect(rcSparkValues("1 4 2")).toEqual([1, 4, 2]);
+    expect(rcSparkValues("3, n/a, 5")).toEqual([3, 5]);
+    expect(rcSparkValues("")).toEqual([]);
+  });
+
+  test("a sparkline spans its box, flat when every value matches", () => {
+    const { rcSparkPoints } = kitHelpers();
+    const points = rcSparkPoints([0, 5, 10], 100, 30);
+    const [first, middle, last] = points.split(" ").map((p) => p.split(",").map(Number));
+    expect(first?.[0]).toBe(2);
+    expect(last?.[0]).toBe(98);
+    // The lowest value is at the bottom, the highest at the top, y grows down.
+    expect(first?.[1]).toBe(28);
+    expect(last?.[1]).toBe(2);
+    expect(middle?.[1]).toBe(15);
+    expect(rcSparkPoints([3, 3], 100, 30)).toBe("2,15 98,15");
   });
 
   test("a view sends at most one message every 2 seconds", () => {

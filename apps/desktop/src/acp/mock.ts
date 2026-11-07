@@ -2569,20 +2569,22 @@ export class MockEngine {
       }
       const reply = /\bkit\b/i.test(prompt)
         ? MOCK_KIT
-        : /\bview\b/i.test(prompt)
-          ? MOCK_VIEW
-          : /\bcharts?\b/i.test(prompt)
-            ? MOCK_VIZ
-            : [
-                "Done. ",
-                "I updated the greeting in `src/app.ts` ",
-                "and the tests pass.\n\n",
-                "```ts\n",
-                'const greeting = "hello, world";\n',
-                "export default greeting;\n",
-                "```\n\n",
-                "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-              ];
+        : /\b(hover|trend|graph)\b/i.test(prompt)
+          ? MOCK_CHARTS
+          : /\bview\b/i.test(prompt)
+            ? MOCK_VIEW
+            : /\bcharts?\b/i.test(prompt)
+              ? MOCK_VIZ
+              : [
+                  "Done. ",
+                  "I updated the greeting in `src/app.ts` ",
+                  "and the tests pass.\n\n",
+                  "```ts\n",
+                  'const greeting = "hello, world";\n',
+                  "export default greeting;\n",
+                  "```\n\n",
+                  "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -2712,6 +2714,57 @@ export const MOCK_KIT = [
   '  <button class="rc-chip" data-rc-send="Show the failing tests">Show the failures</button>\n',
   '  <button class="rc-chip" data-rc-copy="128 run, 7 failed, 41 s median">Copy numbers</button>\n',
   "</div>\n",
+  "```\n",
+];
+
+/**
+ * A Smart UI reply built from the kit's charts and hover pieces: a themed line
+ * chart, a donut with its total in the middle, bars with hover text, an inline
+ * sparkline and a table that sorts on a heading click. No CSS of its own.
+ */
+export const MOCK_CHARTS = [
+  "Failures fell to zero after Thursday's fixture fix; here is the week, and the suites ranked.\n\n",
+  "```rustcode-ui v1\n",
+  "<title>Failures this week</title>\n",
+  '<p class="rc-lead">Failures fell to zero after Thursday\'s fixture fix.</p>\n',
+  '<div class="rc-stats">\n',
+  '  <div class="rc-stat rc-bad"><span class="rc-stat-value">7</span><span class="rc-stat-label">Failed</span><span class="rc-stat-note">4 on Thursday</span></div>\n',
+  '  <div class="rc-stat rc-ok"><span class="rc-stat-value">0</span><span class="rc-stat-label">Failed since</span><span class="rc-stat-note">3 days clean</span></div>\n',
+  '  <div class="rc-stat"><span class="rc-stat-value">41 s</span><span class="rc-stat-label">Median run</span><span class="rc-stat-note">6 s faster</span></div>\n',
+  "</div>\n",
+  '<div class="rc-chart" style="height:180px"><canvas role="img" aria-label="Runs and failures per day"></canvas></div>\n',
+  '<div class="rc-row rc-gap-3" style="align-items:center">\n',
+  '  <div class="rc-chart" style="height:140px;width:140px"><canvas role="img" aria-label="Runs by suite"></canvas>',
+  '<div class="rc-donut-total"><b>128</b><span>runs</span></div></div>\n',
+  '  <div class="rc-bars" style="flex:1">\n',
+  '    <div class="rc-bar" data-rc-tip="64 passed, 0 failed, 42 s"><span>engine</span><i style="width:100%"></i><b>42 s</b></div>\n',
+  '    <div class="rc-bar" data-rc-tip="38 passed, 0 failed, 18.5 s"><span>desktop</span><i style="width:44%"></i><b>18.5 s</b></div>\n',
+  '    <div class="rc-bar rc-bad" data-rc-tip="12 passed, 7 failed, 10.5 s"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div>\n',
+  "  </div>\n",
+  "</div>\n",
+  '<div class="rc-row rc-gap-2" style="margin:10px 0"><span class="rc-label">Duration, last 8 runs</span>',
+  '<span class="rc-spark" data-values="86,81,79,74,72,63,55,48" style="width:120px;height:24px"></span>',
+  '<span class="rc-num">48 s</span></div>\n',
+  '<table class="rc-table" data-rc-sort><thead><tr><th>Suite</th><th class="rc-num">Time</th><th class="rc-num">Failed</th></tr></thead><tbody>\n',
+  '  <tr><td>engine</td><td class="rc-num">42 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>desktop</td><td class="rc-num">18.5 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>auth</td><td class="rc-num">10.5 s</td><td class="rc-num">7</td></tr>\n',
+  '  <tr><td>core</td><td class="rc-num">3 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>e2e</td><td class="rc-num">64 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>cli</td><td class="rc-num">2 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>mcp</td><td class="rc-num">1 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>sandbox</td><td class="rc-num">9 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>store</td><td class="rc-num">4 s</td><td class="rc-num">0</td></tr>\n',
+  '  <tr><td>tui</td><td class="rc-num">7 s</td><td class="rc-num">0</td></tr>\n',
+  "</tbody></table>\n",
+  '<script src="rustcode-lib:chart.js"></script>\n',
+  "<script>\n",
+  "const canvases = document.querySelectorAll('.rc-chart canvas');\n",
+  "new Chart(canvases[0], { type: 'line', data: { labels: ['Mon','Tue','Wed','Thu','Fri'],\n",
+  "  datasets: [{ label: 'Runs', data: [25,27,24,23,29] }, { label: 'Failed', data: [1,0,2,4,0] }] } });\n",
+  "new Chart(canvases[1], { type: 'doughnut', data: { labels: ['engine','desktop','auth','core'],\n",
+  "  datasets: [{ label: 'Runs', data: [64,38,19,7] }] }, options: { plugins: { legend: { display: false } } } });\n",
+  "</script>\n",
   "```\n",
 ];
 
