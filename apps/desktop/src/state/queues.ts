@@ -37,6 +37,11 @@ export interface QueueRow {
   fromView?: boolean;
   /** Delivered for another thread (orchestration link id). */
   link?: string;
+  /**
+   * The app's own restart resume (`store.ts` `resumeInterrupted`), with the links the quit severed:
+   * present even when empty, so a resume waiting behind a turn outlives the window it was queued in.
+   */
+  resume?: string[];
   /** The thread that queued it for this one; absent is the user's own (or an older build's). */
   from?: string;
   /** The links a wake reports, and of those the ones that wait on the user. */
@@ -93,6 +98,7 @@ export function parseQueueBook(raw: string | null): QueueBook {
         from: typeof row.from === "string" && row.from ? row.from : undefined,
         wakeLinks: strings(row.wakeLinks),
         wakeAsking: strings(row.wakeAsking),
+        resume: strings(row.resume),
       }));
       if (kept.length) rows[id] = kept;
     }
@@ -113,6 +119,7 @@ export function rowOf(item: QueuedPrompt, now: number, created?: number): QueueR
   if (item.extras && JSON.stringify(item.extras).length <= MAX_ROW_EXTRAS) row.extras = item.extras;
   if (item.fromView) row.fromView = true;
   if (item.link) row.link = item.link;
+  if (item.resume) row.resume = [...item.resume];
   if (item.from) row.from = item.from;
   if (item.wakeLinks?.length) row.wakeLinks = [...item.wakeLinks];
   if (item.wakeAsking?.length) row.wakeAsking = [...item.wakeAsking];
@@ -145,6 +152,7 @@ export function queueOf(rows: readonly QueueRow[], acked: readonly string[] = []
     if (row.extras) item.extras = row.extras;
     if (row.fromView) item.fromView = true;
     if (row.link) item.link = row.link;
+    if (row.resume) item.resume = row.resume;
     if (row.from) {
       item.from = row.from;
       item.queuedAt = row.created_at;
