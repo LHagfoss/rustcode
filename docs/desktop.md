@@ -307,17 +307,34 @@ composer's keys stay outside the table.
   read when they are attached, not when they are sent, and the prompt's blocks
   are built after the bubble is on screen, so a long paste or a 20 MB picture
   does not hold the row back.
+- **New thread cards.** Under an empty thread's field, a quiet row of glass cards
+  (`ui/NewThreadWidgets.tsx`, `state/widgets.ts`): the last 17 weeks as a
+  contribution heatmap of turns with the threads active in them, this project's
+  three most recent threads, the last 30 days of reported tokens and cost, this
+  project's three most recent pull requests (the same cached `gh` read the
+  sidebar uses; a row opens the pull on GitHub), and this month's turns and
+  spend against the last. One `_rustcode/data/usage` read grouped by day feeds
+  the three figures cards, so the screen asks the engine once. Every card keeps
+  one height from the first frame and says what it has in a line when it has
+  nothing, so the field above never moves as the reads land; below `lg` the
+  cards are one sideways-scrolling row, and a window shorter than 700px leaves
+  them out rather than push the field off the pane.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries
   the plain URL. Settings › Chat › Link previews turns fetching off.
 - **Thread actions.** A row's ⋯ menu or right-click: Mark for Review,
-  Mark Done, Pin, Rename, Move to Trash. Pins go to the engine
+  Settle, Pin, Rename, Move to Trash. Settle is **Unsettle** once the thread
+  is settled, in the row's menu, on hover in the row, in the thread's status
+  menu and in one glass capsule above the field in the chat — the same
+  `.rc-glass-overlay` as the jump-to-latest pill, a `success` tick, *Settled*
+  and a quiet *Unsettle* pill — so the way back out is one click wherever you
+  are. Pins go to the engine
   (`_rustcode/session/pin`, read back from `_meta.rustcode.pinned`) when it
   has the method; pins kept by an older build move there once, and
-  without the method they stay in app storage. Archive is gone: Settled is
-  exactly the threads marked Done, and threads an older build archived
-  are marked Done once. ⌘F finds in the thread (CSS highlights, ⏎/⇧⏎ step). A sent
+  without the method they stay in app storage. Archive is gone: the Settled
+  shelf holds exactly the settled threads, and threads an older build
+  archived are settled once. ⌘F finds in the thread (CSS highlights, ⏎/⇧⏎ step). A sent
   message has Edit (back to the composer; sending takes the thread back to
   it) and Retry, both with `_rustcode/rewind`, asking first when later
   messages go too. A finished turn shows a summary card: files changed with
@@ -502,10 +519,11 @@ composer's keys stay outside the table.
   that keeps its tools running, and queued — never a stopped turn — everywhere
   else ([orchestrator.md](orchestrator.md) › Waking a parent thread).
 - **Command palette** (⌘K): recent threads, then actions: new thread (on
-  any harness, or in a worktree), board, review, mark review/done,
+  any harness, or in a worktree), board, review, mark for review, settle the
+  open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
 - **Sidebar.** One list: pinned threads first, then every
-  active thread, and Settled as a shelf at the foot: threads marked Done
+  active thread, and Settled as a shelf at the foot: threads marked Settled
   and threads untouched for three days unless they wait
   for review (`idleSettled`), folded by default, 10 at a time then *Show
   25 more*. A thread that works, waits or needs you stays in the list and
@@ -516,8 +534,9 @@ composer's keys stay outside the table.
   turn that ended while you looked elsewhere, *Done* (green) or *Failed*
   (red) until you open the thread (`finished`/`failed` in the store; *Mark
   Unread* in the menu brings Done back). What wants you reads in medium
-  weight; what works, waits or is settled recedes. Hovering swaps the slot for Pin, Settle and the menu, so nothing shifts.
-  Double-click or F2 renames. Settling is marking a thread Done, with an
+  weight; what works, waits or is settled recedes. Hovering swaps the slot for
+  Pin, Settle (or Unsettle) and the menu, so nothing shifts.
+  Double-click or F2 renames. Settling is marking a thread Settled, with an
   Undo toast (the row, the selection bar, the chat's menu, the palette and the
   board all offer it); a new message brings it back. Settling the selected
   thread while the chat is showing closes its panel and leaves it for the
@@ -765,9 +784,10 @@ composer's keys stay outside the table.
   message (`<type>/<slug>`) that can be edited. A worktree thread's menu
   opens it in Finder or Terminal and removes it, asking first and again with
   the engine's reason (uncommitted changes, unpushed commits).
-- **Status and Board.** Running, Needs input, Review and Done chips on rows
-  and in the chat header (a menu marks Review or Done). *Board* (the
-  sidebar's filter menu, or ⌘K) shows those four columns; drag a card to Review or Done.
+- **Status and Board.** Running, Needs input, Review and Settled chips on rows
+  and in the chat header (a menu marks Review or Settled). *Board* (the
+  sidebar's filter menu, or ⌘K) shows those four columns; drag a card to
+  Review or Settled.
   Marks go to `_rustcode/session/status`; on an engine without it the app
   keeps them itself. `_meta.rustcode.status` from the engine (a merged
   branch's auto-done) updates the chip.

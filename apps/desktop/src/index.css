@@ -88,10 +88,10 @@
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e8e8ea;
   /* The composer is glass on the raised surface (see `Glass` in index.css). */
-  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 75%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
-  --rc-composer-filter: saturate(1.14) blur(16px);
-  --rc-composer-outline: #00000014;
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 66%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 78%, transparent);
+  --rc-composer-filter: saturate(1.12) blur(22px);
+  --rc-composer-outline: #00000012;
   --rc-composer-highlight: transparent;
   --rc-border: #0000000f;
   --rc-border-strong: #0000001f;
@@ -119,11 +119,21 @@
     --rc-surface: #18181a;
     --rc-surface-2: #1e1e21;
     --rc-surface-3: #232327;
-    --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 75%, transparent);
-    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
-    --rc-composer-filter: saturate(1.08) blur(20px);
-    --rc-composer-outline: #ffffff0d;
-    --rc-composer-highlight: #ffffff08;
+    /* A step lighter than the raised surface it is drawn from, so the glass reads as light over a
+       dark pane rather than as a darker slab over it. */
+    --rc-composer-bg: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 58%,
+      transparent
+    );
+    --rc-composer-bg-focus: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 70%,
+      transparent
+    );
+    --rc-composer-filter: saturate(1.18) blur(28px);
+    --rc-composer-outline: #ffffff1f;
+    --rc-composer-highlight: #ffffff12;
     --rc-border: #ffffff0f;
     --rc-border-strong: #ffffff1c;
     --rc-text: #ededed;
@@ -149,11 +159,19 @@
   --rc-surface: #18181a;
   --rc-surface-2: #1e1e21;
   --rc-surface-3: #232327;
-  --rc-composer-bg: color-mix(in srgb, var(--rc-surface-2) 75%, transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
-  --rc-composer-filter: saturate(1.08) blur(20px);
-  --rc-composer-outline: #ffffff0d;
-  --rc-composer-highlight: #ffffff08;
+  --rc-composer-bg: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 58%,
+    transparent
+  );
+  --rc-composer-bg-focus: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 70%,
+    transparent
+  );
+  --rc-composer-filter: saturate(1.18) blur(28px);
+  --rc-composer-outline: #ffffff1f;
+  --rc-composer-highlight: #ffffff12;
   --rc-border: #ffffff0f;
   --rc-border-strong: #ffffff1c;
   --rc-text: #ededed;
@@ -179,9 +197,9 @@
   /* A sent message's surface: 8.5% of the text over the pane lands a step above the background in
      either mode, and follows whatever neutrals a theme brings. */
   --rc-message: color-mix(in srgb, var(--rc-text) 8.5%, var(--rc-bg));
-  /* The composer's strip: the pane, a step towards the text's own light, so it reads as attached to
-     the floating card in either mode (the dark theme's page is nearly black, the light one white). */
-  --rc-composer-footer-bg: color-mix(in srgb, var(--rc-text) 5%, var(--rc-bg));
+  /* The composer's strip: the card's own glass with a 4% lift of the text colour, so it reads as
+     attached to the floating card rather than as a slab beside it, in either mode. */
+  --rc-composer-footer-bg: color-mix(in srgb, var(--rc-text) 4%, var(--rc-composer-bg));
   --rc-diff-add: color-mix(in srgb, var(--rc-success) 14%, transparent);
   --rc-diff-del: color-mix(in srgb, var(--rc-danger) 14%, transparent);
   /* Word marks inside a changed line: the line tints mixed stronger, so the edited
@@ -876,6 +894,21 @@
   -webkit-backdrop-filter: var(--rc-glass-filter);
 }
 
+/*
+ * The composer's lighter pair on the cards that sit under it on a new thread (ui/NewThreadWidgets.tsx):
+ * the same recipe, not a third one, so the cards and the field read as one material.
+ */
+.rc-glass-soft {
+  background: var(--rc-composer-bg);
+  backdrop-filter: var(--rc-composer-filter);
+  -webkit-backdrop-filter: var(--rc-composer-filter);
+}
+
+/* A day of the activity heatmap's grid: 2px, under the smallest radius step, on a 7px cell. */
+.rc-heat-cell {
+  border-radius: 2px;
+}
+
 /* Small pills over text (jump to latest, toasts): the denser glass, so their label reads. */
 .rc-glass-strong {
   background: var(--rc-glass-bg-strong);
@@ -926,11 +959,12 @@
 }
 
 /*
- * The composer floats over the transcript in glass on the raised surface: 75% at rest,
- * 84% once it has focus, a 1px outline and, in dark, a 3% inner highlight. There is no
- * coloured ring. Its corner is its own step (`--rc-composer-radius`), and its drawer is the
- * same glass, tucked behind that edge, so the two read as one surface. The foot and the tray
- * are rows inside the one card, not slabs beside it.
+ * The composer floats over the transcript in glass: 66% at rest and 78% focused in light, 58% and
+ * 70% of a surface-2 a step lighter in dark (theme blocks above), a 1px outline and, in dark, a 7%
+ * inner highlight. There is no coloured ring. Its corner is its own step
+ * (`--rc-composer-radius`), and its drawer is the same glass, tucked behind that edge, so the two
+ * read as one surface. The foot and the tray are rows inside the one card, not slabs beside it,
+ * and the strip under the card takes the same pair (`.rc-composer-footer`).
  */
 .rc-composer,
 .rc-toast {
@@ -977,7 +1011,9 @@
 .rc-composer-footer {
   border-radius: 0 0 var(--rc-composer-radius) var(--rc-composer-radius);
   background: var(--rc-composer-footer-bg);
-  box-shadow: 0 0 0 1px var(--rc-border);
+  backdrop-filter: var(--rc-composer-filter);
+  -webkit-backdrop-filter: var(--rc-composer-filter);
+  box-shadow: 0 0 0 1px var(--rc-composer-outline);
 }
 /* A drawer is read, not looked through: opaque, its foot cut where the box begins. Its top
    corners are the box's own radius, one inset inside them. */
