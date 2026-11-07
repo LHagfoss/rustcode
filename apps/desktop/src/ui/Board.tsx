@@ -1,7 +1,7 @@
 // The Board: the threads as cards in four columns, Running, Needs input,
-// Review and Done, as an alternative to the list. Drag a card to Review or
-// Done (or use its buttons) to mark it; the engine moves merged worktree
-// threads to Done by itself. Idle threads stay in the list.
+// Review and Settled, as an alternative to the list. Drag a card to Review or
+// Settled (or use its buttons) to mark it; the engine moves merged worktree
+// threads to Settled by itself. Idle threads stay in the list.
 
 import { CircleCheck, Eye, GitBranch, PanelLeft, SquarePen, Undo2 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -119,9 +119,9 @@ function Card({
       {(status === "review" || status === "done") && (
         <div className="mt-2 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
           {status === "review" ? (
-            <Tooltip label="Mark done">
-              <Pill size="sm" aria-label="Mark done" onClick={() => settleThread(session.id)}>
-                <CircleCheck size={11} /> Done
+            <Tooltip label="Settle">
+              <Pill size="sm" aria-label="Settle" onClick={() => settleThread(session.id)}>
+                <CircleCheck size={11} /> Settle
               </Pill>
             </Tooltip>
           ) : (
@@ -135,10 +135,10 @@ function Card({
               </Pill>
             </Tooltip>
           )}
-          <Tooltip label="Clear the status">
+          <Tooltip label="Unsettle">
             <button
               type="button"
-              aria-label="Clear the status"
+              aria-label="Unsettle"
               onClick={() => void setThreadStatus(session.id, "idle")}
               className="flex size-6 items-center justify-center rounded-full bg-fill hover:bg-fill-strong"
             >

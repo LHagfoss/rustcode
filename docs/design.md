@@ -505,7 +505,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   picked rows are `bg-accent/12` + `font-medium`, which is not the open row's
   `bg-fill`, and a plain click opens the thread and lets the selection go. A
   thread that leaves the list leaves the selection. With more than one picked,
-  the row's menu and a bar under the list (`3 selected`, Pin, Settle, Clear)
+  the row's menu and a bar under the list (`3 selected`, Pin, Settle unless all
+  of them are settled, Unsettle while one of them is, Clear)
   act on all of them, with one toast and one failure message for the lot.
 - **Skeleton:** `Skeleton` (`.rc-skeleton`): `fill-subtle` blocks the shape
   of what will appear (a text line `h-3`, a meta line `h-2`, a pill
@@ -865,7 +866,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   the panel and leaves it for the new-thread screen in the same folder, with
   the same Undo the sidebar offers; settling from the board, review or compare
   stays on that view, and a status set by an agent or the engine never moves
-  the screen.
+  the screen. A thread that is settled and open in the chat says so in one glass
+  capsule above the field, the same `.rc-glass-overlay` as the jump-to-latest
+  pill — a `success` tick, *Settled*, and a quiet *Unsettle* pill — because
+  settling it was the way it left the screen, and one press puts it back to
+  idle where it is.
   Below 980px of window there is no room for both columns: the panel opens as a
   **sheet** over the chat instead — `w-[min(88vw,380px)]`, full height at the
   window's right edge, `bg-surface` and `shadow-2` (opaque, because it opens over
