@@ -684,12 +684,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   A turn's changes are one line, never two: the completion card
   (`N files changed +A −R ›`, with the checks and the files it opens)
   where the harness reported one, else the checkpoint's `Changes +A −R`
-  chip (which also holds Restore). The two sources are picked once per
+  chip (which also holds Rewind here). The two sources are picked once per
   turn, so the numbers can't disagree. The newest finished turn keeps the
   line in view above its footer; an older turn's change line folds with
   its steps, as the last row inside that turn's `Worked for 2m`, so it is
   there when the turn is opened and out of the way when scrolling past
-  (and its Restore goes with it). The right panel's Changes view is the
+  (and its Rewind here goes with it). The right panel's Changes view is the
   thread's own and stays as it is.
   Opening the fold shows the steps in order,
   each fading in with `rc-expand` (opacity and 4px, so nothing lays out
@@ -698,6 +698,28 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   thread while the app runs; an opened old thread starts with every turn
   folded; find in thread opens them all while it searches. Folded steps are
   not rows at all, so the virtualizer and the timeline rail have fewer.
+- **Rewind an attempt.** A checkpoint is an attempt, not a one-shot restore:
+  *Rewind here*, in a turn's Changes chip, puts the files back to before that
+  turn — and the conversation with them when the harness rewinds — and keeps
+  the turns it leaves as an **earlier attempt**: the same rows, faded to 50%,
+  under an *Earlier attempt* divider at the foot of the transcript (a hairline
+  with `History`, how many turns it held, and *Go back to this attempt*). They
+  stay readable and clickable — messages select and copy, a reply's footer
+  copies it, a turn's Changes opens its diff — but nothing in them sends the
+  thread on. The divider's *Go back* puts the files where that attempt ended,
+  and its confirm says the conversation cannot follow, because the engine has
+  no way to restore messages it took out. An attempt whose state the engine
+  could not keep says so instead (`TriangleAlert`, "The state it left was not
+  kept") rather than offering a button that would pretend. The record is the
+  app's, so it lasts while the thread is open (like a question's row): the
+  engine's history no longer holds those turns.
+  The minimap's **checkpoint lane** is the same idea at thread scale: one node
+  per turn a rewind can go back to, at that turn's height, joined by a
+  `w-px` hairline and drawn in front of the strips' left edge; the head (the
+  newest) is the one `accent` mark the rail uses, the other nodes are
+  `fg/35`. Pointing at a node's height picks that turn as the strips do, and
+  the hover card adds `Checkpoint N · current` for it. The lane never asks
+  for a click of its own: rewinding is the chip's, behind a confirm.
   Logic: `state/fold.ts` (`foldTurns`).
 - **Settings reset:** a row whose value differs from its default shows a small
   reset icon before its control, on hover or keyboard focus (`Row`'s `reset`).

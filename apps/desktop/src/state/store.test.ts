@@ -65,6 +65,8 @@ import {
   resetForTests,
   resumeQueue,
   retryPendingSetup,
+  returnToAttempt,
+  rewindCheckpoint,
   saveQueuedEdit,
   selectThread,
   sendDecisionFor,
@@ -799,7 +801,7 @@ describe("engine controller with the mock engine", () => {
 
   test("thread actions: pin, archive, rename and trash", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().sessions.length === 5);
+    await until(() => useApp.getState().sessions.length === 6);
     const id = useApp.getState().sessions[1]!.id;
     togglePin(id);
     expect(useApp.getState().pinned).toEqual([id]);
@@ -830,7 +832,7 @@ describe("engine controller with the mock engine", () => {
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 5);
+    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 6);
     const id = useApp.getState().sessions[2]!.id;
     togglePin(id);
     await new Promise((r) => setTimeout(r, 10));
@@ -838,6 +840,42 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().sessions.find((x) => x.id === id)?.pinned).toBe(true);
     await setThreadStatus(id, "done");
     expect(statusOf(useApp.getState(), id)).toBe("done");
+  });
+
+  test("a rewind keeps the turns it leaves as an earlier attempt", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const id = "mock-thread-attempts";
+    selectThread(id);
+    await until(() => useApp.getState().threads[id]?.loaded === true);
+    await until(() => (useApp.getState().checkpoints[id]?.length ?? 0) === 3);
+    const second = useApp.getState().checkpoints[id]!.find((c) => c.turn === 2)!;
+
+    // The engine keeps the abandoned state, so this rewinds without asking first.
+    await rewindCheckpoint(id, second);
+    expect(useApp.getState().confirm).toBeNull();
+    await until(() => (useApp.getState().attempts[id]?.length ?? 0) === 1);
+    await until(() => useApp.getState().threads[id]?.loaded === true);
+
+    // The live transcript is the turn above the cut; the two it left read as the attempt.
+    const live = useApp.getState().threads[id]!;
+    expect(live.items.filter((i) => i.kind === "turnEnd")).toHaveLength(1);
+    const attempt = useApp.getState().attempts[id]![0]!;
+    expect(attempt.turn).toBe(2);
+    expect(attempt.items.filter((i) => i.kind === "turnEnd")).toHaveLength(2);
+    // Its head was kept, as a checkpoint of its own, and the turns above it are still listed.
+    expect(attempt.head).toBe(4);
+    const after = useApp.getState().checkpoints[id]!;
+    expect(after.map((c) => c.turn)).toEqual([1, 2, 3, 4]);
+    expect(after.find((c) => c.turn === 4)?.attempt).toBe(true);
+
+    // Going back puts the files on that attempt, and says the conversation cannot follow.
+    returnToAttempt(id, attempt.id);
+    const confirm = useApp.getState().confirm;
+    expect(confirm?.action).toBe("Restore the Files");
+    confirm!.run();
+    await until(() => useApp.getState().toasts[0]?.text === "Files restored to the earlier attempt");
+    expect(useApp.getState().attempts[id]).toHaveLength(1);
   });
 
   test("edit and resend rewinds the thread to the message first", async () => {

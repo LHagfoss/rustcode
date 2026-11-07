@@ -9,6 +9,7 @@ import type { PermissionRequest, PlanEntry } from "../acp/types";
 import { checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
 import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
+import { checkpointsByMessage } from "../state/attempts";
 import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
 import {
   foldEnds,
@@ -39,6 +40,7 @@ import {
 import { useWaiting, type Waiting, waitingLabel } from "../state/waiting";
 import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
+import { EarlierAttempts } from "./EarlierAttempts";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
 import { QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
@@ -61,7 +63,7 @@ import {
   WorkingRow,
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
-import { plainPreview, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
+import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
 export type Row = {
@@ -524,6 +526,10 @@ export function Transcript({
     return checkpointsByTurn(turns, checkpoints);
   }, [thread.items, checkpoints]);
 
+  // The turns an earlier rewind abandoned, faded under their divider after the live transcript
+  // (ui/EarlierAttempts.tsx): a record of the attempt this thread left, not part of it.
+  const attempts = useApp((s) => s.attempts[thread.id]);
+
   // The newest finished turn keeps its actions and its change line in view; the older ones wait
   // for a hover, and their changes fold away with their steps (state/fold.ts, turnChangeLine).
   const lastEnd = useMemo(() => newestTurnEnd(rows), [rows]);
@@ -658,10 +664,16 @@ export function Transcript({
     virtualizer.measure();
   }, [approvalSig, planSig, childSig]);
 
+  // Where the thread's own rows end, past the earlier attempts a rewind kept below it: the view
+  // pins there, so a new turn is never scrolled past into a record the reader is not writing to.
+  const liveEnd = useCallback((el: HTMLDivElement) => {
+    const inner = innerRef.current;
+    return Math.max(0, (inner?.offsetHeight ?? el.scrollHeight) - el.clientHeight);
+  }, []);
   const toBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, []);
+    if (el) el.scrollTop = liveEnd(el);
+  }, [liveEnd]);
 
   // Opening a thread starts at its end.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the thread changes
@@ -698,11 +710,22 @@ export function Transcript({
     turnsKey.current = {
       sig,
       turns: rows.flatMap((row, i) =>
-        row.item?.kind === "user" ? [{ row: i, title: turnTitle(row.item.text) }] : [],
+        row.item?.kind === "user" ? [{ row: i, id: row.item.id, title: turnTitle(row.item.text) }] : [],
       ),
     };
   }
   const turns = turnsKey.current.turns;
+  // Each message you sent that started a turn with a checkpoint: the minimap's checkpoint lane.
+  const checkpointNodes = useMemo(() => {
+    const byMessage = checkpointsByMessage(thread.items, turnCheckpoints);
+    const nodes: RailNode[] = [];
+    turns.forEach((turn, index) => {
+      const checkpoint = byMessage[turn.id];
+      if (checkpoint) nodes.push({ at: index, turn: checkpoint.turn });
+    });
+    return nodes;
+  }, [thread.items, turnCheckpoints, turns]);
+
   // Sending a message follows it down, even from a view scrolled up to read.
   const sentTurns = useRef({ thread: thread.id, count: turns.length });
   useLayoutEffect(() => {
@@ -739,7 +762,9 @@ export function Transcript({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    // Reading an earlier attempt is below the thread's end: the pill shows there too.
+    const end = liveEnd(el);
+    const atBottom = el.scrollTop <= end && end - el.scrollTop < 48;
     pinned.current = atBottom;
     setShowLatest(!atBottom);
     // The turn being read: the last one whose first line is above 30% of the visible part.
@@ -1100,6 +1125,9 @@ export function Transcript({
             })}
           </div>
         </div>
+        {attempts?.length ? (
+          <EarlierAttempts threadId={thread.id} cwd={thread.cwd} attempts={attempts} />
+        ) : null}
       </div>
       <TimelineRail
         turns={turns}
@@ -1110,13 +1138,15 @@ export function Transcript({
         offset={topInset}
         onJump={jumpToTurn}
         replyOf={replyOf}
+        nodes={checkpointNodes}
       />
       <button
         type="button"
         onClick={() => {
           pinned.current = true;
           setShowLatest(false);
-          scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+          const el = scrollRef.current;
+          el?.scrollTo({ top: liveEnd(el), behavior: "smooth" });
         }}
         aria-hidden={!showLatest}
         tabIndex={showLatest ? 0 : -1}

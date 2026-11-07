@@ -1,21 +1,30 @@
 // The "Changes" chip under a finished turn: what that turn changed, from its
-// checkpoint (`_rustcode/checkpoints/diff`), and Restore, which puts the
-// files back to before the turn (and the conversation too, when the
-// harness can rewind). A turn the harness reported a completion for draws
-// that card instead, so a turn never shows its changes twice
-// (state/fold.ts `turnChangeLine`).
+// checkpoint (`_rustcode/checkpoints/diff`), and Rewind here, which goes back
+// to before the turn (files and conversation when the harness can rewind) and
+// keeps the turns it leaves as an earlier attempt (state/attempts.ts). A turn
+// the harness reported a completion for draws that card instead, so a turn
+// never shows its changes twice (state/fold.ts `turnChangeLine`).
 
 import { FileDiff, History } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useState } from "react";
 import type { Checkpoint, PatchFile } from "../acp/v2";
 import { parsePatch } from "../state/diff";
-import { askConfirm, canRewind, restoreCheckpoint, setView, turnDiff, useApp } from "../state/store";
+import { canRewind, rewindCheckpoint, setView, turnDiff, useApp } from "../state/store";
 import { Patch } from "./DiffView";
 import { Pill, Skeleton } from "./primitives";
 import { DiffCount } from "./Rows";
 
-export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkpoint: Checkpoint }) {
+export function TurnChanges({
+  threadId,
+  checkpoint,
+  rewindable = true,
+}: {
+  threadId: string;
+  checkpoint: Checkpoint;
+  /** An earlier attempt's chip: its changes read, but a rewind starts from the live turn instead. */
+  rewindable?: boolean;
+}) {
   const [files, setFiles] = useState<PatchFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const thread = useApp((s) => s.threads[threadId]);
@@ -27,22 +36,7 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
       setError(e instanceof Error ? e.message : String(e)),
     );
   };
-  const restore = () =>
-    askConfirm({
-      title: `Restore the files to before turn ${checkpoint.turn}?`,
-      message: rewind
-        ? "The files go back to how they were before this turn. You can take the conversation back too; later messages and their replies are then removed."
-        : "The files go back to how they were before this turn. This harness cannot rewind, so the conversation stays as it is.",
-      action: "Files Only",
-      destructive: true,
-      run: () => void restoreCheckpoint(threadId, checkpoint.turn, false),
-      alt: rewind
-        ? {
-            action: "Files and Conversation",
-            run: () => void restoreCheckpoint(threadId, checkpoint.turn, true),
-          }
-        : undefined,
-    });
+  const rewindTo = () => void rewindCheckpoint(threadId, checkpoint);
   if (!checkpoint.filesChanged) return null;
   return (
     <Popover.Root onOpenChange={(open) => open && load()}>
@@ -70,9 +64,15 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
             </span>
             <span className="flex-1" />
             <Pill onClick={() => setView({ kind: "review", threadId })}>Review…</Pill>
-            <Pill disabled={running} onClick={restore} title={running ? "Stop the turn first" : undefined}>
-              <History size={12} /> Restore…
-            </Pill>
+            {rewindable && (
+              <Pill
+                disabled={running}
+                onClick={rewindTo}
+                title={running ? "Stop the turn first" : rewindNote(rewind)}
+              >
+                <History size={12} /> Rewind here
+              </Pill>
+            )}
           </div>
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
             {error && <p className="px-1 text-callout text-fg-muted">{error}</p>}
@@ -94,6 +94,13 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
       </Popover.Portal>
     </Popover.Root>
   );
+}
+
+/** What the pill says above it, so the outcome is not a surprise: the conversation goes too, or not. */
+function rewindNote(rewind: boolean): string {
+  return rewind
+    ? "Put the files and the conversation back to before this turn; the turns it leaves stay below as an earlier attempt"
+    : "Put the files back to before this turn; this harness cannot rewind the conversation";
 }
 
 /** The shape of two changed files: their header line, then the patch's lines. */

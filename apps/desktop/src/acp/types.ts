@@ -86,6 +86,11 @@ export interface AgentInfo {
   sessionMove: boolean;
   /** `_rustcode/session/repair`: Repair Thread for one that will not open. */
   sessionRepair: boolean;
+  /**
+   * `_rustcode/checkpoints/restore` with `keep`: a rewind keeps the state it abandons as a
+   * checkpoint, so the attempt it leaves can be returned to.
+   */
+  checkpointAttempts: boolean;
 }
 
 export function parseAgentInfo(result: Json): AgentInfo {
@@ -113,6 +118,7 @@ export function parseAgentInfo(result: Json): AgentInfo {
     pullRequests: num(meta?.pullRequests) !== undefined,
     sessionMove: num(meta?.sessionMove) !== undefined,
     sessionRepair: num(meta?.sessionRepair) !== undefined,
+    checkpointAttempts: (num(meta?.checkpoints) ?? 0) >= 2,
   };
 }
 
