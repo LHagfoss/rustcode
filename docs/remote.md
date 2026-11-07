@@ -123,6 +123,41 @@ To choose another address by hand: `rustcode remote stop`, then
 register with the new gateway on their own within two minutes; devices stay
 paired.
 
+## In the desktop app
+
+Settings › **Remote access** is the same switch, without a terminal. Turn it
+on and every thread the app has open is shared: on the built-in harness and on
+Codex, Claude Code, Pi, OpenCode or any other external harness
+([harnesses](harnesses.md)). A thread opened later is shared as soon as it
+exists, and closing it ends its share. Switching it off stops the gateway and
+every device, exactly as `/remote off` does; pairings are kept.
+
+| In the app | What it does |
+| --- | --- |
+| **Remote access** switch | On: starts the gateway and shares every open thread. Off: stops it. |
+| **Pair a device…** | Calls the same pairing challenge as `/remote pair`: a QR code, the address, the manual code, the countdown and the wrong codes left. Remote access is switched on first if it was off. |
+| **Gateway › Address** | The `host:port` a device dials, and whether it is reachable from another machine at all. |
+| **Gateway › Paired devices** | How many devices are paired, with their names. Revoking one is `rustcode remote revoke` for now. |
+| A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
+
+The app and a terminal share one setting: `/remote on` in a terminal shares
+the app's open threads too, and the app's switch shows that it is on. While a
+thread runs on an external harness, a prompt sent from a device is run through
+the harness exactly as the app's own message is, so it shows in both places;
+cancelling, steering, answering a question and resolving an approval work the
+same way. One rough edge: an approval a device resolves leaves the app's
+approval card on screen until the turn ends, because ACP has no way to
+withdraw a request already sent to the client.
+
+The ACP methods behind the page (`_rustcode/remote`, `/start`, `/pair`,
+`/stop`, in `engine/src/acp/remote.rs`) take an optional `sessionId`: with it
+they describe and drive that thread's share, without it the machine's own
+switch, gateway and challenge. Their answers add `qrRows` (the QR code as rows
+of `0` and `1`, quiet zone included), `target` (the harness a shared thread
+runs on) and, for the machine, `gateway.pairing` and `gateway.devices` from the
+gateway's own status. The wire protocol to the gateway
+([remote-protocol](remote-protocol/README.md)) is unchanged.
+
 ## In the terminal
 
 | Command | Behavior |

@@ -259,6 +259,15 @@ composer's keys stay outside the table.
 
 ## Features
 
+- **Remote access.** Settings › Remote access switches remote access on for
+  this Mac and pairs a phone (`docs/remote.md` › In the desktop app). While it
+  is on, every thread the app has open is shared with the paired devices — on
+  any harness — and a prompt, cancel, question or approval from the phone acts
+  on the desktop thread, showing up in the app as if it were typed there.
+  **Pair a device…** shows the QR code, the address, the manual code and the
+  countdown; a thread's header carries a chip while it is shared and a count
+  while a device is attached. The page reads `_rustcode/remote`,
+  `/start`, `/pair` and `/stop` (`engine/src/acp/remote.rs`).
 - **Composer.** One glass card: the field, then a single footer row inside
   it, **+** (attaching and new threads), the project folder, *Worktree*
   (new threads) and the branch, the permissions mode, the plan meter, the
@@ -1265,7 +1274,8 @@ From the SwiftUI app, still missing or partial:
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, remote pairing.
+  keybinding editor, Discord presence, revoking a paired device (Settings ›
+  Remote access lists them; `rustcode remote revoke` in a terminal revokes).
 - Terminal tabs (one terminal per folder).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The

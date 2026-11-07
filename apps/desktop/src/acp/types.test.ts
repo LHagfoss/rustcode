@@ -7,6 +7,7 @@ import {
   parseAgentInfo,
   parseHarnessSnapshot,
   parsePermissionRequest,
+  parseRemoteStatus,
   parseSessionList,
   parseSessionUpdate,
   projectName,
@@ -222,5 +223,71 @@ describe("projectName", () => {
   test("a path with no folder left says itself", () => {
     expect(projectName("")).toBe("");
     expect(projectName("/")).toBe("/");
+  });
+});
+
+describe("remote access", () => {
+  test("reads the machine's gateway, devices and pairing challenge", () => {
+    const status = parseRemoteStatus({
+      available: true,
+      enabled: true,
+      shared: false,
+      gateway: {
+        connected: true,
+        advertisedAddress: "192.168.31.185:17879",
+        loopbackOnly: false,
+        attachedDevices: [],
+        connectedDevices: ["Lars's iPhone"],
+        pairedDevices: 1,
+        pairing: { expiresInSecs: 87, attemptsLeft: 4 },
+      },
+      offer: {
+        qrPayload: '{"protocol_version":1}',
+        qrRows: ["0110", "1001"],
+        code: "4821-7730",
+        address: "192.168.31.185:17879",
+        expiresInSecs: 87,
+        loopbackOnly: false,
+        challenge: 7,
+      },
+      pairedDevices: 1,
+      devices: [{ id: "device-1", name: "Lars's iPhone" }],
+    });
+    expect(status.enabled).toBe(true);
+    expect(status.shared).toBe(false);
+    expect(status.gateway?.advertisedAddress).toBe("192.168.31.185:17879");
+    expect(status.gateway?.pairing?.attemptsLeft).toBe(4);
+    expect(status.offer?.qrRows).toEqual(["0110", "1001"]);
+    expect(status.offer?.code).toBe("4821-7730");
+    expect(status.devices).toEqual([{ id: "device-1", name: "Lars's iPhone" }]);
+  });
+
+  test("a thread's share names the device attached to it", () => {
+    const status = parseRemoteStatus({
+      available: true,
+      enabled: true,
+      shared: true,
+      sessionId: "session-1",
+      target: "claude-code",
+      gateway: {
+        connected: true,
+        attachedDevices: ["Lars's iPhone"],
+        connectedDevices: ["Lars's iPhone"],
+      },
+      pairedDevices: 1,
+      devices: [{ id: "device-1", name: "Lars's iPhone" }],
+    });
+    expect(status.shared).toBe(true);
+    expect(status.target).toBe("claude-code");
+    expect(status.gateway?.attachedDevices).toEqual(["Lars's iPhone"]);
+  });
+
+  test("an answer with nothing set reads as off, never as on", () => {
+    const status = parseRemoteStatus({});
+    expect(status.enabled).toBe(false);
+    expect(status.shared).toBe(false);
+    expect(status.pairedDevices).toBe(0);
+    expect(status.devices).toEqual([]);
+    expect(status.offer).toBeUndefined();
   });
 });

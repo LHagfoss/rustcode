@@ -1740,6 +1740,14 @@ export class MockEngine {
   private presence = true;
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
+  /**
+   * Remote access (docs/remote.md): the machine's switch, the pairing
+   * challenge on screen and the devices paired with this Mac. Off until
+   * Settings › Remote access switches it on, as `remote/disabled` holds it.
+   */
+  private remoteEnabled = false;
+  private remoteDevices: JsonObject[] = [{ id: "device-1", name: "Lars's iPhone" }];
+  private remotePairing: { code: string; expiresAt: number; attemptsLeft: number } | null = null;
   private removedWorktrees = new Set<string>();
   /** The link book the app keeps in the data store: none until it saves one, and kept in `options` as the engine's disk does. */
   private get linkBook(): JsonObject | undefined {
@@ -1792,6 +1800,56 @@ export class MockEngine {
       remainingSecs: 42 * 60,
     },
   ];
+
+  /**
+   * `_rustcode/remote`: the machine's gateway, paired devices and pairing
+   * challenge, or one thread's share, shaped as the engine answers
+   * (engine/src/acp/remote.rs).
+   */
+  private remoteStatus(sessionId: string | undefined): JsonObject {
+    const pairing = this.remotePairing;
+    const secondsLeft = pairing ? Math.max(0, Math.round((pairing.expiresAt - Date.now()) / 1000)) : 0;
+    if (pairing && secondsLeft === 0) this.remotePairing = null;
+    const open = this.remoteEnabled;
+    return {
+      available: true,
+      enabled: open,
+      shared: sessionId ? open : false,
+      ...(sessionId ? { sessionId, target: "rustcode", registrationEpoch: 1 } : {}),
+      gateway: open
+        ? {
+            connected: true,
+            advertisedAddress: "192.168.31.185:17879",
+            listenAddress: "192.168.31.185:17879",
+            loopbackOnly: false,
+            pairedDevices: this.remoteDevices.length,
+            // A phone attached to the thread on screen, so its header shows it.
+            attachedDevices: sessionId ? ["Lars's iPhone"] : [],
+            connectedDevices: ["Lars's iPhone"],
+            pairingOpen: !!pairing && secondsLeft > 0,
+            pairing: pairing ? { expiresInSecs: secondsLeft, attemptsLeft: pairing.attemptsLeft } : null,
+          }
+        : null,
+      offer:
+        pairing && secondsLeft > 0
+          ? {
+              qrPayload: '{"protocol_version":1,"address":"192.168.31.185:17879"}',
+              qrRows: mockQrRows(),
+              code: pairing.code,
+              address: "192.168.31.185:17879",
+              expiresInSecs: secondsLeft,
+              loopbackOnly: false,
+              challenge: 7,
+              lockedForSecs: null,
+            }
+          : null,
+      pairingExpired: !!pairing && secondsLeft === 0,
+      pairingPending: false,
+      pairingError: null,
+      pairedDevices: this.remoteDevices.length,
+      devices: this.remoteDevices,
+    };
+  }
 
   /** A timed approval the user just gave in the mock: listed and revocable like the engine's. */
   private addGrant(prefix: string) {
@@ -2726,6 +2784,36 @@ export class MockEngine {
       }
       case "_rustcode/presence":
         return { enabled: this.presence, discordDetected: true };
+      case "_rustcode/remote": {
+        const sessionId = str(params.sessionId);
+        return this.remoteStatus(sessionId);
+      }
+      case "_rustcode/remote/start": {
+        const sessionId = str(params.sessionId);
+        // Settings' switch names no thread and switches the machine on; a
+        // thread's own start shares that thread.
+        if (!sessionId) {
+          await this.sleep(this.delay * 4);
+          this.remoteEnabled = true;
+        }
+        return this.remoteStatus(sessionId);
+      }
+      case "_rustcode/remote/pair": {
+        await this.sleep(this.delay * 4);
+        this.remoteEnabled = true;
+        this.remotePairing = {
+          code: "4821-7730",
+          expiresAt: Date.now() + 2 * 60_000,
+          attemptsLeft: 5,
+        };
+        return this.remoteStatus(str(params.sessionId));
+      }
+      case "_rustcode/remote/stop": {
+        await this.sleep(this.delay * 3);
+        this.remoteEnabled = false;
+        this.remotePairing = null;
+        return this.remoteStatus(str(params.sessionId));
+      }
       case "_rustcode/presence/set":
         this.presence = params.enabled === true;
         return { enabled: this.presence, discordDetected: true };
@@ -3933,4 +4021,37 @@ export function mockGitChanges(cwd: string, base?: string): JsonObject {
     diff += `diff --git a/src/ui/LoginForm.tsx b/src/ui/LoginForm.tsx\nnew file mode 100644\n--- /dev/null\n+++ b/src/ui/LoginForm.tsx\n${LOGIN_PATCH}\n`;
   }
   return { branch: cwd.includes("worktrees") ? "feat/login-form" : "main", files, diff };
+}
+
+/**
+ * A QR-shaped module matrix for the mock's pairing dialog (one string of `0`
+ * and `1` per row, quiet zone included). It is drawn, not encoded: the mock
+ * has no pairing payload worth scanning, and the dialog only needs the shape a
+ * real code has. The engine sends the real one (`remote_gateway/qr.rs`).
+ */
+function mockQrRows(size = 37): string[] {
+  let seed = 0x31_85_79;
+  const next = () => {
+    seed = (seed * 1_103_515_245 + 12_345) & 0x7fff_ffff;
+    return seed / 0x7fff_ffff;
+  };
+  const rows: string[] = [];
+  for (let y = 0; y < size; y += 1) {
+    let row = "";
+    for (let x = 0; x < size; x += 1) {
+      const inFinder = (ox: number, oy: number) =>
+        x >= ox && x < ox + 7 && y >= oy && y < oy + 7
+          ? // A finder pattern: a dark ring with a dark 3x3 centre.
+            Math.max(Math.abs(x - ox - 3), Math.abs(y - oy - 3)) !== 2
+          : null;
+      // A four-module quiet zone, as a scanner expects.
+      const left = inFinder(4, 4);
+      const right = inFinder(size - 11, 4);
+      const bottom = inFinder(4, size - 11);
+      const finder = left ?? right ?? bottom;
+      row += finder === null ? (next() > 0.5 ? "1" : "0") : finder ? "1" : "0";
+    }
+    rows.push(row);
+  }
+  return rows;
 }

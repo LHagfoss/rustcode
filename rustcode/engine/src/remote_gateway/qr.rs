@@ -29,29 +29,68 @@ pub const PANEL_ROW_MARK: char = '\u{2060}';
 /// module: `▀` upper, `▄` lower, `█` both. `None` when the payload is too
 /// long for a QR code.
 pub fn rows(payload: &str) -> Option<Vec<String>> {
-    let code = QrCode::with_error_correction_level(payload.as_bytes(), EcLevel::L).ok()?;
-    let width = code.width();
-    let colors = code.to_colors();
-    let size = width + 2 * QUIET_ZONE;
-    let dark = |x: usize, y: usize| {
-        let inside = |v: usize| (QUIET_ZONE..QUIET_ZONE + width).contains(&v);
-        inside(x) && inside(y) && colors[(y - QUIET_ZONE) * width + (x - QUIET_ZONE)] == Color::Dark
-    };
+    let matrix = matrix(payload)?;
+    let size = matrix.len();
     Some(
         (0..size)
             .step_by(2)
             .map(|y| {
                 (0..size)
-                    .map(|x| match (dark(x, y), dark(x, y + 1)) {
-                        (true, true) => '█',
-                        (true, false) => '▀',
-                        (false, true) => '▄',
-                        (false, false) => ' ',
+                    .map(
+                        |x| match (matrix[y][x], matrix.get(y + 1).is_some_and(|row| row[x])) {
+                            (true, true) => '█',
+                            (true, false) => '▀',
+                            (false, true) => '▄',
+                            (false, false) => ' ',
+                        },
+                    )
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+/// The code as a square of modules, quiet zone included, `true` for a dark
+/// module. A client that can draw a bitmap (the desktop app's pairing dialog)
+/// takes the shape from here and paints it; `None` when the payload is too
+/// long for a QR code.
+pub fn matrix(payload: &str) -> Option<Vec<Vec<bool>>> {
+    let code = QrCode::with_error_correction_level(payload.as_bytes(), EcLevel::L).ok()?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let size = width + 2 * QUIET_ZONE;
+    let inside = |v: usize| (QUIET_ZONE..QUIET_ZONE + width).contains(&v);
+    Some(
+        (0..size)
+            .map(|y| {
+                (0..size)
+                    .map(|x| {
+                        inside(x)
+                            && inside(y)
+                            && colors[(y - QUIET_ZONE) * width + (x - QUIET_ZONE)] == Color::Dark
                     })
                     .collect()
             })
             .collect(),
     )
+}
+
+/// [`matrix`] as rows of `0` (light) and `1` (dark), the shape the ACP
+/// `_rustcode/remote*` answers carry for the desktop app. Empty when the
+/// payload does not fit a QR code.
+pub fn bitmap(payload: &str) -> Vec<String> {
+    matrix(payload)
+        .map(|matrix| {
+            matrix
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|dark| if *dark { '1' } else { '0' })
+                        .collect::<String>()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The code for a terminal that understands ANSI colours: black on white

@@ -70,6 +70,15 @@ export const Method = {
   /** The timed approvals still in force ("Allow for 1 hour"), and revoking one. */
   permissions: "_rustcode/permissions",
   permissionsRevoke: "_rustcode/permissions/revoke",
+  /**
+   * Remote access (`docs/remote.md`): share this app's threads with paired
+   * devices. Each takes a `sessionId`, or none for the machine's own switch,
+   * gateway and pairing challenge (Settings › Remote access).
+   */
+  remote: "_rustcode/remote",
+  remoteStart: "_rustcode/remote/start",
+  remotePair: "_rustcode/remote/pair",
+  remoteStop: "_rustcode/remote/stop",
 } as const;
 
 // ---------------------------------------------------------------- initialize
@@ -1100,5 +1109,142 @@ export function parseSessionHarness(result: Json): SessionHarness | undefined {
     id,
     capabilities: parseCapabilities(h?.capabilities, id === "rustcode"),
     ...(account ? { account } : {}),
+  };
+}
+
+// ---------------------------------------------------------------- remote access
+
+/** A phone or tablet paired with this Mac, as `_rustcode/remote` names it. */
+export interface RemoteDevice {
+  id: string;
+  name: string;
+}
+
+/**
+ * One pairing challenge: what a device scans or types, and how long it has.
+ * `qrRows` is the code itself, one string per row of `0` (light) and `1`
+ * (dark) modules with the quiet zone included, so the app draws it without a
+ * QR encoder (`engine/src/remote_gateway/qr.rs`).
+ */
+export interface RemoteOffer {
+  qrPayload?: string;
+  qrRows?: string[];
+  code?: string;
+  address?: string;
+  expiresInSecs: number;
+  loopbackOnly?: boolean;
+  challenge?: number;
+  /** Pairing is locked on this host for this long after too many wrong codes. */
+  lockedForSecs?: number;
+}
+
+/** Where the gateway listens and who is on it. */
+export interface RemoteGateway {
+  connected: boolean;
+  advertisedAddress?: string;
+  listenAddress?: string;
+  /** The address is loopback: no phone on the network can reach it. */
+  loopbackOnly?: boolean;
+  /** Devices attached to this thread, when the answer names one. */
+  attachedDevices?: string[];
+  connectedDevices?: string[];
+  /** Devices connected to the gateway, attached to this thread or not. */
+  pairedDevices?: number;
+  /** Wrong codes the open challenge still tolerates, and how long it has. */
+  pairing?: { expiresInSecs?: number; attemptsLeft?: number; lockedForSecs?: number } | null;
+}
+
+/**
+ * The engine's answer to `_rustcode/remote` (status), `/start`, `/pair` and
+ * `/stop`. With no `sessionId` it describes the machine; with one, that
+ * thread's share.
+ */
+export interface RemoteStatus {
+  available: boolean;
+  /** Remote access is switched on for this machine. */
+  enabled: boolean;
+  /** This thread is shared with paired devices. */
+  shared: boolean;
+  sessionId?: string;
+  /** The harness the shared thread runs on. */
+  target?: string;
+  gateway?: RemoteGateway | null;
+  offer?: RemoteOffer | null;
+  pairingExpired?: boolean;
+  pairingPending?: boolean;
+  pairingError?: string | null;
+  /** Why sharing ended, when it did. */
+  error?: string | null;
+  pairedDevices: number;
+  devices: RemoteDevice[];
+}
+
+function parseOffer(value: Json | undefined): RemoteOffer | undefined {
+  const o = obj(value);
+  if (!o) return undefined;
+  return {
+    qrPayload: str(o.qrPayload),
+    qrRows: arr(o.qrRows)
+      ?.map((row) => str(row))
+      .filter((row): row is string => !!row),
+    code: str(o.code),
+    address: str(o.address),
+    expiresInSecs: num(o.expiresInSecs) ?? 0,
+    loopbackOnly: bool(o.loopbackOnly),
+    challenge: num(o.challenge),
+    lockedForSecs: num(o.lockedForSecs),
+  };
+}
+
+function parseGateway(value: Json | undefined): RemoteGateway | undefined {
+  const o = obj(value);
+  if (!o) return undefined;
+  const pairing = obj(o.pairing);
+  const names = (list: Json | undefined) =>
+    arr(list)
+      ?.map((name) => str(name))
+      .filter((name): name is string => !!name) ?? [];
+  return {
+    connected: bool(o.connected) ?? false,
+    advertisedAddress: str(o.advertisedAddress),
+    listenAddress: str(o.listenAddress),
+    loopbackOnly: bool(o.loopbackOnly),
+    attachedDevices: names(o.attachedDevices),
+    connectedDevices: names(o.connectedDevices),
+    pairedDevices: num(o.pairedDevices),
+    pairing: pairing
+      ? {
+          expiresInSecs: num(pairing.expiresInSecs),
+          attemptsLeft: num(pairing.attemptsLeft),
+          lockedForSecs: num(pairing.lockedForSecs),
+        }
+      : undefined,
+  };
+}
+
+export function parseRemoteStatus(value: Json): RemoteStatus {
+  const root = obj(value);
+  return {
+    available: bool(root?.available) ?? true,
+    enabled: bool(root?.enabled) ?? false,
+    shared: bool(root?.shared) ?? false,
+    sessionId: str(root?.sessionId),
+    target: str(root?.target),
+    gateway: parseGateway(root?.gateway),
+    offer: parseOffer(root?.offer),
+    pairingExpired: bool(root?.pairingExpired),
+    pairingPending: bool(root?.pairingPending),
+    pairingError: str(root?.pairingError),
+    error: str(root?.error),
+    pairedDevices: num(root?.pairedDevices) ?? 0,
+    devices:
+      arr(root?.devices)
+        ?.map((device) => {
+          const entry = obj(device);
+          const id = str(entry?.id);
+          const name = str(entry?.name);
+          return id && name ? { id, name } : null;
+        })
+        .filter((device): device is RemoteDevice => !!device) ?? [],
   };
 }

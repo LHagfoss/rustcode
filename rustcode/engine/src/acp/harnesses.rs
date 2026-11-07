@@ -294,6 +294,7 @@ pub(crate) async fn new_session(
     asked: harness::HarnessRequest,
     connection: &ConnectionTo<Client>,
     orchestration: u8,
+    remote: &super::remote::RemoteManager,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
     let cwd = super::canonical_acp_cwd(&request.cwd, "session/new")?;
     let id = asked.harness.clone().unwrap_or_default();
@@ -339,10 +340,13 @@ pub(crate) async fn new_session(
         &session_id,
         &super::session_workspace(cwd, request.additional_directories.clone()),
     );
-    let sink = Arc::new(AcpClientSink {
-        connection: connection.clone(),
-        session_id: session_id.clone(),
-    });
+    let sink = remote.wrap_sink(
+        Arc::new(AcpClientSink {
+            connection: connection.clone(),
+            session_id: session_id.clone(),
+        }),
+        &session_id,
+    );
     let session = ExternalSession::new(
         session_id.clone(),
         resolved.clone(),
@@ -402,6 +406,7 @@ pub(crate) async fn load_session(
     record: store::HarnessRecord,
     connection: &ConnectionTo<Client>,
     orchestration: u8,
+    remote: &super::remote::RemoteManager,
 ) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
     let session_id = request.session_id.to_string();
     let cwd = super::canonical_acp_cwd(&request.cwd, "session/load")?;
@@ -437,10 +442,13 @@ pub(crate) async fn load_session(
         if open.contains_key(&session_id) {
             return Err(failure("session is already active".to_owned()));
         }
-        let sink = Arc::new(AcpClientSink {
-            connection: connection.clone(),
-            session_id: session_id.clone(),
-        });
+        let sink = remote.wrap_sink(
+            Arc::new(AcpClientSink {
+                connection: connection.clone(),
+                session_id: session_id.clone(),
+            }),
+            &session_id,
+        );
         let session = ExternalSession::new(
             session_id.clone(),
             resolved.clone(),
@@ -465,7 +473,7 @@ pub(crate) async fn load_session(
         if let Err(error) =
             connection.send_notification(SessionNotification::new(session_id.clone(), update))
         {
-            close(sessions, &session_id).await;
+            close(sessions, &session_id, remote).await;
             return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
         }
     }
@@ -520,6 +528,7 @@ pub(crate) async fn switch(
     builtin_cwd: Option<std::path::PathBuf>,
     connection: &ConnectionTo<Client>,
     orchestration: u8,
+    remote: &super::remote::RemoteManager,
 ) -> Result<Value, agent_client_protocol::Error> {
     let session_id = request.session_id.clone();
     let to = request.harness.trim().to_owned();
@@ -571,7 +580,7 @@ pub(crate) async fn switch(
     });
     let from_label = harness::handoff::label(&from, from_account_name.as_deref());
     if current.is_some() {
-        close(sessions, &session_id).await;
+        close(sessions, &session_id, remote).await;
     }
     let asked = harness::HarnessRequest {
         harness: Some(to.clone()),
@@ -614,10 +623,13 @@ pub(crate) async fn switch(
     let divider = harness::handoff::divider(&marker);
     history.push(marker);
 
-    let sink = Arc::new(AcpClientSink {
-        connection: connection.clone(),
-        session_id: session_id.clone(),
-    });
+    let sink = remote.wrap_sink(
+        Arc::new(AcpClientSink {
+            connection: connection.clone(),
+            session_id: session_id.clone(),
+        }),
+        &session_id,
+    );
     let session = ExternalSession::new(
         session_id.clone(),
         resolved.clone(),
@@ -643,11 +655,21 @@ pub(crate) async fn switch(
 }
 
 /// Close one external thread; whether it was one.
-pub(crate) async fn close(sessions: &ExternalSessions, session_id: &str) -> bool {
+pub(crate) async fn close(
+    sessions: &ExternalSessions,
+    session_id: &str,
+    remote: &super::remote::RemoteManager,
+) -> bool {
     let session = sessions.lock().await.remove(session_id);
     let Some(session) = session else {
         return false;
     };
+    remote
+        .stop_session(
+            session_id,
+            crate::remote::SessionCloseReason::SessionChanged,
+        )
+        .await;
     session.close().await;
     crate::orchestration::hub::release(session_id);
     super::unmark_acp_session(session_id);

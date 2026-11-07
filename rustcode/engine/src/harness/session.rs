@@ -868,6 +868,16 @@ impl ExternalSession {
         self.adapter.lock().await.is_some()
     }
 
+    /// The transcript recorded so far. A share of this thread starts its
+    /// mirror from it, so nothing recorded before the share is missing.
+    pub(crate) fn recorded_history(&self) -> Vec<crate::app::ChatMessage> {
+        self.transcript
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .history
+            .clone()
+    }
+
     /// The transcript recorded so far (tests).
     #[cfg(test)]
     pub(crate) fn history(&self) -> Vec<crate::app::ChatMessage> {
@@ -1758,6 +1768,55 @@ pub(crate) mod test_support {
             session,
             updates,
             permissions,
+        }
+    }
+
+    /// A thread whose client is `wrap`ped around a sink that never answers a
+    /// permission request by itself: only whoever the wrapper adds can. Used
+    /// where a test answers from somewhere other than the client, as a paired
+    /// device does.
+    pub(crate) fn thread_with_pending_client(
+        harness: &ResolvedHarness,
+        wrap: impl FnOnce(Arc<dyn ClientSink>) -> Arc<dyn ClientSink>,
+    ) -> Thread {
+        let (updates_tx, updates) = mpsc::unbounded_channel();
+        let (permissions_tx, permissions) = mpsc::unbounded_channel();
+        let recording: Arc<dyn ClientSink> = Arc::new(PendingSink {
+            updates: updates_tx,
+            permissions: permissions_tx,
+        });
+        let sink = wrap(recording);
+        let record = HarnessRecord::new(&harness.id, std::env::temp_dir());
+        let session = ExternalSession::new(
+            "test-thread".to_owned(),
+            harness.clone(),
+            record,
+            Vec::new(),
+            sink,
+            false,
+        );
+        Thread {
+            session,
+            updates,
+            permissions,
+        }
+    }
+
+    /// A sink that records what it is sent and never answers a permission
+    /// request on its own.
+    pub(crate) struct PendingSink {
+        pub updates: mpsc::UnboundedSender<SessionUpdate>,
+        pub permissions: mpsc::UnboundedSender<RequestPermissionRequest>,
+    }
+
+    impl ClientSink for PendingSink {
+        fn update(&self, update: SessionUpdate) {
+            let _ = self.updates.send(update);
+        }
+
+        fn request_permission(&self, request: RequestPermissionRequest) -> PermissionFuture {
+            let _ = self.permissions.send(request);
+            Box::pin(std::future::pending())
         }
     }
 

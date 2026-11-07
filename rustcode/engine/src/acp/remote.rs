@@ -12,7 +12,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
+    ContentBlock, ContentChunk, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SessionNotification, SessionUpdate, TextContent,
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,11 @@ use super::AcpSession;
 use super::session::{KnownTaskIds, SessionTurnState};
 use crate::app::AppState;
 use crate::controller::AgentUiEvent;
+#[cfg(unix)]
+use crate::harness::session::{ClientSink, ExternalSession, PermissionFuture};
 use crate::remote::SessionCloseReason;
+#[cfg(unix)]
+use crate::remote::harness::HarnessMirror;
 use rustcode_tasks::TaskEvent;
 
 // Shares and pairing offers are driven by the remote gateway, which the
@@ -31,12 +36,13 @@ use rustcode_tasks::TaskEvent;
 // stub with the same surface that reports the feature as unavailable.
 #[cfg(unix)]
 use crate::remote::owner::{
-    GatewayLinkStatus, OwnerCommand, OwnerLink, OwnerMessage, default_connector,
+    GatewayLinkStatus, OwnerCommand, OwnerConnector, OwnerLink, OwnerMessage, default_connector,
     next_registration_epoch,
 };
 #[cfg(unix)]
 use crate::remote::{
-    OwnerFollowUp, ProjectionLimits, ReceiptState, RemoteResponse, SessionPublisher,
+    OwnerFollowUp, ProjectionLimits, PromptDisposition, ReceiptState, RemoteError, RemoteErrorCode,
+    RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, SessionPublisher,
     SessionRegistration, apply_session_mutation, read_session,
 };
 #[cfg(unix)]
@@ -58,6 +64,9 @@ pub(crate) const REMOTE_CAPABILITY_VERSION: u64 = 1;
 #[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/remote", response = serde_json::Value)]
 pub(crate) struct RemoteStatusRequest {
+    /// The thread to report on; empty for the machine itself (Settings ›
+    /// Remote access).
+    #[serde(default)]
     pub session_id: String,
 }
 
@@ -65,6 +74,8 @@ pub(crate) struct RemoteStatusRequest {
 #[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/remote/start", response = serde_json::Value)]
 pub(crate) struct RemoteStartRequest {
+    /// The thread to share; empty switches remote access on for the machine.
+    #[serde(default)]
     pub session_id: String,
     /// Ask for a pairing offer as soon as the gateway is connected.
     #[serde(default)]
@@ -75,6 +86,8 @@ pub(crate) struct RemoteStartRequest {
 #[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/remote/pair", response = serde_json::Value)]
 pub(crate) struct RemotePairRequest {
+    /// The thread whose share shows the code; empty pairs the machine.
+    #[serde(default)]
     pub session_id: String,
 }
 
@@ -82,6 +95,7 @@ pub(crate) struct RemotePairRequest {
 #[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/remote/stop", response = serde_json::Value)]
 pub(crate) struct RemoteStopRequest {
+    #[serde(default)]
     pub session_id: String,
 }
 
@@ -247,11 +261,15 @@ pub(crate) struct RemoteManager {
 #[derive(Default)]
 struct Inner {
     shares: std::collections::HashMap<String, Arc<Share>>,
+    /// The gateway link factory, replaced in tests that have no gateway: a
+    /// share is otherwise opened against the machine's own gateway.
+    #[cfg(test)]
+    connector: Option<Arc<dyn Fn() -> Box<dyn OwnerConnector> + Send + Sync>>,
 }
 
 #[cfg(unix)]
 struct Share {
-    session: Arc<RemoteSession>,
+    target: ShareTarget,
     registration: SessionRegistration,
     state: Mutex<ShareState>,
     events: mpsc::UnboundedSender<AgentUiEvent>,
@@ -261,7 +279,7 @@ struct Share {
 
 #[cfg(unix)]
 struct ShareState {
-    publisher: SessionPublisher,
+    publisher: Publisher,
     link: OwnerLink,
     events: mpsc::UnboundedReceiver<AgentUiEvent>,
     gateway: Option<GatewayLinkStatus>,
@@ -270,6 +288,141 @@ struct ShareState {
     offer: Option<PairingOffer>,
     pairing_error: Option<String>,
     closed: Option<String>,
+}
+
+/// What a share publishes. The built-in harness publishes events projected
+/// from its state; a thread on an external harness publishes a snapshot
+/// whenever its mirror changed.
+#[cfg(unix)]
+enum Publisher {
+    Acp(SessionPublisher),
+    Harness {
+        sequence: u64,
+        /// Asked for by the gateway, or owed after a lagging link.
+        snapshot_due: bool,
+        lagging: bool,
+    },
+}
+
+#[cfg(unix)]
+impl Publisher {
+    fn observe(&mut self, event: &AgentUiEvent) {
+        if let Publisher::Acp(publisher) = self {
+            publisher.observe(event);
+        }
+    }
+
+    fn request_snapshot(&mut self) {
+        match self {
+            Publisher::Acp(publisher) => publisher.request_snapshot(),
+            Publisher::Harness { snapshot_due, .. } => *snapshot_due = true,
+        }
+    }
+
+    fn mark_lagging(&mut self) {
+        match self {
+            Publisher::Acp(publisher) => publisher.mark_lagging(),
+            Publisher::Harness { lagging, .. } => *lagging = true,
+        }
+    }
+
+    fn owns(&self, state: &AppState) -> bool {
+        match self {
+            Publisher::Acp(publisher) => publisher.owns(state),
+            Publisher::Harness { .. } => true,
+        }
+    }
+
+    fn publish(&mut self, state: &AppState, room_for_resync: bool) -> Vec<OwnerMessage> {
+        match self {
+            Publisher::Acp(publisher) => publisher.publish(state, room_for_resync),
+            Publisher::Harness { .. } => Vec::new(),
+        }
+    }
+
+    fn sequence(&self) -> u64 {
+        match self {
+            Publisher::Acp(publisher) => publisher.sequence(),
+            Publisher::Harness { sequence, .. } => *sequence,
+        }
+    }
+
+    /// For a harness share: the snapshot owed this pass, with the reason a
+    /// subscriber must discard what it holds (`None` for a plain update).
+    /// `dirty` says the mirror changed since the last one.
+    fn harness_snapshot(
+        &mut self,
+        dirty: bool,
+        room_for_resync: bool,
+    ) -> Option<Option<crate::remote::ResyncReason>> {
+        let Publisher::Harness {
+            sequence,
+            snapshot_due,
+            lagging,
+        } = self
+        else {
+            return None;
+        };
+        if *lagging {
+            if !room_for_resync {
+                return None;
+            }
+            *lagging = false;
+            *snapshot_due = false;
+            *sequence += 1;
+            return Some(Some(crate::remote::ResyncReason::Lagged));
+        }
+        if !*snapshot_due && !dirty {
+            return None;
+        }
+        *snapshot_due = false;
+        *sequence += 1;
+        Some(None)
+    }
+}
+
+/// One shared thread: on the built-in harness, or on an external one.
+#[cfg(unix)]
+enum ShareTarget {
+    Acp(Arc<RemoteSession>),
+    Harness(Arc<HarnessShare>),
+}
+
+#[cfg(unix)]
+impl ShareTarget {
+    /// Which harness the shared thread runs on: `rustcode` for the built-in
+    /// one, the harness id otherwise.
+    fn kind(&self) -> &str {
+        match self {
+            ShareTarget::Acp(_) => crate::harness::BUILTIN_ID,
+            ShareTarget::Harness(share) => share.mirror.harness_id(),
+        }
+    }
+
+    fn session_id(&self) -> &str {
+        match self {
+            ShareTarget::Acp(session) => &session.session_id,
+            ShareTarget::Harness(share) => &share.session_id,
+        }
+    }
+
+    fn stop_sharing(&self) {
+        match self {
+            ShareTarget::Acp(session) => session.sharing.store(false, Ordering::Release),
+            ShareTarget::Harness(share) => share.mirror.close(),
+        }
+    }
+}
+
+/// A thread on an external harness (`docs/harnesses.md`), shared from the
+/// mirror of the updates it sends. Prompts, cancels, steers, approvals and
+/// question answers are applied to the harness itself, through the same
+/// [`ExternalSession`] the desktop app's own prompt goes through.
+#[cfg(unix)]
+struct HarnessShare {
+    session_id: String,
+    external: Arc<ExternalSession>,
+    mirror: Arc<HarnessMirror>,
 }
 
 #[cfg(unix)]
@@ -303,6 +456,26 @@ impl PairingOffer {
 
 #[cfg(unix)]
 impl RemoteManager {
+    fn connector(&self) -> Box<dyn OwnerConnector> {
+        #[cfg(test)]
+        if let Ok(inner) = self.inner.lock()
+            && let Some(make) = &inner.connector
+        {
+            return make();
+        }
+        default_connector()
+    }
+
+    /// The manager with a link factory of its own (tests).
+    #[cfg(test)]
+    fn with_connector(make: impl Fn() -> Box<dyn OwnerConnector> + Send + Sync + 'static) -> Self {
+        let manager = Self::default();
+        if let Ok(mut inner) = manager.inner.lock() {
+            inner.connector = Some(Arc::new(make));
+        }
+        manager
+    }
+
     fn get(&self, session_id: &str) -> Option<Arc<Share>> {
         self.inner
             .lock()
@@ -311,15 +484,76 @@ impl RemoteManager {
     }
 
     fn forget(&self, share: &Arc<Share>) {
+        let session_id = share.target.session_id();
         if let Ok(mut inner) = self.inner.lock()
             && inner
                 .shares
-                .get(&share.session.session_id)
+                .get(session_id)
                 .is_some_and(|current| Arc::ptr_eq(current, share))
         {
-            inner.shares.remove(&share.session.session_id);
+            inner.shares.remove(session_id);
         }
-        share.session.sharing.store(false, Ordering::Release);
+        share.target.stop_sharing();
+    }
+
+    /// Whether `session_id` is shared right now.
+    pub(crate) fn is_shared(&self, session_id: &str) -> bool {
+        self.get(session_id).is_some()
+    }
+
+    /// The mirror of a shared thread on an external harness, for the sink that
+    /// feeds it and for the ACP handlers that note what the app sends.
+    pub(crate) fn mirror(&self, session_id: &str) -> Option<Arc<HarnessMirror>> {
+        match &self.get(session_id)?.target {
+            ShareTarget::Harness(share) => Some(Arc::clone(&share.mirror)),
+            ShareTarget::Acp(_) => None,
+        }
+    }
+
+    /// Note a prompt the app sent to a shared thread, so a device reading the
+    /// transcript sees it (a harness does not echo the prompt back).
+    pub(crate) fn note_prompt(&self, session_id: &str, text: &str) {
+        if let Some(mirror) = self.mirror(session_id) {
+            mirror.note_prompt(text);
+        }
+    }
+
+    /// Note that a prompt was handed to a harness and its turn has not
+    /// returned yet, so the mirror does not close the turn early.
+    pub(crate) fn note_prompt_applied(&self, session_id: &str) {
+        if let Some(mirror) = self.mirror(session_id) {
+            mirror.note_prompt_applied();
+        }
+    }
+
+    pub(crate) fn note_turn_returned(&self, session_id: &str) {
+        if let Some(mirror) = self.mirror(session_id) {
+            mirror.note_turn_returned();
+        }
+    }
+
+    /// Whether any thread is shared. Used to know whether switching remote
+    /// access off has anything to end.
+    pub(crate) fn shared_count(&self) -> usize {
+        self.inner
+            .lock()
+            .map(|inner| inner.shares.len())
+            .unwrap_or(0)
+    }
+
+    /// The sink a thread on an external harness sends its updates through:
+    /// the client's own sink, with every update fed to the mirror first and
+    /// permission requests offered to paired devices.
+    pub(crate) fn wrap_sink(
+        &self,
+        inner: Arc<dyn ClientSink>,
+        session_id: &str,
+    ) -> Arc<dyn ClientSink> {
+        Arc::new(TeeSink {
+            inner,
+            session_id: session_id.to_owned(),
+            remote: self.clone(),
+        })
     }
 
     /// Note an agent event for the share that owns `session_id`. Called from
@@ -347,7 +581,7 @@ impl RemoteManager {
             session_id: session.session_id.clone(),
             registration_epoch: next_registration_epoch(),
         };
-        let mut connector = default_connector();
+        let mut connector = self.connector();
         let directory = connector.gateway_directory();
         let link = connector.connect(&registration).map_err(|error| {
             agent_client_protocol::Error::internal_error().data(error.to_string())
@@ -363,6 +597,7 @@ impl RemoteManager {
             }
             let (publisher, register) =
                 SessionPublisher::register(&state, registration.clone(), state.has_active_turn());
+            let publisher = Publisher::Acp(publisher);
             drop(state);
             if let Err(error) = link.outbound.try_send(register) {
                 return Err(agent_client_protocol::Error::internal_error()
@@ -382,7 +617,7 @@ impl RemoteManager {
         };
 
         let share = Arc::new(Share {
-            session: Arc::clone(&session),
+            target: ShareTarget::Acp(Arc::clone(&session)),
             registration,
             state: Mutex::new(share_state),
             events,
@@ -401,25 +636,152 @@ impl RemoteManager {
         Ok(self.status(&session.session_id).await)
     }
 
+    /// Share a thread that runs on an external harness (`docs/harnesses.md`).
+    /// Its updates are mirrored; a prompt, cancel or answer from a device is
+    /// applied through the same [`ExternalSession`] the app's own prompt uses.
+    pub(crate) async fn start_harness(
+        &self,
+        session_id: String,
+        external: Arc<ExternalSession>,
+        pair: bool,
+    ) -> Result<Value, agent_client_protocol::Error> {
+        if let Some(share) = self.get(&session_id) {
+            if pair {
+                share.request_pair().await;
+            }
+            return Ok(self.status(&session_id).await);
+        }
+
+        let record = external.record();
+        let title = record
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
+            .or_else(|| crate::config::load_session_title(&session_id))
+            .unwrap_or_default();
+        let model = record
+            .model
+            .clone()
+            .unwrap_or_else(|| external.harness.name.clone());
+        let mirror = Arc::new(HarnessMirror::new(
+            session_id.clone(),
+            external.harness.id.clone(),
+            external.cwd.clone(),
+            model,
+            title,
+            external.recorded_history(),
+        ));
+        let registration = SessionRegistration {
+            session_id: session_id.clone(),
+            registration_epoch: next_registration_epoch(),
+        };
+        let mut connector = self.connector();
+        let directory = connector.gateway_directory();
+        let link = connector.connect(&registration).map_err(|error| {
+            agent_client_protocol::Error::internal_error().data(error.to_string())
+        })?;
+        let lifecycle = directory.map(RemoteLifecycle::new);
+        let register = OwnerMessage::Register {
+            registration: registration.clone(),
+            snapshot: Box::new(mirror.snapshot(&registration, 0, &ProjectionLimits::default())),
+        };
+        if let Err(error) = link.outbound.try_send(register) {
+            return Err(agent_client_protocol::Error::internal_error()
+                .data(format!("could not register the remote session: {error}")));
+        }
+        let (events, receiver) = mpsc::unbounded_channel();
+        let share = Arc::new(Share {
+            target: ShareTarget::Harness(Arc::new(HarnessShare {
+                session_id: session_id.clone(),
+                external,
+                mirror,
+            })),
+            registration,
+            state: Mutex::new(ShareState {
+                publisher: Publisher::Harness {
+                    sequence: 0,
+                    snapshot_due: false,
+                    lagging: false,
+                },
+                link,
+                events: receiver,
+                gateway: None,
+                lifecycle,
+                pairing_due: pair,
+                offer: None,
+                pairing_error: None,
+                closed: None,
+            }),
+            events,
+            stop: CancellationToken::new(),
+            pairing_in_flight: AtomicBool::new(false),
+        });
+        self.inner
+            .lock()
+            .map_err(|_| {
+                agent_client_protocol::Error::internal_error().data("remote manager is unavailable")
+            })?
+            .shares
+            .insert(session_id.clone(), Arc::clone(&share));
+        tokio::spawn(share_loop(self.clone(), share));
+        Ok(self.status(&session_id).await)
+    }
+
     pub(crate) async fn status(&self, session_id: &str) -> Value {
         let Some(share) = self.get(session_id) else {
-            return idle_status(session_id);
+            let mut status = host_status().await;
+            if let Some(object) = status.as_object_mut() {
+                object.insert("sessionId".to_owned(), json!(session_id));
+                object.insert("shared".to_owned(), json!(false));
+            }
+            return status;
         };
         share.pair_if_due().await;
         share.status_value().await
     }
 
+    /// Ask for a pairing challenge. With no thread named (Settings › Remote
+    /// access) the machine's gateway is switched on first, so a device can
+    /// pair before any thread is shared.
     pub(crate) async fn pair(&self, session_id: &str) -> Value {
         let Some(share) = self.get(session_id) else {
-            return json!({
-                "available": true,
-                "shared": false,
-                "error": "this session is not shared",
-            });
+            return pair_host().await;
         };
         share.request_pair().await;
         share.pair_if_due().await;
         share.status_value().await
+    }
+
+    /// Switch remote access on for the machine with no thread to share yet:
+    /// the gateway starts, and every open thread shares itself from the next
+    /// pass of the ACP frontend's auto-share loop.
+    pub(crate) async fn enable(&self) -> Value {
+        match service::enable_for_host().await {
+            Ok(()) => host_status().await,
+            Err(error) => json!({
+                "available": true,
+                "enabled": remote_enabled(),
+                "error": format!("{error:#}"),
+            }),
+        }
+    }
+
+    /// End every share, because remote access was switched off.
+    pub(crate) async fn unshare_all(&self, reason: SessionCloseReason) {
+        let shares = self
+            .inner
+            .lock()
+            .map(|mut inner| {
+                inner
+                    .shares
+                    .drain()
+                    .map(|(_, share)| share)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for share in shares {
+            share.close(reason).await;
+        }
     }
 
     /// Turn remote access off for this machine, ending every share.
@@ -449,7 +811,7 @@ impl RemoteManager {
                 agent_client_protocol::Error::internal_error().data(error.to_string())
             })?;
         }
-        Ok(idle_status(session_id))
+        Ok(self.status(session_id).await)
     }
 
     /// Stop sharing one session without changing the machine-wide setting.
@@ -526,6 +888,51 @@ impl RemoteManager {
 
     pub(crate) async fn shutdown(&self) {}
 
+    pub(crate) fn is_shared(&self, _session_id: &str) -> bool {
+        false
+    }
+
+    pub(crate) fn mirror(&self, _session_id: &str) -> Option<Arc<HarnessMirror>> {
+        None
+    }
+
+    pub(crate) fn note_prompt(&self, _session_id: &str, _text: &str) {}
+
+    pub(crate) fn note_prompt_applied(&self, _session_id: &str) {}
+
+    pub(crate) fn note_turn_returned(&self, _session_id: &str) {}
+
+    pub(crate) fn shared_count(&self) -> usize {
+        0
+    }
+
+    pub(crate) fn wrap_sink(
+        &self,
+        inner: Arc<dyn ClientSink>,
+        _session_id: &str,
+    ) -> Arc<dyn ClientSink> {
+        inner
+    }
+
+    pub(crate) async fn start_harness(
+        &self,
+        _session_id: String,
+        _external: Arc<ExternalSession>,
+        _pair: bool,
+    ) -> Result<Value, agent_client_protocol::Error> {
+        Err(self.unsupported())
+    }
+
+    pub(crate) async fn enable(&self) -> Value {
+        json!({
+            "available": false,
+            "enabled": false,
+            "error": "remote access is not available on this host",
+        })
+    }
+
+    pub(crate) async fn unshare_all(&self, _reason: SessionCloseReason) {}
+
     fn unsupported(&self) -> agent_client_protocol::Error {
         agent_client_protocol::Error::invalid_params().data(
             "remote access needs the remote gateway, which the workspace builds only on unix hosts",
@@ -533,16 +940,10 @@ impl RemoteManager {
     }
 }
 
-fn idle_status(session_id: &str) -> Value {
-    let devices = idle_devices();
-    json!({
-        "available": true,
-        "enabled": remote_enabled(),
-        "shared": false,
-        "sessionId": session_id,
-        "pairedDevices": devices.len(),
-        "devices": devices,
-    })
+/// Whether remote access is switched on for this machine. While it is, every
+/// open ACP thread shares itself, like a terminal does.
+pub(crate) fn enabled() -> bool {
+    remote_enabled()
 }
 
 #[cfg(unix)]
@@ -557,27 +958,134 @@ fn remote_enabled() -> bool {
     false
 }
 
+/// What Settings › Remote access shows without naming a thread: whether
+/// remote access is on, the gateway's address and state, the paired devices
+/// and where pairing stands. Reads the gateway's own status, so it is the
+/// same answer `rustcode remote status` gives.
 #[cfg(unix)]
-fn idle_devices() -> Vec<Value> {
-    let directory = crate::config::get_config_dir();
-    directory
-        .as_deref()
-        .map(RemoteLifecycle::new)
-        .and_then(|lifecycle| lifecycle.devices().ok())
-        .unwrap_or_default()
-        .iter()
-        .map(|device| {
-            json!({
-                "id": device.id,
-                "name": device.name,
-            })
+async fn host_status() -> Value {
+    let Some(directory) = crate::config::get_config_dir() else {
+        return json!({
+            "available": true,
+            "enabled": false,
+            "shared": false,
+            "pairedDevices": 0,
+            "devices": [],
+            "error": "no configuration directory",
+        });
+    };
+    let lifecycle = RemoteLifecycle::new(&directory);
+    let enabled = service::enabled(&directory);
+    let status = lifecycle.status().await.ok().flatten();
+    let devices = status
+        .as_ref()
+        .map(|status| {
+            status
+                .devices
+                .iter()
+                .map(|device| (device.id.clone(), device.name.clone()))
+                .collect::<Vec<_>>()
         })
-        .collect()
+        .unwrap_or_else(|| {
+            lifecycle
+                .devices()
+                .unwrap_or_default()
+                .iter()
+                .map(|device| (device.id.clone(), device.name.clone()))
+                .collect()
+        });
+    let gateway = status.as_ref().map(|status| {
+        json!({
+            "connected": true,
+            "advertisedAddress": status.advertised_address,
+            "listenAddress": status.listen_address,
+            "loopbackOnly": status.loopback_only,
+            "connectedDevices": status.connections.iter().map(|connection| connection.device_name.clone()).collect::<Vec<_>>(),
+            "attachedDevices": Vec::<String>::new(),
+            "pairedDevices": status.paired_devices,
+            "pairingOpen": status.pairing_open,
+            "pairing": status.pairing,
+            "sessions": status.sessions.as_ref().map(|sessions| sessions.len()).unwrap_or(0),
+        })
+    });
+    json!({
+        "available": true,
+        "enabled": enabled,
+        "shared": false,
+        "gateway": gateway,
+        "pairedDevices": devices.len(),
+        "devices": devices.iter().map(|(id, name)| json!({
+            "id": id,
+            "name": name,
+        })).collect::<Vec<_>>(),
+    })
 }
 
-#[cfg(not(unix))]
-fn idle_devices() -> Vec<Value> {
-    Vec::new()
+/// A pairing challenge for the machine, with no thread named: Settings ›
+/// Remote access › Pair a device. Switches remote access on when it is off,
+/// exactly as `/remote` does in a terminal.
+#[cfg(unix)]
+async fn pair_host() -> Value {
+    if let Err(error) = service::enable_for_host().await {
+        return json!({
+            "available": true,
+            "enabled": remote_enabled(),
+            "shared": false,
+            "pairingError": format!("{error:#}"),
+        });
+    }
+    let Some(directory) = crate::config::get_config_dir() else {
+        return json!({
+            "available": true,
+            "enabled": false,
+            "shared": false,
+            "pairingError": "no configuration directory",
+        });
+    };
+    let lifecycle = RemoteLifecycle::new(&directory);
+    let result = tokio::time::timeout(Duration::from_secs(15), lifecycle.pair()).await;
+    let mut status = host_status().await;
+    let Some(object) = status.as_object_mut() else {
+        return status;
+    };
+    object.insert("shared".to_owned(), json!(false));
+    object.insert("pairingPending".to_owned(), json!(false));
+    object.insert("offer".to_owned(), Value::Null);
+    match result {
+        Ok(Ok(offer)) => {
+            let offer = PairingOffer::new(offer);
+            object.insert("offer".to_owned(), offer_json(&offer, Instant::now()));
+            object.insert("pairingError".to_owned(), Value::Null);
+        }
+        Ok(Err(error)) => {
+            object.insert("pairingError".to_owned(), json!(error.to_string()));
+        }
+        Err(_) => {
+            object.insert(
+                "pairingError".to_owned(),
+                json!("the remote gateway did not answer in time"),
+            );
+        }
+    }
+    status
+}
+
+/// One pairing offer as the apps render it. `qrRows` is the code itself, one
+/// string per row of `0` (light) and `1` (dark) modules with the four-module
+/// quiet zone included, so a client draws it without a QR encoder.
+#[cfg(unix)]
+fn offer_json(offer: &PairingOffer, now: Instant) -> Value {
+    json!({
+        "qrPayload": offer.qr_payload,
+        "qrRows": crate::remote_gateway::qr::bitmap(&offer.qr_payload),
+        "code": offer.code,
+        "address": offer.address,
+        "expiresInSecs": offer.expires_at.saturating_duration_since(now).as_secs(),
+        "loopbackOnly": offer.loopback_only,
+        "gatewayId": offer.gateway_id,
+        "challenge": offer.challenge,
+        "lockedForSecs": offer.locked_for_secs,
+    })
 }
 
 #[cfg(unix)]
@@ -667,18 +1175,7 @@ impl Share {
             .offer
             .as_ref()
             .filter(|offer| offer.expires_at > now)
-            .map(|offer| {
-                json!({
-                    "qrPayload": offer.qr_payload,
-                    "code": offer.code,
-                    "address": offer.address,
-                    "expiresInSecs": offer.expires_at.saturating_duration_since(now).as_secs(),
-                    "loopbackOnly": offer.loopback_only,
-                    "gatewayId": offer.gateway_id,
-                    "challenge": offer.challenge,
-                    "lockedForSecs": offer.locked_for_secs,
-                })
-            });
+            .map(|offer| offer_json(offer, now));
         let expired = state
             .offer
             .as_ref()
@@ -709,7 +1206,8 @@ impl Share {
             "available": true,
             "enabled": enabled,
             "shared": true,
-            "sessionId": self.session.session_id,
+            "target": self.target.kind(),
+            "sessionId": self.target.session_id(),
             "registrationEpoch": self.registration.registration_epoch,
             "gateway": gateway,
             "offer": offer,
@@ -726,7 +1224,7 @@ impl Share {
     }
 
     async fn close(&self, reason: SessionCloseReason) {
-        self.session.sharing.store(false, Ordering::Release);
+        self.target.stop_sharing();
         self.stop.cancel();
         let state = self.state.lock().await;
         let _ = state
@@ -738,6 +1236,13 @@ impl Share {
     /// One pass of the owner loop: apply device commands, publish state, and
     /// start a turn when a device queued a prompt.
     async fn tick(&self) -> bool {
+        if let Some(share) = self.harness() {
+            let share = Arc::clone(share);
+            return self.tick_harness(&share).await;
+        }
+        let Some(session) = self.acp().cloned() else {
+            return false;
+        };
         let mut should_pair = false;
         let mut start_runner = false;
         let alive = {
@@ -763,14 +1268,13 @@ impl Share {
                 match command {
                     OwnerCommand::Request { request, reply } => {
                         let request_id = request.request_id.clone();
-                        let mut cancel_token = self
-                            .session
+                        let mut cancel_token = session
                             .turns
                             .active_token()
                             .unwrap_or_else(CancellationToken::new);
                         if request.operation.is_mutation() {
                             match apply_session_mutation(
-                                &self.session.state,
+                                &session.state,
                                 &mut cancel_token,
                                 &self.registration,
                                 &request,
@@ -800,7 +1304,7 @@ impl Share {
                         ) {
                             // Git may take a moment: read it off the owner's
                             // loop, with no lock held.
-                            let app = self.session.state.lock().await;
+                            let app = session.state.lock().await;
                             let workspace = crate::remote::ops::changes_workspace(
                                 &app,
                                 &self.registration,
@@ -824,7 +1328,7 @@ impl Share {
                                 Err(error) => reply.send(RemoteResponse::error(request_id, error)),
                             }
                         } else {
-                            let app = self.session.state.lock().await;
+                            let app = session.state.lock().await;
                             let result = read_session(
                                 &app,
                                 &self.registration,
@@ -850,13 +1354,13 @@ impl Share {
                 }
             }
 
-            let app = self.session.state.lock().await;
+            let app = session.state.lock().await;
             if !state.publisher.owns(&app) {
                 return false;
             }
             let room_for_resync = state.link.outbound.capacity() > 1;
             let messages = state.publisher.publish(&app, room_for_resync);
-            start_runner |= !self.session.runner.load(Ordering::Acquire)
+            start_runner |= !session.runner.load(Ordering::Acquire)
                 && !app.has_active_turn()
                 && !app.pending_queue.is_empty();
             drop(app);
@@ -889,15 +1393,349 @@ impl Share {
             self.pair_if_due().await;
         }
         if start_runner {
-            self.session.ensure_runner();
+            session.ensure_runner();
+        }
+        true
+    }
+
+    fn acp(&self) -> Option<&Arc<RemoteSession>> {
+        match &self.target {
+            ShareTarget::Acp(session) => Some(session),
+            ShareTarget::Harness(_) => None,
+        }
+    }
+
+    fn harness(&self) -> Option<&Arc<HarnessShare>> {
+        match &self.target {
+            ShareTarget::Harness(share) => Some(share),
+            ShareTarget::Acp(_) => None,
+        }
+    }
+
+    /// One pass for a thread on an external harness: apply device commands,
+    /// keep the mirror's turn in step with the harness, publish a snapshot
+    /// when it changed, and start a queued prompt the harness is free for.
+    async fn tick_harness(&self, share: &Arc<HarnessShare>) -> bool {
+        let mut should_pair = false;
+        let start_next;
+        let alive = {
+            let mut state = self.state.lock().await;
+            if let Some(reason) = state.closed.take() {
+                state.closed = Some(reason);
+                return false;
+            }
+
+            for _ in 0..8 {
+                let command = match state.link.commands.try_recv() {
+                    Ok(command) => command,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        state.closed = Some("the remote gateway closed the link".to_owned());
+                        return false;
+                    }
+                };
+                match command {
+                    OwnerCommand::Request { request, reply } => {
+                        let request_id = request.request_id.clone();
+                        if request.operation.is_mutation() {
+                            match harness_mutation(share, &self.registration, &request).await {
+                                Ok(result) => {
+                                    reply.send(
+                                        RemoteResponse::new(request_id, result)
+                                            .with_receipt(ReceiptState::Applied),
+                                    );
+                                }
+                                Err(error) => {
+                                    reply.send(
+                                        RemoteResponse::error(request_id, error)
+                                            .with_receipt(ReceiptState::Rejected),
+                                    );
+                                }
+                            }
+                        } else if matches!(
+                            request.operation,
+                            crate::remote::protocol::RemoteOperation::GetChanges
+                        ) {
+                            match share.mirror.check(&self.registration, &request) {
+                                Ok(()) => {
+                                    let root = share.external.cwd.clone();
+                                    tokio::spawn(async move {
+                                        let changes = crate::remote::changes::read(
+                                            &root,
+                                            chrono::Utc::now().to_rfc3339(),
+                                        )
+                                        .await;
+                                        reply.send(RemoteResponse::new(
+                                            request_id,
+                                            crate::remote::protocol::RemoteResult::Changes(changes),
+                                        ));
+                                    });
+                                }
+                                Err(error) => reply.send(RemoteResponse::error(request_id, error)),
+                            }
+                        } else {
+                            match share.mirror.read(
+                                &self.registration,
+                                &request,
+                                &ProjectionLimits::default(),
+                            ) {
+                                Ok(result) => reply.send(RemoteResponse::new(request_id, result)),
+                                Err(error) => reply.send(RemoteResponse::error(request_id, error)),
+                            }
+                        }
+                    }
+                    OwnerCommand::SnapshotRequested => state.publisher.request_snapshot(),
+                    OwnerCommand::Status(status) => {
+                        should_pair |= status.connected && state.pairing_due;
+                        state.gateway = Some(status);
+                    }
+                    OwnerCommand::Closed { reason } => {
+                        state.closed = Some(reason);
+                        return false;
+                    }
+                }
+            }
+
+            // A turn the app or a device started is picked up here, and one
+            // that ended is closed, so the transcript keeps both prompts and
+            // the reply the device saw streaming.
+            share
+                .mirror
+                .sync_turn(crate::thread_status::is_running(&share.session_id));
+            start_next = share.mirror.wants_prompt();
+
+            let room_for_resync = state.link.outbound.capacity() > 1;
+            let dirty = share.mirror.dirty();
+            if let Some(resync) = state.publisher.harness_snapshot(dirty, room_for_resync) {
+                let sequence = state.publisher.sequence();
+                let snapshot = share.mirror.snapshot(
+                    &self.registration,
+                    sequence,
+                    &ProjectionLimits::default(),
+                );
+                let message = OwnerMessage::Snapshot {
+                    snapshot: Box::new(snapshot),
+                    resync,
+                };
+                match state.link.outbound.try_send(message) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        state.publisher.mark_lagging();
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        state.closed = Some("the remote gateway closed the link".to_owned());
+                        return false;
+                    }
+                }
+            }
+            should_pair |= state.pairing_due
+                && state
+                    .gateway
+                    .as_ref()
+                    .is_some_and(|gateway| gateway.connected);
+            true
+        };
+
+        if !alive {
+            return false;
+        }
+        if should_pair {
+            self.pair_if_due().await;
+        }
+        if start_next {
+            share.start_queued();
         }
         true
     }
 }
 
+#[cfg(unix)]
+impl HarnessShare {
+    /// Run one prompt on the harness, as the app's own prompt does, and then
+    /// the next one a device queued while it ran.
+    fn start_prompt(self: &Arc<Self>, text: String) {
+        self.mirror.note_prompt(&text);
+        // The turn guard is taken inside `prompt`; until it is, the mirror
+        // must not believe the thread went idle.
+        self.mirror.note_prompt_applied();
+        let share = Arc::clone(self);
+        tokio::spawn(async move {
+            let blocks = vec![ContentBlock::Text(TextContent::new(text))];
+            let result = share.external.prompt(blocks).await;
+            share.mirror.note_turn_returned();
+            if let Err(error) = result {
+                share.mirror.note_error(&format!(
+                    "**{} turn failed**\n\n{error}",
+                    share.external.harness.name
+                ));
+            }
+            share.start_queued();
+        });
+    }
+
+    /// Start a prompt a device queued, if the harness is idle.
+    fn start_queued(self: &Arc<Self>) {
+        if crate::thread_status::is_running(&self.session_id) {
+            return;
+        }
+        let Some(text) = self.mirror.take_queue() else {
+            return;
+        };
+        self.start_prompt(text);
+    }
+}
+
+/// Apply one mutating request to a thread on an external harness, or say why
+/// not. Everything a request names is checked under the lock that applies it.
+#[cfg(unix)]
+async fn harness_mutation(
+    share: &Arc<HarnessShare>,
+    registration: &SessionRegistration,
+    request: &RemoteRequest,
+) -> Result<RemoteResult, RemoteError> {
+    share.mirror.check(registration, request)?;
+    match &request.operation {
+        RemoteOperation::SubmitPrompt { prompt } => {
+            if crate::thread_status::is_running(&share.session_id) {
+                return Err(RemoteError::new(
+                    RemoteErrorCode::Busy,
+                    "a turn is already running on this session",
+                ));
+            }
+            share.start_prompt(prompt.clone());
+            Ok(RemoteResult::PromptAccepted {
+                disposition: PromptDisposition::Started,
+            })
+        }
+        RemoteOperation::Queue { prompt } => {
+            if !crate::thread_status::is_running(&share.session_id) {
+                return Err(RemoteError::new(
+                    RemoteErrorCode::NotRunning,
+                    "no turn is running on this session",
+                ));
+            }
+            share.mirror.queue(prompt.clone());
+            Ok(RemoteResult::PromptAccepted {
+                disposition: PromptDisposition::Queued,
+            })
+        }
+        RemoteOperation::Steer { prompt } => {
+            let blocks = vec![ContentBlock::Text(TextContent::new(prompt.clone()))];
+            if share.external.steer(&blocks).await {
+                share.mirror.note_prompt(prompt);
+                Ok(RemoteResult::PromptAccepted {
+                    disposition: PromptDisposition::Steered,
+                })
+            } else {
+                Err(RemoteError::new(
+                    RemoteErrorCode::UnsupportedOperation,
+                    "this harness does not accept steering a running turn",
+                ))
+            }
+        }
+        RemoteOperation::CancelTurn { turn_id } => {
+            if share.mirror.turn_id().as_deref() != Some(turn_id.as_str()) {
+                return Err(RemoteError::new(
+                    RemoteErrorCode::StaleTurn,
+                    "the named turn is no longer running",
+                ));
+            }
+            share.external.cancel();
+            Ok(RemoteResult::TurnCancelled {
+                turn_id: turn_id.clone(),
+            })
+        }
+        RemoteOperation::ResolveApproval { batch_id, choice } => {
+            share.mirror.resolve_approval(batch_id, *choice)?;
+            Ok(RemoteResult::ApprovalResolved {
+                batch_id: batch_id.clone(),
+                choice: *choice,
+            })
+        }
+        RemoteOperation::AnswerQuestion {
+            question_id,
+            answer,
+        } => {
+            share.mirror.answer_question(question_id, answer)?;
+            Ok(RemoteResult::QuestionAnswered {
+                question_id: question_id.clone(),
+            })
+        }
+        RemoteOperation::CancelQuestion { question_id } => {
+            share.mirror.cancel_question(question_id)?;
+            Ok(RemoteResult::QuestionCancelled {
+                question_id: question_id.clone(),
+            })
+        }
+        other => Err(RemoteError::new(
+            RemoteErrorCode::UnsupportedOperation,
+            format!(
+                "a thread on an external harness does not support `{}` from a device",
+                other.name()
+            ),
+        )),
+    }
+}
+
+/// A thread's sink, with the mirror fed first: every update the harness sends
+/// is what a device sees, and a permission request is offered to devices
+/// while the app still gets it.
+#[cfg(unix)]
+struct TeeSink {
+    inner: Arc<dyn ClientSink>,
+    session_id: String,
+    remote: RemoteManager,
+}
+
+#[cfg(unix)]
+impl ClientSink for TeeSink {
+    fn update(&self, update: SessionUpdate) {
+        if let Some(mirror) = self.remote.mirror(&self.session_id) {
+            mirror.observe(&update);
+        }
+        self.inner.update(update);
+    }
+
+    fn request_permission(&self, request: RequestPermissionRequest) -> PermissionFuture {
+        bridge_permission(
+            self.remote.mirror(&self.session_id),
+            self.inner.clone(),
+            request,
+        )
+    }
+}
+
+/// Offer a harness's permission request to paired devices while the app is
+/// still asked: whichever answers first ends it.
+#[cfg(unix)]
+pub(crate) fn bridge_permission(
+    mirror: Option<Arc<HarnessMirror>>,
+    inner: Arc<dyn ClientSink>,
+    request: RequestPermissionRequest,
+) -> PermissionFuture {
+    let Some(mirror) = mirror else {
+        return inner.request_permission(request);
+    };
+    Box::pin(async move {
+        let mut from_device = mirror.begin_permission(&request);
+        let mut from_app = inner.request_permission(request);
+        tokio::select! {
+            answer = &mut from_app => {
+                mirror.end_permission();
+                answer
+            }
+            // A device answered first. The app's card stays until the turn
+            // ends, when the app drops its pending permissions.
+            answer = &mut from_device => answer.unwrap_or_else(|_| {
+                RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+            }),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::idle_status;
+    use super::*;
 
     #[test]
     fn requests_use_the_camel_case_acp_wire_shape() {
@@ -913,12 +1751,251 @@ mod tests {
         assert_eq!(status.session_id, "session-1");
     }
 
+    /// Settings › Remote access asks without naming a thread: the machine's
+    /// own switch, the gateway and the paired devices.
     #[test]
-    fn idle_status_is_explicit_about_not_sharing() {
-        let value = idle_status("session-1");
+    fn a_status_request_may_name_no_thread() {
+        let host: super::RemoteStatusRequest =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(host.session_id, "");
+        let start: super::RemoteStartRequest =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(start.session_id, "");
+        assert!(!start.pair);
+        let stop: super::RemoteStopRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(stop.session_id, "");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_host_status_names_the_switch_and_the_devices() {
+        let value = super::host_status().await;
         assert_eq!(value["available"], true);
+        assert!(value["enabled"].is_boolean());
         assert_eq!(value["shared"], false);
-        assert_eq!(value["sessionId"], "session-1");
+        assert!(value["devices"].is_array());
+    }
+
+    /// A prompt a device sends on a thread that runs on an external harness
+    /// reaches the harness, and the mirror a device reads grows with it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_prompt_from_a_device_runs_on_the_harness_and_shows_in_the_mirror() {
+        use crate::harness::acp_child::tests::start;
+        let (thread, _seen) = start(Some("allow"), Default::default()).await;
+        let mirror = Arc::new(crate::remote::harness::HarnessMirror::new(
+            "test-thread".to_owned(),
+            "fake-acp".to_owned(),
+            thread.session.cwd.clone(),
+            "sonnet".to_owned(),
+            "A thread".to_owned(),
+            Vec::new(),
+        ));
+        // What the tee sink does in the app: every update the harness sends
+        // is what a device sees.
+        let mut updates = thread.updates;
+        let sink_mirror = Arc::clone(&mirror);
+        tokio::spawn(async move {
+            while let Some(update) = updates.recv().await {
+                sink_mirror.observe(&update);
+            }
+        });
+        let share = Arc::new(HarnessShare {
+            session_id: "test-thread".to_owned(),
+            external: Arc::clone(&thread.session),
+            mirror: Arc::clone(&mirror),
+        });
+        let registration = SessionRegistration {
+            session_id: "test-thread".to_owned(),
+            registration_epoch: 1,
+        };
+        let request = RemoteRequest {
+            authenticated_device_id: None,
+            protocol_version: crate::remote::REMOTE_PROTOCOL_VERSION,
+            request_id: "r1".to_owned(),
+            session_id: Some("test-thread".to_owned()),
+            registration_epoch: Some(1),
+            operation: RemoteOperation::SubmitPrompt {
+                prompt: "write notes".to_owned(),
+            },
+        };
+        let applied = harness_mutation(&share, &registration, &request)
+            .await
+            .expect("the device's prompt is accepted");
+        assert!(matches!(
+            applied,
+            RemoteResult::PromptAccepted {
+                disposition: PromptDisposition::Started
+            }
+        ));
+        // What the share loop does every pass: follow the turn, then publish.
+        let mut texts = Vec::new();
+        for _ in 0..400 {
+            mirror.sync_turn(crate::thread_status::is_running("test-thread"));
+            let snapshot = mirror.snapshot(&registration, 1, &ProjectionLimits::default());
+            texts = snapshot
+                .transcript
+                .iter()
+                .map(|message| (message.role.clone(), message.content.text.clone()))
+                .collect();
+            if texts
+                .iter()
+                .any(|(role, text)| role == "assistant" && text.contains("Wrote it."))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        mirror.sync_turn(false);
+        assert!(
+            texts
+                .iter()
+                .any(|(role, text)| role == "user" && text == "write notes"),
+            "the device's prompt is in the shared transcript: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|(role, text)| role == "assistant" && text.contains("Wrote it.")),
+            "the harness's reply is in the shared transcript: {texts:?}"
+        );
+    }
+
+    /// A question a device answers while the app still shows its card.
+    /// A shared thread on an external harness registers under its own id, and
+    /// switching remote access off ends the share.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_harness_share_registers_and_unshares() {
+        use crate::remote::owner::{GatewayLink, OwnerConnector, OwnerLink, OwnerLinkError};
+
+        struct MemoryGateway;
+        impl OwnerConnector for MemoryGateway {
+            fn connect(
+                &mut self,
+                _registration: &SessionRegistration,
+            ) -> Result<OwnerLink, OwnerLinkError> {
+                let (owner, gateway) = crate::remote::owner::owner_link_pair(16, 16);
+                // A gateway that answers every command: what a share needs to
+                // stay registered.
+                tokio::spawn(async move {
+                    let GatewayLink {
+                        mut messages,
+                        commands,
+                    } = gateway;
+                    while let Some(message) = messages.recv().await {
+                        if matches!(
+                            message,
+                            crate::remote::owner::OwnerMessage::Unregister { .. }
+                        ) {
+                            break;
+                        }
+                    }
+                    drop(commands);
+                });
+                Ok(owner)
+            }
+        }
+
+        let manager = super::RemoteManager::with_connector(|| Box::new(MemoryGateway));
+        let harness = crate::harness::session::test_support::harness(
+            "fake-acp",
+            crate::harness::HarnessKind::Acp,
+        );
+        let thread = crate::harness::session::test_support::thread(&harness, None);
+        manager
+            .start_harness("test-thread".to_owned(), Arc::clone(&thread.session), false)
+            .await
+            .expect("the thread shares itself");
+        assert!(manager.is_shared("test-thread"));
+        assert!(manager.mirror("test-thread").is_some());
+
+        manager
+            .unshare_all(crate::remote::SessionCloseReason::SharingDisabled)
+            .await;
+        assert!(!manager.is_shared("test-thread"), "remote access is off");
+    }
+
+    /// A device answers an approval while the app still shows its card: the
+    /// harness hears the device's answer and the turn finishes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_device_answer_resolves_the_harness_permission_request() {
+        use crate::harness::acp_child::tests::{Fake, start_shared};
+        use crate::harness::session::{ClientSink, PermissionFuture};
+
+        struct Tee {
+            inner: Arc<dyn ClientSink>,
+            mirror: Arc<crate::remote::harness::HarnessMirror>,
+        }
+
+        impl ClientSink for Tee {
+            fn update(&self, update: SessionUpdate) {
+                self.mirror.observe(&update);
+                self.inner.update(update);
+            }
+
+            fn request_permission(&self, request: RequestPermissionRequest) -> PermissionFuture {
+                super::bridge_permission(
+                    Some(Arc::clone(&self.mirror)),
+                    Arc::clone(&self.inner),
+                    request,
+                )
+            }
+        }
+
+        let mirror = Arc::new(crate::remote::harness::HarnessMirror::new(
+            "test-thread".to_owned(),
+            "fake-acp".to_owned(),
+            std::env::temp_dir(),
+            "sonnet".to_owned(),
+            "A thread".to_owned(),
+            Vec::new(),
+        ));
+        let tee_mirror = Arc::clone(&mirror);
+        // The app never answers: only the device does.
+        let thread = start_shared("fake-acp-answer", Fake::echo(false), move |inner| {
+            Arc::new(Tee {
+                inner,
+                mirror: tee_mirror,
+            }) as Arc<dyn ClientSink>
+        })
+        .await;
+
+        let session = Arc::clone(&thread.session);
+        let prompting = tokio::spawn(async move {
+            session
+                .prompt(vec![ContentBlock::Text(TextContent::new("write notes"))])
+                .await
+        });
+        let registration = SessionRegistration {
+            session_id: "test-thread".to_owned(),
+            registration_epoch: 1,
+        };
+        let mut batch = None;
+        for _ in 0..200 {
+            if let Some(approval) = mirror
+                .snapshot(&registration, 1, &ProjectionLimits::default())
+                .pending_approval
+            {
+                batch = Some(approval);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let batch = batch.expect("the device is offered the approval");
+        mirror
+            .resolve_approval(&batch.batch_id, crate::controller::ApprovalChoice::Approve)
+            .expect("the device's answer is applied");
+        let stop = tokio::time::timeout(std::time::Duration::from_secs(5), prompting)
+            .await
+            .expect("the turn ends")
+            .expect("the prompt task runs");
+        assert_eq!(
+            stop,
+            Ok(agent_client_protocol::schema::v1::StopReason::EndTurn),
+            "the harness took the device's answer as permission"
+        );
     }
 
     #[cfg(unix)]

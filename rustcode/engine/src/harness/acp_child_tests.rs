@@ -79,13 +79,23 @@ fn options_for(model: &str, effort: &str) -> Value {
 
 /// What the fake agent advertises and does.
 #[derive(Clone, Copy)]
-struct Fake {
+pub(crate) struct Fake {
     /// `sessionCapabilities.systemPrompt`: takes RustCode's text appended to
     /// its own system prompt, as `claude-agent-acp` does.
     system_prompt: bool,
     /// Echo the prompt it was given back as `user_message_chunk`, as pi-acp
     /// and OpenCode do.
     echo: bool,
+}
+
+impl Fake {
+    /// The fake as other test modules use it.
+    pub(crate) fn echo(echo: bool) -> Self {
+        Self {
+            system_prompt: true,
+            echo,
+        }
+    }
 }
 
 impl Default for Fake {
@@ -278,7 +288,7 @@ async fn fake_agent(
     }
 }
 
-async fn start(
+pub(crate) async fn start(
     choice: Option<&str>,
     options: StartOptions,
 ) -> (
@@ -328,6 +338,35 @@ async fn start_named(
     .expect("the fake agent starts");
     thread.session.attach(adapter).await;
     (thread, seen)
+}
+
+/// A thread on the fake agent whose client is `wrap`ped, for a test that
+/// answers where the client itself does not (a paired device).
+pub(crate) async fn start_shared(
+    id: &str,
+    fake: Fake,
+    wrap: impl FnOnce(
+        Arc<dyn crate::harness::session::ClientSink>,
+    ) -> Arc<dyn crate::harness::session::ClientSink>,
+) -> crate::harness::session::test_support::Thread {
+    let harness = harness(id, HarnessKind::Acp);
+    let ((ours, our_incoming), (theirs, their_incoming)) = pipe();
+    let (seen_tx, _seen) = mpsc::unbounded_channel();
+    tokio::spawn(fake_agent(theirs, their_incoming, seen_tx, fake));
+    let thread = crate::harness::session::test_support::thread_with_pending_client(&harness, wrap);
+    let adapter = Adapter::connect(
+        &harness,
+        ours,
+        our_incoming,
+        None,
+        &std::env::temp_dir(),
+        StartOptions::default(),
+        thread.session.output(),
+    )
+    .await
+    .expect("the fake agent starts");
+    thread.session.attach(adapter).await;
+    thread
 }
 
 /// The adapter of a session on the fake agent, for what a listing does before

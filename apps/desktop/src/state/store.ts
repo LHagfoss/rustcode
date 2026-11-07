@@ -37,6 +37,7 @@ import {
   parseHarnessModels,
   parseHarnessSnapshot,
   parsePermissionRequest,
+  parseRemoteStatus,
   parseSessionHarness,
   parseSessionList,
   parseSessionUpdate,
@@ -45,6 +46,7 @@ import {
   projectName,
   questionOptionsAnswer,
   questionTextAnswer,
+  type RemoteStatus,
   type SessionSummary,
   type SlashCommand,
 } from "../acp/types";
@@ -209,6 +211,7 @@ export type SettingsSection =
   | "agents"
   | "connections"
   | "capabilities"
+  | "remote"
   | "appearance"
   | "keyboard"
   | "usage"
@@ -223,6 +226,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "agents",
   "connections",
   "capabilities",
+  "remote",
   "appearance",
   "keyboard",
   "usage",
@@ -449,6 +453,14 @@ export interface AppState {
    * this one settled line for a moment instead of vanishing (ui/AttentionCards.tsx).
    */
   resolvedApprovals: Record<string, ResolvedApproval>;
+  /**
+   * Remote access for this machine (`docs/remote.md`): whether it is on, the
+   * gateway's address, the paired devices and a pairing challenge while one
+   * is on screen. Read from `_rustcode/remote`.
+   */
+  remote: RemoteStatus | null;
+  /** Each open thread's own share, so its header can say a device is attached. */
+  remoteByThread: Record<string, RemoteStatus>;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -646,6 +658,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   failed: {},
   grants: [],
   resolvedApprovals: {},
+  remote: null,
+  remoteByThread: {},
   view: { kind: "chat" },
   checkpoints: {},
   attempts: {},
@@ -4621,6 +4635,88 @@ export async function request<T = Json>(
   timeoutMs = 15_000,
 ): Promise<T> {
   return engine().request<T>(method, params, timeoutMs);
+}
+
+// ---------------------------------------------------------------- remote access
+
+/**
+ * Re-read the machine's remote access state. `sessionId` reads one thread's
+ * share instead, for its header indicator. Never throws: Settings shows the
+ * engine's refusal next to the switch.
+ */
+export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | null> {
+  const params: JsonObject = sessionId ? { sessionId } : {};
+  try {
+    const status = parseRemoteStatus(await request(Method.remote, params, 10_000));
+    if (sessionId) set((s) => ({ remoteByThread: { ...s.remoteByThread, [sessionId]: status } }));
+    else set({ remote: status });
+    return status;
+  } catch (error) {
+    const failed: RemoteStatus = {
+      available: false,
+      enabled: false,
+      shared: false,
+      pairedDevices: 0,
+      devices: [],
+      error: errorText(error),
+    };
+    if (sessionId) set((s) => ({ remoteByThread: { ...s.remoteByThread, [sessionId]: failed } }));
+    else set({ remote: failed });
+    return null;
+  }
+}
+
+/**
+ * Switch remote access on or off for every thread on this Mac. On starts the
+ * gateway and shares every open thread; off stops the gateway, so no device
+ * sees anything until it is switched on again. Pairings are kept.
+ */
+export async function setRemoteAccess(on: boolean): Promise<void> {
+  if (on)
+    set({
+      remote: {
+        ...(get().remote ?? {}),
+        available: true,
+        enabled: true,
+        shared: false,
+        pairedDevices: 0,
+        devices: [],
+      } as RemoteStatus,
+    });
+  try {
+    const status = parseRemoteStatus(await request(on ? Method.remoteStart : Method.remoteStop, {}, 20_000));
+    set({ remote: status });
+    if (status.error) toast(status.error, "error");
+    else {
+      toast(
+        on
+          ? "Remote access is on. Every open thread is shared with paired devices."
+          : "Remote access is off. Paired devices stay paired.",
+        "success",
+      );
+    }
+    // Every open thread's share changed with it.
+    for (const threadId of Object.keys(get().remoteByThread)) void refreshRemote(threadId);
+  } catch (error) {
+    toast(errorText(error), "error");
+    void refreshRemote();
+  }
+}
+
+/**
+ * Ask the gateway for a pairing challenge. Remote access is switched on first
+ * if it was off, as `/remote` does in a terminal.
+ */
+export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
+  try {
+    const status = parseRemoteStatus(await request(Method.remotePair, {}, 20_000));
+    set({ remote: status });
+    if (status.pairingError) toast(status.pairingError, "error");
+    return status;
+  } catch (error) {
+    toast(errorText(error), "error");
+    return null;
+  }
 }
 
 /** Test hook: reset to a clean slate. */
