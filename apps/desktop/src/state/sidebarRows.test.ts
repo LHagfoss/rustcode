@@ -5,6 +5,7 @@ import {
   keepListed,
   listedPicks,
   nextRow,
+  opensRowMenu,
   rangeRows,
   rowKeyAction,
   threadDiff,
@@ -150,6 +151,17 @@ describe("the keys the list answers", () => {
     expect(rowKeyAction({ key: "Enter", ctrlKey: true })).toBeNull();
     expect(rowKeyAction({ key: "Escape", altKey: true })).toBeNull();
     expect(rowKeyAction({ key: "a" })).toBeNull();
+  });
+});
+
+describe("the keys that open a row's menu", () => {
+  test("Shift+F10 and the ContextMenu key, and nothing else", () => {
+    expect(opensRowMenu({ key: "F10", shiftKey: true })).toBe(true);
+    expect(opensRowMenu({ key: "ContextMenu" })).toBe(true);
+    // F10 alone is the window's, and Shift with another key is not this.
+    expect(opensRowMenu({ key: "F10" })).toBe(false);
+    expect(opensRowMenu({ key: "F2", shiftKey: true })).toBe(false);
+    expect(opensRowMenu({ key: "Enter" })).toBe(false);
   });
 });
 

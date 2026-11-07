@@ -61,6 +61,7 @@ import {
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
+import { listCommandFor } from "../lib/keys";
 import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
@@ -82,6 +83,7 @@ import {
   nextRow,
   type OrderRow,
   type OrderSection,
+  opensRowMenu,
   rangeRows,
   rowKeyAction,
   threadDiff,
@@ -448,6 +450,11 @@ function copyText(text: string, done: string) {
   );
 }
 
+/** A row's element wherever it is drawn: the list, a project's group, the settled shelf. */
+function rowElement(id: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`);
+}
+
 /** A running turn's clock, ticking on its own so the row does not re-render every second. */
 function Elapsed({ since }: { since: number }) {
   const [now, setNow] = useState(Date.now());
@@ -458,18 +465,21 @@ function Elapsed({ since }: { since: number }) {
   return <>{formatClock(now - since)}</>;
 }
 
-/** A small icon button in a row's hover slot. */
+/** A small icon button in a row's hover slot: 26px so the pointer finds it without aiming. */
 function RowAction({
   label,
+  hint,
   onClick,
   children,
 }: {
   label: string;
+  /** The key that does the same thing, shown on the tooltip. */
+  hint?: string;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <Tooltip label={label}>
+    <Tooltip label={hint ? `${label} (${hint})` : label}>
       <button
         type="button"
         aria-label={label}
@@ -477,7 +487,7 @@ function RowAction({
           e.stopPropagation();
           onClick();
         }}
-        className="flex size-[22px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+        className="flex size-[26px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
       >
         {children}
       </button>
@@ -487,10 +497,10 @@ function RowAction({
 
 /**
  * The room a row's top line keeps clear of its hover actions: Pin, Settle (or
- * Unsettle) and the menu, three 22px buttons that sit 6px in from the row's end.
+ * Unsettle) and the menu, three 26px buttons that sit 6px in from the row's end.
  */
 const ACTIONS_CLEAR =
-  "group-hover:pr-[72px] group-has-[:focus-visible]:pr-[72px] group-has-[[data-state=open]]:pr-[72px]";
+  "group-hover:pr-[84px] group-has-[:focus-visible]:pr-[84px] group-has-[[data-state=open]]:pr-[84px]";
 
 /**
  * A row's fill, drawn as its own child under the row's content.
@@ -566,6 +576,8 @@ const ThreadRow = memo(function ThreadRow({
   navActive,
   picked,
   bulk,
+  pinKey,
+  settleKey,
   onClearSelection,
 }: {
   session: SessionSummary;
@@ -589,6 +601,9 @@ const ThreadRow = memo(function ThreadRow({
   picked?: boolean;
   /** The picked threads, when there is more than one: this row's menu then acts on all of them. */
   bulk?: SessionSummary[];
+  /** Pin's and Settle's keys (Settings › Keyboard), on the hover actions' tooltips. */
+  pinKey?: string;
+  settleKey?: string;
   onClearSelection?: () => void;
 }) {
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
@@ -618,6 +633,8 @@ const ThreadRow = memo(function ThreadRow({
   const failed = !!failedAt && !selected;
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
+  /** The menu was opened with Shift+F10 or the ContextMenu key: the row takes the keyboard back. */
+  const menuFromKeys = useRef(false);
   const external = !!session.harness && session.harness !== "rustcode";
   const harness = external ? harnesses?.harnesses.find((h) => h.id === session.harness) : undefined;
   // Where the row runs: the worktree's repository, else the thread's own folder.
@@ -660,7 +677,15 @@ const ThreadRow = memo(function ThreadRow({
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
   return (
-    <ContextMenu.Root>
+    <ContextMenu.Root
+      onOpenChange={(open) => {
+        // A menu opened from the keyboard hands it back to the row when it closes, so ↑ ↓, P and
+        // D keep working; one the pointer opened returns focus where the pointer went.
+        if (open || !menuFromKeys.current) return;
+        menuFromKeys.current = false;
+        setTimeout(() => rowElement(session.id)?.focus(), 0);
+      }}
+    >
       <ContextMenu.Trigger asChild>
         <div className="group relative">
           <button
@@ -673,7 +698,22 @@ const ThreadRow = memo(function ThreadRow({
               if (e.key === "F2") {
                 e.preventDefault();
                 startRename();
+                return;
               }
+              // Shift+F10 and the ContextMenu key open the menu the row's right-click opens,
+              // anchored on the row itself rather than wherever the pointer last was.
+              if (!opensRowMenu(e)) return;
+              e.preventDefault();
+              menuFromKeys.current = true;
+              const rect = e.currentTarget.getBoundingClientRect();
+              e.currentTarget.dispatchEvent(
+                new MouseEvent("contextmenu", {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: rect.left + 16,
+                  clientY: rect.top + Math.min(rect.height / 2, 24),
+                }),
+              );
             }}
             aria-current={selected ? "page" : undefined}
             aria-pressed={picked || undefined}
@@ -683,7 +723,7 @@ const ThreadRow = memo(function ThreadRow({
             <RowFill selected={lit} picked={picked} radius="rounded-xl" />
             {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
                 actions take the right slot's place, so this line keeps exactly their room clear:
-                Pin, Settle or Unsettle and the menu, 22px each plus the 6px they sit in from
+                Pin, Settle or Unsettle and the menu, 26px each plus the 6px they sit in from
                 the row's edge. */}
             <span className={cx("relative flex h-[17px] w-full min-w-0 items-center gap-1", ACTIONS_CLEAR)}>
               {!grouped && (
@@ -806,17 +846,21 @@ const ThreadRow = memo(function ThreadRow({
               </span>
             )}
           </button>
-          <div className="absolute top-1 right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
-            <RowAction label={pinned ? "Unpin" : "Pin"} onClick={() => togglePin(session.id)}>
-              {pinned ? <PinOff size={12} /> : <Pin size={12} />}
+          <div className="absolute top-0.5 right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
+            <RowAction label={pinned ? "Unpin" : "Pin"} hint={pinKey} onClick={() => togglePin(session.id)}>
+              {pinned ? <PinOff size={13} /> : <Pin size={13} />}
             </RowAction>
             {done ? (
-              <RowAction label="Unsettle" onClick={() => void setThreadStatus(session.id, "idle")}>
-                <CircleDashed size={13} />
+              <RowAction
+                label="Unsettle"
+                hint={settleKey}
+                onClick={() => void setThreadStatus(session.id, "idle")}
+              >
+                <CircleDashed size={14} />
               </RowAction>
             ) : (
-              <RowAction label="Settle" onClick={() => settleThread(session.id)}>
-                <Check size={13} />
+              <RowAction label="Settle" hint={settleKey} onClick={() => settleThread(session.id)}>
+                <Check size={14} />
               </RowAction>
             )}
             <DropdownMenu.Root modal={false}>
@@ -824,9 +868,10 @@ const ThreadRow = memo(function ThreadRow({
                 <button
                   type="button"
                   aria-label={`Actions for ${session.title || "thread"}`}
-                  className="flex size-[22px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+                  title="Actions · ⇧F10"
+                  className="flex size-[26px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
                 >
-                  <Ellipsis size={13} />
+                  <Ellipsis size={15} />
                 </button>
               </DropdownMenu.Trigger>
               <MenuContent align="start" sideOffset={4}>
@@ -1336,8 +1381,12 @@ export function Sidebar() {
   const finished = useApp((s) => s.finished);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
+  const shortcuts = useApp((s) => s.shortcuts);
   const toggleKey = useShortcutHint("toggle-sidebar");
   const newKey = useShortcutHint("new-thread");
+  // The row marks' keys, from the same table: they follow a remap and show on the row's tooltips.
+  const pinKey = useShortcutHint("pin-thread");
+  const settleKey = useShortcutHint("settle-thread");
   const pinned = useApp((s) => s.pinned);
   const [query, setQuery] = useState("");
   // The search row is a label until it is used: ⌘F while the sidebar has the keyboard opens it.
@@ -1752,30 +1801,78 @@ export function Sidebar() {
   const focusRow = (id: string) =>
     list.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`)?.focus();
 
-  // ↑ ↓ ⏎ Esc over the rows; a section or group control keeps its own keys, and a field inside
-  // the list (the rename box) keeps every key it is given.
+  // P pins and D settles the rows the keyboard acts on: a multi-selection when there is one, else
+  // the row the keyboard is on. Both are the calls the hover actions and the selection bar make,
+  // so a mark means the same thing wherever it is asked for, and both offer the same toast.
+  const markRows = (command: string, focused: string) => {
+    const ids = pickedSessions.length > 1 ? pickedSessions.map((s) => s.id) : [focused];
+    if (command === "pin-thread") {
+      // The same rule as the selection bar's button: unpin when every row is pinned, else pin.
+      const wasPinned = ids.filter((id) => pinned.includes(id));
+      const on = wasPinned.length !== ids.length;
+      setPinned(ids, on);
+      const title = byId.get(ids[0]!)?.title || "New thread";
+      toast(
+        ids.length > 1
+          ? `${on ? "Pinned" : "Unpinned"} ${ids.length} threads`
+          : `${on ? "Pinned" : "Unpinned"} "${title}"`,
+        "info",
+        {
+          // Each row goes back the way it was, however mixed the selection was.
+          action: {
+            label: "Undo",
+            run: () => {
+              const rest = ids.filter((id) => !wasPinned.includes(id));
+              if (wasPinned.length) setPinned(wasPinned, true);
+              if (rest.length) setPinned(rest, false);
+            },
+          },
+        },
+      );
+    } else if (command === "settle-thread") {
+      const state = useApp.getState();
+      // D settles; on threads already settled it puts them back, like the row's own button.
+      if (ids.every((id) => statusOf(state, id) === "done")) unsettleThreads(ids);
+      else settleThreads(ids);
+    } else return;
+    // A mark can move the row to another section, where it is drawn anew: keep the keyboard on it.
+    setActiveId(focused);
+    setTimeout(() => focusRow(focused), 0);
+  };
+
+  // ↑ ↓ ⏎ Esc over the rows, and P/D to mark the row the keyboard is on; a section or group
+  // control keeps its own keys, and a field inside the list (the rename box) keeps every key.
   const onListKey = (e: React.KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
+    const editable = !!target?.closest("input, textarea, [contenteditable]");
     const action = rowKeyAction({
       key: e.key,
       metaKey: e.metaKey,
       ctrlKey: e.ctrlKey,
       altKey: e.altKey,
-      editable: !!target?.closest("input, textarea, [contenteditable]"),
+      editable,
     });
-    if (!action) return;
-    if (action.kind === "clear") {
+    // The list's marking keys never fire from the window (lib/keys.ts): they are read here, where
+    // a row has the keyboard, so typing one into any field stays typing.
+    const mark = editable ? null : listCommandFor(shortcuts, e);
+    if (!action && !mark) return;
+    if (action?.kind === "clear") {
       e.preventDefault();
       clearSelection();
       return;
     }
     if (!target?.closest("[data-row-id]")) return;
     e.preventDefault();
-    if (action.kind === "open") {
+    if (mark) {
+      if (currentId) markRows(mark, currentId);
+      return;
+    }
+    if (action?.kind === "open") {
       if (currentId) selectThread(currentId);
       clearSelection();
       return;
     }
+    if (action?.kind !== "move") return;
     const to = nextRow(orderIds, currentId, action.delta);
     if (!to) return;
     setActiveId(to);
@@ -1860,6 +1957,8 @@ export function Sidebar() {
       navActive={s.id === currentId}
       picked={picked.has(s.id)}
       bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
+      pinKey={pinKey}
+      settleKey={settleKey}
       onClearSelection={clearSelection}
     />
   );

@@ -22,6 +22,11 @@ export interface AppCommand {
   group: ShortcutGroup;
   /** False for the keys the composer owns, which Settings lists but does not change. */
   remappable: boolean;
+  /**
+   * True for a key the thread list answers while one of its rows has the keyboard: the window
+   * never fires it, so a bare letter cannot type over the composer or a field.
+   */
+  list?: boolean;
 }
 
 export const APP_COMMANDS: readonly AppCommand[] = [
@@ -41,6 +46,22 @@ export const APP_COMMANDS: readonly AppCommand[] = [
     remappable: true,
   },
   { id: "stop-turn", label: "Stop the turn", binding: "mod+.", group: "Threads", remappable: true },
+  {
+    id: "pin-thread",
+    label: "Pin or unpin the highlighted thread",
+    binding: "p",
+    group: "Threads",
+    remappable: true,
+    list: true,
+  },
+  {
+    id: "settle-thread",
+    label: "Settle the highlighted thread, or unsettle it",
+    binding: "d",
+    group: "Threads",
+    remappable: true,
+    list: true,
+  },
   {
     id: "command-palette",
     label: "Command palette: threads, actions",
@@ -316,6 +337,11 @@ export function bindingOf(overrides: Readonly<Record<string, string>>, id: strin
   return overrides[id] ?? command?.binding ?? "";
 }
 
+/** True for a command only the thread list answers while a row has its keyboard. */
+function isListKey(id: string): boolean {
+  return APP_COMMANDS.some((command) => command.id === id && command.list === true);
+}
+
 /** The commands whose binding would be the same key, the one being changed aside. */
 export function conflictingCommands(
   overrides: Readonly<Record<string, string>>,
@@ -353,7 +379,9 @@ export function bindingProblem(
   const text = formatBinding(binding);
   if (RESERVED_BINDINGS.includes(binding)) return `${text} belongs to macOS.`;
   if (RESERVED_EDITING.includes(binding)) return `${text} belongs to copy, paste and undo.`;
-  if (!hasModifier(parsed) && !isFunctionKey(parsed)) {
+  // A list key is typed where nothing else takes it (a row has the keyboard), so a bare letter
+  // is usable for one; every other command needs ⌘/⌥ or a function key.
+  if (!hasModifier(parsed) && !isFunctionKey(parsed) && !isListKey(id)) {
     return `Add ⌘ to it, or use a function key like F6.`;
   }
   const [taken] = conflictingCommands(overrides, id, binding);
@@ -361,12 +389,30 @@ export function bindingProblem(
   return null;
 }
 
-/** The command a keydown runs, or null: only commands Settings can change fire here. */
+/**
+ * The command a keydown runs app-wide, or null: only commands Settings can change fire here, and
+ * the list's own marking keys are left to the thread list (see `listCommandFor`).
+ */
 export function commandFor(overrides: Readonly<Record<string, string>>, event: KeyEventLike): string | null {
   const pressed = bindingFromEvent(event);
   if (!pressed) return null;
   const bindings = bindingsFor(overrides);
-  const command = CHANGEABLE_COMMANDS.find((c) => bindings[c.id] === pressed);
+  const command = CHANGEABLE_COMMANDS.find((c) => !c.list && bindings[c.id] === pressed);
+  return command?.id ?? null;
+}
+
+/**
+ * The thread list's marking key a keydown is, or null: P (pin) and D (settle) are answered by
+ * the row the list has focus on, never by the window, and follow a remap like every other key.
+ */
+export function listCommandFor(
+  overrides: Readonly<Record<string, string>>,
+  event: KeyEventLike,
+): string | null {
+  const pressed = bindingFromEvent(event);
+  if (!pressed) return null;
+  const bindings = bindingsFor(overrides);
+  const command = CHANGEABLE_COMMANDS.find((c) => c.list && bindings[c.id] === pressed);
   return command?.id ?? null;
 }
 
@@ -396,7 +442,7 @@ export function parseOverrides(raw: string | null | undefined): Record<string, s
     if (!parsed) continue;
     const binding = bindingFromParts(parsed);
     if (RESERVED_BINDINGS.includes(binding) || RESERVED_EDITING.includes(binding)) continue;
-    if (!hasModifier(parsed) && !isFunctionKey(parsed)) continue;
+    if (!hasModifier(parsed) && !isFunctionKey(parsed) && !command.list) continue;
     if (conflictingCommands(out, command.id, binding).length > 0) continue;
     // A bare default is not an override: the table stays the source of it.
     if (binding === command.binding) continue;
