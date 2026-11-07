@@ -230,10 +230,14 @@ Frosted rather than near-solid on purpose: the field is what the screen is about
 the lightest surface in the app, and the blur keeps text scrolling under it a hint rather
 than a smear. One filter per surface, two recipes in all
 (the shared glass and the composer's): no larger radius, no second blur
-stacked on the first, no blur on a pane or a scrolling row. The composer's pair
-is also what the cards under a new thread's field are made of
-(`.rc-glass-soft`, ui/NewThreadWidgets.tsx): the same material, not a third
-recipe.
+stacked on the first, no blur on a pane or a scrolling row.
+
+A new thread draws its chosen picture behind the whole pane, so the field there takes a third
+value of its own: 85% (`--rc-composer-bg-over`, `.rc-composer-over`, ui/ChatView.tsx), which
+reads as a panel rather than as another window on the picture. The cards under it are the
+screen's one see-through surface, `.rc-glass-faint`: a third of `surface-2` and the shared
+filter, no edge ring, so the picture runs on behind them. Both go solid under Reduce
+transparency with the rest.
 
 ## Spacing
 
@@ -660,11 +664,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   change the effort at once; the model's name (Enter or a click) swaps the card
   for the searchable list of every harness's models, and picking one comes back
   to the track on that model's own last level.
-- **New thread cards:** under an empty thread's field, a quiet row of five glass cards
-  (`.rc-glass-soft rounded-xl shadow-1`, one height, label in `text-caption text-fg-faint`
-  with a 12px icon): activity, this project's recent threads, the last thirty days of
-  usage, its pull requests, and this month against the last. Three columns from `lg`, one
-  sideways-scrolling row below it; a card with nothing to say says so in one line rather
+- **New thread screen:** the field and its strip, and the cards below them. No heading, no path
+  line and no starter prompts: the project is picked from the folder pill in the strip, whose
+  panel already lists the projects and ends with `Choose Folder…`. A chosen picture covers the
+  whole pane top to bottom (`object-fit: cover`, no fade) under one light scrim (`bg` at 35%), so
+  what is written on it stays readable in either theme.
+- **New thread cards:** under an empty thread's field, a dashboard of five see-through cards
+  (`.rc-glass-faint rounded-xl`, no edge ring, `p-5`, 16px apart), a step wider than the field
+  (up to 1100px, centred; the field keeps the chat's own measure): the activity heatmap and this
+  project's recent threads across the first row, then the last thirty days of usage, its pull
+  requests and this month against the last. One height for every card, its label in
+  `text-caption text-fg-faint` with a 12px icon; six columns from `lg` (3 + 3, then 2 + 2 + 2),
+  one sideways-scrolling row below it; a card with nothing to say says so in one line rather
   than collapsing, so the field above it never moves as reads land.
 - **Composer strip:** what the thread works in and what it is allowed to do
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
