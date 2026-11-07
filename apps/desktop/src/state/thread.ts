@@ -29,6 +29,12 @@ export type TranscriptItem =
       fromView?: boolean;
       /** The app woke the thread for its children: a divider row, not a message the user typed. */
       wake?: boolean;
+      /**
+       * Typed here and sent from the composer: its row flies out of the field on its first sighting
+       * (`lib/sendFlight.ts`). A replayed item, a wake, a message from another thread or a view and
+       * the one a thread was made for all leave it out, so they only rise in.
+       */
+      sent?: boolean;
     }
   | { kind: "assistant"; id: string; text: string; at?: number; turnId?: string }
   | {
@@ -519,6 +525,7 @@ export function beginTurn(
   attachments?: SentAttachment[],
   fromView?: boolean,
   wake?: boolean,
+  sent?: boolean,
 ): ThreadState {
   const closed = closePendingTurn(state);
   return {
@@ -540,6 +547,7 @@ export function beginTurn(
         attachments: attachments?.length ? attachments : undefined,
         fromView: fromView || undefined,
         wake: wake || isWakeMessage(text) || undefined,
+        sent: sent || undefined,
       },
     ],
   };
