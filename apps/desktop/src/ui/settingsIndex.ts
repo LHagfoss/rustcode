@@ -205,13 +205,24 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // ------------------------------------------------------------ Statistics
   {
     section: "statistics",
-    title: "Recorded usage",
-    keywords: "tokens cost turns cached cache write reported usd spend total",
+    title: "Totals",
+    keywords:
+      "tokens cost turns active days period today 7 days 30 days all time change delta sparkline recorded usage cached cache write reported usd spend",
   },
   {
     section: "statistics",
-    title: "By harness and model",
-    keywords: "tokens per harness model cost reported breakdown",
+    title: "Daily activity",
+    keywords: "per day chart daily turns tokens cost peak graph bar",
+  },
+  {
+    section: "statistics",
+    title: "Cost by harness and model",
+    keywords: "tokens per harness model cost reported breakdown share stacked legend",
+  },
+  {
+    section: "statistics",
+    title: "Usage limits",
+    keywords: "plan limits windows reset left used percentage subscription rate limit",
   },
   {
     section: "statistics",

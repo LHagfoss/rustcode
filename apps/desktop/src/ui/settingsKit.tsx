@@ -61,7 +61,7 @@ export function SectionTitle({
 }) {
   if (!title && !action) return null;
   return (
-    <div className={cx("mb-2.5 flex min-h-7 items-center gap-2 px-3 sm:px-4", className)}>
+    <div className={cx("mb-2.5 flex min-h-7 flex-wrap items-center gap-2 px-3 sm:px-4", className)}>
       <h2 className="flex min-w-0 flex-1 items-center gap-2 font-semibold text-fg text-title3">{title}</h2>
       {action}
     </div>
@@ -82,7 +82,7 @@ export function Group({
   action?: ReactNode;
 }) {
   return (
-    <section className="mb-8" data-setting={typeof title === "string" ? title : undefined}>
+    <section className="mb-8 scroll-mt-5" data-setting={typeof title === "string" ? title : undefined}>
       <SectionTitle title={title} action={action} />
       <div className="divide-y divide-border overflow-hidden rounded-xl border border-border-strong bg-surface-2/40">
         {children}
@@ -409,6 +409,84 @@ export function Choice<T extends string>({
   );
 }
 
+/** A row's state at a glance: a short tinted chip (signed in, signed out, active). */
+export function Chip({
+  tone = "idle",
+  title,
+  children,
+}: {
+  tone?: "ok" | "warn" | "bad" | "idle";
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      title={title}
+      className={cx(
+        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-caption",
+        tone === "ok"
+          ? "bg-success/12 text-success"
+          : tone === "warn"
+            ? "bg-warning/12 text-warning"
+            : tone === "bad"
+              ? "bg-danger/12 text-danger"
+              : "bg-fill text-fg-muted",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * A whole number chosen from a short range, in a row: the native slider (so
+ * the arrow keys, Home and End work) with the value it is on beside it and the
+ * ends of its range under them.
+ */
+export function Slider({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+  unit,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+  /** What one step is of, for the caption (“threads”). */
+  unit: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-3">
+        <input
+          type="range"
+          aria-label={label}
+          aria-valuetext={`${value} ${unit}`}
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="h-5 w-36 cursor-pointer accent-accent"
+        />
+        <span className="min-w-14 text-right font-medium text-callout text-fg tabular">
+          {value} {unit}
+        </span>
+      </div>
+      <div className="flex justify-between text-caption text-fg-faint tabular">
+        <span>{min}</span>
+        <span>{max}</span>
+      </div>
+    </div>
+  );
+}
+
 export function Loading({ error }: { error: string | null }) {
   return error ? (
     <p className="text-callout text-warning">{error}</p>
@@ -438,7 +516,12 @@ export function Loading({ error }: { error: string | null }) {
  * dropped, so a slow response never puts back what the page just changed.
  * The cache is in memory only and is cleared when the engine goes away.
  */
-export function useEngineData<T>(method: string, parse: (v: Json) => T, params: JsonObject = {}) {
+export function useEngineData<T>(
+  method: string,
+  parse: (v: Json) => T,
+  params: JsonObject = {},
+  { skip = false }: { skip?: boolean } = {},
+) {
   const status = useApp((s) => s.status);
   const key = pageKey(method, params);
   const [data, setDataState] = useState<T | null>(() => cachedPage<T>(key)?.data ?? null);
@@ -447,6 +530,8 @@ export function useEngineData<T>(method: string, parse: (v: Json) => T, params: 
   // object or parser does not restart the effect on every render.
   const ask = useRef({ method, params, parse, key });
   ask.current = { method, params, parse, key };
+  const skipped = useRef(skip);
+  skipped.current = skip;
   const setData = useCallback((value: T | null) => {
     const { key } = ask.current;
     if (value === null) forgetPage(key);
@@ -454,6 +539,7 @@ export function useEngineData<T>(method: string, parse: (v: Json) => T, params: 
     setDataState((shown) => (sameValue(shown, value) ? shown : value));
   }, []);
   const load = useCallback(async () => {
+    if (skipped.current) return;
     const { method, params, parse } = ask.current;
     const token = beginPageRead(key);
     try {
@@ -475,7 +561,7 @@ export function useEngineData<T>(method: string, parse: (v: Json) => T, params: 
     setError(null);
   }, [status, key]);
   useEffect(() => {
-    if (status === "ready") void load();
-  }, [status, load]);
+    if (status === "ready" && !skip) void load();
+  }, [status, skip, load]);
   return { data, error, setData, reload: load };
 }

@@ -26,7 +26,7 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -100,6 +100,7 @@ import { StatisticsPage } from "./StatisticsPage";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
+  Chip,
   Choice,
   fieldClass,
   Group,
@@ -107,7 +108,7 @@ import {
   Row,
   RowResets,
   SectionTitle,
-  Select,
+  Slider,
   useEngineData,
   useRowResets,
 } from "./settingsKit";
@@ -480,9 +481,9 @@ function AgentsPage() {
           title="New threads start on"
           action={
             saved ? (
-              <span className="flex items-center gap-1 text-caption text-success">
-                <Check size={12} /> Saved
-              </span>
+              <Chip tone="ok">
+                <Check size={11} /> Saved
+              </Chip>
             ) : undefined
           }
           footer="A thread can still switch harness and model from the composer."
@@ -493,15 +494,10 @@ function AgentsPage() {
       <Group
         title="Coding agents"
         action={
-          <button
-            type="button"
-            onClick={() => void recheck()}
-            disabled={rechecking}
-            className="flex items-center gap-1 text-caption text-fg-muted hover:text-fg disabled:opacity-60"
-          >
-            <RefreshCw size={11} className={rechecking ? "animate-spin" : undefined} />
+          <Action quiet size="sm" onClick={() => void recheck()} disabled={rechecking}>
+            <RefreshCw size={11} />
             {rechecking ? "Checking…" : "Refresh"}
-          </button>
+          </Action>
         }
         footer="Each agent signs in on its own; RustCode never stores its credentials. Advanced runs setup again."
       >
@@ -519,10 +515,6 @@ function OrchestrationGroup() {
   const readAcrossProjects = useApp((s) => s.readAcrossProjects);
   const pending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
-  const limits = Array.from({ length: MAX_ACTIVE_LIMIT - MIN_ACTIVE_LINKS + 1 }, (_, i) => ({
-    value: String(MIN_ACTIVE_LINKS + i),
-    label: `${MIN_ACTIVE_LINKS + i} thread${MIN_ACTIVE_LINKS + i === 1 ? "" : "s"}`,
-  }));
   return (
     <Group title="Orchestration">
       <Row
@@ -545,11 +537,13 @@ function OrchestrationGroup() {
         }
         subtitle={`How many distinct threads one thread may have working at the same time. A message to a thread it is already running is a follow-up and takes no slot. The whole delegation tree holds twice as many: ${threadLimit * 2} now.`}
       >
-        <Select
+        <Slider
           label="Threads one thread can run at once"
-          value={String(threadLimit)}
-          options={limits}
-          onChange={(value) => setThreadLimit(Number(value))}
+          value={threadLimit}
+          min={MIN_ACTIVE_LINKS}
+          max={MAX_ACTIVE_LIMIT}
+          onChange={setThreadLimit}
+          unit="threads"
         />
       </Row>
       <Row
@@ -627,11 +621,15 @@ function ConnectionsPage() {
           <Row title="GitHub CLI not installed" subtitle="Install it with: brew install gh" />
         ) : data.github.accounts.length ? (
           data.github.accounts.map((a) => (
-            <Row
-              key={`${a.host}/${a.login}`}
-              title={a.login}
-              subtitle={`${a.host}${a.active ? " · active" : ""}${a.valid ? "" : " · token invalid"}`}
-            />
+            <Row key={`${a.host}/${a.login}`} title={a.login} subtitle={a.host}>
+              {a.valid ? (
+                <Chip tone="ok">{a.active ? "Signed in" : "Usable"}</Chip>
+              ) : (
+                <Chip tone="warn" title="Run: gh auth login">
+                  Token invalid
+                </Chip>
+              )}
+            </Row>
           ))
         ) : (
           <Row title="Not signed in" subtitle="Run: gh auth login" />
@@ -643,12 +641,14 @@ function ConnectionsPage() {
       >
         {data.accounts.length ? (
           data.accounts.map((a, i) => (
-            <Row
-              key={i}
-              title={a.display || a.provider}
-              subtitle={`${a.provider} · ${a.method}${a.needsSignIn ? " · sign in again" : ""}`}
-            >
-              {a.active && !a.needsSignIn && <span className="text-caption text-success">Active</span>}
+            <Row key={i} title={a.display || a.provider} subtitle={`${a.provider} · ${a.method}`}>
+              {a.needsSignIn ? (
+                <Chip tone="warn">Sign in again</Chip>
+              ) : a.active ? (
+                <Chip tone="ok">Active</Chip>
+              ) : (
+                <Chip>Idle</Chip>
+              )}
             </Row>
           ))
         ) : (
@@ -753,6 +753,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
           onKeyDown={(e) => e.key === "Enter" && valid && void create()}
           placeholder="theme-name"
           aria-label="Theme name"
+          aria-invalid={name.length > 0 && !valid}
           className={cx(fieldClass, "flex-1 font-mono")}
         />
         <Action onClick={onDone}>Cancel</Action>
@@ -760,7 +761,11 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
           Create
         </Action>
       </div>
-      {cli ? (
+      {name.length > 0 && !valid ? (
+        <p className="m-0 text-caption text-warning">
+          A theme name is lowercase letters, digits and dashes, up to 64, starting with a letter or digit.
+        </p>
+      ) : cli ? (
         <p className="m-0 text-caption text-fg-muted">
           This engine cannot create themes from the app. In a terminal:{" "}
           <code className="selectable rounded-xs bg-fill px-1 py-px font-mono text-fg">{cli}</code>
@@ -1202,6 +1207,55 @@ export function Settings() {
   useEffect(() => {
     panel.current?.focus({ preventScroll: true });
   }, []);
+  // The page's own sections (its group cards), for the nav under the open page:
+  // they are read from the page's DOM, so a page that loads its rows later still
+  // lists them, and the one being scrolled through is marked as you go.
+  const main = useRef<HTMLElement>(null);
+  const [sections, setSections] = useState<string[]>([]);
+  const [atSection, setAtSection] = useState<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the page is what is observed
+  useLayoutEffect(() => {
+    const root = main.current;
+    if (!root) return;
+    let frame = 0;
+    const mark = () => {
+      const top = root.getBoundingClientRect().top;
+      let at: string | null = null;
+      for (const element of root.querySelectorAll<HTMLElement>("section[data-setting]")) {
+        if (element.getBoundingClientRect().top - top <= 24) at = element.dataset.setting ?? null;
+      }
+      setAtSection(at ?? root.querySelector<HTMLElement>("section[data-setting]")?.dataset.setting ?? null);
+    };
+    const collect = () => {
+      setSections(
+        [...root.querySelectorAll<HTMLElement>("section[data-setting]")]
+          .map((element) => element.dataset.setting ?? "")
+          .filter(Boolean),
+      );
+      mark();
+    };
+    const again = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(collect);
+    };
+    const observer = new MutationObserver(again);
+    observer.observe(root, { childList: true, subtree: true });
+    root.addEventListener("scroll", mark, { passive: true });
+    // The page's own sections are in the DOM by now, so a page switch never
+    // shows the page before it under the nav for a frame.
+    collect();
+    return () => {
+      observer.disconnect();
+      root.removeEventListener("scroll", mark);
+      cancelAnimationFrame(frame);
+    };
+  }, [section]);
+
+  /** Scrolls the open page to one of its sections, and marks it at once. */
+  const jump = (title: string) => {
+    findSetting(title)?.scrollIntoView({ block: "start" });
+    setAtSection(title);
+  };
 
   const clear = () => {
     setQuery("");
@@ -1357,21 +1411,42 @@ export function Settings() {
                         </div>
                       )}
                       {group.pages.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          aria-current={s.id === section ? "page" : undefined}
-                          onClick={() => openSettings(s.id)}
-                          className={cx(
-                            "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
-                            s.id === section
-                              ? "bg-fill text-fg"
-                              : "text-fg-muted hover:bg-fill hover:text-fg",
+                        <div key={s.id} className="flex flex-col">
+                          <button
+                            type="button"
+                            aria-current={s.id === section ? "page" : undefined}
+                            onClick={() => openSettings(s.id)}
+                            className={cx(
+                              "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
+                              s.id === section
+                                ? "bg-fill text-fg"
+                                : "text-fg-muted hover:bg-fill hover:text-fg",
+                            )}
+                          >
+                            <s.icon size={16} className="shrink-0" />
+                            {s.label}
+                          </button>
+                          {s.id === section && sections.length > 1 && (
+                            <div className="mb-1 ms-3.5 flex flex-col border-border border-s ps-1.5">
+                              {sections.map((title) => (
+                                <button
+                                  key={title}
+                                  type="button"
+                                  aria-current={atSection === title ? "true" : undefined}
+                                  onClick={() => jump(title)}
+                                  className={cx(
+                                    "flex h-7 min-w-0 items-center rounded-sm px-2 text-left text-callout",
+                                    atSection === title
+                                      ? "font-medium text-fg"
+                                      : "text-fg-muted hover:bg-fill hover:text-fg",
+                                  )}
+                                >
+                                  <span className="truncate">{title}</span>
+                                </button>
+                              ))}
+                            </div>
                           )}
-                        >
-                          <s.icon size={16} className="shrink-0" />
-                          {s.label}
-                        </button>
+                        </div>
                       ))}
                     </div>
                   ))
@@ -1380,8 +1455,8 @@ export function Settings() {
             </nav>
             <div className="flex min-w-0 flex-1 flex-col">
               <PanelHeader label={current.label} />
-              <main className="scroll-stable min-h-0 flex-1">
-                <div className="mx-auto w-full max-w-[760px] px-4 pt-5 pb-24">
+              <main ref={main} className="scroll-stable min-h-0 flex-1">
+                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-5 pb-24">
                   {section === "general" && <GeneralPage />}
                   {section === "chat" && <ChatPage />}
                   {section === "agents" && <AgentsPage />}

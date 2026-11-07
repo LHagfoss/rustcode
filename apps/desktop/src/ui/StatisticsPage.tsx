@@ -8,11 +8,27 @@
 // either its reported cost or its estimate, never both. A row with neither is
 // `unknown`, never $0. The total keeps the reported and estimated parts beside
 // it, and ≈ marks a number that is partly or wholly estimated.
+//
+// The page is read in one period at a time (`state/period.ts`): the totals at
+// the top are one report for the period and one for the period before, the day
+// read covers both so a sparkline and the daily chart have their days, and the
+// breakdown's bar and table share the model rows.
 
 import { ChevronRight, RefreshCw } from "lucide-react";
-import { Fragment, type ReactNode, useMemo, useState } from "react";
-import { parseUsageReport, type UsageRow, type UsageTotals } from "../acp/rustcode";
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { parseUsageReport, type UsageRow, type UsageTotals, windowTitle } from "../acp/rustcode";
 import { type Harness, Method } from "../acp/types";
+import { count } from "../lib/plural";
+import {
+  dailySeries,
+  previousRows,
+  rangeDays,
+  STATS_PERIODS,
+  type StatsPeriod,
+  statsRange,
+  sumRows,
+  trend,
+} from "../state/period";
 import {
   bestCost,
   type CostInput,
@@ -27,181 +43,347 @@ import {
 import {
   type HarnessTotal,
   harnessTotals,
+  type ModelTotal,
   type ThreadReport,
   type ThreadTotal,
   threadReport,
   usedTokens,
 } from "../state/statistics";
-import { useApp } from "../state/store";
-import { formatTokens as compactTokens } from "../state/thread";
+import { openSettings, useApp } from "../state/store";
+import { formatTokens as compactTokens, relativeAge } from "../state/thread";
+import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
-import { cx, Spinner } from "./primitives";
-import { Action, Group, Loading, Row, useEngineData } from "./settingsKit";
+import { cx, Skeleton, Spinner } from "./primitives";
+import {
+  ChartSkeleton,
+  CostShare,
+  DailyChart,
+  type DailyMetric,
+  type HarnessShare,
+  Tile,
+  useGlide,
+} from "./StatisticsCharts";
+import { Action, Chip, Choice, Group, Loading, Row, SectionTitle, useEngineData } from "./settingsKit";
 
 /** How many top-level threads the page draws before Show all. */
 const THREAD_LIMIT = 10;
 
-/** The daily chart's window, today and the 29 days before it. */
-const DAY_WINDOW = 30;
-
 /** The cost table's token columns that step out when its card is narrow. */
 const NARROW_COLUMN = "@max-[36rem]/usage:hidden";
 
-const DAY_MS = 86_400_000;
+const DEFAULT_PERIOD: StatsPeriod = "30d";
 
-/** `days` UTC days before today, as the store's `date(started_at)` writes it. */
-function utcDaysAgo(days: number): string {
-  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
-  return new Date(today - days * DAY_MS).toISOString().slice(0, 10);
+/** The cost inputs of a report's rows: one model row each. */
+const rowInputs = (rows: readonly UsageRow[]): CostInput[] =>
+  rows.map((row) => ({ harness: row.harness, model: row.model, totals: row }));
+
+/** The cost of a set of rows, each row's reported number or its estimate. */
+const costsOf = (rows: readonly UsageRow[]): CostTotals => rollUpCosts(rowInputs(rows));
+
+const modelInput = (harness: string, model: ModelTotal): CostInput => ({
+  harness,
+  model: model.model,
+  totals: model.totals,
+});
+
+/** A row's best known cost, or -1 so an unknown row ranks after every known one. */
+const rankOf = (cost: CostTotals | undefined): number => cost?.usd ?? -1;
+
+/** Harnesses and their models by cost, costliest first: the bar and the table share this order. */
+function rankGroups(groups: HarnessTotal[], costs: Map<string, CostTotals>): HarnessTotal[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      models: [...group.models].sort(
+        (one, other) =>
+          rankOf(costOf(modelInput(group.harness, other))) - rankOf(costOf(modelInput(group.harness, one))) ||
+          usedTokens(other.totals) - usedTokens(one.totals) ||
+          one.model.localeCompare(other.model),
+      ),
+    }))
+    .sort(
+      (one, other) =>
+        rankOf(costs.get(other.harness)) - rankOf(costs.get(one.harness)) ||
+        usedTokens(other.totals) - usedTokens(one.totals) ||
+        one.harness.localeCompare(other.harness),
+    );
+}
+
+/** The period's models by harness, the cost of each harness, and its models ordered by cost. */
+function useUsage(rows: UsageRow[] | undefined) {
+  return useMemo(() => {
+    const groups = harnessTotals(rows ?? []);
+    const costs = new Map<string, CostTotals>();
+    for (const group of groups) {
+      costs.set(group.harness, rollUpCosts(group.models.map((model) => modelInput(group.harness, model))));
+    }
+    return { groups, costs, total: costsOf(rows ?? []), ranked: rankGroups(groups, costs) };
+  }, [rows]);
 }
 
 export function StatisticsPage() {
-  const since = utcDaysAgo(DAY_WINDOW - 1);
-  const models = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "model" });
+  const [period, setPeriod] = useState<StatsPeriod>(DEFAULT_PERIOD);
+  const [metric, setMetric] = useState<DailyMetric>("turns");
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [all, setAll] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const range = useMemo(() => statsRange(period, new Date()), [period]);
+
+  // The period, and the same-length period before it, each read on its own so
+  // their totals are the store's own sums rather than a page slicing.
+  const current = useEngineData(Method.dataUsage, parseUsageReport, {
+    groupBy: "model",
+    ...(range.since ? { since: range.since } : {}),
+  });
+  const before = useEngineData(
+    Method.dataUsage,
+    parseUsageReport,
+    { groupBy: "model", ...(range.previousSince ? { since: range.previousSince } : {}) },
+    { skip: period === "all" },
+  );
+  // One day read covers both periods: the sparklines and the daily chart draw
+  // the current period's days, and the previous period's days count for its
+  // change. "All" asks for every day the store recorded.
+  const days = useEngineData(Method.dataUsage, parseUsageReport, {
+    groupBy: "day",
+    ...(range.previousSince ? { since: range.previousSince } : {}),
+  });
   const threads = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "thread" });
-  // The window is asked for, not sliced from the store's 1,000-row cap: without
-  // `since`, a store with more than 1,000 days could lose the recent ones.
-  const days = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day", since });
+
   const sessions = useApp((s) => s.sessions);
   const sessionsCapped = useApp((s) => s.sessionsCapped);
   const links = useApp((s) => s.links.links);
   const harnesses = useApp((s) => s.harnesses?.harnesses);
-  const [refreshing, setRefreshing] = useState(false);
-  const [all, setAll] = useState(false);
+  const names = useMemo(() => harnessNames(harnesses), [harnesses]);
 
-  const groups = useMemo(() => harnessTotals(models.data?.rows ?? []), [models.data?.rows]);
-  const costRows = useMemo(
-    () =>
-      groups.flatMap((group) =>
-        group.models.map((model) => ({
-          harness: group.harness,
-          model: model.model,
-          totals: model.totals,
-        })),
-      ),
-    [groups],
-  );
-  const cost = useMemo(() => rollUpCosts(costRows), [costRows]);
-  const costsByHarness = useMemo(() => {
-    const map = new Map<string, CostTotals>();
-    for (const group of groups) {
-      map.set(
-        group.harness,
-        rollUpCosts(
-          group.models.map((model) => ({
-            harness: group.harness,
-            model: model.model,
-            totals: model.totals,
-          })),
-        ),
-      );
-    }
-    return map;
-  }, [groups]);
+  const usage = useUsage(current.data?.rows);
+  const beforeRows = useMemo(() => {
+    if (period === "all" || !before.data) return undefined;
+    return previousRows(before.data.rows, current.data?.rows ?? []);
+  }, [period, before.data, current.data?.rows]);
+  // The comparison period's cost is priced from the rows it had on its own.
+  const beforeCostTotals = useMemo(() => (beforeRows ? costsOf(beforeRows) : undefined), [beforeRows]);
+
   const rolled = useMemo(
     () => (threads.data ? threadReport(threads.data, sessions, links, sessionsCapped) : null),
     [threads.data, sessions, links, sessionsCapped],
   );
-  const columns = useMemo(() => lastDays(days.data?.rows ?? [], since), [days.data?.rows, since]);
-  const names = useMemo(() => harnessNames(harnesses), [harnesses]);
+  const points = useMemo(() => {
+    const rows = days.data?.rows ?? [];
+    return dailySeries(rows, range.days ? rangeDays(range.since, range.days) : []);
+  }, [days.data?.rows, range.since, range.days]);
+  const beforePoints = useMemo(() => {
+    if (!range.days || !range.previousSince) return [];
+    const rows = (days.data?.rows ?? []).filter(
+      (row) => row.day !== undefined && row.day < range.since! && row.day >= range.previousSince!,
+    );
+    return dailySeries(rows, rangeDays(range.previousSince, range.days));
+  }, [days.data?.rows, range.days, range.since, range.previousSince]);
 
-  if (!models.data || !threads.data || !rolled) return <Loading error={models.error ?? threads.error} />;
-
-  const totals = models.data.totals;
-  const error = models.error ?? threads.error;
-  if (!groups.length && !rolled.threads.length && !error) return <NothingRecorded />;
+  const error = current.error ?? days.error ?? threads.error;
+  const compare =
+    period === "all"
+      ? "all time"
+      : period === "today"
+        ? "against yesterday"
+        : `against the ${range.days} days before`;
 
   const refresh = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([models.reload(), threads.reload(), days.reload()]);
+      await Promise.all([current.reload(), before.reload(), days.reload(), threads.reload()]);
     } finally {
       setRefreshing(false);
     }
   };
 
-  const turns = columns.reduce((sum, column) => sum + column.turns, 0);
+  const blocked = current.error;
+  if (!current.data && blocked) return <Loading error={blocked} />;
+  if (!current.data) return <StatisticsSkeleton period={period} onPeriod={setPeriod} onRefresh={refresh} />;
+
+  // Only a store with neither turns nor threads is empty: a period with nothing
+  // in it still shows its tiles at zero, with the daily card saying so.
+  if (threads.data && !usage.groups.length && !rolled?.threads.length) {
+    return <NothingRecorded refresh={refresh} refreshing={refreshing} error={error} />;
+  }
+
+  const totals = sumRows(current.data.rows);
+  const previousTotals = beforeRows ? sumRows(beforeRows) : undefined;
+  // A period that recorded no turns spent nothing: its zero is a number, not a
+  // blank, so the tile can say "up" instead of falling back to the comparison.
+  const previousEmpty = previousTotals?.turns === 0;
+  const beforeCost = previousEmpty ? 0 : beforeCostTotals?.usd;
+  const beforeTokens = previousEmpty ? 0 : previousTotals ? used(previousTotals) : undefined;
+  const activeDays = points.filter((point) => point.turns > 0).length;
+  const beforeActiveDays = beforePoints.filter((point) => point.turns > 0).length;
+  const change = (now?: number, was?: number) => (period === "all" ? undefined : trend(now, was));
+  const activeCompare =
+    period === "all" ? `${count(points.length, "day")} recorded` : `of ${count(range.days, "day")}`;
 
   return (
     <>
-      <Group
-        title="Recorded usage"
-        action={
-          <Action onClick={() => void refresh()} disabled={refreshing}>
-            {refreshing ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
-          </Action>
-        }
-        footer={
-          <UsageFootnote
-            totals={totals}
-            cost={cost}
-            truncated={models.data.truncated}
-            error={error}
-            dayError={days.error}
+      <section className="mb-8 scroll-mt-5" data-setting="Totals">
+        <SectionTitle
+          title="Totals"
+          action={
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Choice<StatsPeriod>
+                label="Period"
+                value={period}
+                options={STATS_PERIODS.map((one) => ({ value: one.value, label: one.label }))}
+                onChange={setPeriod}
+              />
+              <Action onClick={() => void refresh()} disabled={refreshing}>
+                {refreshing ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
+              </Action>
+            </div>
+          }
+        />
+        <div className="grid grid-cols-2 gap-3 @min-[44rem]:grid-cols-4">
+          <Tile
+            label="Cost"
+            value={costValue(usage.total)}
+            exact={costExact(usage.total)}
+            note={costNote(usage.total)}
+            trend={change(usage.total.usd, beforeCost)}
+            compare={compare}
+            series={points.map((point) => point.cost)}
+            seriesLabel="Reported cost per day; estimates are not in the line"
           />
-        }
-      >
-        <div className="grid grid-cols-2 gap-x-6 gap-y-4 px-4 py-4">
-          <Stat label="Cost" value={costValue(cost)} exact={costExact(cost)} note={costNote(cost)} />
-          <Stat
+          <Tile
+            label="Tokens"
+            value={tokensLabel(used(totals))}
+            exact={exact(used(totals))}
+            note={`${tokensLabel(totals.input)} in · ${tokensLabel(totals.output)} out`}
+            trend={change(used(totals), beforeTokens)}
+            compare={compare}
+            series={points.map((point) => point.tokens)}
+            seriesLabel="Input and output tokens per day"
+          />
+          <Tile
             label="Turns"
             value={String(totals.turns)}
+            count={totals.turns}
             note={
               totals.turnsWithoutAnyTokens > 0
-                ? `${totals.turnsWithoutAnyTokens} with missing counts`
-                : undefined
+                ? `${count(totals.turnsWithoutAnyTokens, "turn")} with missing counts`
+                : `${count(totals.turns, "turn")} recorded`
+            }
+            trend={change(totals.turns, previousTotals?.turns)}
+            compare={compare}
+            series={points.map((point) => point.turns)}
+            seriesLabel="Turns per day"
+          />
+          <Tile
+            label="Active days"
+            value={String(activeDays)}
+            count={activeDays}
+            note={activeCompare}
+            trend={change(activeDays, period === "all" ? undefined : beforeActiveDays)}
+            compare={compare}
+            series={points.map((point) => (point.turns > 0 ? 1 : 0))}
+            seriesLabel="Days with a turn, one mark each"
+          />
+        </div>
+        <div className="mt-2 max-w-[70ch] px-3 text-caption text-fg-faint sm:px-4">
+          <UsageFootnote
+            totals={totals}
+            cost={usage.total}
+            truncated={current.data.truncated}
+            error={error}
+            dayError={days.error}
+            period={period === "all" ? undefined : compare}
+          />
+        </div>
+      </section>
+
+      <Group
+        title="Daily activity"
+        action={days.data?.truncated ? <Chip tone="warn">Day read capped</Chip> : undefined}
+        footer={
+          <span className="block">
+            One bar a day, in UTC as the store groups them. Cost is what harnesses reported that day; the
+            tiles add a list-price estimate where none was reported.
+          </span>
+        }
+      >
+        {!days.data ? (
+          <ChartSkeleton />
+        ) : points.some((point) => point.turns > 0) ? (
+          <DailyChart
+            points={points}
+            metric={metric}
+            onMetric={setMetric}
+            format={(value) =>
+              metric === "cost"
+                ? value === undefined
+                  ? "unknown"
+                  : formatCost(value)
+                : value === undefined
+                  ? "—"
+                  : metric === "tokens"
+                    ? compactTokens(value)
+                    : String(value)
             }
           />
-        </div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-3 sm:grid-cols-4">
-          <Stat secondary label="Input" value={tokensLabel(totals.input)} exact={totals.input} />
-          <Stat secondary label="Output" value={tokensLabel(totals.output)} exact={totals.output} />
-          <Stat secondary label="Cached" value={tokensLabel(totals.cached)} exact={totals.cached} />
-          <Stat
-            secondary
-            label="Cache write"
-            value={tokensLabel(totals.cacheWrite)}
-            exact={totals.cacheWrite}
-          />
-        </div>
+        ) : (
+          <Row
+            title="Nothing recorded in this period"
+            subtitle="Pick a longer period, or run a turn and it lands here."
+          >
+            {period !== "all" && <Action onClick={() => setPeriod("all")}>Show all time</Action>}
+          </Row>
+        )}
       </Group>
 
-      {groups.length > 0 && (
+      {usage.groups.length > 0 && (
         <Group
-          title="Cost by model"
+          title="Cost by harness and model"
           footer={
             <span className="block">
-              Bars compare each model's best known cost, relative to the costliest; ≈ marks an estimate at API
-              list prices on {PRICE_DATE}, and a row with neither number has no bar.
+              The bar is each harness's share of the period's cost; picking a name in the legend takes it off
+              the bar, and a row lights its harness. ≈ marks an estimate at API list prices on {PRICE_DATE},
+              and a row with neither number has no bar.
             </span>
           }
         >
-          <ModelCosts rows={modelCosts(groups)} names={names} />
+          {usage.ranked.some((group) => rankOf(usage.costs.get(group.harness)) > 0) ? (
+            <CostShare
+              shares={sharesOf(usage.ranked, usage.costs, names)}
+              hidden={hidden}
+              onToggle={(key) =>
+                setHidden((was) => {
+                  const next = new Set(was);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+              }
+              hovered={hovered}
+              onHover={setHovered}
+              formatCost={formatCost}
+            />
+          ) : (
+            <Row
+              title="No cost to compare"
+              subtitle="No model this period ran reported a cost, and none has a list price this page can apply."
+            />
+          )}
+          <UsageTable
+            groups={usage.ranked}
+            names={names}
+            costs={usage.costs}
+            hovered={hovered}
+            hidden={hidden}
+            onHover={setHovered}
+          />
         </Group>
       )}
 
-      {turns > 0 && (
-        <Group
-          title="Last 30 days"
-          footer={
-            days.data?.truncated ? (
-              <span className="block text-warning">
-                The day read stopped at its row cap; some days may be missing.
-              </span>
-            ) : undefined
-          }
-        >
-          <TurnsChart columns={columns} />
-        </Group>
-      )}
+      <PlanLimits names={names} />
 
-      {groups.length > 0 && (
-        <Group title="By harness and model" footer={<UsageTableFootnote cost={cost} />}>
-          <UsageTable groups={groups} names={names} costs={costsByHarness} />
-        </Group>
-      )}
-
-      {rolled.threads.length > 0 && (
+      {rolled && rolled.threads.length > 0 && (
         <Group
           title="Threads"
           action={
@@ -228,37 +410,24 @@ function harnessNames(harnesses: Harness[] | undefined): Map<string, string> {
   return new Map((harnesses ?? []).map((harness) => [harness.id, harness.name]));
 }
 
-/** A number from the summary: its name, the compact value, and the exact one on hover. */
-function Stat({
-  label,
-  value,
-  exact,
-  note,
-  secondary,
-}: {
-  label: string;
-  value: string;
-  exact?: number | string;
-  note?: string;
-  /** A quieter line under the primary stats (the token counts). */
-  secondary?: boolean;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="text-caption text-fg-faint">{label}</div>
-      <div
-        className={
-          secondary
-            ? "truncate text-callout text-fg-muted tabular"
-            : "truncate font-medium text-title3 tabular"
-        }
-        title={typeof exact === "number" ? exact.toLocaleString("en-US") : exact}
-      >
-        {value}
-      </div>
-      {note && <div className="truncate text-caption text-fg-faint">{note}</div>}
-    </div>
-  );
+/** Each harness's part of the cost, costliest first, for the bar and its legend. */
+function sharesOf(
+  groups: HarnessTotal[],
+  costs: Map<string, CostTotals>,
+  names: Map<string, string>,
+): HarnessShare[] {
+  return groups.flatMap((group) => {
+    const cost = costs.get(group.harness);
+    if (!cost?.usd || cost.usd <= 0) return [];
+    return [
+      {
+        key: group.harness,
+        label: names.get(group.harness) ?? group.harness,
+        usd: cost.usd,
+        estimated: cost.estimatedUsd !== undefined,
+      },
+    ];
+  });
 }
 
 function tokensLabel(count: number | undefined): string {
@@ -277,10 +446,8 @@ function costValue(cost: CostTotals): string {
 function costNote(cost: CostTotals): string {
   const parts: string[] = [];
   if (cost.reportedUsd !== undefined) parts.push(`${formatCost(cost.reportedUsd)} reported`);
-  if (cost.estimatedUsd !== undefined) parts.push(`${formatCost(cost.estimatedUsd)} estimated`);
-  if (cost.unknownTurns > 0) {
-    parts.push(`${cost.unknownTurns} ${cost.unknownTurns === 1 ? "turn" : "turns"} unknown`);
-  }
+  if (cost.estimatedUsd !== undefined) parts.push(`${formatCost(cost.estimatedUsd)} est.`);
+  if (cost.unknownTurns > 0) parts.push(`${count(cost.unknownTurns, "turn")} unknown`);
   return parts.length ? parts.join(" · ") : "nothing reported or priced";
 }
 
@@ -312,112 +479,37 @@ function used(totals: UsageTotals): number | undefined {
   return totals.input === undefined && totals.output === undefined ? undefined : usedTokens(totals);
 }
 
-/** One model row in Cost by model: what it cost, and which number that was. */
-interface ModelCost {
-  harness: string;
-  model: string;
-  cost: CostTotals;
-  usd?: number;
-  turns: number;
-}
-
-/** Every model row, with its best known cost, the costliest first and unknown last. */
-function modelCosts(groups: HarnessTotal[]): ModelCost[] {
-  const rows: ModelCost[] = [];
-  for (const group of groups) {
-    for (const model of group.models) {
-      const one = costOf({ harness: group.harness, model: model.model, totals: model.totals });
-      rows.push({
-        harness: group.harness,
-        model: model.model,
-        cost: one,
-        usd: one.usd,
-        turns: model.totals.turns,
-      });
-    }
-  }
-  return rows.sort((one, other) => {
-    if (one.usd === undefined || other.usd === undefined) {
-      if (one.usd === other.usd) return other.turns - one.turns || one.model.localeCompare(other.model);
-      return one.usd === undefined ? 1 : -1;
-    }
-    return other.usd - one.usd || one.model.localeCompare(other.model);
-  });
-}
-
-/** Bars of each model's best known cost, relative to the costliest row. */
-function ModelCosts({ rows, names }: { rows: ModelCost[]; names: Map<string, string> }) {
-  const highest = Math.max(...rows.map((row) => row.usd ?? 0));
-  return (
-    <div className="flex flex-col gap-2 px-4 py-4">
-      {rows.map((row) => {
-        const estimated = row.cost.estimatedUsd !== undefined;
-        const width = row.usd !== undefined && highest > 0 ? (row.usd / highest) * 100 : 0;
-        return (
-          <div
-            key={`${row.harness}/${row.model}`}
-            className="flex min-w-0 items-center gap-2"
-            title={modelCostTitle(row, names.get(row.harness) ?? row.harness)}
-          >
-            <HarnessIcon id={row.harness} name={names.get(row.harness)} size={13} />
-            <span className="w-2/5 min-w-0 truncate text-callout text-fg-muted">
-              {row.model || "Unknown model"}
-            </span>
-            {row.usd !== undefined ? (
-              <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-fill-subtle">
-                <span
-                  className={cx(
-                    "block h-full rounded-full",
-                    estimated ? "bg-accent/45" : "bg-accent",
-                    // A tiny share still draws: a 4px minimum keeps it from
-                    // looking like an empty slot.
-                    row.usd > 0 && "min-w-[4px]",
-                  )}
-                  style={{ width: `${width}%` }}
-                />
-              </span>
-            ) : (
-              // No track for an unknown row: an empty bar would read as $0.
-              <span className="min-w-0 flex-1" />
-            )}
-            <span
-              className={
-                row.usd === undefined
-                  ? "w-[4.5rem] shrink-0 text-right text-callout text-fg-faint tabular"
-                  : "w-[4.5rem] shrink-0 text-right text-callout text-fg-muted tabular"
-              }
-            >
-              {bestValue(row.usd, estimated)}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function modelCostTitle(row: ModelCost, harness: string): string {
-  if (row.cost.reportedUsd !== undefined) {
-    return `${exactUsd(row.cost.reportedUsd)} USD reported by ${harness}`;
-  }
-  if (row.cost.estimatedUsd !== undefined) {
-    return `${exactUsd(row.cost.estimatedUsd)} USD estimated at API list prices on ${PRICE_DATE}, not necessarily what a subscription bills; no turn in this row reported a cost`;
-  }
-  const priced = priceOf(row.model) !== undefined;
-  return priced
-    ? `${harness} records token counts this page cannot split into input, cache read and cache write; this row has no reported cost and no estimate`
-    : `No list price for ${row.model || "this model"}; this row has no reported cost`;
-}
-
 function UsageTable({
   groups,
   names,
   costs,
+  hovered,
+  hidden,
+  onHover,
 }: {
   groups: HarnessTotal[];
   names: Map<string, string>;
   costs: Map<string, CostTotals>;
+  hovered: string | null;
+  hidden: ReadonlySet<string>;
+  onHover: (harness: string | null) => void;
 }) {
+  // Rows glide when the period changes the ranking: the order is the key.
+  const order = groups
+    .map((group) => `${group.harness}(${group.models.map((model) => model.model).join(",")})`)
+    .join("|");
+  const body = useGlide<HTMLTableSectionElement>(order);
+  // On a touch pointer there is no hover to link a row to its segment.
+  const [touch, setTouch] = useState(false);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(pointer: coarse)");
+    setTouch(media.matches);
+    const listen = () => setTouch(media.matches);
+    media.addEventListener("change", listen);
+    return () => media.removeEventListener("change", listen);
+  }, []);
+  const lit = (harness: string) => !touch && hovered === harness;
   return (
     <div className="@container/usage overflow-x-auto">
       <table className="w-full border-collapse text-callout">
@@ -446,12 +538,22 @@ function UsageTable({
             </th>
           </tr>
         </thead>
-        <tbody>
+        <tbody ref={body}>
           {groups.map((group) => {
             const groupCost = costs.get(group.harness) ?? { unknownTurns: 0 };
+            const off = hidden.has(group.harness);
             return (
               <Fragment key={group.harness}>
-                <tr className="border-border border-b bg-surface-2/50">
+                <tr
+                  data-glide={`h:${group.harness}`}
+                  onPointerEnter={() => onHover(group.harness)}
+                  onPointerLeave={() => onHover(null)}
+                  className={cx(
+                    "border-border border-b",
+                    lit(group.harness) ? "bg-fill" : "bg-surface-2/50",
+                    off && "opacity-50",
+                  )}
+                >
                   <th scope="row" className="min-w-0 px-4 py-2 text-left font-medium">
                     <span className="flex min-w-0 items-center gap-2">
                       <HarnessIcon id={group.harness} name={names.get(group.harness)} size={13} />
@@ -486,13 +588,19 @@ function UsageTable({
                   <td className="px-4 py-2 text-right text-fg-muted tabular">{group.totals.turns}</td>
                 </tr>
                 {group.models.map((model) => {
-                  const input: CostInput = {
-                    harness: group.harness,
-                    model: model.model,
-                    totals: model.totals,
-                  };
+                  const input = modelInput(group.harness, model);
                   return (
-                    <tr key={model.model || "unknown"} className="border-border border-b last:border-b-0">
+                    <tr
+                      key={model.model || "unknown"}
+                      data-glide={`m:${group.harness}/${model.model}`}
+                      onPointerEnter={() => onHover(group.harness)}
+                      onPointerLeave={() => onHover(null)}
+                      className={cx(
+                        "border-border border-b last:border-b-0",
+                        lit(group.harness) && "bg-fill-subtle",
+                        off && "opacity-50",
+                      )}
+                    >
                       <td className="min-w-0 px-4 py-2 pl-9 text-fg-muted">
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="truncate">{model.model || "Unknown model"}</span>
@@ -613,68 +721,77 @@ function MissingMark({ label }: { label: string }) {
   );
 }
 
-/** One column of Last 30 days: a UTC day the store grouped by, and its turns. */
-interface DayColumn {
-  day: string;
-  turns: number;
+/** A ticking clock for the plan windows' reset countdowns, once every half minute. */
+function useNow(every = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), every);
+    return () => clearInterval(timer);
+  }, [every]);
+  return now;
 }
 
-/** The queried window's UTC days, from the store's `date(started_at)`; a missing day is an empty slot. */
-function lastDays(rows: UsageRow[], since: string, count = DAY_WINDOW): DayColumn[] {
-  const turnsByDay = new Map<string, number>();
-  for (const row of rows) {
-    if (row.day) turnsByDay.set(row.day, (turnsByDay.get(row.day) ?? 0) + row.turns);
-  }
-  const start = Date.parse(`${since}T00:00:00Z`);
-  return Array.from({ length: count }, (_, index) => {
-    const day = new Date(start + index * DAY_MS).toISOString().slice(0, 10);
-    return { day, turns: turnsByDay.get(day) ?? 0 };
-  });
-}
-
-const shortDay = (day: string): string =>
-  new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-
-/** Turns per day over the last 30 days, with no axis and a peak count instead. */
-function TurnsChart({ columns }: { columns: DayColumn[] }) {
-  const peak = Math.max(...columns.map((column) => column.turns));
-  if (!columns.length || peak === 0) return null;
-  const first = columns[0]?.day ?? "";
-  const last = columns[columns.length - 1]?.day ?? "";
+/**
+ * The plan windows this Mac is signed in to, from the cache the composer's meter
+ * reads (`_rustcode/usage/plans`): each window's used bar and when it resets.
+ * Nothing is asked for here — Settings › Usage and the background poll read it.
+ */
+function PlanLimits({ names }: { names: Map<string, string> }) {
+  const cache = useApp((s) => s.planCache);
+  const now = useNow();
+  const plans = useMemo(
+    () =>
+      Object.values(cache)
+        .filter((plan) => plan.windows.length)
+        .sort(
+          (one, other) =>
+            (one.name ?? one.source).localeCompare(other.name ?? other.source) ||
+            (one.account ?? "").localeCompare(other.account ?? ""),
+        ),
+    [cache],
+  );
+  if (!plans.length) return null;
   return (
-    <div className="px-4 py-4">
-      <div
-        className="flex h-14 items-end gap-[3px]"
-        role="img"
-        aria-label={`Turns per day over the last ${columns.length} days`}
-      >
-        {columns.map((column) => (
-          <div
-            key={column.day}
-            className="flex h-full min-w-0 flex-1 items-end"
-            title={`${shortDay(column.day)} (UTC): ${column.turns} ${column.turns === 1 ? "turn" : "turns"}`}
-          >
-            {column.turns > 0 && (
-              <span
-                className="block w-full rounded-xs bg-fg-muted/45"
-                style={{ height: `${(column.turns / peak) * 100}%` }}
-              />
-            )}
-          </div>
-        ))}
+    <Group
+      title="Usage limits"
+      action={
+        <Action quiet size="sm" onClick={() => openSettings("usage")}>
+          Usage…
+        </Action>
+      }
+      footer="Read from each subscription's own sign-in by Settings › Usage and the background poll; nothing new is read here."
+    >
+      <div className="flex flex-col gap-4 px-4 py-4">
+        {plans.map((plan) => {
+          const old = plan.fetchedAt !== undefined && now - plan.fetchedAt > 10 * 60_000;
+          return (
+            <div
+              key={`${plan.source}/${plan.harness ?? ""}/${plan.account ?? ""}`}
+              className="flex flex-col gap-2.5"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate font-medium text-body">
+                  {plan.name ?? (plan.harness ? (names.get(plan.harness) ?? plan.harness) : plan.source)}
+                </span>
+                {plan.plan && (
+                  <span className="shrink-0 text-caption text-fg-faint capitalize">{plan.plan}</span>
+                )}
+                {plan.stale && <Chip tone="warn">stale</Chip>}
+                {old && !plan.stale && <Chip tone="warn">not read lately</Chip>}
+                {plan.fetchedAt !== undefined && (
+                  <span className="shrink-0 text-caption text-fg-faint">
+                    read {relativeAge(plan.fetchedAt, now)}
+                  </span>
+                )}
+              </div>
+              {plan.windows.map((window) => (
+                <PlanWindow key={windowTitle(window)} window={window} title={windowTitle(window)} />
+              ))}
+            </div>
+          );
+        })}
       </div>
-      <div className="mt-1.5 flex items-center justify-between text-caption text-fg-faint tabular">
-        <span>{shortDay(first)}</span>
-        <span>
-          peak {peak} {peak === 1 ? "turn" : "turns"}
-        </span>
-        <span>{shortDay(last)}</span>
-      </div>
-    </div>
+    </Group>
   );
 }
 
@@ -684,7 +801,7 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
   const delegates = thread.delegateCount;
   const notes = [
     thread.total.turnsWithoutAnyTokens > 0
-      ? `${thread.total.turnsWithoutAnyTokens} turns with missing counts`
+      ? `${count(thread.total.turnsWithoutAnyTokens, "turn")} with missing counts`
       : "",
     thread.unlinked ? "Parent recorded by title only; counted on its own" : "",
   ].filter(Boolean);
@@ -698,8 +815,8 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
         </span>
       }
       subtitle={`${harness} · own ${own} in+out${
-        delegates > 0 ? ` + ${delegates} delegated ${delegates === 1 ? "thread" : "threads"}` : ""
-      } · ${thread.total.turns} turns`}
+        delegates > 0 ? ` + ${count(delegates, "delegated thread")}` : ""
+      } · ${count(thread.total.turns, "turn")}`}
       status={notes.length ? notes.join(" · ") : undefined}
     >
       <div className="text-right leading-tight">
@@ -711,109 +828,6 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
         </div>
       </div>
     </Row>
-  );
-}
-
-/** Which token columns are missing on some turns, with how many turns each. */
-function missingColumns(totals: UsageTotals): string {
-  const missing = [
-    [totals.turnsWithoutInputTokens, "input"],
-    [totals.turnsWithoutOutputTokens, "output"],
-    [totals.turnsWithoutCachedTokens, "cached"],
-    [totals.turnsWithoutCacheWriteTokens, "cache write"],
-  ].flatMap(([count, name]) => (Number(count) > 0 ? [`${name} on ${Number(count)}`] : []));
-  return missing.length ? `: ${missing.join(", ")} turns` : "";
-}
-
-/** The method behind a number, folded away: one sentence shows, the rest on demand. */
-function HowThisIsCounted({ children }: { children: ReactNode }) {
-  return (
-    <details className="group">
-      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-caption text-fg-faint hover:text-fg-muted">
-        <ChevronRight size={11} className="shrink-0 transition-transform group-open:rotate-90" aria-hidden />
-        How this is counted
-      </summary>
-      <div className="mt-1 space-y-1">{children}</div>
-    </details>
-  );
-}
-
-function UsageFootnote({
-  totals,
-  cost,
-  truncated,
-  error,
-  dayError,
-}: {
-  totals: UsageTotals;
-  cost: CostTotals;
-  truncated: boolean;
-  error: string | null;
-  dayError: string | null;
-}) {
-  return (
-    <div className="space-y-1">
-      <span className="block">
-        Every turn in this Mac's local data store; a blank count means no turn in that row reported it.
-      </span>
-      <HowThisIsCounted>
-        <span className="block">
-          Each column sums only the counts that were reported, so a turn that reported one count and not
-          another is included as it was reported. A * after a number means not every turn in that row reported
-          that count. Cost is the USD a harness reported, or the same tokens at API list prices on{" "}
-          {PRICE_DATE} where it reported none; a reported number is never altered. The total adds each row's
-          reported cost or its estimate, never both, and shows the two parts beneath it. Estimates are not a
-          bill: a subscription can charge differently. The CLI's rustcode usage is still reported-only.
-        </span>
-        {totals.turnsWithoutAnyTokens > 0 && (
-          <span className="block">
-            {totals.turnsWithoutAnyTokens} of {totals.turns} turns are missing at least one token count
-            {missingColumns(totals)}.
-          </span>
-        )}
-        {totals.turnsWithoutCost > 0 && (
-          <span className="block">
-            {totals.turnsWithoutCost} of {totals.turns} turns reported no cost
-            {cost.unknownTurns > 0 ? `; ${cost.unknownTurns} have no cost we can show` : ""}.
-          </span>
-        )}
-      </HowThisIsCounted>
-      {truncated && (
-        <span className="block text-warning">
-          The harness and model read stopped at 1,000 groups; these totals cover only what it returned.
-        </span>
-      )}
-      {error && <span className="block text-warning">Could not refresh: {error}</span>}
-      {dayError && <span className="block text-warning">Could not read turns per day: {dayError}</span>}
-    </div>
-  );
-}
-
-/** How the cost column is priced, and what its marks mean. */
-function UsageTableFootnote({ cost }: { cost: CostTotals }) {
-  return (
-    <div className="space-y-1">
-      <span className="block">
-        A harness row totals its models; a * means not every turn in that row reported a count.
-      </span>
-      <HowThisIsCounted>
-        <span className="block">
-          Cost is the USD a harness reported, or the same tokens at public API list prices on {PRICE_DATE}
-          where it reported none. ≈ marks an estimate, and a reported number is never altered. Each harness's
-          counts are normalized to uncached input, cache read, cache write and output first, because the
-          built-in harness and Codex count cached input inside input tokens while Claude Code and Pi report it
-          separately. A model with no list price, or a harness whose counts cannot be split, shows unknown,
-          never $0.
-        </span>
-        {cost.unknownTurns > 0 && (
-          <span className="block">
-            {cost.unknownTurns} turns have no cost we can show: no turn-level cost was reported for them, or
-            their model has no list price here, or their harness's token counts cannot be split.
-          </span>
-        )}
-        {cost.usd === undefined && <span className="block">No row here could be priced.</span>}
-      </HowThisIsCounted>
-    </div>
   );
 }
 
@@ -860,9 +874,163 @@ function ThreadFootnote({ report }: { report: ThreadReport }) {
   );
 }
 
-function NothingRecorded() {
+/** Which token columns are missing on some turns, with how many turns each. */
+function missingColumns(totals: UsageTotals): string {
+  const missing = [
+    [totals.turnsWithoutInputTokens, "input"],
+    [totals.turnsWithoutOutputTokens, "output"],
+    [totals.turnsWithoutCachedTokens, "cached"],
+    [totals.turnsWithoutCacheWriteTokens, "cache write"],
+  ].flatMap(([count, name]) => (Number(count) > 0 ? [`${name} on ${Number(count)}`] : []));
+  return missing.length ? `: ${missing.join(", ")} turns` : "";
+}
+
+/** The method behind a number, folded away: one sentence shows, the rest on demand. */
+function HowThisIsCounted({ children }: { children: ReactNode }) {
   return (
-    <Group title="Recorded usage">
+    <details className="group">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-caption text-fg-faint hover:text-fg-muted">
+        <ChevronRight size={11} className="shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+        How this is counted
+      </summary>
+      <div className="mt-1 space-y-1">{children}</div>
+    </details>
+  );
+}
+
+function UsageFootnote({
+  totals,
+  cost,
+  truncated,
+  error,
+  dayError,
+  period,
+}: {
+  totals: UsageTotals;
+  cost: CostTotals;
+  truncated: boolean;
+  error: string | null;
+  dayError: string | null;
+  /** What the tiles' change is compared with, when there is one. */
+  period?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <span className="block">
+        Every turn in this Mac's local data store.{period ? ` Each tile compares ${period}.` : ""} A blank
+        count means no turn in that row reported it.
+      </span>
+      <HowThisIsCounted>
+        <span className="block">
+          Each column sums only the counts that were reported, so a turn that reported one count and not
+          another is included as it was reported. A * after a number means not every turn in that row reported
+          that count. Cost is the USD a harness reported, or the same tokens at API list prices on{" "}
+          {PRICE_DATE} where it reported none; a reported number is never altered. The total adds each row's
+          reported cost or its estimate, never both, and shows the two parts beneath it. Estimates are not a
+          bill: a subscription can charge differently. The CLI's rustcode usage is still reported-only.
+        </span>
+        {totals.turnsWithoutAnyTokens > 0 && (
+          <span className="block">
+            {count(totals.turnsWithoutAnyTokens, "turn")} of {count(totals.turns, "turn")}{" "}
+            {totals.turnsWithoutAnyTokens === 1 ? "is" : "are"} missing at least one token count
+            {missingColumns(totals)}.
+          </span>
+        )}
+        {totals.turnsWithoutCost > 0 && (
+          <span className="block">
+            {count(totals.turnsWithoutCost, "turn")} of {count(totals.turns, "turn")} reported no cost
+            {cost.unknownTurns > 0 ? `; ${cost.unknownTurns} have no cost we can show` : ""}.
+          </span>
+        )}
+      </HowThisIsCounted>
+      {truncated && (
+        <span className="block text-warning">
+          The harness and model read stopped at 1,000 groups; these totals cover only what it returned.
+        </span>
+      )}
+      {error && <span className="block text-warning">Could not refresh: {error}</span>}
+      {dayError && <span className="block text-warning">Could not read turns per day: {dayError}</span>}
+    </div>
+  );
+}
+
+/** Where the tiles and the two charts will be, at the shape they take. */
+function StatisticsSkeleton({
+  period,
+  onPeriod,
+  onRefresh,
+}: {
+  period: StatsPeriod;
+  onPeriod: (period: StatsPeriod) => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <>
+      <section className="mb-8">
+        <SectionTitle
+          title="Totals"
+          action={
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Choice<StatsPeriod>
+                label="Period"
+                value={period}
+                options={STATS_PERIODS.map((one) => ({ value: one.value, label: one.label }))}
+                onChange={onPeriod}
+              />
+              <Action onClick={onRefresh}>
+                <RefreshCw size={12} /> Refresh
+              </Action>
+            </div>
+          }
+        />
+        <div role="status" aria-label="Loading" className="grid grid-cols-2 gap-3 @min-[44rem]:grid-cols-4">
+          {[0, 1, 2, 3].map((tile) => (
+            <div
+              key={tile}
+              className="flex flex-col gap-2 rounded-xl border border-border-strong bg-surface-2/40 px-4 py-3.5"
+            >
+              <Skeleton className="h-2 w-16" />
+              <Skeleton className="h-6 w-24" />
+              <Skeleton className="h-2 w-28" />
+              <Skeleton className="mt-2 h-6 w-full" />
+            </div>
+          ))}
+        </div>
+      </section>
+      {[0, 1].map((card) => (
+        <section key={card} className="mb-8" role="status" aria-label="Loading">
+          <div className="mb-2.5 flex min-h-7 items-center px-3 sm:px-4">
+            <Skeleton className="h-3 w-32" />
+          </div>
+          <div className="flex flex-col gap-3 rounded-xl border border-border-strong bg-surface-2/40 px-4 py-4">
+            <Skeleton className="h-3 w-40" />
+            <Skeleton className="h-32 w-full" />
+          </div>
+        </section>
+      ))}
+    </>
+  );
+}
+
+function NothingRecorded({
+  refresh,
+  refreshing,
+  error,
+}: {
+  refresh: () => void;
+  refreshing: boolean;
+  error: string | null;
+}) {
+  return (
+    <Group
+      title="Recorded usage"
+      action={
+        <Action onClick={() => void refresh()} disabled={refreshing}>
+          {refreshing ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
+        </Action>
+      }
+      footer={error ? <span className="block text-warning">Could not refresh: {error}</span> : undefined}
+    >
       <Row
         title="Nothing recorded yet"
         subtitle="Run a turn, or open the app once so existing threads are collected into the local data store."
