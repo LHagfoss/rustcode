@@ -225,6 +225,11 @@ export function AccountsList({ harness }: { harness: Harness }) {
           {busy ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
         </Action>
       </div>
+      {/* A named Codex login is its own CODEX_HOME, so it starts without the
+          Mac's own ~/.codex config.toml, AGENTS.md or MCP servers. */}
+      {harness.id === "codex" && (
+        <p className="text-caption text-fg-faint">Each account has its own Codex settings.</p>
+      )}
       {accounts.length ? (
         <ul className="flex flex-col gap-2">
           {accounts.map((account) => (
@@ -250,7 +255,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
                     {gaveUp === account.id ? "Not signed in" : accountStatus(account)}
                   </span>
                 )}
-                {account.auth !== "ok" && waiting !== account.id && (
+                {account.auth !== "ok" && waiting !== account.id && accountSignIn(harness) && (
                   <Tooltip label={canOpenTerminal() ? undefined : "Only the app can open Terminal"}>
                     <span>
                       <Action
@@ -274,7 +279,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
                   </button>
                 </Tooltip>
               </div>
-              {account.auth !== "ok" && (
+              {account.auth !== "ok" && accountSignIn(harness) && (
                 <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2.5">
                   <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
                     {accountLoginCommand(harness, account)}
@@ -453,7 +458,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           <CopyButton text={harness.install_hint} />
         </div>
       )}
-      {accountSignIn(harness) && <AccountsList harness={harness} />}
+      {(accountSignIn(harness) || (harness.accounts?.length ?? 0) > 0) && <AccountsList harness={harness} />}
       {(result || harness.error) && (
         <div
           className={cx(

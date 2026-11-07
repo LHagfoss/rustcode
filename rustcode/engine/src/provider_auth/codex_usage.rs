@@ -5,10 +5,16 @@
 //! it may read. A signed-in `codex` CLI can: `codex app-server` answers
 //! `account/rateLimits/read` with the 5-hour and weekly windows of that
 //! ChatGPT account. This asks it, at most once a minute, and only reads.
+//!
+//! A login is a `CODEX_HOME` directory (`docs/harnesses.md` › "Named
+//! accounts"), and each login has its own numbers: the CLI is started with that
+//! directory and its answer is kept under it, so two accounts never share
+//! windows. `None` is the Mac's own `~/.codex`, which needs no variable.
 
 use super::rate_limits::{ProviderRateLimits, RateLimitWindow};
 use serde_json::{Value, json};
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -34,7 +40,39 @@ pub(crate) enum CodexUsageError {
 
 type Read = Result<ProviderRateLimits, CodexUsageError>;
 
-static CACHE: Mutex<Option<(Instant, Read)>> = Mutex::new(None);
+/// The answers kept so far, one per Codex home: a login's numbers are never
+/// another's. Few enough that a linear scan beats a map's hashing.
+#[derive(Default)]
+struct Cache {
+    answers: Mutex<Vec<(Option<PathBuf>, Instant, Read)>>,
+}
+
+impl Cache {
+    /// The answer kept for `home`, while it is fresh at `now`.
+    fn get(&self, home: Option<&Path>, now: Instant) -> Option<Read> {
+        let answers = self.answers.lock().ok()?;
+        let (_, at, read) = answers.iter().find(|(key, _, _)| key.as_deref() == home)?;
+        let ttl = if read.is_ok() { FRESH } else { RETRY };
+        if now.saturating_duration_since(*at) >= ttl {
+            return None;
+        }
+        Some(read.clone())
+    }
+
+    fn put(&self, home: Option<&Path>, at: Instant, read: &Read) {
+        let Ok(mut answers) = self.answers.lock() else {
+            return;
+        };
+        let key = home.map(Path::to_path_buf);
+        answers.retain(|(known, _, _)| *known != key);
+        answers.push((key, at, read.clone()));
+    }
+}
+
+fn cache() -> &'static Cache {
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    CACHE.get_or_init(Cache::default)
+}
 
 /// The `codex` to run: `RUSTCODE_CODEX_CLI`, else `codex` resolved on the
 /// login shell's PATH like harness detection does. An app opened from the
@@ -46,45 +84,45 @@ fn program() -> Option<std::path::PathBuf> {
     crate::harness::detect::resolve_program(&program)
 }
 
-/// The plan windows the Codex CLI reports, from the cache while fresh.
-pub(crate) async fn rate_limits() -> Option<ProviderRateLimits> {
-    read_cached().await.ok()
+/// The plan windows the Codex CLI reports for the login in `home` (the Mac's
+/// own `~/.codex` for `None`), from the cache while fresh.
+pub(crate) async fn rate_limits(home: Option<&Path>) -> Option<ProviderRateLimits> {
+    read_cached(home).await.ok()
 }
 
 /// Like [`rate_limits`], with the reason when there are none.
-pub(crate) async fn read_cached() -> Read {
-    if let Some((at, cached)) = CACHE.lock().ok().and_then(|cache| cache.clone()) {
-        let ttl = if cached.is_ok() { FRESH } else { RETRY };
-        if at.elapsed() < ttl {
-            return cached;
-        }
+pub(crate) async fn read_cached(home: Option<&Path>) -> Read {
+    if let Some(cached) = cache().get(home, Instant::now()) {
+        return cached;
     }
-    let read = match tokio::time::timeout(TIMEOUT, read()).await {
+    let read = match tokio::time::timeout(TIMEOUT, read(home)).await {
         Ok(read) => read,
         Err(_) => Err(CodexUsageError::Unavailable(
             "Codex CLI did not answer within 10 seconds".into(),
         )),
     };
-    if let Ok(mut cache) = CACHE.lock() {
-        *cache = Some((Instant::now(), read.clone()));
-    }
+    cache().put(home, Instant::now(), &read);
     read
 }
 
-async fn read() -> Read {
+async fn read(home: Option<&Path>) -> Read {
     let unavailable = |what: &str| CodexUsageError::Unavailable(what.to_string());
     let program = program().ok_or(CodexUsageError::NotInstalled)?;
-    let mut child = tokio::process::Command::new(&program)
+    let mut command = tokio::process::Command::new(&program);
+    command
         .arg("app-server")
         .env("PATH", crate::harness::detect::search_path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| {
-            CodexUsageError::Unavailable(format!("could not start Codex CLI: {error}"))
-        })?;
+        .kill_on_drop(true);
+    // A named login is its own home; the Mac's own needs no variable at all.
+    if let Some(home) = home {
+        command.env("CODEX_HOME", home);
+    }
+    let mut child = command.spawn().map_err(|error| {
+        CodexUsageError::Unavailable(format!("could not start Codex CLI: {error}"))
+    })?;
     let mut stdin = child.stdin.take().ok_or_else(|| unavailable("no stdin"))?;
     let requests = [
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -188,6 +226,36 @@ mod tests {
         assert_eq!(primary.resets_at, Some(1_793_188_931));
         assert_eq!(limits.secondary.unwrap().window_minutes, Some(10080));
         assert!(parse(&json!({"primary": null})).is_none());
+    }
+
+    #[test]
+    fn two_codex_homes_never_share_an_answer() {
+        let cache = Cache::default();
+        let now = Instant::now();
+        let limits = ProviderRateLimits {
+            primary: Some(RateLimitWindow {
+                used_percent: 5.0,
+                window_minutes: Some(300),
+                resets_at: Some(1_793_188_931),
+            }),
+            secondary: None,
+        };
+        let paral = Path::new("/Users/me/.codex-paral");
+        cache.put(None, now, &Ok(limits.clone()));
+        cache.put(Some(paral), now, &Err(CodexUsageError::SignedOut));
+        // Each home reads its own answer: the account's, never the Mac's own.
+        assert_eq!(cache.get(None, now), Some(Ok(limits)));
+        assert_eq!(
+            cache.get(Some(paral), now),
+            Some(Err(CodexUsageError::SignedOut))
+        );
+        // A home never read has no answer rather than another login's numbers.
+        assert_eq!(
+            cache.get(Some(Path::new("/Users/me/.codex-work")), now),
+            None
+        );
+        // A failure is retried sooner than an answer that worked.
+        assert_eq!(cache.get(Some(paral), now + RETRY), None);
     }
 
     #[test]

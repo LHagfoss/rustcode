@@ -50,21 +50,24 @@ pub(crate) fn forget(id: &str) {
 ///
 /// A `probe` look runs the harness's own cheap status command with the
 /// account's directory (`codex login status`), which is authoritative about a
-/// sign-in that expired behind `auth.json` and prints no secret. Failing that
-/// (a harness without such a command, or one that is not installed), the
-/// login's own credentials file is looked for by name (`.credentials.json`,
-/// Codex's `auth.json`) and never opened; Claude Code's macOS Keychain item,
-/// named after the directory, is asked for existence too. An account on the
-/// harness's default directory is the login with no variable set, so it reads
-/// as that login does. Nothing is started as a session and no token is read.
-/// `ok` is a sign-in found, `needs_login` one looked for and not found (only
-/// after `probe`), `unknown` not looked for.
+/// sign-in that expired behind `auth.json` and prints no secret. Only the
+/// CLI's own `Not logged in` counts as a sign-out; any other failure (an older
+/// CLI without the command, a broken `config.toml`, a shim) is no answer, and
+/// the login's own credentials file is looked for by name instead
+/// (`.credentials.json`, Codex's `auth.json`), never opened. Claude Code has no
+/// status command: its macOS Keychain item, named after the directory, is asked
+/// for existence too. An account on the harness's default directory is the
+/// login with no variable set, so it reads as that login does. Nothing is
+/// started as a session and no token is read. `ok` is a sign-in found,
+/// `needs_login` one looked for and not found (only after `probe`), `unknown`
+/// not looked for.
 pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool) -> &'static str {
     let Some(layout) = super::config::account_layout(&account.harness) else {
         return "unknown";
     };
     let dir = account.resolved_dir();
-    if probe && let Some(args) = super::known(&account.harness).and_then(|known| known.auth_probe) {
+    let status = super::known(&account.harness).and_then(|known| known.auth_probe);
+    if probe && let Some(args) = status {
         let env = super::config::login_env(&account.harness, &dir);
         let env: Vec<(&str, &std::path::Path)> = env
             .as_ref()
@@ -72,8 +75,12 @@ pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool)
             .into_iter()
             .collect();
         if let Some((success, output)) = run_quick_env(args[0], &args[1..], &env) {
-            let found = success && !output.to_ascii_lowercase().contains("not logged in");
-            return if found { "ok" } else { "needs_login" };
+            match status_says_signed_in(success, &output) {
+                Some(true) => return "ok",
+                Some(false) => return "needs_login",
+                // No answer we can trust: fall through to the file by name.
+                None => {}
+            }
         }
     }
     if dir.join(layout.marker).is_file() {
@@ -82,14 +89,28 @@ pub(crate) fn account_auth(account: &super::config::HarnessAccount, probe: bool)
     if !probe {
         return "unknown";
     }
-    // Claude Code has no status command: on macOS its sign-in is a Keychain
-    // item named after the directory, and the default login's after none.
+    if status.is_some() {
+        // A harness with a status command has no Keychain to ask as well.
+        return "needs_login";
+    }
+    // Claude Code: on macOS its sign-in is a Keychain item named after the
+    // directory, and the default login's after none.
     let found = if super::config::is_default_dir(&account.harness, &dir) {
         crate::provider_auth::claude_usage::default_keychain_item_exists()
     } else {
         crate::provider_auth::claude_usage::keychain_item_exists(&dir)
     };
     if found { "ok" } else { "needs_login" }
+}
+
+/// What a harness's own sign-in status command said. Only the Codex CLI's own
+/// `Not logged in` (printed with exit 1) is a sign-out; a non-zero exit for any
+/// other reason is no answer at all.
+fn status_says_signed_in(success: bool, output: &str) -> Option<bool> {
+    if output.to_ascii_lowercase().contains("not logged in") {
+        return Some(false);
+    }
+    success.then_some(true)
 }
 
 /// The version the last detection of `id` found, without running anything.
@@ -283,6 +304,39 @@ mod tests {
             Some("2.1.2")
         );
         assert_eq!(parse_version("no version here"), None);
+    }
+
+    #[test]
+    fn missing_programs_are_not_installed() {
+        let harness = ResolvedHarness {
+            id: "ghost".into(),
+            name: "Ghost".into(),
+            kind: HarnessKind::Acp,
+            command: vec!["rustcode-no-such-harness-binary".into()],
+            enabled: true,
+            known: None,
+        };
+        let detection = detect(&harness);
+        assert!(!detection.installed);
+        assert_eq!(detection.auth, "unknown");
+        assert!(resolve_program("sh").is_some());
+    }
+
+    #[test]
+    fn only_the_harnesss_own_not_logged_in_is_a_sign_out() {
+        // The Codex CLI exits 1 with this line when the login is gone.
+        assert_eq!(status_says_signed_in(false, "Not logged in\n"), Some(false));
+        assert_eq!(
+            status_says_signed_in(true, "Logged in using ChatGPT"),
+            Some(true)
+        );
+        // Another failure (an older CLI, a broken config.toml, a shim) says
+        // nothing, so the credentials file decides instead.
+        assert_eq!(
+            status_says_signed_in(false, "error: unexpected argument 'status'"),
+            None
+        );
+        assert_eq!(status_says_signed_in(false, ""), None);
     }
 
     #[test]

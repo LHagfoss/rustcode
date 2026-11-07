@@ -240,6 +240,14 @@ The engine creates the directory when it is missing. `~/.claude` and
 thread on one runs as the Mac's own login, with no `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME` set (macOS keys Claude Code's Keychain item on the variable, so
 setting it would look signed out; Codex reads `~/.codex` with none).
+
+A Codex account's directory *replaces* the Codex home: `CODEX_HOME` makes the
+CLI read that directory's `config.toml`, `AGENTS.md` and `[mcp_servers]`
+instead of `~/.codex`'s. So a new account starts without the user's profiles,
+model providers and MCP servers, and RustCode copies and links nothing: what an
+account should have goes in its directory by hand. `~/.codex` itself, registered
+or not, is never written to. Settings › Agents' Codex Accounts section says
+"Each account has its own Codex settings." for the same reason.
 The section is read from the user config only: a checked-out project cannot
 choose where a thread signs in.
 
@@ -602,8 +610,11 @@ thread uses the account it was given until the user picks another, and
 limits are that account's own. Token totals need no account handling: Codex
 and Claude Code report them over the harness protocol, and the log scans in
 `harness_usage.rs` already take the account's own directory for the harnesses
-that keep a log (Claude Code, Pi). Codex plan windows are not per account yet:
-`provider_auth/codex_usage.rs` asks the Codex CLI, which reads `~/.codex`.
+that keep a log (Claude Code, Pi). Codex plan windows are the account's own:
+`provider_auth/codex_usage.rs` starts the Codex CLI with that account's
+`CODEX_HOME` and keeps one answer per home, so a thread on `~/.codex-paral`
+shows its own windows. Settings › Usage's ChatGPT row is the Mac's own
+`~/.codex` login.
 
 The terminal UI starts every thread on the built-in harness with its own
 `[default]` model and does not read the per-harness choice; it has no

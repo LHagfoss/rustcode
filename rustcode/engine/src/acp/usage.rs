@@ -204,7 +204,9 @@ pub(crate) async fn limits(
         (state.provider_rate_limits.clone(), chatgpt)
     };
     let limits = if chatgpt {
-        match crate::provider_auth::codex_usage::rate_limits().await {
+        // The native harness's ChatGPT profile signs in with the Mac's own
+        // `~/.codex`; a Codex thread on a named account is read per thread.
+        match crate::provider_auth::codex_usage::rate_limits(None).await {
             Some(limits) => {
                 state.lock().await.provider_rate_limits = Some(limits.clone());
                 Some(limits)
@@ -225,14 +227,29 @@ pub(crate) fn external_harness(session_id: &str) -> Option<String> {
         .filter(|harness| harness != "rustcode")
 }
 
+/// The `CODEX_HOME` of the named account a thread on another harness runs on,
+/// else None: the harness's own login (`~/.codex` for Codex), or no account at
+/// all, which read the same login and so share one answer.
+pub(crate) fn account_home(session_id: &str, harness: &str) -> Option<std::path::PathBuf> {
+    let record = crate::harness::store::load(session_id)?;
+    let dir = crate::harness::session::account_config_dir(&record, harness)?;
+    // The Mac's own login runs with no variable at all, so it is the same read.
+    (!crate::harness::config::is_default_dir(harness, &dir)).then_some(dir)
+}
+
 /// `_rustcode/usage/limits` for a thread on another harness: the Codex CLI's
-/// windows for Codex, nothing (null) for a harness whose plan the engine
-/// cannot read without asking (Claude Code's is in the Keychain).
-pub(crate) async fn harness_limits(harness: &str) -> serde_json::Value {
+/// windows of the login in `home` (the Mac's own `~/.codex` for `None`), and
+/// nothing (null) for a harness whose plan the engine cannot read without
+/// asking (Claude Code's is in the Keychain). A login's numbers are its own:
+/// the account the thread runs on, never another Codex home's.
+pub(crate) async fn harness_limits(
+    harness: &str,
+    home: Option<&std::path::Path>,
+) -> serde_json::Value {
     if harness != "codex" {
         return serde_json::Value::Null;
     }
-    let limits = crate::provider_auth::codex_usage::rate_limits().await;
+    let limits = crate::provider_auth::codex_usage::rate_limits(home).await;
     limits_json(limits.as_ref(), "codex")
 }
 
@@ -307,7 +324,10 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
         serde_json::json!({"id": "codex", "name": "ChatGPT", "via": "Codex CLI",
                            "status": status, "error": error, "windows": windows})
     };
-    let codex = match read_cached().await {
+    // Settings › Usage's ChatGPT row is the Mac's own `~/.codex` login: the
+    // Codex CLI reports it with no `CODEX_HOME`, and a named account's windows
+    // are read per thread (`harness_limits`).
+    let codex = match read_cached(None).await {
         Ok(limits) => {
             let windows: Vec<_> = [limits.primary.as_ref(), limits.secondary.as_ref()]
                 .into_iter()
@@ -932,6 +952,6 @@ mod harness_tests {
         );
         assert_eq!(external_harness("usage-no-such-thread"), None);
         // Claude Code's plan needs the user's consent to read: none here.
-        assert!(harness_limits("claude-code").await.is_null());
+        assert!(harness_limits("claude-code", None).await.is_null());
     }
 }

@@ -215,12 +215,13 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   summary, and a running thread shows the chips disabled with *Stop the turn
   to switch account*. A thread from before accounts shows its own login as
   *Original login*. The composer's model pill names the account whenever the
-  harness has any. Settings › Usage and the composer's plan meter show one
-  row (or meter) per Claude Code account: a thread's meter never shows another
-  Claude login's numbers. Codex's plan windows still come from the Mac's own
-  `~/.codex` login, which the Codex CLI reports, so a Codex account's windows
-  are not read yet. Separate accounts are chosen by hand, limits stay per
-  account, and there is no pooling.
+  harness has any. The composer's plan meter shows one meter per account: a
+  thread's meter never shows another login's numbers, for Claude Code or
+  Codex (the Codex CLI is asked with that account's `CODEX_HOME`). Settings ›
+  Usage lists one row per Claude Code account; its ChatGPT row is the Mac's
+  own `~/.codex` login. For Codex the section says each account has its own
+  Codex settings, because `CODEX_HOME` replaces `~/.codex`. Separate accounts
+  are chosen by hand, limits stay per account, and there is no pooling.
 - **UI** (`src/ui/`): every colour, radius and shadow is a token from
   [design.md](design.md), defined once in `src/index.css` (the Tailwind
   `@theme` maps `--rc-*` variables to classes; the palette is switched
@@ -341,7 +342,8 @@ composer's keys stay outside the table.
 - **Settings › Usage.** Every subscription this machine is signed in to, with
   no thread open: `_rustcode/usage/plans` (engine `acp/usage.rs`) answers
   `{plans: [{id, name, via, status, plan?, error?, reason?, windows}]}`. ChatGPT
-  comes from the Codex CLI's `account/rateLimits/read` (as the composer meter);
+  comes from the Codex CLI's `account/rateLimits/read` for the Mac's own
+  `~/.codex` login (a thread's meter asks with its own account's `CODEX_HOME`);
   Claude from Claude Code's OAuth sign-in (Keychain `Claude Code-credentials`,
   else `~/.claude/.credentials.json`) against `api.anthropic.com/api/oauth/usage`
   (5-hour, weekly, weekly per model), read-only and never refreshed
@@ -424,9 +426,9 @@ composer's keys stay outside the table.
   its reset. The plan numbers refresh on hover, when a thread is selected,
   when a turn in it ends, every 3 minutes while the app is in front and just
   after a window resets; a failed refresh keeps the last numbers and says so.
-  Each Claude Code login has its own numbers: the meter shows the account the
-  thread runs on, read when the thread first opens, never another login's. A
-  new thread shows the limits the last thread learnt. The chat header no longer repeats
+  Each login has its own numbers: the meter shows the account the thread runs
+  on, read when the thread first opens, never another login's. A new thread
+  shows the limits the last thread learnt. The chat header no longer repeats
   them.
 - **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
   model has the `fast` option) and the model with its effort on one line;

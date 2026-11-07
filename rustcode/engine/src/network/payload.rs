@@ -33,7 +33,8 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         // A ChatGPT sign-in's responses carry no windows; a signed-in Codex
         // CLI reports them for the same plan (#2545).
         let codex = if chatgpt_sign_in {
-            crate::provider_auth::codex_usage::rate_limits().await
+            // The native harness runs on the Mac's own `~/.codex` login.
+            crate::provider_auth::codex_usage::rate_limits(None).await
         } else {
             None
         };

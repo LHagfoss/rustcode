@@ -426,9 +426,16 @@ pub(crate) struct AccountLayout {
     pub marker: &'static str,
     /// Variables that would override the account's own sign-in.
     pub drop_env: &'static [&'static str],
-    /// Names whose presence makes a directory look like a login directory of
-    /// this harness (files or directories).
-    pub looks_like: &'static [&'static str],
+    /// What makes a directory look like a login directory of this harness.
+    pub looks_like: &'static [LoginEntry],
+}
+
+/// One name inside a login directory, and whether it is a file or a directory:
+/// a directory called `auth.json` is not a Codex sign-in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoginEntry {
+    File(&'static str),
+    Dir(&'static str),
 }
 
 const CLAUDE_ACCOUNT: AccountLayout = AccountLayout {
@@ -445,10 +452,10 @@ const CLAUDE_ACCOUNT: AccountLayout = AccountLayout {
         "CLAUDE_CODE_OAUTH_TOKEN",
     ],
     looks_like: &[
-        ".claude.json",
-        ".credentials.json",
-        "settings.json",
-        "projects",
+        LoginEntry::File(".claude.json"),
+        LoginEntry::File(".credentials.json"),
+        LoginEntry::File("settings.json"),
+        LoginEntry::Dir("projects"),
     ],
 };
 
@@ -461,7 +468,11 @@ const CODEX_ACCOUNT: AccountLayout = AccountLayout {
     login_command: &["codex", "login"],
     marker: "auth.json",
     drop_env: &["OPENAI_API_KEY", "CODEX_API_KEY"],
-    looks_like: &["config.toml", "auth.json", "sessions"],
+    looks_like: &[
+        LoginEntry::File("config.toml"),
+        LoginEntry::File("auth.json"),
+        LoginEntry::Dir("sessions"),
+    ],
 };
 
 /// The harnesses with named logins. Pi, OpenCode, Gemini and a custom harness
@@ -577,9 +588,14 @@ pub(crate) fn discovered_accounts_in(
 }
 
 /// Whether `dir` looks like one of the harness's login directories, by names
-/// only: no file is opened.
+/// only: no file is opened. A name counts only as the kind it is: a directory
+/// named `auth.json`, or a file named `sessions`, is not a Codex home.
 fn looks_like_login_dir(layout: &AccountLayout, dir: &Path) -> bool {
-    dir.is_dir() && layout.looks_like.iter().any(|name| dir.join(name).exists())
+    dir.is_dir()
+        && layout.looks_like.iter().any(|entry| match entry {
+            LoginEntry::File(name) => dir.join(name).is_file(),
+            LoginEntry::Dir(name) => dir.join(name).is_dir(),
+        })
 }
 
 /// The name a discovered directory is suggested under: the suffix after the
@@ -1296,6 +1312,23 @@ config_dir = "~/.claude-paral-2"
                 .all(|a| a.config_dir != "~/.codex-paral")
         );
         assert!(discovered_accounts_in(home.path(), "gemini", &[]).is_empty());
+    }
+
+    #[test]
+    fn a_login_directory_counts_only_the_kind_of_name_it_holds() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = |name: &str| home.path().join(name);
+        // A directory called `auth.json` is not a Codex sign-in, and a file
+        // called `sessions` is not its sessions folder.
+        std::fs::create_dir_all(dir(".codex-file-as-dir/auth.json")).unwrap();
+        std::fs::create_dir_all(dir(".codex-dir-as-file")).unwrap();
+        std::fs::write(dir(".codex-dir-as-file/sessions"), "").unwrap();
+        // The same for Claude Code's `projects/` and `.credentials.json`.
+        std::fs::create_dir_all(dir(".claude-file-as-dir/.credentials.json")).unwrap();
+        std::fs::create_dir_all(dir(".claude-dir-as-file")).unwrap();
+        std::fs::write(dir(".claude-dir-as-file/projects"), "").unwrap();
+        assert!(discovered_accounts_in(home.path(), "codex", &[]).is_empty());
+        assert!(discovered_accounts_in(home.path(), "claude-code", &[]).is_empty());
     }
 
     #[test]

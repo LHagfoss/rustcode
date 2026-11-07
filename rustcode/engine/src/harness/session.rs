@@ -404,9 +404,10 @@ fn waited(timeout: Duration) -> String {
     }
 }
 
-/// The config directory of the named account a thread runs on, when its
-/// session log lies there (`crate::harness_usage`).
-fn account_config_dir(record: &HarnessRecord, harness: &str) -> Option<PathBuf> {
+/// The config directory of the named account a thread runs on, when it has one:
+/// where its session log lies (`crate::harness_usage`) and the `CODEX_HOME` a
+/// plan read asks the Codex CLI about (`crate::acp::usage`).
+pub(crate) fn account_config_dir(record: &HarnessRecord, harness: &str) -> Option<PathBuf> {
     let account = record.account.as_deref()?;
     let dir = super::config::config_dir().ok()?;
     super::config::load_accounts_in(&dir)

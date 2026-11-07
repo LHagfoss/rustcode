@@ -523,14 +523,14 @@ pub(crate) fn session_meta_for(
     meta
 }
 
-/// One `harnesses` row of the snapshot.
+/// One `harnesses` row of the snapshot. `accounts` are its named-login rows,
+/// already built with each sign-in read (`account_rows`).
 fn snapshot_entry(
     harness: &ResolvedHarness,
     detection: &detect::Detection,
     entries: &[config::HarnessEntry],
-    accounts: &[config::HarnessAccount],
+    accounts: &[Value],
     discovered: Option<&[config::DiscoveredAccount]>,
-    probe: bool,
 ) -> Value {
     let learned = learned_for(&harness.id);
     let builtin = harness.kind == HarnessKind::Builtin;
@@ -545,23 +545,6 @@ fn snapshot_entry(
         .find(|entry| entry.id == harness.id)
         .filter(|entry| entry.model.is_some() || entry.effort.is_some())
         .map(|entry| json!({ "model": entry.model, "effort": entry.effort }));
-    // A named login is only a directory; whether it is signed in is read from
-    // its own credentials or a status command, never by starting the harness.
-    let accounts = config::accounts_of(accounts, &harness.id)
-        .into_iter()
-        .map(|account| {
-            json!({
-                "id": account.id,
-                "name": account.display_name(),
-                "config_dir": account.config_dir,
-                // Whether this is the Mac's own login (`~/.claude`, `~/.codex`),
-                // whatever path it was written as: the app must set no
-                // `CLAUDE_CONFIG_DIR`/`CODEX_HOME` for it.
-                "own_dir": config::is_default_dir(&harness.id, &account.resolved_dir()),
-                "auth": detect::account_auth(&account, probe),
-            })
-        })
-        .collect::<Vec<_>>();
     json!({
         "id": harness.id,
         "name": harness.name,
@@ -637,7 +620,8 @@ pub(crate) async fn snapshot_in(dir: &std::path::Path) -> Result<Value, String> 
 }
 
 /// The snapshot with each account's sign-in read from its credentials;
-/// `probe` also looks for the macOS Keychain item an account's directory
+/// `probe` also runs the harness's own status command for the account
+/// (`codex login status`) or asks for the macOS Keychain item its directory
 /// names. Only a client's explicit Refresh asks for that.
 pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Result<Value, String> {
     let (defaults, entries) = config::load_in(dir);
@@ -662,12 +646,16 @@ pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Resu
         .await
         .unwrap_or_default()
     };
+    // Each account's sign-in is read the same way: off the runtime, every one
+    // of them at once, since a probe runs a status command that can sleep.
+    let accounts = account_rows(&harnesses, &accounts, probe).await;
     let rows = harnesses
         .iter()
         .zip(detections.iter())
         .map(|(harness, detection)| {
             let found = discovered.get(harness.id.as_str()).map(Vec::as_slice);
-            snapshot_entry(harness, detection, &entries, &accounts, found, probe)
+            let accounts = accounts.get(&harness.id).map(Vec::as_slice).unwrap_or(&[]);
+            snapshot_entry(harness, detection, &entries, accounts, found)
         })
         .collect::<Vec<_>>();
     Ok(json!({
@@ -679,6 +667,52 @@ pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Resu
         },
         "onboarded": defaults.onboarded,
     }))
+}
+
+/// Each harness's named-login rows, with each account's sign-in read.
+///
+/// A probe runs the harness's own status command, which can take seconds:
+/// every account is read on the blocking pool at once, as detection is, so a
+/// hanging CLI never stalls a runtime worker and the Accounts list is not made
+/// to wait for one account after another.
+async fn account_rows(
+    harnesses: &[ResolvedHarness],
+    accounts: &[config::HarnessAccount],
+    probe: bool,
+) -> std::collections::HashMap<String, Vec<Value>> {
+    let tasks = harnesses
+        .iter()
+        .flat_map(|harness| {
+            config::accounts_of(accounts, &harness.id)
+                .into_iter()
+                .map(|account| {
+                    let harness = harness.id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let auth = detect::account_auth(&account, probe);
+                        (harness, account, auth)
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut rows: std::collections::HashMap<String, Vec<Value>> = Default::default();
+    for task in tasks {
+        let Ok((harness, account, auth)) = task.await else {
+            continue;
+        };
+        // Whether this is the Mac's own login (`~/.claude`, `~/.codex`),
+        // whatever path it was written as: the app must set no
+        // `CLAUDE_CONFIG_DIR`/`CODEX_HOME` for it.
+        let own_dir = config::is_default_dir(&account.harness, &account.resolved_dir());
+        let name = account.display_name().to_owned();
+        rows.entry(harness).or_default().push(json!({
+            "id": account.id,
+            "name": name,
+            "config_dir": account.config_dir,
+            "own_dir": own_dir,
+            "auth": auth,
+        }));
+    }
+    rows
 }
 
 async fn futures_detect(harnesses: &[ResolvedHarness]) -> Vec<detect::Detection> {
