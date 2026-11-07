@@ -181,16 +181,25 @@ hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round control
 own, which puts their icons on that same edge.
 
 The composer is its own, lighter pair, because it is the one surface text
-scrolls under all day: `surface-2` at **75%** (84% focused), its own
-`--rc-composer-filter` (`saturate(1.14) blur(16px)`; `saturate(1.08)
-blur(20px)` in dark), and a 1px `--rc-composer-outline` (`black` at 8% in
-light, `white` at 5% in dark) with a 3% `white` inner highlight in dark.
-It keeps a radius token of its own, at the `2xl` step.
+scrolls under all day: `surface-2` at **66%** (78% focused) in light, and in
+dark a step lighter than `surface-2` (10% of the text mixed in) at **58%**
+(70% focused), so it reads as light glass over a dark pane instead of a darker
+slab. Its own `--rc-composer-filter` (`saturate(1.12) blur(22px)`;
+`saturate(1.18) blur(28px)` in dark) does the frosting, and a 1px
+`--rc-composer-outline` (`black` at 7% in light, `white` at 12% in dark) draws
+the hairline, with a 7% `white` inner highlight in dark. It keeps a radius token
+of its own, at the `2xl` step. The strip under it takes the same glass with a
+4% lift of the text colour (`--rc-composer-footer-bg`), so field and strip read
+as one frosted unit.
 
-Near-solid and lightly blurred on purpose: text scrolling under a panel
-should be a hint, not a smear. One filter per surface, two recipes in all
+Frosted rather than near-solid on purpose: the field is what the screen is about, so it is
+the lightest surface in the app, and the blur keeps text scrolling under it a hint rather
+than a smear. One filter per surface, two recipes in all
 (the shared glass and the composer's): no larger radius, no second blur
-stacked on the first, no blur on a pane or a scrolling row.
+stacked on the first, no blur on a pane or a scrolling row. The composer's pair
+is also what the cards under a new thread's field are made of
+(`.rc-glass-soft`, ui/NewThreadWidgets.tsx): the same material, not a third
+recipe.
 
 ## Spacing
 
@@ -560,8 +569,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   its text inside the scroller. The control row at the bottom of the card
   is `px-3 pt-1 pb-3`, its round controls carrying a few px of their own,
   which puts their icons on the same 20px edge. Glass at
-  `--rc-composer-bg` (75%, 84% focused) with `--rc-composer-filter` and a
-  1px `--rc-composer-outline`; no ring or colour on focus, the glass step
+  `--rc-composer-bg` (66%, 78% focused; see Glass) with `--rc-composer-filter`
+  and a 1px `--rc-composer-outline`; no ring or colour on focus, the glass step
   is the focus. The card clips to its own corner. The editor reads at
   `text-body leading-relaxed` (22.75px), two lines at rest above the control
   row and 217px (nine lines) at most, then it scrolls; its text carries 6px
@@ -602,14 +611,21 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   effort at once; the model's name (Enter or a click) opens the list. The model's name swaps the card for the
   searchable list of every harness's models, and picking one comes back to the
   track with the effort clamped to that model's levels.
+- **New thread cards:** under an empty thread's field, a quiet row of five glass cards
+  (`.rc-glass-soft rounded-xl shadow-1`, one height, label in `text-caption text-fg-faint`
+  with a 12px icon): activity, this project's recent threads, the last thirty days of
+  usage, its pull requests, and this month against the last. Three columns from `lg`, one
+  sideways-scrolling row below it; a card with nothing to say says so in one line rather
+  than collapsing, so the field above it never moves as reads land.
 - **Composer strip:** what the thread works in and what it is allowed to do
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
   (`.rc-composer-footer`) inset 12px each side, its top edge tucked 8px behind
   the card so the two read as one stack, its own corners round only at the
-  bottom, a hairline edge and `--rc-composer-footer-bg` (the pane mixed 5%
-  towards the text, derived like `--rc-message`) instead of the card's
-  translucency; `text-callout` in `fg-muted`, 14px icons, `gap-4` between the
-  groups. The thread's folder, its worktree toggle and its branch chip are on
+  bottom, a hairline edge and `--rc-composer-footer-bg` (the card's own glass
+  with a 4% lift of the text colour, so the strip frosts what passes under it
+  instead of sitting on it as a slab), through the same
+  `--rc-composer-filter`; `text-callout` in `fg-muted`, 14px icons, `gap-4`
+  between the groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
   them is a pill whose panel opens off the pill itself, 8px away from it,
   `top` by default. The usage meter's percentage shimmers while its turn runs
