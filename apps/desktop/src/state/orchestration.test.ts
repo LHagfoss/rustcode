@@ -816,7 +816,7 @@ describe("waking a parent", () => {
     const b = book([done("a", "b"), link("a", "c", "working")]);
     const wake = wakesDue(b, ctx({ states: { "a/c": "needs_user" }, pending: { "a/c": "3" } }))[0]!;
     const text = wakeMessage(wake, 10_000);
-    expect(text.split("\n")[0]).toBe("1 child finished · 1 needs you");
+    expect(text.split("\n")[0]).toBe("Delegate finished: b · Delegate asks: c");
     // It marks itself, so a wake turn replayed from history is still a wake (state/thread.ts).
     expect(isWakeMessage(text)).toBe(true);
     expect(text).toContain("link_id a/b");
@@ -827,6 +827,12 @@ describe("waking a parent", () => {
     expect(text).toContain("list_pending_requests");
     expect(text).toContain("read_session");
     expect(text).toContain("do not poll with sleeps");
+    // A delegate's line names its harness and how long it worked; a link without timing omits it
+    // rather than showing 0.
+    const timed: Link = { ...done("a", "b"), harness: "pi", harnessName: "Pi", workedMs: 229_000 };
+    const rich = wakeMessage({ parent: "a", parentTitle: "Parent a", settled: [timed], asking: [] }, 10_000);
+    expect(rich).toContain("- link_id a/b · done · “b” · Pi · worked 3m 49s · session b");
+    expect(text).not.toContain("worked");
     // Each answer is bounded, whatever the child said.
     const long = { ...done("a", "b"), answer: "x".repeat(5_000) };
     const cappedText = wakeMessage({ ...wake, settled: [long], asking: [] }, 10_000);
@@ -1062,8 +1068,8 @@ describe("waking a parent", () => {
     const wake = wakeFor("a", "Parent a", [...ids, ...wakeIds(second)], both, ctx())!;
     expect(wakeIds(wake)).toEqual(["a/b", "a/c"]);
     const text = wakeMessage(wake, 10_000);
-    // One summary for the two of them, not a line that says "1 child finished" twice.
-    expect(text.split("\n")[0]).toBe("2 children finished");
+    // One summary for the two of them, not a line that says "Delegate finished" twice.
+    expect(text.split("\n")[0]).toBe("2 delegates finished");
     expect(text).toContain("link_id a/b");
     expect(text).toContain("link_id a/c");
     expect(text).toContain("b says done");
@@ -1077,7 +1083,7 @@ describe("waking a parent", () => {
     const b = book([{ ...done("a", "b"), answerChangedAt: 9_000 }]);
     const wake = wakeFor("a", "Parent a", ["a/b", "a/b"], b, ctx())!;
     expect(wake.settled.map((l) => l.id)).toEqual(["a/b"]);
-    expect(wakeSummary(wake)).toBe("1 child finished");
+    expect(wakeSummary(wake)).toBe("Delegate finished: b");
   });
 
   test("a child that asked and then finished reads once, as finished", () => {
@@ -1092,7 +1098,7 @@ describe("waking a parent", () => {
     const wake = wakeFor("a", "Parent a", wakeIds(queued), settled, ctx({ now: 10_000 }))!;
     expect(wake.asking).toEqual([]);
     expect(wake.settled.map((l) => l.id)).toEqual(["a/b"]);
-    expect(wakeSummary(wake)).toBe("1 child finished");
+    expect(wakeSummary(wake)).toBe("Delegate finished: b");
   });
 
   test("a queued wake is one row, not a queue of them", () => {
@@ -1107,7 +1113,7 @@ describe("waking a parent", () => {
     const folded = queue[1]!;
     expect(folded.wake).toBe(true);
     expect(folded.wakeLinks).toEqual(["a/b", "a/c"]);
-    expect(wakeLine(folded.text)).toBe("2 children finished");
+    expect(wakeLine(folded.text)).toBe("2 delegates finished");
     expect(folded.text).toContain("b says done");
     expect(folded.text).toContain("c says done");
     expect(isWakeMessage(folded.text)).toBe(true);
@@ -1117,7 +1123,7 @@ describe("waking a parent", () => {
     const three = book([done("a", "b"), done("a", "c", 9_500), done("a", "d", 9_900)]);
     const again = queueWake(queue, wakesDue(three, ctx())[0]!, three, ctx(), 10_000, "q-newer");
     expect(again).toHaveLength(2);
-    expect(wakeLine(again[1]!.text)).toBe("3 children finished");
+    expect(wakeLine(again[1]!.text)).toBe("3 delegates finished");
     // Nothing left to report (both were stopped since): the row it has stands rather than emptying.
     const stopped = book([link("a", "b", "cancelled"), link("a", "c", "cancelled")]);
     const nothing = { parent: "a", parentTitle: "Parent a", settled: [], asking: [] };
@@ -1146,7 +1152,7 @@ describe("waking a parent", () => {
     ]);
     const kept = wakeFor("a", "Parent a", ["a/middle"], promised, ctx({ now: 9_500 }))!;
     expect(kept.settled.map((l) => l.id)).toEqual(["a/middle"]);
-    expect(wakeSummary(kept)).toBe("1 child finished");
+    expect(wakeSummary(kept)).toBe("Delegate finished: middle");
   });
 
   test("a report the book has pruned is never overwritten", () => {
@@ -1171,7 +1177,7 @@ describe("waking a parent", () => {
     expect(queue[0]).toBe(row);
     expect(queue[0]!.text).toContain("link_id a/old");
     expect(queue[1]!.wakeLinks).toEqual(["a/b"]);
-    expect(wakeLine(queue[1]!.text)).toBe("1 child finished");
+    expect(wakeLine(queue[1]!.text)).toBe("Delegate finished: b");
     // A row whose links are all known folds again, so the extra row is not permanent.
     const both = book([done("a", "b"), done("a", "c", 9_500)]);
     const folded = queueWake(queue, wakesDue(both, ctx())[0]!, both, ctx(), 10_000, "q-newer");
@@ -1252,12 +1258,12 @@ describe("waking a parent", () => {
   });
 
   test("a row that said a child waits keeps its finish owed once the child answers", () => {
-    // The row was queued as "1 needs you": the child asked, and answered before the row ran.
+    // The row was queued as "Delegate asks": the child asked, and answered before the row ran.
     const askingCtx = ctx({ states: { "a/c": "needs_user" }, pending: { "a/c": "9" }, now: 10_000 });
     const asked = book([link("a", "c", "working")]);
     const notice = wakesDue(asked, askingCtx)[0]!;
     expect(wakeIds(notice)).toEqual(["a/c"]);
-    expect(wakeSummary(notice)).toBe("1 needs you");
+    expect(wakeSummary(notice)).toBe("Delegate asks: c");
     const row = wakeRow("q-wake", notice, 10_000);
     expect(row.wakeLinks).toEqual(["a/c"]);
     expect(row.wakeAsking).toEqual(["a/c"]);

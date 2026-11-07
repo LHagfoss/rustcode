@@ -5,7 +5,14 @@ import { harnessPlanKey, parsePlans } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
-import { answerOrchestration, linkFinished, orchestrationCallDropped, resolveGrant, wakeTick } from "./host";
+import {
+  answerOrchestration,
+  linkFinished,
+  linkStarted,
+  orchestrationCallDropped,
+  resolveGrant,
+  wakeTick,
+} from "./host";
 import { emptyBook, type Link } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
 import { QUEUE_REASON } from "./queue";
@@ -1037,6 +1044,28 @@ describe("engine controller with the mock engine", () => {
     expect(linkOf()?.notifiedAt).toBeUndefined();
   });
 
+  test("a finished link records its harness and how long its turn worked", async () => {
+    const { link, target, linkOf } = await stagedWait();
+    linkStarted(link.id);
+    expect(linkOf()?.startedAt).toBeDefined();
+    // The turn began 3m 49s before it answered.
+    const started = Date.now() - 229_000;
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: s.links.links.map((l) => (l.id === link.id ? { ...l, startedAt: started } : l)),
+      },
+    }));
+    linkFinished(link.id, target, "completed", undefined, [
+      { kind: "assistant", id: "m", text: "the child's answer" },
+    ]);
+    const settled = linkOf();
+    expect(settled?.workedMs).toBeGreaterThanOrEqual(229_000);
+    // The target's own harness names it in the notice ("Pi", "Codex", …).
+    expect(settled?.harness).toBeDefined();
+    expect(settled?.harnessName).toBeDefined();
+  });
+
   test("a child that finishes as the call drops is delivered exactly once", async () => {
     const { parent, link, target, linkOf } = await stagedWait();
     const waited = answerOrchestration({
@@ -1127,10 +1156,10 @@ describe("engine controller with the mock engine", () => {
     updateThread(target, (t) => ({ ...t, permissions: [request] }));
     wakeTick();
     await until(() => wakes(parent) === 1, 3000);
-    expect(wakeText(parent)).toContain("1 needs you");
+    expect(wakeText(parent)).toContain("Delegate asks:");
     expect(wakeLinks(parent)).toEqual([link.id]);
     // The user answers, and the child finishes before the parent's turn ends: the queued row still
-    // says "needs you", and the finish has not been reported to anyone.
+    // says "Delegate asks", and the finish has not been reported to anyone.
     updateThread(target, (t) => ({ ...t, permissions: [] }));
     linkFinished(link.id, target, "completed", undefined, [
       { kind: "assistant", id: "m", text: "the child's answer" },
@@ -1141,7 +1170,7 @@ describe("engine controller with the mock engine", () => {
     // The row runs: it told the parent about a question, so the finish is still owed, and comes once.
     await runQueuedWake(parent);
     await until(() => wakeTurns(parent).some((t) => t.includes("the child's answer")), 5000);
-    const finishes = wakeTurns(parent).filter((t) => t.includes("1 child finished"));
+    const finishes = wakeTurns(parent).filter((t) => t.includes("Delegate finished:"));
     expect(finishes).toHaveLength(1);
     expect(finishes[0]).toContain("the child's answer");
     expect(useApp.getState().links.links.find((l) => l.id === link.id)?.notifiedAt).toBeDefined();

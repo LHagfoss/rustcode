@@ -9,7 +9,7 @@ import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
-import { type QueuedPrompt, withWakeMark } from "./thread";
+import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
 export const CAPABILITY_VERSION = 7;
@@ -110,6 +110,8 @@ export interface Link {
   /** Started the target thread (`start_session`, `fan_out`) rather than messaging an existing one. */
   started?: boolean;
   harness?: string;
+  /** The harness's display name, as the notice writes it (Pi, Codex, Claude Code). */
+  harnessName?: string;
   /** The named login the thread runs on, when it is not the harness's default. */
   account?: string;
   fanOut?: string;
@@ -117,6 +119,10 @@ export interface Link {
   truncated?: boolean;
   filesChanged?: number;
   createdAt: number;
+  /** When the turn this link waits on started working, for the notice's time. */
+  startedAt?: number;
+  /** How long that turn worked, from its start to the link settling. Absent when not recorded. */
+  workedMs?: number;
   /** When it settled (done or failed), for the coalescing window. */
   settledAt?: number;
   /** When the parent was told it settled: one delivery per link, kept in the book across restarts. */
@@ -1507,7 +1513,7 @@ export function askingIds(wake: Wake): string[] {
 /**
  * The wake those links make now, with each link's state as shown. It is how a wake waiting for a busy
  * parent is rebuilt around a newer one: one turn reports everything, not a queue of turns each saying
- * "1 child finished".
+ * "Delegate finished".
  *
  * It follows `wakesDue`'s rules, so a rebuild never restates what that rule withdrew: a settled link a
  * newer one to the same thread replaced is out of date, and one the parent is blocked on in
@@ -1554,7 +1560,7 @@ export function wakeFor(
 
 /**
  * A queued wake with a newer one folded into it: one wake turn for everything that finished, instead
- * of a queue of turns each saying "1 child finished". Its text is rebuilt from the links the waiting
+ * of a queue of turns each saying "Delegate finished". Its text is rebuilt from the links the waiting
  * row already carried plus the new wake's ({@link wakeFor}), so a child that asked and then finished
  * reads once, as finished. The row keeps its place among the user's own messages; when nothing is
  * left to report it is returned as it is.
@@ -1635,21 +1641,36 @@ export function queueWake(
   ];
 }
 
-/** A wake's compact first line, and the transcript's: "2 children finished · 1 needs you". */
+/** A wake's compact first line, and the transcript's: "2 delegates finished · 1 delegate asks". */
 export function wakeSummary(wake: Wake): string {
   const parts: string[] = [];
   if (wake.settled.length) {
-    parts.push(`${wake.settled.length} ${wake.settled.length === 1 ? "child" : "children"} finished`);
+    const failed = wake.settled.filter((link) => link.state === "failed").length;
+    if (wake.settled.length === 1) {
+      const link = wake.settled[0]!;
+      parts.push(`Delegate ${link.state === "failed" ? "failed" : "finished"}: ${link.targetTitle}`);
+    } else if (failed === wake.settled.length) {
+      parts.push(`${wake.settled.length} delegates failed`);
+    } else {
+      parts.push(`${wake.settled.length} delegates finished`);
+      if (failed) parts.push(`${failed} failed`);
+    }
   }
-  if (wake.asking.length) {
-    parts.push(`${wake.asking.length} ${wake.asking.length === 1 ? "needs" : "need"} you`);
+  if (wake.asking.length === 1) {
+    parts.push(`Delegate asks: ${wake.asking[0]!.targetTitle}`);
+  } else if (wake.asking.length > 1) {
+    parts.push(`${wake.asking.length} delegates need you`);
   }
   return parts.join(" · ");
 }
 
-/** One child, as the wake message names it: link id, status, title, thread, what it changed. */
+/** One delegate, as the wake message names it: link id, status, title, harness, worked time, thread, changes. */
 const linkLine = (link: Link, state: LinkState, now: number) => {
-  const bits = [`link_id ${link.id}`, state, `“${link.targetTitle}”`, `session ${link.target}`];
+  const bits = [`link_id ${link.id}`, state, `“${link.targetTitle}”`];
+  const harness = link.harnessName ?? link.harness;
+  if (harness) bits.push(harness);
+  if (link.workedMs) bits.push(`worked ${formatDuration(link.workedMs)}`);
+  bits.push(`session ${link.target}`);
   if (link.filesChanged) bits.push(`${link.filesChanged} file${link.filesChanged === 1 ? "" : "s"} changed`);
   if (link.settledAt) bits.push(`${Math.max(1, Math.round((now - link.settledAt) / 1000))}s ago`);
   return `- ${bits.join(" · ")}`;
