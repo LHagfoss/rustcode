@@ -1,8 +1,12 @@
-// `bun run mock-window <open [path] | eval "<js>" | screenshot <file.png> | close>`:
+// `bun run mock-window <open [path] | eval "<js>" | click "<css>" [--at <x>,<y>] |
+//   type "<text>" | press <key> [--shift] [--ctrl] [--alt] [--meta] |
+//   screenshot <file.png> | close>`:
 // one shared, visible Chrome window on the mock dev server at native scale, so UI
 // checks look like the app and agents do not each launch their own browser.
 // `open` leaves the server and window running detached; `close` stops only those
 // two. `scripts/perf.ts` stays headless: it measures performance, not appearance.
+// `MOCK_WINDOW_CDP_PORT` and `MOCK_WINDOW_PROFILE` move this helper to another
+// port and profile, so a second thread can drive a window of its own.
 
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync, rmSync } from "node:fs";
@@ -11,14 +15,31 @@ import { join, resolve } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const CDP_PORT = 9223; // fixed, so every caller finds the same window
+const envPort = Number(process.env.MOCK_WINDOW_CDP_PORT);
+const CDP_PORT = Number.isInteger(envPort) && envPort > 0 ? envPort : 9223; // fixed, so every caller finds the same window
 const PORT_FROM = 1421; // 1420 belongs to `bun tauri dev` and its strict port
-const profile = join(tmpdir(), "rustcode-mock-window");
-const record = join(tmpdir(), "rustcode-mock-window-server.json");
+const profile = process.env.MOCK_WINDOW_PROFILE || join(tmpdir(), "rustcode-mock-window");
+const record = `${profile}-server.json`; // per profile, so two windows keep their own server
 const cdp = `http://127.0.0.1:${CDP_PORT}`;
 const NOT_UP = "No mock window is open. Run `bun run mock-window open` first.";
 const NO_TAB = "The mock window has no tab. Run `bun run mock-window close`, then `open`.";
 const CDP_TIMEOUT = 30_000; // a wedged renderer must not hang the caller
+
+/** Keys `press` can send: the ones a check needs to move focus and submit. */
+const KEYS: Record<string, { code: string; vk: number; text?: string }> = {
+  Enter: { code: "Enter", vk: 13, text: "\r" },
+  Escape: { code: "Escape", vk: 27 },
+  Tab: { code: "Tab", vk: 9 },
+  Backspace: { code: "Backspace", vk: 8 },
+  Delete: { code: "Delete", vk: 46 },
+  Space: { code: "Space", vk: 32, text: " " },
+  ArrowUp: { code: "ArrowUp", vk: 38 },
+  ArrowDown: { code: "ArrowDown", vk: 40 },
+  ArrowLeft: { code: "ArrowLeft", vk: 37 },
+  ArrowRight: { code: "ArrowRight", vk: 39 },
+  Home: { code: "Home", vk: 36 },
+  End: { code: "End", vk: 35 },
+};
 
 type Server = { pid: number; cwd: string; port: number };
 type Target = { id: string; type: string; url: string; webSocketDebuggerUrl?: string };
@@ -119,10 +140,13 @@ async function stopMockServer() {
   rmSync(record, { force: true });
 }
 
+/** Both loopback families: vite binds `localhost` on ::1, so a server of
+ * another checkout on the same port went unnoticed by an IPv4-only probe. */
 function freePort() {
   for (let port = PORT_FROM; port < PORT_FROM + 200; port++) {
     try {
-      Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } }).stop(true);
+      for (const hostname of ["127.0.0.1", "::1"])
+        Bun.listen({ hostname, port, socket: { data() {} } }).stop(true);
       return port;
     } catch {}
   }
@@ -255,6 +279,146 @@ async function withPage<T>(
   }
 }
 
+/** Real input needs focus: Chrome queues mouse and key events for a window that
+ * is behind others, so a page that is not frontmost never receives them. */
+async function withInput<T>(fn: (send: (method: string, params?: object) => Promise<Cdp>) => Promise<T>) {
+  return withPage(await origin(), async (send) => {
+    await send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    return fn(send);
+  });
+}
+
+const evaluate = (send: (method: string, params?: object) => Promise<Cdp>, expression: string) =>
+  send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+
+/** Unwraps a page result, failing with the page's own first error line. */
+function pageValue(r: Cdp) {
+  if (!r.exceptionDetails) return r.result?.value;
+  const text = r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails);
+  throw new Error(
+    String(text)
+      .replace(/^Error: /, "")
+      .split("\n")[0],
+  );
+}
+
+/** `document.activeElement` as `tag [aria-label]`, printed after every input. */
+async function focused(send: (method: string, params?: object) => Promise<Cdp>) {
+  const expression = `(() => {
+    const a = document.activeElement;
+    if (!a) return "none";
+    const label = a.getAttribute("aria-label");
+    return a.tagName.toLowerCase() + (label ? " [" + label + "]" : "");
+  })()`;
+  return pageValue(await evaluate(send, expression)) ?? "none";
+}
+
+/** Splits `--flag` options from the words before them, so a selector may hold spaces. */
+function parseArgs(args: string[]) {
+  const words: string[] = [];
+  const flags = new Set<string>();
+  let at: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (!arg.startsWith("--")) words.push(arg);
+    else {
+      flags.add(arg);
+      if (arg === "--at") at = args[++i] ?? "";
+    }
+  }
+  let offset: { x: number; y: number } | null = null;
+  if (at !== undefined) {
+    const [x, y] = at.split(",").map(Number);
+    if (!Number.isFinite(x) || !Number.isFinite(y))
+      throw new Error(`--at needs <x>,<y> from the element's top-left, got "${at}"`);
+    offset = { x: x!, y: y! };
+  }
+  const modifiers =
+    (flags.has("--alt") ? 1 : 0) |
+    (flags.has("--ctrl") ? 2 : 0) |
+    (flags.has("--meta") ? 4 : 0) |
+    (flags.has("--shift") ? 8 : 0);
+  return { words: words.join(" "), offset, modifiers };
+}
+
+const modifierNames = (m: number) =>
+  [m & 1 ? "Alt+" : "", m & 2 ? "Ctrl+" : "", m & 4 ? "Meta+" : "", m & 8 ? "Shift+" : ""].join("");
+
+/** Scrolls a selector into view, checks the press would hit it, then presses it. */
+async function click(selector: string, offset: { x: number; y: number } | null) {
+  const hint = offset ? "" : " — pass --at <x>,<y> to press a visible part of it";
+  const page = `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) throw new Error("Nothing matches the selector " + ${JSON.stringify(selector)});
+    el.scrollIntoView({ block: "center", inline: "center" });
+    const b = el.getBoundingClientRect();
+    const x = b.x + ${offset ? offset.x : "b.width / 2"};
+    const y = b.y + ${offset ? offset.y : "b.height / 2"};
+    const name = (e) => e
+      ? "<" + e.tagName.toLowerCase() +
+        (e.getAttribute("aria-label") ? ' aria-label="' + e.getAttribute("aria-label") + '"' : "") + ">"
+      : "nothing";
+    const hit = document.elementFromPoint(x, y);
+    if (hit !== el && !(hit && el.contains(hit)))
+      throw new Error("A press at " + Math.round(x) + "," + Math.round(y) + " would land on " +
+        name(hit) + ", not " + name(el) + ${JSON.stringify(hint)});
+    return { x, y };
+  })()`;
+  await withInput(async (send) => {
+    const { x, y } = pageValue(await evaluate(send, page)) as { x: number; y: number };
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await sleep(250); // long enough for someone watching to see the pointer land
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button: "left",
+      clickCount: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button: "left",
+      clickCount: 1,
+    });
+    await sleep(300);
+    console.log(`Clicked ${selector} at ${Math.round(x)},${Math.round(y)}; focus is ${await focused(send)}.`);
+  });
+}
+
+async function type(text: string) {
+  await withInput(async (send) => {
+    await send("Input.insertText", { text });
+    await sleep(300);
+    console.log(`Typed ${JSON.stringify(text)}; focus is ${await focused(send)}.`);
+  });
+}
+
+async function press(name: string, modifiers: number) {
+  const key = KEYS[name];
+  if (!key) throw new Error(`press does not know ${name}. Use one of ${Object.keys(KEYS).join(", ")}.`);
+  await withInput(async (send) => {
+    const base = {
+      key: name,
+      code: key.code,
+      windowsVirtualKeyCode: key.vk,
+      nativeVirtualKeyCode: key.vk,
+      modifiers,
+    };
+    // Enter inserts a newline only with its text, as in a real key press.
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      ...base,
+      text: key.text,
+      unmodifiedText: key.text,
+    });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    await sleep(300);
+    console.log(`Pressed ${modifierNames(modifiers)}${name}; focus is ${await focused(send)}.`);
+  });
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "open") {
@@ -306,6 +470,18 @@ async function main() {
       process.exit(1);
     }
     console.log(JSON.stringify(r.result?.value, null, 2));
+  } else if (command === "click") {
+    const { words, offset } = parseArgs(rest);
+    if (!words) throw new Error('Usage: bun run mock-window click "<css selector>" [--at <x>,<y>]');
+    await click(words, offset);
+  } else if (command === "type") {
+    const text = rest.join(" ");
+    if (!text) throw new Error('Usage: bun run mock-window type "<text>"');
+    await type(text);
+  } else if (command === "press") {
+    const { words, modifiers } = parseArgs(rest);
+    if (!words) throw new Error("Usage: bun run mock-window press <key> [--shift] [--ctrl] [--alt] [--meta]");
+    await press(words, modifiers);
   } else if (command === "screenshot") {
     const file = rest[0];
     if (!file) throw new Error("Usage: bun run mock-window screenshot <file.png>");
@@ -316,7 +492,9 @@ async function main() {
     await Bun.write(file, Buffer.from(data, "base64"));
     console.log(`Saved ${resolve(file)}`);
   } else {
-    throw new Error('Usage: bun run mock-window <open [path] | eval "<js>" | screenshot <file> | close>');
+    throw new Error(
+      'Usage: bun run mock-window <open [path] | eval "<js>" | click "<css>" [--at <x>,<y>] | type "<text>" | press <key> [--shift] [--ctrl] [--alt] [--meta] | screenshot <file> | close>',
+    );
   }
 }
 
