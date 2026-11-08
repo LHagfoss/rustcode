@@ -318,6 +318,12 @@ describe("smart ui", () => {
     );
     expect(script).not.toContain("root.scrollHeight");
     expect(script).toContain("observer.observe(document.body)");
+    expect(script).toContain('data.type === "focus-modality"');
+    expect(script).toContain('event.key === "Tab"');
+    expect(script).toContain('addEventListener("pointerdown"');
+    expect(script).not.toContain('window.addEventListener("blur"');
+    expect(BASE_CSS).toContain(":root[data-keyboard-nav] :focus-visible");
+    expect(BASE_CSS).toContain(":root[data-keyboard-nav] :is(input, select, textarea):focus-visible");
     for (const part of [
       'addEventListener("click"',
       'addEventListener("keydown"',

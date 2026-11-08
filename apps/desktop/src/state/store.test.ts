@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans } from "../acp/rustcode";
+import type { Transport, TransportEvent } from "../acp/transport";
 import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
@@ -29,6 +30,7 @@ import { QUEUE_REASON } from "./queue";
 import {
   addHarnessAccount,
   agentHistory,
+  answerConnectRequest,
   answerPermission,
   answerQuestionOptions,
   type CachedPlan,
@@ -51,6 +53,7 @@ import {
   loadTotalLimit,
   localChoices,
   MAX_PANELS,
+  markFinished,
   mergePlans,
   moveThread,
   newThreadChoice,
@@ -58,6 +61,7 @@ import {
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
+  pairRemoteDevice,
   parsePanels,
   peekThread,
   permissionModeOf,
@@ -74,6 +78,7 @@ import {
   RESUME_TEXT,
   refreshAgents,
   refreshHarnesses,
+  refreshRemote,
   refreshSessions,
   refreshSessionsOnFocus,
   removeQueued,
@@ -140,6 +145,33 @@ const until = async (check: () => boolean, ms = 2000) => {
   }
 };
 
+class HeldSessionLoadTransport extends MockTransport {
+  readonly requests: JsonObject[] = [];
+  target: string | undefined;
+  heldLoad: string | undefined;
+
+  override send(line: string): void {
+    const request = JSON.parse(line) as JsonObject;
+    this.requests.push(request);
+    const params = request.params as JsonObject | undefined;
+    if (
+      request.method === Method.sessionLoad &&
+      params?.sessionId === this.target &&
+      this.heldLoad === undefined
+    ) {
+      this.heldLoad = line;
+      return;
+    }
+    super.send(line);
+  }
+
+  releaseLoad(): void {
+    const line = this.heldLoad;
+    this.heldLoad = undefined;
+    if (line) super.send(line);
+  }
+}
+
 /**
  * The app's storage in a test (there is no window): a map `store()` writes into, seeded with an
  * entry an earlier build left. `done()` takes it away again, so the next test starts empty.
@@ -152,6 +184,56 @@ function testStorage(seed: Record<string, string> = {}) {
     setItem: (key: string, value: string) => void data.set(key, value),
   } as unknown as Storage;
   return { data, done: () => delete scope.localStorage };
+}
+
+/** Holds one machine-status response so a test can deliver it after a newer answer. */
+class DelayedRemoteStatusTransport implements Transport {
+  readonly name = "mock" as const;
+  private readonly mock = new MockTransport({ delayMs: 0, remote: "connect" });
+  private onEvent: ((event: TransportEvent) => void) | null = null;
+  private readonly methods = new Map<number, string>();
+  holdNextStatus = false;
+  heldResponse: string | null = null;
+
+  async start(onEvent: (event: TransportEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+    await this.mock.start((event) => {
+      if (event.type === "line") {
+        const response = JSON.parse(event.line) as { id?: number };
+        if (
+          this.holdNextStatus &&
+          response.id !== undefined &&
+          this.methods.get(response.id) === "_rustcode/remote"
+        ) {
+          this.holdNextStatus = false;
+          this.heldResponse = event.line;
+          return;
+        }
+      }
+      onEvent(event);
+    });
+  }
+
+  send(line: string): void {
+    const message = JSON.parse(line) as { id?: number; method?: string };
+    if (message.id !== undefined && message.method) this.methods.set(message.id, message.method);
+    this.mock.send(line);
+  }
+
+  releaseStatus(): void {
+    if (!this.heldResponse) throw new Error("no remote status response is being held");
+    const line = this.heldResponse;
+    this.heldResponse = null;
+    this.onEvent?.({ type: "line", line });
+  }
+
+  async restart(): Promise<void> {
+    await this.mock.restart();
+  }
+
+  async stop(): Promise<void> {
+    await this.mock.stop();
+  }
 }
 
 /** A running thread whose own record still reads no steering: the harness learned it after the thread started. */
@@ -178,6 +260,48 @@ const selected = () => {
 beforeEach(() => resetForTests());
 
 describe("engine controller with the mock engine", () => {
+  test("an old status read cannot restore a connection prompt after Accept", async () => {
+    const transport = new DelayedRemoteStatusTransport();
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    try {
+      const initial = await refreshRemote();
+      const id = initial?.connectRequests[0]?.id;
+      if (!id) throw new Error("the mock must seed a connection request");
+
+      transport.holdNextStatus = true;
+      const staleRead = refreshRemote();
+      await until(() => transport.heldResponse !== null);
+      expect(await answerConnectRequest(id, true)).toBe(true);
+      expect(useApp.getState().remote?.connectRequests[0]?.state).toBe("approved");
+
+      transport.releaseStatus();
+      await staleRead;
+      expect(useApp.getState().remote?.connectRequests[0]?.state).toBe("approved");
+    } finally {
+      await transport.stop();
+    }
+  });
+
+  test("accepting a phone's request takes down the QR code it replaced", async () => {
+    const transport = new MockTransport({ delayMs: 0, remote: "connect" });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    try {
+      const initial = await refreshRemote();
+      const id = initial?.connectRequests[0]?.id;
+      if (!id) throw new Error("the mock must seed a connection request");
+      await pairRemoteDevice();
+      expect(useApp.getState().remoteChallenge).not.toBeNull();
+
+      expect(await answerConnectRequest(id, true)).toBe(true);
+      expect(useApp.getState().remoteChallenge).toBeNull();
+      expect(useApp.getState().connectCode?.requestId).toBe(id);
+    } finally {
+      await transport.stop();
+    }
+  });
+
   test("the migrated delegate total is written once, so a later per-thread change does not move it", () => {
     // An earlier build kept only the per-thread limit; its old twice-it tree ceiling becomes the
     // total. The migration is one-shot: the total is stored, not recomputed on every launch.
@@ -2500,11 +2624,11 @@ describe("toasts", () => {
     for (let i = 0; i < 50; i++) toast(`Failed ${i}`, "error");
     expect(useApp.getState().toasts.length).toBe(3);
     expect(useApp.getState().toasts.map((t) => t.text)).toEqual(["Failed 49", "Failed 48", "Failed 47"]);
-    toast("Starting engine…", "info", { id: "engine", persist: true, progress: 0.2 });
-    toast("The engine stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
+    toast("Starting the server…", "info", { id: "engine", persist: true, progress: 0.2 });
+    toast("The server stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
     const engine = useApp.getState().toasts.filter((t) => t.id === "engine");
     expect(engine.length).toBe(1);
-    expect(engine[0]!.text).toBe("The engine stopped.");
+    expect(engine[0]!.text).toBe("The server stopped.");
     expect(engine[0]!.action?.label).toBe("Restart");
     // Replacing a toast that is fading out keeps the new one.
     dismissToast("engine");
@@ -3596,5 +3720,202 @@ describe("continuing after a limit", () => {
     expect(useApp.getState().limitWaits).toEqual({});
     setContinueAfterLimit(true);
     await continueDueThreads();
+  });
+});
+
+describe("a delegate whose turn failed", () => {
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const caller = useApp.getState().sessions[0]!.id;
+    setPermissionMode(caller, "full");
+    const target = useApp
+      .getState()
+      .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
+    await openThread(target);
+    return { caller, target };
+  };
+  const send = (caller: string, target: string, message: string) =>
+    answerOrchestration({
+      sessionId: caller,
+      tool: "message_session",
+      args: { session_id: target, message },
+    });
+
+  test("can be messaged again: the failure is no reason to refuse it", async () => {
+    const { caller, target } = await ready();
+    // Its turn failed (and its harness process may since have been stopped for idling): the thread
+    // keeps the error on screen, which used to read as "could not be opened".
+    updateThread(target, (t) => ({
+      ...t,
+      running: false,
+      error: "Codex rejected the request (HTTP 400 Bad Request).",
+    }));
+    const answer = await send(caller, target, "try again with less");
+    expect(answer.error).toBeUndefined();
+    expect(answer.receipt).toBe("started");
+    await until(
+      () =>
+        useApp
+          .getState()
+          .threads[target]?.items.some((i) => i.kind === "user" && i.text.includes("try again with less")) ??
+        false,
+    );
+  });
+
+  test("a thread whose open failed is opened again before it is refused", async () => {
+    const { caller, target } = await ready();
+    updateThread(target, (t) => ({
+      ...t,
+      openFailed: true,
+      error: "Could not open this thread: engine restarting",
+    }));
+    const answer = await send(caller, target, "are you there");
+    expect(answer.error).toBeUndefined();
+    expect(useApp.getState().threads[target]?.openFailed).toBeUndefined();
+  });
+
+  test("a message waits for one in-flight open and is delivered once", async () => {
+    const transport = new HeldSessionLoadTransport();
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const caller = useApp.getState().sessions[0]!.id;
+    setPermissionMode(caller, "full");
+    const target = useApp
+      .getState()
+      .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
+    transport.target = target;
+
+    const opening = openThread(target);
+    await until(() => transport.heldLoad !== undefined);
+    expect(openThread(target)).toBe(opening);
+    let messageSettled = false;
+    const message = send(caller, target, "deliver once after load").then((answer) => {
+      messageSettled = true;
+      return answer;
+    });
+    const matching = (method: string) =>
+      transport.requests.filter(
+        (request) =>
+          request.method === method && (request.params as JsonObject | undefined)?.sessionId === target,
+      );
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(messageSettled).toBe(false);
+      expect(matching(Method.sessionPrompt)).toHaveLength(0);
+      transport.releaseLoad();
+      await opening;
+      const answer = await message;
+      expect(answer.error).toBeUndefined();
+      await until(() => matching(Method.sessionPrompt).length === 1);
+      expect(matching(Method.sessionLoad)).toHaveLength(1);
+      expect(matching(Method.sessionPrompt)).toHaveLength(1);
+      expect(
+        useApp
+          .getState()
+          .threads[target]!.items.filter(
+            (item) => item.kind === "user" && item.text.includes("deliver once"),
+          ),
+      ).toHaveLength(1);
+    } finally {
+      transport.releaseLoad();
+    }
+  });
+
+  test("a thread archived while it is opening does not receive a delegate message", async () => {
+    const transport = new HeldSessionLoadTransport();
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const caller = useApp.getState().sessions[0]!.id;
+    setPermissionMode(caller, "full");
+    const target = useApp
+      .getState()
+      .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
+    transport.target = target;
+
+    const message = send(caller, target, "do not reopen after archive");
+    await until(() => transport.heldLoad !== undefined);
+    setArchived(target, true);
+    try {
+      transport.releaseLoad();
+      const answer = await message;
+      expect((answer.error as JsonObject).message).toContain("archived");
+      expect(
+        transport.requests.filter(
+          (request) =>
+            request.method === Method.sessionPrompt &&
+            (request.params as JsonObject | undefined)?.sessionId === target,
+        ),
+      ).toHaveLength(0);
+    } finally {
+      transport.releaseLoad();
+    }
+  });
+
+  test("settled and deliberately stopped threads return a clear refusal", async () => {
+    const { caller, target } = await ready();
+    setArchived(target, true);
+    const archived = await send(caller, target, "archived");
+    expect((archived.error as JsonObject).message).toContain("unarchive it");
+
+    setArchived(target, false);
+    await setThreadStatus(target, "done");
+    const settled = await send(caller, target, "settled");
+    expect((settled.error as JsonObject).message).toContain("settled");
+
+    await setThreadStatus(target, "idle");
+    updateThread(target, (thread) => ({
+      ...thread,
+      items: [
+        ...thread.items,
+        { kind: "turnEnd", id: "user-stopped", at: Date.now(), outcome: "cancelled" },
+        { kind: "notice", id: "stop-note", text: "Stopped", tone: "info" },
+      ],
+    }));
+    const stopped = await send(caller, target, "stopped");
+    expect((stopped.error as JsonObject).message).toContain("last turn was stopped");
+  });
+
+  test("a message queued on it fails with the reason instead of staying Queued", async () => {
+    const { caller, target } = await ready();
+    updateThread(target, (t) => ({ ...t, running: true }));
+    const answer = await send(caller, target, "after that, this");
+    expect(answer.receipt).toBe("queued");
+    const id = String(answer.link_id);
+    // The user's own queued message stays held for Resume.
+    updateThread(target, (t) => ({
+      ...t,
+      running: false,
+      queueHeld: true,
+      queue: [...t.queue, { id: "user-1", text: "mine", queuedAt: Date.now() }],
+    }));
+    threadTurnEnded(target, false, "failed", "Codex rejected the request (HTTP 400 Bad Request).", []);
+    const link = useApp.getState().links.links.find((l) => l.id === id)!;
+    expect(link.state).toBe("failed");
+    expect(link.answer).toContain("Not delivered");
+    expect(link.answer).toContain("HTTP 400 Bad Request");
+    const queue = useApp.getState().threads[target]!.queue;
+    expect(queue.map((q) => q.id)).toEqual(["user-1"]);
+    expect(useApp.getState().threads[target]!.queueHeld).toBe(true);
+    expect(
+      useApp
+        .getState()
+        .threads[target]!.items.filter(
+          (item) => item.kind === "user" && item.text.includes("after that, this"),
+        ),
+    ).toHaveLength(0);
+    // Ending the same failure twice does not enqueue or deliver the message a second time.
+    threadTurnEnded(target, false, "failed", "Codex rejected the request (HTTP 400 Bad Request).", []);
+    expect(useApp.getState().links.links.find((l) => l.id === id)?.state).toBe("failed");
+    expect(useApp.getState().threads[target]!.queue.map((q) => q.id)).toEqual(["user-1"]);
+  });
+
+  test("settling it takes its failed turn out of the Inbox", async () => {
+    const { target } = await ready();
+    markFinished(target, Date.now(), true);
+    expect(target in useApp.getState().failed).toBe(true);
+    await setThreadStatus(target, "done");
+    expect(target in useApp.getState().failed).toBe(false);
   });
 });

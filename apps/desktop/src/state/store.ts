@@ -68,6 +68,7 @@ import {
 } from "../acp/v2";
 import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
+import { capServerLogLine } from "../lib/diagnostics";
 import { afterPaint } from "../lib/frame";
 import {
   APP_COMMANDS,
@@ -110,6 +111,8 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import type { ConnectCode } from "./connectRequests";
+import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { parseGrants, type TimedGrant } from "./grants";
 import {
@@ -217,6 +220,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { userTypedPrompt } from "./topLevel";
+import { readableTurnError } from "./turnError";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -234,6 +238,7 @@ export type SettingsSection =
   | "usage"
   | "statistics"
   | "advanced"
+  | "diagnostics"
   | "about";
 
 /** Every Settings page, in the order the panel's nav lists them. */
@@ -249,6 +254,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "usage",
   "statistics",
   "advanced",
+  "diagnostics",
   "about",
 ];
 
@@ -492,6 +498,11 @@ export interface AppState {
    * look off.
    */
   remoteError: string | null;
+  /**
+   * The code shown after accepting a phone that asked to connect, until the phone pairs or it
+   * runs out (`state/connectRequests.ts`). The only copy: never persisted.
+   */
+  connectCode: ConnectCode | null;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -742,6 +753,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   remotePaired: null,
   remoteByThread: {},
   remoteError: null,
+  connectCode: null,
   view: { kind: "chat" },
   checkpoints: {},
   attempts: {},
@@ -908,8 +920,14 @@ function rpcReason(data: Json | undefined): string | null {
 
 let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
+/** Ignore machine-status reads that started before a newer answer changed remote state. */
+let remoteStatusRevision = 0;
+let remoteStatusReadId = 0;
+let latestRemoteStatusReadId = 0;
 /** Sessions whose `session/load` replay is arriving. */
 const loading = new Set<string>();
+/** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
+const opening = new Map<string, Promise<string | null>>();
 
 /**
  * Threads whose messages contain `query`, from the engine's SQLite index
@@ -931,7 +949,7 @@ export async function searchThreads(query: string): Promise<Record<string, strin
 }
 
 export function engine(): AcpConnection {
-  if (!connection) throw new Error("The engine is not connected.");
+  if (!connection) throw new Error("The server is not connected.");
   return connection;
 }
 
@@ -950,9 +968,14 @@ const inbound = frameQueue<string>((lines) =>
     }),
   ),
 );
-/** Engine stderr, kept for Settings › Advanced; appended once a frame, not per line. */
-const logs = frameQueue<string>((lines) =>
-  set((s) => ({ engineLog: [...s.engineLog, ...lines].slice(-400) })),
+/** Lines of server stderr kept for Settings › Diagnostics. */
+export const SERVER_LOG_LINES = 1000;
+/** Server stderr, kept for Settings › Diagnostics; appended once a frame, not per line. */
+const logs = frameQueue<string>(
+  (lines) =>
+    set((s) => ({ engineLog: [...s.engineLog, ...lines.map(capServerLogLine)].slice(-SERVER_LOG_LINES) })),
+  16,
+  SERVER_LOG_LINES,
 );
 
 // ---------------------------------------------------------------- engine toast
@@ -983,14 +1006,14 @@ function onEngineStatus(s: AppState, prev?: AppState) {
   clearTimeout(slowTimer);
   if (s.status === "ready") {
     // Batched updates can go from closed straight to ready: this keys on `crashed` alone.
-    if (crashed && prev) toast("The engine restarted", "success", { id: ENGINE_TOAST });
+    if (crashed && prev) toast("The server restarted", "success", { id: ENGINE_TOAST });
     else dismissToast(ENGINE_TOAST);
     crashed = false;
     return;
   }
   if (s.status === "closed") {
     crashed = true;
-    toast(s.statusDetail ?? "The engine stopped.", "error", {
+    toast(s.statusDetail ?? "The server stopped.", "error", {
       id: ENGINE_TOAST,
       action: { label: "Restart", run: () => void restartEngine() },
     });
@@ -1000,7 +1023,7 @@ function onEngineStatus(s: AppState, prev?: AppState) {
   if (get().toasts.some((t) => t.id === ENGINE_TOAST && t.tone === "error")) dismissToast(ENGINE_TOAST);
   slowTimer = setTimeout(() => {
     if (get().status !== "connecting") return;
-    toast(crashed ? "Restarting engine…" : "Starting engine…", "info", {
+    toast(crashed ? "Restarting the server…" : "Starting the server…", "info", {
       id: ENGINE_TOAST,
       persist: true,
       progress: bootProgress,
@@ -1044,7 +1067,7 @@ export async function connect(next: Transport): Promise<void> {
 }
 
 async function handshake(): Promise<void> {
-  connection?.close("The engine restarted.");
+  connection?.close("The server restarted.");
   const conn = new AcpConnection((line) => transport?.send(line));
   connection = conn;
   conn.onInbound((message) => {
@@ -1274,7 +1297,7 @@ async function syncPinsAndSettled(conn: AcpConnection): Promise<void> {
 export function featureMissing(feature: keyof AppState["features"]): string | null {
   const known = get().features[feature];
   if (known) return null;
-  if (known === undefined) return "Checking what the engine supports…";
+  if (known === undefined) return "Checking what the server supports…";
   const what = {
     worktrees: "worktrees",
     checkpoints: "checkpoints",
@@ -1282,14 +1305,14 @@ export function featureMissing(feature: keyof AppState["features"]): string | nu
     themes: "themes",
     pins: "pins",
   }[feature];
-  return `This engine has no ${what} yet (update RustCode).`;
+  return `This server has no ${what} yet (update RustCode).`;
 }
 
 export async function restartEngine(): Promise<void> {
   if (!transport) return;
   crashed = true;
   bootProgress = 0.15;
-  set({ status: "connecting", statusDetail: "Restarting the engine…" });
+  set({ status: "connecting", statusDetail: "Restarting the server…" });
   await transport.restart().catch((error) => set({ status: "closed", statusDetail: errorText(error) }));
 }
 
@@ -1323,7 +1346,7 @@ async function handleInbound(message: Inbound) {
         threads: Object.fromEntries(
           Object.entries(s.threads).map(([id, t]) => [
             id,
-            t.running ? finishTurn(t, "failed", Date.now(), "The engine stopped during this turn.") : t,
+            t.running ? finishTurn(t, "failed", Date.now(), "The server stopped during this turn.") : t,
           ]),
         ),
       }));
@@ -1682,7 +1705,7 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
     return false;
   }
   if (!get().agent?.sessionMove || !connection) {
-    toast("This engine cannot move a thread to another folder. Update RustCode.", "error");
+    toast("This server cannot move a thread to another folder. Update RustCode.", "error");
     return false;
   }
   if (thread && get().agent?.closeSession) await closeThread(id);
@@ -1710,37 +1733,48 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
  * open error when it could not be opened, so a caller can say why instead of
  * reporting an empty thread.
  */
-export async function openThread(id: string): Promise<string | null> {
+export function openThread(id: string): Promise<string | null> {
+  const inFlight = opening.get(id);
+  if (inFlight) return inFlight;
   const conn = connection;
   const existing = get().threads[id];
-  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return null;
+  // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
+  // be opened once (the engine was restarting, its harness was down) is not refused for good.
+  if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
+    return Promise.resolve(null);
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
+  let pending: Promise<string | null>;
+  pending = Promise.resolve().then(async () => {
+    try {
+      const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
+      updateThread(id, (t) => ({
+        ...finishLoad(t),
+        configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
+        harness: parseSessionHarness(result) ?? t.harness,
+      }));
+      const opened = get().threads[id];
+      if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
+      void refreshPlanUsage(id);
+      void refreshCheckpoints(id);
+      // A thread opened after it went idle can still be before its cache deadline.
+      scheduleAutoCompact(id);
+      return null;
+    } catch (error) {
+      const message = `Could not open this thread: ${errorText(error)}`;
+      updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
+      return message;
+    } finally {
+      loading.delete(id);
+      if (opening.get(id) === pending) opening.delete(id);
+    }
+  });
+  opening.set(id, pending);
   loading.add(id);
   set((s) => ({
     threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
   }));
-  try {
-    const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
-    updateThread(id, (t) => ({
-      ...finishLoad(t),
-      configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
-      harness: parseSessionHarness(result) ?? t.harness,
-    }));
-    const opened = get().threads[id];
-    if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
-    void refreshPlanUsage(id);
-    void refreshCheckpoints(id);
-    // A thread opened after it went idle can still be before its cache deadline.
-    scheduleAutoCompact(id);
-    return null;
-  } catch (error) {
-    const message = `Could not open this thread: ${errorText(error)}`;
-    updateThread(id, (t) => ({ ...finishLoad(t), error: message }));
-    return message;
-  } finally {
-    loading.delete(id);
-  }
+  return pending;
 }
 
 /**
@@ -1751,7 +1785,7 @@ export async function openThread(id: string): Promise<string | null> {
 export async function repairThread(id: string): Promise<void> {
   const conn = connection;
   if (!conn || !get().agent?.sessionRepair) {
-    toast("This engine cannot repair threads. Update RustCode.", "error");
+    toast("This server cannot repair threads. Update RustCode.", "error");
     return;
   }
   if (get().threads[id]?.running) {
@@ -1839,7 +1873,7 @@ export async function createSession(options: NewSession): Promise<string> {
   if (Object.keys(meta).length) params._meta = { rustcode: meta };
   const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
   const id = str(result.sessionId);
-  if (!id) throw new Error("The engine did not return a session id.");
+  if (!id) throw new Error("The server did not return a thread id.");
   const worktree: Worktree | undefined = parseWorktree(
     ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
   );
@@ -2895,14 +2929,20 @@ export async function runPrompt(
     outcome = "failed";
     failure = errorText(error);
   }
-  updateThread(id, (t) =>
-    requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
-  );
+  // A provider's raw answer (`Codex: {"detail":"Bad Request"}`) is said in words, with what to do
+  // when the conversation is full; the raw text stays on the thread, behind the error's Details.
+  const rawFailure = failure;
+  if (failure !== undefined) failure = readableTurnError(failure, contextPercent(get().threads[id]?.usage));
+  updateThread(id, (t) => ({
+    ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
+    ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
+  }));
   // The limit is settled first: a turn it stopped is reported as the limit, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact
     ? (get().limitWaits[id] ?? null)
-    : settleLimitWait(id, outcome, failure, startIndex);
+    : // The limit is read from what the harness said, not the words the thread shows.
+      settleLimitWait(id, outcome, rawFailure, startIndex);
   // An automatic compaction is not a turn the user waits for: it is not "Done"
   // news, and it must not wake the thread's parent as if its work finished.
   if (!options.autoCompact) {
@@ -4100,7 +4140,15 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
   const wanted = new Set(ids);
-  set((s) => ({ sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)) }));
+  set((s) => ({
+    sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)),
+    // A settled thread asks nothing of the user: a turn of it that failed is no longer theirs to
+    // retry (`cleanup_worktree`, a fan-out's losers, a delegate its parent replaced), so its
+    // Inbox card goes with the settle.
+    ...(status === "done"
+      ? { failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))) }
+      : {}),
+  }));
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);
@@ -4354,7 +4402,7 @@ export async function rewindCheckpoint(id: string, checkpoint: Checkpoint): Prom
     askConfirm({
       title: `Rewind to before turn ${checkpoint.turn}?`,
       message:
-        "The files and the conversation go back to before this turn. This engine cannot keep the state it leaves, so there is no way back to it.",
+        "The files and the conversation go back to before this turn. This server cannot keep the state it leaves, so there is no way back to it.",
       action: "Rewind",
       destructive: true,
       run: go,
@@ -5070,11 +5118,23 @@ export async function request<T = Json>(
 
 // ---------------------------------------------------------------- remote access
 
-// Discard status reads that started before a pairing request completed.
-let remotePairGeneration = 0;
+// Every read of the machine's remote state runs on one clock. A change made here (pair, answer,
+// revoke, the switch) or a dismissed QR code bumps the revision, so a read that started before it
+// cannot put back what it changed; among the reads that started after, only the newest lands. All
+// of them, and every mutation's answer, land through `applyRemoteStatus`, which keeps or clears the
+// QR challenge and notices a device that just paired.
+function invalidateRemoteStatusReads() {
+  remoteStatusRevision += 1;
+  latestRemoteStatusReadId = remoteStatusReadId;
+}
+
+function commitRemoteStatus(status: RemoteStatus) {
+  invalidateRemoteStatusReads();
+  applyRemoteStatus(status);
+}
 
 export function dismissRemoteChallenge() {
-  remotePairGeneration++;
+  invalidateRemoteStatusReads();
   set({ remoteChallenge: null });
 }
 
@@ -5091,10 +5151,15 @@ export function applyRemoteStatus(status: RemoteStatus, now = Date.now()) {
   });
 }
 
-/** Re-read the machine's remote state, or one thread's share. Never throws. */
+/**
+ * Re-read the machine's remote access state. `sessionId` reads one thread's
+ * share instead, for its header indicator. Never throws: Settings shows the
+ * engine's refusal next to the switch.
+ */
 export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | null> {
   const params: JsonObject = sessionId ? { sessionId } : {};
-  const generation = remotePairGeneration;
+  const revision = remoteStatusRevision;
+  const readId = sessionId ? 0 : ++remoteStatusReadId;
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.status, params, 10_000));
     if (sessionId)
@@ -5102,12 +5167,20 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
         remoteByThread: { ...s.remoteByThread, [sessionId]: status },
         remoteError: null,
       }));
-    else if (generation === remotePairGeneration) applyRemoteStatus(status);
-    return status;
+    else if (revision === remoteStatusRevision && readId > latestRemoteStatusReadId) {
+      latestRemoteStatusReadId = readId;
+      applyRemoteStatus(status);
+    }
+    return sessionId || (revision === remoteStatusRevision && readId === latestRemoteStatusReadId)
+      ? status
+      : get().remote;
   } catch (error) {
     // The engine answered nothing (a restart, a dropped request): say so and
     // keep what was last true, rather than showing remote access as off.
-    set({ remoteError: errorText(error) });
+    if (sessionId || (revision === remoteStatusRevision && readId > latestRemoteStatusReadId)) {
+      if (!sessionId) latestRemoteStatusReadId = readId;
+      set({ remoteError: errorText(error) });
+    }
     return null;
   }
 }
@@ -5118,11 +5191,9 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
  * sees anything until it is switched on again. Pairings are kept.
  */
 export async function setRemoteAccess(on: boolean): Promise<void> {
-  if (!on) {
-    dismissRemoteChallenge();
-    set({ remotePaired: null });
-  }
-  if (on)
+  invalidateRemoteStatusReads();
+  if (!on) set({ remoteChallenge: null, remotePaired: null });
+  if (on) {
     set({
       remote: {
         ...(get().remote ?? {}),
@@ -5133,9 +5204,10 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
         devices: [],
       } as RemoteStatus,
     });
+  }
   try {
     const status = parseRemoteStatus(await request(on ? RemoteMethod.start : RemoteMethod.stop, {}, 20_000));
-    set({ remote: status });
+    commitRemoteStatus(status);
     if (status.error) toast(status.error, "error");
     else {
       toast(
@@ -5159,25 +5231,29 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
  */
 export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
   const baselineIds = (get().remote?.devices ?? []).map((device) => device.id);
-  const generation = ++remotePairGeneration;
+  invalidateRemoteStatusReads();
+  const revision = remoteStatusRevision;
   set({ remoteChallenge: null, remotePaired: null });
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.pair, {}, 20_000));
-    if (generation === remotePairGeneration) {
-      remotePairGeneration++;
+    if (revision === remoteStatusRevision) {
       const fresh = newPairedDevice(baselineIds, status.devices);
       const instanceChanged =
         status.offer?.instanceId &&
         status.gateway?.instanceId &&
         status.offer.instanceId !== status.gateway.instanceId;
       set({
-        remote: status,
         remotePaired: fresh ? { name: fresh.name } : null,
         remoteChallenge:
           status.offer && !fresh && !instanceChanged
             ? makeChallenge(status.offer, Date.now(), baselineIds)
             : null,
       });
+      commitRemoteStatus(status);
+    } else {
+      // Dismissed, switched off or answered meanwhile: the code is not shown, but the machine's
+      // state did change, so read it again.
+      void refreshRemote();
     }
     if (status.pairingError) toast(status.pairingError, "error");
     return status;
@@ -5187,10 +5263,63 @@ export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
   }
 }
 
+/**
+ * Accept or deny a phone that asked to connect. Accepting shows the code the phone needs
+ * (`connectCode`); the request's own prompt goes with the next status either way.
+ */
+export async function answerConnectRequest(id: string, accept: boolean): Promise<boolean> {
+  invalidateRemoteStatusReads();
+  try {
+    const status = parseRemoteStatus(await request(RemoteMethod.answer, { id, accept }, 15_000));
+    commitRemoteStatus(status);
+    if (status.connectError) {
+      toast(status.connectError, "error");
+      return false;
+    }
+    const answer = status.connectAnswer;
+    if (accept && answer?.code) {
+      set({
+        connectCode: {
+          requestId: answer.id,
+          deviceName: answer.deviceName,
+          code: answer.code,
+          instanceId: answer.instanceId ?? status.gateway?.instanceId,
+          expiresAt: Date.now() + (answer.expiresInSecs ?? 120) * 1000,
+          lockedForSecs: answer.lockedForSecs,
+        },
+      });
+    }
+    return true;
+  } catch (error) {
+    toast(errorText(error), "error");
+    return false;
+  }
+}
+
+/** Take the connection code off the screen. */
+export function closeConnectCode() {
+  set({ connectCode: null });
+}
+
+/** Forget a paired device: its token stops working and its connections close. */
+export async function revokeRemoteDevice(id: string): Promise<void> {
+  invalidateRemoteStatusReads();
+  try {
+    const status = parseRemoteStatus(await request(RemoteMethod.revoke, { deviceId: id }, 15_000));
+    commitRemoteStatus(status);
+    if (status.revokeError) toast(status.revokeError, "error");
+    else if (status.revoked) toast(`${status.revoked.name} can no longer connect.`, "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
-  remotePairGeneration++;
   lastFocusListAt = 0;
+  remoteStatusRevision += 1;
+  remoteStatusReadId = 0;
+  latestRemoteStatusReadId = 0;
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
   limitTimer = null;
@@ -5206,6 +5335,7 @@ export function resetForTests() {
   transport = null;
   setShellTransport(null);
   loading.clear();
+  opening.clear();
   set({
     status: "connecting",
     remote: null,
@@ -5233,6 +5363,7 @@ export function resetForTests() {
     onboardingOpen: false,
     toasts: [],
     toastsPaused: false,
+    connectCode: null,
     limitWaits: {},
     continueAfterLimit: true,
     agent: undefined,

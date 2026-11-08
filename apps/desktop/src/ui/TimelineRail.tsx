@@ -305,7 +305,7 @@ export const TimelineRail = memo(function TimelineRail({
           ref={strip}
           type="button"
           aria-label={ariaLabel}
-          className="absolute inset-0 cursor-pointer rounded-xs outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="absolute inset-0 cursor-pointer rounded-xs outline-none keyboard:focus-visible:ring-2 keyboard:focus-visible:ring-accent/50"
           onMouseMove={(e) => {
             if (inCard.current) return;
             keepOpen();

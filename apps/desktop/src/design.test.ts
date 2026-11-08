@@ -197,6 +197,25 @@ describe("design system", () => {
     }
   });
 
+  test("blurred scrims have opaque platform and reduced-transparency fallbacks", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    const block = (start: number) => {
+      expect(start).toBeGreaterThanOrEqual(0);
+      return start < 0 ? "" : css.slice(start, css.indexOf("}", start));
+    };
+    const linux = block(css.indexOf(':root[data-platform="linux"] {'));
+    expect(linux).toContain("--rc-scrim-bg: var(--rc-bg);");
+    expect(linux).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
+    expect(block(css.indexOf(".rc-scrim {"))).toContain("background: var(--rc-scrim-bg);");
+    expect(block(css.indexOf(".rc-lightbox-scrim {"))).toContain(
+      "background-color: var(--rc-lightbox-scrim-bg);",
+    );
+    const reducedAt = css.indexOf("@media (prefers-reduced-transparency: reduce)");
+    const reducedRoot = block(css.indexOf("  :root {", reducedAt));
+    expect(reducedRoot).toContain("--rc-scrim-bg: var(--rc-bg);");
+    expect(reducedRoot).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
+  });
+
   test("index.css's built-in themes match lib/themes.ts", () => {
     const css = readFileSync(join(SRC, "index.css"), "utf8");
     const block = (selector: string) => {

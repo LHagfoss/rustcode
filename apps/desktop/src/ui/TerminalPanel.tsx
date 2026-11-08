@@ -57,7 +57,8 @@ function TerminalView({ cwd, visible }: { cwd: string; visible: boolean }) {
     setError(null);
     const term = new Terminal({
       fontFamily:
-        '"SF Mono", "MesloLGS NF", "Symbols Nerd Font Mono", "JetBrainsMono Nerd Font", ui-monospace, Menlo, monospace',
+        // macOS resolves by Menlo at the latest; the rest are Windows' and Linux's own monospace faces.
+        '"SF Mono", "MesloLGS NF", "Symbols Nerd Font Mono", "JetBrainsMono Nerd Font", ui-monospace, Menlo, "Cascadia Mono", Consolas, "JetBrains Mono", "DejaVu Sans Mono", monospace',
       fontSize: 12,
       lineHeight: 1.2,
       cursorBlink: true,

@@ -40,11 +40,11 @@ describe("toast queue", () => {
   });
 
   test("a re-add while the old card still fades keeps one card, not a duplicate key", () => {
-    let list = add([], "Starting engine…", 0, { id: "engine", persist: true });
+    let list = add([], "Starting the server…", 0, { id: "engine", persist: true });
     list = dismiss(list, "engine");
     list = enqueue(
       list,
-      { id: "engine", text: "The engine stopped.", tone: "error" },
+      { id: "engine", text: "The server stopped.", tone: "error" },
       { now: 100, paused: false },
     );
     expect(list.map((t) => t.id)).toEqual(["engine"]);
@@ -52,8 +52,8 @@ describe("toast queue", () => {
   });
 
   test("the same text in another tone is another notice", () => {
-    let list = add([], "The engine stopped.", 0);
-    list = add(list, "The engine stopped.", 1, { tone: "error" });
+    let list = add([], "The server stopped.", 0);
+    list = add(list, "The server stopped.", 1, { tone: "error" });
     expect(list.length).toBe(2);
   });
 
@@ -89,7 +89,7 @@ describe("toast queue", () => {
   });
 
   test("a burst never pushes out a toast that stays until dismissed", () => {
-    let list = add([], "The engine stopped.", 0, { id: "engine", persist: true, tone: "error" });
+    let list = add([], "The server stopped.", 0, { id: "engine", persist: true, tone: "error" });
     for (let i = 0; i < 20; i++) list = add(list, `Thread ${i} finished`, i + 1);
     expect(list.length).toBe(TOAST_LIMIT);
     expect(list.map((t) => t.id)).toContain("engine");
@@ -130,7 +130,7 @@ describe("toast queue", () => {
   });
 
   test("a persistent toast never expires and is never paused", () => {
-    let list = add([], "Starting engine…", 0, { persist: true, progress: 0.2 });
+    let list = add([], "Starting the server…", 0, { persist: true, progress: 0.2 });
     expect(list[0]!.expiresAt).toBeNull();
     expect(due(list, 10_000_000)).toEqual([]);
     list = pause(list, 100);
@@ -153,9 +153,9 @@ describe("toast queue", () => {
 
   test("clear keeps the toasts that stay until dismissed", () => {
     let list = add([], "notice", 0);
-    list = add(list, "Starting engine…", 1, { id: "engine", persist: true });
+    list = add(list, "Starting the server…", 1, { id: "engine", persist: true });
     list = clear(list);
-    expect(list.map((t) => t.text)).toEqual(["Starting engine…"]);
+    expect(list.map((t) => t.text)).toEqual(["Starting the server…"]);
   });
 
   test("one expiry feeds one timer, and a paused queue feeds none", () => {

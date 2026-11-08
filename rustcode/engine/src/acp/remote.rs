@@ -107,6 +107,26 @@ pub(crate) struct RemoteStopRequest {
     pub session_id: String,
 }
 
+/// Accept or deny a device's connection request (`connectRequests` in the
+/// machine's status). The answer is the machine's status plus
+/// `connectAnswer`; on acceptance it carries the code to show, the only copy.
+#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/remote/answer", response = serde_json::Value)]
+pub(crate) struct RemoteAnswerRequest {
+    pub id: String,
+    pub accept: bool,
+}
+
+/// Forget a paired device and close its connections. The answer is the
+/// machine's status plus `revoked`, or `revokeError`.
+#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/remote/revoke", response = serde_json::Value)]
+pub(crate) struct RemoteRevokeRequest {
+    pub device_id: String,
+}
+
 /// The runtime a remote turn needs. It is built from the ACP session when
 /// `/remote` starts and stays valid while the share exists.
 pub(crate) struct RemoteSession {
@@ -1048,6 +1068,16 @@ impl RemoteManager {
         }
     }
 
+    /// Accept or deny a device that asked to connect.
+    pub(crate) async fn answer_connect(&self, id: &str, accept: bool) -> Value {
+        self.host_extras(answer_connect_host(id, accept).await)
+    }
+
+    /// Forget a paired device.
+    pub(crate) async fn revoke(&self, device_id: &str) -> Value {
+        self.host_extras(revoke_host(device_id).await)
+    }
+
     /// End every share, because remote access was switched off.
     pub(crate) async fn unshare_all(&self, reason: SessionCloseReason) {
         let shares = self
@@ -1270,6 +1300,22 @@ impl RemoteManager {
 
     pub(crate) async fn unshare_all(&self, _reason: SessionCloseReason) {}
 
+    pub(crate) async fn answer_connect(&self, _id: &str, _accept: bool) -> Value {
+        json!({
+            "available": false,
+            "enabled": false,
+            "connectError": "remote access is not available on this host",
+        })
+    }
+
+    pub(crate) async fn revoke(&self, _device_id: &str) -> Value {
+        json!({
+            "available": false,
+            "enabled": false,
+            "revokeError": "remote access is not available on this host",
+        })
+    }
+
     pub(crate) fn unsupported_message(&self) -> String {
         "remote access needs the remote gateway, which the workspace builds only on unix hosts"
             .to_owned()
@@ -1353,11 +1399,51 @@ async fn host_status() -> Value {
             "sessions": status.sessions.as_ref().map(|sessions| sessions.len()).unwrap_or(0),
         })
     });
+    let connect_requests = status
+        .as_ref()
+        .map(|status| {
+            status
+                .connect_requests
+                .iter()
+                .map(|request| {
+                    json!({
+                        "id": request.id,
+                        "deviceName": request.device_name,
+                        "platform": request.platform,
+                        "remoteAddr": request.remote_addr,
+                        "ageSecs": request.age_secs,
+                        "expiresInSecs": request.expires_in_secs,
+                        "state": request.state,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let ended_connect_requests = status
+        .as_ref()
+        .map(|status| {
+            status
+                .ended_connect_requests
+                .iter()
+                .map(|ended| {
+                    json!({
+                        "id": ended.id,
+                        "deviceName": ended.device_name,
+                        "end": ended.end,
+                        "deviceId": ended.device_id,
+                        "endedSecsAgo": ended.ended_secs_ago,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     json!({
         "available": true,
         "enabled": enabled,
         "shared": false,
         "gateway": gateway,
+        "connectRequests": connect_requests,
+        "endedConnectRequests": ended_connect_requests,
         "pairedDevices": devices.len(),
         "devices": devices.iter().map(|(id, name)| json!({
             "id": id,
@@ -1410,6 +1496,73 @@ async fn pair_host() -> Value {
                 "pairingError".to_owned(),
                 json!("the remote gateway did not answer in time"),
             );
+        }
+    }
+    status
+}
+
+/// Settings › Remote access, or the prompt anywhere in the app: the owner's
+/// answer to a device asking to connect, with the machine's status.
+#[cfg(unix)]
+async fn answer_connect_host(id: &str, accept: bool) -> Value {
+    let result = match crate::config::get_config_dir() {
+        Some(directory) => RemoteLifecycle::new(&directory)
+            .answer_connect_request(id, accept)
+            .await
+            .map_err(|error| format!("{error:#}")),
+        None => Err("no configuration directory".to_owned()),
+    };
+    let mut status = host_status().await;
+    if let Some(object) = status.as_object_mut() {
+        match result {
+            Ok(answer) => {
+                object.insert(
+                    "connectAnswer".to_owned(),
+                    json!({
+                        "id": answer.id,
+                        "deviceName": answer.device_name,
+                        "instanceId": answer.instance_id,
+                        "accepted": answer.accepted,
+                        "code": answer.code.as_ref().map(|code| code.expose()),
+                        "expiresInSecs": answer.expires_in_secs,
+                        "lockedForSecs": answer.locked_for_secs,
+                    }),
+                );
+            }
+            Err(error) => {
+                object.insert("connectError".to_owned(), json!(error));
+            }
+        }
+    }
+    status
+}
+
+/// Settings › Remote access › Revoke: forget a device, as `rustcode remote
+/// revoke` does, and answer with the machine's status.
+#[cfg(unix)]
+async fn revoke_host(device_id: &str) -> Value {
+    let result = match crate::config::get_config_dir() {
+        Some(directory) => RemoteLifecycle::new(&directory)
+            .revoke(device_id)
+            .await
+            .map_err(|error| format!("{error:#}")),
+        None => Err("no configuration directory".to_owned()),
+    };
+    let mut status = host_status().await;
+    if let Some(object) = status.as_object_mut() {
+        match result {
+            Ok(revocation) => {
+                object.insert(
+                    "revoked".to_owned(),
+                    json!({
+                        "deviceId": revocation.device_id,
+                        "deviceName": revocation.device_name,
+                    }),
+                );
+            }
+            Err(error) => {
+                object.insert("revokeError".to_owned(), json!(error));
+            }
         }
     }
     status
@@ -2224,6 +2377,16 @@ mod tests {
         assert!(!start.pair);
         let stop: super::RemoteStopRequest = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(stop.session_id, "");
+        let answer: super::RemoteAnswerRequest =
+            serde_json::from_value(serde_json::json!({"id": "5be1c4a07d2e9f63", "accept": true}))
+                .unwrap();
+        assert_eq!(
+            (answer.id.as_str(), answer.accept),
+            ("5be1c4a07d2e9f63", true)
+        );
+        let revoke: super::RemoteRevokeRequest =
+            serde_json::from_value(serde_json::json!({"deviceId": "0011223344556677"})).unwrap();
+        assert_eq!(revoke.device_id, "0011223344556677");
     }
 
     #[cfg(unix)]
@@ -2234,6 +2397,8 @@ mod tests {
         assert!(value["enabled"].is_boolean());
         assert_eq!(value["shared"], false);
         assert!(value["devices"].is_array());
+        assert!(value["connectRequests"].is_array());
+        assert!(value["endedConnectRequests"].is_array());
     }
 
     /// A prompt a device sends on a thread that runs on an external harness

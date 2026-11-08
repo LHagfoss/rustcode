@@ -504,6 +504,26 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
         lines.push(format!("    {}  {}{seen}", device.id, device.name));
     }
     lines.push(format!("  pairing        {pairing}"));
+    if !status.connect_requests.is_empty() {
+        lines.push(format!(
+            "  asking to connect {} (answer in the desktop app)",
+            status.connect_requests.len()
+        ));
+        for request in &status.connect_requests {
+            let state = match request.state {
+                super::connect::RequestState::Pending => "waiting",
+                super::connect::RequestState::Approved => "accepted, code shown",
+            };
+            lines.push(format!(
+                "    {}  {}  ({}, {}, {state}, {} s left)",
+                request.id,
+                request.device_name,
+                request.platform,
+                request.remote_addr,
+                request.expires_in_secs
+            ));
+        }
+    }
     lines.push(format!("  connections    {}", status.connections.len()));
     if status.devices.is_empty() {
         for connection in &status.connections {
@@ -770,6 +790,8 @@ mod tests {
             unregistered_owners: vec!["session-1".into()],
             log_path: Some("/config/remote/gateway.log".into()),
             owner_log_directory: Some("/config/remote/owners".into()),
+            connect_requests: Vec::new(),
+            ended_connect_requests: Vec::new(),
             automatic_bind: Some(false),
             fixed_advertise: Some(false),
         };

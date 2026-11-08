@@ -138,7 +138,9 @@ every device, exactly as `/remote off` does; pairings are kept.
 | **Remote access › Gateway address** | The `host:port` a device dials, how many devices are connected, and whether it is reachable from another machine at all. |
 | **Remote access › Pair a device** | Calls the same pairing challenge as `/remote pair`: a QR code, the address, the manual code, the countdown and the wrong codes left. Remote access is switched on first if it was off. |
 | **Pairing** | The challenge on screen, its countdown, the wrong codes left, a lockout, and *Paired ‹name›* once a device pairs. |
-| **Paired devices** | How many devices are paired, with their names. Revoking one is `rustcode remote revoke` for now. |
+| **A phone asking to connect** | A card in the window's corner, over any page: *‹name› wants to connect*, the platform and address, *Deny* and *Accept*. Accept shows the code to enter on the phone (large, with *Copy* and its countdown) until the phone pairs or the code runs out. See [Connection requests](#connection-requests). |
+| **Remote access › Asking to connect** | The same requests with the same answers, while any are open. |
+| **Paired devices** | How many devices are paired, with their names. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
 | **Open threads** | Each open thread with its harness, whether it is shared and how many devices are attached, or why the host holds it back. |
 | A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
 
@@ -162,14 +164,23 @@ Prompts a device queues on a thread are dropped when sharing ends, and a share
 the gateway turns down is retried no more than once a minute.
 
 The ACP methods behind the page (`_rustcode/remote`, `/start`, `/pair`,
-`/stop`, in `engine/src/acp/remote.rs`) take an optional `sessionId`: with it
+`/stop`, `/answer`, `/revoke`, in `engine/src/acp/remote.rs`) take an
+optional `sessionId` (the first four): with it
 they describe and drive that thread's share, without it the machine's own
 switch, gateway and challenge. Their answers add `qrRows` (the QR code as rows
 of `0` and `1`, quiet zone included), `target` (the harness a shared thread
 runs on), `notShared` (why this thread is held back on a thread's answer, the
 count of held-back threads on the machine's) and, for the machine,
 `gateway.pairing` and `gateway.connectedDevices` from the gateway's own
-status. The wire protocol to the gateway
+status, plus `connectRequests` (open: `id`, `deviceName`, `platform`,
+`remoteAddr`, `ageSecs`, `expiresInSecs`, `state` `pending` or `approved`) and
+`endedConnectRequests` (the last eight: `id`, `deviceName`, `end`, `deviceId`
+when it paired, `endedSecsAgo`). `_rustcode/remote/answer { id, accept }`
+answers with the machine's status plus `connectAnswer` (`code`,
+`expiresInSecs` and `instanceId` on acceptance) or `connectError`;
+`_rustcode/remote/revoke { deviceId }` with `revoked` or `revokeError`. The
+app reads the machine's status every 2.5 s while the gateway runs, and every
+15 s otherwise, whichever page is open. The wire protocol to the gateway
 ([remote-protocol](remote-protocol/README.md)) changed only additively:
 session entries gained an optional `harness`, and every other field and frame
 works as before.
@@ -329,7 +340,38 @@ be revoked earlier by identifier. `rustcode remote devices` and
 (`unknown` for records stored before this was kept), which tells the stale
 ones from the one in use.
 
+## Connection requests
+
+Instead of racing a two-minute QR code, a phone can ask. It finds the Mac on
+the local network (Bonjour `_rustcode._tcp`, whose record lists
+`caps=connect_requests`) and taps *Connect*; the gateway holds the request
+and the desktop app shows *‹name› wants to connect* wherever the user is.
+
+1. The phone opens a WebSocket and sends `connect_request` with its name,
+   platform and install identifier. It carries no secret.
+2. The Mac shows the request. *Deny* ends it, and that address cannot ask
+   again for 30 seconds. Nobody answering ends it after two minutes.
+3. *Accept* issues a pairing challenge bound to that request: it replaces any
+   outstanding challenge (a QR code on screen, or another accepted request),
+   and the Mac shows its eight-digit code.
+4. The user types or pastes the code on the phone, which sends it on the same
+   connection as an ordinary `pair` frame. Only that connection can redeem it,
+   and it may try once: a wrong code ends the request, and the phone asks
+   again. Wrong codes count toward the host-wide lockout like any other.
+5. The phone is paired as with a QR code, including the install identifier
+   that replaces an earlier record of the same app.
+
+At most four requests are open on a host and one per network address, so a
+peer cannot flood the owner with prompts; a phone that reconnects with the
+same install identifier replaces its own open request. Pressing *Pair a
+device* while a code is on screen for a request replaces that code too.
+`rustcode remote status` lists open requests. The frames and their order are
+in [the protocol](remote-protocol/README.md#connection-requests).
+
 ## Revoking and stopping
+
+- Settings › Remote access › *Revoke* on a paired device does the same as
+  `rustcode remote revoke` below.
 
 - `/remote off` (or `rustcode remote stop`) ends access to every session for
   every device until `/remote` is run again.
@@ -476,8 +518,9 @@ next start installs it with the current environment.
   `rustcode remote stop && rustcode remote serve --bind <netbird ip> --advertise <host>.netbird.cloud`
   (or the same two values as `[remote] bind` and `advertise`). On Linux
   `--prefer-interface netbird` finds the address by itself.
-- **Bonjour** announces the service name, port, protocol version and
-  gateway identifier, but no address on purpose: the phone resolves the
+- **Bonjour** announces the service name, port, protocol version,
+  gateway identifier and optional handshakes (`caps=connect_requests`), but
+  no address on purpose: the phone resolves the
   announcement itself on the network it is on, so the record cannot go stale
   after a DHCP change and never points at an interface the phone cannot
   reach. A paired phone that finds its gateway identifier at a new address

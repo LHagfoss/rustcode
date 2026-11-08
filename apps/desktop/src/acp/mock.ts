@@ -50,9 +50,20 @@ export interface MockOptions {
   /**
    * Remote access the mock starts in (`?remote=`): `disconnected` shares with
    * the gateway unreachable, `expired` issues a pairing code that has already
-   * run out. The default starts idle.
+   * run out, `connect` starts on with a phone asking to connect. The default
+   * starts idle.
    */
-  remote?: "disconnected" | "expired";
+  remote?: "disconnected" | "expired" | "connect";
+}
+
+interface MockConnectRequest {
+  id: string;
+  deviceName: string;
+  platform: string;
+  remoteAddr: string;
+  createdAt: number;
+  expiresAt: number;
+  state: "pending" | "approved";
 }
 
 interface MockThread {
@@ -1804,6 +1815,10 @@ export class MockEngine {
     pairingDue: false,
     pairingError: null as string | null,
     refused: new Map<string, string>(),
+    /** Phones asking to connect, as the gateway holds them (`remote_gateway/connect.rs`). */
+    connect: [] as MockConnectRequest[],
+    /** Requests that ended, oldest first, as the gateway keeps its last eight. */
+    endedConnect: [] as { id: string; deviceName: string; end: string; deviceId?: string; at: number }[],
   };
   private removedWorktrees = new Set<string>();
   /** The link book the app keeps in the data store: none until it saves one, and kept in `options` as the engine's disk does. */
@@ -1943,6 +1958,74 @@ export class MockEngine {
       };
     }
     this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
+    if (options.remote === "connect") {
+      this.remote.enabled = true;
+      this.remote.gateway = this.remoteGateway();
+      for (const open of this.threads) this.remote.shared.add(open.id);
+      this.askToConnect("Lars's Pixel", "android", "192.168.1.31");
+    }
+  }
+
+  /** A phone on the network asks to connect, as `connect_request` does at the gateway. */
+  private askToConnect(deviceName: string, platform: string, remoteAddr: string): string {
+    const id = Math.random().toString(16).slice(2, 18).padEnd(16, "0");
+    const now = Date.now();
+    this.remote.connect.push({
+      id,
+      deviceName,
+      platform,
+      remoteAddr,
+      createdAt: now,
+      expiresAt: now + 120_000,
+      state: "pending",
+    });
+    return id;
+  }
+
+  private endConnect(id: string, end: string, deviceId?: string) {
+    const request = this.remote.connect.find((entry) => entry.id === id);
+    if (!request) return;
+    this.remote.connect = this.remote.connect.filter((entry) => entry !== request);
+    this.remote.endedConnect.push({ id, deviceName: request.deviceName, end, deviceId, at: Date.now() });
+    this.remote.endedConnect = this.remote.endedConnect.slice(-8);
+  }
+
+  /** The phone enters the code the app showed: it pairs, as a new device. */
+  private enterConnectCode(): boolean {
+    const request = this.remote.connect.find((entry) => entry.state === "approved");
+    if (!request) return false;
+    const deviceId = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+    this.remote.devices.push({ id: deviceId, name: request.deviceName });
+    this.endConnect(request.id, "paired", deviceId);
+    return true;
+  }
+
+  private connectRequestsJson(): JsonObject {
+    const now = Date.now();
+    for (const request of [...this.remote.connect]) {
+      if (request.expiresAt <= now) this.endConnect(request.id, "expired");
+    }
+    return {
+      connectRequests: this.remote.connect.map((request) => ({
+        id: request.id,
+        deviceName: request.deviceName,
+        platform: request.platform,
+        remoteAddr: request.remoteAddr,
+        ageSecs: Math.floor((now - request.createdAt) / 1000),
+        expiresInSecs: Math.max(0, Math.floor((request.expiresAt - now) / 1000)),
+        state: request.state,
+      })),
+      endedConnectRequests: this.remote.endedConnect.map((ended) => {
+        const entry: JsonObject = {
+          id: ended.id,
+          deviceName: ended.deviceName,
+          end: ended.end,
+          endedSecsAgo: Math.floor((now - ended.at) / 1000),
+        };
+        if (ended.deviceId) entry.deviceId = ended.deviceId;
+        return entry;
+      }),
+    };
   }
 
   private get delay() {
@@ -2146,6 +2229,7 @@ export class MockEngine {
     const phones = connected ? this.remote.devices.map((device) => str(device.name) ?? "phone") : [];
     return {
       connected,
+      instanceId: "mock-gateway-instance-1",
       advertisedAddress: "192.168.1.24:17879",
       listenAddress: "192.168.1.24:17879",
       loopbackOnly: false,
@@ -2192,6 +2276,7 @@ export class MockEngine {
       notShared: this.remote.refused.size,
       pairedDevices: this.remote.devices.length,
       devices: this.remote.devices,
+      ...this.connectRequestsJson(),
     };
     if (this.remote.gateway) {
       const gateway: JsonObject = {
@@ -2546,6 +2631,33 @@ export class MockEngine {
         return mockUsage(this.threads, ask?.groupBy ?? "harness", ask?.since);
       }
       case "_rustcode/data/query":
+        if (String(obj(params)?.sql ?? "").includes("operational_events")) {
+          const at = (ago: number) => new Date(Date.now() - ago).toISOString();
+          return {
+            columns: ["at", "event_type", "thread_id", "fields_json"],
+            rows: [
+              {
+                at: at(40_000),
+                event_type: "turn.summary",
+                thread_id: "t-login",
+                fields_json: '{"rounds":6,"tool_calls":11}',
+              },
+              {
+                at: at(95_000),
+                event_type: "tools.batch.finish",
+                thread_id: "t-login",
+                fields_json: '{"calls":3,"failed":1}',
+              },
+              {
+                at: at(120_000),
+                event_type: "turn.start",
+                thread_id: "t-login",
+                fields_json: '{"wakeup":false}',
+              },
+            ],
+            truncated: false,
+          };
+        }
         return {
           columns: ["tool_name", "failures", "calls"],
           rows: [
@@ -2882,6 +2994,61 @@ export class MockEngine {
         this.issueRemoteOffer();
         return { ...obj(this.remoteStatus(sessionId)), offer: this.remoteOffer() } as Json;
       }
+      case "_rustcode/remote/answer": {
+        const id = str(params.id) ?? "";
+        const accept = params.accept === true;
+        await this.sleep(this.delay * 2);
+        const request = this.remote.connect.find((entry) => entry.id === id);
+        if (!request)
+          return { ...this.remoteHost(), connectError: "that connection request is no longer open" };
+        if (!accept) {
+          this.endConnect(id, "denied");
+          return {
+            ...this.remoteHost(),
+            connectAnswer: { id, deviceName: request.deviceName, accepted: false },
+          };
+        }
+        if (request.state !== "pending")
+          return { ...this.remoteHost(), connectError: "that connection request was already accepted" };
+        // One challenge at a time: the code replaces the QR code's and any other accepted request's.
+        for (const other of this.remote.connect.filter((entry) => entry.state === "approved"))
+          this.endConnect(other.id, "replaced");
+        this.remote.offer = null;
+        request.state = "approved";
+        request.expiresAt = Date.now() + 120_000;
+        // In the browser the phone types the code a few seconds later; tests enter it themselves.
+        if (this.delay > 0) setTimeout(() => this.enterConnectCode(), 6_000);
+        return {
+          ...this.remoteHost(),
+          connectAnswer: {
+            id,
+            deviceName: request.deviceName,
+            instanceId: "mock-gateway-instance-1",
+            accepted: true,
+            code: "4821-9034",
+            expiresInSecs: 120,
+          },
+        };
+      }
+      case "_rustcode/remote/revoke": {
+        const deviceId = str(params.deviceId) ?? "";
+        await this.sleep(this.delay * 2);
+        const device = this.remote.devices.find((entry) => entry.id === deviceId);
+        if (!device) return { ...this.remoteHost(), revokeError: `no paired device matches ${deviceId}` };
+        this.remote.devices = this.remote.devices.filter((entry) => entry !== device);
+        return { ...this.remoteHost(), revoked: { deviceId: device.id, deviceName: device.name } };
+      }
+      // Test and mock-window hooks: a phone asks to connect, or enters the code it was shown.
+      case "_mock/remote/askToConnect":
+        return {
+          id: this.askToConnect(
+            str(params.deviceName) ?? "Lars's iPhone",
+            str(params.platform) ?? "ios",
+            str(params.remoteAddr) ?? "192.168.1.42",
+          ),
+        };
+      case "_mock/remote/enterCode":
+        return { paired: this.enterConnectCode() };
       case "_rustcode/remote/stop": {
         const sessionId = str(params.sessionId) ?? "";
         await this.sleep(this.delay * 2);
@@ -2892,6 +3059,8 @@ export class MockEngine {
         this.remote.pairingDue = false;
         this.remote.pairingError = null;
         this.remote.refused.clear();
+        // The gateway is gone, and with it every phone waiting on it.
+        this.remote.connect = [];
         return this.remoteStatus(sessionId);
       }
       case "_rustcode/warm":
@@ -4194,24 +4363,49 @@ export class MockTransport implements Transport {
       this.options,
     );
     if (this.options.bootMs) await new Promise((r) => setTimeout(r, this.options.bootMs));
-    onEvent({ type: "log", line: "mock engine started" });
+    this.startedAt = Date.now();
+    for (const line of MOCK_SERVER_LOG) onEvent({ type: "log", line });
     onEvent({ type: "open", engine: "mock" });
     const crash = this.options.crashAfterMs;
     if (crash && !this.crashed) {
       this.crashed = true;
       setTimeout(() => {
-        onEvent({ type: "closed", reason: "The engine exited unexpectedly (signal 9)." });
+        const reason = "The server was stopped by signal 9.";
+        this.lastExit = { code: null, signal: 9, atMs: Date.now(), reason, expected: false };
+        this.crashRestarts += 1;
+        onEvent({ type: "closed", reason });
         void this.start(onEvent);
       }, crash);
     }
   }
   private crashed = false;
+  /** What Settings › Diagnostics reads of the process (`server_status`). */
+  private startedAt = Date.now();
+  private crashRestarts = 0;
+  private lastExit: JsonObject | null = null;
 
   async restart(): Promise<void> {
     const onEvent = this.onEvent;
     if (!onEvent) return;
-    onEvent({ type: "closed", reason: "Restarting the engine." });
+    const reason = "The server exited (code 0).";
+    this.lastExit = { code: 0, signal: null, atMs: Date.now(), reason, expected: true };
+    onEvent({ type: "closed", reason });
     await this.start(onEvent);
+  }
+
+  /** `server_status`, as src-tauri/src/diagnostics.rs answers it. */
+  private serverStatus(): JsonObject {
+    return {
+      running: this.engine !== null,
+      pid: this.engine ? 48213 : null,
+      path: "/Applications/RustCode.app/Contents/MacOS/rustcode",
+      startedAtMs: this.engine ? this.startedAt : null,
+      crashRestarts: this.crashRestarts,
+      lastExit: this.lastExit,
+      version: "1.21.0",
+      configDir: "/Users/lars/.config/rustcode",
+      logFile: "/Users/lars/.config/rustcode/debug.log",
+    };
   }
 
   send(line: string): void {
@@ -4220,6 +4414,21 @@ export class MockTransport implements Transport {
 
   async call(command: string, args: Record<string, unknown>): Promise<unknown> {
     if (command === "link_meta") return mockLinkMeta(String(args.url));
+    if (command === "server_status") return this.serverStatus();
+    if (command === "system_info") return MOCK_SYSTEM_INFO;
+    if (command === "resolve_binaries")
+      return (args.names as string[]).map((name) =>
+        ["codex", "claude-agent-acp", "gemini", "opencode"].includes(name)
+          ? `/opt/homebrew/bin/${name}`
+          : null,
+      );
+    if (command === "logs_folder_open") return null;
+    if (command === "diagnostics_save") return `/Users/lars/Downloads/${String(args.name)}`;
+    if (command === "thread_log_open") {
+      const id = String(args.id);
+      if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("Not a thread id.");
+      return `/Users/lars/.config/rustcode/threads/2026/11/08/${id}/logs/debug.log`;
+    }
     if (command === "thread_rename") return this.engine?.renameThread(String(args.id), String(args.title));
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     if (command === "project_files") return MOCK_PROJECT_FILES;
@@ -4248,6 +4457,31 @@ export class MockTransport implements Transport {
     this.engine = null;
   }
 }
+
+/** The server's stderr at start, a few levels of it, for Settings › Diagnostics. */
+const MOCK_SERVER_LOG = [
+  "desktop: started /Applications/RustCode.app/Contents/MacOS/rustcode --acp (pid 48213)",
+  "2026-11-08T09:12:01.114Z  INFO rustcode::acp: listening on stdio (protocol 1)",
+  "2026-11-08T09:12:01.120Z DEBUG rustcode::config: read /Users/lars/.config/rustcode/config.toml",
+  "2026-11-08T09:12:01.402Z  INFO rustcode::harness: found codex 0.50.0, claude-agent-acp 0.9.1",
+  "2026-11-08T09:12:01.733Z  WARN rustcode::harness: gemini: not signed in (gemini auth login)",
+  '2026-11-08T09:12:02.010Z ERROR rustcode::mcp: server "linear" exited during initialize: token=lin_api_abcdef123456',
+  "2026-11-08T09:12:02.011Z  INFO rustcode::store: data.sqlite ready (migrations 14)",
+];
+
+/** `system_info`, as the shell answers it on a Mac. */
+const MOCK_SYSTEM_INFO: JsonObject = {
+  os: "macos",
+  osVersion: "15.2 (24C101)",
+  kernel: null,
+  arch: "aarch64",
+  appVersion: "1.21.0",
+  tauriVersion: "2.12.5",
+  webview: "WKWebView",
+  webviewVersion: "20620.1.16.11.8",
+  home: "/Users/lars",
+  graphicsEnv: [],
+};
 
 const MOCK_PROJECT_FILES = [
   "README.md",

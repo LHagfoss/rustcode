@@ -122,6 +122,15 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
             },
         ),
         (
+            "connect_request",
+            HandshakeRequest::ConnectRequest {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_name: "Lars's iPhone".to_owned(),
+                platform: "ios".to_owned(),
+                install_id: Some("6F9619FF-8B86-D011-B42D-00C04FC964FF".to_owned()),
+            },
+        ),
+        (
             "authenticate",
             HandshakeRequest::Authenticate {
                 protocol_version: HANDSHAKE_PROTOCOL_VERSION,
@@ -145,6 +154,29 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
 /// The handshake answers and one bare error frame per code.
 pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
     let mut frames = vec![
+        (
+            "connect_pending".to_owned(),
+            HandshakeResponse::ConnectPending {
+                request_id: "5be1c4a07d2e9f63".to_owned(),
+                expires_in_secs: 120,
+            },
+        ),
+        (
+            "connect_approved".to_owned(),
+            HandshakeResponse::ConnectApproved {
+                request_id: "5be1c4a07d2e9f63".to_owned(),
+                code_length: 8,
+                expires_in_secs: 120,
+            },
+        ),
+        (
+            "connect_denied".to_owned(),
+            HandshakeResponse::ConnectDenied,
+        ),
+        (
+            "connect_expired".to_owned(),
+            HandshakeResponse::ConnectExpired,
+        ),
         (
             "paired".to_owned(),
             HandshakeResponse::Paired {
@@ -195,6 +227,8 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
         ErrorCode::RateLimited,
         ErrorCode::Unauthorized,
         ErrorCode::Busy,
+        ErrorCode::ConnectBusy,
+        ErrorCode::ConnectRateLimited,
         ErrorCode::Revoked,
         ErrorCode::SlowConsumer,
         ErrorCode::IdleTimeout,
@@ -208,7 +242,11 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
             HandshakeResponse::Error {
                 code,
                 message: "why the connection is being closed".to_owned(),
-                retry_after_secs: (code == ErrorCode::RateLimited).then_some(240),
+                retry_after_secs: match code {
+                    ErrorCode::RateLimited => Some(240),
+                    ErrorCode::ConnectRateLimited => Some(30),
+                    _ => None,
+                },
             },
         ));
     }

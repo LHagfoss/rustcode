@@ -102,8 +102,8 @@ export class WebSocketTransport implements Transport {
         onEvent(event);
       };
       socket.onclose = () => {
-        onEvent({ type: "closed", reason: "The engine bridge disconnected." });
-        if (!opened) reject(new Error(`No engine bridge at ${this.url}. Run \`bun run dev:web\`.`));
+        onEvent({ type: "closed", reason: "The server bridge disconnected." });
+        if (!opened) reject(new Error(`No server bridge at ${this.url}. Run \`bun run dev:web\`.`));
       };
     });
   }
@@ -175,8 +175,8 @@ export async function defaultTransport(): Promise<Transport> {
       claudeUsage: (["expired", "refused", "forbidden", "denied", "recorded"] as const).find(
         (f) => f === q.get("claudeUsage"),
       ),
-      // Remote access states the happy path does not reach (`?remote=disconnected|expired`).
-      remote: (["disconnected", "expired"] as const).find((f) => f === q.get("remote")),
+      // Remote access states the happy path does not reach (`?remote=disconnected|expired|connect`).
+      remote: (["disconnected", "expired", "connect"] as const).find((f) => f === q.get("remote")),
     });
   }
   const port = import.meta.env.VITE_BRIDGE_PORT ?? "1421";

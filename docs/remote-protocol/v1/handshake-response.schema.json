@@ -42,6 +42,16 @@
           "type": "string"
         },
         {
+          "const": "connect_busy",
+          "description": "The host holds as many connection requests as it takes, or this\naddress already has one open. Retry later.",
+          "type": "string"
+        },
+        {
+          "const": "connect_rate_limited",
+          "description": "This address was denied a moment ago; see `retry_after_secs`.",
+          "type": "string"
+        },
+        {
           "const": "revoked",
           "description": "The device was revoked while connected. Do not reconnect.",
           "type": "string"
@@ -71,6 +81,86 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Frames the gateway sends during the handshake, and the error frame that\nprecedes a close. After authentication an `error` frame is never the\nanswer to a request: those are `response` frames carrying the request ID.",
   "oneOf": [
+    {
+      "description": "The connection request is in front of the host's owner. Wait on the\nsame socket, sending nothing but pings, for the answer.",
+      "properties": {
+        "expires_in_secs": {
+          "description": "Time the owner has to answer.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "connect_pending",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "expires_in_secs"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The owner accepted and the host shows a code. Send one `pair` frame\nwith `method: \"code\"` and that code within `expires_in_secs`. Only\nthis socket can redeem it.",
+      "properties": {
+        "code_length": {
+          "description": "Digits in the code, without its separator.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expires_in_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "connect_approved",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "code_length",
+        "expires_in_secs"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The owner denied the request. The connection closes.",
+      "properties": {
+        "type": {
+          "const": "connect_denied",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Nobody answered in time, the code was not sent in time, or a newer\ncode on the host replaced it. The connection closes; ask again.",
+      "properties": {
+        "type": {
+          "const": "connect_expired",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
     {
       "description": "Pairing succeeded. `token` is shown exactly once; the connection is\nauthenticated as this device from here on.",
       "properties": {

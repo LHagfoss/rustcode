@@ -21,7 +21,7 @@ for session frames, `rustcode/engine/src/remote_gateway/handshake.rs` and
 | `v1/request.schema.json` | JSON Schema for a client → host frame after the handshake, `RemoteRequest`. |
 | `v1/frame.schema.json` | JSON Schema for a host → client frame after the handshake, `RemoteFrame`. |
 | `v1/golden/handshake/requests/*.json` | One example of every handshake request. |
-| `v1/golden/handshake/responses/*.json` | `paired`, `authenticated`, and one bare `error` per code. |
+| `v1/golden/handshake/responses/*.json` | `connect_pending`, `connect_approved`, `connect_denied`, `connect_expired`, `paired`, `authenticated`, and one bare `error` per code. |
 | `v1/golden/handshake/pairing_qr.json` | An example QR payload. |
 | `v1/golden/requests/*.json` | One example of every request shape. |
 | `v1/golden/frames/*.json` | One example of every response, event and error shape. |
@@ -102,7 +102,8 @@ current iOS app asks for thread names.
    gateway to browsers.
 2. Send exactly one handshake frame, `pair` or `authenticate`, within 10
    seconds. Nothing is sent to an unauthenticated socket except the answer to
-   that frame.
+   that frame. The one exception is `connect_request`, which keeps the socket
+   open for the host owner's answer ([Connection requests](#connection-requests)).
 3. On `paired` or `authenticated` the connection is authenticated. From here
    on the client sends `RemoteRequest` frames and receives `RemoteFrame`
    frames.
@@ -181,6 +182,9 @@ authenticated connection; those are always `response` frames (below).
 | Handshake (`pair`) | `rate_limited` | Too many failed pairings on the host; `retry_after_secs` says when to try again. |
 | Handshake (`authenticate`) | `unauthorized` | Unknown or revoked device, or wrong token. Stop reconnecting; pair again. |
 | Handshake | `busy` | Connection or device limit reached. Retry later. |
+| Handshake (`connect_request`) | `connect_busy` | The host holds four requests already, or this address has one open. Retry later. |
+| Handshake (`connect_request`) | `connect_rate_limited` | This address was denied less than 30 seconds ago; `retry_after_secs` says when to ask again. |
+| Connection request | `invalid_frame` | A text frame before `connect_approved`, or anything but a `pair` frame after it. A bug. |
 | Handshake (`pair`) | `internal` | The host could not store the device. |
 | After authentication | `revoked` | The device was revoked. Stop reconnecting, delete the token, pair again. |
 | After authentication | `slow_consumer` | The client did not read fast enough. Reconnect and resume. |
@@ -191,6 +195,71 @@ authenticated connection; those are always `response` frames (below).
 
 `not_implemented` is reserved for a gateway without session routing and is not
 sent by this one.
+
+### Connection requests
+
+A phone that found the host on the local network can ask its owner to let it
+pair, instead of scanning a QR code. The gateway takes it when its Bonjour
+record (`_rustcode._tcp`) carries `caps=connect_requests` in its TXT record
+(next to `protocol=1` and `gateway=<gateway_id>`); a paired device also sees
+`connect_requests` in the `sessions` result's `capabilities`. A gateway
+without it answers `connect_request` with `invalid_frame`.
+
+The exchange, all on one WebSocket:
+
+1. Client → host, the first frame, within 10 seconds:
+
+   ```json
+   {"type": "connect_request", "protocol_version": 1, "device_name": "Lars's iPhone", "platform": "ios", "install_id": "6F9619FF-8B86-D011-B42D-00C04FC964FF"}
+   ```
+
+   No secret. `device_name` is a label shown to the owner (trimmed and
+   bounded like in `pair`); `platform` is `ios`, `android`, … (lowercase
+   letters, digits, `-_.`, up to 32); `install_id` is optional, as in `pair`.
+
+2. Host → client: `{"type": "connect_pending", "request_id": "5be1c4a07d2e9f63", "expires_in_secs": 120}`.
+   The request is in front of the owner. Wait on the same socket, sending
+   nothing but WebSocket pings or pongs (the gateway pings every 30 s); any
+   text frame now is `invalid_frame` and closes the connection. The 10 s
+   handshake deadline no longer applies; the request's own does.
+
+3. Host → client, one of:
+   - `{"type": "connect_denied"}`: the owner said no. The connection closes,
+     and this address cannot ask again for 30 seconds
+     (`connect_rate_limited`).
+   - `{"type": "connect_expired"}`: nobody answered in `expires_in_secs`. The
+     connection closes; ask again.
+   - `{"type": "connect_approved", "request_id": "5be1c4a07d2e9f63", "code_length": 8, "expires_in_secs": 120}`:
+     the owner accepted and the host shows an eight-digit code, formatted
+     `4821-9034`.
+
+4. After `connect_approved`, client → host, exactly one frame within
+   `expires_in_secs`: the ordinary code `pair` frame with what the user typed
+   (with or without the `-`):
+
+   ```json
+   {"type": "pair", "protocol_version": 1, "method": "code", "secret": "4821-9034", "device_name": "Lars's iPhone", "install_id": "6F9619FF-8B86-D011-B42D-00C04FC964FF"}
+   ```
+
+   The answer is the usual `paired` frame, and the connection is
+   authenticated from there, or an `error` (`pairing_failed`,
+   `rate_limited`, `busy`, `internal`) and a close. A wrong code ends the
+   request: one code per accepted request; ask again. Anything but a `pair`
+   frame is `invalid_frame`.
+
+   Until that frame is sent the host may still send
+   `{"type": "connect_expired"}` and close: the code ran out, or a newer
+   challenge on the host replaced it (the owner pressed *Pair a device* or
+   accepted another request).
+
+The code is bound to that connection: the same code sent by any other
+socket is `pairing_failed`, and the request's socket cannot redeem a QR
+code's challenge. Wrong codes count toward the host-wide limit shared with
+every other pairing (10 failures in 5 minutes lock pairing). The host holds
+at most four requests and one per network address (`connect_busy`); a new
+request with the same `install_id` from the same address replaces the open
+one, whose socket gets `connect_expired`, so a reconnecting app need not wait.
+Closing the socket withdraws the request and destroys its code.
 
 ## Session frames
 
@@ -677,8 +746,10 @@ restarts after a crash or binary upgrade. `rustcode remote start` enables it,
 `remote pair` starts it as needed, and `remote stop` explicitly disables the
 LaunchAgent. Development binaries run detached without installing a login job.
 The gateway advertises `_rustcode._tcp` on the local network; its Bonjour record
-contains only the host name, port, and protocol version. Discovery does not pair
-a device or grant access.
+contains only the host name, port, protocol version (`protocol=1`), gateway
+identifier (`gateway=…`) and optional handshakes (`caps=connect_requests`).
+Discovery does not pair a device or grant access; a
+[connection request](#connection-requests) only asks the owner.
 
 Authenticated clients can use `list_directories { path? }` to browse existing
 folders (default `~/`) and `create_session { path?, harness?, model? }` to

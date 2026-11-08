@@ -2,9 +2,9 @@
 // words people look for but that the row does not say. Pure (no React, no
 // store at runtime), so the nav's search is testable on its own.
 //
-// A few pages have no rows of their own — Agents lists cards, Connections and
-// Advanced render the engine's answers — so their groups are listed here; a
-// group title is a landing target too (settingsKit.tsx).
+// A few pages have no rows of their own — Agents lists cards, Connections,
+// Advanced and Diagnostics render the server's answers — so their groups are
+// listed here; a group title is a landing target too (settingsKit.tsx).
 
 import { APP_COMMANDS, commandHint } from "../lib/keys";
 import type { SettingsSection } from "../state/store";
@@ -36,7 +36,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   {
     section: "general",
     title: "Continue threads after a restart",
-    keywords: "resume quit update engine cut short",
+    keywords: "resume quit update server engine restart cut short",
   },
   {
     section: "general",
@@ -286,12 +286,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // ------------------------------------------------------------ Advanced
   {
     section: "advanced",
-    title: "Engine",
-    keywords: "status restart running stopped starting acp transport",
-  },
-  { section: "advanced", title: "Engine log", keywords: "log stderr debug errors" },
-  {
-    section: "advanced",
     title: "Record request bodies",
     keywords: "capture payload telemetry privacy redact clip query_data store request body response",
   },
@@ -309,6 +303,45 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "advanced",
     title: "Set up your agents again",
     keywords: "setup onboarding install sign in harness start over",
+  },
+  {
+    section: "advanced",
+    title: "Server status and logs",
+    keywords: "engine server diagnostics debug",
+  },
+
+  // ------------------------------------------------------------ Diagnostics
+  {
+    section: "diagnostics",
+    title: "Debug report",
+    keywords: "copy debug report github issue bug redact paste save",
+  },
+  {
+    section: "diagnostics",
+    title: "Server",
+    keywords:
+      "engine status restart running stopped crashed starting pid process version binary uptime config folder exit code signal acp transport logs folder",
+  },
+  {
+    section: "diagnostics",
+    title: "Server log",
+    keywords: "engine log stderr debug errors warnings level filter search pause follow copy save",
+  },
+  {
+    section: "diagnostics",
+    title: "System",
+    keywords:
+      "os version linux windows macos arch webview webview2 webkitgtk wkwebview gpu display scale platform",
+  },
+  {
+    section: "diagnostics",
+    title: "Harnesses",
+    keywords: "harness binary path version sign-in error codex claude gemini",
+  },
+  {
+    section: "diagnostics",
+    title: "Open thread log",
+    keywords: "thread debug.log turn logs",
   },
 
   // ------------------------------------------------------------ About

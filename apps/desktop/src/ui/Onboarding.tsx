@@ -54,7 +54,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               </Dialog.Title>
               <Dialog.Description className="text-callout text-fg-muted">
                 {step === 0
-                  ? "A harness is the coding agent that runs a thread: Claude Code, Codex and others, each with its own sign-in, models and rules. RustCode's local engine stays available for the TUI and local models."
+                  ? "A harness is the coding agent that runs a thread: Claude Code, Codex and others, each with its own sign-in, models and rules. RustCode's built-in harness stays available for the TUI and local models."
                   : "New threads start on this harness. You can pick another one when a thread starts."}
               </Dialog.Description>
             </div>

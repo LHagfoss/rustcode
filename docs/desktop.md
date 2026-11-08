@@ -116,7 +116,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
 - **Sidecar** (`src-tauri/src/engine.rs`). The shell starts `rustcode --acp`,
   relays each stdout line to the webview over a Tauri `Channel`, takes
   outgoing lines with the `engine_send` command, and forwards stderr as `log`
-  events (Settings › Advanced shows them). When the engine exits it restarts
+  events (Settings › Diagnostics shows them). When the engine exits it restarts
   with backoff (0.5 s doubling to 30 s, reset after a minute up) and the UI
   initializes a fresh connection. Quitting closes the engine's stdin so it
   cleans up its sessions, then kills it after 2 s. The shell does not read or
@@ -445,6 +445,27 @@ composer's keys stay outside the table.
   list prices, not necessarily what a subscription bills. **Cost by model**
   draws the same numbers as bars, and **Last 30 days** charts turns per day.
   The CLI's `rustcode usage` stays reported-only.
+- **Settings › Diagnostics.** Built in for debugging the RustCode server
+  (the `rustcode --acp` process; "server" is its user-facing name,
+  [terminology.md](terminology.md)) on macOS, Linux and Windows
+  (`src/ui/DiagnosticsPage.tsx`, `src-tauri/src/diagnostics.rs`). *Server*:
+  running, starting, stopped or crashed (an exit nobody asked for), process
+  ID, version (`rustcode --version`), binary, uptime, config folder and its
+  `debug.log`, restarts after a crash and the last exit's code or signal and
+  time (`engine.rs` keeps them), with *Restart server* and *Open logs
+  folder*. *Server log*: the last 1000 stderr lines live, a level filter,
+  search, Pause/Follow, Copy and Save (redacted). *System*: OS and version
+  (`sw_vers`, `/etc/os-release` and the kernel, `ver`), architecture, app
+  and Tauri versions, the web view (WKWebView, WebView2, WebKitGTK) and its
+  version, the GPU WebGL names, display scale, `data-platform` and the
+  environment that changes how WebKitGTK composites. *Harnesses*: what
+  Agents last detected, with the binary this app's `PATH` resolves. *Open
+  thread log* opens the open thread's `logs/debug.log` (also in every
+  thread's menu); the shell finds the folder with `rustcode threads path`.
+  *Copy debug report* puts all of it, the last 200 log lines and the last 50
+  `operational_events` in one Markdown block for a GitHub issue, with
+  tokens, API keys, email addresses and the home folder (`~`) taken out
+  (`src/lib/diagnostics.ts`); *Save…* writes it where the save panel says.
 - **Settings › Advanced › Record request bodies.** The two payload-capture
   switches (`docs/data-store.md` › Captured payloads), off by default:
   *Provider requests (built-in harness)* for the built-in harness's request
@@ -453,7 +474,7 @@ composer's keys stay outside the table.
   `_rustcode/config/telemetry` / `_rustcode/config/telemetry/set`
   (`engine/src/acp/telemetry.rs`), so a terminal and this page change one
   setting; a project file still cannot turn either on. The engine reads them
-  from the config it started with, so changing one shows *Restart the engine
+  from the config it started with, so changing one shows *Restart the server
   to apply* right under the switches, the same row the Smart UI and
   orchestration settings use.
 - **Usage.** In the composer row, after the SwiftUI app's `UsageCapsule`
@@ -520,8 +541,14 @@ composer's keys stay outside the table.
   page shows the gateway's address, the pairing QR code and the eight-digit
   code with the challenge's countdown and the wrong codes left, and the paired
   devices. A new device appears as *Paired ‹name›* and the used code is taken
-  down, not left until it expires. It asks the engine's `_rustcode/remote`,
-  `_rustcode/remote/start`, `_rustcode/remote/pair` and
+  down, not left until it expires. A phone that asks to connect gets a card
+  in the window's corner over any page (`src/ui/ConnectRequests.tsx`):
+  *‹name› wants to connect*, Deny or Accept; Accept shows the code with
+  Copy and a countdown until the phone pairs or it runs out. The app reads
+  the machine's status every 2.5 s while the gateway runs for that. Each
+  paired device has *Revoke*. It asks the engine's `_rustcode/remote`,
+  `_rustcode/remote/start`, `_rustcode/remote/pair`,
+  `_rustcode/remote/answer`, `_rustcode/remote/revoke` and
   `_rustcode/remote/stop` over ACP, with no `sessionId` for the machine's own
   switch and pairing; the engine owns the gateway, the shares and pairing
   (`rustcode/engine/src/acp/remote.rs`). The QR code is the engine's own rows

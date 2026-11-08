@@ -351,7 +351,7 @@ function McpRow({
           <div>
             <div className="mb-1 text-caption text-fg-faint">Log</div>
             <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-md bg-code-bg p-2 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
-              {log?.length ? log.join("\n") : "No lines from this server in the engine's log."}
+              {log?.length ? log.join("\n") : "No lines from this MCP server in the RustCode server's log."}
             </pre>
           </div>
           {s.scope === "user" && (
@@ -550,7 +550,7 @@ function NewSkill({ onDone }: { onDone: () => void }) {
     try {
       const path = await createSkill(name, scope, cwd);
       openPath(path);
-      toast("Skill created. The engine finds it on the next turn.", "success");
+      toast("Skill created. The agent finds it on the next turn.", "success");
       onDone();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), "error");

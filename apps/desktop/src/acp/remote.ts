@@ -17,7 +17,56 @@ export const RemoteMethod = {
   pair: "_rustcode/remote/pair",
   /** Turn remote access off for the machine, ending every share. */
   stop: "_rustcode/remote/stop",
+  /** Accept or deny a device asking to connect (`{ id, accept }`); accepting answers with the code to show. */
+  answer: "_rustcode/remote/answer",
+  /** Forget a paired device and close its connections (`{ deviceId }`). */
+  revoke: "_rustcode/remote/revoke",
 } as const;
+
+/**
+ * A device on the network asking to pair (the machine's answer, `connectRequests`). It carries no
+ * secret: accepting it makes the host show a code that only this device's connection can use.
+ */
+export interface RemoteConnectRequest {
+  id: string;
+  /** The label the device sent. Not an identity. */
+  deviceName: string;
+  /** `ios`, `android`, … as the device says. */
+  platform: string;
+  /** The network address the request came from. */
+  remoteAddr: string;
+  ageSecs: number;
+  /** Seconds left to answer, or once accepted for the device to enter the code. */
+  expiresInSecs: number;
+  /** `pending` waits for an answer; `approved` has its code on this Mac. */
+  state: "pending" | "approved";
+}
+
+/** How a connection request ended: `paired`, `denied`, `expired`, `replaced`, `failed` or `withdrawn`. */
+export type ConnectRequestEnd = "paired" | "denied" | "expired" | "replaced" | "failed" | "withdrawn";
+
+/** A connection request that ended a moment ago (the machine's answer, `endedConnectRequests`). */
+export interface RemoteEndedConnectRequest {
+  id: string;
+  deviceName: string;
+  end: ConnectRequestEnd;
+  /** The device it paired, when it did. */
+  deviceId?: string;
+  endedSecsAgo: number;
+}
+
+/** The answer to `_rustcode/remote/answer`. On acceptance `code` is the only copy, for this Mac to show. */
+export interface RemoteConnectAnswer {
+  id: string;
+  deviceName: string;
+  /** Gateway process that issued the answer and its code. */
+  instanceId?: string;
+  accepted: boolean;
+  code?: string;
+  expiresInSecs?: number;
+  /** Pairing is locked after too many wrong codes: the code works once this runs out. */
+  lockedForSecs?: number;
+}
 
 /** A phone or tablet paired with this Mac, as `_rustcode/remote` names it. */
 export interface RemoteDevice {
@@ -39,6 +88,7 @@ export interface RemotePairing {
 /** Where the gateway listens and who is on it. */
 export interface RemoteGateway {
   connected: boolean;
+  /** Changes every time the gateway process starts. */
   instanceId?: string;
   /** The address a phone dials, when the gateway knows it. */
   advertisedAddress?: string;
@@ -114,6 +164,74 @@ export interface RemoteStatus {
   notShared?: string | number;
   pairedDevices: number;
   devices: RemoteDevice[];
+  /** Devices asking to connect right now (the machine's answer). */
+  connectRequests: RemoteConnectRequest[];
+  /** Connection requests that ended recently, oldest first (the machine's answer). */
+  endedConnectRequests: RemoteEndedConnectRequest[];
+  /** The answer to `_rustcode/remote/answer`. */
+  connectAnswer?: RemoteConnectAnswer;
+  /** Why `_rustcode/remote/answer` did nothing (the request ended meanwhile). */
+  connectError?: string;
+  /** The device `_rustcode/remote/revoke` forgot. */
+  revoked?: RemoteDevice;
+  revokeError?: string;
+}
+
+const REQUEST_ENDS: readonly ConnectRequestEnd[] = [
+  "paired",
+  "denied",
+  "expired",
+  "replaced",
+  "failed",
+  "withdrawn",
+];
+
+function parseConnectRequest(value: Json | undefined): RemoteConnectRequest[] {
+  const entry = obj(value);
+  const id = str(entry?.id);
+  if (!entry || !id) return [];
+  return [
+    {
+      id,
+      deviceName: str(entry.deviceName) ?? "A device",
+      platform: str(entry.platform) ?? "unknown",
+      remoteAddr: str(entry.remoteAddr) ?? "",
+      ageSecs: num(entry.ageSecs) ?? 0,
+      expiresInSecs: num(entry.expiresInSecs) ?? 0,
+      state: str(entry.state) === "approved" ? "approved" : "pending",
+    },
+  ];
+}
+
+function parseEndedConnectRequest(value: Json | undefined): RemoteEndedConnectRequest[] {
+  const entry = obj(value);
+  const id = str(entry?.id);
+  const end = REQUEST_ENDS.find((known) => known === str(entry?.end));
+  if (!entry || !id || !end) return [];
+  return [
+    {
+      id,
+      deviceName: str(entry.deviceName) ?? "A device",
+      end,
+      deviceId: str(entry.deviceId),
+      endedSecsAgo: num(entry.endedSecsAgo) ?? 0,
+    },
+  ];
+}
+
+function parseConnectAnswer(value: Json | undefined): RemoteConnectAnswer | undefined {
+  const answer = obj(value);
+  const id = str(answer?.id);
+  if (!answer || !id) return undefined;
+  return {
+    id,
+    deviceName: str(answer.deviceName) ?? "A device",
+    instanceId: str(answer.instanceId),
+    accepted: bool(answer.accepted) ?? false,
+    code: str(answer.code),
+    expiresInSecs: num(answer.expiresInSecs),
+    lockedForSecs: num(answer.lockedForSecs),
+  };
 }
 
 /** How many of the app's open threads the host holds back (the machine's answer). */
@@ -206,5 +324,15 @@ export function parseRemoteStatus(value: Json | undefined): RemoteStatus {
       if (!id) return [];
       return [{ id, name: str(entry?.name) ?? id }];
     }),
+    connectRequests: arr(root.connectRequests).flatMap(parseConnectRequest),
+    endedConnectRequests: arr(root.endedConnectRequests).flatMap(parseEndedConnectRequest),
+    connectAnswer: parseConnectAnswer(root.connectAnswer),
+    connectError: str(root.connectError),
+    revoked: (() => {
+      const revoked = obj(root.revoked);
+      const id = str(revoked?.deviceId);
+      return id ? { id, name: str(revoked?.deviceName) ?? id } : undefined;
+    })(),
+    revokeError: str(root.revokeError),
   };
 }

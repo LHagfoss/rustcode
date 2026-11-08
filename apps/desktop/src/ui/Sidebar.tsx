@@ -22,6 +22,7 @@ import {
   Ellipsis,
   Eye,
   FileDiff,
+  FileText,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -64,7 +65,7 @@ import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { listCommandFor } from "../lib/keys";
-import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
+import { openTerminalAt, openThreadLog, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type ChildInfo, childInfo } from "../state/children";
@@ -100,6 +101,7 @@ import {
   askCustomSnooze,
   autoCompactOffFor,
   dismissPendingSetup,
+  errorText,
   featureMissing,
   markUnread,
   removeWorktree,
@@ -388,6 +390,17 @@ function ThreadMenuItems({
       </Item>
       <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
         <Copy size={13} /> Copy Thread ID
+      </Item>
+      <Item
+        className={menuItem}
+        disabled={!canFiles}
+        onSelect={() =>
+          void openThreadLog(session.id).catch((e) =>
+            toast(`Could not open the thread log: ${errorText(e)}`, "error"),
+          )
+        }
+      >
+        <FileText size={13} /> Open Thread Log
       </Item>
       {worktree && (
         <>
