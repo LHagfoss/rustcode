@@ -695,12 +695,18 @@ access work as on the other systems. What differs:
 
 ### Desktop ACP channel
 
-After authentication, a device paired with `device_kind: "desktop"` can send
+After authentication, a device with the host-controlled `acp` grant can send
 `{"type":"acp_open"}`. The gateway connects to the already-running RustCode
 server in the gateway's configuration directory and answers
 `{"type":"acp_opened"}`. Subsequent WebSocket text frames each contain one ACP
 JSON-RPC message, in either direction. These additive frames keep protocol
-version 1. Phones, CLI devices and unknown device kinds receive a gateway
+version 1. The grant defaults to false, including for existing device records.
+Self-reported device kind never grants access. Accepting a desktop's ask-to-connect
+request grants ACP after it enters the request-bound code; the approval says
+"Can see and run all threads on this machine". Pairing with a standalone short
+code never grants ACP. The owner can run `rustcode remote devices allow <id>`
+or `rustcode remote devices deny <id>`; deny immediately disconnects the device.
+Devices without the grant receive a gateway
 `error` with code `unauthorized_access` when opening ACP. A missing or unreachable
 local server closes the connection with `internal`.
 

@@ -29,7 +29,7 @@ export function ConnectRequestsGroup() {
         <Row
           key={request.id}
           title={request.deviceName}
-          subtitle={`${deviceLabel(request.deviceKind, request.platform)}${request.remoteAddr ? ` at ${request.remoteAddr}` : ""}`}
+          subtitle={`${request.deviceKind === "desktop" ? "Can see and run all threads on this machine. " : ""}${deviceLabel(request.deviceKind, request.platform)}${request.remoteAddr ? ` at ${request.remoteAddr}` : ""}`}
         >
           <Action disabled={answering === request.id} onClick={() => void answer(request.id, false)}>
             Deny

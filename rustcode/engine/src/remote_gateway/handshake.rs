@@ -113,7 +113,7 @@ pub enum HandshakeRequest {
         /// What the device is: `phone`, `desktop` (the desktop app on
         /// another machine) or `cli`. Absent, or a kind this gateway does
         /// not know, is a phone. A label for the owner, not a permission.
-        /// Gateways that list `desktops` in their capabilities record it.
+        /// Gateways that list `desktops` record it; it never grants ACP access.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device_kind: Option<String>,
         /// What the device runs on: `ios`, `android`, `macos`, `windows`,

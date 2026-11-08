@@ -420,6 +420,38 @@ impl RemoteLifecycle {
         Ok(self.device_store().load()?.list().to_vec())
     }
 
+    /// Grant or deny full ACP access under the same writer lock as revocation.
+    pub async fn set_acp(&self, selector: &str, allow: bool) -> Result<()> {
+        match self.owner_lock() {
+            Ok(_lock) => {
+                let store = self.device_store();
+                let mut devices = store.load()?;
+                devices.set_acp(selector, allow)?;
+                store.save(&devices)
+            }
+            Err(error) if is_lock_busy(&error) => {
+                ensure!(
+                    self.status().await?.is_some(),
+                    "gateway holds the device store but did not answer; grant unchanged"
+                );
+                match control::request(
+                    &self.socket_path(),
+                    &ControlRequest::SetAcp {
+                        device: selector.to_owned(),
+                        allow,
+                    },
+                )
+                .await?
+                {
+                    ControlResponse::Ack => Ok(()),
+                    ControlResponse::Error { message } => bail!(message),
+                    response => bail!("unexpected ACP grant response: {response:?}"),
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Revoke one device.
     ///
     /// The owner lock decides who writes. If this call gets it, no gateway is

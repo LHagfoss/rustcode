@@ -28,6 +28,11 @@ pub const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlRequest {
     Status,
+    /// Host owner grants or revokes full ACP control. Never a device frame.
+    SetAcp {
+        device: String,
+        allow: bool,
+    },
     /// Issue a pairing challenge, replacing any outstanding one.
     Pair,
     /// Revoke a device by identifier, identifier prefix or unique name.

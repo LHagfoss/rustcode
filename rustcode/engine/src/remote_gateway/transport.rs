@@ -474,8 +474,8 @@ async fn pump(
                 Some(Ok(Message::Text(text))) => {
                     last_heard = Instant::now();
                     if serde_json::from_str::<crate::remote::protocol::AcpClientFrame>(&text).is_ok() {
-                        if connection.kind != super::devices::DeviceKind::Desktop {
-                            let error = HandshakeResponse::error(ErrorCode::UnauthorizedAccess, "ACP access requires a desktop device");
+                        if !shared.acp_allowed(&connection.context.device_id) {
+                            let error = HandshakeResponse::error(ErrorCode::UnauthorizedAccess, "ACP access requires approval from the host owner");
                             write(writer, Message::text(error.to_text()), limits.write_timeout).await?;
                             continue;
                         }

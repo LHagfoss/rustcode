@@ -228,7 +228,6 @@ pub(super) struct LiveConnection {
     shared: Arc<Shared>,
     pub(super) context: DeviceContext,
     pub(super) control: Arc<ConnectionControl>,
-    pub(super) kind: super::devices::DeviceKind,
 }
 
 impl Drop for LiveConnection {
@@ -541,9 +540,14 @@ impl Shared {
             return Err(busy("the gateway is at its connection limit"));
         }
         let mut devices = state.devices.clone();
-        let enrolled = devices
+        let mut enrolled = devices
             .enroll_as(device_name, install_id, &profile)
             .map_err(|error| busy(error.to_string()))?;
+        // Only the owner-approved, socket-bound desktop request grants ACP.
+        // A standalone short code, regardless of its claimed kind, never does.
+        if request.is_some() && profile.kind == super::devices::DeviceKind::Desktop {
+            enrolled.record = devices.set_acp(&enrolled.record.id, true).unwrap();
+        }
         if let Err(error) = self.store.save(&devices) {
             crate::dbg_log!("remote gateway: device store write failed: {error:#}");
             return Err(HandshakeResponse::error(
@@ -652,7 +656,6 @@ impl Shared {
                     device_name: record.name.clone(),
                 },
                 control,
-                kind: record.kind,
             },
             welcome,
             sink,
@@ -687,6 +690,25 @@ impl Shared {
         state.devices = devices;
         let closed = close_device(&mut state, &record.id);
         Ok((record, closed))
+    }
+
+    pub(super) fn acp_allowed(&self, id: &str) -> bool {
+        self.state()
+            .devices
+            .select(id)
+            .is_ok_and(|record| record.acp)
+    }
+
+    fn set_acp(&self, selector: &str, allow: bool) -> Result<()> {
+        let mut state = self.state();
+        let mut devices = state.devices.clone();
+        let record = devices.set_acp(selector, allow)?;
+        self.store.save(&devices)?;
+        state.devices = devices;
+        if !allow {
+            close_device(&mut state, &record.id);
+        }
+        Ok(())
     }
 
     fn issue_pairing(&self) -> OfferDetails {
@@ -1038,6 +1060,12 @@ async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStrea
             },
             ControlRequest::Pair => ControlResponse::Offer {
                 offer: shared.issue_pairing(),
+            },
+            ControlRequest::SetAcp { device, allow } => match shared.set_acp(&device, allow) {
+                Ok(()) => ControlResponse::Ack,
+                Err(error) => ControlResponse::Error {
+                    message: format!("{error:#}"),
+                },
             },
             ControlRequest::Revoke { device } => match shared.revoke(&device) {
                 Ok((record, closed_connections)) => ControlResponse::Revoked {

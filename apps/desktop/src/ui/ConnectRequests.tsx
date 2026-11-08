@@ -136,6 +136,7 @@ function RequestCard({
             {request.remoteAddr ? ` at ${request.remoteAddr}` : ""}
           </div>
           <p className="m-0 pt-2 text-caption text-fg-faint leading-normal">
+            {request.deviceKind === "desktop" && <>Can see and run all threads on this machine. </>}
             Accept only a device you have with you. This computer then shows a code to enter on it.
           </p>
         </div>

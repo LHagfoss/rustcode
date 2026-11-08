@@ -305,7 +305,20 @@ async fn run_remote_command(
                 remote::watch_pairing_in_terminal(&lifecycle, &offer, before.as_ref()).await;
             }
         }
-        RemoteCommands::Devices { json } => {
+        RemoteCommands::Devices { json, command } => {
+            if let Some(command) = command {
+                use crate::cli::RemoteDeviceCommands;
+                let (device, allow) = match command {
+                    RemoteDeviceCommands::Allow { device } => (device, true),
+                    RemoteDeviceCommands::Deny { device } => (device, false),
+                };
+                lifecycle.set_acp(device, allow).await?;
+                println!(
+                    "ACP access {} for {device}.",
+                    if allow { "allowed" } else { "denied" }
+                );
+                return Ok(());
+            }
             let devices = lifecycle.devices()?;
             if *json {
                 println!("{}", remote::devices_json(&devices));

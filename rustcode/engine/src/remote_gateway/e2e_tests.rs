@@ -1192,7 +1192,7 @@ async fn large_output_stays_within_frame_limits_and_rebuilds_completely() {
 }
 
 /// The gateway uses the same per-config server description as local apps.
-async fn acp_device(host: &Host, kind: &str) -> Phone {
+async fn acp_device(host: &Host, kind: &str, grant: bool) -> Phone {
     let offer = bounded(host.lifecycle.pair()).await.unwrap();
     let (mut paired_socket, paired) = Phone::connect(
         host.addr(),
@@ -1204,6 +1204,13 @@ async fn acp_device(host: &Host, kind: &str) -> Phone {
     .await;
     assert_eq!(paired["type"], "paired");
     bounded(paired_socket.socket.close(None)).await.unwrap();
+    assert!(!host.lifecycle.devices().unwrap().last().unwrap().acp);
+    if grant {
+        host.lifecycle
+            .set_acp(paired["device_id"].as_str().unwrap(), true)
+            .await
+            .unwrap();
+    }
     Phone::authenticate(host, &paired).await.0
 }
 
@@ -1247,7 +1254,7 @@ async fn remote_acp_desktop_round_trip_resume_denial_and_server_close() {
         // and notifications never reached the server in the meantime.
         assert!(lines.next_line().await.unwrap().is_none());
     });
-    let mut device = acp_device(&host, "desktop").await;
+    let mut device = acp_device(&host, "desktop", true).await;
     device.send(json!({"type":"acp_open"})).await;
     assert_eq!(device.read().await.unwrap(), json!({"type":"acp_opened"}));
     device
@@ -1273,8 +1280,8 @@ async fn remote_acp_desktop_round_trip_resume_denial_and_server_close() {
 #[tokio::test]
 async fn remote_acp_phone_and_cli_are_refused() {
     let mut host = Host::start().await;
-    for kind in ["phone", "cli"] {
-        let mut device = acp_device(&host, kind).await;
+    for kind in ["phone", "cli", "desktop"] {
+        let mut device = acp_device(&host, kind, false).await;
         device.send(json!({"type":"acp_open"})).await;
         assert_eq!(device.read().await.unwrap()["code"], "unauthorized_access");
     }
@@ -1300,7 +1307,7 @@ async fn remote_acp_server_close_closes_websocket() {
         let (stream, _) = listener.accept().await.unwrap();
         drop(stream);
     });
-    let mut device = acp_device(&host, "desktop").await;
+    let mut device = acp_device(&host, "desktop", true).await;
     device.send(json!({"type":"acp_open"})).await;
     assert_eq!(device.read().await.unwrap()["type"], "acp_opened");
     assert!(device.read().await.is_none());
@@ -1336,11 +1343,63 @@ async fn remote_acp_idle_peer_closes_server_connection() {
         let mut stream = stream;
         assert_eq!(bounded(stream.read(&mut [0u8; 1])).await.unwrap(), 0);
     });
-    let mut device = acp_device(&host, "desktop").await;
+    let mut device = acp_device(&host, "desktop", true).await;
     device.send(json!({"type":"acp_open"})).await;
     assert_eq!(device.read().await.unwrap()["type"], "acp_opened");
     // Do not poll the WebSocket: a sleeping peer cannot answer pings.
     bounded(server).await.unwrap();
     assert_eq!(device.read().await.unwrap()["code"], "idle_timeout");
+    host.stop_gateway().await;
+}
+
+#[tokio::test]
+async fn remote_acp_deny_and_revoke_close_open_relays() {
+    use tokio::io::AsyncReadExt;
+    for revoke in [false, true] {
+        let mut host = Host::start().await;
+        let run = host.dir.path().join("run");
+        std::fs::create_dir_all(&run).unwrap();
+        let endpoint = run.join("acp-revoke.sock");
+        let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+        std::fs::write(
+            run.join("server.json"),
+            serde_json::to_vec(&crate::server::ServerInfo::now(
+                endpoint.to_string_lossy().into(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            assert_eq!(bounded(stream.read(&mut [0; 1])).await.unwrap(), 0);
+        });
+        let mut device = acp_device(&host, "desktop", true).await;
+        device.send(json!({"type":"acp_open"})).await;
+        assert_eq!(device.read().await.unwrap()["type"], "acp_opened");
+        let id = host.lifecycle.devices().unwrap()[0].id.clone();
+        if revoke {
+            host.lifecycle.revoke(&id).await.unwrap();
+        } else {
+            host.lifecycle.set_acp(&id, false).await.unwrap();
+        }
+        assert_eq!(device.read().await.unwrap()["code"], "revoked");
+        bounded(server).await.unwrap();
+        host.stop_gateway().await;
+    }
+}
+
+#[tokio::test]
+async fn remote_acp_grant_survives_gateway_restart() {
+    let mut host = Host::start().await;
+    let mut device = acp_device(&host, "desktop", true).await;
+    bounded(device.socket.close(None)).await.unwrap();
+    host.stop_gateway().await;
+    let record = host.lifecycle.devices().unwrap().remove(0);
+    assert!(record.acp);
+    host.start_gateway().await;
+    // Authorization passes after reloading the store; no local server exists.
+    // A missing grant would yield unauthorized_access instead of internal.
+    let offer = host.lifecycle.devices().unwrap();
+    assert!(offer[0].acp);
     host.stop_gateway().await;
 }
