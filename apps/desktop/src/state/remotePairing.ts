@@ -34,6 +34,11 @@ export function challengeIsValid(challenge: PairingChallenge, status: RemoteStat
     !status.pairingExpired &&
     !!gateway?.connected &&
     gateway.pairingOpen !== false &&
+    !(
+      challenge.offer.instanceId &&
+      gateway.instanceId &&
+      challenge.offer.instanceId !== gateway.instanceId
+    ) &&
     gateway.pairing?.attemptsLeft !== 0 &&
     (!status.offer || status.offer.qrPayload === challenge.offer.qrPayload) &&
     !(currentId !== undefined && offerId !== undefined && currentId !== offerId)

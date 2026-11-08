@@ -39,6 +39,7 @@ export interface RemotePairing {
 /** Where the gateway listens and who is on it. */
 export interface RemoteGateway {
   connected: boolean;
+  instanceId?: string;
   /** The address a phone dials, when the gateway knows it. */
   advertisedAddress?: string;
   /** The address the gateway bound. */
@@ -76,6 +77,7 @@ export interface RemoteOffer {
   expiresInSecs: number;
   loopbackOnly: boolean;
   gatewayId: string;
+  instanceId?: string;
   challenge?: number;
   /** Seconds pairing stays locked after too many wrong codes, when it is. */
   lockedForSecs?: number;
@@ -146,6 +148,7 @@ function parseOffer(value: Json | undefined): RemoteOffer | undefined {
     expiresInSecs: num(offer.expiresInSecs) ?? 0,
     loopbackOnly: bool(offer.loopbackOnly) ?? false,
     gatewayId: str(offer.gatewayId) ?? "",
+    instanceId: str(offer.instanceId),
     challenge: num(offer.challenge),
     lockedForSecs: num(offer.lockedForSecs),
   };
@@ -167,6 +170,7 @@ function parseGateway(value: Json | undefined): RemoteGateway | undefined {
   if (!gateway) return undefined;
   return {
     connected: bool(gateway.connected) ?? false,
+    instanceId: str(gateway.instanceId),
     advertisedAddress: str(gateway.advertisedAddress),
     listenAddress: str(gateway.listenAddress),
     loopbackOnly: bool(gateway.loopbackOnly) ?? false,

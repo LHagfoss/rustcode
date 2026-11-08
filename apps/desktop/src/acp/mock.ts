@@ -2169,6 +2169,7 @@ export class MockEngine {
       expiresInSecs: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)),
       loopbackOnly: stored.loopbackOnly === true,
       gatewayId: str(stored.gatewayId) ?? "",
+      instanceId: str(stored.instanceId) ?? "mock-instance",
       challenge: num(stored.challenge) ?? 0,
     };
     const lockedFor = num(stored.lockedForSecs);
@@ -2195,6 +2196,7 @@ export class MockEngine {
     if (this.remote.gateway) {
       const gateway: JsonObject = {
         ...this.remote.gateway,
+        instanceId: "mock-instance",
         pairedDevices: this.remote.devices.length,
         pairingOpen: offer !== null,
         sessions: this.remote.shared.size,

@@ -82,6 +82,26 @@ describe("remote pairing", () => {
     expect(useApp.getState().remoteChallenge).toBeNull();
     expect(useApp.getState().remotePaired?.name).toBe("iPhone");
   });
+  test("clears an offer when the gateway restarts and reuses its challenge serial", () => {
+    const original = parseRemoteStatus({
+      offer: { qrPayload: "qr", code: "12345678", expiresInSecs: 120, challenge: 1, instanceId: "first" },
+    }).offer!;
+    useApp.setState({ remoteChallenge: { offer: original, expiresAt: 121_000, baselineIds: [] } });
+    applyRemoteStatus(
+      parseRemoteStatus({
+        enabled: true,
+        gateway: {
+          connected: true,
+          instanceId: "second",
+          pairingOpen: true,
+          pairing: { expiresInSecs: 110, challenge: 1 },
+        },
+        devices: [],
+      }),
+      11_000,
+    );
+    expect(useApp.getState().remoteChallenge).toBeNull();
+  });
   test("clears a closed, replaced, expired or failed challenge", () => {
     const invalid = [
       snapshot(110, { gateway: { connected: true, pairingOpen: false } }),

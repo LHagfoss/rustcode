@@ -5166,10 +5166,17 @@ export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
     if (generation === remotePairGeneration) {
       remotePairGeneration++;
       const fresh = newPairedDevice(baselineIds, status.devices);
+      const instanceChanged =
+        status.offer?.instanceId &&
+        status.gateway?.instanceId &&
+        status.offer.instanceId !== status.gateway.instanceId;
       set({
         remote: status,
         remotePaired: fresh ? { name: fresh.name } : null,
-        remoteChallenge: status.offer && !fresh ? makeChallenge(status.offer, Date.now(), baselineIds) : null,
+        remoteChallenge:
+          status.offer && !fresh && !instanceChanged
+            ? makeChallenge(status.offer, Date.now(), baselineIds)
+            : null,
       });
     }
     if (status.pairingError) toast(status.pairingError, "error");
