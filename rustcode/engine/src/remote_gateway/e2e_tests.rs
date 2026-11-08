@@ -98,6 +98,38 @@ impl Host {
         });
     }
 
+    /// Try to start the gateway and return why it refused, without leaving one
+    /// running. Retries only the ownership lock the stopped gateway may still
+    /// hold for a moment.
+    async fn bind_error(&self) -> anyhow::Error {
+        let config = || {
+            let hub = SessionHub::start(HubLimits::default());
+            GatewayConfig {
+                replan: None,
+                plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
+                port: 0,
+                router: hub.clone(),
+                sessions: Some(hub.clone()),
+                limits: Limits::default(),
+            }
+        };
+        bounded(async {
+            let mut attempts = 0;
+            loop {
+                match Gateway::bind(&self.lifecycle, config()).await {
+                    Ok(_) => panic!("the gateway started when it must refuse"),
+                    Err(error) if error.to_string().contains("revocations.json") => break error,
+                    Err(_) if attempts < 50 => {
+                        attempts += 1;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(error) => break error,
+                }
+            }
+        })
+        .await
+    }
+
     async fn stop_gateway(&mut self) {
         let running = self.running.take().expect("a gateway is running");
         running.shutdown.cancel();
@@ -1433,4 +1465,456 @@ async fn remote_acp_grant_survives_gateway_restart() {
     device.send(json!({"type":"acp_open"})).await;
     assert_eq!(device.read().await.unwrap()["code"], "internal");
     host.stop_gateway().await;
+}
+
+/// Pair a device that asked for `token_rotation`, as a desktop app does.
+async fn pair_rotating(host: &Host) -> (Phone, Value) {
+    let offer = bounded(host.lifecycle.pair()).await.unwrap();
+    Phone::connect(
+        host.addr(),
+        json!({
+            "type": "pair",
+            "protocol_version": 1,
+            "method": "code",
+            "secret": offer.code.expose(),
+            "device_name": "Lars's PC",
+            "device_kind": "desktop",
+            "platform": "windows",
+            "capabilities": ["token_rotation"],
+        }),
+    )
+    .await
+}
+
+/// Acknowledge a rotation and wait until the host has applied it: frames on a
+/// connection are handled in order, so its next answer comes after the ack.
+async fn acknowledge(phone: &mut Phone, welcome: &Value) {
+    phone
+        .send(json!({"type": "token_ack", "rotation_id": welcome["rotation_id"]}))
+        .await;
+    let listed = phone.request(None, json!({"type": "list_sessions"})).await;
+    assert_eq!(listed["kind"], "response", "{listed}");
+}
+
+/// Authenticate with one rotating credential: a refresh or an access token.
+async fn authenticate_with(
+    host: &Host,
+    paired: &Value,
+    credential: (&str, &Value),
+) -> (Phone, Value) {
+    let mut frame = json!({
+        "type": "authenticate",
+        "protocol_version": 1,
+        "device_id": paired["device_id"],
+    });
+    frame[credential.0] = credential.1.clone();
+    Phone::connect(host.addr(), frame).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rotating_device_keeps_its_pairing_until_it_is_revoked() {
+    let host = Host::start().await;
+    let (mut phone, paired) = pair_rotating(&host).await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+    // No static token and no expiry: a refresh token, an access token, and
+    // when the access token stops working.
+    assert!(paired.get("token").is_none(), "{paired}");
+    assert!(paired.get("expires_at").is_none(), "{paired}");
+    assert!(paired["refresh_token"].is_string(), "{paired}");
+    assert!(paired["access_token"].is_string(), "{paired}");
+    assert!(paired["access_expires_at"].is_string(), "{paired}");
+    let device_id = paired["device_id"].as_str().unwrap();
+    assert!(host.lifecycle.devices().unwrap()[0].rotates());
+
+    // The access token reconnects without rotating anything.
+    let (mut reconnected, welcome) =
+        authenticate_with(&host, &paired, ("access_token", &paired["access_token"])).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    assert!(welcome.get("refresh_token").is_none(), "{welcome}");
+    assert!(welcome.get("rotation_id").is_none(), "{welcome}");
+    assert_eq!(welcome["access_expires_at"], paired["access_expires_at"]);
+    bounded(reconnected.socket.close(None)).await.unwrap();
+
+    // A refresh token rotates: a new refresh token and the id to acknowledge.
+    let (mut rotated, welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    assert_eq!(welcome["device_id"], device_id);
+    assert!(welcome.get("expires_at").is_none(), "{welcome}");
+    let rotation_id = welcome["rotation_id"].as_str().unwrap();
+    let refresh = welcome["refresh_token"].as_str().unwrap();
+    assert_ne!(refresh, paired["refresh_token"].as_str().unwrap());
+    let access = welcome["access_token"].as_str().unwrap();
+
+    // Storing it is acknowledged; the previous token now is a replay.
+    rotated
+        .send(json!({"type": "token_ack", "rotation_id": rotation_id}))
+        .await;
+
+    // The connection still serves requests after an acknowledgement.
+    let listed = rotated
+        .request(None, json!({"type": "list_sessions"}))
+        .await;
+    assert_eq!(listed["kind"], "response", "{listed}");
+
+    let (_, replayed) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    assert_eq!(replayed["code"], "token_replayed", "{replayed}");
+    // The whole family is gone, and its live connection is closed as revoked.
+    assert!(host.lifecycle.devices().unwrap().is_empty());
+    let revoked = rotated.frame(|frame| frame["type"] == "error").await;
+    assert_eq!(revoked["code"], "revoked", "{revoked}");
+    assert!(rotated.read().await.is_none());
+    // The connection that paired is revoked too.
+    let revoked = phone.frame(|frame| frame["type"] == "error").await;
+    assert_eq!(revoked["code"], "revoked", "{revoked}");
+    // The tokens it still held are worthless: the record is gone.
+    let (_, gone) = authenticate_with(&host, &paired, ("refresh_token", &json!(refresh))).await;
+    assert_eq!(gone["code"], "unauthorized", "{gone}");
+    let (_, gone) = authenticate_with(&host, &paired, ("access_token", &json!(access))).await;
+    assert_eq!(gone["code"], "unauthorized", "{gone}");
+    drop(host.dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rotating_device_recovers_from_a_dropped_authenticated_frame() {
+    let host = Host::start().await;
+    let (_paired_phone, paired) = pair_rotating(&host).await;
+    let refresh = paired["refresh_token"].clone();
+
+    // The host rotates, but the answer never reaches the device: it still
+    // holds the token it paired with.
+    let (_lost, _welcome) = authenticate_with(&host, &paired, ("refresh_token", &refresh)).await;
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+
+    // Retrying with the same token is accepted, not treated as a replay.
+    let (mut phone, welcome) = authenticate_with(&host, &paired, ("refresh_token", &refresh)).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    let next = welcome["refresh_token"].clone();
+    assert_ne!(next, refresh);
+    acknowledge(&mut phone, &welcome).await;
+
+    // The token it stored works from here on.
+    let (mut again, welcome) = authenticate_with(&host, &paired, ("refresh_token", &next)).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    acknowledge(&mut again, &welcome).await;
+    // And the original one is now a replay: it was acknowledged away.
+    let (_, replayed) = authenticate_with(&host, &paired, ("refresh_token", &refresh)).await;
+    assert_eq!(replayed["code"], "token_replayed", "{replayed}");
+    drop(host.dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_gateway_restart_keeps_the_rotated_state_and_forgets_access_tokens() {
+    let mut host = Host::start().await;
+    let (_paired_phone, paired) = pair_rotating(&host).await;
+    let (mut rotated, welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    let next = welcome["refresh_token"].clone();
+    let access = welcome["access_token"].clone();
+    rotated
+        .send(json!({"type": "token_ack", "rotation_id": welcome["rotation_id"]}))
+        .await;
+    bounded(rotated.socket.close(None)).await.unwrap();
+
+    host.stop_gateway().await;
+    host.start_gateway().await;
+
+    // Access tokens are memory only: after a restart the device refreshes.
+    let (_, refused) = authenticate_with(&host, &paired, ("access_token", &access)).await;
+    assert_eq!(refused["code"], "access_expired", "{refused}");
+    let (mut phone, welcome) = authenticate_with(&host, &paired, ("refresh_token", &next)).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    phone
+        .send(json!({"type": "token_ack", "rotation_id": welcome["rotation_id"]}))
+        .await;
+    // Still no expiry, still the same pairing.
+    assert!(host.lifecycle.devices().unwrap()[0].rotates());
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+    drop(host.dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_routes_racing_with_one_refresh_token_do_not_revoke_the_device() {
+    let host = Host::start().await;
+    let (_paired_phone, paired) = pair_rotating(&host).await;
+    let refresh = paired["refresh_token"].clone();
+    let (mut first, first_welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &refresh)).await;
+    let (mut second, second_welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &refresh)).await;
+    assert_eq!(first_welcome["type"], "authenticated");
+    assert_eq!(second_welcome["type"], "authenticated");
+    // The retry is idempotent: the same tokens, not a second rotation.
+    assert_eq!(
+        first_welcome["refresh_token"],
+        second_welcome["refresh_token"]
+    );
+    assert_eq!(first_welcome["rotation_id"], second_welcome["rotation_id"]);
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+    // Either connection's acknowledgement retires the token before them, and
+    // the token both hold keeps working.
+    acknowledge(&mut second, &second_welcome).await;
+    let (mut third, welcome) = authenticate_with(
+        &host,
+        &paired,
+        ("refresh_token", &second_welcome["refresh_token"]),
+    )
+    .await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    acknowledge(&mut third, &welcome).await;
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+    // Both answered connections are still live.
+    let listed = first.request(None, json!({"type": "list_sessions"})).await;
+    assert_eq!(listed["kind"], "response", "{listed}");
+    drop(host.dir);
+}
+
+/// The attack the two-phase window must survive: the real device rotated R1
+/// into R2 but has not acknowledged it yet, and a thief presents the same R1.
+/// The thief must not end up with a newer token while the real device's R2 is
+/// refused, so the retry re-issues R2 unchanged: both hold R2, the family is
+/// intact, and the real device is never locked out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thief_with_the_previous_token_cannot_lock_the_real_device_out() {
+    let host = Host::start().await;
+    let (_paired_phone, paired) = pair_rotating(&host).await;
+    let (real_answer, real_welcome) = {
+        let (phone, welcome) =
+            authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+        (phone, welcome)
+    };
+    assert_eq!(real_welcome["type"], "authenticated", "{real_welcome}");
+    let stored = real_welcome["refresh_token"].clone();
+    let rotation = real_welcome["rotation_id"].clone();
+
+    // The thief presents the previous token before the acknowledgement.
+    let (mut thief, thief_welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    assert_eq!(thief_welcome["type"], "authenticated", "{thief_welcome}");
+    assert_eq!(thief_welcome["refresh_token"], stored, "{thief_welcome}");
+    assert_eq!(thief_welcome["rotation_id"], rotation, "{thief_welcome}");
+    assert_eq!(thief_welcome["access_token"], real_welcome["access_token"]);
+    // Nothing rotated: still one family.
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+
+    // The real device acknowledges the token it stored. Its token is current.
+    let mut real = real_answer;
+    acknowledge(&mut real, &real_welcome).await;
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+    let (mut next, welcome) = authenticate_with(&host, &paired, ("refresh_token", &stored)).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    acknowledge(&mut next, &welcome).await;
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+    // A copy of R1 is a replay: the family goes, and every connection with it.
+    let (_, replayed) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    assert_eq!(replayed["code"], "token_replayed", "{replayed}");
+    let revoked = thief.frame(|frame| frame["type"] == "error").await;
+    assert_eq!(revoked["code"], "revoked", "{revoked}");
+    assert!(host.lifecycle.devices().unwrap().is_empty());
+    drop(host.dir);
+}
+
+/// After a restart the host no longer holds the answer it handed out, so a
+/// retry with the previous token is a copy of it: replay, not idempotent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retry_with_the_previous_token_after_a_restart_is_a_replay() {
+    let mut host = Host::start().await;
+    let (_paired_phone, paired) = pair_rotating(&host).await;
+    let previous = paired["refresh_token"].clone();
+    let (mut rotated, welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &previous)).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    acknowledge(&mut rotated, &welcome).await;
+    bounded(rotated.socket.close(None)).await.unwrap();
+    host.stop_gateway().await;
+    host.start_gateway().await;
+    // The stored token still works after the restart.
+    let (mut phone, welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &welcome["refresh_token"])).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    acknowledge(&mut phone, &welcome).await;
+
+    let (_, replayed) = authenticate_with(&host, &paired, ("refresh_token", &previous)).await;
+    assert_eq!(replayed["code"], "token_replayed", "{replayed}");
+    assert!(host.lifecycle.devices().unwrap().is_empty());
+    drop(host.dir);
+}
+
+/// A revocation note left by a store write that failed is applied before the
+/// gateway serves anyone, so a restart cannot bring the family back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pending_revocation_note_is_applied_at_startup() {
+    let mut host = Host::start().await;
+    let (_paired_phone, paired) = pair_rotating(&host).await;
+    let device_id = paired["device_id"].as_str().unwrap().to_owned();
+    host.stop_gateway().await;
+
+    // What a failed store write leaves behind: the family still in the store,
+    // and a note that says it was revoked.
+    host.lifecycle.revocation_notes().add(&device_id).unwrap();
+    assert!(
+        host.lifecycle
+            .devices()
+            .unwrap()
+            .iter()
+            .any(|d| d.id == device_id)
+    );
+    host.start_gateway().await;
+
+    assert!(host.lifecycle.devices().unwrap().is_empty());
+    assert!(!host.lifecycle.revocations_path().exists());
+    let (_, refused) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    assert_eq!(refused["code"], "unauthorized", "{refused}");
+    let (_, refused) =
+        authenticate_with(&host, &paired, ("access_token", &paired["access_token"])).await;
+    assert_eq!(refused["code"], "unauthorized", "{refused}");
+    drop(host.dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_old_client_keeps_its_static_token_and_its_thirty_days() {
+    let host = Host::start().await;
+    let (mut phone, paired) = Phone::pair(&host, "old phone").await;
+    assert!(paired["token"].is_string(), "{paired}");
+    assert!(paired["expires_at"].is_string(), "{paired}");
+    assert!(paired.get("refresh_token").is_none(), "{paired}");
+    assert!(!host.lifecycle.devices().unwrap()[0].rotates());
+    // Its token is used again and again, and never rotates.
+    let (mut again, welcome) = Phone::authenticate(&host, &paired).await;
+    assert_eq!(welcome["expires_at"], paired["expires_at"]);
+    assert!(welcome.get("refresh_token").is_none(), "{welcome}");
+    // A stray `token_ack` from a client that never rotates is ignored, and
+    // the connection keeps serving.
+    again
+        .send(json!({"type": "token_ack", "rotation_id": "whatever"}))
+        .await;
+    let listed = again.request(None, json!({"type": "list_sessions"})).await;
+    assert_eq!(listed["kind"], "response", "{listed}");
+    // A malformed one closes it as a bug.
+    again.send(json!({"type": "token_ack"})).await;
+    let error = again.frame(|frame| frame["type"] == "error").await;
+    assert_eq!(error["code"], "invalid_frame", "{error}");
+    Phone::authenticate(&host, &paired).await;
+    bounded(phone.socket.close(None)).await.unwrap();
+    drop(host.dir);
+}
+
+/// A replay must revoke even when the device store cannot be written: closed
+/// connections, refused tokens, and no claim that the revocation is on disk.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replay_revokes_in_memory_when_the_store_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut host = Host::start().await;
+    let (mut phone, paired) = pair_rotating(&host).await;
+    let device_id = paired["device_id"].as_str().unwrap().to_owned();
+    // Live connections, and a rotation that makes R1 a replay when acknowledged.
+    let (mut rotated, welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    acknowledge(&mut rotated, &welcome).await;
+
+    let remote = host.lifecycle.config_directory().join("remote");
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (_, replayed) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(replayed["code"], "token_replayed", "{replayed}");
+
+    // Every connection closed, and the family is refused in memory even though
+    // the store on disk could not be updated.
+    let revoked = phone.frame(|frame| frame["type"] == "error").await;
+    assert_eq!(revoked["code"], "revoked", "{revoked}");
+    assert!(phone.read().await.is_none());
+    let still_listed = host
+        .lifecycle
+        .devices()
+        .unwrap()
+        .iter()
+        .any(|device| device.id == device_id);
+    assert!(
+        still_listed,
+        "the store write failed, so the record is still there"
+    );
+    let (_, refused) =
+        authenticate_with(&host, &paired, ("access_token", &paired["access_token"])).await;
+    assert_eq!(refused["code"], "unauthorized", "{refused}");
+    let (_, refused) =
+        authenticate_with(&host, &paired, ("refresh_token", &welcome["refresh_token"])).await;
+    assert_eq!(refused["code"], "unauthorized", "{refused}");
+
+    // The revocation is retried in the background; once the directory is
+    // writable again it reaches the disk, and a restart refuses the family.
+    bounded(async {
+        loop {
+            let listed = host
+                .lifecycle
+                .devices()
+                .unwrap()
+                .iter()
+                .any(|device| device.id == device_id);
+            if !listed {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    host.stop_gateway().await;
+    host.start_gateway().await;
+    assert!(
+        !host
+            .lifecycle
+            .devices()
+            .unwrap()
+            .iter()
+            .any(|device| device.id == device_id),
+        "the stopped gateway's last write removed the family"
+    );
+    let (_, refused) =
+        authenticate_with(&host, &paired, ("refresh_token", &welcome["refresh_token"])).await;
+    assert_eq!(refused["code"], "unauthorized", "{refused}");
+    drop(host.dir);
+}
+
+/// Notes left by a failed revocation write must be readable before the gateway
+/// serves anyone: an unreadable note could hide a revoked family, so the
+/// gateway refuses to start and says what to do about it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_gateway_refuses_to_start_on_unreadable_revocation_notes() {
+    let mut host = Host::start().await;
+    let (_phone, paired) = pair_rotating(&host).await;
+    let device_id = paired["device_id"].as_str().unwrap().to_owned();
+    host.stop_gateway().await;
+
+    std::fs::write(host.lifecycle.revocations_path(), "not json at all").unwrap();
+    let error = host.bind_error().await;
+    let message = format!("{error:#}");
+    assert!(message.contains("revocations.json"), "{message}");
+    assert!(message.contains("rustcode remote revoke"), "{message}");
+    // Nothing ran and nothing was changed: the store still lists the device.
+    assert!(
+        host.lifecycle
+            .devices()
+            .unwrap()
+            .iter()
+            .any(|device| device.id == device_id)
+    );
+    assert_eq!(
+        std::fs::read_to_string(host.lifecycle.revocations_path()).unwrap(),
+        "not json at all"
+    );
+
+    // Following the error: delete the note (the owner revokes from the device
+    // list instead when a family must go), and the gateway starts again.
+    std::fs::remove_file(host.lifecycle.revocations_path()).unwrap();
+    host.start_gateway().await;
+    let (mut phone, welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    acknowledge(&mut phone, &welcome).await;
+    drop(host.dir);
 }

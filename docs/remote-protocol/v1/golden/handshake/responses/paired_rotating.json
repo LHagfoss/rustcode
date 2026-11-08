@@ -1,0 +1,12 @@
+{
+  "type": "paired",
+  "protocol_version": 1,
+  "gateway_id": "gw-8e1f4b7a",
+  "instance_id": "inst-41c07d92",
+  "device_id": "0011223344556677",
+  "device_name": "Lars's Windows PC",
+  "host_name": "studio",
+  "refresh_token": "ZXhhbXBsZS1yZWZyZXNoLXRva2VuLW5vdC1yZWFs",
+  "access_token": "ZXhhbXBsZS1hY2Nlc3MtdG9rZW4tbm90LXJlYWw",
+  "access_expires_at": "2026-08-22T09:15:00Z"
+}
