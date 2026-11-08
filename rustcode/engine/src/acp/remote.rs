@@ -283,6 +283,7 @@ pub(crate) struct RemoteManager {
 
 /// How long a refused thread is left alone before it is tried again: the
 /// reason may pass (another thread closed, the terminal that held it stopped).
+#[cfg(unix)]
 const REFUSAL_TTL: Duration = Duration::from_secs(60);
 
 #[cfg(unix)]
@@ -981,8 +982,8 @@ impl RemoteManager {
         &self,
         _session: Arc<RemoteSession>,
         _pair: bool,
-    ) -> Result<Value, agent_client_protocol::Error> {
-        Err(self.unsupported())
+    ) -> Result<Value, StartError> {
+        Err(StartError::Refused(self.unsupported_message()))
     }
 
     pub(crate) async fn status(&self, session_id: &str) -> Value {
@@ -1013,7 +1014,7 @@ impl RemoteManager {
         &self,
         _session_id: &str,
     ) -> Result<Value, agent_client_protocol::Error> {
-        Err(self.unsupported())
+        Err(agent_client_protocol::Error::invalid_params().data(self.unsupported_message()))
     }
 
     pub(crate) async fn stop_session(&self, _session_id: &str, _reason: SessionCloseReason) {}
@@ -1050,9 +1051,20 @@ impl RemoteManager {
         &self,
         _session_id: String,
         _external: Arc<ExternalSession>,
+        _connection: Option<agent_client_protocol::ConnectionTo<Client>>,
         _pair: bool,
-    ) -> Result<Value, agent_client_protocol::Error> {
-        Err(self.unsupported())
+    ) -> Result<Value, StartError> {
+        Err(StartError::Refused(self.unsupported_message()))
+    }
+
+    pub(crate) fn refuse(&self, _session_id: &str, _reason: String) {}
+
+    pub(crate) fn refusal(&self, _session_id: &str) -> Option<String> {
+        None
+    }
+
+    pub(crate) fn refused_count(&self) -> usize {
+        0
     }
 
     pub(crate) async fn enable(&self) -> Value {
@@ -1065,10 +1077,9 @@ impl RemoteManager {
 
     pub(crate) async fn unshare_all(&self, _reason: SessionCloseReason) {}
 
-    fn unsupported(&self) -> agent_client_protocol::Error {
-        agent_client_protocol::Error::invalid_params().data(
-            "remote access needs the remote gateway, which the workspace builds only on unix hosts",
-        )
+    pub(crate) fn unsupported_message(&self) -> String {
+        "remote access needs the remote gateway, which the workspace builds only on unix hosts"
+            .to_owned()
     }
 }
 
