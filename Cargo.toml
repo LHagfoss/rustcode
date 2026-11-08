@@ -15,6 +15,9 @@ members = [
     "rustcode/core/rustcode-lifecycle",
     "rustcode/core/rustcode-tasks",
     "rustcode/core/rustcode-loop-detect",
+    # The machine client: saved machines, pairing, the WebSocket transport and
+    # ACP over the remote gateway, shared by the app and `rustcode machines`.
+    "rustcode/client",
     # The engine is the root package itself: agent loop, tools, config,
     # session state, ACP, daemon, and the terminal frontend behind `tui`.
     # Terminal frontend (TUI + CLI modes).

@@ -219,6 +219,14 @@ pub enum Commands {
         command: RemoteCommands,
     },
 
+    /// List, add and remove the machines this one is paired with (a phone or
+    /// another computer running RustCode)
+    #[command(alias = "machine")]
+    Machines {
+        #[command(subcommand)]
+        command: MachineCommands,
+    },
+
     /// Manage scheduled jobs through the running daemon
     Cron {
         #[command(subcommand)]
@@ -453,6 +461,50 @@ pub enum RemoteCommands {
     /// Stop the running gateway
     #[command(alias = "off")]
     Stop,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum MachineCommands {
+    /// List saved machines, the route in use and whether each answers now
+    List {
+        /// Also read each connected machine's thread titles over ACP
+        #[arg(long)]
+        threads: bool,
+        /// Print the machines as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ask a machine to let this one in, pair with it and save it
+    Add {
+        /// Address to dial: host, host:port, [v6]:port or ws://host:port
+        address: Option<String>,
+        /// Name to save the machine under (default: the name it reports)
+        #[arg(long)]
+        name: Option<String>,
+        /// The eight-digit code the machine shows, when it cannot be typed
+        #[arg(long)]
+        code: Option<String>,
+        /// Choose the machine from Bonjour instead of typing an address
+        #[arg(long, conflicts_with = "address")]
+        discover: bool,
+        /// How long to look for machines on the network with --discover
+        #[arg(long, default_value_t = 4, value_name = "SECONDS")]
+        discover_secs: u64,
+    },
+    /// Forget a machine and its token
+    Remove {
+        /// Name, host id or a prefix of one
+        machine: String,
+    },
+    /// List the machines on this network that take a desktop client
+    Discover {
+        /// How long to listen for announcements
+        #[arg(long, default_value_t = 4, value_name = "SECONDS")]
+        secs: u64,
+        /// Print what was found as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1276,6 +1328,70 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["rustcode", "remote", "revoke"]).is_err());
         assert!(Cli::try_parse_from(["rustcode", "remote"]).is_err());
+    }
+
+    #[test]
+    fn parses_machine_commands() {
+        let machines = |args: &[&str]| {
+            let mut all = vec!["rustcode", "machines"];
+            all.extend_from_slice(args);
+            match Cli::try_parse_from(all).map(|cli| cli.command) {
+                Ok(Some(Commands::Machines { command })) => Ok(command),
+                Ok(other) => panic!("expected a machines command, got {other:?}"),
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        assert!(matches!(
+            machines(&["list"]).unwrap(),
+            MachineCommands::List {
+                threads: false,
+                json: false
+            }
+        ));
+        assert!(matches!(
+            machines(&["list", "--threads", "--json"]).unwrap(),
+            MachineCommands::List {
+                threads: true,
+                json: true
+            }
+        ));
+        assert!(matches!(
+            machines(&["add", "192.168.1.20:17879", "--name", "Studio", "--code", "4821-9034"])
+                .unwrap(),
+            MachineCommands::Add {
+                ref address,
+                ref name,
+                ref code,
+                discover: false,
+                ..
+            } if address.as_deref() == Some("192.168.1.20:17879")
+                && name.as_deref() == Some("Studio")
+                && code.as_deref() == Some("4821-9034")
+        ));
+        assert!(matches!(
+            machines(&["add", "--discover"]).unwrap(),
+            MachineCommands::Add {
+                discover: true,
+                address: None,
+                ..
+            }
+        ));
+        // An address and --discover are two ways to name the same machine.
+        assert!(machines(&["add", "10.0.0.2", "--discover"]).is_err());
+        assert!(matches!(
+            machines(&["remove", "Studio"]).unwrap(),
+            MachineCommands::Remove { ref machine } if machine == "Studio"
+        ));
+        assert!(machines(&["discover", "--json", "--secs", "2"]).is_ok());
+        assert!(machines(&["remove"]).is_err());
+        assert!(machines(&[]).is_err());
+        // `machine` is the singular alias, and the subcommand keeps its name.
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "machine", "list"])
+                .unwrap()
+                .command,
+            Some(Commands::Machines { .. })
+        ));
     }
 
     #[test]

@@ -1,0 +1,27 @@
+[package]
+name = "rustcode-client"
+version = "1.23.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "The machine client: saved machines, pairing, the WebSocket transport and ACP over the remote gateway"
+
+[dependencies]
+anyhow = "1.0.97"
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
+futures-util = "0.3.32"
+hex = "0.4"
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+mdns-sd = { version = "0.21.7", default-features = false }
+rand = "0.10.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tempfile = "3.10"
+tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+# The real gateway, its session hub and the server description, so the
+# integration test speaks to what ships instead of a stand-in.
+rustcode = { path = "../.." }
+tokio = { version = "1.52.3", features = ["test-util"] }
+tokio-util = "0.7.18"
