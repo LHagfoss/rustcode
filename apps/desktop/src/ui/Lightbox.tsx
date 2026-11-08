@@ -1,3 +1,4 @@
+import { primaryModifier } from "../lib/platform";
 // A picture opened from the composer or the transcript: over a dimmed, blurred
 // backdrop, fit to the window. Esc or a click outside closes it, ←→ step through
 // the message's pictures. Pinch or ⌘-scroll zooms at the pointer, a click on the
@@ -197,7 +198,7 @@ export function Lightbox() {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const v = view.current;
-      if (e.ctrlKey || e.metaKey) {
+      if (primaryModifier(e)) {
         // A trackpad pinch arrives as ctrl+wheel.
         const { cx, cy } = centre();
         const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002));

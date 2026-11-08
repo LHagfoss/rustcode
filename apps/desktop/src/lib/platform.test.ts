@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { platformFor } from "./platform";
+import { fileManagerName, platformFor } from "./platform";
 
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
 const WINDOWS =
@@ -22,4 +22,10 @@ describe("platformFor", () => {
   test("an unknown agent falls back to mac", () => {
     expect(platformFor("", true)).toBe("mac");
   });
+});
+
+test("names each platform file manager", () => {
+  expect(fileManagerName("mac")).toBe("Finder");
+  expect(fileManagerName("windows")).toBe("Explorer");
+  expect(fileManagerName("linux")).toBe("file manager");
 });

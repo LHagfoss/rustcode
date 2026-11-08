@@ -1,3 +1,4 @@
+import { currentPlatform } from "../lib/platform";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -357,7 +358,7 @@ function GeneralPage() {
           reset={
             notifications ? undefined : () => setSystemNotifications(SETTINGS_DEFAULTS.systemNotifications)
           }
-          subtitle="A notification when a thread needs your approval, asks you a question, hits a usage limit or finishes. The app asks macOS for permission the first time one is due."
+          subtitle="A notification when a thread needs your approval, asks you a question, hits a usage limit or finishes. The app asks the system for permission the first time one is due."
         >
           <Switch label="System notifications" checked={notifications} onChange={setSystemNotifications} />
         </Row>
@@ -400,30 +401,32 @@ function GeneralPage() {
           />
         </Row>
       </Group>
-      <Group title="This Mac">
+      <Group title="This computer">
         <PresenceRow />
-        <Row
-          title="Trackpad haptics"
-          reset={
-            haptics
-              ? undefined
-              : () => {
-                  setHaptics(HAPTICS_DEFAULT);
-                  setHapticsState(HAPTICS_DEFAULT);
-                }
-          }
-          subtitle="A light tap on the Force Touch trackpad when you send, stop a turn, or rest on Send."
-        >
-          <Switch
-            label="Trackpad haptics"
-            checked={haptics}
-            onChange={(v) => {
-              setHaptics(v);
-              setHapticsState(v);
-              if (v) haptic("generic");
-            }}
-          />
-        </Row>
+        {currentPlatform() === "mac" && (
+          <Row
+            title="Trackpad haptics"
+            reset={
+              haptics
+                ? undefined
+                : () => {
+                    setHaptics(HAPTICS_DEFAULT);
+                    setHapticsState(HAPTICS_DEFAULT);
+                  }
+            }
+            subtitle="A light tap on the Force Touch trackpad when you send, stop a turn, or rest on Send."
+          >
+            <Switch
+              label="Trackpad haptics"
+              checked={haptics}
+              onChange={(v) => {
+                setHaptics(v);
+                setHapticsState(v);
+                if (v) haptic("generic");
+              }}
+            />
+          </Row>
+        )}
       </Group>
     </>
   );
@@ -908,7 +911,7 @@ function AppearancePage() {
         <Row
           title="Light or dark"
           reset={mode !== SETTINGS_DEFAULTS.theme ? () => setTheme(SETTINGS_DEFAULTS.theme) : undefined}
-          subtitle="System follows macOS. Picking a theme sets its mode."
+          subtitle="System follows your operating system. Picking a theme sets its mode."
         >
           <Choice
             label="Appearance"

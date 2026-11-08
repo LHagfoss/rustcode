@@ -80,10 +80,26 @@ pub fn reveal_path(path: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        crate::process::command("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Could not open Explorer: {e}"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         open_with_system(&path.parent().unwrap_or(&path).display().to_string())
     }
+}
+
+#[cfg(target_os = "windows")]
+fn interactive_command(program: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+    command
 }
 
 /// POSIX single-quote a word for a shell command line.
@@ -148,11 +164,54 @@ pub fn open_login_terminal(
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let quote = |word: &str| format!("'{}'", word.replace('\'', "''"));
+        let mut script = String::new();
+        for (key, value) in &env {
+            script.push_str(&format!("$env:{key} = {}; ", quote(value)));
+        }
+        script.push_str("& ");
+        script.push_str(
+            &command
+                .iter()
+                .map(|word| quote(word))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        let _ = line;
+        interactive_command("powershell.exe")
+            .args(["-NoExit", "-Command", &script])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Could not open PowerShell: {e}"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         let _ = line;
+        let mut args: Vec<String> = env
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        args.extend(command);
+        for terminal in ["x-terminal-emulator", "gnome-terminal", "konsole"] {
+            let separator = if terminal == "gnome-terminal" {
+                "--"
+            } else {
+                "-e"
+            };
+            if crate::process::command(terminal)
+                .arg(separator)
+                .arg("env")
+                .args(&args)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
         Err(
-            "Opening a terminal is only supported on macOS so far; copy the command instead."
+            "Could not open a terminal; install a supported terminal or copy the command instead."
                 .into(),
         )
     }
@@ -337,10 +396,31 @@ pub fn open_terminal_at(path: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        let _ = path;
-        Err("Opening a terminal is only supported on macOS so far.".into())
+        for terminal in ["wt.exe", "cmd.exe"] {
+            if interactive_command(terminal)
+                .current_dir(&path)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("Could not open Windows Terminal or Command Prompt.".into())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for terminal in ["x-terminal-emulator", "gnome-terminal", "konsole"] {
+            if crate::process::command(terminal)
+                .current_dir(&path)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("Could not open a supported terminal.".into())
     }
 }
 

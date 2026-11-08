@@ -22,12 +22,25 @@ const cmd = (key: string, mods: Partial<KeyEventLike> = {}) => press(key, { meta
 describe("shortcut bindings", () => {
   test("reads a keydown as the table's canonical text", () => {
     expect(bindingFromEvent(cmd("b"))).toBe("mod+b");
-    expect(bindingFromEvent(press("b", { ctrlKey: true }))).toBe("mod+b");
+    expect(bindingFromEvent(press("b", { ctrlKey: true }))).toBeNull();
     expect(bindingFromEvent(cmd("O", { shiftKey: true }))).toBe("mod+shift+o");
     expect(bindingFromEvent(cmd("."))).toBe("mod+.");
     expect(bindingFromEvent(cmd(",", { shiftKey: true }))).toBe("mod+,");
     expect(bindingFromEvent(press("F6"))).toBe("f6");
     expect(bindingFromEvent(press("Enter", { shiftKey: true }))).toBe("shift+enter");
+  });
+
+  test("uses each platform's modifier and labels", () => {
+    for (const platform of ["windows", "linux"] as const) {
+      expect(formatBinding("mod+shift+p", platform)).toBe("Ctrl+Shift+P");
+      expect(formatBinding("mod+alt+b", platform)).toBe("Ctrl+Alt+B");
+      expect(formatBinding("mod+enter", platform)).toBe("Ctrl+Enter");
+      expect(bindingFromEvent(press("k", { ctrlKey: true }), platform)).toBe("mod+k");
+      expect(bindingFromEvent(cmd("k"), platform)).toBeNull();
+    }
+    expect(formatBinding("mod+shift+p", "mac")).toBe("⌘⇧P");
+    expect(bindingFromEvent(cmd("k"), "mac")).toBe("mod+k");
+    expect(bindingFromEvent(press("k", { ctrlKey: true }), "mac")).toBeNull();
   });
 
   test("⌘+ and ⌘= are one binding, because + only exists shifted", () => {
@@ -84,7 +97,7 @@ describe("matching", () => {
   test("a keydown runs the command it is bound to", () => {
     expect(commandFor({}, cmd("b"))).toBe("toggle-sidebar");
     expect(commandFor({}, cmd("O", { shiftKey: true }))).toBe("default-folder");
-    expect(commandFor({}, press("b", { ctrlKey: true }))).toBe("toggle-sidebar");
+    expect(commandFor({}, press("b", { ctrlKey: true }))).toBeNull();
     expect(commandFor({}, cmd("Enter"))).toBeNull();
     expect(commandFor({}, press("Enter"))).toBeNull();
     expect(commandFor({}, press("b"))).toBeNull();
@@ -165,12 +178,12 @@ describe("what a binding may be", () => {
     }
     // The named keys that are not a row's own are still function keys or modified.
     expect(bindingProblem({}, "pin-thread", "f6")).toBeNull();
-    expect(bindingProblem({}, "pin-thread", "mod+tab")).toContain("macOS");
+    expect(bindingProblem({}, "pin-thread", "mod+tab")).toContain("reserved by the system");
   });
 
   test("refuses the combinations the system owns", () => {
     for (const binding of RESERVED_BINDINGS) {
-      expect(bindingProblem({}, "new-thread", binding)).toContain("macOS");
+      expect(bindingProblem({}, "new-thread", binding)).toContain("reserved by the system");
     }
     expect(RESERVED_BINDINGS).toEqual(["mod+q", "mod+w", "mod+h", "mod+m", "mod+tab"]);
   });
