@@ -73,6 +73,14 @@ pub fn schema_documents() -> Vec<(&'static str, String)> {
     let document = |schema: schemars::Schema| sorted_json(schema.as_value());
     vec![
         (
+            "acp-client.schema.json",
+            document(schemars::schema_for!(AcpClientFrame)),
+        ),
+        (
+            "acp-server.schema.json",
+            document(schemars::schema_for!(AcpServerFrame)),
+        ),
+        (
             "request.schema.json",
             document(schemars::schema_for!(RemoteRequest)),
         ),
@@ -245,6 +253,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
         ErrorCode::PairingFailed,
         ErrorCode::RateLimited,
         ErrorCode::Unauthorized,
+        ErrorCode::UnauthorizedAccess,
         ErrorCode::Busy,
         ErrorCode::ConnectBusy,
         ErrorCode::ConnectRateLimited,
@@ -1401,6 +1410,8 @@ pub fn contract_files() -> Vec<(String, String)> {
         .into_iter()
         .map(|(name, contents)| (name.to_owned(), contents))
         .collect::<Vec<_>>();
+    files.push(("acp_open.json".into(), pretty(&AcpClientFrame::AcpOpen)));
+    files.push(("acp_opened.json".into(), pretty(&AcpServerFrame::AcpOpened)));
     files.extend(
         golden_requests()
             .iter()
@@ -1433,6 +1444,27 @@ pub fn contract_files() -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acp_switch_frames_match_the_contract() {
+        for (name, expected, schema_name) in [
+            (
+                "acp_open.json",
+                serde_json::to_value(AcpClientFrame::AcpOpen).unwrap(),
+                "acp-client.schema.json",
+            ),
+            (
+                "acp_opened.json",
+                serde_json::to_value(AcpServerFrame::AcpOpened).unwrap(),
+                "acp-server.schema.json",
+            ),
+        ] {
+            let value: Value = serde_json::from_str(&committed(name)).unwrap();
+            assert_eq!(value, expected);
+            let schema = schema(schema_name);
+            validate(&schema, &value, &schema, "$").unwrap();
+        }
+    }
 
     #[test]
     fn old_v1_frames_decode_with_timing_absent() {

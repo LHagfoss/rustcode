@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "unauthorized_access",
+  "message": "why the connection is being closed"
+}

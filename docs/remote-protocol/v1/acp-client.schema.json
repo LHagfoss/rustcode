@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Switch an authenticated desktop WebSocket to raw ACP JSON-RPC frames.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "acp_open",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "AcpClientFrame"
+}

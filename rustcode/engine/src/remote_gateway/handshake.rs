@@ -314,6 +314,8 @@ pub enum ErrorCode {
     RateLimited,
     /// Unknown device, revoked device or wrong token; indistinguishable.
     Unauthorized,
+    /// The authenticated device cannot perform this operation.
+    UnauthorizedAccess,
     /// The gateway is at its connection or device limit.
     Busy,
     /// The host holds as many connection requests as it takes, or this
