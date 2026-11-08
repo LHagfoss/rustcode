@@ -592,7 +592,16 @@ fn bundle_path() -> Option<PathBuf> {
 
 fn writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".rustcode-update-probe-{}", std::process::id()));
-    let ok = std::fs::write(&probe, b"").is_ok();
+    let create = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+    };
+    // `create_new` never follows a file already at the name, so a folder others
+    // can write cannot be used to point the write at another file; a probe left
+    // by an earlier run (the same pid) is removed and made again.
+    let ok = create().is_ok() || (std::fs::remove_file(&probe).is_ok() && create().is_ok());
     let _ = std::fs::remove_file(&probe);
     ok
 }
@@ -812,12 +821,18 @@ pub async fn update_install(
         &install,
     )
     .await?;
-    let Some(package) = install.package().filter(|_| info.available) else {
+    let Some(package) = install.package() else {
         return Err(install
             .note()
             .unwrap_or_else(|| "No update this app can install itself.".into()));
     };
-    let version = info.latest.unwrap_or_default();
+    // The check this install re-runs has to offer it again: the release can be
+    // gone, or a beta the user skipped, between the row and the click. The
+    // install note is no answer to that (it says how an install works).
+    let offered = info.available;
+    let Some(version) = info.latest.filter(|_| offered) else {
+        return Err("This update is no longer offered. Check for updates again.".into());
+    };
     let asset = package
         .asset(&version, arch())
         .ok_or("This release has no app for this platform.")?;
@@ -953,27 +968,59 @@ fn private_dir() -> Result<PathBuf, String> {
 
 /// Writes the new AppImage next to the running one and renames it over that
 /// file: the swap is atomic, and the running copy keeps its old file open
-/// until it quits.
+/// until it quits. The staged file is made with `create_new`, so a file another
+/// user planted at the name (the AppImage can live in `/tmp`) is never followed.
 fn replace_appimage(target: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = target.parent().ok_or("The AppImage has no folder.")?;
     let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let staged = dir.join(format!(".{name}.update-{}", std::process::id()));
-    let swap = || -> std::io::Result<()> {
-        std::fs::write(&staged, bytes)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+    let mut staged = None;
+    for attempt in 0..8 {
+        let path = dir.join(format!(".{name}.update-{}-{attempt}", std::process::id()));
+        match write_executable(&path, bytes) {
+            Ok(()) => {
+                staged = Some(path);
+                break;
+            }
+            // A name taken by a leftover of an earlier attempt: the next one.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(appimage_failure(target, &e)),
         }
-        std::fs::rename(&staged, target)
-    };
-    swap().map_err(|e| {
-        let _ = std::fs::remove_file(&staged);
-        format!(
-            "RustCode could not replace {} ({e}). Download the new AppImage from the release page.",
+    }
+    let Some(staged) = staged else {
+        return Err(format!(
+            "RustCode could not write a new copy of {} (every name it tried is taken). Download the new AppImage from the release page.",
             target.display()
-        )
-    })
+        ));
+    };
+    if let Err(e) = std::fs::rename(&staged, target) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(appimage_failure(target, &e));
+    }
+    Ok(())
+}
+
+/// Writes `bytes` to a new file at `path`, executable: `create_new` refuses a
+/// file already there instead of writing through it.
+fn write_executable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+fn appimage_failure(target: &Path, error: &std::io::Error) -> String {
+    format!(
+        "RustCode could not replace {} ({error}). Download the new AppImage from the release page.",
+        target.display()
+    )
 }
 
 /// Variables the AppImage runtime and its launcher set for the running copy;
@@ -1470,6 +1517,46 @@ mod tests {
         assert_eq!(checksum("", asset), None);
     }
 
+    #[test]
+    fn a_checksum_names_its_own_asset_and_any_hex_case() {
+        let hash = "a1b2c3d4".repeat(8);
+        let asset = "RustCode-1.22.0-linux-x86_64.AppImage";
+        // The manifest's hex may be printed in either case (and mixed).
+        for written in [
+            hash.clone(),
+            hash.to_uppercase(),
+            hash.chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    if i % 2 == 0 {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c
+                    }
+                })
+                .collect(),
+        ] {
+            assert_eq!(
+                checksum(&format!("{written}  {asset}\n"), asset).as_deref(),
+                Some(hash.as_str()),
+                "{written}"
+            );
+        }
+        // A different asset whose name only shares a prefix or a suffix is not
+        // this one: the entry has to name it exactly.
+        for other in [
+            format!("{asset}.old"),
+            asset.trim_end_matches(".AppImage").to_string(),
+            asset.replace("x86_64", "aarch64"),
+        ] {
+            assert_eq!(
+                checksum(&format!("{hash}  {other}\n"), asset),
+                None,
+                "{other}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn download_reports_progress_to_the_end() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1729,6 +1816,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_release_sums_file_in_upper_case_still_verifies() {
+        let asset = "RustCode-1.22.0-linux-x86_64.deb";
+        let body = vec![3u8; 4096];
+        let hash: String = Sha256::digest(&body)
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
+        let sums = format!("{hash}  {asset}\n").into_bytes();
+        let base = serve(vec![
+            ("/RustCode-1.22.0-linux-x86_64.deb", body.clone()),
+            ("/SHA256SUMS", sums),
+        ])
+        .await;
+        let got = fetch_verified(&client().unwrap(), &base, asset, |_| {})
+            .await
+            .expect("an upper-case manifest verifies");
+        assert_eq!(got, body);
+    }
+
+    #[tokio::test]
     async fn a_download_that_does_not_match_the_release_sums_is_refused() {
         let asset = "RustCode-1.22.0-windows-x64-setup.exe";
         let served = vec![1u8; 4096];
@@ -1771,6 +1878,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The AppImage can sit in a folder others can write (`/tmp`), where anyone
+    /// may plant the name the swap would stage under. The write must make its
+    /// own file instead of following that one, in every attempt.
+    #[cfg(unix)]
+    #[test]
+    fn the_appimage_swap_never_writes_through_a_planted_file() {
+        let dir = scratch("appimage-planted");
+        let target = dir.join("RustCode.AppImage");
+        std::fs::write(&target, b"old").unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"keep me").unwrap();
+        for attempt in 0..8 {
+            let staged = dir.join(format!(
+                ".RustCode.AppImage.update-{}-{attempt}",
+                std::process::id()
+            ));
+            std::os::unix::fs::symlink(&victim, &staged).unwrap();
+        }
+        // Every name is taken: nothing is written, and the app stays as it was.
+        let err = replace_appimage(&target, b"new build").unwrap_err();
+        assert!(err.contains("release page"), "{err}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        // One name free: the swap uses it, not the planted link.
+        std::fs::remove_file(dir.join(format!(
+            ".RustCode.AppImage.update-{}-7",
+            std::process::id()
+        )))
+        .unwrap();
+        replace_appimage(&target, b"new build").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new build");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The write probe asks whether the folder takes a new file; it must not
+    /// truncate a file the name already names.
+    #[cfg(unix)]
+    #[test]
+    fn the_write_probe_never_truncates_a_planted_file() {
+        let dir = scratch("probe-planted");
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"keep me").unwrap();
+        let probe = dir.join(format!(".rustcode-update-probe-{}", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &probe).unwrap();
+        // The folder does take a file: the probe proves it with one of its own.
+        assert!(writable(&dir));
+        // The planted link is unlinked, not written through, and gone either way.
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
