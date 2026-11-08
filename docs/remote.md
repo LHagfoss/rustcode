@@ -728,7 +728,8 @@ JSON-RPC responses to server requests pass through. Batch messages are refused.
 `session/load` resume metadata (`_meta.rustcode.resume: {cursor}`) passes through
 without modification. The gateway translates WebSocket messages to the local
 server's newline-delimited JSON; JSON is compacted without changing JSON string contents or resume metadata. Local-server frames retain the gateway's 1 MiB
-frame limit. ACP has its own bounded outbound queue of 1,024 frames. Overflow
+frame limit. ACP has its own outbound queue capped at 1,024 frames and 16 MiB, including
+the frame being written. Overflow
 closes the device with `slow_consumer`; it never blocks other gateway clients.
 Revocation and gateway shutdown still close ACP connections, and closing either
 endpoint closes the other.

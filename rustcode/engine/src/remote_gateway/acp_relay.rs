@@ -1,7 +1,7 @@
 //! A desktop's restricted ACP connection to the per-user server.
 use super::gateway::MAX_FRAME_BYTES;
 use super::handshake::ErrorCode;
-use super::router::{ConnectionControl, FrameSink};
+use super::router::ConnectionControl;
 use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -14,6 +14,53 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
 type Socket = WebSocketStream<TcpStream>;
 const OUTBOUND_FRAMES: usize = 1024;
+const OUTBOUND_BYTES: usize = 16 * 1024 * 1024;
+
+// The permit travels with each frame, covering queued and in-flight writes.
+struct OutboundFrame {
+    text: String,
+    _bytes: tokio::sync::OwnedSemaphorePermit,
+}
+
+struct OutboundQueue {
+    sender: tokio::sync::mpsc::Sender<OutboundFrame>,
+    bytes: Arc<tokio::sync::Semaphore>,
+    control: Arc<ConnectionControl>,
+}
+
+impl OutboundQueue {
+    fn new(control: Arc<ConnectionControl>) -> (Self, tokio::sync::mpsc::Receiver<OutboundFrame>) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(OUTBOUND_FRAMES);
+        (
+            Self {
+                sender,
+                bytes: Arc::new(tokio::sync::Semaphore::new(OUTBOUND_BYTES)),
+                control,
+            },
+            receiver,
+        )
+    }
+
+    fn send(&self, text: String) -> Result<(), ErrorCode> {
+        let permit = u32::try_from(text.len())
+            .ok()
+            .and_then(|length| Arc::clone(&self.bytes).try_acquire_many_owned(length).ok());
+        if let Some(permit) = permit {
+            if self
+                .sender
+                .try_send(OutboundFrame {
+                    text,
+                    _bytes: permit,
+                })
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        self.control.close(ErrorCode::SlowConsumer);
+        Err(ErrorCode::SlowConsumer)
+    }
+}
 
 const EXACT_METHODS: &[&str] = &[
     "initialize",
@@ -68,7 +115,7 @@ pub(super) async fn relay(
         return None;
     }
     let (server_read, mut server_write) = tokio::io::split(stream);
-    let (sink, mut queue) = FrameSink::new(OUTBOUND_FRAMES, control);
+    let (sink, mut queue) = OutboundQueue::new(control);
     let produce = async {
         let mut server = BufReader::new(server_read);
         loop {
@@ -101,8 +148,8 @@ pub(super) async fn relay(
         loop {
             tokio::select! {
                 frame = queue.recv() => {
-                    let frame = frame?;
-                    if !matches!(tokio::time::timeout(write_timeout, writer.send(Message::text(frame))).await, Ok(Ok(()))) { return None; }
+                    let OutboundFrame { text, _bytes } = frame?;
+                    if !matches!(tokio::time::timeout(write_timeout, writer.send(Message::text(text))).await, Ok(Ok(()))) { return None; }
                 }
                 _ = ping.tick() => {
                     if last_heard.elapsed() >= idle_timeout { return Some(ErrorCode::IdleTimeout); }
@@ -149,6 +196,29 @@ pub(super) async fn relay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn outbound_queue_caps_bytes_and_releases_written_frames() {
+        let control = Arc::new(ConnectionControl::new(
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        let (sink, mut queue) = OutboundQueue::new(Arc::clone(&control));
+        for _ in 0..16 {
+            sink.send("x".repeat(1024 * 1024)).unwrap();
+        }
+        assert_eq!(sink.bytes.available_permits(), 0);
+        let frame = queue.recv().await.unwrap();
+        assert_eq!(
+            sink.bytes.available_permits(),
+            0,
+            "in-flight frame still counts"
+        );
+        drop(frame);
+        sink.send("x".repeat(1024 * 1024)).unwrap();
+        assert_eq!(sink.send("x".into()), Err(ErrorCode::SlowConsumer));
+        assert!(control.cancel.is_cancelled());
+        assert_eq!(control.reason(), ErrorCode::SlowConsumer);
+    }
+
     #[test]
     fn desktop_allowlist_contract() {
         assert_eq!(
