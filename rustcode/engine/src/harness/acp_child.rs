@@ -1024,4 +1024,4 @@ async fn relay(
 
 #[cfg(test)]
 #[path = "acp_child_tests.rs"]
-mod tests;
+pub(crate) mod tests;

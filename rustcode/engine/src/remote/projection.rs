@@ -304,6 +304,10 @@ pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> Re
             .or_else(|| state.effective_workspace_root())
             .map(|path| path.display().to_string()),
         model: state.model_name.clone(),
+        // A session this projection serves is on the built-in harness: a
+        // thread on an external one shares through its own mirror
+        // (`remote/harness.rs`).
+        harness: Some(crate::harness::BUILTIN_ID.to_owned()),
         turn_count: session_turn_count(state),
         last_active_at: state
             .history
@@ -555,17 +559,17 @@ pub(super) fn project_ended_timing(state: &AppState, turn_id: &str) -> Option<Re
 }
 
 /// Keep at most `limit` entries, reporting how many were left out.
-fn cap<T>(mut items: Vec<T>, limit: usize, omitted: &mut u32) -> Vec<T> {
+pub(super) fn cap<T>(mut items: Vec<T>, limit: usize, omitted: &mut u32) -> Vec<T> {
     *omitted = items.len().saturating_sub(limit) as u32;
     items.truncate(limit);
     items
 }
 
-fn encoded_len<T: serde::Serialize>(value: &T) -> usize {
+pub(super) fn encoded_len<T: serde::Serialize>(value: &T) -> usize {
     serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
 }
 
-fn halve(text: &mut BoundedText, keep_tail: bool) -> bool {
+pub(super) fn halve(text: &mut BoundedText, keep_tail: bool) -> bool {
     if text.text.is_empty() {
         return false;
     }

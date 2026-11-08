@@ -1120,3 +1120,20 @@ export function parseSessionHarness(result: Json): SessionHarness | undefined {
     ...(account ? { account } : {}),
   };
 }
+
+// ---------------------------------------------------------------- remote access
+
+// The remote shapes and their parser live in `remote.ts`, next to the methods
+// the page calls; they are re-exported here so every ACP shape stays reachable
+// from this module.
+export {
+  heldBackCount,
+  heldBackReason,
+  parseRemoteStatus,
+  type RemoteDevice,
+  type RemoteGateway,
+  RemoteMethod,
+  type RemoteOffer,
+  type RemotePairing,
+  type RemoteStatus,
+} from "./remote";

@@ -70,6 +70,7 @@ import {
   surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
+import { RemoteThreadIndicator } from "./RemoteAccessPage";
 import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
@@ -380,6 +381,8 @@ function Header({
             <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
           )}
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
+          {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
+          <RemoteThreadIndicator sessionId={thread?.id} />
         </>
       }
       right={right.length ? right : undefined}

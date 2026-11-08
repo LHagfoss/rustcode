@@ -574,6 +574,7 @@ async fn acp_load_session(
             record,
             connection,
             server.client_has_orchestration.load(Ordering::Relaxed),
+            &server.remote,
         )
         .await;
     }
@@ -942,6 +943,10 @@ struct AcpServer {
     presence: presence::Presence,
     /// `/remote` shares and their pairing offers.
     remote: remote::RemoteManager,
+    /// Not before this: the next attempt to share a thread by itself, after a
+    /// gateway that could not be reached. Without it a gateway that is down
+    /// would be retried, and logged, on every pass.
+    share_retry_at: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Threads running on an external harness (`docs/harnesses.md`).
     external: harnesses::ExternalSessions,
 }
@@ -1001,7 +1006,174 @@ fn unknown_session(session_id: &str) -> agent_client_protocol::Error {
         .data(format!("unknown ACP session: {session_id}"))
 }
 
+/// One open thread auto-share may share, with how recently it was used.
+struct Candidate {
+    last_active: String,
+    target: CandidateTarget,
+}
+
+enum CandidateTarget {
+    Builtin(Arc<remote::RemoteSession>),
+    Harness(String, Arc<crate::harness::session::ExternalSession>),
+}
+
+impl Candidate {
+    fn session_id(&self) -> String {
+        match &self.target {
+            CandidateTarget::Builtin(session) => session.session_id.clone(),
+            CandidateTarget::Harness(session_id, _) => session_id.clone(),
+        }
+    }
+}
+
 impl AcpServer {
+    /// Share every open thread while remote access is switched on for this
+    /// machine, and unshare them when it is switched off. A thread on the
+    /// built-in harness shares from its `AppState`; one on an external
+    /// harness shares the mirror of its updates. Both are the same threads
+    /// the app has open, so a device sees exactly those.
+    async fn auto_share(&self, connection: &agent_client_protocol::ConnectionTo<Client>) {
+        if !remote::enabled() {
+            if self.remote.shared_count() > 0 {
+                self.remote
+                    .unshare_all(crate::remote::SessionCloseReason::SharingDisabled)
+                    .await;
+            }
+            return;
+        }
+        if self
+            .share_retry_at
+            .lock()
+            .ok()
+            .and_then(|at| *at)
+            .is_some_and(|at| std::time::Instant::now() < at)
+        {
+            return;
+        }
+        // The gateway shares at most this many threads per host, so a Mac
+        // with more threads open shares the ones used most recently.
+        let room = remote::MAX_SHARED_SESSIONS.saturating_sub(self.remote.shared_count());
+        let mut candidates: Vec<Candidate> = Vec::new();
+        {
+            let sessions = self.sessions.lock().await;
+            for (session_id, session) in sessions.iter() {
+                if self.remote.is_shared(session_id) || self.remote.refusal(session_id).is_some() {
+                    continue;
+                }
+                // Read without waiting: a busy thread's clock is its last
+                // message, and a lock held elsewhere only costs it its place
+                // in the order.
+                let last_active = session
+                    .state
+                    .try_lock()
+                    .ok()
+                    .and_then(|state| {
+                        state
+                            .history
+                            .iter()
+                            .rev()
+                            .map(|message| message.timestamp.clone())
+                            .find(|timestamp| !timestamp.is_empty())
+                    })
+                    .unwrap_or_default();
+                candidates.push(Candidate {
+                    last_active,
+                    target: CandidateTarget::Builtin(remote::RemoteSession::from_acp(
+                        session_id.clone(),
+                        session,
+                        connection.clone(),
+                        Arc::clone(&self.client),
+                        self.auto_approve,
+                        self.presence.clone(),
+                        self.remote.clone(),
+                    )),
+                });
+            }
+        }
+        {
+            let sessions = self.external.lock().await;
+            for (session_id, session) in sessions.iter() {
+                if self.remote.is_shared(session_id)
+                    || self.remote.refusal(session_id).is_some()
+                    || session.is_closed()
+                {
+                    continue;
+                }
+                candidates.push(Candidate {
+                    last_active: session.record().updated_at,
+                    target: CandidateTarget::Harness(session_id.clone(), Arc::clone(session)),
+                });
+            }
+        }
+        // Most recently active first; a thread with no recorded activity goes
+        // last. ISO 8601 strings sort by time as they are.
+        candidates.sort_by(|left, right| right.last_active.cmp(&left.last_active));
+        // Past the host's bound the least recently active threads stay
+        // private, and their status says why.
+        for extra in candidates.iter().skip(room) {
+            self.remote.refuse(
+                &extra.session_id(),
+                "this host already shares 32 threads; close one to share this one".to_owned(),
+            );
+        }
+        let mut failed = false;
+        for candidate in candidates.into_iter().take(room) {
+            let session_id = candidate.session_id();
+            let started = match candidate.target {
+                CandidateTarget::Builtin(session) => self.remote.start(session, false).await,
+                CandidateTarget::Harness(id, session) => {
+                    self.remote
+                        .start_harness(id, session, Some(connection.clone()), false)
+                        .await
+                }
+            };
+            match started {
+                Ok(_) => {
+                    // A thread closed while this pass connected has nothing
+                    // to share: the close removed its session, so the share
+                    // that just registered would outlive it.
+                    if !self.thread_is_open(&session_id).await {
+                        self.remote
+                            .stop_session(
+                                &session_id,
+                                crate::remote::SessionCloseReason::SessionChanged,
+                            )
+                            .await;
+                    }
+                }
+                // The gateway itself could not be reached: back off for every
+                // thread, not just this one.
+                Err(remote::StartError::Link(message)) => {
+                    crate::dbg_log!("could not share this thread with a device: {message}");
+                    failed = true;
+                }
+                // This thread alone cannot be shared (it closed, or another
+                // process holds it): leave it, and try the others.
+                Err(remote::StartError::Refused(message)) => {
+                    crate::dbg_log!("thread {session_id} is not shared with a device: {message}");
+                    self.remote.refuse(&session_id, message);
+                }
+            }
+        }
+        if let Ok(mut retry_at) = self.share_retry_at.lock() {
+            *retry_at =
+                failed.then(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
+        }
+    }
+
+    /// Whether `session_id` is still open in this app, under the registry's
+    /// own lock: what a share started a moment ago must re-check.
+    async fn thread_is_open(&self, session_id: &str) -> bool {
+        if self.sessions.lock().await.contains_key(session_id) {
+            return true;
+        }
+        self.external
+            .lock()
+            .await
+            .get(session_id)
+            .is_some_and(|session| !session.is_closed())
+    }
+
     /// An open session's state and working directory.
     async fn session_handle(
         &self,
@@ -1047,6 +1219,7 @@ impl AcpServer {
             client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
+            share_retry_at: Arc::new(std::sync::Mutex::new(None)),
             external: harnesses::ExternalSessions::default(),
         })
     }
@@ -1394,6 +1567,24 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     .set_client(presence::client_meta_wants_presence(
                         request.client_capabilities.meta.as_ref(),
                     ));
+                // While remote access is on for this machine, every thread
+                // this app has open shares itself, the way a terminal does
+                // (`docs/remote.md`). The flag is read again on every pass:
+                // `/remote` in a terminal and Settings › Remote access here
+                // are one switch.
+                let autosharer = server.clone();
+                let autoshare_connection = _connection.clone();
+                tokio::spawn(async move {
+                    let mut interval =
+                        tokio::time::interval(std::time::Duration::from_secs(2));
+                    interval.set_missed_tick_behavior(
+                        tokio::time::MissedTickBehavior::Delay,
+                    );
+                    loop {
+                        interval.tick().await;
+                        autosharer.auto_share(&autoshare_connection).await;
+                    }
+                });
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(server_capabilities()),
@@ -1414,6 +1605,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     // while; it does not hold the dispatch loop.
                     if let Some(asked) = harnesses::external_request(&request) {
                         let external = server.external.clone();
+                        let remote = server.remote.clone();
                         let orchestration = server.client_has_orchestration.load(Ordering::Relaxed);
                         let connection = _connection.clone();
                         return _connection.spawn(async move {
@@ -1423,6 +1615,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                                 asked,
                                 &connection,
                                 orchestration,
+                                &remote,
                             )
                             .await
                             {
@@ -1838,6 +2031,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     if let Some(external) =
                         harnesses::get(&server.external, &request.session_id).await
                     {
+                        let remote = server.remote.clone();
                         return connection.spawn(async move {
                             let blocks = request.prompt.clone().unwrap_or_else(|| {
                                 vec![agent_client_protocol::schema::v1::ContentBlock::Text(
@@ -1847,6 +2041,9 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                                 )]
                             });
                             let accepted = external.steer(&blocks).await;
+                            if accepted {
+                                remote.note_prompt(&request.session_id, &request.text);
+                            }
                             responder.respond(serde_json::json!({ "accepted": accepted }))?;
                             Ok(())
                         });
@@ -1898,6 +2095,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let server = server.clone();
                     let notification = connection.clone();
                     connection.spawn(async move {
+                        if request.session_id.is_empty() {
+                            // Settings › Remote access: switch the machine on
+                            // with no thread named. Every open thread shares
+                            // itself from the next auto-share pass.
+                            return responder.respond(server.remote.enable().await);
+                        }
                         let session = {
                             let sessions = server.sessions.lock().await;
                             sessions.get(&request.session_id).map(|session| {
@@ -1922,7 +2125,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         };
                         match server.remote.start(session, request.pair).await {
                             Ok(value) => responder.respond(value)?,
-                            Err(error) => responder.respond_with_error(error)?,
+                            Err(error) => responder.respond_with_error(error.into_acp())?,
                         }
                         Ok(())
                     })
@@ -2091,8 +2294,15 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             close_builtin(&server, &session_id).await
                         };
                         let orchestration = server.client_has_orchestration.load(Ordering::Relaxed);
-                        match harnesses::switch(&server.external, request, builtin, &connection, orchestration)
-                            .await
+                        match harnesses::switch(
+                            &server.external,
+                            request,
+                            builtin,
+                            &connection,
+                            orchestration,
+                            &server.remote,
+                        )
+                        .await
                         {
                             Ok(value) => responder.respond(value)?,
                             Err(error) => responder.respond_with_error(error)?,
@@ -2701,7 +2911,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: CloseSessionRequest, responder, _connection| {
                     let session_id = request.session_id.to_string();
-                    if harnesses::close(&server.external, &session_id).await {
+                    if harnesses::close(&server.external, &session_id, &server.remote).await {
                         server.presence.session_closed(&session_id);
                         return responder.respond(CloseSessionResponse::new());
                     }
@@ -2801,8 +3011,25 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 async move |request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
                     if let Some(external) = harnesses::get(&server.external, &session_id).await {
+                        // A device reading the shared thread sees this prompt
+                        // too: a harness does not echo it back.
+                        let prompt_text = request
+                            .prompt
+                            .iter()
+                            .filter_map(|block| match block {
+                                ContentBlock::Text(text) => Some(text.text.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        server.remote.note_prompt(&session_id, &prompt_text);
+                        server.remote.note_prompt_applied(&session_id);
+                        let remote = server.remote.clone();
+                        let turn_session = session_id.clone();
                         return connection.spawn(async move {
-                            match external.prompt(request.prompt).await {
+                            let result = external.prompt(request.prompt).await;
+                            remote.note_turn_returned(&turn_session);
+                            match result {
                                 Ok(stop_reason) => {
                                     responder.respond(PromptResponse::new(stop_reason))?
                                 }
@@ -3215,6 +3442,7 @@ mod tests {
             client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
+            share_retry_at: Arc::new(std::sync::Mutex::new(None)),
             external: harnesses::ExternalSessions::default(),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);

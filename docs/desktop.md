@@ -504,21 +504,25 @@ composer's keys stay outside the table.
   name), decoded once, and the text drawn once per size on an offscreen
   canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
   the new one is ready. It fades in, and does not move under Reduce motion.
-- **Remote access.** Settings › Setup › Remote access
-  ([remote.md](remote.md)) starts the remote gateway, shares the threads
-  this app has open on the built-in harness with a paired phone, and shows
-  the address, the pairing QR code and the eight-digit code with its
-  countdown, the fixed five-wrong-codes allowance, and the paired devices.
-  A new device appears as *Paired ‹name›* and the used code is taken down,
-  not left until it expires. It asks the engine's `_rustcode/remote`,
+- **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
+  machine's switch: turned on it starts the remote gateway and shares every
+  thread this app has open with the paired devices — on the built-in harness
+  and on Codex, Claude Code, Pi or any other external harness — and a prompt,
+  cancel, question or approval from the phone acts on the desktop thread. The
+  page shows the gateway's address, the pairing QR code and the eight-digit
+  code with the challenge's countdown and the wrong codes left, and the paired
+  devices. A new device appears as *Paired ‹name›* and the used code is taken
+  down, not left until it expires. It asks the engine's `_rustcode/remote`,
   `_rustcode/remote/start`, `_rustcode/remote/pair` and
-  `_rustcode/remote/stop` over ACP; the engine owns the gateway, the
-  shares and pairing (`rustcode/engine/src/acp/remote.rs`). An external
-  harness thread (Claude Code, Codex, Pi) keeps no ACP session, so it is
-  listed but not shareable. The QR code is encoded in the app
-  (`src/lib/qr.ts`), so no pairing material leaves it. A thread opened
-  after remote access was turned on is shared from the page's *Open
-  threads* row, which also says how many devices are attached.
+  `_rustcode/remote/stop` over ACP, with no `sessionId` for the machine's own
+  switch and pairing; the engine owns the gateway, the shares and pairing
+  (`rustcode/engine/src/acp/remote.rs`). The QR code is the engine's own rows
+  (`qrRows`) when it sends them, else it is encoded in the app
+  (`src/lib/qr.ts`), so no pairing material leaves it. Its *Open threads*
+  group says which threads are shared, how many devices are attached to each,
+  and why a thread the host holds back (it shares at most 32 at once, most
+  recently used first) is not. A thread's header carries a chip while it is
+  shared, with its attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Window.** The window opens at the size it was last closed with
@@ -1328,8 +1332,8 @@ From the SwiftUI app, still missing or partial:
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, revoking a paired device (the CLI's
-  `rustcode remote revoke` does it).
+  keybinding editor, Discord presence, revoking a paired device (Settings ›
+  Remote access lists them; `rustcode remote revoke` in a terminal revokes).
 - Terminal tabs (one terminal per folder).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The

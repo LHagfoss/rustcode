@@ -88,14 +88,14 @@ describe("mock remote access", () => {
       expect(paired.offer?.expiresInSecs).toBeGreaterThan(0);
       expect(paired.offer?.qrPayload).toContain('"protocol_version":1');
 
-      // A session that is not shared is refused with a reason, not an RPC error,
-      // in exactly the engine's shape (`acp/remote.rs` › `pair`).
-      const refused = (await engine.request("_rustcode/remote/pair", {
-        sessionId: "mock-thread-4",
-      })) as JsonObject;
-      expect(Object.keys(refused).sort()).toEqual(["available", "error", "shared"]);
-      expect(refused.shared).toBe(false);
-      expect(refused.error).toBe("this session is not shared");
+      // A challenge belongs to the gateway, so pairing a thread the app does
+      // not share still answers with an offer, as the engine does
+      // (`acp/remote.rs` › `pair` › `pair_host`).
+      const other = parseRemoteStatus(
+        await engine.request("_rustcode/remote/pair", { sessionId: "mock-thread-4" }),
+      );
+      expect(other.shared).toBe(false);
+      expect(other.offer?.code).toBe("4927-3318");
 
       const stopped = parseRemoteStatus(
         await engine.request("_rustcode/remote/stop", { sessionId: "mock-thread-1" }),
@@ -133,8 +133,40 @@ describe("mock remote access", () => {
       );
       expect(started.shared).toBe(true);
       expect(started.gateway?.connected).toBe(false);
-      expect(started.gateway?.attachedDevices).toBe(0);
-      expect(started.gateway?.connectedDevices).toBe(0);
+      expect(started.gateway?.attachedDevices).toEqual([]);
+      expect(started.gateway?.connectedDevices).toEqual([]);
+    } finally {
+      await engine.done();
+    }
+  });
+
+  test("the machine's switch shares every open thread, and off stops them", async () => {
+    const engine = mockEngine();
+    try {
+      // Settings › Remote access names no thread: the gateway comes up and
+      // every open thread on any harness is shared (`acp.rs` › `auto_share`).
+      const host = parseRemoteStatus(await engine.request("_rustcode/remote"));
+      expect(host.enabled).toBe(false);
+      expect(host.gateway).toBeUndefined();
+      expect(host.notShared).toBe(0);
+
+      const on = parseRemoteStatus(await engine.request("_rustcode/remote/start", {}));
+      expect(on.enabled).toBe(true);
+      expect(on.gateway?.connected).toBe(true);
+      expect(on.gateway?.sessions).toBeGreaterThan(0);
+
+      const thread = parseRemoteStatus(
+        await engine.request("_rustcode/remote", { sessionId: "mock-thread-1" }),
+      );
+      expect(thread.shared).toBe(true);
+
+      const paired = parseRemoteStatus(await engine.request("_rustcode/remote/pair", {}));
+      expect(paired.offer?.qrRows?.length).toBeGreaterThan(0);
+      expect(paired.gateway?.pairing?.attemptsLeft).toBe(5);
+
+      const off = parseRemoteStatus(await engine.request("_rustcode/remote/stop", {}));
+      expect(off.enabled).toBe(false);
+      expect(off.shared).toBe(false);
     } finally {
       await engine.done();
     }

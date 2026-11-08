@@ -270,6 +270,38 @@ pub fn paired_devices(config_directory: &Path) -> usize {
         .unwrap_or(0)
 }
 
+/// Switch remote access on for this machine with nothing to share yet, as
+/// Settings › Remote access does: clear the explicit-off marker, then start
+/// the gateway the way `/remote` would. Every open thread shares itself from
+/// the next pass of its frontend's auto-share loop.
+pub async fn enable_for_host() -> Result<()> {
+    let config_directory = crate::config::get_config_dir().context("no configuration directory")?;
+    let lifecycle = super::lifecycle::RemoteLifecycle::new(&config_directory);
+    let _ = std::fs::remove_file(config_directory.join("remote/disabled"));
+    let mut launcher = super::owner_client::Launcher {
+        program: executable_path()?,
+        config_directory: config_directory.clone(),
+        bind: None,
+        port: None,
+        advertise: None,
+        prefer_interface: None,
+    };
+    let (_, _, config) = crate::config::load_config();
+    launcher.bind = config.remote.bind;
+    launcher.port = config.remote.port;
+    launcher.advertise = config.remote.advertise;
+    launcher.prefer_interface = config.remote.prefer_interface;
+    let status = start(&launcher, &lifecycle).await?;
+    crate::logger::operational_event(
+        "remote.enabled",
+        serde_json::json!({
+            "advertised_address": status.advertised_address,
+            "gateway_id": status.gateway_id,
+        }),
+    );
+    Ok(())
+}
+
 /// Switch remote access off for this machine: remember the choice, remove the
 /// login service and stop the gateway. Returns whether a gateway was running.
 pub async fn disable(config_directory: &Path) -> Result<bool> {

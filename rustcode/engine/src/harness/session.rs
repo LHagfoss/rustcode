@@ -868,6 +868,16 @@ impl ExternalSession {
         self.adapter.lock().await.is_some()
     }
 
+    /// The transcript recorded so far. A share of this thread starts its
+    /// mirror from it, so nothing recorded before the share is missing.
+    pub(crate) fn recorded_history(&self) -> Vec<crate::app::ChatMessage> {
+        self.transcript
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .history
+            .clone()
+    }
+
     /// The transcript recorded so far (tests).
     #[cfg(test)]
     pub(crate) fn history(&self) -> Vec<crate::app::ChatMessage> {
@@ -1525,6 +1535,12 @@ impl ExternalSession {
         }
     }
 
+    /// Whether this thread was closed: the app's registry dropped it, so a
+    /// share of it must end.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     /// Stop the harness for good: `session/close`, connection close.
     pub(crate) async fn close(&self) {
         self.closed.store(true, Ordering::Release);
@@ -1752,6 +1768,17 @@ pub(crate) mod test_support {
         record: HarnessRecord,
         choice: Option<&str>,
     ) -> Thread {
+        with_record_named(harness, "test-thread", record, choice)
+    }
+
+    /// The same, under a session id of its own: a test that reads the thread's
+    /// status must not see a test running beside it on the shared id.
+    pub(crate) fn with_record_named(
+        harness: &ResolvedHarness,
+        session_id: &str,
+        record: HarnessRecord,
+        choice: Option<&str>,
+    ) -> Thread {
         let (updates_tx, updates) = mpsc::unbounded_channel();
         let (permissions_tx, permissions) = mpsc::unbounded_channel();
         let sink = Arc::new(ChannelSink {
@@ -1760,7 +1787,7 @@ pub(crate) mod test_support {
             choice: choice.map(str::to_owned),
         });
         let session = ExternalSession::new(
-            "test-thread".to_owned(),
+            session_id.to_owned(),
             harness.clone(),
             record,
             Vec::new(),
@@ -1771,6 +1798,56 @@ pub(crate) mod test_support {
             session,
             updates,
             permissions,
+        }
+    }
+
+    /// A thread whose client is `wrap`ped around a sink that never answers a
+    /// permission request by itself: only whoever the wrapper adds can. Used
+    /// where a test answers from somewhere other than the client, as a paired
+    /// device does.
+    pub(crate) fn thread_with_pending_client(
+        harness: &ResolvedHarness,
+        session_id: &str,
+        wrap: impl FnOnce(Arc<dyn ClientSink>) -> Arc<dyn ClientSink>,
+    ) -> Thread {
+        let (updates_tx, updates) = mpsc::unbounded_channel();
+        let (permissions_tx, permissions) = mpsc::unbounded_channel();
+        let recording: Arc<dyn ClientSink> = Arc::new(PendingSink {
+            updates: updates_tx,
+            permissions: permissions_tx,
+        });
+        let sink = wrap(recording);
+        let record = HarnessRecord::new(&harness.id, std::env::temp_dir());
+        let session = ExternalSession::new(
+            session_id.to_owned(),
+            harness.clone(),
+            record,
+            Vec::new(),
+            sink,
+            false,
+        );
+        Thread {
+            session,
+            updates,
+            permissions,
+        }
+    }
+
+    /// A sink that records what it is sent and never answers a permission
+    /// request on its own.
+    pub(crate) struct PendingSink {
+        pub updates: mpsc::UnboundedSender<SessionUpdate>,
+        pub permissions: mpsc::UnboundedSender<RequestPermissionRequest>,
+    }
+
+    impl ClientSink for PendingSink {
+        fn update(&self, update: SessionUpdate) {
+            let _ = self.updates.send(update);
+        }
+
+        fn request_permission(&self, request: RequestPermissionRequest) -> PermissionFuture {
+            let _ = self.permissions.send(request);
+            Box::pin(std::future::pending())
         }
     }
 

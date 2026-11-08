@@ -688,7 +688,14 @@ pub struct RemoteSessionInfo {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// The model the thread runs on, as the host names it; empty when the
+    /// host does not know it.
     pub model: String,
+    /// The harness the thread runs on: `rustcode` for the built-in one, else
+    /// the harness id (`claude-code`, `codex`, `pi`, …). Absent from a host
+    /// that predates harness threads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
     /// Total logical turns across the full host transcript, including an active turn.
     /// Absent when an archived prefix prevents an exact total.
     #[serde(default, skip_serializing_if = "Option::is_none")]

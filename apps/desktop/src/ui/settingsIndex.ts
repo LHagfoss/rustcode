@@ -181,21 +181,35 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // ------------------------------------------------------------ Remote access
   {
     section: "remote",
-    title: "Share this app's threads",
-    keywords: "remote access gateway phone device share mobile iphone pair on off",
+    title: "Share this Mac's threads with a phone",
+    keywords:
+      "remote access phone device mobile share paired pair gateway on off switch every thread harness",
   },
   {
     section: "remote",
     title: "Gateway address",
-    keywords: "address ip port lan netbird remote gateway network",
+    keywords: "address ip host port lan netbird remote gateway network copy connected",
   },
   {
     section: "remote",
     title: "Pair a device",
-    keywords: "pair pairing qr code device phone mobile scan eight digit",
+    keywords: "pair pairing qr code scan phone device mobile address eight digit two minutes",
   },
-  { section: "remote", title: "Paired devices", keywords: "devices paired revoke phone" },
-  { section: "remote", title: "Open threads", keywords: "threads shared open list" },
+  {
+    section: "remote",
+    title: "Paired devices",
+    keywords: "devices paired attachments attached phone revoke revoke device count",
+  },
+  {
+    section: "remote",
+    title: "Open threads",
+    keywords: "threads shared open list share attached harness",
+  },
+  {
+    section: "remote",
+    title: "Held back threads",
+    keywords: "not shared held back refused limit 32 most recently used why",
+  },
 
   // ------------------------------------------------------------ Appearance
   { section: "appearance", title: "Light or dark", keywords: "mode theme system" },

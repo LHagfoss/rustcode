@@ -65,25 +65,6 @@ The gateway runs in the background when started by `/remote`; output goes to
 `remote/gateway.log` in the configuration directory. It keeps running when the
 terminal exits; `rustcode remote stop` stops it.
 
-## From the desktop app
-
-The macOS app ([desktop.md](desktop.md)) has the same switch without a
-terminal: **Settings › Setup › Remote access**. It starts the gateway, shares
-the threads the app has open on the built-in harness, and shows the gateway
-address with the pairing QR code, the eight-digit code, its countdown and the
-fixed allowance of five wrong codes (it has no live count of the attempts
-left). Pairing there is the same challenge as `/remote pair`: scan the code or
-type the address and code, and the phone sees the shared threads and can open
-one, send a prompt and resolve an approval. A new device shows as *Paired
-‹name›* and the used code is taken down at once. A thread opened
-after remote access was turned on is shared from the page's *Open threads*
-row, which also says how many devices are attached. A thread on an external
-harness (Claude Code, Codex, Pi) is listed but cannot be shared: only ACP
-sessions register with the gateway. Turning the switch off stops the gateway
-for the whole machine, as `/remote off` does, including shares a terminal
-started; the paired devices stay paired, and revoking one is still
-`rustcode remote revoke <device>`.
-
 ## Automatic address selection
 
 Without `--bind` or a configured bind, `auto` chooses an active Wi-Fi/Ethernet
@@ -141,6 +122,57 @@ To choose another address by hand: `rustcode remote stop`, then
 `rustcode remote serve` with an explicit `--bind`. Sessions that were shared
 register with the new gateway on their own within two minutes; devices stay
 paired.
+
+## In the desktop app
+
+Settings › **Remote access** is the same switch, without a terminal. Turn it
+on and every thread the app has open is shared: on the built-in harness and on
+Codex, Claude Code, Pi, OpenCode or any other external harness
+([harnesses](harnesses.md)). A thread opened later is shared as soon as it
+exists, and closing it ends its share. Switching it off stops the gateway and
+every device, exactly as `/remote off` does; pairings are kept.
+
+| In the app | What it does |
+| --- | --- |
+| **Remote access › Share this Mac's threads with a phone** | On: starts the gateway and shares every open thread. Off: stops it. |
+| **Remote access › Gateway address** | The `host:port` a device dials, how many devices are connected, and whether it is reachable from another machine at all. |
+| **Remote access › Pair a device** | Calls the same pairing challenge as `/remote pair`: a QR code, the address, the manual code, the countdown and the wrong codes left. Remote access is switched on first if it was off. |
+| **Pairing** | The challenge on screen, its countdown, the wrong codes left, a lockout, and *Paired ‹name›* once a device pairs. |
+| **Paired devices** | How many devices are paired, with their names. Revoking one is `rustcode remote revoke` for now. |
+| **Open threads** | Each open thread with its harness, whether it is shared and how many devices are attached, or why the host holds it back. |
+| A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
+
+Each shared thread tells a device which harness runs it and its model
+(`harness` and `model` on the session list and on every snapshot), so a phone
+labels a Claude Code thread as such. The app and a terminal share one setting:
+`/remote on` in a terminal shares the app's open threads too, and the app's
+switch shows that it is on. While a
+thread runs on an external harness, a prompt sent from a device is run through
+the harness exactly as the app's own message is, and the engine echoes it to
+the app as a `user_message_chunk`, so the chat shows it live; cancelling,
+steering, answering a question and resolving an approval work the same way.
+One rough edge: an approval a device resolves leaves the app's approval card
+on screen until the turn ends, because ACP has no way to withdraw a request
+already sent to the client.
+
+A host shares at most 32 threads at once. When more are open, the ones used
+most recently are shared and the rest say why they are not (`notShared`), the
+same reason `rustcode remote status` gives for a session the gateway refused.
+Prompts a device queues on a thread are dropped when sharing ends, and a share
+the gateway turns down is retried no more than once a minute.
+
+The ACP methods behind the page (`_rustcode/remote`, `/start`, `/pair`,
+`/stop`, in `engine/src/acp/remote.rs`) take an optional `sessionId`: with it
+they describe and drive that thread's share, without it the machine's own
+switch, gateway and challenge. Their answers add `qrRows` (the QR code as rows
+of `0` and `1`, quiet zone included), `target` (the harness a shared thread
+runs on), `notShared` (why this thread is held back on a thread's answer, the
+count of held-back threads on the machine's) and, for the machine,
+`gateway.pairing` and `gateway.connectedDevices` from the gateway's own
+status. The wire protocol to the gateway
+([remote-protocol](remote-protocol/README.md)) changed only additively:
+session entries gained an optional `harness`, and every other field and frame
+works as before.
 
 ## In the terminal
 

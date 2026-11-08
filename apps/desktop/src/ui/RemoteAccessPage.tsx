@@ -1,14 +1,20 @@
-// Settings › Remote access (docs/remote.md): the gateway, the threads this app
-// shares with a paired phone, and device pairing. The engine owns the gateway,
-// the shares and pairing, and answers `_rustcode/remote*`; the page only asks,
-// polls while it is open, and draws the offer the engine hands back.
+// Settings › Remote access (docs/remote.md): the switch that shares this app's
+// open threads with paired phones, the gateway's address, pairing, the paired
+// devices and each open thread's share. The engine owns the gateway, the
+// shares and pairing, and answers `_rustcode/remote*`; the page asks, polls
+// while it is open, and draws the offer the engine hands back.
+//
+// Every open thread is shared, whatever harness runs it (the built-in one, or
+// Codex, Claude Code, Pi and any other external harness): a device sees them
+// all while the switch is on, and a prompt, cancel, question or approval sent
+// from the phone acts on the thread here. The host shares at most 32 at once,
+// most recently used first, and says why it holds the rest back.
 
-import { Copy, RefreshCw, Smartphone } from "lucide-react";
+import { Copy, RefreshCw, Smartphone, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Json } from "../acp/jsonrpc";
-import { parseRemoteStatus, RemoteMethod, type RemoteOffer, type RemoteStatus } from "../acp/remote";
+import { heldBackCount, heldBackReason, type RemoteOffer, type RemotePairing } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
-import { errorText, request, toast, useApp } from "../state/store";
+import { errorText, pairRemoteDevice, refreshRemote, setRemoteAccess, toast, useApp } from "../state/store";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { Action, Chip, Group, Loading, Row } from "./settingsKit";
 
@@ -24,15 +30,10 @@ const PAIR_DEADLINE_MS = 20_000;
 /** Wrong codes one challenge tolerates (`remote_gateway/pairing.rs`). */
 const WRONG_CODES_ALLOWED = 5;
 
-interface Reading {
-  status: RemoteStatus;
-  readAt: number;
-}
-
 interface OpenThread {
   id: string;
   title: string;
-  /** The harness the thread runs on; only the built-in one is an ACP session. */
+  /** The harness the thread runs on; the engine shares either kind. */
   harness: string;
 }
 
@@ -40,18 +41,18 @@ export function RemoteAccessPage() {
   const engine = useApp((s) => s.status);
   const sessions = useApp((s) => s.sessions);
   const threads = useApp((s) => s.threads);
-  const [readings, setReadings] = useState<Record<string, Reading>>({});
-  const [error, setError] = useState<string | null>(null);
+  const remote = useApp((s) => s.remote);
+  const remoteError = useApp((s) => s.remoteError);
+  const byThread = useApp((s) => s.remoteByThread);
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [readAt, setReadAt] = useState(0);
   const [paired, setPaired] = useState<{ name: string } | null>(null);
-  const [pendingSince, setPendingSince] = useState<number | null>(null);
-  const readToken = useRef(0);
+  const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);
 
-  // The app's open threads, with the harness each runs on. Only the built-in
-  // harness keeps an ACP session (`server.sessions`); an external harness
-  // thread lives in `server.external`, which `_rustcode/remote/start` does
-  // not share.
+  // The app's open threads, with the harness each runs on. Both kinds are
+  // shared: the built-in harness from its ACP session, an external one from
+  // the mirror of the updates it sends.
   const open = useMemo<OpenThread[]>(
     () =>
       sessions
@@ -63,34 +64,14 @@ export function RemoteAccessPage() {
         })),
     [sessions, threads],
   );
-  const shareable = open.filter((thread) => thread.harness === "rustcode");
-  const external = open.filter((thread) => thread.harness !== "rustcode");
-  // With no thread open, the newest saved one still answers the machine-wide
-  // part of the status (the gateway, the devices); it shares nothing.
-  const ids = open.length ? open.map((thread) => thread.id) : sessions.slice(0, 1).map((s) => s.id);
-  const idsKey = ids.join("|");
+  const idsKey = open.map((thread) => thread.id).join("|");
 
   const refresh = useCallback(async () => {
-    const asking = idsKey ? idsKey.split("|") : [];
-    if (!asking.length) {
-      setReadings({});
-      setError(null);
-      return;
-    }
-    const token = ++readToken.current;
-    try {
-      const entries = await Promise.all(
-        asking.map(async (id) => {
-          const value = await request<Json>(RemoteMethod.status, { sessionId: id }, 10_000);
-          return [id, { status: parseRemoteStatus(value), readAt: Date.now() }] as const;
-        }),
-      );
-      if (token !== readToken.current) return;
-      setReadings(Object.fromEntries(entries));
-      setError(null);
-    } catch (e) {
-      if (token === readToken.current) setError(errorText(e));
-    }
+    await refreshRemote();
+    setReadAt(Date.now());
+    // One read per open thread, so the *Open threads* rows and the thread
+    // headers say what the engine says about that thread's own share.
+    for (const id of idsKey ? idsKey.split("|") : []) void refreshRemote(id);
   }, [idsKey]);
 
   useEffect(() => {
@@ -105,144 +86,78 @@ export function RemoteAccessPage() {
     return () => clearInterval(timer);
   }, []);
 
-  const list = Object.values(readings);
-  const shared = list.filter((reading) => reading.status.shared);
-  const offerReading = shared.find((reading) => reading.status.offer) ?? list.find((r) => r.status.offer);
-  const offer = offerReading?.status.offer;
-  const gateway = list.map((reading) => reading.status.gateway).find(Boolean);
-  const devices = list.find((reading) => reading.status.devices.length)?.status.devices ?? [];
-  const pending = list.some((reading) => reading.status.pairingPending);
-  const expired = list.some((reading) => reading.status.pairingExpired);
-  const pairingError = list.map((reading) => reading.status.pairingError).find(Boolean);
-  const ended = shared.map((reading) => reading.status.error).find(Boolean);
-  const unavailable = list.length > 0 && list.every((reading) => !reading.status.available);
-  const enabled = list.some((reading) => reading.status.enabled);
-  const on = shared.length > 0;
-  // Pairing answers on one shared session; a new offer replaces the previous one.
-  const target = shared[0]?.status.sessionId ?? shareable[0]?.id;
+  const devices = remote?.devices ?? [];
+  const gateway = remote?.gateway;
+  const offer = remote?.offer;
+  const pairing = gateway?.pairing;
+  const unavailable = remote?.available === false;
+  const enabled = remote?.enabled === true;
+  const heldBack = heldBackCount(remote);
+  const pending = busy === "pair" || remote?.pairingPending === true;
+  const expired = remote?.pairingExpired === true;
+  const pairingError = remote?.pairingError;
+  const ended = remote?.error;
 
-  // A used offer stays in the engine's answer until it expires, so the page
-  // watches for a device it did not know when the offer arrived: that is the
-  // phone pairing. A new offer starts the known list again.
-  const devicesKey = devices.map((device) => device.id).join("|");
-  const offerKey = offer ? String(offer.challenge ?? offer.qrPayload) : "";
-  const knownDevices = useRef<{ offer: string; ids: string[] } | null>(null);
-  // The devices just before a code is asked for: a phone that pairs at once
-  // is new against that list, not against the answer that already has it.
+  // A phone that pairs appears in the device list: remember the list from
+  // before the code was asked for, so one that pairs at once is still new.
   const baselineDevices = useRef<string[] | null>(null);
   useEffect(() => {
-    if (!offer) {
-      knownDevices.current = null;
-      return;
-    }
-    const known = devicesKey ? devicesKey.split("|") : [];
-    if (knownDevices.current?.offer !== offerKey) {
-      knownDevices.current = { offer: offerKey, ids: baselineDevices.current ?? known };
-      baselineDevices.current = null;
-      setPaired(null);
-      return;
-    }
-    const fresh = known.find((id) => !knownDevices.current!.ids.includes(id));
+    const baseline = baselineDevices.current;
+    if (!baseline) return;
+    const fresh = devices.find((device) => !baseline.includes(device.id));
     if (!fresh) return;
-    knownDevices.current.ids.push(fresh);
-    const name = devices.find((device) => device.id === fresh)?.name ?? fresh;
-    setPaired((current) => (current?.name === name ? current : { name }));
-  }, [offer, offerKey, devices, devicesKey]);
+    baselineDevices.current = null;
+    setPaired({ name: fresh.name });
+  }, [devices]);
 
   useEffect(() => {
-    setPendingSince((current) => (pending ? (current ?? Date.now()) : null));
-  }, [pending]);
-
-  // Remote access can end from a terminal too: drop a "Paired" note then.
-  useEffect(() => {
-    if (!enabled && !on) setPaired(null);
-  }, [enabled, on]);
+    if (!enabled) setPaired(null);
+  }, [enabled]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
     setBusy(label);
     try {
       await action();
     } catch (e) {
-      toast(errorText(e), "error");
+      // `setRemoteAccess` and `pairRemoteDevice` also toast their own refusal.
+      if (label !== "pair" && label !== "toggle") toast(errorText(e), "error");
     } finally {
       await refresh();
       setBusy(null);
     }
   };
 
-  /**
-   * Share each thread. The first start also brings the gateway up (it can take
-   * seconds), so it goes alone; the rest register on the running gateway in
-   * parallel, and one refusal does not hide the others.
-   */
-  const start = async (sessionIds: string[], pair: boolean) => {
-    const [first, ...rest] = sessionIds;
-    if (!first) return;
-    await request(RemoteMethod.start, { sessionId: first, pair }, 30_000);
-    const settled = await Promise.allSettled(
-      rest.map((sessionId) => request(RemoteMethod.start, { sessionId, pair: false }, 30_000)),
-    );
-    const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (failed) throw failed.reason;
-  };
-
-  // `_rustcode/remote/stop` is machine-wide; the session id is only the
-  // answer's own label, so a saved thread is enough when none is shared.
-  const stopId = target ?? ids[0];
-  const stop = () => {
-    if (!stopId) return;
-    void run("stop", () => request(RemoteMethod.stop, { sessionId: stopId }, 30_000));
-    setPaired(null);
-  };
-
   const toggle = (next: boolean) => {
-    if (next)
-      void run("start", () =>
-        start(
-          shareable.map((thread) => thread.id),
-          false,
-        ),
-      );
-    else stop();
+    if (!next) setPaired(null);
+    void run("toggle", () => setRemoteAccess(next));
   };
 
   const pair = () => {
-    if (!target) return;
     setPaired(null);
     baselineDevices.current = devices.map((device) => device.id);
-    setPendingSince(Date.now());
-    void run("pair", async () => {
-      const value = await request<Json>(RemoteMethod.pair, { sessionId: target }, 30_000);
-      const answer = parseRemoteStatus(value);
-      // A refusal is an answer, not an error: `{available, shared: false, error}`.
-      if (answer.error) throw new Error(answer.error);
-      setReadings((current) => ({
-        ...current,
-        [target]: { status: answer, readAt: Date.now() },
-      }));
-    });
+    setPairAskedAt(Date.now());
+    void run("pair", () => pairRemoteDevice());
   };
 
-  if (engine !== "ready" || (!list.length && ids.length > 0)) {
-    return <Loading error={error} />;
+  if (engine !== "ready" || (remote === null && !remoteError)) {
+    return <Loading error={remoteError} />;
   }
 
+  const shared = open.filter((thread) => byThread[thread.id]?.shared);
   const status = unavailable
     ? "Remote access is not available on this host."
     : ended
       ? ended
-      : on
-        ? shared.length === shareable.length
+      : enabled
+        ? shared.length
           ? `Sharing ${shared.length === 1 ? "this thread" : `these ${shared.length} threads`} with paired devices.`
-          : `Sharing ${shared.length} of ${shareable.length} shareable threads.`
-        : enabled
-          ? "The gateway is on for this Mac, but this app shares nothing yet."
-          : "Nothing is shared from this app.";
+          : "Remote access is on for this Mac. An open thread is shared from the next pass."
+        : "Nothing is shared from this app.";
 
   return (
     <>
-      {error && list.length > 0 && (
-        <p className="mb-6 text-callout text-warning">Could not read the gateway: {error}</p>
+      {remoteError && (
+        <p className="mb-6 text-callout text-warning">Could not read the gateway: {remoteError}</p>
       )}
 
       <Group
@@ -250,27 +165,17 @@ export function RemoteAccessPage() {
         footer="Shared with the RustCode app on your phone through the remote gateway (docs/remote.md). Plain LAN traffic is authenticated but not encrypted: use NetBird away from a trusted network."
       >
         <Row
-          title="Share this app's threads"
-          subtitle="Starts the gateway and lists the threads this app has open on the built-in harness in the phone app. Turning it off stops remote access for this Mac, including a share a terminal started; paired devices stay paired."
+          title="Share this Mac's threads with a phone"
+          subtitle="Starts the gateway and shares every thread this app has open — on the built-in harness or on Codex, Claude Code, Pi or any other — with the paired devices. Turning it off stops remote access for this Mac, including a share a terminal started; paired devices stay paired."
           status={status}
         >
           <Switch
             label="Remote access"
-            checked={on}
-            disabled={!shareable.length || unavailable || busy !== null}
+            checked={enabled}
+            disabled={unavailable || busy !== null}
             onChange={toggle}
           />
         </Row>
-        {enabled && !on && (
-          <Row
-            title="Remote access is on for this Mac"
-            subtitle="A terminal turned it on and still shares there. Turning it off stops the gateway for the whole machine."
-          >
-            <Action disabled={busy !== null || !stopId} onClick={stop}>
-              Turn off
-            </Action>
-          </Row>
-        )}
         <Row
           title="Gateway address"
           subtitle="The address a phone on this network dials. The terminal's `/remote status` shows the same one."
@@ -278,11 +183,12 @@ export function RemoteAccessPage() {
             gateway?.advertisedAddress ? (
               <span className="font-mono">
                 {gateway.advertisedAddress}
-                {gateway.connected
-                  ? ` · ${gateway.connectedDevices} device${gateway.connectedDevices === 1 ? "" : "s"} connected`
+                {gateway.connected && gateway.connectedDevices.length > 0
+                  ? ` · ${gateway.connectedDevices.length} device${gateway.connectedDevices.length === 1 ? "" : "s"} connected`
                   : ""}
+                {gateway.loopbackOnly ? " · this Mac only" : ""}
               </span>
-            ) : on ? (
+            ) : enabled ? (
               "The gateway has not announced an address yet."
             ) : (
               "The gateway is not running."
@@ -297,8 +203,8 @@ export function RemoteAccessPage() {
               <Copy size={12} /> Copy
             </Action>
           )}
-          <Chip tone={gateway?.connected ? "ok" : on ? "warn" : "idle"}>
-            {gateway?.connected ? "Connected" : on ? "Starting" : "Off"}
+          <Chip tone={gateway?.connected ? "ok" : enabled ? "warn" : "idle"}>
+            {gateway?.connected ? "Connected" : enabled ? "Starting" : "Off"}
           </Chip>
         </Row>
         <Row
@@ -307,20 +213,27 @@ export function RemoteAccessPage() {
           status={
             unavailable
               ? "Remote access needs the remote gateway, which this host does not build."
-              : !shareable.length
-                ? "Open a built-in harness thread first: pairing happens through a shared thread."
-                : pending
-                  ? "Asking the gateway for a code…"
-                  : expired
-                    ? "The last code expired. Pair again for a fresh one."
-                    : undefined
+              : pending
+                ? "Asking the gateway for a code…"
+                : expired
+                  ? "The last code expired. Pair again for a fresh one."
+                  : undefined
           }
         >
-          <Action prominent disabled={!shareable.length || unavailable || busy !== null} onClick={pair}>
+          <Action prominent disabled={unavailable || busy !== null} onClick={pair}>
             {busy === "pair" ? <Spinner /> : <Smartphone size={13} />}
             Pair a device
           </Action>
         </Row>
+        {heldBack > 0 && (
+          <Row
+            title="Held back threads"
+            subtitle={`This Mac shares at most 32 threads at once, the ones used most recently. ${heldBack === 1 ? "One open thread is" : `${heldBack} open threads are`} held back; each says why under Open threads.`}
+            status={heldBack === 1 ? "1 thread" : `${heldBack} threads`}
+          >
+            <Chip tone="warn">Over the limit</Chip>
+          </Row>
+        )}
       </Group>
 
       {paired ? (
@@ -341,15 +254,16 @@ export function RemoteAccessPage() {
           <Group title="Pairing">
             <PairingCard
               offer={offer}
+              pairing={pairing}
               // The request itself can wait for the gateway: say so from the press.
-              pending={pending || busy === "pair"}
+              pending={pending}
               error={pairingError}
               now={now}
-              readAt={offerReading?.readAt ?? now}
-              overdue={pending && pendingSince !== null && now - pendingSince > PAIR_DEADLINE_MS}
+              readAt={readAt}
+              overdue={pending && pairAskedAt !== null && now - pairAskedAt > PAIR_DEADLINE_MS}
               busy={busy === "pair"}
               onRenew={pair}
-              onStop={stop}
+              onStop={() => toggle(false)}
             />
           </Group>
         )
@@ -376,40 +290,35 @@ export function RemoteAccessPage() {
       <Group title="Open threads">
         {open.length ? (
           open.map((thread) => {
-            const reading = readings[thread.id]?.status;
+            const reading = byThread[thread.id];
             const isShared = reading?.shared === true;
-            const attached = reading?.gateway?.attachedDevices ?? 0;
-            const shares = thread.harness === "rustcode";
+            const attached = reading?.gateway?.attachedDevices.length ?? 0;
+            const reason = heldBackReason(reading);
             return (
               <Row
                 key={thread.id}
                 title={thread.title}
-                status={reading?.error ?? undefined}
+                status={reason}
                 subtitle={
-                  !shares
-                    ? `Runs on ${thread.harness || "another harness"}, which keeps no ACP session: only threads on the built-in harness can be shared.`
-                    : isShared
-                      ? attached > 0
-                        ? `${attached} device${attached === 1 ? "" : "s"} attached.`
-                        : "Visible in the phone app; no device is attached right now."
-                      : "Not shared with paired devices."
+                  isShared
+                    ? attached > 0
+                      ? `${attached} device${attached === 1 ? "" : "s"} attached.`
+                      : "Visible in the phone app; no device is attached right now."
+                    : reason
+                      ? undefined
+                      : enabled
+                        ? "Not shared yet: the gateway picks it up on its next pass."
+                        : "Not shared with paired devices."
                 }
               >
-                {!shares ? (
-                  <Chip>Not shareable</Chip>
-                ) : isShared ? (
+                <Chip>{thread.harness || "harness"}</Chip>
+                {isShared ? (
                   <>
                     <Chip tone="ok">Shared</Chip>
                     {attached > 0 && <Chip>{attached} attached</Chip>}
                   </>
                 ) : (
-                  <Action
-                    disabled={unavailable || busy !== null}
-                    onClick={() => void run(`start:${thread.id}`, () => start([thread.id], false))}
-                  >
-                    {busy === `start:${thread.id}` ? <Spinner /> : null}
-                    Share
-                  </Action>
+                  <Chip tone={reason ? "warn" : "idle"}>{reason ? "Held back" : "Not shared"}</Chip>
                 )}
               </Row>
             );
@@ -417,17 +326,10 @@ export function RemoteAccessPage() {
         ) : (
           <Row
             title="No thread is open"
-            subtitle="Open a thread and it can be shared with your phone. Remote access shares the threads this app has open."
+            subtitle="Open a thread and it is shared with your phone while remote access is on."
           />
         )}
       </Group>
-
-      {external.length > 0 && shareable.length === 0 && (
-        <p className="m-0 text-caption text-fg-faint">
-          This app has no thread on the built-in harness open, so there is nothing for the remote gateway to
-          share yet.
-        </p>
-      )}
     </>
   );
 }
@@ -441,11 +343,12 @@ function mmss(seconds: number): string {
 /**
  * The pairing offer as the terminal panel shows it: the QR code for the
  * camera, the address and eight-digit code for typing, and the countdown.
- * The gateway publishes no live wrong-codes count through ACP, so the page
- * states the fixed allowance and never counts a lockout down.
+ * The gateway reports the challenge's own countdown, wrong codes left and any
+ * lockout, so the card counts down with the engine rather than on its own.
  */
 function PairingCard({
   offer,
+  pairing,
   pending,
   error,
   now,
@@ -456,6 +359,7 @@ function PairingCard({
   onStop,
 }: {
   offer?: RemoteOffer;
+  pairing?: RemotePairing;
   pending: boolean;
   error?: string;
   now: number;
@@ -465,12 +369,15 @@ function PairingCard({
   onRenew: () => void;
   onStop: () => void;
 }) {
-  const left = offer ? Math.max(0, Math.ceil((readAt + offer.expiresInSecs * 1000 - now) / 1000)) : 0;
+  const secs = pairing?.expiresInSecs ?? offer?.expiresInSecs ?? 0;
+  const left = Math.max(0, Math.ceil((readAt + secs * 1000 - now) / 1000));
+  const lockedFor = pairing?.lockedForSecs ?? offer?.lockedForSecs ?? 0;
+  const attemptsLeft = pairing?.attemptsLeft;
   return (
     <div className="px-4 py-4">
       {offer ? (
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
-          <QrCode payload={offer.qrPayload} />
+          <QrCode payload={offer.qrPayload} rows={offer.qrRows} />
           <div className="min-w-0 flex-1">
             <div className="font-medium text-body text-fg">Scan the code with the phone app</div>
             <p className="m-0 max-w-[52ch] pt-1 text-callout text-fg-muted leading-normal">
@@ -501,18 +408,22 @@ function PairingCard({
             </div>
             <div className="flex flex-wrap items-center gap-2 pt-3 text-caption text-fg-faint">
               {left > 0 ? <span className="tabular">Expires in {mmss(left)}</span> : <span>Expired</span>}
-              <span>{WRONG_CODES_ALLOWED} wrong codes allowed</span>
-              {offer.lockedForSecs !== undefined && <Chip tone="warn">Pairing locked</Chip>}
+              <span>
+                {typeof attemptsLeft === "number"
+                  ? `${attemptsLeft} wrong ${attemptsLeft === 1 ? "code" : "codes"} left`
+                  : `${WRONG_CODES_ALLOWED} wrong codes allowed`}
+              </span>
+              {lockedFor > 0 && <Chip tone="warn">Pairing locked</Chip>}
               {offer.loopbackOnly && <Chip tone="warn">This Mac only</Chip>}
               <Action quiet size="sm" disabled={busy} onClick={onRenew}>
                 {busy ? <Spinner /> : <RefreshCw size={12} />}
                 New code
               </Action>
             </div>
-            {offer.lockedForSecs !== undefined && (
+            {lockedFor > 0 && (
               <p className="m-0 pt-2 text-caption text-warning">
-                Too many wrong codes on this host: pairing is locked, and even the right code is refused until
-                the lockout ends.
+                Too many wrong codes on this host: pairing is locked for {mmss(lockedFor)}, and even the right
+                code is refused until then.
               </p>
             )}
             {offer.loopbackOnly && (
@@ -554,25 +465,46 @@ const QR_LIGHT = "#ffffff";
 // design-lint: allow (same: the modules keep maximum contrast for the camera)
 const QR_DARK = "#000000";
 
-/** The QR code as one SVG path: no canvas, no image, and nothing leaves the app. */
-function QrCode({ payload }: { payload: string }) {
-  const path = useMemo(() => {
-    const code = encodeQr(payload, "M");
-    if (!code) return null;
+/**
+ * The QR code as one SVG path: no canvas, no image, and nothing leaves the
+ * app. The engine sends the modules (`qrRows`, one string of `0` and `1` per
+ * row, quiet zone included); an answer without them is encoded here from the
+ * payload (`lib/qr.ts`).
+ */
+function QrCode({ payload, rows }: { payload: string; rows?: string[] }) {
+  const code = useMemo(() => {
+    if (rows?.length) {
+      const parts: string[] = [];
+      rows.forEach((row, y) => {
+        let start = -1;
+        for (let x = 0; x <= row.length; x += 1) {
+          const dark = row[x] === "1";
+          if (dark && start < 0) start = x;
+          if (!dark && start >= 0) {
+            const width = x - start;
+            parts.push(`M${start} ${y}h${width}v1h-${width}z`);
+            start = -1;
+          }
+        }
+      });
+      return { d: parts.join(""), side: rows[0]?.length ?? 0 };
+    }
+    const encoded = encodeQr(payload, "M");
+    if (!encoded) return null;
     const quiet = 4;
-    const side = code.size + quiet * 2;
+    const side = encoded.size + quiet * 2;
     const parts: string[] = [];
-    code.modules.forEach((row, y) => {
+    encoded.modules.forEach((row, y) => {
       row.forEach((dark, x) => {
         if (dark) parts.push(`M${x + quiet} ${y + quiet}h1v1h-1z`);
       });
     });
     return { d: parts.join(""), side };
-  }, [payload]);
-  if (!path) return null;
+  }, [payload, rows]);
+  if (!code) return null;
   return (
     <svg
-      viewBox={`0 0 ${path.side} ${path.side}`}
+      viewBox={`0 0 ${code.side} ${code.side}`}
       width={180}
       height={180}
       role="img"
@@ -581,7 +513,47 @@ function QrCode({ payload }: { payload: string }) {
       className="shrink-0 rounded-md p-2"
       style={{ background: QR_LIGHT }}
     >
-      <path d={path.d} fill={QR_DARK} />
+      <path d={code.d} fill={QR_DARK} />
     </svg>
+  );
+}
+
+/**
+ * A thread's own share, in its header: a small chip while the thread is shared
+ * (with the number of devices attached to it), and a muted one saying the
+ * host cannot share this thread right now.
+ *
+ * It polls the thread's own status, so it does not depend on Settings being
+ * open to learn that remote access was switched on in a terminal.
+ */
+export function RemoteThreadIndicator({ sessionId }: { sessionId?: string }) {
+  const remote = useApp((s) => (sessionId ? s.remoteByThread[sessionId] : undefined));
+  useEffect(() => {
+    if (!sessionId) return;
+    void refreshRemote(sessionId);
+    const timer = setInterval(() => void refreshRemote(sessionId), POLL_MS);
+    return () => clearInterval(timer);
+  }, [sessionId]);
+  if (!sessionId || !remote) return null;
+  if (!remote.shared) {
+    const reason = heldBackReason(remote);
+    if (!reason) return null;
+    return (
+      <Chip tone="warn" title={`Not shared with paired devices: ${reason}`}>
+        <WifiOff size={11} />
+        <span className="sr-only">Not shared with paired devices: {reason}</span>
+      </Chip>
+    );
+  }
+  const count = remote.gateway?.attachedDevices.length ?? 0;
+  const label =
+    count === 0
+      ? "Shared with paired devices"
+      : `${count} ${count === 1 ? "device" : "devices"} attached to this thread`;
+  return (
+    <Chip tone={count > 0 ? "ok" : "idle"} title={label}>
+      <Smartphone size={11} />
+      {count > 0 ? count : <span className="sr-only">{label}</span>}
+    </Chip>
   );
 }

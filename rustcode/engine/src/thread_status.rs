@@ -116,6 +116,22 @@ pub(crate) fn is_running(session_id: &str) -> bool {
     matches!(current(session_id), Status::Running | Status::NeedsInput)
 }
 
+/// Whether a turn runs or waits on the user right now, read from memory only.
+///
+/// [`is_running`] falls back to the stored status, which is a file read; a
+/// caller that looks every 100 ms (a shared thread's loop) wants the live
+/// answer alone, which is the same one: a stored `done` or `review` is never
+/// `is_running`.
+pub(crate) fn is_active(session_id: &str) -> bool {
+    let live = live()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(session_id)
+        .copied()
+        .unwrap_or_default();
+    live.turns > 0 || live.waits > 0
+}
+
 /// The `session_info_update` that tells the client `status`.
 pub(crate) fn update(status: Status) -> SessionUpdate {
     SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().meta(serde_json::Map::from_iter([(

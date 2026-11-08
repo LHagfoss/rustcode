@@ -21,8 +21,8 @@ describe("remote access", () => {
         connected: true,
         advertisedAddress: "192.168.1.24:17879",
         loopbackOnly: false,
-        attachedDevices: 1,
-        connectedDevices: 2,
+        attachedDevices: ["Lars's iPhone"],
+        connectedDevices: ["Lars's iPhone", "Kitchen iPad"],
       },
       offer: {
         qrPayload: '{"protocol_version":1}',
@@ -42,7 +42,8 @@ describe("remote access", () => {
     expect(status.shared).toBe(true);
     expect(status.enabled).toBe(true);
     expect(status.gateway?.advertisedAddress).toBe("192.168.1.24:17879");
-    expect(status.gateway?.connectedDevices).toBe(2);
+    expect(status.gateway?.attachedDevices).toEqual(["Lars's iPhone"]);
+    expect(status.gateway?.connectedDevices).toHaveLength(2);
     expect(status.offer?.code).toBe("1234-5678");
     expect(status.offer?.expiresInSecs).toBe(87);
     expect(status.offer?.lockedForSecs).toBe(240);
