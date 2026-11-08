@@ -628,8 +628,8 @@ pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
 }
 
 /// Ask a detached session owner to exit and wait for its lease to release.
-/// Detached owners only exist on unix (they are spawned with setsid); other
-/// platforms refuse instead of signalling blindly.
+/// Only Unix can ask it to exit gracefully (SIGTERM, which saves history on
+/// the way out); Windows refuses instead of terminating it outright.
 #[cfg(unix)]
 fn stop_detached_owner(owners: &std::path::Path, session_id: &str) -> Result<(), String> {
     if !crate::remote_gateway::workspace::owner_alive(owners, session_id) {
@@ -673,7 +673,9 @@ fn stop_detached_owner(owners: &std::path::Path, session_id: &str) -> Result<(),
 
 #[cfg(not(unix))]
 fn stop_detached_owner(_owners: &std::path::Path, _session_id: &str) -> Result<(), String> {
-    Err("Adopting a phone thread is only supported on macOS and Linux.".to_owned())
+    Err(format!(
+        "Adopting a phone thread is not supported on Windows yet. End thread '{_session_id}' on the device, then resume it from /history."
+    ))
 }
 
 /// True when `pid` is a live process running this same binary. Guards `/adopt`

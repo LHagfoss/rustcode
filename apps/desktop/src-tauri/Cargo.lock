@@ -3142,11 +3142,13 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tokio",
+ "window-vibrancy",
 ]
 
 [[package]]

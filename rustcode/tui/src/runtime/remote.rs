@@ -20,23 +20,18 @@ use rustcode::remote::{
 };
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 
-#[cfg(unix)]
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
-#[cfg(unix)]
 use rustcode::remote_gateway::owner_ipc::{GatewayFrame, OWNER_IPC_VERSION, OwnerFrame};
 
 /// A standby owner link: this terminal announced its unshared session as
 /// reachable, so a device can ask it to share. Presence only: no transcript
 /// ever leaves the terminal until the user accepts with y and `/remote` runs.
-/// Unix only: the owner socket does not exist on other platforms.
-#[cfg(unix)]
 struct Standby {
     to_task: tokio::sync::mpsc::Sender<OwnerFrame>,
     from_task: tokio::sync::mpsc::UnboundedReceiver<StandbyEvent>,
     session_id: String,
 }
 
-#[cfg(unix)]
 enum StandbyEvent {
     ShareRequested {
         pending_id: u64,
@@ -53,8 +48,7 @@ const COMMANDS_PER_TICK: usize = 8;
 
 /// How long the bridge waits before announcing again after the gateway went
 /// away. The link is never started when no gateway runs: announcing must not
-/// bring one up behind the user's back. Unix only.
-#[cfg(unix)]
+/// bring one up behind the user's back.
 const STANDBY_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How often the bridge re-reads whether remote access is switched on for the
@@ -94,11 +88,8 @@ pub(crate) struct RemoteBridge {
     share: Option<Share>,
     /// Announced-but-unshared presence for device-initiated share requests.
     /// Dropped the moment the session is shared, and re-announced on session
-    /// switch. Never started when no gateway runs. Unix only: the owner
-    /// socket does not exist on other platforms.
-    #[cfg(unix)]
+    /// switch. Never started when no gateway runs.
     standby: Option<Standby>,
-    #[cfg(unix)]
     standby_retry_at: Option<std::time::Instant>,
     /// A turn's start was applied and its end not yet. Tracked while nothing
     /// is shared too, so a registration made mid-turn publishes that end.
@@ -125,9 +116,7 @@ impl RemoteBridge {
         Self {
             connector,
             share: None,
-            #[cfg(unix)]
             standby: None,
-            #[cfg(unix)]
             standby_retry_at: None,
             turn_stream_open: false,
             stopped: None,
@@ -149,13 +138,10 @@ impl RemoteBridge {
         {
             return enabled;
         }
-        #[cfg(unix)]
         let enabled = self
             .connector
             .gateway_directory()
             .is_some_and(|directory| rustcode::remote_gateway::service::enabled(&directory));
-        #[cfg(not(unix))]
-        let enabled = false;
         self.share_all = Some((enabled, now));
         enabled
     }
@@ -296,7 +282,6 @@ impl RemoteBridge {
     }
 
     fn paired_devices(&self) -> usize {
-        #[cfg(unix)]
         if let Some(directory) = self.connector.gateway_directory() {
             return rustcode::remote_gateway::service::paired_devices(&directory);
         }
@@ -309,7 +294,6 @@ impl RemoteBridge {
     async fn switch_off(&mut self) -> String {
         let was_shared = self.close(SessionCloseReason::SharingDisabled);
         self.share_all = Some((false, std::time::Instant::now()));
-        #[cfg(unix)]
         if let Some(directory) = self.connector.gateway_directory() {
             return match rustcode::remote_gateway::service::disable(&directory).await {
                 Ok(_) => "Remote access is off for every thread on this machine. Running turns are not affected.\n\
@@ -348,7 +332,6 @@ impl RemoteBridge {
         if self.headless {
             return false;
         }
-        #[cfg(unix)]
         if let Some(directory) = self.connector.gateway_directory() {
             tokio::spawn(
                 rustcode::remote_gateway::command::show_pairing_details(
@@ -369,7 +352,6 @@ impl RemoteBridge {
     /// the gateway's addresses, devices, sessions and logs as soon as its
     /// control socket answers, on its own task like the pairing details.
     async fn show_gateway_status(&self, app_state: &Arc<Mutex<AppState>>) -> bool {
-        #[cfg(unix)]
         if let Some(directory) = self.connector.gateway_directory() {
             let session_id = self
                 .share
@@ -438,7 +420,6 @@ impl RemoteBridge {
         });
         // The shared registration replaces the standby announcement; its
         // connection ends when the task notices the dropped sender.
-        #[cfg(unix)]
         {
             self.standby = None;
         }
@@ -453,8 +434,6 @@ impl RemoteBridge {
     /// Announce the unshared session as reachable when a gateway already runs,
     /// pump share requests and user decisions. Never starts a gateway: the
     /// announcement must not bring one up behind the user's back.
-    /// Unix only: the owner socket does not exist on other platforms.
-    #[cfg(unix)]
     async fn maintain_standby(
         &mut self,
         app_state: &Arc<Mutex<AppState>>,
@@ -565,22 +544,11 @@ impl RemoteBridge {
 
     /// End the announcement. The gateway clears it when the task's
     /// connection ends; prompts for the old session die with it.
-    /// Unix only: there is no standby link on other platforms.
-    #[cfg(unix)]
     async fn drop_standby(&mut self, app_state: &Arc<Mutex<AppState>>) {
         self.standby = None;
         let mut state = app_state.lock().await;
         state.pending_share_prompt = None;
         state.share_decision = None;
-    }
-
-    /// No standby announcements off unix: the owner socket does not exist.
-    #[cfg(not(unix))]
-    async fn maintain_standby(
-        &mut self,
-        _app_state: &Arc<Mutex<AppState>>,
-        _needs_redraw: &mut bool,
-    ) {
     }
 
     fn status(&self) -> String {
@@ -791,8 +759,6 @@ impl RemoteBridge {
 
 /// Title shown to the asking device, so the terminal can tell its sessions
 /// apart. Falls back to the session id when nothing was saved yet.
-/// Unix only: part of the standby announcement.
-#[cfg(unix)]
 /// The name a device sees for the session on screen: its saved title, else
 /// one derived from the first prompt, else its id. Reads one small file at
 /// most; listing the session store here parsed every recent transcript.
@@ -806,7 +772,6 @@ fn standby_title(state: &AppState) -> String {
         .unwrap_or_else(|| state.active_session_id.clone())
 }
 
-#[cfg(unix)]
 fn spawn_standby(
     config_directory: std::path::PathBuf,
     session_id: String,
@@ -833,8 +798,6 @@ fn spawn_standby(
 /// Announce one session and relay share requests until the bridge drops the
 /// link, the gateway closes it, or a write fails. Connects only: a gateway
 /// the user stopped is never brought back behind their back.
-/// Unix only: the owner socket does not exist on other platforms.
-#[cfg(unix)]
 async fn standby_task(
     config_directory: std::path::PathBuf,
     session_id: String,
@@ -847,7 +810,7 @@ async fn standby_task(
         let _ = to_ui.send(StandbyEvent::Gone);
     };
     let socket = RemoteLifecycle::new(&config_directory).owner_socket_path();
-    let stream = match tokio::net::UnixStream::connect(&socket).await {
+    let stream = match rustcode::remote_gateway::local_socket::connect(&socket).await {
         Ok(stream) => stream,
         Err(_) => return gone(&to_ui),
     };
@@ -1415,6 +1378,7 @@ mod tests {
     }
 
     /// Run the loop until the `/remote` panel satisfies `done`.
+    #[cfg(unix)]
     async fn panel_until(runtime: &mut AppRuntime, done: impl Fn(&str) -> bool) -> String {
         tokio::time::timeout(WAIT, async {
             loop {

@@ -103,8 +103,20 @@ RUSTCODE_INSTALL_ARTIFACTS=/tmp/rc/art bash ../../scripts/install.sh --bin-dir /
   code signature and bundle id, then quits, swaps `RustCode.app` and reopens.
   It needs write access to the folder the app is in; otherwise the button
   opens the release page. Running the installer again works too.
-- Windows and Linux: the button links to the release; run the installer
-  again to update (it replaces the app in place).
+- Linux AppImage: **Update to X** downloads the new AppImage next to the
+  running one, checks it against `SHA256SUMS`, replaces the file and reopens.
+  It needs write access to the AppImage's folder (`~/Applications` is); no
+  root.
+- Linux `.deb`: **Update to X** downloads the package, checks it and installs
+  it with `pkexec apt-get install -y` (or `pkexec dpkg -i`), which asks for
+  your password through polkit, then reopens. Without `pkexec` or a polkit
+  agent, install the new `.deb` yourself (`sudo apt install ./RustCode-<ver>-linux-x86_64.deb`).
+- Windows: **Update to X** downloads the setup, checks it, runs it silently
+  (`/S /UPDATE /R`) and quits; the installer replaces the app in place and
+  reopens it. No administrator prompt.
+- Other installs (a tarball, Flatpak, a folder RustCode cannot write, arm
+  Linux or Windows): the button links to the release;
+  run the installer again to update.
 
 ### Uninstalling
 

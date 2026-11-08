@@ -5,7 +5,7 @@
 // once; a new one fades in.
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { asciiDrawing, charWidth, type Drawing, LINE_HEIGHT, loadBanner } from "../lib/banner";
+import { asciiDrawing, blurScale, charWidth, type Drawing, LINE_HEIGHT, loadBanner } from "../lib/banner";
 import { observeSize } from "../lib/resize";
 import { cx } from "./primitives";
 
@@ -34,11 +34,14 @@ export function NewThreadBanner({
   name,
   style,
   height,
+  blur = 0,
   className,
 }: {
   name: string;
   style: "ascii" | "picture";
   height: number;
+  /** Blur radius in px; the picture grows a little so the soft edge falls outside the pane. */
+  blur?: number;
   className?: string;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -117,7 +120,12 @@ export function NewThreadBanner({
     >
       <div
         className="absolute inset-0 transition-opacity duration-[250ms] ease-out"
-        style={{ opacity: ready ? 1 : 0 }}
+        style={{
+          opacity: ready ? 1 : 0,
+          ...(blur > 0
+            ? { filter: `blur(${blur}px)`, transform: `scale(${blurScale(blur, width, height)})` }
+            : undefined),
+        }}
       >
         {layer(true)}
         {layer(false)}

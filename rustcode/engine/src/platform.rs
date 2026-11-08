@@ -134,3 +134,29 @@ pub(crate) fn tokio_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::proc
     rustcode_command::hide_console_window(command.as_std_mut());
     command
 }
+
+/// Let a background process outlive whoever started it: its own session on
+/// Unix, so the terminal's hangup does not reach it; on Windows its own
+/// process group, so the console's Ctrl+C does not, and no console window.
+pub(crate) fn detach(command: &mut std::process::Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // SAFETY: setsid is async-signal-safe and the callback accesses no shared state.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    }
+}

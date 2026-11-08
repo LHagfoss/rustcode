@@ -118,19 +118,16 @@ pub enum GatewayFrame {
     Pong,
 }
 
-#[cfg(unix)]
 pub(super) use server::serve_owner;
 
-#[cfg(unix)]
 mod server {
     use super::*;
     use crate::daemon::protocol::{read_async_frame_with_buffer, write_async_frame};
     use crate::remote_gateway::hub::SessionHub;
+    use crate::remote_gateway::local_socket::{LocalStream, LocalWriteHalf};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::io::BufReader;
-    use tokio::net::UnixStream;
-    use tokio::net::unix::OwnedWriteHalf;
     use tokio_util::sync::CancellationToken;
 
     /// How long a new connection may take to send its registration.
@@ -138,7 +135,7 @@ mod server {
     /// How long one frame may take to reach an owner's socket.
     const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
-    async fn write(writer: &mut OwnedWriteHalf, frame: &GatewayFrame) -> bool {
+    async fn write(writer: &mut LocalWriteHalf, frame: &GatewayFrame) -> bool {
         matches!(
             tokio::time::timeout(WRITE_TIMEOUT, write_async_frame(writer, frame)).await,
             Ok(Ok(()))
@@ -149,16 +146,10 @@ mod server {
     /// ends with the connection, whatever ended it.
     pub(in crate::remote_gateway) async fn serve_owner(
         hub: Arc<SessionHub>,
-        stream: UnixStream,
+        stream: LocalStream,
         shutdown: CancellationToken,
     ) {
-        // The directory and socket modes already keep other users out; this
-        // holds even if someone loosens them by hand.
-        // SAFETY: geteuid has no preconditions.
-        let me = unsafe { libc::geteuid() };
-        if !stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
-            return;
-        }
+        // The listener verified the peer (`LocalListener::accept`).
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut buffer = Vec::new();

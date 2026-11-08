@@ -13,12 +13,34 @@ export type BannerStyle = "ascii" | "picture";
 
 const KEY = "rustcode.newThreadBanner";
 const STYLE_KEY = "rustcode.newThreadBannerStyle";
+const DARKEN_KEY = "rustcode.newThreadBannerDarken";
+const BLUR_KEY = "rustcode.newThreadBannerBlur";
+const IN_THREADS_KEY = "rustcode.newThreadBannerInThreads";
 const DATA_KEY = "rustcode.newThreadBannerData";
 const BROWSER_NAME = "browser";
 
 /** No picture until one is chosen, and then drawn in text (Settings › Appearance). */
 export const BANNER_NAME_DEFAULT = "";
 export const BANNER_STYLE_DEFAULT: BannerStyle = "ascii";
+/** How much black lies over the picture, in percent: none until asked for (the pane's own wash stays). */
+export const BANNER_DARKEN_DEFAULT = 0;
+export const BANNER_DARKEN_MAX = 80;
+/** How far the picture is blurred, in px. */
+export const BANNER_BLUR_DEFAULT = 0;
+export const BANNER_BLUR_MAX = 40;
+/** The picture shows behind open threads too: off, so it stays a new thread's. */
+export const BANNER_IN_THREADS_DEFAULT = false;
+
+export interface BannerSetting {
+  name: string;
+  style: BannerStyle;
+  /** Percent of black over the picture, 0 to {@link BANNER_DARKEN_MAX}. */
+  darken: number;
+  /** Blur radius in px, 0 to {@link BANNER_BLUR_MAX}. */
+  blur: number;
+  /** Whether the picture also shows behind open threads. */
+  inThreads: boolean;
+}
 
 function read(key: string): string {
   try {
@@ -37,14 +59,29 @@ function write(key: string, value: string) {
   }
 }
 
+/** A stored whole number held to 0..max; anything unreadable is the default. */
+export function boundedNumber(raw: string, max: number, fallback: number): number {
+  if (raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(0, Math.round(n)));
+}
+
+function load(): BannerSetting {
+  return {
+    name: read(KEY),
+    style: read(STYLE_KEY) === "picture" ? "picture" : "ascii",
+    darken: boundedNumber(read(DARKEN_KEY), BANNER_DARKEN_MAX, BANNER_DARKEN_DEFAULT),
+    blur: boundedNumber(read(BLUR_KEY), BANNER_BLUR_MAX, BANNER_BLUR_DEFAULT),
+    inThreads: read(IN_THREADS_KEY) === "1",
+  };
+}
+
 const listeners = new Set<() => void>();
-let snapshot = {
-  name: read(KEY),
-  style: (read(STYLE_KEY) === "picture" ? "picture" : "ascii") as BannerStyle,
-};
+let snapshot = load();
 
 function publish() {
-  snapshot = { name: read(KEY), style: read(STYLE_KEY) === "picture" ? "picture" : "ascii" };
+  snapshot = load();
   for (const l of listeners) l();
 }
 
@@ -53,14 +90,55 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-/** The banner setting: the kept picture's name ("" for none) and its style. */
-export function useBanner(): { name: string; style: BannerStyle } {
+/** The banner setting now, outside React. */
+export function bannerSetting(): BannerSetting {
+  return snapshot;
+}
+
+/** The banner setting: the kept picture's name ("" for none), its style, darkening, blur and reach. */
+export function useBanner(): BannerSetting {
   return useSyncExternalStore(subscribe, () => snapshot);
 }
 
 export function setBannerStyle(style: BannerStyle) {
   write(STYLE_KEY, style);
   publish();
+}
+
+/** Percent of black over the picture; the default is stored as nothing. */
+export function setBannerDarken(percent: number) {
+  const value = boundedNumber(String(percent), BANNER_DARKEN_MAX, BANNER_DARKEN_DEFAULT);
+  write(DARKEN_KEY, value === BANNER_DARKEN_DEFAULT ? "" : String(value));
+  publish();
+}
+
+/** The picture's blur in px; the default is stored as nothing. */
+export function setBannerBlur(px: number) {
+  const value = boundedNumber(String(px), BANNER_BLUR_MAX, BANNER_BLUR_DEFAULT);
+  write(BLUR_KEY, value === BANNER_BLUR_DEFAULT ? "" : String(value));
+  publish();
+}
+
+/** Whether open threads show the picture too. */
+export function setBannerInThreads(on: boolean) {
+  write(IN_THREADS_KEY, on ? "1" : "");
+  publish();
+}
+
+/** The picture's black veil as a CSS colour, or null when there is none. */
+export function darkenOverlay(darken: number): string | null {
+  const percent = Math.min(BANNER_DARKEN_MAX, Math.max(0, Math.round(darken)));
+  return percent > 0 ? `rgb(0 0 0 / ${percent}%)` : null;
+}
+
+/**
+ * How far the picture grows so a blur's soft edge falls outside the pane: a blur fades about two
+ * radii in from each side, so the layer must overshoot by that on both.
+ */
+export function blurScale(blur: number, width: number, height: number): number {
+  const shortest = Math.min(width, height);
+  if (blur <= 0 || shortest <= 0) return 1;
+  return 1 + (4 * blur) / shortest;
 }
 
 /** Asks for a picture and keeps a copy. The new name, or null when none was chosen. */

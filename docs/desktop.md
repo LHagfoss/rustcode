@@ -548,6 +548,13 @@ composer's keys stay outside the table.
   name), decoded once, and the text drawn once per size on an offscreen
   canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
   the new one is ready. It fades in, and does not move under Reduce motion.
+  Under the picture, *Darken* (0–80%, black over it), *Blur* (0–40px) and
+  *Show in threads* (off by default): on, open threads draw the same picture,
+  darkened and blurred the same, behind the transcript, under a heavier wash of
+  the pane colour (80%, against 35% on the new-thread screen): a white photo in the dark theme left
+  the body text at 4.4:1 and its muted lines at 2.0:1 under the 60% first tried, where 80% keeps
+  9.4:1 and 4.3:1. A thread is read line by line and a new thread is not. They are kept with the
+  banner (`lib/banner.ts`).
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
   machine's switch: turned on it starts the remote gateway and shares every
   thread this app has open with the paired devices — on the built-in harness
@@ -585,8 +592,8 @@ composer's keys stay outside the table.
   pick up the wallpaper through the window's material (`windowEffects` is
   still set in `tauri.conf.json` but nothing shows it). What floats (the
   composer, popovers, menus, tooltips, dialogs, toasts, the lightbox)
-  shares one glass, `--rc-glass-bg` + `--rc-glass-filter`; Reduce transparency (the media query, or the system setting
-  read by the shell's `reduce_transparency`) makes them solid. Hover is
+  shares one glass, `--rc-glass-bg` + `--rc-glass-filter` on every OS; Reduce transparency (Settings › Appearance, the media query, or the system setting
+  read by the shell's `reduce_transparency`) makes them solid. Windows 11 lets Mica show through the sidebar alone (design.md › Platforms). Hover is
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
   long scrollers.
@@ -1295,9 +1302,10 @@ window is in front (every 30 minutes behind it), when its window comes back,
 and 30 s after a failed check, doubling to 5 minutes (`src/state/updates.ts`).
 A check is a HEAD request to the release page on Stable, and the release feed
 on Beta: neither is the GitHub API, which a 30-second check would exhaust. A
-release counts as out only once its macOS app is uploaded and its
-`SHA256SUMS` lists it: the release goes public minutes before the other
-platforms and the sums land, and an install verifies against them. When a newer release is out, an *Update to X* row
+release counts as out only once the package this copy installs from is
+uploaded and its `SHA256SUMS` lists it: the release goes public minutes before
+the other platforms and the sums land, and an install verifies against them.
+When a newer release is out, an *Update to X* row
 sits at the foot of the sidebar: it installs in place where the app can
 (below), else opens the release page; while it installs, the row shows a
 progress bar (`Downloading · 39% of 58.2 MB`, then Verifying and Installing)
@@ -1337,16 +1345,42 @@ and switching back to Stable never offers a downgrade (a beta is already newer
 than the release before it). On Beta the row reads **Update to
 1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
 the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
-as usual. On macOS **Update to X** downloads
-`RustCode-<ver>-macos-<arch>.app.zip`, checks it against the release's
-`SHA256SUMS`, unpacks it with `ditto`, requires `codesign --verify --deep
---strict` and this app's bundle id, then a detached shell waits for the app
-to quit, swaps the bundle, re-registers it with Launch Services and opens
-it. It installs in place only from a release bundle in a folder it can write;
-otherwise, and on Windows and Linux, the button opens the release page and
-the installer does the update. A `tauri dev` build always sees an update
-but never installs it. The channel is the app's own: Homebrew and the CLI
-updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
+as usual. **Update to X** installs in place on macOS, Linux (AppImage and
+`.deb`) and Windows; how depends on how this copy was installed
+(`Install` in `updater.rs`, decided from `$APPIMAGE`, the binary's path,
+`dpkg-query -S` and the files beside it). Every route first downloads the
+package, checks it against the release's `SHA256SUMS` in memory and refuses a
+mismatch, so nothing unverified is written or run:
+
+- **macOS app bundle**: `RustCode-<ver>-macos-<arch>.app.zip`, unpacked with
+  `ditto`; `codesign --verify --deep --strict` and this app's bundle id are
+  required, then a detached shell waits for the app to quit, swaps the bundle,
+  re-registers it with Launch Services and opens it.
+- **Linux AppImage** (`$APPIMAGE` is set): `RustCode-<ver>-linux-x86_64.AppImage`
+  is written next to the running file, made executable and renamed over it
+  (atomic, no root); a detached shell then starts it once the app has quit.
+- **Linux `.deb`** (a dpkg-owned binary under `/usr`, no `$APPIMAGE`, not
+  Flatpak or Snap): `RustCode-<ver>-linux-x86_64.deb` is saved in a new
+  `0700` folder and installed with `pkexec apt-get install -y <file>` (`pkexec
+  dpkg -i` when there is no apt-get); polkit asks for the password. A
+  dismissed dialog, a missing `pkexec` or a failing package tool shows the
+  reason in a toast with a **Release page** button. The app reopens from the
+  path it started from.
+- **Windows** (an NSIS install: `uninstall.exe` beside the app):
+  `RustCode-<ver>-windows-x64-setup.exe` is saved to a new temp folder and run
+  as `setup.exe /S /UPDATE /R` (the flags Tauri's NSIS template reads: silent,
+  keep the install and skip its pages, start the app again), the path passed as
+  one argument and never through a shell. The app quits so the installer can
+  replace its files; it needs no administrator rights (`installMode:
+  currentUser`).
+
+Any other copy (a tarball or AUR/manual install, Flatpak, an AppImage or
+bundle in a folder RustCode cannot write, Linux or Windows on arm) cannot
+replace itself: the button opens the release page, and a read-only folder says
+so in the row. A `tauri dev` build always sees an update but never installs it.
+An install that fails leaves the running app as it was and shows the reason
+with a **Release page** button. The channel is the app's own: Homebrew and the
+CLI updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
 prerelease both skip).
 
 It does not use `tauri-plugin-updater`: that plugin requires its own

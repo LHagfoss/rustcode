@@ -8,6 +8,7 @@ pub mod executor;
 #[cfg(unix)]
 pub mod lifecycle;
 pub mod model;
+pub(crate) mod private_files;
 pub mod protocol;
 pub mod schedule;
 pub mod scheduler;

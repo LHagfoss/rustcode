@@ -139,7 +139,7 @@ export interface RemoteOffer {
  * thread's share.
  */
 export interface RemoteStatus {
-  /** False on a host without the gateway (Windows, or a build without it). */
+  /** False from an engine without the gateway (Windows builds up to 1.21). */
   available: boolean;
   /** Remote access is switched on for the machine: the gateway was started and not stopped. */
   enabled: boolean;

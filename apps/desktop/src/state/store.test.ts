@@ -94,6 +94,7 @@ import {
   revokeGrant,
   rewindCheckpoint,
   runPrompt,
+  SETTINGS_DEFAULTS,
   saveQueuedEdit,
   selectThread,
   sendDecisionFor,
@@ -112,6 +113,7 @@ import {
   setPanel,
   setPermissionMode,
   setProjectCwd,
+  setReduceTransparency,
   setThreadLimit,
   setThreadStatus,
   setTotalLimit,
@@ -2350,6 +2352,21 @@ describe("engine controller with the mock engine", () => {
     startNewThread();
     expect(useApp.getState().peekId).toBeNull();
     expect(useApp.getState().panel).toBeNull();
+  });
+
+  test("Reduce transparency defaults off and is kept in storage", () => {
+    expect(SETTINGS_DEFAULTS.reduceTransparency).toBe(false);
+    const storage = testStorage();
+    try {
+      setReduceTransparency(true);
+      expect(useApp.getState().reduceTransparency).toBe(true);
+      expect(storage.data.get("rustcode.reduceTransparency")).toBe("1");
+      setReduceTransparency(SETTINGS_DEFAULTS.reduceTransparency);
+      expect(useApp.getState().reduceTransparency).toBe(false);
+      expect(storage.data.get("rustcode.reduceTransparency")).toBe("0");
+    } finally {
+      storage.done();
+    }
   });
 
   test("the per-thread panel is kept in storage, bounded to the newest entries", async () => {

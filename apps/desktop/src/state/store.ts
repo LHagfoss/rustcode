@@ -443,6 +443,8 @@ export interface AppState {
   roundedFont: boolean;
   /** A streaming reply's new words fade in as the model writes them. */
   animateStreaming: boolean;
+  /** Glass is solid on every OS (Settings › Appearance); the system's own request does the same. */
+  reduceTransparency: boolean;
   /** How wide the chat lane grows, transcript and composer alike (Settings › Chat). */
   chatWidth: ChatWidth;
   /** Which buttons the thread header shows, in order (Settings › Chat); anything absent is hidden. */
@@ -574,6 +576,7 @@ const STORAGE = {
   runningThreads: "rustcode.runningThreads",
   roundedFont: "rustcode.roundedFont",
   animateStreaming: "rustcode.animateStreaming",
+  reduceTransparency: "rustcode.reduceTransparency",
   chatWidth: "rustcode.chatWidth",
   headerButtons: "rustcode.headerButtons",
   statusMarks: "rustcode.statusMarks",
@@ -608,6 +611,7 @@ export const SETTINGS_DEFAULTS = {
   theme: "system" as AppState["theme"],
   roundedFont: false,
   animateStreaming: true,
+  reduceTransparency: false,
   chatWidth: CHAT_WIDTH_DEFAULT,
   headerButtons: DEFAULT_HEADER_BUTTONS,
   resumeAfterRestart: true,
@@ -736,6 +740,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
+  reduceTransparency: storedFlag(STORAGE.reduceTransparency, SETTINGS_DEFAULTS.reduceTransparency),
   chatWidth: parseChatWidth(stored(STORAGE.chatWidth)),
   headerButtons: sanitizeHeaderButtons(storedJson<unknown>(STORAGE.headerButtons, null)),
   shortcuts: parseOverrides(stored(STORAGE.shortcuts)),
@@ -3769,6 +3774,11 @@ export function resetShortcut(id: string) {
 export function setAnimateStreaming(on: boolean) {
   set({ animateStreaming: on });
   store(STORAGE.animateStreaming, on ? "1" : "0");
+}
+
+export function setReduceTransparency(on: boolean) {
+  set({ reduceTransparency: on });
+  store(STORAGE.reduceTransparency, on ? "1" : "0");
 }
 
 export function setChatWidth(width: ChatWidth) {

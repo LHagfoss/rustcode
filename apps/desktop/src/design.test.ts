@@ -203,9 +203,10 @@ describe("design system", () => {
       expect(start).toBeGreaterThanOrEqual(0);
       return start < 0 ? "" : css.slice(start, css.indexOf("}", start));
     };
-    const linux = block(css.indexOf(':root[data-platform="linux"] {'));
-    expect(linux).toContain("--rc-scrim-bg: var(--rc-bg);");
-    expect(linux).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
+    const reduced = block(css.indexOf(":root.reduce-transparency {"));
+    expect(reduced).toContain("--rc-scrim-bg: var(--rc-bg);");
+    expect(reduced).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
+    expect(reduced).toContain("--rc-glass-filter: none;");
     expect(block(css.indexOf(".rc-scrim {"))).toContain("background: var(--rc-scrim-bg);");
     expect(block(css.indexOf(".rc-lightbox-scrim {"))).toContain(
       "background-color: var(--rc-lightbox-scrim-bg);",
@@ -214,6 +215,47 @@ describe("design system", () => {
     const reducedRoot = block(css.indexOf("  :root {", reducedAt));
     expect(reducedRoot).toContain("--rc-scrim-bg: var(--rc-bg);");
     expect(reducedRoot).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
+    // The media query is the fallback before lib/transparency.ts has run: the sidebar is solid too.
+    expect(reducedRoot).toContain("--rc-sidebar-bg: var(--rc-sidebar);");
+  });
+
+  test("Linux keeps the glass; Reduce transparency is the solid fallback on every platform", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    // No rule hands Linux (or Windows) the solid glass tokens: only the class and the media query do.
+    for (const platform of ["linux", "windows"]) {
+      const rules = [
+        ...css.matchAll(new RegExp(`:root\\[data-platform="${platform}"\\][^{]*\\{([^}]*)\\}`, "g")),
+      ];
+      expect(rules.length).toBeGreaterThan(0);
+      for (const [, body] of rules) {
+        expect(body).not.toContain("--rc-glass-filter");
+        expect(body).not.toContain("--rc-glass-bg");
+        expect(body).not.toContain("--rc-scrim-bg");
+      }
+    }
+    // The solid fallback reaches the sidebar too, so nothing shows a material under Reduce transparency.
+    const reduced = css.slice(css.indexOf(":root.reduce-transparency {"));
+    expect(reduced.slice(0, reduced.indexOf("}"))).toContain("--rc-sidebar-bg: var(--rc-sidebar);");
+  });
+
+  test("Windows shows Mica through the sidebar only, and only when the shell has it", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    const mica = ':root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency)';
+    const rule = css.slice(css.indexOf(`${mica} {`));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("--rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) 72%, transparent);");
+    // The body is cleared for the material and nothing else is: the chat pane keeps its opaque colour.
+    expect(css).toContain(`${mica} body {\n  background: transparent;`);
+    expect(css).toContain("--color-sidebar-glass: var(--rc-sidebar-bg);");
+    // The base sidebar fill is the solid colour, so a platform without the material is unchanged.
+    expect(css).toContain("--rc-sidebar-bg: var(--rc-sidebar);");
+    // The window is transparent where the shell can give it a material, and nowhere else.
+    const config = (name: string) =>
+      JSON.parse(readFileSync(join(SRC, `../src-tauri/${name}`), "utf8")).app.windows[0];
+    expect(config("tauri.windows.conf.json").transparent).toBe(true);
+    expect(config("tauri.windows.conf.json").decorations).toBe(true);
+    expect(config("tauri.linux.conf.json").transparent).toBe(false);
+    expect(config("tauri.linux.conf.json").decorations).toBe(true);
   });
 
   test("index.css's built-in themes match lib/themes.ts", () => {
