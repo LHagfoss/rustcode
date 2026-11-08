@@ -484,7 +484,7 @@ async fn pump(
                         let Some(endpoint) = crate::server::listen::running_endpoint(&shared.lifecycle.config_directory()) else {
                             return Some(ErrorCode::Internal);
                         };
-                        return super::acp_relay::relay(&endpoint, writer, reader, Arc::clone(&connection.control), limits.write_timeout).await;
+                        return super::acp_relay::relay(&endpoint, writer, reader, Arc::clone(&connection.control), limits.write_timeout, limits.ping_interval, limits.idle_timeout).await;
                     }
                     if thread_names {
                         let text = wire_names::to_session_names(text.as_str());

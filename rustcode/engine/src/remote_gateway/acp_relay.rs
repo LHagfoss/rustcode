@@ -47,6 +47,8 @@ pub(super) async fn relay(
     reader: &mut SplitStream<Socket>,
     control: Arc<ConnectionControl>,
     write_timeout: Duration,
+    ping_interval: Duration,
+    idle_timeout: Duration,
 ) -> Option<ErrorCode> {
     let stream =
         match tokio::time::timeout(write_timeout, crate::server::listen::connect(endpoint)).await {
@@ -93,13 +95,22 @@ pub(super) async fn relay(
         }
     };
     let consume = async {
+        let mut ping =
+            tokio::time::interval_at(tokio::time::Instant::now() + ping_interval, ping_interval);
+        let mut last_heard = tokio::time::Instant::now();
         loop {
             tokio::select! {
                 frame = queue.recv() => {
                     let frame = frame?;
                     if !matches!(tokio::time::timeout(write_timeout, writer.send(Message::text(frame))).await, Ok(Ok(()))) { return None; }
                 }
-                message = reader.next() => match message {
+                _ = ping.tick() => {
+                    if last_heard.elapsed() >= idle_timeout { return Some(ErrorCode::IdleTimeout); }
+                    if !matches!(tokio::time::timeout(write_timeout, writer.send(Message::Ping(Default::default()))).await, Ok(Ok(()))) { return None; }
+                }
+                message = reader.next() => {
+                    last_heard = tokio::time::Instant::now();
+                    match message {
                     Some(Ok(Message::Text(text))) => {
                         let Ok(value) = serde_json::from_str::<Value>(&text) else { return Some(ErrorCode::InvalidFrame); };
                         if !value.is_object() || value["jsonrpc"] != "2.0" { return Some(ErrorCode::InvalidFrame); }
@@ -127,6 +138,7 @@ pub(super) async fn relay(
                     Some(Ok(Message::Pong(_) | Message::Frame(_))) => {}
                     Some(Ok(Message::Binary(_))) => return Some(ErrorCode::InvalidFrame),
                     _ => return None,
+                    }
                 }
             }
         }

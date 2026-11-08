@@ -68,6 +68,10 @@ impl Host {
     }
 
     async fn start_gateway(&mut self) {
+        self.start_gateway_with_limits(Limits::default()).await;
+    }
+
+    async fn start_gateway_with_limits(&mut self, limits: Limits) {
         let hub = SessionHub::start(HubLimits::default());
         let config = || GatewayConfig {
             replan: None,
@@ -75,7 +79,7 @@ impl Host {
             port: 0,
             router: hub.clone(),
             sessions: Some(hub.clone()),
-            limits: Limits::default(),
+            limits,
         };
         // The previous gateway's lock is released a moment after it stops.
         let gateway = bounded(async {
@@ -1301,5 +1305,42 @@ async fn remote_acp_server_close_closes_websocket() {
     assert_eq!(device.read().await.unwrap()["type"], "acp_opened");
     assert!(device.read().await.is_none());
     bounded(server).await.unwrap();
+    host.stop_gateway().await;
+}
+
+#[tokio::test]
+async fn remote_acp_idle_peer_closes_server_connection() {
+    let mut host = Host::start().await;
+    host.stop_gateway().await;
+    host.start_gateway_with_limits(Limits {
+        ping_interval: Duration::from_millis(20),
+        idle_timeout: Duration::from_millis(100),
+        ..Limits::default()
+    })
+    .await;
+    let run = host.dir.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let endpoint = run.join("acp-close.sock");
+    let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+    std::fs::write(
+        run.join("server.json"),
+        serde_json::to_vec(&crate::server::ServerInfo::now(
+            endpoint.to_string_lossy().into(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        use tokio::io::AsyncReadExt;
+        let mut stream = stream;
+        assert_eq!(bounded(stream.read(&mut [0u8; 1])).await.unwrap(), 0);
+    });
+    let mut device = acp_device(&host, "desktop").await;
+    device.send(json!({"type":"acp_open"})).await;
+    assert_eq!(device.read().await.unwrap()["type"], "acp_opened");
+    // Do not poll the WebSocket: a sleeping peer cannot answer pings.
+    bounded(server).await.unwrap();
+    assert_eq!(device.read().await.unwrap()["code"], "idle_timeout");
     host.stop_gateway().await;
 }
