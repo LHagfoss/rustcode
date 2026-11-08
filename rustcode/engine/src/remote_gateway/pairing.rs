@@ -227,9 +227,9 @@ impl PairingState {
 
     /// [`Self::redeem`] from the socket of connection request `request`
     /// (`None` for any other socket). A challenge bound to another request,
-    /// or to none when one is named, fails like a wrong secret: nothing is
-    /// compared and the challenge keeps its attempts, but the failure counts
-    /// against the host.
+    /// or to none when one is named, fails like a wrong secret. Since the
+    /// caller cannot attempt this challenge, it spends neither the challenge's
+    /// attempts nor the host-wide code-entry budget.
     pub fn redeem_as(
         &mut self,
         now: Instant,
@@ -251,7 +251,7 @@ impl PairingState {
             .as_ref()
             .is_some_and(|challenge| challenge.bound_to.as_deref() != request)
         {
-            return Err(self.fail(now));
+            return Err(PairingError::Failed);
         }
         let challenge = self.challenge.as_mut().expect("challenge is open");
         // Spend the attempt before comparing so a failure cannot be retried free.
@@ -578,7 +578,7 @@ mod tests {
         let mut state = PairingState::default();
         let offer = state.issue_bound(now, Some("r1".into()));
         assert_eq!(state.bound_request(now), Some("r1"));
-        // Any other socket, with the right code, fails without spending an attempt.
+        // Any other socket, with the right code, fails without spending either budget.
         for request in [None, Some("r2")] {
             assert_eq!(
                 state.redeem_as(now, request, PairingMethod::Code, offer.code.expose()),
@@ -589,12 +589,36 @@ mod tests {
             state.open_challenge(now).map(|(_, attempts)| attempts),
             Some(ATTEMPTS_PER_CHALLENGE)
         );
-        assert_eq!(state.failures.len(), 2);
+        assert!(state.failures.is_empty());
         assert_eq!(
             state.redeem_as(now, Some("r1"), PairingMethod::Code, offer.code.expose()),
             Ok(())
         );
         assert_eq!(state.last_ended(), Some((1, ChallengeEnd::Paired)));
+    }
+
+    #[test]
+    fn another_socket_cannot_lock_out_a_bound_code() {
+        let now = Instant::now();
+        let mut state = PairingState::default();
+        let offer = state.issue_bound(now, Some("r1".into()));
+
+        for _ in 0..HOST_FAILURE_LIMIT {
+            assert_eq!(
+                state.redeem_as(now, None, PairingMethod::Code, "0000-0000"),
+                Err(PairingError::Failed)
+            );
+        }
+
+        assert_eq!(state.lockout(now), None);
+        assert_eq!(
+            state.open_challenge(now).map(|(_, attempts)| attempts),
+            Some(ATTEMPTS_PER_CHALLENGE)
+        );
+        assert_eq!(
+            state.redeem_as(now, Some("r1"), PairingMethod::Code, offer.code.expose()),
+            Ok(())
+        );
     }
 
     #[test]
