@@ -1133,23 +1133,37 @@ pub(crate) fn cleanup(
                     "the worktree has uncommitted changes; commit or discard them first".to_owned(),
                 ));
             }
-            // The same proof the named branch gets below: the merged head holds
-            // every commit, or the content is already the base's.
-            if !(unique.is_empty()
-                || same_content
-                || (!pull.head_sha.trim().is_empty()
-                    && unique
-                        .iter()
-                        .all(|commit| commit_reachable(&repo, &commit.sha, &pull.head_sha))))
-            {
+            // The branch↔pull request proof: HEAD is the merged head, or every
+            // local commit is already in it (an ancestor, or the same patch,
+            // which `git cherry <head> <branch>` reports as absent). An empty
+            // `git cherry <base> <branch>` alone is no proof: it says nothing
+            // about the pull request, and a head that cannot be read is no
+            // proof either, so both fail closed.
+            let pr_head = pull.head_sha.trim();
+            let head_matches = !pr_head.is_empty()
+                && git_line(&path, &["rev-parse", "HEAD"]).is_ok_and(|head| head == pr_head);
+            let missing = if pr_head.is_empty() {
+                None
+            } else {
+                Some(cherry_commits(&repo, pr_head, &branch).map_err(unknown)?)
+            };
+            let covered =
+                head_matches || missing.as_ref().is_some_and(|missing| missing.is_empty());
+            if !covered {
+                let hint = match missing.as_deref() {
+                    Some(commits) if !commits.is_empty() => format!(
+                        "{} commit(s) are not part of it: {}",
+                        commits.len(),
+                        commits
+                            .iter()
+                            .map(|commit| commit.subject.as_str())
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ),
+                    _ => "no merged head is known for it".to_owned(),
+                };
                 return Err(refusal(format!(
-                    "{} commit(s) on {branch} are not part of its merged pull request: {}",
-                    unique.len(),
-                    unique
-                        .iter()
-                        .map(|commit| commit.subject.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ")
+                    "{branch} is not provably its merged pull request's branch: {hint}"
                 )));
             }
             Some(expected.to_owned())
@@ -1745,6 +1759,78 @@ pub(crate) mod tests {
                 "{branch} was deleted"
             );
         }
+    }
+
+    #[test]
+    fn a_cleanup_needs_the_pull_request_head_not_an_empty_cherry_against_the_base() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        git(
+            &worktree.path,
+            &["checkout", "-q", "-b", "feat/asked-for-name"],
+        )
+        .unwrap();
+        // The branch has nothing of its own against main, but the merged pull
+        // request is another history entirely: an empty `git cherry main
+        // <branch>` says nothing about it, so it is not proof.
+        git(&repo, &["checkout", "-q", "--orphan", "elsewhere"]).unwrap();
+        std::fs::write(repo.join("other.txt"), "other\n").unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "an unrelated pull request"]).unwrap();
+        let pr_head = tip_of(&repo, "elsewhere");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed("feat/asked-for-name", &pr_head, true)),
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "branch_changed");
+        assert!(
+            refused.message.contains("not provably"),
+            "{}",
+            refused.message
+        );
+        assert!(worktree.path.exists());
+    }
+
+    #[test]
+    fn a_cleanup_refuses_a_pull_request_head_it_cannot_read() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        git(
+            &worktree.path,
+            &["checkout", "-q", "-b", "feat/asked-for-name"],
+        )
+        .unwrap();
+        // gh reported a head this repository does not have: no proof, and a git
+        // that cannot read it is `unknown` rather than "nothing unique".
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed(
+                "feat/asked-for-name",
+                "0123456789abcdef0123456789abcdef01234567",
+                true,
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "unknown");
+        assert!(worktree.path.exists());
     }
 
     #[test]

@@ -1809,9 +1809,11 @@ pub(crate) struct PullMergeRequest {
     pub timeout_ms: Option<u64>,
 }
 
-/// Remove a merged delegate's worktree and branch (#3153). `merged` is what
-/// the app read for its pull request; the engine still checks the worktree is
-/// clean and its commits are not lost. Answers `{cleanup}` or `{error}`.
+/// Remove a merged delegate's worktree and branch (#3153). `merged`, `head_sha`
+/// and `branch` are what the app read for its pull request; the engine still
+/// reads the branch the worktree is on now and checks it is provably that pull
+/// request's head before accepting a rename, and that the worktree is clean and
+/// its commits are not lost. Answers `{cleanup}` or `{error}`.
 #[derive(
     Debug,
     Clone,
@@ -1824,7 +1826,8 @@ pub(crate) struct PullMergeRequest {
 #[request(method = "_rustcode/worktrees/cleanup", response = serde_json::Value)]
 pub(crate) struct WorktreeCleanupRequest {
     pub path: std::path::PathBuf,
-    /// The branch the caller read the pull request for, checked against HEAD.
+    /// The branch recorded for the worktree, checked against HEAD: when the
+    /// worktree is on another, cleanup reads that branch's pull request itself.
     #[serde(default)]
     pub branch: Option<String>,
     /// The commit the pull request was merged at.

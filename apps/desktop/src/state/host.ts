@@ -898,23 +898,19 @@ async function delegatePull(
 ): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure }> {
   const cwd = projectOf(target);
   if (!cwd) return { error: failure("failed", "this thread has no project folder") };
+  const worktree = target.worktree;
   try {
-    let answer = parsePullState(
-      await request(
-        Method.pullState,
-        { cwd, ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}) },
-        60_000,
-      ),
-    );
-    if (answer.error) return { error: pullFailure(answer.error) };
-    // A delegate may rename its branch to the name its task asked for, which
-    // leaves the recorded branch stale. When that one has no pull request, ask
-    // again for the branch the worktree is on now, so its pull request is still
-    // found after the rename.
-    if (!answer.pull && target.worktree && answer.branch !== target.worktree.branch) {
-      const current = parsePullState(await request(Method.pullState, { cwd: target.worktree.path }, 60_000));
-      if (!current.error) answer = current;
+    // Ask for the branch the worktree is on now, not the recorded one: a
+    // delegate may have renamed it, and the engine echoes the branch it was
+    // asked for, so naming the recorded one would hide the rename (and its
+    // pull request) from status, merge and cleanup.
+    let answer = parsePullState(await request(Method.pullState, { cwd: worktree?.path ?? cwd }, 60_000));
+    // A detached HEAD has no branch to look up, so fall back to the recorded
+    // one rather than reporting no pull request at all.
+    if (answer.error && worktree?.branch) {
+      answer = parsePullState(await request(Method.pullState, { cwd, branch: worktree.branch }, 60_000));
     }
+    if (answer.error) return { error: pullFailure(answer.error) };
     return { branch: answer.branch, pull: answer.pull };
   } catch (error) {
     return {
@@ -1046,7 +1042,7 @@ async function mergeWhenGreen(
       {
         cwd: projectOf(target),
         number: pull.number,
-        ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}),
+        ...(state.branch ? { branch: state.branch } : {}),
         timeoutMs: call.timeoutMs,
       },
       call.timeoutMs + 120_000,

@@ -740,13 +740,17 @@ out, and a v8 app has neither the code nor the engine methods.
 | `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, recorded_branch?, recorded_branch_removed?, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `branch_changed` also names the merged-pull-request check that failed (no pull request for the branch, one that is not merged, a dirty tree, or commits not in its head). `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
 
 `thread_status` asks the engine `_rustcode/pulls/state` `{ cwd, branch? }`
-(`engine/src/pull_requests.rs` `for_branch`): the worktree's branch when there is
-one, else the folder's, matched against the host's pull requests, an open one
-first and then a merged one, and its `statusCheckRollup` mapped to
-`pending`/`passing`/`failing`/`none`. When the recorded branch has no pull
-request, the app asks again for the branch the worktree is on now, so a delegate
-that renamed its branch to the name its task asked for still shows its pull
-request. `merge_when_green` asks
+(`engine/src/pull_requests.rs` `for_branch`) for the branch the worktree is on
+now (`cwd` is the worktree, so the engine resolves its `HEAD`): a delegate that
+renamed its branch still shows its pull request, and `merge_when_green` and
+`cleanup_worktree` use that same branch. The match keeps only a pull request
+whose head is this repository (`headRepository`, `headRepositoryOwner`,
+`isCrossRepository`): `gh pr list --head` also matches a same-named branch on a
+fork, which is refused rather than reported as the delegate's, and an entry gh
+cannot place in a repository fails the read instead of guessing. The chosen
+pull request is an open one first and then a merged one, and its
+`statusCheckRollup` is mapped to `pending`/`passing`/`failing`/`none`.
+`merge_when_green` asks
 `_rustcode/pulls/merge` and reuses the same rollup: its wait is also how an
 orchestrator learns that CI finished without a shell poll loop, and a failing
 check ends it with the names. It ignores the advisory `portability coverage`
@@ -756,15 +760,18 @@ before anything merges on a failing check, and then runs
 `gh pr merge <n> --squash --delete-branch`. Nothing is forced and no other
 repository is touched. `cleanup_worktree` asks `_rustcode/worktrees/cleanup`
 (`engine/src/worktrees.rs` `cleanup`), on a blocking thread like
-`_rustcode/worktrees/remove`. It sends the branch it read the pull request for
-and the pull request's `head_sha`; the engine refuses if the worktree's `HEAD`
-is on another branch, unless that branch is the head of a merged pull request
-(a delegate may rename its branch to the name its task asked for: the engine
-reads the branch the worktree is on now with `for_branch`, as `thread_status`
-does, and accepts the change only when the tree is clean, the pull request
-merged, and every commit is at or part of its head). The branch it was recorded
-on is deleted too when it still exists and holds nothing unique, so a rename
-leaves neither branch behind. It also refuses a worktree that is not under the
+`_rustcode/worktrees/remove`. It sends the recorded branch and the pull
+request's `head_sha`; the engine refuses if the worktree's `HEAD` is on another
+branch, unless that branch is the head of a merged pull request. A delegate may
+rename its branch to the name its task asked for, so the engine reads the
+branch the worktree is on now with `for_branch`, as `thread_status` does, and
+accepts the change only when the tree is clean, the pull request merged, and
+the branch is provably its head: `HEAD` is the pull request's `headRefOid`, or
+every local commit is already in it (an ancestor, or the same patch per `git
+cherry <headRefOid> <branch>`). An empty `git cherry <base> <branch>` alone is
+no proof, and a head this repository does not have refuses instead of assuming.
+The branch it was recorded on is deleted too when it still exists and holds
+nothing unique, so a rename leaves neither branch behind. It also refuses a worktree that is not under the
 config directory, one
 on the base or default branch (the branch delete would otherwise remove it), a
 dirty one, ignored files that are not known build output (`target/`,
