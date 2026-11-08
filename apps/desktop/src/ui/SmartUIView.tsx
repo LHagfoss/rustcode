@@ -43,7 +43,13 @@ const HIDDEN_TIMEOUT = 30_000;
 const SEEN_MARGIN = "200px";
 
 function currentTheme() {
-  return pageTheme(isDark() ? "dark" : "light", cssVar);
+  // The app's fonts only off macOS: there the page keeps its own stack, as it always has.
+  const platform = document.documentElement.dataset.platform;
+  const fonts =
+    platform === "windows" || platform === "linux"
+      ? { sans: cssVar("--font-sans"), mono: cssVar("--font-mono") }
+      : {};
+  return pageTheme(isDark() ? "dark" : "light", cssVar, fonts);
 }
 
 /** Where a page is served from in the app: its own scheme, with its own CSP (src-tauri/src/smartui.rs). */

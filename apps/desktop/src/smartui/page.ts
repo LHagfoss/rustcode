@@ -24,8 +24,21 @@ export interface PageTheme {
   vars: Record<string, string>;
 }
 
-/** The page's variables from the app's tokens (`index.css`), read through `token`. */
-export function pageTheme(mode: ThemeMode, token: (name: string) => string): PageTheme {
+/** The macOS faces, for a page drawn without the app's own (`fonts` below). */
+const MAC_FONTS = {
+  sans: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
+  mono: '"SF Mono", ui-monospace, Menlo, monospace',
+};
+
+/**
+ * The page's variables from the app's tokens (`index.css`), read through `token`. `fonts` are the
+ * app's own `--font-sans` / `--font-mono`, which follow the platform (docs/design.md › Platforms).
+ */
+export function pageTheme(
+  mode: ThemeMode,
+  token: (name: string) => string,
+  fonts: { sans?: string; mono?: string } = {},
+): PageTheme {
   const vars: Record<string, string> = {
     "--rc-text": token("--rc-text"),
     "--rc-bg": token("--rc-bg"),
@@ -38,8 +51,8 @@ export function pageTheme(mode: ThemeMode, token: (name: string) => string): Pag
     "--rc-danger": token("--rc-danger"),
     "--rc-success": token("--rc-success"),
     "--rc-warning": token("--rc-warning"),
-    "--rc-font": '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
-    "--rc-mono": '"SF Mono", ui-monospace, Menlo, monospace',
+    "--rc-font": fonts.sans || MAC_FONTS.sans,
+    "--rc-mono": fonts.mono || MAC_FONTS.mono,
     "--rc-radius": "10px",
   };
   SERIES[mode].forEach((c, i) => {

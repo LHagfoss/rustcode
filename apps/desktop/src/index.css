@@ -1343,7 +1343,9 @@
 /*
  * Reduce transparency: glass turns solid. The media query where the web
  * view has it, else the `reduce-transparency` class main.tsx sets from the
- * system setting.
+ * system setting. Linux always takes this path (Platforms, below): WebKitGTK
+ * draws `backdrop-filter` slowly or not at all, and translucency without the
+ * blur leaves text over text.
  */
 @media (prefers-reduced-transparency: reduce) {
   :root {
@@ -1364,7 +1366,8 @@
     background: var(--rc-surface-2);
   }
 }
-:root.reduce-transparency {
+:root.reduce-transparency,
+:root[data-platform="linux"] {
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
   --rc-glass-faint-bg: var(--rc-surface-2);
@@ -1374,12 +1377,69 @@
   --rc-composer-bg-over: var(--rc-surface-2);
   --rc-composer-filter: none;
 }
-:root.reduce-transparency .rc-composer:focus-within {
+:root.reduce-transparency .rc-composer:focus-within,
+:root[data-platform="linux"] .rc-composer:focus-within {
   background: var(--rc-surface-2);
 }
 :root.reduce-transparency,
-:root.reduce-transparency .rc-header-glass.rc-frost::before {
+:root.reduce-transparency .rc-header-glass.rc-frost::before,
+:root[data-platform="linux"],
+:root[data-platform="linux"] .rc-header-glass.rc-frost::before {
   --rc-glass-pane: var(--rc-bg);
+}
+
+/*
+ * Platforms (docs/design.md › Platforms): `data-platform` on <html> (lib/platform.ts) fits the
+ * macOS design to the other web views. Nothing here applies to `mac` or to a page without the
+ * attribute, so the macOS look is the rules above alone. Glass on Linux is solid (above); Windows
+ * keeps the glass, whose 13px blur WebView2 draws on the GPU.
+ *
+ * Type: each OS's own UI face, since SF Pro is not there to find and the macOS names in the stack
+ * fall through to whatever the font config aliases them to. There is no rounded face elsewhere, so
+ * Settings › Appearance › Rounded keeps the system face. Font smoothing is a macOS property: other
+ * systems keep their own (subpixel or ClearType) antialiasing.
+ */
+:root[data-platform="windows"] {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-rounded: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+:root[data-platform="linux"] {
+  --font-sans: Inter, Cantarell, Ubuntu, "Noto Sans", system-ui, sans-serif;
+  --font-rounded: Inter, Cantarell, Ubuntu, "Noto Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "DejaVu Sans Mono", "Noto Sans Mono", ui-monospace, monospace;
+}
+:root:is([data-platform="windows"], [data-platform="linux"]) body {
+  -webkit-font-smoothing: auto;
+}
+
+/*
+ * Motion on Linux: WebKitGTK often composites in software, so a `filter` or a `scale` repaints
+ * the text on every frame. The streaming reveal fades without its blur, and what opened by
+ * scaling (popovers, toasts, What's New) fades and slides instead. Durations stay the design's;
+ * reduced motion still turns all of it off (its rules are `!important` or collapse durations).
+ */
+@keyframes rc-toast-in-flat {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+:root[data-platform="linux"] .rc-reveal {
+  animation-name: rc-fade;
+  animation-duration: 180ms;
+}
+:root[data-platform="linux"] [data-radix-popper-content-wrapper] > [data-state$="open"] {
+  animation-name: rc-in;
+}
+:root[data-platform="linux"] .rc-toast-in {
+  animation-name: rc-toast-in-flat;
+}
+:root[data-platform="linux"] [role="dialog"].rc-whatsnew[data-state="open"] {
+  animation-name: rc-fade;
+}
+:root[data-platform="linux"] [role="dialog"].rc-whatsnew[data-state="closed"] {
+  animation-name: rc-out;
 }
 
 /* Mermaid diagrams in replies (ui/MarkdownMedia.tsx): fit the column, flat like the rest of the chat. */
