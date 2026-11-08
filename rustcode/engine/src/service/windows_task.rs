@@ -100,6 +100,17 @@ pub fn render(definition: &Definition, user: &str) -> String {
     )
 }
 
+/// A task cannot set environment variables, so a server that needs some
+/// (a custom `RUSTCODE_CONFIG_DIR`) cannot be one.
+pub fn check_definition(definition: &Definition) -> Result<()> {
+    anyhow::ensure!(
+        definition.env.is_empty(),
+        "a background server for a custom RUSTCODE_CONFIG_DIR is not supported on Windows: \
+         a scheduled task cannot set it"
+    );
+    Ok(())
+}
+
 /// The bytes `schtasks /XML` reads: UTF-16 little-endian with a byte order
 /// mark, as the document's declaration says.
 pub fn encode(document: &str) -> Vec<u8> {
@@ -232,12 +243,12 @@ impl Manager for WindowsTask {
         })
     }
 
+    fn check(&self, definition: &Definition) -> Result<()> {
+        check_definition(definition)
+    }
+
     fn install(&self, definition: &Definition) -> Result<Installed> {
-        anyhow::ensure!(
-            definition.env.is_empty(),
-            "a background server for a custom RUSTCODE_CONFIG_DIR is not supported on Windows: \
-             a scheduled task cannot set it"
-        );
+        self.check(definition)?;
         let document = render(definition, &Self::user()?);
         let file = tempfile::Builder::new()
             .prefix("rustcode-task")
@@ -328,6 +339,15 @@ mod tests {
             env: Vec::new(),
             log: PathBuf::from(r"C:\Users\Ada\AppData\Roaming\rustcode\logs\server.log"),
         }
+    }
+
+    #[test]
+    fn a_custom_config_dir_cannot_be_a_scheduled_task() {
+        assert!(check_definition(&definition("C:/rustcode.exe")).is_ok());
+        let mut custom = definition("C:/rustcode.exe");
+        custom.env = vec![("RUSTCODE_CONFIG_DIR".to_owned(), "D:/rc".to_owned())];
+        let error = check_definition(&custom).expect_err("refused").to_string();
+        assert!(error.contains("RUSTCODE_CONFIG_DIR"), "{error}");
     }
 
     #[test]

@@ -100,6 +100,12 @@ pub trait Manager {
     /// `launchd`, `systemd`, `scheduled-task` or `run-key`.
     fn kind(&self) -> &'static str;
     fn state(&self) -> Result<State>;
+    /// Whether [`install`](Manager::install) can take `definition`, without
+    /// changing anything. Asked before a running server is stopped for the
+    /// service, so an install that would fail leaves it alone.
+    fn check(&self, _definition: &Definition) -> Result<()> {
+        Ok(())
+    }
     /// Write `definition`, and start it unless it is already started.
     fn install(&self, definition: &Definition) -> Result<Installed>;
     /// Stop the service and start it again from its installed definition.

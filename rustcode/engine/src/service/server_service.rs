@@ -373,7 +373,7 @@ pub struct InstallReport {
 /// `restart` does, and asks for `yes` when it has turns running.
 pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
     let (manager, definition) = current_manager()?;
-    super::refuse_dev_binary(&definition.program, force_dev)?;
+    preflight(manager.as_ref(), &definition, force_dev)?;
     let state = manager.state()?;
     let before = live_status().await;
     match plan_takeover(&state, before.as_ref(), yes) {
@@ -424,6 +424,13 @@ pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
         live,
         problems,
     })
+}
+
+/// Everything that can refuse an install, before a running server is stopped
+/// for it: a development build, or a definition the manager cannot take.
+fn preflight(manager: &dyn Manager, definition: &Definition, force_dev: bool) -> Result<()> {
+    super::refuse_dev_binary(&definition.program, force_dev)?;
+    manager.check(definition)
 }
 
 /// What `install` does about a server that already answers.
@@ -813,6 +820,47 @@ mod tests {
         };
         let report = build_report(observed(unknown, Some(live("1.23.0", 99))), 0);
         assert!(codes(&report).is_empty(), "{:?}", codes(&report));
+    }
+
+    struct Refusing;
+
+    impl Manager for Refusing {
+        fn kind(&self) -> &'static str {
+            "fake"
+        }
+        fn state(&self) -> Result<State> {
+            unreachable!("a refused install reads nothing")
+        }
+        fn check(&self, _definition: &Definition) -> Result<()> {
+            anyhow::bail!("the manager cannot take this definition")
+        }
+        fn install(&self, _definition: &Definition) -> Result<Installed> {
+            unreachable!("a refused install writes nothing")
+        }
+        fn restart(&self) -> Result<()> {
+            unreachable!()
+        }
+        fn uninstall(&self) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn install_is_refused_before_a_server_is_stopped() {
+        let definition = definition(
+            Path::new("/usr/bin/rustcode"),
+            Some(Path::new("/tmp/rc")),
+            "/c/logs/server.log".into(),
+        );
+        let error = preflight(&Refusing, &definition, false).expect_err("refused");
+        assert!(error.to_string().contains("cannot take"), "{error}");
+        // The development-build refusal is part of it.
+        let dev = super::super::Definition {
+            program: "/w/target/debug/rustcode".into(),
+            ..definition
+        };
+        let error = preflight(&Refusing, &dev, false).expect_err("refused");
+        assert!(error.to_string().contains("development build"), "{error}");
     }
 
     #[test]

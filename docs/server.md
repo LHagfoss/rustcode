@@ -97,6 +97,12 @@ rustcode server uninstall   # remove the service
   (`no.rustcode.server-<hash>`, `rustcode-server-<hash>.service`) that sets the
   variable, so a scratch directory never replaces your real server's service.
   Not on Windows, where a task cannot set it.
+- If another server already runs (an app's, or `rustcode server run` in a
+  terminal), it holds the server lock and the service's own would exit at
+  once, so `install` stops it first and then starts the service. It does not
+  end running turns without asking: it stops with a message, and `--yes`
+  stops the server anyway. Nothing is stopped when the install would be
+  refused (a development build, or a custom `RUSTCODE_CONFIG_DIR` on Windows).
 - `install` is idempotent. If the service is already installed and the
   definition is unchanged it does nothing (but starts it if it is not
   running). If the definition changed while the server runs (a new binary
