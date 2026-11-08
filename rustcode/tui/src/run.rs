@@ -876,6 +876,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if run_daemon_or_cron_command(&cli_args).await? {
         return Ok(());
     }
+    if let Some(crate::cli::Commands::Machines { command }) = cli_args.command.as_ref() {
+        if let Err(error) = crate::machines::run(command).await {
+            eprintln!("rustcode machines: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(crate::cli::Commands::Remote { command }) = cli_args.command.as_ref() {
         run_remote_command(command).await?;
         return Ok(());

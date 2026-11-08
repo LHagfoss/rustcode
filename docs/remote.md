@@ -375,6 +375,48 @@ device* while a code is on screen for a request replaces that code too.
 `rustcode remote status` lists open requests. The frames and their order are
 in [the protocol](remote-protocol/README.md#connection-requests).
 
+## Machines
+
+A computer can also be the *client*: `rustcode machines` pairs this one with
+another computer's gateway and keeps it, so the same machine is one entry with
+every address it answers on. This is the command-line side of the desktop app's
+multi-machine client (`rustcode/client`, the `rustcode-client` crate); the app
+fills in the same saved machines.
+
+| Command | Behavior |
+| --- | --- |
+| `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in. It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
+| `rustcode machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
+| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. The platform is `unknown` until the gateway reports one, which it does not yet. With `--threads`, each connected machine's thread titles over ACP (`session/list`). `--json` for scripts. |
+| `rustcode machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
+| `rustcode machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
+
+An address is `host`, `host:port`, `[v6]:port` or `ws://host:port`; the port
+defaults to `17879`. `wss://` is refused: the gateway has no TLS listener, so
+use an overlay network (Tailscale, NetBird) to encrypt the traffic.
+
+- The command line pairs as a **desktop** client, because that is the pairing
+  the machine's owner grants ACP access to when accepting the request. A
+  `cli`-kind device reaching the same code is allowed the session protocol
+  until the owner runs `rustcode remote devices allow <device>` there.
+- Saved machines live in `machines.json` in the configuration directory
+  (`0600` on Unix). Each is keyed by the machine's stable `host_id` — its
+  gateway identifier — with an ordered list of routes (`lan`, `vpn`,
+  `tailscale`, `public`), the device record and when it was added and last
+  connected. The first machine saved is the **main** one.
+- Tokens are kept in the operating system credential store (Keychain,
+  Credential Manager, Secret Service) under `rustcode-machines`, one entry per
+  machine. They are never written to `credentials.json` or
+  `provider-accounts.json`. On a machine without a credential store, set
+  `RUSTCODE_MACHINE_TOKEN_STORE=file` to keep them in
+  `machines/tokens.json` (`0600` in a `0700` directory) instead; without it,
+  the command says so rather than writing a credential to disk silently.
+- Routes are tried in the saved order; the first that authenticates *as the
+  machine we saved* — same `host_id`, and the device record the token belongs
+  to — is used. An address that now belongs to another computer is refused
+  rather than trusted. Racing routes, learning new addresses and moving back to
+  a better route are not implemented yet; the saved order decides.
+
 ## Revoking and stopping
 
 - Settings › Remote access › *Revoke* on a paired device does the same as
@@ -689,6 +731,9 @@ access work as on the other systems. What differs:
   the app still runs it, answers "session is already active": a live session
   cannot be opened twice. Close the thread in the app and open it again.
 - No push notifications.
+- `rustcode machines` reaches a machine over its WebSocket only: no SSH route,
+  no relay, and a route list is not reordered or learned yet (steps 1.8 and
+  1.11 of the machine network plan).
 - Access is per host: a paired device sees every session open in a terminal.
   There are no per-session grants and no per-session opt-out.
 - Reachability from a real iPhone (local-network permission, NetBird routing)

@@ -12,6 +12,7 @@ path = "src/main.rs"
 # Core library without the (now empty) default feature set: the terminal
 # frontend brings its own renderer instead of the root package's.
 rustcode = { path = "../..", default-features = false }
+rustcode-client = { path = "../client" }
 rustcode-core = { path = "../core/rustcode-core" }
 rustcode-tool-protocol = { path = "../core/rustcode-tool-protocol" }
 rustcode-tasks = { path = "../core/rustcode-tasks" }

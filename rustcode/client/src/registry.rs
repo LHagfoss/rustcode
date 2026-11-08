@@ -1,0 +1,736 @@
+//! Saved machines and their routes.
+//!
+//! A machine is a computer this client has paired with, keyed by its
+//! `host_id` (the remote gateway's stable identifier). Each one keeps an
+//! ordered list of routes to reach it by, so a laptop that answers on the LAN
+//! at home and over an overlay away from home is one entry, not two.
+//!
+//! The registry is one private JSON file in the configuration directory,
+//! `machines.json` (`0600` on Unix, in a `0700` directory). Device tokens are
+//! not in it; see [`crate::tokens`].
+
+use anyhow::{Context, Result, bail, ensure};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::io::{Read, Write};
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+
+/// Bounds, so a corrupted or hostile file cannot exhaust memory.
+const MAX_MACHINES_BYTES: u64 = 256 * 1024;
+const MAX_ROUTES_PER_MACHINE: usize = 16;
+/// Shortest identifier prefix `remove` and `select` accept, matching
+/// `rustcode remote revoke`.
+const MIN_SELECTOR_CHARS: usize = 4;
+
+/// How this client reaches a machine. Ordered as the app prefers to try them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteKind {
+    /// An address on the local network.
+    Lan,
+    /// A private overlay or VPN address (WireGuard, NetBird, …).
+    Vpn,
+    /// A Tailscale address or `*.ts.net` name.
+    Tailscale,
+    /// A public host name or address.
+    Public,
+}
+
+impl RouteKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lan => "lan",
+            Self::Vpn => "vpn",
+            Self::Tailscale => "tailscale",
+            Self::Public => "public",
+        }
+    }
+
+    /// Whether traffic over this route is encrypted by the network itself
+    /// rather than plain on the LAN.
+    pub fn is_encrypted(self) -> bool {
+        matches!(self, Self::Vpn | Self::Tailscale)
+    }
+}
+
+impl fmt::Display for RouteKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.pad(self.as_str())
+    }
+}
+
+/// One way to reach a machine: `address` is what a WebSocket dials, a
+/// `host:port`, a bare host (the default port), or `host:port`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Route {
+    pub kind: RouteKind,
+    pub address: String,
+}
+
+impl Route {
+    /// A route to `address`, with the kind its address implies.
+    pub fn new(address: impl Into<String>) -> Self {
+        let address = address.into();
+        Self {
+            kind: classify_address(&address),
+            address,
+        }
+    }
+
+    pub fn with_kind(kind: RouteKind, address: impl Into<String>) -> Self {
+        Self {
+            kind,
+            address: address.into(),
+        }
+    }
+}
+
+/// Which kind an address implies without asking the network or the machine.
+///
+/// A `100.64.0.0/10` address is reported as [`RouteKind::Vpn`]: that range is
+/// shared by Tailscale and other carriers of private addresses, and only the
+/// machine itself can say which interface it is on (step 1.7 of the machine
+/// network plan reports that; this is the seam it fills).
+pub fn classify_address(address: &str) -> RouteKind {
+    let host = crate::transport::host_part(address);
+    let name = host.strip_suffix('.').unwrap_or(host);
+    if !name.is_empty() && name.parse::<IpAddr>().is_err() {
+        let name = name.to_ascii_lowercase();
+        if name.ends_with(".ts.net") || name == "ts.net" {
+            return RouteKind::Tailscale;
+        }
+        if name.ends_with(".local") || !name.contains('.') {
+            return RouteKind::Lan;
+        }
+        return RouteKind::Public;
+    }
+    match name.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => {
+            let [a, b, ..] = ip.octets();
+            if ip.is_loopback() || ip.is_private() || ip.is_link_local() {
+                RouteKind::Lan
+            } else if a == 100 && (64..128).contains(&b) {
+                RouteKind::Vpn
+            } else {
+                RouteKind::Public
+            }
+        }
+        Ok(IpAddr::V6(ip)) => {
+            let segments = ip.segments();
+            // Tailscale's IPv6 prefix, `fd7a:115c:a1e0::/48`.
+            if segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0 {
+                RouteKind::Tailscale
+            } else if ip.is_loopback() || (segments[0] & 0xffc0) == 0xfe80 {
+                RouteKind::Lan
+            } else if (segments[0] & 0xfe00) == 0xfc00 {
+                // Unique-local addressing, which a VPN hands out.
+                RouteKind::Vpn
+            } else {
+                RouteKind::Public
+            }
+        }
+        Err(_) => RouteKind::Public,
+    }
+}
+
+/// A computer this client has paired with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Machine {
+    /// The remote gateway's stable identifier, as its `paired` frame reports
+    /// it. The key of the entry, and what a route must authenticate against.
+    pub host_id: String,
+    /// The name the machine reports, or the one given with `--name`.
+    pub name: String,
+    /// What the machine runs, when it says: `macos`, `windows`, `linux`, …
+    /// `unknown` for a gateway that does not report it yet.
+    #[serde(default = "unknown_platform")]
+    pub platform: String,
+    /// Routes in the order they are tried.
+    pub routes: Vec<Route>,
+    /// The device record on that machine, needed for `authenticate`.
+    pub device_id: String,
+    pub added_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_connected_at: Option<DateTime<Utc>>,
+    /// The main machine: listed first, and the default **Run on**.
+    #[serde(default)]
+    pub main: bool,
+}
+
+fn unknown_platform() -> String {
+    "unknown".to_owned()
+}
+
+impl Machine {
+    /// A newly paired machine with one route.
+    pub fn new(
+        host_id: impl Into<String>,
+        name: impl Into<String>,
+        platform: impl Into<String>,
+        device_id: impl Into<String>,
+        route: Route,
+        now: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            host_id: host_id.into(),
+            name: name.into(),
+            platform: platform.into(),
+            routes: vec![route],
+            device_id: device_id.into(),
+            added_at: now,
+            last_connected_at: None,
+            main: false,
+        }
+    }
+
+    /// The route in use: the first one configured. Which one actually answers
+    /// is decided per connection; keeping the list ordered is what makes the
+    /// order meaningful (the full race, learn and move-back rules are the
+    /// machine network's step 1.8).
+    pub fn preferred_route(&self) -> Option<&Route> {
+        self.routes.first()
+    }
+
+    /// Add a route unless the same address is already there, which only
+    /// learns its kind. Learned routes keep their place at the end.
+    fn learn_route(&mut self, route: Route) -> bool {
+        if let Some(existing) = self
+            .routes
+            .iter_mut()
+            .find(|existing| same_address(&existing.address, &route.address))
+        {
+            if existing.kind == route.kind {
+                return false;
+            }
+            existing.kind = route.kind;
+            return true;
+        }
+        if self.routes.len() >= MAX_ROUTES_PER_MACHINE {
+            return false;
+        }
+        self.routes.push(route);
+        true
+    }
+}
+
+/// The same endpoint spelled `studio.local:17879` and `studio.local`.
+fn same_address(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right) || dial_host(left) == dial_host(right)
+}
+
+fn dial_host(address: &str) -> String {
+    format!(
+        "{}:{}",
+        crate::transport::host_part(address).to_ascii_lowercase(),
+        crate::transport::port_or_default(address)
+    )
+}
+
+/// The saved machines, loaded once and written through.
+#[derive(Debug)]
+pub struct MachineRegistry {
+    path: PathBuf,
+    machines: Vec<Machine>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Stored {
+    version: u32,
+    #[serde(default)]
+    machines: Vec<Machine>,
+}
+
+const STORE_VERSION: u32 = 1;
+
+impl MachineRegistry {
+    /// Load the machines in `config_dir`. A missing file is no machines; a
+    /// file that cannot be read is an error, never an empty list that the
+    /// next save would overwrite.
+    pub fn load(config_dir: &Path) -> Result<Self> {
+        Self::load_file(crate::config::machines_file(config_dir))
+    }
+
+    pub fn load_file(path: impl Into<PathBuf>) -> Result<Self> {
+        let path = path.into();
+        let stored = match read_bounded(&path) {
+            Ok(Some(bytes)) => {
+                let stored: Stored = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("{} is not a machine registry", path.display()))?;
+                ensure!(
+                    stored.version <= STORE_VERSION,
+                    "{} was written by a newer RustCode (format {}); update this one",
+                    path.display(),
+                    stored.version
+                );
+                stored
+            }
+            Ok(None) => Stored {
+                version: STORE_VERSION,
+                machines: Vec::new(),
+            },
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", path.display()));
+            }
+        };
+        Ok(Self {
+            path,
+            machines: stored.machines,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Oldest first, except the main machine, which is listed first.
+    pub fn machines(&self) -> &[Machine] {
+        &self.machines
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.machines.is_empty()
+    }
+
+    pub fn get(&self, host_id: &str) -> Option<&Machine> {
+        self.machines
+            .iter()
+            .find(|machine| machine.host_id == host_id)
+    }
+
+    /// The machine `selector` names: its full `host_id`, an unambiguous
+    /// prefix of one, or its unique name.
+    pub fn select(&self, selector: &str) -> Result<&Machine> {
+        let selector = selector.trim();
+        ensure!(!selector.is_empty(), "name a machine to select");
+        if let Some(machine) = self.get(selector) {
+            return Ok(machine);
+        }
+        let named: Vec<&Machine> = self
+            .machines
+            .iter()
+            .filter(|machine| machine.name.eq_ignore_ascii_case(selector))
+            .collect();
+        match named.len() {
+            1 => return Ok(named[0]),
+            2.. => bail!(
+                "{} machines are named {selector}; use a host id instead",
+                named.len()
+            ),
+            _ => {}
+        }
+        if selector.len() >= MIN_SELECTOR_CHARS {
+            let matching: Vec<&Machine> = self
+                .machines
+                .iter()
+                .filter(|machine| machine.host_id.starts_with(selector))
+                .collect();
+            match matching.len() {
+                1 => return Ok(matching[0]),
+                2.. => bail!("{selector} is a prefix of {} machines", matching.len()),
+                _ => {}
+            }
+        }
+        bail!("no saved machine is named {selector}{}", known_names(self));
+    }
+
+    /// Insert a newly paired machine, or replace what a re-pairing learned
+    /// about a saved one: the name, platform, device record and routes,
+    /// keeping when it was first added and whether it is the main machine.
+    pub fn insert(&mut self, machine: Machine) -> Result<()> {
+        match self
+            .machines
+            .iter_mut()
+            .find(|existing| existing.host_id == machine.host_id)
+        {
+            Some(existing) => {
+                existing.name = machine.name;
+                existing.platform = machine.platform;
+                existing.device_id = machine.device_id;
+                for route in machine.routes {
+                    existing.learn_route(route);
+                }
+            }
+            None => {
+                let main = self.machines.is_empty();
+                let mut machine = machine;
+                machine.main = main;
+                self.machines.push(machine);
+            }
+        }
+        self.save()
+    }
+
+    /// Forget a machine. Returns the record that was removed, so the caller
+    /// can drop its token too.
+    pub fn remove(&mut self, selector: &str) -> Result<Machine> {
+        let host_id = self.select(selector)?.host_id.clone();
+        let index = self
+            .machines
+            .iter()
+            .position(|machine| machine.host_id == host_id)
+            .expect("select returned a saved machine");
+        let removed = self.machines.remove(index);
+        if removed.main
+            && let Some(next) = self.machines.first_mut()
+        {
+            next.main = true;
+        }
+        self.save()?;
+        Ok(removed)
+    }
+
+    /// Record a successful connection.
+    pub fn mark_connected(&mut self, host_id: &str, now: DateTime<Utc>) -> Result<()> {
+        let Some(machine) = self
+            .machines
+            .iter_mut()
+            .find(|machine| machine.host_id == host_id)
+        else {
+            return Ok(());
+        };
+        machine.last_connected_at = Some(now);
+        self.save()
+    }
+
+    /// Add a route learned from a machine or a discovery record (the seam the
+    /// route racing in step 1.8 fills with more).
+    pub fn add_route(&mut self, host_id: &str, route: Route) -> Result<bool> {
+        let Some(machine) = self
+            .machines
+            .iter_mut()
+            .find(|machine| machine.host_id == host_id)
+        else {
+            bail!("no saved machine has host id {host_id}");
+        };
+        let learned = machine.learn_route(route);
+        if learned {
+            self.save()?;
+        }
+        Ok(learned)
+    }
+
+    /// Make `host_id` the main machine, so it is listed first and is the
+    /// default **Run on**.
+    pub fn set_main(&mut self, host_id: &str) -> Result<()> {
+        ensure!(self.get(host_id).is_some(), "no saved machine has that id");
+        for machine in &mut self.machines {
+            machine.main = machine.host_id == host_id;
+        }
+        self.save()
+    }
+
+    pub fn main_machine(&self) -> Option<&Machine> {
+        self.machines.iter().find(|machine| machine.main)
+    }
+
+    /// Order the list the way it is shown: main machine first, then oldest.
+    pub fn ordered(&self) -> Vec<&Machine> {
+        let mut machines: Vec<&Machine> = self.machines.iter().collect();
+        machines.sort_by(|left, right| {
+            right
+                .main
+                .cmp(&left.main)
+                .then(left.added_at.cmp(&right.added_at))
+        });
+        machines
+    }
+
+    /// Write the registry atomically and privately.
+    pub fn save(&self) -> Result<()> {
+        let stored = Stored {
+            version: STORE_VERSION,
+            machines: self.machines.clone(),
+        };
+        write_private_json(&self.path, &stored)
+    }
+}
+
+fn known_names(registry: &MachineRegistry) -> String {
+    match registry.machines.as_slice() {
+        [] => String::new(),
+        machines => format!(
+            "; saved: {}",
+            machines
+                .iter()
+                .map(|machine| machine.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// Read at most [`MAX_MACHINES_BYTES`]; `None` when the file does not exist.
+fn read_bounded(path: &Path) -> Result<Option<Vec<u8>>> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_MACHINES_BYTES + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_MACHINES_BYTES,
+        "{} is larger than {MAX_MACHINES_BYTES} bytes",
+        path.display()
+    );
+    Ok(Some(bytes))
+}
+
+/// Replace `path` with complete owner-only JSON. The temporary file is
+/// created `0600` in the same directory, so the destination never exists with
+/// wider permissions or partial contents.
+pub(crate) fn write_private_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("a private file needs a parent directory")?;
+    create_private_directory(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    serde_json::to_writer(&mut file, value)?;
+    file.flush()?;
+    file.as_file().sync_all()?;
+    file.persist(path)
+        .map_err(|error| error.error)
+        .context("replace the file")?;
+    Ok(())
+}
+
+fn create_private_directory(directory: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder.create(directory)?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(directory)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load(dir: &Path) -> MachineRegistry {
+        MachineRegistry::load(dir).unwrap()
+    }
+
+    fn machine(host_id: &str, name: &str, address: &str) -> Machine {
+        Machine::new(
+            host_id,
+            name,
+            "macos",
+            "device-1",
+            Route::new(address),
+            Utc::now(),
+        )
+    }
+
+    #[test]
+    fn a_saved_machine_survives_a_reload() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        assert!(store.is_empty());
+        store
+            .insert(machine("gw-8e1f4b7a", "Studio", "192.168.1.20:17879"))
+            .unwrap();
+        let reloaded = load(dir.path());
+        assert_eq!(reloaded.machines().len(), 1);
+        let studio = &reloaded.machines()[0];
+        assert_eq!(studio.host_id, "gw-8e1f4b7a");
+        assert_eq!(studio.name, "Studio");
+        assert_eq!(studio.platform, "macos");
+        assert_eq!(studio.device_id, "device-1");
+        assert_eq!(
+            studio.routes,
+            [Route::with_kind(RouteKind::Lan, "192.168.1.20:17879")]
+        );
+        // The first machine saved is the main one, and its time is kept.
+        assert!(studio.main && studio.last_connected_at.is_none());
+        assert!(reloaded.main_machine().is_some());
+        assert_eq!(reloaded.path(), crate::config::machines_file(dir.path()));
+    }
+
+    /// The file is `0600`, and a directory this crate creates is `0700`. A
+    /// directory that already exists (the user's configuration directory) is
+    /// left as it is: widening or narrowing someone else's directory is not
+    /// this crate's to decide, and the file inside is owner-only either way.
+    #[cfg(unix)]
+    #[test]
+    fn the_registry_is_owner_only() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let config = dir.path().join("new-config");
+        let mut store = MachineRegistry::load(&config).unwrap();
+        store
+            .insert(machine("gw-a", "A", "10.0.0.2:17879"))
+            .unwrap();
+        let metadata = std::fs::metadata(store.path()).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        let directory = std::fs::metadata(&config).unwrap();
+        assert_eq!(directory.mode() & 0o777, 0o700);
+        // An existing directory keeps its own mode.
+        let mut store = MachineRegistry::load(dir.path()).unwrap();
+        store
+            .insert(machine("gw-b", "B", "10.0.0.3:17879"))
+            .unwrap();
+        let mode = std::fs::metadata(store.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn removing_selects_by_name_prefix_or_id_and_drops_its_routes() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("3f9a1c7e5b2d4086", "Studio", "10.0.0.2:17879"))
+            .unwrap();
+        store
+            .insert(machine("aabbccddeeff0011", "Laptop", "10.0.0.3:17879"))
+            .unwrap();
+        assert_eq!(store.select("Studio").unwrap().host_id, "3f9a1c7e5b2d4086");
+        assert_eq!(store.select("studio").unwrap().host_id, "3f9a1c7e5b2d4086");
+        assert_eq!(store.select("aabb").unwrap().host_id, "aabbccddeeff0011");
+        assert!(store.select("a").is_err(), "one character is ambiguous");
+        assert!(store.select("nope").is_err());
+        let removed = store.remove("Studio").unwrap();
+        assert_eq!(removed.host_id, "3f9a1c7e5b2d4086");
+        assert_eq!(load(dir.path()).machines().len(), 1);
+        // The main flag moves to what is left.
+        assert!(store.machines()[0].main);
+        assert!(store.remove("Studio").is_err());
+    }
+
+    #[test]
+    fn a_second_machine_is_not_main_and_main_can_move() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "A", "10.0.0.2:17879"))
+            .unwrap();
+        store
+            .insert(machine("gw-b", "B", "10.0.0.3:17879"))
+            .unwrap();
+        assert_eq!(store.main_machine().unwrap().name, "A");
+        store.set_main("gw-b").unwrap();
+        assert_eq!(store.main_machine().unwrap().name, "B");
+        assert_eq!(
+            store
+                .ordered()
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            ["B", "A"]
+        );
+    }
+
+    #[test]
+    fn pairing_again_updates_in_place_and_learns_routes() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        let first = machine("gw-a", "Studio", "192.168.1.20:17879");
+        let added_at = first.added_at;
+        store.insert(first).unwrap();
+        store
+            .add_route(
+                "gw-a",
+                Route::with_kind(RouteKind::Vpn, "100.92.13.44:17879"),
+            )
+            .unwrap();
+        // The same address with another port is another endpoint to try.
+        assert!(
+            store
+                .add_route(
+                    "gw-a",
+                    Route::with_kind(RouteKind::Lan, "192.168.1.20:9000")
+                )
+                .unwrap()
+        );
+        // Learning the same address again changes nothing.
+        assert!(
+            !store
+                .add_route(
+                    "gw-a",
+                    Route::with_kind(RouteKind::Lan, "192.168.1.20:9000")
+                )
+                .unwrap()
+        );
+        let mut renamed = machine("gw-a", "Studio (MacBook)", "192.168.1.20:17879");
+        renamed.added_at = Utc::now() + chrono::Duration::hours(1);
+        store.insert(renamed).unwrap();
+        let reloaded = load(dir.path());
+        let studio = &reloaded.machines()[0];
+        assert_eq!(studio.name, "Studio (MacBook)");
+        assert_eq!(studio.added_at, added_at, "first pairing keeps its date");
+        assert_eq!(reloaded.machines().len(), 1);
+        assert_eq!(studio.routes.len(), 3);
+        assert_eq!(studio.preferred_route().unwrap().kind, RouteKind::Lan);
+    }
+
+    #[test]
+    fn an_unreadable_file_is_an_error_not_an_empty_registry() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::write(crate::config::machines_file(dir.path()), b"{not json").unwrap();
+        let error = MachineRegistry::load(dir.path()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("machine registry"),
+            "{error:#}"
+        );
+        std::fs::write(
+            crate::config::machines_file(dir.path()),
+            br#"{"version": 99, "machines": []}"#,
+        )
+        .unwrap();
+        let error = MachineRegistry::load(dir.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("newer RustCode"), "{error:#}");
+    }
+
+    #[test]
+    fn routes_are_classified_by_address() {
+        for (address, kind) in [
+            ("192.168.1.20", RouteKind::Lan),
+            ("10.0.0.2:17879", RouteKind::Lan),
+            ("172.16.4.5:17879", RouteKind::Lan),
+            ("127.0.0.1:17879", RouteKind::Lan),
+            ("[::1]:17879", RouteKind::Lan),
+            ("100.92.13.44:17879", RouteKind::Vpn),
+            ("100.64.0.1", RouteKind::Vpn),
+            ("100.128.0.1", RouteKind::Public),
+            ("203.0.113.9:17879", RouteKind::Public),
+            ("8.8.8.8", RouteKind::Public),
+            ("mac.tail1234.ts.net", RouteKind::Tailscale),
+            ("mac.tail1234.ts.net:17879", RouteKind::Tailscale),
+            ("[fd7a:115c:a1e0::1]:17879", RouteKind::Tailscale),
+            ("[fd00::1]:17879", RouteKind::Vpn),
+            ("[2001:db8::20]:17879", RouteKind::Public),
+            ("rustcode-8e1f4b7a.local.", RouteKind::Lan),
+            ("studio.local", RouteKind::Lan),
+            ("studio", RouteKind::Lan),
+            ("example.com", RouteKind::Public),
+        ] {
+            assert_eq!(classify_address(address), kind, "{address}");
+        }
+    }
+
+    #[test]
+    fn a_route_behind_a_bracket_or_a_default_port_is_recognised_as_the_same() {
+        assert!(same_address("studio.local", "studio.local:17879"));
+        assert!(same_address("STUDIO.local:17879", "studio.local"));
+        assert!(same_address("[fd00::1]:17879", "[fd00::1]"));
+        assert!(!same_address("studio.local", "studio.local:9000"));
+        assert!(!same_address("studio.local", "laptop.local"));
+        assert!(!same_address("10.0.0.2", "10.0.0.3"));
+    }
+}

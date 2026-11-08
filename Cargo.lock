@@ -3582,6 +3582,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustcode-client"
+version = "1.23.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures-util",
+ "hex",
+ "keyring",
+ "mdns-sd",
+ "rand 0.10.2",
+ "rustcode",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+]
+
+[[package]]
 name = "rustcode-command"
 version = "1.23.0"
 dependencies = [
@@ -3663,6 +3683,7 @@ dependencies = [
  "ratatui",
  "reqwest",
  "rustcode",
+ "rustcode-client",
  "rustcode-core",
  "rustcode-tasks",
  "rustcode-tool-protocol",
