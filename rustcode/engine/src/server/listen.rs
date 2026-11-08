@@ -250,3 +250,8 @@ mod windows {
         }
     }
 }
+
+/// Endpoint published by the server in this gateway's configuration directory.
+pub(crate) fn running_endpoint(config_directory: &Path) -> Option<String> {
+    super::lock::read_info(&config_directory.join("run")).map(|info| info.endpoint)
+}
