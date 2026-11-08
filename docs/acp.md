@@ -193,6 +193,39 @@ worktree thread); a status or pin change is sent as `session/update`
 `session_info_update` with `_meta.rustcode.status` or
 `_meta.rustcode.pinned`.
 
+## Replay cursor
+
+Every `session/update` of a session carries a cursor in
+`_meta.rustcode.cursor`, a number that only grows. Live updates count up by
+one. The updates that rebuild a view on load (the transcript, the running
+turn, the title, commands and usage) carry the cursor the view is current as
+of. A client keeps the greatest cursor it saw; the `session/load` answer
+repeats it in `_meta.rustcode.cursor`, the value to keep once the load is done.
+Thread status updates sent to every client for the thread list have none.
+
+`session/load` accepts `_meta.rustcode.resume: {"cursor"}`, the cursor the
+client last saw:
+
+- The engine keeps the latest updates of each open session in memory (8,192
+  updates or 8 MiB as JSON, whichever comes first). When every update after
+  `cursor` is still kept it sends only those, each with its own cursor, then
+  streams live, with nothing missed or sent twice. Nothing else is sent: not
+  the transcript, and not the title, commands and usage a plain load adds.
+- Otherwise the cursor is too old, from before the engine restarted or the
+  session was closed (cursors start from the clock, so an earlier run's never
+  fall in a later log), or from the future. The engine sends an empty
+  `session_info_update` with `_meta.rustcode.reset: true` (also in the answer),
+  then everything a load without `resume` sends. The client clears what it
+  shows of the session at the marker.
+- A rewind (`_rustcode/rewind`, a checkpoint restore that rewinds the chat)
+  cuts the history without an update, so it ends every resume from before it.
+- A load without `resume` behaves as before, plus the cursors.
+
+Each connection keeps its own position; the engine holds none for them. A
+prompt shown to the session's other clients is logged too, so the connection
+that sent it skips a cursor there; if it drops before the next update it
+gets its own prompt again on resume.
+
 ## Slash commands
 
 A session's commands arrive as `session/update` `available_commands_update`

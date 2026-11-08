@@ -10,7 +10,7 @@ use crate::harness::{self, HarnessKind, store};
 use agent_client_protocol::schema::v1::{
     LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionConfigOptionValue, SessionInfoUpdate, SessionNotification, SessionUpdate,
+    SessionConfigOptionValue, SessionInfoUpdate, SessionUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -494,23 +494,30 @@ pub(crate) async fn load_session(
             SessionInfoUpdate::new().title(title),
         ));
     }
+    // It asked to resume a thread that is not open here (the engine
+    // restarted, or it was closed): the transcript replaces what it has.
+    let reset = super::cursor::requested_cursor(request).is_some();
+    if reset && let Err(error) = peer.send_reset(&session_id) {
+        close(sessions, &session_id, remote).await;
+        peer.clients().forget_session(&session_id);
+        return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+    }
     for update in updates {
-        if let Err(error) = peer
-            .connection()
-            .send_notification(SessionNotification::new(session_id.clone(), update))
-        {
+        if let Err(error) = peer.send_snapshot(&session_id, update) {
             close(sessions, &session_id, remote).await;
             peer.clients().forget_session(&session_id);
             return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
         }
     }
-    Ok(LoadSessionResponse::new()
-        .config_options(session.config_options().await)
-        .meta(harness::session_meta_for(
-            &resolved,
-            account.as_ref(),
-            orchestrated,
-        )))
+    Ok(peer.clients().position(&session_id, reset).finish(
+        LoadSessionResponse::new()
+            .config_options(session.config_options().await)
+            .meta(harness::session_meta_for(
+                &resolved,
+                account.as_ref(),
+                orchestrated,
+            )),
+    ))
 }
 
 /// `session/load` of a thread already open in this engine, perhaps mid-turn:
@@ -528,9 +535,10 @@ pub(crate) async fn attach_open(
             "session/load cwd does not match the open thread".to_owned(),
         ));
     }
-    super::attach_with_replay(
+    let position = super::attach_with_replay(
         peer,
         &session_id,
+        super::cursor::requested_cursor(request),
         || {
             let history = rustcode_core::History::from(session.recorded_history());
             async move { history }
@@ -540,37 +548,41 @@ pub(crate) async fn attach_open(
     .await?;
     let record = session.record();
     let mut updates = Vec::new();
-    if let Some(usage) = record
-        .usage
-        .clone()
-        .and_then(|usage| serde_json::from_value::<SessionUpdate>(usage).ok())
+    // A resumed client has these already: changes to them were updates.
+    if !position.resumed
+        && let Some(usage) = record
+            .usage
+            .clone()
+            .and_then(|usage| serde_json::from_value::<SessionUpdate>(usage).ok())
     {
         updates.push(usage);
     }
-    if let Some(title) = record
-        .title
-        .clone()
-        .filter(|title| !title.trim().is_empty())
+    if !position.resumed
+        && let Some(title) = record
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
     {
         updates.push(SessionUpdate::SessionInfoUpdate(
             SessionInfoUpdate::new().title(title),
         ));
     }
     for update in updates {
-        let _ = peer
-            .connection()
-            .send_notification(SessionNotification::new(session_id.clone(), update));
+        let _ = peer.send_snapshot(&session_id, update);
     }
+    let position = peer.clients().position(&session_id, position.reset);
     let account = harness::config::config_dir().ok().and_then(|dir| {
         harness::config::account_for_load(&harness::config::load_accounts_in(&dir), &record)
     });
-    Ok(LoadSessionResponse::new()
-        .config_options(session.config_options().await)
-        .meta(harness::session_meta_for(
-            &session.harness,
-            account.as_ref(),
-            session.orchestrated(),
-        )))
+    Ok(position.finish(
+        LoadSessionResponse::new()
+            .config_options(session.config_options().await)
+            .meta(harness::session_meta_for(
+                &session.harness,
+                account.as_ref(),
+                session.orchestrated(),
+            )),
+    ))
 }
 
 /// Where a switch starts from: the open session, a built-in thread's folder,
