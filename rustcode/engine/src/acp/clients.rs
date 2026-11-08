@@ -404,8 +404,9 @@ impl Clients {
         }
     }
 
-    /// The cursor of the newest update of `session_id` (tests).
-    #[cfg(test)]
+    /// The cursor of the newest update of `session_id`: a load of a session
+    /// that is not open yet takes it before it reads the history, and
+    /// [`Peer::attach_closed`] sends everything logged after it.
     pub(crate) fn head(&self, session_id: &str) -> u64 {
         self.registry().log(session_id).head()
     }
@@ -597,6 +598,37 @@ impl Peer {
         replay: Vec<SessionUpdate>,
         reset: bool,
     ) -> Result<Option<Position>, agent_client_protocol::Error> {
+        self.attach_replayed(session_id, generation, None, replay, reset)
+    }
+
+    /// This client loads `session_id`, which was not open: the engine read
+    /// its transcript from disk, then opened it, and `replay` is that
+    /// transcript. `base` is [`Clients::head`] from before the transcript was
+    /// read. Updates the session logged since (another client loaded it and
+    /// ran a turn, a title arrived) are not in the transcript: they are sent
+    /// after it, each with its cursor, so the cursor the answer names covers
+    /// nothing this connection was not sent.
+    ///
+    /// `None`, with nothing sent, when the log no longer reaches back to
+    /// `base`: the load has to start again.
+    pub(crate) fn attach_closed(
+        &self,
+        session_id: &str,
+        base: u64,
+        replay: Vec<SessionUpdate>,
+        reset: bool,
+    ) -> Result<Option<Position>, agent_client_protocol::Error> {
+        self.attach_replayed(session_id, None, Some(base), replay, reset)
+    }
+
+    fn attach_replayed(
+        &self,
+        session_id: &str,
+        generation: Option<u64>,
+        base: Option<u64>,
+        replay: Vec<SessionUpdate>,
+        reset: bool,
+    ) -> Result<Option<Position>, agent_client_protocol::Error> {
         let mut registry = self.clients.registry();
         if generation.is_some_and(|generation| generation != registry.generation(session_id)) {
             return Ok(None);
@@ -607,6 +639,16 @@ impl Peer {
             reset,
             resumed: false,
         };
+        // The log after `base`, if it is all still there.
+        let missed = match base {
+            None => Vec::new(),
+            Some(base) => match registry.log(session_id).since(base) {
+                Some(logged) => logged
+                    .map(|logged| (logged.cursor, logged.update.clone()))
+                    .collect(),
+                None => return Ok(None),
+            },
+        };
         // A client that has gone is not brought back by a late load.
         if !registry.entries.contains_key(&self.id) {
             return Ok(Some(position));
@@ -615,11 +657,16 @@ impl Peer {
         // to number and address itself: nothing reaches this client between
         // the replay and the live updates, and nothing is sent twice.
         // Sending only queues the message. All of it is current as of `head`.
-        let running = registry
-            .turns
-            .get(session_id)
-            .map(|turn| turn.updates.clone())
-            .unwrap_or_default();
+        // With a `base` the log has the running turn's updates too, so they
+        // are not sent a second time from the turn's own record.
+        let running = match base {
+            Some(_) => Vec::new(),
+            None => registry
+                .turns
+                .get(session_id)
+                .map(|turn| turn.updates.clone())
+                .unwrap_or_default(),
+        };
         if reset {
             self.connection
                 .send_notification(reset_marker(session_id))?;
@@ -627,6 +674,10 @@ impl Peer {
         for update in replay.into_iter().chain(running) {
             self.connection
                 .send_notification(snapshot(session_id, update))?;
+        }
+        for (cursor, update) in missed {
+            self.connection
+                .send_notification(notification(session_id, update, cursor))?;
         }
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
@@ -1291,6 +1342,45 @@ mod tests {
             );
             let _ = close.send(());
         }
+    }
+
+    /// A closed-session load whose base the log no longer reaches (too much
+    /// happened meanwhile, or the history was rewritten) sends nothing and
+    /// says so: the cursor it would answer must not cover what it skipped.
+    #[tokio::test]
+    async fn a_closed_load_the_log_cannot_catch_up_is_refused() {
+        use super::super::cursor::LOG_UPDATES;
+        let clients = Clients::default();
+        let sender = clients.session("busy");
+        let base = clients.head("busy");
+        for n in 0..LOG_UPDATES + 5 {
+            sender.update(text(&format!("{n}"))).expect("send");
+        }
+        let (loader, mut notes, _close) = connected(&clients).await;
+        assert!(
+            loader
+                .attach_closed("busy", base, vec![text("history")], false)
+                .unwrap()
+                .is_none()
+        );
+        let base = clients.head("busy");
+        sender.update(text("one")).expect("send");
+        sender.update(text("two")).expect("send");
+        clients.invalidate_cursors("busy");
+        assert!(
+            loader
+                .attach_closed("busy", base, vec![text("history")], false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(notes.try_recv().is_err(), "nothing was sent");
+        let head = clients.head("busy");
+        let position = loader
+            .attach_closed("busy", head, vec![text("history")], false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(position.cursor, head);
+        assert!(notes.recv().await.expect("history").meta.is_none());
     }
 
     /// A load cut off halfway has no cursor to resume from, so the next one

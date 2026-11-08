@@ -698,6 +698,9 @@ async fn acp_load_session(
             .await;
     }
     let cwd = canonical_acp_cwd(&request.cwd, "session/load")?;
+    // Where the session's log is before its transcript is read: whatever it
+    // logs after this is not in the transcript.
+    let base = server.clients.head(&session_id);
     let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
         agent_client_protocol::Error::invalid_params()
             .data(format!("unknown or unresumable ACP session: {session_id}"))
@@ -797,10 +800,20 @@ async fn acp_load_session(
         }
         snapshot.push(commands::available_commands_update());
         snapshot.push(loaded_usage);
-        // Queued and attached under one lock (see `Peer::attach_open`).
-        if let Err(error) = peer.attach_open(&session_id, None, snapshot, reset) {
-            unregister_acp_session(server, &session_id).await;
-            return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+        load_pause::here(&session_id).await;
+        // Queued and attached under one lock (see `Peer::attach_closed`):
+        // the transcript, then what the session logged since `base`.
+        match peer.attach_closed(&session_id, base, snapshot, reset) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                unregister_acp_session(server, &session_id).await;
+                return Err(agent_client_protocol::Error::internal_error()
+                    .data("session changed while loading; retry session/load"));
+            }
+            Err(error) => {
+                unregister_acp_session(server, &session_id).await;
+                return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+            }
         }
         return Ok(peer.position(&session_id, reset).finish(
             LoadSessionResponse::new()
@@ -808,6 +821,49 @@ async fn acp_load_session(
                 .meta(crate::harness::builtin_session_meta()),
         ));
     }
+}
+
+/// A test stops a closed-session load after the session is open and before
+/// the loading client is attached, to do what another client could do there.
+#[cfg(test)]
+pub(crate) mod load_pause {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
+
+    type Gate = (Arc<Notify>, Arc<Notify>);
+
+    static GATES: Mutex<Option<HashMap<String, Gate>>> = Mutex::new(None);
+
+    /// The load of `session_id` stops at its next [`here`]: `reached` says it
+    /// is there, `go` lets it on.
+    pub(crate) fn arm(session_id: &str) -> Gate {
+        let gate = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        GATES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .insert(session_id.to_owned(), gate.clone());
+        gate
+    }
+
+    pub(crate) async fn here(session_id: &str) {
+        let gate = GATES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+            .and_then(|gates| gates.remove(session_id));
+        if let Some((reached, go)) = gate {
+            reached.notify_one();
+            go.notified().await;
+        }
+    }
+}
+
+#[cfg(not(test))]
+pub(crate) mod load_pause {
+    #[inline]
+    pub(crate) async fn here(_session_id: &str) {}
 }
 
 /// `session/load` of a built-in session already open in this engine: `peer`
@@ -6419,18 +6475,9 @@ mod tests {
             cwd: &std::path::Path,
             resume: Option<u64>,
         ) -> (Vec<SessionNotification>, LoadSessionResponse) {
-            let mut request = LoadSessionRequest::new(session_id.to_owned(), cwd.to_path_buf());
-            if let Some(cursor) = resume {
-                request.meta = Some(
-                    serde_json::json!({ "rustcode": { "resume": { "cursor": cursor } } })
-                        .as_object()
-                        .cloned()
-                        .expect("object"),
-                );
-            }
             let response = self
                 .connection
-                .send_request(request)
+                .send_request(load_request(session_id, cwd, resume))
                 .block_task()
                 .await
                 .expect("session/load");
@@ -6478,6 +6525,35 @@ mod tests {
                 .expect("connection")
                 .expect("connection ends cleanly");
         }
+    }
+
+    /// Run `work` on a thread named like the ones that serve connections:
+    /// the test config directory is per thread name, so what it writes is
+    /// what a `session/load` served on such a thread reads.
+    fn on_the_connection_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .name("test-connection".to_owned())
+            .spawn(work)
+            .expect("thread")
+            .join()
+            .expect("work")
+    }
+
+    fn load_request(
+        session_id: &str,
+        cwd: &std::path::Path,
+        resume: Option<u64>,
+    ) -> LoadSessionRequest {
+        let mut request = LoadSessionRequest::new(session_id.to_owned(), cwd.to_path_buf());
+        if let Some(cursor) = resume {
+            request.meta = Some(
+                serde_json::json!({ "rustcode": { "resume": { "cursor": cursor } } })
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            );
+        }
+        request
     }
 
     fn rustcode_of(meta: Option<&serde_json::Map<String, serde_json::Value>>) -> serde_json::Value {
@@ -6606,6 +6682,279 @@ mod tests {
             resumed.leave().await;
         }
         plain.leave().await;
+        server.shutdown().await;
+    }
+
+    /// A second client does something to a closed session while a first one
+    /// loads it, after the session is open and before the loader is attached.
+    /// The loader is sent, after the transcript, everything the session
+    /// logged since before the transcript was read, in order and once, and
+    /// the cursor of its answer is the last of them: it never names an
+    /// update it was not sent.
+    fn assert_the_loader_gets_what_happened_while_it_loaded(
+        notes: &[SessionNotification],
+        response: &LoadSessionResponse,
+        base: u64,
+        transcript: &[(&str, String)],
+    ) -> Vec<SessionNotification> {
+        assert!(is_reset(&notes[0]), "the reset comes first: {:?}", notes[0]);
+        let first_logged = notes
+            .iter()
+            .position(|note| cursor_opt(note).is_some())
+            .expect("the updates of the window reach the loader");
+        assert!(
+            notes[..first_logged]
+                .iter()
+                .all(|note| cursor_opt(note).is_none()),
+            "nothing with a cursor lands inside the transcript"
+        );
+        let said_before: Vec<_> = chunks(&notes[..first_logged])
+            .into_iter()
+            .map(|(_, who, text)| (who, text))
+            .collect();
+        assert_eq!(said_before, transcript);
+        let logged = &notes[first_logged..];
+        assert!(
+            logged.iter().all(|note| cursor_opt(note).is_some()),
+            "after the transcript only logged updates follow"
+        );
+        let cursors: Vec<u64> = logged.iter().map(cursor_of).collect();
+        assert_eq!(
+            cursors,
+            (base + 1..=base + cursors.len() as u64).collect::<Vec<_>>(),
+            "every update since before the transcript was read, once, in order"
+        );
+        assert_eq!(
+            answered_cursor(response),
+            cursors.last().copied(),
+            "the answer names the last update the loader was sent"
+        );
+        logged.to_vec()
+    }
+
+    #[test]
+    fn a_closed_thread_load_gets_the_turn_and_title_of_a_second_client_meanwhile() {
+        on_a_large_stack(without_mcp(closed_load_with_a_second_client()));
+    }
+
+    async fn closed_load_with_a_second_client() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+        // A thread on disk that is not open in this engine.
+        let session_id = on_the_connection_thread(|| {
+            let session_id = crate::config::create_detached_session();
+            crate::config::save_session_history(
+                &session_id,
+                &[
+                    crate::app::ChatMessage::new("user", "an earlier question"),
+                    crate::app::ChatMessage::new("assistant", "an earlier answer"),
+                ][..],
+            );
+            // The history is written in the background.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while crate::config::load_session_by_id(&session_id).is_none() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the history is never written"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            session_id
+        });
+        let transcript = vec![
+            ("user", "an earlier question".to_owned()),
+            ("agent", "an earlier answer".to_owned()),
+        ];
+
+        let (reached, go) = load_pause::arm(&session_id);
+        let mut loader = Noting::connect(&server).await;
+        let load = loader
+            .connection
+            .send_request(load_request(&session_id, &cwd_path, Some(1)))
+            .block_task();
+        let mut load = tokio::spawn(load);
+        tokio::select! {
+            () = reached.notified() => {}
+            early = &mut load => panic!("the load ended before its pause: {early:?}"),
+            () = tokio::time::sleep(std::time::Duration::from_secs(20)) => {
+                panic!("the load never reached its pause")
+            }
+        }
+        let base = server.clients.head(&session_id);
+
+        // Another client loads the open thread, runs a prompt that starts and
+        // ends, and the thread is titled: all before the loader is attached.
+        let mut second = Noting::connect(&server).await;
+        let (_, _) = second.load(&session_id, &cwd_path, None).await;
+        let (endpoint, release) = held_provider("reply one, ", "reply two").await;
+        use_provider(&server, &session_id, &endpoint).await;
+        let prompt = second.connection.send_request(PromptRequest::new(
+            session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new("second question"))],
+        ));
+        second.until_text("reply one").await;
+        let _ = release.send(());
+        second.until_text("reply two").await;
+        prompt.block_task().await.expect("the prompt");
+        wait_until("the turn ends", || {
+            !server.clients.turn_running(&session_id)
+        })
+        .await;
+        server
+            .clients
+            .session(&session_id)
+            .update(SessionUpdate::SessionInfoUpdate(
+                SessionInfoUpdate::new().title("A new title"),
+            ))
+            .expect("title");
+
+        go.notify_one();
+        let response = load.await.expect("task").expect("session/load");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let notes = loader.drain();
+        let logged = assert_the_loader_gets_what_happened_while_it_loaded(
+            &notes,
+            &response,
+            base,
+            &transcript,
+        );
+        let said: Vec<_> = chunks(&logged)
+            .into_iter()
+            .map(|(_, who, text)| (who, text))
+            .collect();
+        assert!(
+            said.contains(&("user", "second question".to_owned())),
+            "the prompt: {said:?}"
+        );
+        assert_eq!(
+            said.iter()
+                .filter(|(who, _)| *who == "agent")
+                .map(|(_, text)| text.as_str())
+                .collect::<String>(),
+            "reply one, reply two",
+            "the whole reply, once"
+        );
+        assert!(
+            logged.iter().any(|note| matches!(
+                &note.update,
+                SessionUpdate::SessionInfoUpdate(info)
+                    if serde_json::to_value(info).is_ok_and(|info| info["title"] == "A new title")
+            )),
+            "the title"
+        );
+
+        // It carries on from there: the next update reaches both, in order.
+        let last = answered_cursor(&response).expect("cursor");
+        server
+            .clients
+            .session(&session_id)
+            .update(SessionUpdate::SessionInfoUpdate(
+                SessionInfoUpdate::new().title("Later"),
+            ))
+            .expect("title");
+        let mut after = Vec::new();
+        wait_until("the loader is sent the next update", || {
+            after.extend(loader.drain());
+            !after.is_empty()
+        })
+        .await;
+        assert_eq!(after.iter().map(cursor_of).collect::<Vec<_>>(), [last + 1]);
+        second.leave().await;
+        loader.leave().await;
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn a_closed_external_thread_load_gets_what_a_second_client_did_meanwhile() {
+        on_a_large_stack(without_mcp(closed_external_load_with_a_second_client()));
+    }
+
+    async fn closed_external_load_with_a_second_client() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+        let session_id = on_the_connection_thread({
+            let cwd_path = cwd_path.clone();
+            move || {
+                let session_id = crate::config::create_detached_session();
+                let mut record = crate::harness::store::HarnessRecord::new("claude-code", cwd_path);
+                record.title = Some("Stored title".to_owned());
+                crate::harness::store::save(&session_id, &record);
+                session_id
+            }
+        });
+
+        let (reached, go) = load_pause::arm(&session_id);
+        let mut loader = Noting::connect(&server).await;
+        let mut load = tokio::spawn(
+            loader
+                .connection
+                .send_request(load_request(&session_id, &cwd_path, Some(1)))
+                .block_task(),
+        );
+        tokio::select! {
+            () = reached.notified() => {}
+            early = &mut load => panic!("the load ended before its pause: {early:?}"),
+            () = tokio::time::sleep(std::time::Duration::from_secs(20)) => {
+                panic!("the load never reached its pause")
+            }
+        }
+        let base = server.clients.head(&session_id);
+
+        // Another client loads the open thread and a turn starts and ends on
+        // it, and the thread is titled, before the loader is attached.
+        let mut second = Noting::connect(&server).await;
+        second.load(&session_id, &cwd_path, None).await;
+        let clients = server.clients.session(&session_id);
+        let turn = clients.begin_turn(0, None);
+        for update in [
+            SessionUpdate::UserMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("second question")),
+            )),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("an answer")),
+            )),
+        ] {
+            clients.update(update).expect("update");
+        }
+        drop(turn);
+        clients
+            .update(SessionUpdate::SessionInfoUpdate(
+                SessionInfoUpdate::new().title("A new title"),
+            ))
+            .expect("title");
+
+        go.notify_one();
+        let response = load.await.expect("task").expect("session/load");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let notes = loader.drain();
+        // The stored title is part of the transcript the loader is sent.
+        assert!(is_reset(&notes[0]));
+        let first_logged = notes
+            .iter()
+            .position(|note| cursor_opt(note).is_some())
+            .expect("the updates of the window reach the loader");
+        assert!(
+            notes[..first_logged]
+                .iter()
+                .all(|note| cursor_opt(note).is_none())
+        );
+        let cursors: Vec<u64> = notes[first_logged..].iter().map(cursor_of).collect();
+        assert_eq!(cursors, [base + 1, base + 2, base + 3]);
+        assert_eq!(answered_cursor(&response), Some(base + 3));
+        assert_eq!(
+            chunks(&notes[first_logged..])
+                .into_iter()
+                .map(|(_, who, text)| (who, text))
+                .collect::<Vec<_>>(),
+            [
+                ("user", "second question".to_owned()),
+                ("agent", "an answer".to_owned())
+            ]
+        );
+        second.leave().await;
+        loader.leave().await;
         server.shutdown().await;
     }
 

@@ -447,6 +447,9 @@ pub(crate) async fn load_session(
             record.harness
         ))
     })?;
+    // Where the thread's log is before its transcript is read: whatever it
+    // logs after this is not in the transcript.
+    let base = peer.clients().head(&session_id);
     let history = crate::config::load_session_by_id(&session_id)
         .map(|(_, history)| history)
         .unwrap_or_default();
@@ -491,11 +494,18 @@ pub(crate) async fn load_session(
     // It asked to resume a thread that is not open here (the engine
     // restarted, or it was closed): the transcript replaces what it has.
     let reset = super::cursor::requested_cursor(request).is_some();
-    // Queued and attached under one lock (see `Peer::attach_open`).
-    if let Err(error) = peer.attach_open(&session_id, None, updates, reset) {
+    super::load_pause::here(&session_id).await;
+    // Queued and attached under one lock (see `Peer::attach_closed`): the
+    // transcript, then what the thread logged since `base`.
+    let failed = match peer.attach_closed(&session_id, base, updates, reset) {
+        Ok(Some(_)) => None,
+        Ok(None) => Some("session changed while loading; retry session/load".to_owned()),
+        Err(error) => Some(error.to_string()),
+    };
+    if let Some(error) = failed {
         close(sessions, &session_id, remote).await;
         peer.clients().forget_session(&session_id);
-        return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+        return Err(agent_client_protocol::Error::internal_error().data(error));
     }
     // The orchestrator is hosted by the client that most recently attached.
     let orchestrated = attach_orchestrator(
