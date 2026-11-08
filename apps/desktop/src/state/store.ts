@@ -181,6 +181,7 @@ import {
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { challengeIsValid, makeChallenge, newPairedDevice, type PairingChallenge } from "./remotePairing";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
+import type { SidebarOrder } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
   appendNotice,
@@ -353,6 +354,11 @@ export interface AppState {
   themeActive: string;
   /** Pinned threads, kept in app storage like the SwiftUI app's `pinnedSessions`. */
   pinned: string[];
+  /**
+   * The order each sidebar section draws its rows in, by section key, as the user
+   * arranged it (state/sidebarOrder.ts). Kept in app storage beside `pinned`.
+   */
+  sidebarOrder: SidebarOrder;
   /** Archived threads and when, kept in app storage; they leave the list until shown. */
   archived: Record<string, number>;
   /**
@@ -552,6 +558,7 @@ const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 const STORAGE = {
   smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
+  sidebarOrder: "rustcode.sidebarOrder",
   archived: "rustcode.archived",
   messaged: "rustcode.messaged",
   project: "rustcode.projectCwd",
@@ -714,6 +721,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // Lets `batcher.batch` defer subscribers (adds no state).
   ...batcher.attach(api),
   pinned: storedJson<string[]>(STORAGE.pinned, []),
+  sidebarOrder: storedJson<SidebarOrder>(STORAGE.sidebarOrder, {}),
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   messaged: storedJson<Record<string, number>>(STORAGE.messaged, {}),
   editing: {},
@@ -2250,6 +2258,16 @@ export function setPinned(ids: string[], on: boolean) {
 
 export function togglePin(id: string) {
   setPinned([id], !get().pinned.includes(id));
+}
+
+/**
+ * Arrange one sidebar section (`state/sidebarOrder.ts`): the ids in the order the user left them,
+ * kept in app storage beside `pinned`, so a drag or ⌥↑/↓ outlives the window.
+ */
+export function setSectionOrder(key: string, ids: string[]) {
+  const sidebarOrder = { ...get().sidebarOrder, [key]: ids };
+  set({ sidebarOrder });
+  store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
 }
 
 export function setArchived(id: string, on: boolean) {
@@ -5450,6 +5468,7 @@ export function resetForTests() {
     continueAfterLimit: true,
     agent: undefined,
     pinned: [],
+    sidebarOrder: {},
     archived: {},
     editing: {},
     confirm: null,
