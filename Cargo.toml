@@ -53,7 +53,7 @@ futures-util = "0.3.32"
 fs2 = "0.4.3"
 globset = "0.4"
 ignore = "0.4"
-jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 qrcode = { version = "0.14.1", default-features = false }
 rand = "0.10.2"
@@ -88,7 +88,7 @@ flate2 = "1.0"
 libc = "0.2"
 mdns-sd = { version = "0.21.7", default-features = false }
 tar = "0.4"
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3.10"
 rustcode-core = { path = "rustcode/core/rustcode-core" }
 rustcode-session = { path = "rustcode/core/rustcode-session" }

@@ -682,6 +682,10 @@ function seedDelegateLinks(): JsonObject[] {
       harness: "codex",
       harnessName: "Codex",
       startedAt: minutes(2),
+      events: [
+        { kind: "started", at: minutes(3), detail: "Codex · gpt-6-luna" },
+        { kind: "working", at: minutes(2) },
+      ],
     }),
     link(DELEGATES.research, 1, DELEGATES.tests, "done", minutes(8), {
       harness: "codex",
@@ -689,12 +693,22 @@ function seedDelegateLinks(): JsonObject[] {
       settledAt: minutes(6),
       answer: "Added 14 tests: the branch sum, the clock that freezes on an approval, and an unknown cost.",
       filesChanged: 1,
+      events: [
+        { kind: "started", at: minutes(8), detail: "Codex · gpt-6-luna" },
+        { kind: "working", at: minutes(8) },
+        { kind: "answered", at: minutes(6), detail: "worked 2m" },
+      ],
     }),
     link(DELEGATES.research, 2, DELEGATES.docs, "failed", minutes(7), {
       harness: "claude-code",
       harnessName: "Claude Code",
       settledAt: minutes(6),
       answer: "The docs build failed on an unknown token name.",
+      events: [
+        { kind: "started", at: minutes(7), detail: "Claude Code · claude-sonnet-6" },
+        { kind: "working", at: minutes(7) },
+        { kind: "failed", at: minutes(6) },
+      ],
     }),
     link(DELEGATES.root, 2, DELEGATES.review, "done", minutes(9), {
       harness: "pi",
@@ -702,6 +716,11 @@ function seedDelegateLinks(): JsonObject[] {
       settledAt: minutes(5),
       answer: "Two notes: fold the finished branch, and keep the cost unknown when no turn reported one.",
       filesChanged: 2,
+      events: [
+        { kind: "started", at: minutes(9), detail: "Pi · deepseek/flash" },
+        { kind: "working", at: minutes(9) },
+        { kind: "answered", at: minutes(5), detail: "worked 4m" },
+      ],
     }),
     // Waiting on the user: the clock stopped when the question was asked.
     link(DELEGATES.root, 3, DELEGATES.wait, "needs_user", minutes(4), {
@@ -709,11 +728,21 @@ function seedDelegateLinks(): JsonObject[] {
       harnessName: "Claude Code",
       startedAt: minutes(3),
       waitingSince: minutes(2),
+      events: [
+        { kind: "started", at: minutes(4), detail: "Claude Code · sonnet" },
+        { kind: "working", at: minutes(3) },
+        { kind: "asking", at: minutes(2) },
+      ],
     }),
     link(DELEGATES.root, 4, DELEGATES.stop, "cancelled", minutes(10), {
       harness: "rustcode",
       harnessName: "RustCode",
       settledAt: minutes(9),
+      events: [
+        { kind: "started", at: minutes(10), detail: "RustCode · chatgpt/gpt-6-luna" },
+        { kind: "working", at: minutes(10) },
+        { kind: "stopped", at: minutes(9) },
+      ],
     }),
   ];
 }

@@ -181,6 +181,7 @@ import {
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { challengeIsValid, makeChallenge, newPairedDevice, type PairingChallenge } from "./remotePairing";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
+import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
   appendNotice,
@@ -353,6 +354,11 @@ export interface AppState {
   themeActive: string;
   /** Pinned threads, kept in app storage like the SwiftUI app's `pinnedSessions`. */
   pinned: string[];
+  /**
+   * The order each sidebar section draws its rows in, by section key, as the user
+   * arranged it (state/sidebarOrder.ts). Kept in app storage beside `pinned`.
+   */
+  sidebarOrder: SidebarOrder;
   /** Archived threads and when, kept in app storage; they leave the list until shown. */
   archived: Record<string, number>;
   /**
@@ -552,6 +558,7 @@ const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
 const STORAGE = {
   smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
+  sidebarOrder: "rustcode.sidebarOrder",
   archived: "rustcode.archived",
   messaged: "rustcode.messaged",
   project: "rustcode.projectCwd",
@@ -714,6 +721,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // Lets `batcher.batch` defer subscribers (adds no state).
   ...batcher.attach(api),
   pinned: storedJson<string[]>(STORAGE.pinned, []),
+  sidebarOrder: storedJson<SidebarOrder>(STORAGE.sidebarOrder, {}),
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   messaged: storedJson<Record<string, number>>(STORAGE.messaged, {}),
   editing: {},
@@ -1537,6 +1545,9 @@ export async function refreshSessions(): Promise<void> {
         projectCwd: s.projectCwd || sessions[0]?.cwd || "",
       };
     });
+    // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
+    // the whole list, so it prunes nothing: the rows of the rest are still there.
+    if (!capped) pruneSidebarOrder(get().sessions.map((x) => x.id));
   } catch (error) {
     set({ sessionsLoaded: true });
     toast(`Could not list threads: ${errorText(error)}`, "error");
@@ -2252,6 +2263,44 @@ export function togglePin(id: string) {
   setPinned([id], !get().pinned.includes(id));
 }
 
+/**
+ * Arrange one sidebar section (`state/sidebarOrder.ts`): the ids in the order the user left them,
+ * kept in app storage beside `pinned`, so a drag or ⌥↑/↓ outlives the window.
+ */
+export function setSectionOrder(key: string, ids: string[]) {
+  const sidebarOrder = { ...get().sidebarOrder, [key]: ids };
+  set({ sidebarOrder });
+  store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
+}
+
+/** The arrangement, written only when it changed (`state/sidebarOrder.ts`). */
+function saveSidebarOrder(next: SidebarOrder, before: SidebarOrder) {
+  if (next === before) return;
+  set({ sidebarOrder: next });
+  store(STORAGE.sidebarOrder, JSON.stringify(next));
+}
+
+/**
+ * A thread that is gone keeps no place in any section's arrangement: without this a trashed thread
+ * would leave its id in app storage for good. A no-op when it had no place.
+ */
+export function forgetSidebarOrder(ids: readonly string[]) {
+  saveSidebarOrder(withoutThreads(get().sidebarOrder, ids), get().sidebarOrder);
+}
+
+/**
+ * The arrangement limited to the threads the engine still lists: a thread trashed from another app,
+ * or before this field existed, loses its place here. Callers pass the whole list — a capped one is
+ * not the whole list and prunes nothing (state/store.ts `refreshSessions`).
+ */
+export function pruneSidebarOrder(known: readonly string[]) {
+  const ids = new Set(known);
+  saveSidebarOrder(
+    keepThreads(get().sidebarOrder, (id) => ids.has(id)),
+    get().sidebarOrder,
+  );
+}
+
 export function setArchived(id: string, on: boolean) {
   const archived = { ...get().archived };
   if (on) {
@@ -2318,6 +2367,8 @@ export async function trashThread(id: string): Promise<boolean> {
   });
   // Links into the trashed thread failed: their parents may now have something to hear.
   wakeTick();
+  // Its place in the sidebar's arrangement goes with it, or the stored order keeps an id forever.
+  forgetSidebarOrder([id]);
   store(STORAGE.archived, JSON.stringify(archived));
   store(STORAGE.pinned, JSON.stringify(pinned));
   store(STORAGE.autoCompactOff, JSON.stringify(autoCompactOff));
@@ -5450,6 +5501,7 @@ export function resetForTests() {
     continueAfterLimit: true,
     agent: undefined,
     pinned: [],
+    sidebarOrder: {},
     archived: {},
     editing: {},
     confirm: null,

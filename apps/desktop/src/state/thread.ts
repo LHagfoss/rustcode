@@ -13,7 +13,7 @@ import type {
   ToolStatus,
 } from "../acp/types";
 import { unwrapShell } from "../lib/command";
-import type { ComposeExtras, SentAttachment } from "./compose";
+import { type ComposeExtras, type SentAttachment, splitImageMarkers } from "./compose";
 import type { Link } from "./orchestration";
 import { activeStep, advancePlanClocks, type PlanClocks, type SteerNote } from "./steer";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "./toolNames";
@@ -1138,6 +1138,26 @@ export function messageTime(at: number | undefined, now = Date.now()): string {
     ...(sameYear ? {} : { year: "numeric" }),
   });
   return `${day}, ${time}`;
+}
+
+/**
+ * The last thing said in a thread, in one line: what a reader recognises it by in a
+ * preview (ui/ThreadHoverCard.tsx). The newest message or answer, skipping the
+ * steps between them and the pictures a message carries; null for a thread with
+ * nothing said in it yet.
+ */
+export function lastWords(items: readonly TranscriptItem[] | undefined): string | undefined {
+  if (!items) return undefined;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i]!;
+    const text =
+      item.kind === "user" || item.kind === "assistant" || item.kind === "notice"
+        ? splitImageMarkers(item.text).text
+        : "";
+    const line = text.replace(/\s+/g, " ").trim();
+    if (line) return line.length > 220 ? `${line.slice(0, 219).trimEnd()}…` : line;
+  }
+  return undefined;
 }
 
 /** The sidebar's compact age: `now`, `5m`, `3h`, `2d`, then the date. */
