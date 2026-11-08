@@ -222,11 +222,13 @@ hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round control
 own, which puts their icons on that same edge.
 
 The composer uses solid `surface-2` in both themes, including over a new thread's
-picture, with no backdrop blur. Its edge uses `--rc-composer-outline` and its
-focus-within ring uses `focus` at 40%. The strip under it uses the same solid
-surface with a 4% lift of the text colour (`--rc-composer-footer-bg`). The
-new thread's picture cards remain translucent (`.rc-glass-faint`) and become
-solid under Reduce transparency.
+picture, with no backdrop blur. It has no edge of its own: the lift under it
+(`0 3px 12px -4px` of `--rc-shadow-soft`) says it floats, and the only rim it
+ever draws is the keyboard's focus-within ring, `focus` at 40%. The strip under
+it uses the same solid surface with a 4% lift of the text colour
+(`--rc-composer-footer-bg`), and no ring either. The new thread's picture cards
+remain translucent (`.rc-glass-faint`) and become solid under Reduce
+transparency.
 
 ## Spacing
 
@@ -707,8 +709,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   card's own 16px. The field itself carries 6px (`py-1.5`) above and below
   its text inside the scroller. The control row at the bottom of the card
   is `px-3 pt-1 pb-3`, its round controls carrying a few px of their own,
-  which puts their icons on the same 20px edge. The solid `surface-2` fill
-  has a 1px `--rc-composer-outline` and a quiet focus-within ring. The card clips to its own corner. The editor reads at
+  which puts their icons on the same 20px edge. The solid `surface-2` fill has
+  no edge and no inner highlight, only the lift under it, and a quiet
+  focus-within ring for the keyboard. The card clips to its own corner. The editor reads at
   `text-body leading-relaxed` (22.75px), two lines at rest above the control
   row and 217px (nine lines) at most, then it scrolls; its text carries 6px
   above and below inside the scroller, so the padding scrolls with it and
@@ -753,7 +756,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   to the track on that model's own last level.
 - **New thread screen:** a centred heading and a rotating tip above the field and its strip, with optional cards below.
   The project name in the heading opens the folder picker; there is no path line or starter prompts.
-  The tip hides in short windows and while the overview is open. The folder pill in the strip
+  Neither the heading nor the tip sits in a pill: over a chosen picture both take
+  `.rc-text-over-image`, a soft halo of the pane's colour that holds the glyphs off the photo, and
+  over the pane itself they carry no background at all. The tip hides in short windows, and stays
+  while the overview is open (its cards scroll below the field and never move it). The folder pill in the strip
   also picks the project, and its
   panel already lists the projects and ends with `Choose Folder…`. A chosen picture covers the
   whole pane top to bottom (`object-fit: cover`, no fade) under one light scrim (`bg` at 35%), so
@@ -773,8 +779,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
   (`.rc-composer-footer`) inset 12px each side, its top edge tucked 8px behind
   the card so the two read as one stack, its own corners round only at the
-  bottom, a hairline edge and `--rc-composer-footer-bg` (the card's solid surface
-  with a 4% lift of the text colour); `text-callout` in `fg-muted`, 14px icons, `gap-4`
+  bottom, no ring (the step in fill separates it) and `--rc-composer-footer-bg`
+  (the card's solid surface with a 4% lift of the text colour); `text-callout` in `fg-muted`, 14px icons, `gap-4`
   between the groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
   them is a pill whose panel opens off the pill itself, 8px away from it,
@@ -994,7 +1000,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   nothing about its size depends on the composer. The chat column is `flex-1` and
   narrows by the card: the lane re-centres in the room that is left and the
   transcript stops at the card's edge rather than scrolling under it. The header
-  floats above both. A pane's header row is a `HEADER_HEIGHT` band inside the card
+  floats above both, and the card draws above the header's glass (the dock's
+  `z-20` against the header's `z-10`): the glass fades 24px past its foot, and
+  that fade stops at the card's top edge instead of washing over it. The card
+  itself starts `HEADER_HEIGHT` down, so it never covers the header's controls.
+  A pane's header row is a `HEADER_HEIGHT` band inside the card
   with a segmented switch between the views and a close button, divided from the
   view by a hairline; views add a slim toolbar (`h-9`) under it. The card draws
   520px wide by default and never wider than 760, 70% of the window, or the row

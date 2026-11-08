@@ -606,10 +606,12 @@ function NewThreadHeading({
   const shortcut = useShortcutHint(tip?.command ?? "");
   return (
     <div className="flex min-w-0 max-w-full flex-col items-center gap-2 pb-2 text-center">
+      {/* No pill behind the words: over a picture, a soft halo of the pane's colour carries them
+          instead (index.css `.rc-text-over-image`), and over the pane itself nothing is needed. */}
       <h2
         className={cx(
-          "min-w-0 max-w-full rounded-full px-3 py-1 font-semibold text-title tracking-tight",
-          banner && "rc-glass",
+          "min-w-0 max-w-full font-semibold text-title tracking-tight",
+          banner && "rc-text-over-image",
         )}
       >
         {project ? (
@@ -631,7 +633,7 @@ function NewThreadHeading({
         )}
       </h2>
       {showTip && tip && shortcut && (
-        <p className={cx("rounded-full px-3 py-1 text-caption text-fg-muted", banner && "rc-glass")}>
+        <p className={cx("text-caption text-fg-muted", banner && "rc-text-over-image")}>
           Tip: {tip.text} with <Kbd>{shortcut}</Kbd>
         </p>
       )}
@@ -846,7 +848,9 @@ export function ChatView() {
                 <NewThreadHeading
                   project={projectCwd}
                   banner={showsBanner}
-                  showTip={height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && !overviewMounted}
+                  // The overview's cards scroll in the room below the field and never move it, so
+                  // the tip above the field has its height either way: it stays while it is open.
+                  showTip={height >= NEW_THREAD_WIDGETS_MIN_HEIGHT}
                 />
               )}
               {error && (

@@ -104,8 +104,6 @@
   /* Over a new thread's picture (`.rc-composer-over`): a panel, not another window on it. */
   --rc-composer-bg-over: var(--rc-surface-2);
   --rc-composer-filter: none;
-  --rc-composer-outline: #00000012;
-  --rc-composer-highlight: transparent;
   --rc-border: #0000000a;
   --rc-border-strong: #0000001f;
   --rc-text: #171717;
@@ -137,8 +135,6 @@
     --rc-composer-bg-focus: var(--rc-surface-2);
     --rc-composer-bg-over: var(--rc-surface-2);
     --rc-composer-filter: none;
-    --rc-composer-outline: #ffffff1f;
-    --rc-composer-highlight: #ffffff12;
     --rc-border: #ffffff0a;
     --rc-border-strong: #ffffff1c;
     --rc-text: #ededed;
@@ -168,8 +164,6 @@
   --rc-composer-bg-focus: var(--rc-surface-2);
   --rc-composer-bg-over: var(--rc-surface-2);
   --rc-composer-filter: none;
-  --rc-composer-outline: #ffffff1f;
-  --rc-composer-highlight: #ffffff12;
   --rc-border: #ffffff0a;
   --rc-border-strong: #ffffff1c;
   --rc-text: #ededed;
@@ -1037,6 +1031,18 @@
   -webkit-backdrop-filter: var(--rc-glass-filter);
 }
 
+/*
+ * The new thread's heading and its tip (ui/ChatView.tsx): a pill behind either of them would cover
+ * the picture the screen is about, so over a chosen picture the words carry a soft halo of the
+ * pane's colour instead — tight enough to hold the glyph's edge, wide enough to read on a busy
+ * photo — and over the pane itself there is nothing to carry.
+ */
+.rc-text-over-image {
+  text-shadow:
+    0 1px 2px color-mix(in srgb, var(--rc-bg) 85%, transparent),
+    0 0 12px color-mix(in srgb, var(--rc-bg) 60%, transparent);
+}
+
 /* A day of the activity heatmap's grid: 2px, under the smallest radius step, on a 7px cell. */
 .rc-heat-cell {
   border-radius: 2px;
@@ -1095,13 +1101,12 @@
 }
 
 /*
- * The composer floats over the transcript in glass: 66% at rest and 78% focused in light; in dark
- * 62% and 76% of the resting surface, so it is the one darker pane over the transcript (theme
- * blocks above), a 1px outline and, in dark, a 7% inner highlight. There is no coloured ring. Its
- * corner is its own step
- * (`--rc-composer-radius`), and its drawer is the same glass, tucked behind that edge, so the two
- * read as one surface. The foot and the tray are rows inside the one card, not slabs beside it,
- * and the strip under the card takes the same pair (`.rc-composer-footer`).
+ * The composer is one solid raised surface over the transcript, with no edge to it: the lift under
+ * it alone says it floats (`--rc-shadow-soft`, and a step stronger than the cards'). Its corner is
+ * its own step (`--rc-composer-radius`), and its drawer is the same surface, tucked behind that
+ * edge, so the two read as one card. The foot and the tray are rows inside the one card, not slabs
+ * beside it, and the strip under the card takes the same fill a step lifted
+ * (`.rc-composer-footer`).
  */
 .rc-composer,
 .rc-toast {
@@ -1116,15 +1121,12 @@
 .rc-toast {
   background: var(--rc-glass-bg-strong);
 }
-/* The composer uses a solid raised surface and its own edge. */
+/* The composer uses a solid raised surface, carried by the lift under it and by no edge. */
 .rc-composer {
   background: var(--rc-composer-bg);
   backdrop-filter: var(--rc-composer-filter);
   -webkit-backdrop-filter: var(--rc-composer-filter);
-  box-shadow:
-    0 3px 12px -4px var(--rc-shadow-soft),
-    inset 0 0 0 1px var(--rc-composer-highlight),
-    0 0 0 1px var(--rc-composer-outline);
+  box-shadow: 0 3px 12px -4px var(--rc-shadow-soft);
 }
 /* The box clips to its own corner, so the attachment thumbnails and a scrolled field stop at the
    curve instead of painting over it. Nothing in it opens a popover: they are portalled. */
@@ -1143,23 +1145,21 @@
  * round only at the bottom, and a fill a step off the pane instead of the card's translucency. Its
  * 8px of padding (6px once the card's tuck is counted) keeps the pills' air even on every side. The
  * card paints over the overlap (its `z-10` against this strip's `z-0`), so the two read as one stack
- * with the card on top.
+ * with the card on top. It has no ring of its own: the step in fill is what separates it.
  */
 .rc-composer-footer {
   border-radius: 0 0 var(--rc-composer-radius) var(--rc-composer-radius);
   background: var(--rc-composer-footer-bg);
   backdrop-filter: var(--rc-composer-filter);
   -webkit-backdrop-filter: var(--rc-composer-filter);
-  box-shadow: 0 0 0 1px var(--rc-composer-outline);
 }
 /* A drawer is read, not looked through: opaque, its foot cut where the box begins. Its top
-   corners are the box's own radius, one inset inside them. */
+   corners are the box's own radius, one inset inside them, and the lift it shares with the card
+   is the only edge it gets. */
 .rc-composer-drawer {
   border-radius: var(--rc-composer-radius) var(--rc-composer-radius) 0 0;
   background: var(--rc-surface-2);
-  box-shadow:
-    inset 0 1px 0 0 var(--rc-composer-highlight),
-    0 0 0 1px var(--rc-composer-outline);
+  box-shadow: 0 3px 12px -4px var(--rc-shadow-soft);
   clip-path: inset(-1px -1px calc(1rem - 1px) -1px);
 }
 /*
@@ -1186,21 +1186,9 @@
     transparent 100%
   );
 }
-/* In dark the lift is invisible; the ring and the inner highlight alone separate it. */
-:root[data-theme="dark"] .rc-composer {
-  box-shadow:
-    inset 0 0 0 1px var(--rc-composer-highlight),
-    0 0 0 1px var(--rc-composer-outline);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .rc-composer {
-    box-shadow:
-      inset 0 0 0 1px var(--rc-composer-highlight),
-      0 0 0 1px var(--rc-composer-outline);
-  }
-}
-/* Focus inside the card changes its fill only. Its ring is the keyboard's: clicking into the field
-   never draws one, tabbing into the card does (lib/focusModality.ts). */
+/* Focus inside the card changes its fill only. Its ring is the keyboard's, and it is the card's
+   only rim: clicking into the field never draws one, tabbing into the card does
+   (lib/focusModality.ts). */
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
 }

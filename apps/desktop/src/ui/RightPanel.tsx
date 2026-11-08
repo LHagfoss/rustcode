@@ -410,8 +410,11 @@ export function RightPanel() {
       ref={attachDock}
       aria-hidden={!open}
       inert={!open}
+      // Above the header's glass (`z-10`, ui/MainHeader.tsx): the header spans the whole view and
+      // fades 24px past its foot, which would otherwise wash over the card's top 12px. The card
+      // starts below the header's band, so nothing of it covers the header's own controls.
       className={cx(
-        "relative flex min-h-0 shrink-0 justify-end overflow-clip",
+        "relative z-20 flex min-h-0 shrink-0 justify-end overflow-clip",
         !open && "pointer-events-none",
       )}
       style={
