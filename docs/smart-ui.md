@@ -110,7 +110,7 @@ in both.
 | Part | What the page gets |
 | --- | --- |
 | Base | A transparent body in the app's font and text color. Headings, paragraphs, tables, inputs, selects, buttons and code are already styled like the chat, so a view needs little CSS. |
-| CSS variables on `:root` | `--rc-text`, `--rc-bg`, `--rc-muted`, `--rc-faint`, `--rc-accent`, `--rc-surface`, `--rc-separator`, `--rc-danger`, `--rc-success`, `--rc-warning`, `--rc-font`, `--rc-mono`, `--rc-radius`, `--rc-series-1` … `--rc-series-8`. They follow light and dark mode. |
+| CSS variables on `:root` | `--rc-text`, `--rc-bg`, `--rc-muted`, `--rc-faint`, `--rc-accent`, `--rc-accent-text`, `--rc-surface`, `--rc-separator`, `--rc-danger`, `--rc-success`, `--rc-warning`, `--rc-font`, `--rc-mono`, `--rc-radius`, `--rc-series-1` … `--rc-series-8`. They follow light and dark mode. |
 | Layout classes | `.rc-row` and `.rc-col` (flex row / column, wrapping), `.rc-grid` (auto-fit grid), `.rc-gap-1` … `.rc-gap-4`, `.rc-muted`, `.rc-mono`, `.rc-num` (tabular figures, right-aligned in tables), `.rc-card` (a quiet inner group, not an outer frame), `.rc-scroll` (bounded, scrolls inside). |
 | Kit: text and numbers | `.rc-title`, `.rc-lead` (the finding, muted), `.rc-label`; `.rc-stats` (auto-fit grid) of `.rc-stat` with `.rc-stat-value`, `.rc-stat-label`, `.rc-stat-note`. |
 | Kit: status | `.rc-badge`, `.rc-callout`, tinted by `.rc-ok`, `.rc-warn`, `.rc-bad`, `.rc-info` (also on a stat, a bar, a progress bar or a line in `.rc-term`); `.rc-progress` around `<span style="width:72%">`. |
