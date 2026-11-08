@@ -706,13 +706,16 @@ out, and a v8 app has neither the code nor the engine methods.
 | --- | --- | --- | --- |
 | `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: it asks nothing; a read of this project's threads, like `read_session` |
 | `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 55 minutes, 165 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
-| `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
+| `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, recorded_branch?, recorded_branch_removed?, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `branch_changed` also names the merged-pull-request check that failed (no pull request for the branch, one that is not merged, a dirty tree, or commits not in its head). `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
 
 `thread_status` asks the engine `_rustcode/pulls/state` `{ cwd, branch? }`
 (`engine/src/pull_requests.rs` `for_branch`): the worktree's branch when there is
 one, else the folder's, matched against the host's pull requests, an open one
 first and then a merged one, and its `statusCheckRollup` mapped to
-`pending`/`passing`/`failing`/`none`. `merge_when_green` asks
+`pending`/`passing`/`failing`/`none`. When the recorded branch has no pull
+request, the app asks again for the branch the worktree is on now, so a delegate
+that renamed its branch to the name its task asked for still shows its pull
+request. `merge_when_green` asks
 `_rustcode/pulls/merge` and reuses the same rollup: its wait is also how an
 orchestrator learns that CI finished without a shell poll loop, and a failing
 check ends it with the names. It ignores the advisory `portability coverage`
@@ -724,8 +727,14 @@ repository is touched. `cleanup_worktree` asks `_rustcode/worktrees/cleanup`
 (`engine/src/worktrees.rs` `cleanup`), on a blocking thread like
 `_rustcode/worktrees/remove`. It sends the branch it read the pull request for
 and the pull request's `head_sha`; the engine refuses if the worktree's `HEAD`
-is on another branch, so a delegate that switched branches cannot take the new
-one down. It also refuses a worktree that is not under the config directory, one
+is on another branch, unless that branch is the head of a merged pull request
+(a delegate may rename its branch to the name its task asked for: the engine
+reads the branch the worktree is on now with `for_branch`, as `thread_status`
+does, and accepts the change only when the tree is clean, the pull request
+merged, and every commit is at or part of its head). The branch it was recorded
+on is deleted too when it still exists and holds nothing unique, so a rename
+leaves neither branch behind. It also refuses a worktree that is not under the
+config directory, one
 on the base or default branch (the branch delete would otherwise remove it), a
 dirty one, ignored files that are not known build output (`target/`,
 `node_modules/`, `dist/`, `.turbo/`, …; `.env.local` or notes are refused and

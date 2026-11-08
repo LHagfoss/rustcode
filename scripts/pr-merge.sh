@@ -23,8 +23,23 @@ for _ in $(seq 1 240); do
     else
         quiet=$((quiet + 1))
         if ((quiet >= 2)); then
-            gh pr merge "$pr" --squash --delete-branch
-            exit 0
+            if merge_out="$(gh pr merge "$pr" --squash --delete-branch 2>&1)"; then
+                [[ -z "$merge_out" ]] || printf '%s\n' "$merge_out"
+                exit 0
+            fi
+            # gh exits non-zero when the merge landed but it could not delete the
+            # local branch, which a delegate's worktree holding it causes. The
+            # pull request is the truth: a merged one is success, so chaining
+            # `pr-merge.sh N && next-step` does not skip the next step.
+            if grep -q 'used by worktree\|failed to delete local branch' <<<"$merge_out"; then
+                state="$(gh pr view "$pr" --json state --jq .state 2>/dev/null || true)"
+                if [[ "$state" == "MERGED" ]]; then
+                    printf 'PR #%s merged; the local branch was kept because a worktree holds it:\n%s\n' "$pr" "$merge_out"
+                    exit 0
+                fi
+            fi
+            printf '%s\n' "$merge_out" >&2
+            exit 1
         fi
     fi
     sleep 20
