@@ -128,7 +128,7 @@ export function CapabilitiesPage() {
   return (
     <>
       <div className="mb-6 flex items-center gap-2">
-        <label className={cx(fieldClass, "flex flex-1 items-center gap-2")}>
+        <label className={cx(fieldClass, "flex flex-1 items-center gap-2 focus-within:bg-fill-strong")}>
           <Search size={14} className="shrink-0 text-fg-faint" />
           <input
             value={filter}
@@ -215,7 +215,7 @@ function McpSection({
       {shown.length === 0 && !adding && (
         <Row
           title={filter ? "No matching servers" : "No MCP servers"}
-          subtitle="Add one to give agents its tools."
+          subtitle={filter ? undefined : "Add one to give agents its tools."}
         />
       )}
       {shown.map((s) => (

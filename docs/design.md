@@ -761,10 +761,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   (up to 1100px, centred; the field keeps the chat's own measure): the activity heatmap and this
   project's recent threads across the first row, then the last thirty days of usage, its pull
   requests and this month against the last. One height for every card, its label in
-  `text-caption text-fg-faint` with a 12px icon; six columns from `lg` (3 + 3, then 2 + 2 + 2),
+  `text-caption text-fg-muted` with a 12px icon (faint text does not read over a picture);
+  six columns from `lg` (3 + 3, then 2 + 2 + 2),
   one sideways-scrolling row below it; a card with nothing to say says so in one line rather
   than collapsing. A persisted, initially closed overview toggle sits below the centred composer;
-  the cards scroll in the remaining space and never move the field.
+  the cards scroll in the remaining space and never move the field. Over a picture the toggle
+  takes `.rc-glass`, so its label reads whatever the picture is.
 - **Composer strip:** what the thread works in and what it is allowed to do
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
   (`.rc-composer-footer`) inset 12px each side, its top edge tucked 8px behind

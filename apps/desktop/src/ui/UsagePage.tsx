@@ -178,12 +178,12 @@ export function UsagePage() {
               {p.plan && <span className="ml-1.5 font-normal text-fg-faint capitalize">{p.plan}</span>}
             </span>
           }
-          action={p.via && <span className="text-caption text-fg-faint">from {p.via}</span>}
+          action={p.via && <span className="text-caption text-fg-muted">from {p.via}</span>}
         >
           {p.status === "ok" && p.windows.length > 0 ? (
             <div className="flex flex-col gap-4 px-4 py-4">
               {p.asOf !== undefined && (
-                <p className="text-caption text-fg-faint">
+                <p className="text-caption text-fg-muted">
                   as of {relativeAge(p.asOf)} · the last numbers RustCode read for this login; run a Claude
                   Code thread on it to refresh them.
                 </p>
@@ -232,7 +232,7 @@ export function UsagePage() {
           )}
         </Group>
       ))}
-      <div className="flex items-center gap-2 px-3 text-caption text-fg-faint sm:px-4">
+      <div className="flex items-center gap-2 px-3 text-caption text-fg-muted sm:px-4">
         <span className="flex-1">
           {view.note ? (
             <span className="text-warning">Could not refresh: {view.note}</span>
