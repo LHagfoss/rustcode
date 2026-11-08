@@ -125,6 +125,16 @@ export function describeExit(exit: LastExit): string {
 
 export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
 
+/** Maximum server log line retained by the UI, even in mock/dev transports. */
+export const SERVER_LOG_LINE_CHARS = 16_384;
+const LOG_LINE_TRUNCATED = " … [line truncated]";
+
+export function capServerLogLine(line: string): string {
+  return line.length > SERVER_LOG_LINE_CHARS
+    ? `${line.slice(0, SERVER_LOG_LINE_CHARS)}${LOG_LINE_TRUNCATED}`
+    : line;
+}
+
 /** Most to least severe; a filter keeps its level and everything before it. */
 export const LOG_LEVELS: readonly LogLevel[] = ["error", "warn", "info", "debug", "trace"];
 
@@ -170,19 +180,37 @@ const SECRET_SHAPES: RegExp[] = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\bAIza[0-9A-Za-z_-]{35}/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
 
 /** `Bearer <token>` and `Basic <credentials>` in a header. */
-const AUTH_SCHEME = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const AUTH_SCHEME = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 
 /** A value after a key that names a secret: `api_key=…`, `"token": "…"`, `Authorization: …`. */
 const SECRET_KEY =
-  /\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|apikey|token|secret|password|passwd|authorization|cookie|credentials?))(["']?\s*[:=]\s*["']?)(?!\[redacted\]|(?:Bearer|Basic)\s)([^\s"',;&}]+)/gi;
+  /\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|apikey|access[_-]?key|token|secret|password|passwd|authorization|cookie|credentials?|pairing[_ -]?code|username|user[_-]?name|hostname|host[_-]?name|address|ip[_-]?address|computer[_-]?name|device[_-]?name))(["']?\s*[:=]\s*["']?)(?!\[redacted\]|(?:Bearer|Basic)\s)([^\s"',;&}]+)/gi;
+
+/** Secret fields serialized in camelCase, including gateway device tokens. */
+const CAMEL_SECRET_KEY =
+  /\b([A-Za-z0-9]*(?:Token|Secret|Password|Passwd|ApiKey|Authorization|Cookie|Credentials|PairingCode|UserName|HostName|Address|IpAddress|ComputerName|DeviceName))(["']?\s*[:=]\s*["']?)(?!\[redacted\]|(?:Bearer|Basic)\s)([^\s"',;&}]+)/gi;
+
+/** Bare host fields and camelCase forms such as `gatewayHost`. */
+const HOST_KEY = /\b(host)(["']?\s*[:=]\s*["']?)(?!\[redacted\])([^\s"',;&}]+)/gi;
+const CAMEL_HOST_KEY = /\b([A-Za-z0-9]*Host)(["']?\s*[:=]\s*["']?)(?!\[redacted\])([^\s"',;&}]+)/g;
 
 const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+
+// These are useful for debugging a connection, but identify a private network
+// or a machine on it. Public IP addresses remain visible in a public report.
+const LAN_IPV4 =
+  /\b(?:(?:10|127)(?:\.\d{1,3}){3}|169\.254(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})(?::\d{1,5})?\b/g;
+const LAN_IPV6 = /\b(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):[0-9a-f:]+(?:%[A-Za-z0-9_.-]+)?\b/gi;
+const LOCAL_HOST = /\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+local\b/gi;
+// Gateway pairing codes are eight digits, shown as `1234-5678` beside the
+// address. Mask that distinctive format even when copied without its label.
+const PAIRING_CODE = /\b\d{4}-\d{4}\b/g;
 
 /** Home folders spelled out when the real one is not known (or for another account's). */
 const HOME_SHAPES: RegExp[] = [
@@ -203,7 +231,14 @@ export function redact(text: string, home?: string | null): string {
   for (const shape of SECRET_SHAPES) out = out.replace(shape, "[redacted]");
   out = out.replace(AUTH_SCHEME, "$1 [redacted]");
   out = out.replace(SECRET_KEY, "$1$2[redacted]");
+  out = out.replace(CAMEL_SECRET_KEY, "$1$2[redacted]");
+  out = out.replace(HOST_KEY, "$1$2[redacted]");
+  out = out.replace(CAMEL_HOST_KEY, "$1$2[redacted]");
   out = out.replace(EMAIL, "[email]");
+  out = out.replace(LAN_IPV4, "[LAN address]");
+  out = out.replace(LAN_IPV6, "[LAN address]");
+  out = out.replace(LOCAL_HOST, "[local host]");
+  out = out.replace(PAIRING_CODE, "[redacted]");
   const homes = new Set<string>();
   const clean = home?.replace(/[\\/]+$/, "");
   if (clean && clean.length > 1) {

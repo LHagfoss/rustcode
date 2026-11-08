@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildDebugReport,
+  capServerLogLine,
   type DebugReportInput,
   filterLog,
   formatDuration,
@@ -8,23 +9,35 @@ import {
   parseOperationalEvents,
   redact,
   reportFileName,
+  SERVER_LOG_LINE_CHARS,
   serverState,
 } from "./diagnostics";
+
+describe("server log tail", () => {
+  test("truncates oversized lines", () => {
+    const line = `${"x".repeat(SERVER_LOG_LINE_CHARS)}…`;
+    expect(capServerLogLine(line)).toBe(`${"x".repeat(SERVER_LOG_LINE_CHARS)} … [line truncated]`);
+    expect(capServerLogLine("short line")).toBe("short line");
+  });
+});
 
 describe("redact", () => {
   test("API keys and tokens of known shapes", () => {
     const text = [
       "openai sk-proj-abcdefghijklmnopqrstuvwx",
+      "openai legacy sk-abcdefghijklmnopqrstuvwx",
       "anthropic sk-ant-api03-ABCDEFGHIJKLMNOP_qrstu",
       "gh ghp_0123456789abcdefghijABCDEFGHIJ",
+      "oauth gho_0123456789abcdefghijABCDEFGHIJ",
       "pat github_pat_11ABCDEFG0123456789_abcdefghij",
       "slack xoxb-1234567890-abcdefghij",
       "aws AKIAIOSFODNN7EXAMPLE",
+      "aws session ASIAIOSFODNN7EXAMPLE",
       "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
     ].join("\n");
     const out = redact(text);
-    expect(out).not.toMatch(/sk-proj|sk-ant|ghp_|github_pat_|xoxb-|AKIA|eyJhbGci/);
-    expect(out.match(/\[redacted\]/g)?.length).toBe(7);
+    expect(out).not.toMatch(/sk-|gh[pousr]_|github_pat_|xoxb-|AKIA|ASIA|eyJhbGci/);
+    expect(out.match(/\[redacted\]/g)?.length).toBe(10);
   });
 
   test("values after a key that names a secret", () => {
@@ -32,8 +45,25 @@ describe("redact", () => {
     expect(redact('{"access_token": "abc.def", "model": "gpt"}')).toBe(
       '{"access_token": "[redacted]", "model": "gpt"}',
     );
+    expect(redact("?access_token=query-secret&next=1")).toBe("?access_token=[redacted]&next=1");
+    expect(redact('{"refresh_token":"refresh-secret","deviceToken":"gateway-secret"}')).toBe(
+      '{"refresh_token":"[redacted]","deviceToken":"[redacted]"}',
+    );
+    expect(redact("pairing_code=123456 pairingCode: 987654")).toBe(
+      "pairing_code=[redacted] pairingCode: [redacted]",
+    );
+    expect(redact("Pairing code: 654321 username=local-user hostName=workstation")).toBe(
+      "Pairing code: [redacted] username=[redacted] hostName=[redacted]",
+    );
+    expect(redact("code: 1234-5678")).toBe("code: [redacted]");
+    expect(redact('{"advertised_address":"private.example.net:17879","gatewayHost":"workstation"}')).toBe(
+      '{"advertised_address":"[redacted]","gatewayHost":"[redacted]"}',
+    );
+    expect(redact('{"membership":"team"}')).toBe('{"membership":"team"}');
     expect(redact("password: hunter2;")).toBe("password: [redacted];");
     expect(redact("Authorization: Bearer abcdefghijkl")).toBe("Authorization: Bearer [redacted]");
+    expect(redact("Authorization: Bearer abc")).toBe("Authorization: Bearer [redacted]");
+    expect(redact("aws_secret_access_key=aws-secret-value")).toBe("aws_secret_access_key=[redacted]");
     expect(redact("x-api-key=zzzzzz&next=1")).toBe("x-api-key=[redacted]&next=1");
   });
 
@@ -46,6 +76,14 @@ describe("redact", () => {
     expect(redact("signed in as lars.h@example.co.uk (pro)")).toBe("signed in as [email] (pro)");
     // A package scope or a version is not an address.
     expect(redact("@types/node 1.2.3 pkg@1.2.3")).toBe("@types/node 1.2.3 pkg@1.2.3");
+  });
+
+  test("local network addresses and local hostnames are hidden", () => {
+    expect(redact("gateway 192.168.1.24:443, display=macbook-pro.local:0")).toBe(
+      "gateway [LAN address], display=[local host]:0",
+    );
+    expect(redact("peer fd12:3456::1 and fe80::4%en0")).toBe("peer [LAN address] and [LAN address]");
+    expect(redact("public service 203.0.113.8:443")).toBe("public service 203.0.113.8:443");
   });
 
   test("the home folder becomes ~, on every platform's spelling", () => {
@@ -191,10 +229,25 @@ describe("debug report", () => {
   });
 
   test("is redacted as a whole", () => {
-    const report = buildDebugReport(base);
+    const report = buildDebugReport({
+      ...base,
+      log: [...base.log, "WARN gateway=192.168.1.24 host=macbook-pro.local"],
+      events: [
+        {
+          at: "2026-11-08T11:59:01Z",
+          eventType: "remote.pairing",
+          threadId: "t1",
+          fields:
+            '{"pairing_code":"123456","deviceToken":"gateway-device-secret","advertised_address":"private.example.net:17879"}',
+        },
+      ],
+    });
     expect(report).not.toContain("/Users/lars");
     expect(report).not.toContain("lars@example.com");
     expect(report).not.toContain("sk-ant");
+    expect(report).not.toMatch(
+      /123456|gateway-device-secret|private\.example\.net|192\.168\.1\.24|macbook-pro\.local/,
+    );
     expect(report).toContain("| Binary | ~/code/rustcode/target/debug/rustcode |");
     expect(report).toContain("ERROR auth failed for [email] with [redacted]");
   });

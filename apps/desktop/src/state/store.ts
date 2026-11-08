@@ -68,6 +68,7 @@ import {
 } from "../acp/v2";
 import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
+import { capServerLogLine } from "../lib/diagnostics";
 import { afterPaint } from "../lib/frame";
 import {
   APP_COMMANDS,
@@ -956,7 +957,7 @@ const inbound = frameQueue<string>((lines) =>
 export const SERVER_LOG_LINES = 1000;
 /** Server stderr, kept for Settings › Diagnostics; appended once a frame, not per line. */
 const logs = frameQueue<string>((lines) =>
-  set((s) => ({ engineLog: [...s.engineLog, ...lines].slice(-SERVER_LOG_LINES) })),
+  set((s) => ({ engineLog: [...s.engineLog, ...lines.map(capServerLogLine)].slice(-SERVER_LOG_LINES) })),
 );
 
 // ---------------------------------------------------------------- engine toast

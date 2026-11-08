@@ -481,7 +481,6 @@ function ServerLog() {
       >
         {shown.length ? (
           shown.map((line, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: log lines repeat; their place is their identity
             <div key={i} className={LINE_TONE[logLevel(line)]}>
               {line || " "}
             </div>

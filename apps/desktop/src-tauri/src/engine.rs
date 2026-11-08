@@ -9,7 +9,7 @@
 //! (`diagnostics.rs`).
 
 use serde::Serialize;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -44,6 +44,44 @@ pub enum EngineEvent {
 /// At most this many lines, or about this many bytes, go in one `Lines` message.
 const BATCH_LINES: usize = 1024;
 const BATCH_BYTES: usize = 4 * 1024 * 1024;
+/// A server log line is truncated before it reaches Tauri or the webview.
+const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
+const LOG_LINE_TRUNCATED: &str = " … [line truncated]";
+
+/// Reads one stderr line while retaining at most `MAX_LOG_LINE_BYTES`; the
+/// rest of an oversized line is drained so the next call starts at its peer.
+fn read_log_line<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
+    let mut bytes = Vec::with_capacity(MAX_LOG_LINE_BYTES);
+    let mut truncated = false;
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            if bytes.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(buffer.len(), |index| index + 1);
+        let content_len = newline.unwrap_or(consumed);
+        let remaining = MAX_LOG_LINE_BYTES.saturating_sub(bytes.len());
+        let copied = content_len.min(remaining);
+        bytes.extend_from_slice(&buffer[..copied]);
+        truncated |= copied < content_len;
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    let mut line = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated {
+        line.push_str(LOG_LINE_TRUNCATED);
+    }
+    Ok(Some(line))
+}
 
 /// Blocks for one line, then takes every further line that is already complete
 /// in the buffer, without waiting for more. `None` at the end of the stream.
@@ -408,8 +446,8 @@ impl Engine {
         });
         let engine = Arc::clone(self);
         thread::spawn(move || {
-            for line in BufReader::new(stderr).lines() {
-                let Ok(line) = line else { break };
+            let mut reader = BufReader::new(stderr);
+            while let Ok(Some(line)) = read_log_line(&mut reader) {
                 if cfg!(debug_assertions) {
                     eprintln!("[engine] {line}");
                 }
@@ -472,6 +510,17 @@ mod tests {
         let mut reader = BufReader::with_capacity(1 << 20, Cursor::new(text.into_bytes()));
         assert_eq!(read_batch(&mut reader).unwrap().unwrap().len(), BATCH_LINES);
         assert_eq!(read_batch(&mut reader).unwrap().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn caps_a_log_line_and_drains_its_remainder() {
+        let text = format!("{}\nnext\n", "x".repeat(MAX_LOG_LINE_BYTES + 20));
+        let mut reader = BufReader::with_capacity(128, Cursor::new(text.into_bytes()));
+        let line = read_log_line(&mut reader).unwrap().unwrap();
+        assert!(line.ends_with(LOG_LINE_TRUNCATED));
+        assert!(line.len() <= MAX_LOG_LINE_BYTES + LOG_LINE_TRUNCATED.len());
+        assert_eq!(read_log_line(&mut reader).unwrap().as_deref(), Some("next"));
+        assert_eq!(read_log_line(&mut reader).unwrap(), None);
     }
 
     #[test]

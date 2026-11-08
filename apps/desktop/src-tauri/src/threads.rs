@@ -5,7 +5,7 @@
 //! folder's `title.txt`; Trash moves the folder to the user's Trash; Open
 //! thread log opens its `logs/debug.log`.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -15,22 +15,37 @@ fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Whether `dir` is thread `id`'s folder in the store.
-pub fn is_thread_dir(dir: &Path, id: &str) -> bool {
-    // Windows paths separate with `\`; the store's folder names are the same.
-    let text = dir.to_string_lossy().replace('\\', "/");
-    dir.is_absolute()
-        && dir.file_name().is_some_and(|n| n == id)
-        && (text.contains("/rustcode/threads/") || text.contains("/rustcode/sessions/"))
-        && !dir
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+/// Resolves a thread directory only when it is inside this config folder's
+/// thread store. Canonical paths also reject symlinks out of the store.
+fn thread_dir_in_config(dir: &Path, id: &str, config: &Path) -> Option<PathBuf> {
+    if !valid_id(id) || !dir.is_absolute() || dir.file_name().is_none_or(|name| name != id) {
+        return None;
+    }
+    let config = config.canonicalize().ok()?;
+    let dir = dir.canonicalize().ok()?;
+    if !dir.is_dir() || dir.file_name().is_none_or(|name| name != id) {
+        return None;
+    }
+    let relative = dir.strip_prefix(&config).ok()?;
+    let store = relative.components().next()?;
+    if !matches!(store, Component::Normal(name) if name == "threads" || name == "sessions") {
+        return None;
+    }
+    Some(dir)
+}
+
+/// Resolves an existing file to its canonical location inside config.
+fn file_in_config(path: &Path, config: &Path) -> Option<PathBuf> {
+    let config = config.canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
+    (path.starts_with(config) && path.is_file()).then_some(path)
 }
 
 fn thread_dir(id: &str) -> Result<PathBuf, String> {
     if !valid_id(id) {
         return Err("Not a thread id.".into());
     }
+    let config = crate::diagnostics::config_dir().ok_or("No config folder.")?;
     let output = crate::process::command(crate::engine::resolve_engine())
         .args(["threads", "path", id])
         .output()
@@ -39,10 +54,8 @@ fn thread_dir(id: &str) -> Result<PathBuf, String> {
         return Err("Could not find this thread's folder.".into());
     }
     let dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-    if !is_thread_dir(&dir, id) || !dir.is_dir() {
-        return Err("Could not find this thread's folder.".into());
-    }
-    Ok(dir)
+    thread_dir_in_config(&dir, id, &config)
+        .ok_or_else(|| "Could not find this thread's folder.".to_string())
 }
 
 /// One line of at most 200 characters.
@@ -66,11 +79,15 @@ pub fn thread_rename(id: String, title: String) -> Result<String, String> {
 /// the thread has not logged anything yet.
 #[tauri::command(async)]
 pub fn thread_log_open(id: String) -> Result<String, String> {
+    let config = crate::diagnostics::config_dir().ok_or("No config folder.")?;
     let dir = thread_dir(&id)?;
     let log = dir.join("logs").join("debug.log");
-    if log.is_file() {
-        crate::native::open_checked(&log, false)?;
-        return Ok(log.display().to_string());
+    if log.exists() {
+        let path = file_in_config(&log, &config)
+            .filter(|path| path.starts_with(&dir))
+            .ok_or("The thread log is outside this thread's folder.")?;
+        crate::native::open_checked(&path, false)?;
+        return Ok(path.display().to_string());
     }
     crate::native::open_checked(&dir, true)?;
     Ok(dir.display().to_string())
@@ -104,25 +121,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_only_a_thread_folder_in_the_store() {
-        let ok = Path::new("/Users/a/.config/rustcode/threads/2026/11/02/abc-1");
-        assert!(is_thread_dir(ok, "abc-1"));
-        assert!(!is_thread_dir(ok, "abc-2"));
-        assert!(!is_thread_dir(Path::new("/Users/a/abc-1"), "abc-1"));
-        assert!(!is_thread_dir(
-            Path::new("/Users/a/.config/rustcode/threads/../../abc-1"),
-            "abc-1"
+    fn accepts_only_a_thread_folder_in_the_configured_store() {
+        let base = std::env::temp_dir().join(format!(
+            "rustcode-thread-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
+        let config = base.join("custom-config");
+        let ok = config.join("threads/2026/11/02/abc-1");
+        let outside = base.join("elsewhere/abc-1");
+        std::fs::create_dir_all(&ok).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        assert_eq!(
+            thread_dir_in_config(&ok, "abc-1", &config),
+            Some(ok.canonicalize().unwrap())
+        );
+        assert!(thread_dir_in_config(&ok, "abc-2", &config).is_none());
+        assert!(thread_dir_in_config(&outside, "abc-1", &config).is_none());
+        assert!(thread_dir_in_config(&config.join("skills/abc-1"), "abc-1", &config).is_none());
+
+        let log = ok.join("logs/debug.log");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, "safe log").unwrap();
+        assert_eq!(
+            file_in_config(&log, &config),
+            Some(log.canonicalize().unwrap())
+        );
+        let external_log = base.join("outside.log");
+        std::fs::write(&external_log, "not a thread log").unwrap();
+        assert!(file_in_config(&external_log, &config).is_none());
+        #[cfg(unix)]
+        {
+            let escaping = config.join("threads/2026/11/03/abc-1");
+            std::fs::create_dir_all(escaping.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&outside, &escaping).unwrap();
+            assert!(thread_dir_in_config(&escaping, "abc-1", &config).is_none());
+
+            std::fs::remove_file(&log).unwrap();
+            std::os::unix::fs::symlink(&external_log, &log).unwrap();
+            assert!(file_in_config(&log, &config).is_none());
+        }
+        let _ = std::fs::remove_dir_all(base);
+
         assert!(!valid_id("../x"));
         assert!(!valid_id(""));
         assert!(valid_id("019a2b-cd_3"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn accepts_a_windows_thread_folder() {
-        let ok = Path::new(r"C:\Users\a\AppData\Roaming\rustcode\threads\2026\11\02\abc-1");
-        assert!(is_thread_dir(ok, "abc-1"));
     }
 
     #[test]
