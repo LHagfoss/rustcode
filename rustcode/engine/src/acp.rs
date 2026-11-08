@@ -2216,6 +2216,37 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: remote::RemoteAnswerRequest, responder, connection| {
+                    let server = server.clone();
+                    connection.spawn(async move {
+                        responder.respond(
+                            server
+                                .remote
+                                .answer_connect(&request.id, request.accept)
+                                .await,
+                        )?;
+                        Ok(())
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: remote::RemoteRevokeRequest, responder, connection| {
+                    let server = server.clone();
+                    connection.spawn(async move {
+                        responder.respond(server.remote.revoke(&request.device_id).await)?;
+                        Ok(())
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         // Harness detection runs commands and a model listing may start
         // one, so none of these holds the dispatch loop.
         .on_receive_request(
