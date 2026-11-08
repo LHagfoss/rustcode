@@ -4,6 +4,7 @@ import { PAGE_FRESH_MS, type PageAnswer } from "./pageCache";
 import {
   answeredPlans,
   failureText,
+  oneReadAtATime,
   PLAN_REFRESH_MAX_BACKOFF_MS,
   refreshBackoff,
   type UsageAnswer,
@@ -468,5 +469,61 @@ describe("the page keeps itself current", () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+});
+
+describe("oneReadAtATime", () => {
+  /** A read the test finishes by hand, recording what it was asked. */
+  function held() {
+    const asked: string[] = [];
+    const finish: Array<(ok: boolean) => void> = [];
+    const gate = oneReadAtATime<string>(
+      (what) =>
+        new Promise<boolean>((resolve) => {
+          asked.push(what);
+          finish.push(resolve);
+        }),
+    );
+    return { asked, finish, gate };
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("an explicit look during a background read runs right after it", async () => {
+    const { asked, finish, gate } = held();
+    const tick = gate.run("tick", false);
+    expect(gate.busy()).toBe(true);
+    // Claude's switch goes on while the tick reads: that look is kept, not dropped.
+    expect(await gate.run("switch on", true)).toBe(true);
+    expect(asked).toEqual(["tick"]);
+    finish[0]!(true);
+    expect(await tick).toBe(true);
+    await settle();
+    expect(asked).toEqual(["tick", "switch on"]);
+    finish[1]!(true);
+    await settle();
+    expect(gate.busy()).toBe(false);
+  });
+
+  test("a background read during a read is dropped, and only the newest look is kept", async () => {
+    const { asked, finish, gate } = held();
+    void gate.run("open", true);
+    void gate.run("tick", false);
+    void gate.run("switch on", true);
+    void gate.run("switch off", true);
+    finish[0]!(false);
+    await settle();
+    expect(asked).toEqual(["open", "switch off"]);
+    finish[1]!(true);
+    await settle();
+    expect(asked).toEqual(["open", "switch off"]);
+    expect(gate.busy()).toBe(false);
+  });
+
+  test("a read that throws is a failure and frees the gate", async () => {
+    const gate = oneReadAtATime<string>(async () => {
+      throw new Error("engine went away");
+    });
+    expect(await gate.run("tick", false)).toBe(false);
+    expect(gate.busy()).toBe(false);
   });
 });

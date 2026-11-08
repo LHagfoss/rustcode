@@ -999,21 +999,41 @@ fn replace_appimage(target: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes `bytes` to a new file at `path`, executable: `create_new` refuses a
-/// file already there instead of writing through it.
+/// Writes `bytes` to a new file at `path`, executable and on disk before the
+/// rename makes it the app: `create_new` refuses a file already there instead
+/// of writing through it.
 fn write_executable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
+    write_new(path, |file| {
+        use std::io::Write;
+        file.write_all(bytes)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+        }
+        // A power cut after the rename must not leave a truncated app behind.
+        file.sync_all()
+    })
+}
+
+/// Makes a new file at `path` (never one already there) and fills it with
+/// `fill`. A fill that fails removes the file it made: a full disk must not
+/// leave a partial copy of the app, as large as the disk had room for, beside
+/// the AppImage.
+fn write_new(
+    path: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
-    file.write_all(bytes)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+    let filled = fill(&mut file);
+    if filled.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
     }
-    Ok(())
+    filled
 }
 
 fn appimage_failure(target: &Path, error: &std::io::Error) -> String {
@@ -1930,6 +1950,29 @@ mod tests {
         // The planted link is unlinked, not written through, and gone either way.
         assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A write that fails partway (a full disk) leaves no partial copy of the
+    /// app beside the AppImage, and a name another file holds is refused
+    /// without touching that file.
+    #[test]
+    fn a_failed_write_leaves_no_partial_copy_behind() {
+        use std::io::Write;
+        let dir = scratch("partial");
+        let staged = dir.join(".RustCode.AppImage.update-1-0");
+        let err = write_new(&staged, |file| {
+            file.write_all(&[7u8; 64 * 1024])?;
+            Err(std::io::Error::other("No space left on device"))
+        })
+        .unwrap_err();
+        assert_eq!(err.to_string(), "No space left on device");
+        assert!(!staged.exists(), "the partial copy was removed");
+
+        std::fs::write(&staged, b"someone else's").unwrap();
+        let err = write_new(&staged, |_| Ok(())).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&staged).unwrap(), b"someone else's");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

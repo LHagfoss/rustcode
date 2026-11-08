@@ -867,6 +867,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         run_remote_command(command).await?;
         return Ok(());
     }
+    if let Some(crate::cli::Commands::Server { command }) = cli_args.command.as_ref()
+        && !matches!(command, crate::cli::ServerCommands::Run { .. })
+        && !matches!(command, crate::cli::ServerCommands::Connect)
+    {
+        crate::server_command::run(command).await;
+    }
     if let Some(crate::cli::Commands::Server {
         command: crate::cli::ServerCommands::Connect,
     }) = cli_args.command.as_ref()
@@ -1233,13 +1239,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(crate::cli::Commands::Server {
-        command: crate::cli::ServerCommands::Run,
+        command: crate::cli::ServerCommands::Run { service },
     }) = cli_args.command.as_ref()
     {
         // Started by launchd, systemd or `server connect` with a bare
         // environment, as the app's engine is.
         rustcode::shell_env::hydrate_all_missing();
-        match rustcode::server::run(cli_args.yolo).await? {
+        match rustcode::server::run(cli_args.yolo, *service).await? {
             rustcode::server::RunOutcome::Stopped => rustcode::config::flush_history(),
             rustcode::server::RunOutcome::AlreadyRunning(Some(info)) => println!(
                 "A RustCode server is already running for this user: pid {}, version {}, at {}.",

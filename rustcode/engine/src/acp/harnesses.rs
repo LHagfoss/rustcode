@@ -449,7 +449,7 @@ pub(crate) async fn load_session(
     })?;
     // Where the thread's log is before its transcript is read: whatever it
     // logs after this is not in the transcript.
-    let base = peer.clients().head(&session_id);
+    let base = peer.clients().load_mark(&session_id);
     let history = crate::config::load_session_by_id(&session_id)
         .map(|(_, history)| history)
         .unwrap_or_default();

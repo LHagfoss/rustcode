@@ -517,7 +517,86 @@ fn append_line_with_session(line: &str, session_id: Option<&str>) {
         }
         let formatted = format!("[{now}] {line}");
         append_line_to_logs(&log_dir, session_id.as_deref(), &formatted);
+        append_server_log(&log_dir, &formatted);
     }
+}
+
+/// Keep the server's log bounded: the current and previous files
+/// (`server.log` and `server.log.1`) are kept.
+const MAX_SERVER_LOG_BYTES: u64 = 20 * 1024 * 1024;
+
+static SERVER_LOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Where the RustCode server's log is: `<config dir>/logs/server.log`.
+pub fn server_log_path() -> Option<PathBuf> {
+    crate::config::get_config_dir().map(|dir| dir.join("logs").join("server.log"))
+}
+
+/// From now on every line this process logs is also written to the server's
+/// log, which `rustcode server logs` reads. Called by the server only: a
+/// service manager's own capture of standard output (a crash's trace) goes to
+/// the same file, but cannot be rotated from here.
+pub fn mirror_to_server_log() {
+    SERVER_LOG.store(true, Ordering::Release);
+}
+
+fn append_server_log(config_dir: &Path, line: &str) {
+    if !SERVER_LOG.load(Ordering::Acquire) {
+        return;
+    }
+    append_server_log_bounded(
+        &config_dir.join("logs").join("server.log"),
+        line,
+        MAX_SERVER_LOG_BYTES,
+    );
+}
+
+fn append_server_log_bounded(path: &Path, line: &str, limit_bytes: u64) {
+    let _guard = log_write_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let line = capped_log_line(line, limit_bytes);
+    let append_bytes = line.len().saturating_add(1) as u64;
+    let current_bytes = std::fs::metadata(path).map_or(0, |metadata| metadata.len());
+    if current_bytes.saturating_add(append_bytes) > limit_bytes && current_bytes > 0 {
+        let mut rotated = path.as_os_str().to_owned();
+        rotated.push(".1");
+        let rotated = PathBuf::from(rotated);
+        // Renaming over a file fails on Windows.
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(path, &rotated);
+    }
+    use std::io::Write;
+    if let Ok(mut file) = open_private_log(path) {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// Open the server's log for appending, readable by this user only: it holds
+/// prompts and tool output. A new file is created `0600`, and an older one
+/// (from before this, or made by a service manager under its own umask) is
+/// narrowed to `0600`. The directory is created if needed.
+pub(crate) fn open_private_log(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = file.metadata()?.permissions();
+        if permissions.mode() & 0o777 != 0o600 {
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(file)
 }
 
 /// The line that opens this process's writes to a session's log, naming the
@@ -1205,6 +1284,59 @@ pub(crate) fn append_line_for_session(session_id: &str, line: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_server_log_is_bounded_to_two_files() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("logs/server.log");
+        for n in 0..10 {
+            append_server_log_bounded(&path, &format!("line {n:02}"), 40);
+        }
+        let current = std::fs::read_to_string(&path).expect("current");
+        let previous =
+            std::fs::read_to_string(dir.path().join("logs/server.log.1")).expect("previous");
+        assert!(
+            current.len() <= 40 && previous.len() <= 40,
+            "{current:?} {previous:?}"
+        );
+        assert!(current.ends_with("line 09\n"));
+        assert!(previous.contains("line 0"));
+        assert!(!dir.path().join("logs/server.log.2").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_server_log_is_private_when_created_rotated_and_found_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("logs/server.log");
+        let previous = dir.path().join("logs/server.log.1");
+
+        // Created private, whatever the process umask.
+        append_server_log_bounded(&path, "first", 40);
+        assert_eq!(mode(&path), 0o600);
+
+        // The file made after a rotation is private too, and so is the one
+        // rotated away.
+        for n in 0..6 {
+            append_server_log_bounded(&path, &format!("line {n:02}"), 40);
+        }
+        assert!(previous.exists());
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&previous), 0o600);
+
+        // A log a service manager created world-readable is narrowed.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        append_server_log_bounded(&path, "again", 1 << 20);
+        assert_eq!(mode(&path), 0o600);
+    }
 
     #[test]
     fn each_session_log_opens_once_with_the_engine_version() {

@@ -32,21 +32,27 @@ mod unix {
     }
 
     /// Unix has no bind-with-mode API. Apply a restrictive umask only while
-    /// the socket inode is created, then restore the process setting.
-    struct SocketUmask(libc::mode_t);
+    /// the socket inode is created, then restore the process setting. (Not in
+    /// a test binary: the mask is the whole process's, and tests that make
+    /// directories and files run beside this one, which even a moment of it
+    /// fails. The socket is in a private directory and is made `0600` right
+    /// after it is bound either way.)
+    struct SocketUmask(Option<libc::mode_t>);
 
     impl SocketUmask {
         fn private() -> Self {
             // SAFETY: umask has no preconditions; Drop restores the old mask.
-            Self(unsafe { libc::umask(0o177) })
+            Self((!cfg!(test)).then(|| unsafe { libc::umask(0o177) }))
         }
     }
 
     impl Drop for SocketUmask {
         fn drop(&mut self) {
-            // SAFETY: this restores the mask captured by `private`.
-            unsafe {
-                libc::umask(self.0);
+            if let Some(previous) = self.0 {
+                // SAFETY: this restores the mask captured by `private`.
+                unsafe {
+                    libc::umask(previous);
+                }
             }
         }
     }

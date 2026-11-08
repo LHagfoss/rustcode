@@ -63,7 +63,10 @@ export class WebSocketTransport implements Transport {
   readonly name = "websocket";
   private socket: WebSocket | null = null;
   private queue: string[] = [];
-  private calls = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private calls = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
   private nextCall = 1;
 
   constructor(private readonly url: string) {}
@@ -91,6 +94,7 @@ export class WebSocketTransport implements Transport {
         if (event.type === "reply") {
           const call = this.calls.get(event.id);
           this.calls.delete(event.id);
+          if (call) clearTimeout(call.timer);
           if (event.ok) call?.resolve(event.value);
           else call?.reject(new Error(event.error ?? "The bridge could not run it."));
           return;
@@ -120,11 +124,12 @@ export class WebSocketTransport implements Transport {
   call(command: string, args: Record<string, unknown>): Promise<unknown> {
     const id = this.nextCall++;
     return new Promise((resolve, reject) => {
-      this.calls.set(id, { resolve, reject });
-      this.send(JSON.stringify({ bridge: "call", id, command, args }));
-      setTimeout(() => {
+      // The timeout goes with the answer: a reply in time leaves no 15 s timer behind it.
+      const timer = setTimeout(() => {
         if (this.calls.delete(id)) reject(new Error(`${command} timed out`));
       }, 15_000);
+      this.calls.set(id, { resolve, reject, timer });
+      this.send(JSON.stringify({ bridge: "call", id, command, args }));
     });
   }
 
