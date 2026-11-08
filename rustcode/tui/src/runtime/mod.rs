@@ -33,7 +33,6 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 mod composer;
-#[cfg(unix)]
 mod detached;
 pub(crate) mod events;
 mod input;

@@ -83,6 +83,7 @@ tree-sitter-javascript = "0.23.1"
 tree-sitter-go = "0.23.4"
 flate2 = "1.0"
 libc = "0.2"
+mdns-sd = { version = "0.21.7", default-features = false }
 tar = "0.4"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tempfile = "3.10"
@@ -95,6 +96,12 @@ rustcode-lifecycle = { path = "rustcode/core/rustcode-lifecycle" }
 rustcode-loop-detect = { path = "rustcode/core/rustcode-loop-detect" }
 rustcode-tasks = { path = "rustcode/core/rustcode-tasks" }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[target.'cfg(windows)'.dependencies]
+# Interface addresses for the remote gateway's listen plan; mdns-sd already
+# builds it, with the same features.
+if-addrs = { version = "0.15", features = ["link-local"] }
+
 # Optimize dependencies even in debug builds — syntect, pulldown-cmark,
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0

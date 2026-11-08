@@ -24,7 +24,6 @@ use super::AcpSession;
 use super::session::{KnownTaskIds, SessionTurnState};
 use crate::app::AppState;
 use crate::controller::AgentUiEvent;
-#[cfg(unix)]
 use crate::harness::session::PermissionFuture;
 use crate::harness::session::{ClientSink, ExternalSession};
 use crate::remote::SessionCloseReason;
@@ -38,28 +37,20 @@ use std::pin::Pin;
 // Shares and pairing offers are driven by the remote gateway, which the
 // workspace builds only on unix; everywhere else the manager below is a
 // stub with the same surface that reports the feature as unavailable.
-#[cfg(unix)]
 use crate::remote::owner::{
     GatewayLinkStatus, OwnerCommand, OwnerConnector, OwnerLink, OwnerMessage, OwnerReply,
     default_connector, next_registration_epoch,
 };
-#[cfg(unix)]
 use crate::remote::{
     OwnerFollowUp, ProjectionLimits, PromptDisposition, ReceiptState, RemoteErrorCode,
     RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, RemoteSnapshot, SessionPublisher,
     SessionRegistration, apply_session_mutation, read_session,
 };
-#[cfg(unix)]
 use crate::remote_gateway::control::OfferDetails;
-#[cfg(unix)]
 use crate::remote_gateway::lifecycle::RemoteLifecycle;
-#[cfg(unix)]
 use crate::remote_gateway::service;
-#[cfg(unix)]
 use std::time::{Duration, Instant};
-#[cfg(unix)]
 use tokio::sync::mpsc;
-#[cfg(unix)]
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const REMOTE_CAPABILITY_VERSION: u64 = 1;
@@ -299,7 +290,6 @@ impl StartError {
     }
 }
 
-#[cfg(unix)]
 #[derive(Clone, Default)]
 pub(crate) struct RemoteManager {
     inner: Arc<std::sync::Mutex<Inner>>,
@@ -307,16 +297,13 @@ pub(crate) struct RemoteManager {
 
 /// How long a refused thread is left alone before it is tried again: the
 /// reason may pass (another thread closed, the terminal that held it stopped).
-#[cfg(unix)]
 const REFUSAL_TTL: Duration = Duration::from_secs(60);
 
-#[cfg(unix)]
 struct Refusal {
     reason: String,
     until: Instant,
 }
 
-#[cfg(unix)]
 #[derive(Default)]
 struct Inner {
     shares: std::collections::HashMap<String, Arc<Share>>,
@@ -344,7 +331,6 @@ pub(crate) struct ThreadStart {
     pub model: Option<String>,
 }
 
-#[cfg(unix)]
 type ThreadHost = Arc<
     dyn Fn(
             ThreadStart,
@@ -354,7 +340,6 @@ type ThreadHost = Arc<
         + Sync,
 >;
 
-#[cfg(unix)]
 struct Share {
     target: ShareTarget,
     registration: SessionRegistration,
@@ -364,7 +349,6 @@ struct Share {
     pairing_in_flight: AtomicBool,
 }
 
-#[cfg(unix)]
 struct ShareState {
     publisher: Publisher,
     link: OwnerLink,
@@ -380,7 +364,6 @@ struct ShareState {
 /// What a share publishes. The built-in harness publishes events projected
 /// from its state; a thread on an external harness publishes a snapshot
 /// whenever its mirror changed.
-#[cfg(unix)]
 enum Publisher {
     Acp(SessionPublisher),
     Harness {
@@ -391,7 +374,6 @@ enum Publisher {
     },
 }
 
-#[cfg(unix)]
 impl Publisher {
     fn observe(&mut self, event: &AgentUiEvent) {
         if let Publisher::Acp(publisher) = self {
@@ -469,13 +451,11 @@ impl Publisher {
 }
 
 /// One shared thread: on the built-in harness, or on an external one.
-#[cfg(unix)]
 enum ShareTarget {
     Acp(Arc<RemoteSession>),
     Harness(Arc<HarnessShare>),
 }
 
-#[cfg(unix)]
 impl ShareTarget {
     /// Which harness the shared thread runs on: `rustcode` for the built-in
     /// one, the harness id otherwise.
@@ -505,7 +485,6 @@ impl ShareTarget {
 /// mirror of the updates it sends. Prompts, cancels, steers, approvals and
 /// question answers are applied to the harness itself, through the same
 /// [`ExternalSession`] the desktop app's own prompt goes through.
-#[cfg(unix)]
 struct HarnessShare {
     session_id: String,
     external: Arc<ExternalSession>,
@@ -516,7 +495,6 @@ struct HarnessShare {
     connection: Option<ConnectionTo<Client>>,
 }
 
-#[cfg(unix)]
 struct PairingOffer {
     qr_payload: String,
     code: String,
@@ -529,7 +507,6 @@ struct PairingOffer {
     expires_at: Instant,
 }
 
-#[cfg(unix)]
 impl PairingOffer {
     fn new(offer: OfferDetails) -> Self {
         let lifetime = Duration::from_secs(offer.expires_in_secs);
@@ -547,7 +524,6 @@ impl PairingOffer {
     }
 }
 
-#[cfg(unix)]
 impl RemoteManager {
     fn connector(&self) -> Box<dyn OwnerConnector> {
         #[cfg(test)]
@@ -1159,185 +1135,22 @@ impl RemoteManager {
     }
 }
 
-/// On hosts without the gateway, the manager keeps the same surface so the
-/// ACP handlers compile everywhere, and reports sharing as unavailable.
-#[cfg(not(unix))]
-#[derive(Clone, Default)]
-pub(crate) struct RemoteManager;
-
-#[cfg(not(unix))]
-impl RemoteManager {
-    /// Shares cannot exist on this host, so there is nothing to publish.
-    pub(crate) fn observe(&self, _session_id: &str, _event: &AgentUiEvent) {}
-
-    pub(crate) async fn start(
-        &self,
-        _session: Arc<RemoteSession>,
-        _pair: bool,
-    ) -> Result<Value, StartError> {
-        Err(StartError::Refused(self.unsupported_message()))
-    }
-
-    pub(crate) async fn status(&self, session_id: &str) -> Value {
-        json!({
-            "available": false,
-            "enabled": false,
-            "shared": false,
-            "sessionId": session_id,
-            "pairedDevices": 0,
-            "devices": [],
-            "error": "remote access is not available on this host",
-        })
-    }
-
-    pub(crate) async fn pair(&self, session_id: &str) -> Value {
-        json!({
-            "available": false,
-            "enabled": false,
-            "shared": false,
-            "sessionId": session_id,
-            "pairedDevices": 0,
-            "devices": [],
-            "error": "remote access is not available on this host",
-        })
-    }
-
-    pub(crate) async fn stop(
-        &self,
-        _session_id: &str,
-    ) -> Result<Value, agent_client_protocol::Error> {
-        Err(agent_client_protocol::Error::invalid_params().data(self.unsupported_message()))
-    }
-
-    pub(crate) async fn stop_session(&self, _session_id: &str, _reason: SessionCloseReason) {}
-
-    pub(crate) async fn shutdown(&self) {}
-
-    pub(crate) fn is_shared(&self, _session_id: &str) -> bool {
-        false
-    }
-
-    /// Nothing here starts threads for devices: the gateway keeps starting a
-    /// session owner when no share advertises `host_threads`.
-    pub(crate) fn set_thread_host<F>(&self, _start: F)
-    where
-        F: Fn(
-                ThreadStart,
-            ) -> Pin<
-                Box<
-                    dyn std::future::Future<Output = Result<RemoteSessionInfo, RemoteError>> + Send,
-                >,
-            > + Send
-            + Sync
-            + 'static,
-    {
-    }
-
-    pub(crate) fn can_host_threads(&self) -> bool {
-        false
-    }
-
-    pub(crate) fn thread_info(&self, _session_id: &str) -> Option<RemoteSessionInfo> {
-        None
-    }
-
-    pub(crate) fn mirror(&self, _session_id: &str) -> Option<Arc<HarnessMirror>> {
-        None
-    }
-
-    pub(crate) fn note_prompt(&self, _session_id: &str, _text: &str) {}
-
-    pub(crate) fn note_prompt_applied(&self, _session_id: &str) {}
-
-    pub(crate) fn note_turn_returned(&self, _session_id: &str) {}
-
-    pub(crate) fn shared_count(&self) -> usize {
-        0
-    }
-
-    pub(crate) fn wrap_sink(
-        &self,
-        inner: Arc<dyn ClientSink>,
-        _session_id: &str,
-    ) -> Arc<dyn ClientSink> {
-        inner
-    }
-
-    pub(crate) async fn start_harness(
-        &self,
-        _session_id: String,
-        _external: Arc<ExternalSession>,
-        _connection: Option<agent_client_protocol::ConnectionTo<Client>>,
-        _pair: bool,
-    ) -> Result<Value, StartError> {
-        Err(StartError::Refused(self.unsupported_message()))
-    }
-
-    pub(crate) fn refuse(&self, _session_id: &str, _reason: String) {}
-
-    pub(crate) fn refusal(&self, _session_id: &str) -> Option<String> {
-        None
-    }
-
-    pub(crate) fn refused_count(&self) -> usize {
-        0
-    }
-
-    pub(crate) async fn enable(&self) -> Value {
-        json!({
-            "available": false,
-            "enabled": false,
-            "error": "remote access is not available on this host",
-        })
-    }
-
-    pub(crate) async fn unshare_all(&self, _reason: SessionCloseReason) {}
-
-    pub(crate) async fn answer_connect(&self, _id: &str, _accept: bool) -> Value {
-        json!({
-            "available": false,
-            "enabled": false,
-            "connectError": "remote access is not available on this host",
-        })
-    }
-
-    pub(crate) async fn revoke(&self, _device_id: &str) -> Value {
-        json!({
-            "available": false,
-            "enabled": false,
-            "revokeError": "remote access is not available on this host",
-        })
-    }
-
-    pub(crate) fn unsupported_message(&self) -> String {
-        "remote access needs the remote gateway, which the workspace builds only on unix hosts"
-            .to_owned()
-    }
-}
-
 /// Whether remote access is switched on for this machine. While it is, every
 /// open ACP thread shares itself, like a terminal does.
 pub(crate) fn enabled() -> bool {
     remote_enabled()
 }
 
-#[cfg(unix)]
 fn remote_enabled() -> bool {
     crate::config::get_config_dir()
         .as_deref()
         .is_some_and(service::enabled)
 }
 
-#[cfg(not(unix))]
-fn remote_enabled() -> bool {
-    false
-}
-
 /// What Settings › Remote access shows without naming a thread: whether
 /// remote access is on, the gateway's address and state, the paired devices
 /// and where pairing stands. Reads the gateway's own status, so it is the
 /// same answer `rustcode remote status` gives.
-#[cfg(unix)]
 async fn host_status() -> Value {
     let Some(directory) = crate::config::get_config_dir() else {
         return json!({
@@ -1448,7 +1261,6 @@ async fn host_status() -> Value {
 /// A pairing challenge for the machine, with no thread named: Settings ›
 /// Remote access › Pair a device. Switches remote access on when it is off,
 /// exactly as `/remote` does in a terminal.
-#[cfg(unix)]
 async fn pair_host() -> Value {
     if let Err(error) = service::enable_for_host().await {
         return json!({
@@ -1496,7 +1308,6 @@ async fn pair_host() -> Value {
 
 /// Settings › Remote access, or the prompt anywhere in the app: the owner's
 /// answer to a device asking to connect, with the machine's status.
-#[cfg(unix)]
 async fn answer_connect_host(id: &str, accept: bool) -> Value {
     let result = match crate::config::get_config_dir() {
         Some(directory) => RemoteLifecycle::new(&directory)
@@ -1532,7 +1343,6 @@ async fn answer_connect_host(id: &str, accept: bool) -> Value {
 
 /// Settings › Remote access › Revoke: forget a device, as `rustcode remote
 /// revoke` does, and answer with the machine's status.
-#[cfg(unix)]
 async fn revoke_host(device_id: &str) -> Value {
     let result = match crate::config::get_config_dir() {
         Some(directory) => RemoteLifecycle::new(&directory)
@@ -1564,7 +1374,6 @@ async fn revoke_host(device_id: &str) -> Value {
 /// One pairing offer as the apps render it. `qrRows` is the code itself, one
 /// string per row of `0` (light) and `1` (dark) modules with the four-module
 /// quiet zone included, so a client draws it without a QR encoder.
-#[cfg(unix)]
 fn offer_json(offer: &PairingOffer, now: Instant) -> Value {
     json!({
         "qrPayload": offer.qr_payload,
@@ -1583,7 +1392,6 @@ fn offer_json(offer: &PairingOffer, now: Instant) -> Value {
 /// Say on a share's snapshot that its owner starts threads a device asks for
 /// (`create_session`): what makes the gateway offer `thread_create_options`
 /// and route new threads here instead of starting a session owner.
-#[cfg(unix)]
 fn advertise_host_threads(snapshot: &mut RemoteSnapshot) {
     let capability = crate::remote::session_capability::HOST_THREADS;
     if !snapshot
@@ -1595,7 +1403,6 @@ fn advertise_host_threads(snapshot: &mut RemoteSnapshot) {
     }
 }
 
-#[cfg(unix)]
 async fn share_loop(manager: RemoteManager, share: Arc<Share>) {
     let mut interval = tokio::time::interval(Duration::from_millis(100));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1619,7 +1426,6 @@ async fn share_loop(manager: RemoteManager, share: Arc<Share>) {
     manager.forget(&share);
 }
 
-#[cfg(unix)]
 impl Share {
     fn directory(&self) -> Option<PathBuf> {
         self.state.try_lock().ok().and_then(|state| {
@@ -2114,7 +1920,6 @@ impl Share {
     }
 }
 
-#[cfg(unix)]
 impl HarnessShare {
     /// Show the app a prompt a device sent, as if it had been typed in the
     /// chat: ACP has no other way to tell a client about a message it did not
@@ -2172,7 +1977,6 @@ impl HarnessShare {
 
 /// Apply one mutating request to a thread on an external harness, or say why
 /// not. Everything a request names is checked under the lock that applies it.
-#[cfg(unix)]
 async fn harness_mutation(
     share: &Arc<HarnessShare>,
     registration: &SessionRegistration,
@@ -2277,14 +2081,12 @@ async fn harness_mutation(
 /// A thread's sink, with the mirror fed first: every update the harness sends
 /// is what a device sees, and a permission request is offered to devices
 /// while the app still gets it.
-#[cfg(unix)]
 struct TeeSink {
     inner: Arc<dyn ClientSink>,
     session_id: String,
     remote: RemoteManager,
 }
 
-#[cfg(unix)]
 impl ClientSink for TeeSink {
     fn update(&self, update: SessionUpdate) {
         if let Some(mirror) = self.remote.mirror(&self.session_id) {
@@ -2304,7 +2106,6 @@ impl ClientSink for TeeSink {
 
 /// Offer a harness's permission request to paired devices while the app is
 /// still asked: whichever answers first ends it.
-#[cfg(unix)]
 pub(crate) fn bridge_permission(
     mirror: Option<Arc<HarnessMirror>>,
     inner: Arc<dyn ClientSink>,
@@ -2489,7 +2290,6 @@ mod tests {
     /// A question a device answers while the app still shows its card.
     /// A shared thread on an external harness registers under its own id, and
     /// switching remote access off ends the share.
-    #[cfg(unix)]
     /// A share connected to a gateway this test holds: it keeps both ends so
     /// it can read the registration and answer requests itself.
     struct TestGateway {

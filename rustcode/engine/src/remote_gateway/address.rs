@@ -392,7 +392,31 @@ pub fn candidate_addresses() -> Vec<Candidate> {
     candidates
 }
 
-#[cfg(not(unix))]
+/// Windows: the adapters' friendly names ("Wi-Fi", "Ethernet"), so
+/// `--prefer-interface` takes what the user sees in Settings.
+#[cfg(windows)]
+pub fn candidate_addresses() -> Vec<Candidate> {
+    if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|interface| interface.is_oper_up() && !interface.is_loopback())
+        .filter_map(|interface| {
+            let address = interface.ip();
+            let link_local = match address {
+                IpAddr::V4(v4) => v4.is_link_local(),
+                IpAddr::V6(v6) => v6.is_unicast_link_local(),
+            };
+            (!link_local && !address.is_loopback() && !address.is_unspecified()).then(|| {
+                Candidate {
+                    interface: interface.name,
+                    address,
+                }
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn candidate_addresses() -> Vec<Candidate> {
     Vec::new()
 }
@@ -663,7 +687,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn candidates_exclude_loopback_and_unspecified_addresses() {
         for candidate in candidate_addresses() {

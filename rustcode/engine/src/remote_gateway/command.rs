@@ -3,6 +3,7 @@
 use super::address::{candidate_addresses, plan_listen_with_preference};
 use super::control::{GatewayStatus, OfferDetails};
 use super::devices::DeviceRecord;
+use super::discovery::Advertisement;
 use super::gateway::{Gateway, GatewayConfig, Limits};
 use super::hub::{HubLimits, SessionHub};
 use super::lifecycle::{RemoteLifecycle, Revocation};
@@ -107,22 +108,33 @@ pub async fn serve(
     .await?;
     let port = gateway.local_addr().port();
     let gateway_id = gateway.gateway_id().to_owned();
-    let mut discovery =
-        super::discovery::advertise(port, plan.advertise.is_loopback(), &gateway_id);
-    // Bonjour is announced only while a phone could reach the address.
+    // Bonjour is announced only while a phone could reach the address. The
+    // announcement is shared so shutdown can withdraw it and wait for the
+    // goodbye before the process exits.
+    let discovery = Arc::new(std::sync::Mutex::new(Advertisement::start(
+        port,
+        plan.advertise.is_loopback(),
+        &gateway_id,
+    )));
     let mut advertised = gateway.advertised_changes();
-    let announce = async move {
-        let mut loopback = plan.advertise.is_loopback();
-        while advertised.changed().await.is_ok() {
-            let now = advertised.borrow_and_update().host().is_loopback();
-            if now != loopback {
-                loopback = now;
-                discovery = super::discovery::advertise(port, loopback, &gateway_id);
+    let announce = {
+        let discovery = Arc::clone(&discovery);
+        async move {
+            let mut loopback = plan.advertise.is_loopback();
+            while advertised.changed().await.is_ok() {
+                let now = advertised.borrow_and_update().host().is_loopback();
+                if now != loopback {
+                    loopback = now;
+                    let next = Advertisement::start(port, loopback, &gateway_id);
+                    // The one replaced withdraws itself as it drops.
+                    *discovery
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+                }
             }
+            // The announcement stays up when the address can no longer change.
+            std::future::pending::<()>().await
         }
-        // Keeps the announcement up when the address can no longer change.
-        let _discovery = discovery;
-        std::future::pending::<()>().await
     };
     let plan = ListenPlanSummary {
         loopback_bind: gateway.local_addr().ip().is_loopback(),
@@ -148,7 +160,8 @@ pub async fn serve(
     let upgraded = super::service::wait_for_upgrade(program.clone());
     tokio::pin!(upgraded);
     let shutdown = gateway.shutdown_token();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let terminate = terminate_signal()?;
+    tokio::pin!(terminate);
     let run = gateway.run();
     tokio::pin!(run);
     tokio::pin!(announce);
@@ -156,12 +169,23 @@ pub async fn serve(
         result = &mut run => return result,
         _ = &mut announce => false,
         _ = tokio::signal::ctrl_c() => false,
-        _ = terminate.recv() => false,
+        _ = &mut terminate => false,
         _ = &mut upgraded => true,
     };
-    // Let the gateway close its connections and remove its registration.
+    // Let the gateway close its connections and remove its registration,
+    // and phones drop it from their nearby list at once.
     shutdown.cancel();
-    run.await?;
+    let advertisement = discovery
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    let withdraw = async move {
+        if let Some(advertisement) = advertisement {
+            advertisement.stop().await;
+        }
+    };
+    let (result, ()) = tokio::join!(&mut run, withdraw);
+    result?;
     if restart && std::env::var_os("RUSTCODE_REMOTE_MANAGED").is_none() {
         let launcher = super::owner_client::Launcher {
             program,
@@ -174,6 +198,58 @@ pub async fn serve(
         lifecycle.start(launcher.command()).await?;
     }
     Ok(())
+}
+
+/// Resolves when the system asks the process to stop: `SIGTERM` (launchd,
+/// systemd, `kill`), or the console closing, logoff or shutdown on Windows.
+#[cfg(unix)]
+pub fn terminate_signal() -> Result<impl std::future::Future<Output = ()>> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    Ok(async move {
+        terminate.recv().await;
+    })
+}
+
+/// A handler that cannot be registered (a detached gateway has no console)
+/// is left out: `remote stop` still ends the process through its control
+/// endpoint.
+#[cfg(windows)]
+pub fn terminate_signal() -> Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+    let mut close = ctrl_close().ok();
+    let mut logoff = ctrl_logoff().ok();
+    let mut shutdown = ctrl_shutdown().ok();
+    Ok(async move {
+        let close = async {
+            match close.as_mut() {
+                Some(signal) => {
+                    let _ = signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        };
+        let logoff = async {
+            match logoff.as_mut() {
+                Some(signal) => {
+                    let _ = signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        };
+        let shutdown = async {
+            match shutdown.as_mut() {
+                Some(signal) => {
+                    let _ = signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            () = close => {}
+            () = logoff => {}
+            () = shutdown => {}
+        }
+    })
 }
 
 struct ListenPlanSummary {

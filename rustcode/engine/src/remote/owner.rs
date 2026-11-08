@@ -258,11 +258,9 @@ impl OwnerConnector for NoGatewayConnector {
 }
 
 /// The connector a session owner uses at runtime: the gateway's local IPC
-/// client, which discovers the running gateway or starts one. Platforms
-/// without the gateway, and a process without a configuration directory, get
-/// [`NoGatewayConnector`].
+/// client, which discovers the running gateway or starts one. A process
+/// without a configuration directory gets [`NoGatewayConnector`].
 pub fn default_connector() -> Box<dyn OwnerConnector> {
-    #[cfg(unix)]
     if let Some(connector) = crate::remote_gateway::owner_client::GatewayConnector::for_this_host()
     {
         return Box::new(connector);

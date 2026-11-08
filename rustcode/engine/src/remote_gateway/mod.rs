@@ -15,46 +15,31 @@
 //! unchanged.
 
 pub mod address;
+pub mod command;
+pub mod connect;
+pub mod control;
+pub mod devices;
+pub mod discovery;
+pub mod gateway;
 pub mod handshake;
 pub mod hub;
+pub mod lifecycle;
+pub mod local_socket;
+pub mod orphan;
+pub mod owner_client;
 pub mod owner_ipc;
 pub mod pairing;
+pub mod pairing_watch;
 pub mod qr;
 pub mod router;
-
-#[cfg(unix)]
-pub mod command;
-#[cfg(unix)]
-pub mod connect;
-#[cfg(unix)]
-pub mod control;
-#[cfg(unix)]
-pub mod devices;
-#[cfg(unix)]
-pub mod gateway;
-#[cfg(unix)]
-pub mod lifecycle;
-#[cfg(unix)]
-pub mod orphan;
-#[cfg(unix)]
-pub mod owner_client;
-#[cfg(unix)]
-pub mod pairing_watch;
-#[cfg(unix)]
+pub mod service;
 mod transport;
 pub mod wire_names;
+pub mod workspace;
 
+// End-to-end through Unix sockets, Unix permissions and process signals.
 #[cfg(all(test, unix))]
 mod e2e_tests;
 
 /// Default TCP port of the gateway's WebSocket listener.
 pub const DEFAULT_PORT: u16 = 17879;
-
-#[cfg(unix)]
-pub mod workspace;
-
-#[cfg(unix)]
-mod discovery;
-
-#[cfg(unix)]
-pub mod service;

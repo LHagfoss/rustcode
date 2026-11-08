@@ -10,6 +10,7 @@ use crate::remote_gateway::pairing::{ATTEMPTS_PER_CHALLENGE, HOST_FAILURE_LIMIT,
 use crate::remote_gateway::router::NoSessionsRouter;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -772,7 +773,10 @@ async fn single_instance_stop_and_cleanup() {
         match Gateway::bind(&lifecycle, config).await {
             Ok(gateway) => break gateway,
             Err(error) => {
-                assert!(crate::daemon::lifecycle::is_lock_busy(&error), "{error:#}");
+                assert!(
+                    crate::daemon::private_files::is_lock_busy(&error),
+                    "{error:#}"
+                );
                 assert!(Instant::now() < deadline, "owner lock not released");
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }

@@ -19,22 +19,22 @@ use super::handshake::{
 };
 use super::hub::{HubIdentity, SessionHub};
 use super::lifecycle::{GatewayRegistration, RemoteLifecycle};
+use super::local_socket::{LocalListener, LocalStream};
 use super::owner_ipc;
 use super::pairing::{PairingError, PairingState};
 use super::router::{ConnectionControl, DeviceContext, FrameQueue, FrameRouter, FrameSink};
 use super::transport;
-use crate::daemon::lifecycle::remove_if_exists;
+use crate::daemon::private_files::remove_if_exists;
 use crate::daemon::protocol::{read_async_frame, write_async_frame};
 use crate::remote::host_capability;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::File;
 use std::net::{IpAddr, SocketAddr};
-use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::io::BufReader;
-use tokio::net::{TcpListener, UnixListener, UnixStream};
+use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -123,14 +123,20 @@ fn read_host_name() -> Option<String> {
     {
         return Some(name);
     }
-    let mut buffer = [0u8; 256];
-    // SAFETY: the buffer is valid for its length; the last byte stays zero.
-    let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len() - 1) };
-    if status != 0 {
-        return None;
+    #[cfg(unix)]
+    {
+        let mut buffer = [0u8; 256];
+        // SAFETY: the buffer is valid for its length; the last byte stays zero.
+        let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len() - 1) };
+        if status != 0 {
+            return None;
+        }
+        let length = buffer.iter().position(|byte| *byte == 0)?;
+        clean_host_name(&String::from_utf8_lossy(&buffer[..length]))
     }
-    let length = buffer.iter().position(|byte| *byte == 0)?;
-    clean_host_name(&String::from_utf8_lossy(&buffer[..length]))
+    // The computer name the user set in Settings › System › About.
+    #[cfg(not(unix))]
+    clean_host_name(&sysinfo::System::host_name()?)
 }
 
 fn clean_host_name(name: &str) -> Option<String> {
@@ -775,8 +781,8 @@ impl Drop for Ownership {
 
 pub struct Gateway {
     listener: TcpListener,
-    control: UnixListener,
-    owners: UnixListener,
+    control: LocalListener,
+    owners: LocalListener,
     shared: Arc<Shared>,
     plan: ListenPlan,
     replan: Option<Replan>,
@@ -803,7 +809,7 @@ impl Gateway {
             local.to_string(),
             advertised.to_string(),
         )?;
-        let control = UnixListener::bind(lifecycle.socket_path()).with_context(|| {
+        let control = LocalListener::bind(&lifecycle.socket_path()).with_context(|| {
             format!(
                 "failed to bind control socket {}",
                 lifecycle.socket_path().display()
@@ -816,17 +822,12 @@ impl Gateway {
             registration: Arc::clone(&registration),
             _lock: lock,
         };
-        fs::set_permissions(lifecycle.socket_path(), fs::Permissions::from_mode(0o600))?;
-        let owners = UnixListener::bind(lifecycle.owner_socket_path()).with_context(|| {
+        let owners = LocalListener::bind(&lifecycle.owner_socket_path()).with_context(|| {
             format!(
                 "failed to bind owner socket {}",
                 lifecycle.owner_socket_path().display()
             )
         })?;
-        fs::set_permissions(
-            lifecycle.owner_socket_path(),
-            fs::Permissions::from_mode(0o600),
-        )?;
         if let Some(sessions) = &config.sessions {
             sessions.advertise_capabilities(&[host_capability::CONNECT_REQUESTS]);
             sessions.bind_identity(HubIdentity {
@@ -955,19 +956,26 @@ impl Gateway {
                     }
                 },
                 accepted = control.accept() => {
-                    if let Ok((stream, _)) = accepted {
-                        tasks.spawn(serve_control(Arc::clone(&shared), started, stream));
+                    if let Ok(incoming) = accepted {
+                        let shared = Arc::clone(&shared);
+                        tasks.spawn(async move {
+                            if let Some(stream) = incoming.verify().await {
+                                serve_control(shared, started, stream).await;
+                            }
+                        });
                     }
                 }
                 accepted = owners.accept() => {
                     // Without a session registry there is nobody to register
                     // with: the connection is dropped.
-                    if let (Ok((stream, _)), Some(sessions)) = (accepted, &shared.sessions) {
-                        tasks.spawn(owner_ipc::serve_owner(
-                            Arc::clone(sessions),
-                            stream,
-                            shared.shutdown.clone(),
-                        ));
+                    if let (Ok(incoming), Some(sessions)) = (accepted, &shared.sessions) {
+                        let sessions = Arc::clone(sessions);
+                        let shutdown = shared.shutdown.clone();
+                        tasks.spawn(async move {
+                            if let Some(stream) = incoming.verify().await {
+                                owner_ipc::serve_owner(sessions, stream, shutdown).await;
+                            }
+                        });
                     }
                 }
                 Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
@@ -984,7 +992,7 @@ impl Gateway {
     }
 }
 
-async fn serve_control(shared: Arc<Shared>, started: Instant, stream: UnixStream) {
+async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStream) {
     let exchange = async {
         let (reader, mut writer) = stream.into_split();
         let request: ControlRequest = read_async_frame(&mut BufReader::new(reader)).await?;
@@ -1143,5 +1151,6 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
     }
 }
 
-#[cfg(test)]
+// End-to-end through Unix sockets and Unix permissions.
+#[cfg(all(test, unix))]
 mod tests;
