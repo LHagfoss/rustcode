@@ -41,10 +41,17 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
 - Settings ▸ Agents ▸ *Threads can start and message other threads*. The
   engine learns it at `initialize`, so a change applies after the engine
   restarts.
-- UI: chips above the composer for the threads this one messaged (state,
-  open, stop), and a *Working for "<thread>"* banner in a thread doing work
-  for another one. The sidebar badge and per-link operational events are not
-  in M1.
+- UI: rows above the composer for the threads this one delegated to (state,
+  open, stop), each keeping a short list of what happened to the link — started
+  on a harness and model, message sent, asked you, answered with the time it
+  worked, failed, stopped, merged, cleaned up — shown as the row's status word
+  and listed in its hover tip ([orchestrator.md](../orchestrator.md) *A link's
+  events*), and a *Working for "<thread>"* banner in a thread doing work for
+  another one. The sidebar badge is there too: a parent whose child finished
+  while its row was not open gets the same done mark as any finished thread,
+  announced once and never taking focus (`markFinished` in `state/store.ts`).
+  Per-link events and the badge are in the desktop app; the TUI and iOS keep the
+  M1 surface.
 
 ## Problem
 
@@ -263,8 +270,10 @@ Decisions:
 - **Target banner**: a target chat shows "Driven by <orchestrator chat>" with
   *Open*, *Pause messages* and *Detach*. Attributed messages render with the
   orchestrator's title.
-- **Sidebar**: driven chats get a link badge; "needs you" uses the same badge
-  as pending approvals.
+- **Sidebar**: driven chats get a link badge (the ↳ in front of a row's
+  delegate marks); "needs you" uses the same badge as pending approvals, and a
+  child that finished while its parent was not open marks the parent row as a
+  finished thread, once.
 - The app sends `_meta.rustcode.orchestration` only when the user turns the
   feature on in Settings (off by default in M1).
 
