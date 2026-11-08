@@ -4078,6 +4078,7 @@ export const MOCK_KIT = [
   '    <li class="rc-item"><span>Engine</span><span class="rc-badge rc-ok">Ready</span></li>\n',
   '    <li class="rc-item"><span>Desktop</span><span class="rc-badge rc-ok">Ready</span></li>\n',
   '    <li class="rc-item"><span>Auth</span><span class="rc-badge rc-warn">Waiting</span></li>\n',
+  '    <li class="rc-item"><span class="rc-badge">Worth reviewing</span><strong>docs/superpowers/</strong><div>Ignored by the repo. It contains 26 design specs and plans, including provider login and remote turn timing.</div></li>\n',
   "  </ul></details>\n",
   '  <details class="rc-details rc-tree"><summary>Changed files <span class="rc-label">4</span></summary><div>\n',
   '    <details class="rc-details" open><summary>tests/auth</summary><div>\n',

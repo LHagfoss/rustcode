@@ -179,11 +179,14 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-spark-area { fill: currentColor; opacity: 0.14; }
 
 .rc-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
-.rc-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0;
+.rc-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 6px 0;
   border-bottom: 1px solid var(--rc-separator); }
 .rc-item:last-child { border-bottom: 0; }
-.rc-item > :first-child { min-width: 0; }
-.rc-item > :last-child:not(:first-child) { flex: none; font-variant-numeric: tabular-nums; }
+.rc-item:has(> div, > p) { justify-content: flex-start; }
+.rc-item > * { min-width: 0; overflow-wrap: anywhere; }
+.rc-item > .rc-badge, .rc-item > .rc-chip { flex: none; }
+.rc-item > :last-child:not(:first-child) { font-variant-numeric: tabular-nums; }
+.rc-item > div, .rc-item > p { flex: 0 0 100%; margin: 0; }
 
 .rc-steps { margin: 0; padding: 0; list-style: none; }
 .rc-step { position: relative; padding: 0 0 12px 20px; }
