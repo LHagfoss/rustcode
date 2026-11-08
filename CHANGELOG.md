@@ -1,3 +1,15 @@
+## [v1.22.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.22.0) - 2026-11-08
+
+### Features
+- Keep the remote pairing QR code visible until it is used, expires, or is dismissed. (#3200)
+- Improve composer readability and refine borders and settings controls. (#3201)
+- Keep Smart UI list items with badges and descriptions readable. (#3203)
+- Prevent extra console windows from appearing when using the Windows desktop app. (#3204)
+- A phone can now ask to connect from the local network: the desktop app shows "‹device› wants to connect" anywhere, and after Accept shows a code to enter on the phone. Paired devices can be revoked from Settings › Remote access. (#3205)
+- The desktop app uses each system's own fonts on Windows and Linux, and on Linux its translucent surfaces are solid so text stays readable. Focus rings now appear only while you move focus with Tab, never when you click. (#3206)
+- Settings › Diagnostics shows the RustCode server's status, live log, system and harness details and copies a redacted debug report for GitHub issues; threads get *Open Thread Log*. (#3208)
+- Delegate rows say what a delegate is doing instead of a raw command, provider errors read as sentences with a hint when the conversation is full, and a delegate whose turn failed can be messaged again and leaves the Inbox once settled. (#3207)
+- On Windows and Linux the app shows Ctrl/Alt shortcuts, native window controls and wording for the OS instead of macOS terms. (#3210)
 ## [v1.21.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.21.0) - 2026-11-08
 
 ### Features
