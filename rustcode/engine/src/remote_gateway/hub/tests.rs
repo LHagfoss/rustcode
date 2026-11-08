@@ -259,6 +259,7 @@ impl Device {
     }
 
     /// The next frame, or `None` while nothing is queued.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn try_next(&mut self) -> Option<Value> {
         self.next()
     }

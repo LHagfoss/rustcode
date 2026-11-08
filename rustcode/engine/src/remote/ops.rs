@@ -85,7 +85,6 @@ pub async fn apply_session_mutation(
         return Err(stale_session());
     }
     match &request.operation {
-        #[cfg(unix)]
         RemoteOperation::UploadImage { .. } => {
             let state = state.lock().await;
             if state.active_session_id != registration.session_id {
@@ -1077,7 +1076,6 @@ async fn ensure_session(
 
 /// Queue or steer a remote prompt. The session check, the running-turn check
 /// and the enqueue share one lock, and the terminal's draft is not touched.
-#[cfg(unix)]
 fn image_error(error: anyhow::Error) -> RemoteError {
     RemoteError::new(
         RemoteErrorCode::InvalidRequest,
@@ -1085,7 +1083,6 @@ fn image_error(error: anyhow::Error) -> RemoteError {
     )
 }
 
-#[cfg(unix)]
 fn ensure_image_support(state: &AppState) -> Result<(), RemoteError> {
     match state.image_support_error() {
         Some(message) => Err(error(RemoteErrorCode::UnsupportedOperation, message)),
@@ -1121,14 +1118,11 @@ async fn accept_prompt(
     if state.active_session_id != registration.session_id {
         return Err(stale_session());
     }
-    #[cfg(unix)]
     if rustcode_core::paste::expand(prompt).contains("![image](file://") {
         ensure_image_support(&state)?;
         let root = super::images::root(&registration.session_id).map_err(image_error)?;
         super::images::validate_prompt(&root, device, prompt).map_err(image_error)?;
     }
-    #[cfg(not(unix))]
-    let _ = device;
     let running = state.has_active_turn() || !state.pending_queue.is_empty();
     let mode = match disposition {
         PromptDisposition::Started if running => {
@@ -1177,7 +1171,6 @@ mod tests {
 
     const SESSION: &str = "remote-ops-session";
 
-    #[cfg(unix)]
     #[test]
     fn image_support_requires_a_vision_model_or_valid_fallback() {
         let mut state = shared_state();

@@ -52,8 +52,8 @@ impl AppRuntime {
         .headless();
         let subscription = rustcode::tools::background_task_manager().subscribe_session(session_id);
         let mut interval = tokio::time::interval(Duration::from_millis(25));
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let terminate = rustcode::remote_gateway::command::terminate_signal()?;
+        tokio::pin!(terminate);
         // An owner nobody can reach is of no use to anyone: one that the
         // gateway never accepts, or keeps turning away, ends itself.
         let mut registered = false;
@@ -63,7 +63,7 @@ impl AppRuntime {
         // left: past the grace, stop the turn and end (see `orphan`).
         let mut orphan = rustcode::remote_gateway::orphan::OrphanWatch::default();
         let failure = loop {
-            tokio::select! { _=interval.tick()=>{}, _=tokio::signal::ctrl_c()=>break None, _=terminate.recv()=>break None }
+            tokio::select! { _=interval.tick()=>{}, _=tokio::signal::ctrl_c()=>break None, _=&mut terminate=>break None }
             // Removing a test/config owner directory is an explicit lease withdrawal.
             if !owners.exists() {
                 runtime.current_cancel_token.cancel();
