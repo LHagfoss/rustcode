@@ -51,6 +51,14 @@ class FakeShell implements Transport {
     expiresInSecs: 120,
   };
   pairError: Error | null = null;
+  /** `machines_ask` waits for `finishAsk`, as the shell does while the owner decides. */
+  askHangs = false;
+  private pendingAsk: ((value: unknown) => void) | null = null;
+
+  finishAsk(value: unknown): void {
+    this.pendingAsk?.(value);
+    this.pendingAsk = null;
+  }
 
   async start(): Promise<void> {}
   send(): void {}
@@ -66,6 +74,7 @@ class FakeShell implements Transport {
         return { connected: true };
       case "machines_ask":
         if (this.ask instanceof Error) throw new Error(this.ask.message);
+        if (this.askHangs) return await new Promise((resolve) => (this.pendingAsk = resolve));
         return this.ask;
       case "machines_pair": {
         if (this.pairError) throw new Error(this.pairError.message);
@@ -140,11 +149,14 @@ describe("machines page state", () => {
   test("asking a machine waits for its owner, then asks for the code", async () => {
     expect(useMachines.getState().pairing).toBeNull();
     await askMachine("192.168.1.20:17879", "Studio");
-    expect(shell.command("machines_ask")).toEqual({ address: "192.168.1.20:17879", name: "Studio" });
+    const asked = shell.command("machines_ask") ?? {};
+    expect(asked).toMatchObject({ address: "192.168.1.20:17879", name: "Studio" });
+    // The id is the page's, made before the shell was asked.
+    expect(String(asked.askId)).toMatch(/^ask-[a-z0-9]+-\d+$/);
     const pairing = useMachines.getState().pairing;
     expect(pairing?.stage).toBe("code");
     if (pairing?.stage !== "code") throw new Error("the code stage never arrived");
-    expect(pairing.requestId).toBe("8f1c2d3e4a5b6c7d");
+    expect(pairing.askId).toBe(asked.askId as string);
     expect(pairing.codeLength).toBe(8);
     expect(pairing.expiresAt).toBeGreaterThan(Date.now());
   });
@@ -160,13 +172,38 @@ describe("machines page state", () => {
 
   test("the code pairs the machine, and it is listed at once", async () => {
     await askMachine("192.168.1.31:17879", "Lars's Linux box");
+    const pairing = useMachines.getState().pairing;
+    if (pairing?.stage !== "code") throw new Error("the code stage never arrived");
     await pairMachine("48219034");
-    expect(shell.command("machines_pair")).toEqual({
-      requestId: "8f1c2d3e4a5b6c7d",
-      code: "48219034",
-    });
+    // One id from the first press to the code: the page's own.
+    expect(shell.command("machines_pair")).toEqual({ askId: pairing.askId, code: "48219034" });
     expect(useMachines.getState().pairing).toBeNull();
     expect(useMachines.getState().machines[0]?.name).toBe("Lars's Linux box");
+  });
+
+  test("a second ask cancels the first one's request", async () => {
+    shell.askHangs = true;
+    void askMachine("192.168.1.31:17879", "Lars's Linux box");
+    const first = useMachines.getState().pairing?.askId;
+    shell.finishAsk({ askId: first, codeLength: 8, expiresInSecs: 120 });
+    shell.askHangs = false;
+    await askMachine("192.168.1.20:17879", "Studio");
+    expect(shell.command("machines_cancel")).toEqual({ askId: first });
+    expect(useMachines.getState().pairing?.askId).not.toBe(first);
+  });
+
+  test("cancelling before the machine answers drops the ask by its own id", async () => {
+    shell.askHangs = true;
+    const asking = askMachine("192.168.1.31:17879", "Lars's Linux box");
+    // The id exists before anything is dialled, so Cancel always has one.
+    const askId = useMachines.getState().pairing?.askId;
+    expect(askId).toBeString();
+    cancelPairing();
+    expect(shell.command("machines_cancel")).toEqual({ askId });
+    // A late accept does not put the page back into the code stage.
+    shell.finishAsk({ askId, codeLength: 8, expiresInSecs: 120 });
+    await asking;
+    expect(useMachines.getState().pairing).toBeNull();
   });
 
   test("a spent code is over: the page asks for a new request instead of retyping", async () => {
@@ -200,7 +237,7 @@ describe("machines rows", () => {
 
   test("a route says whether the network encrypts it", () => {
     expect(routeLabel({ kind: "lan", address: "192.168.1.31:17879", encrypted: false })).toBe(
-      "LAN · Unencrypted (LAN)",
+      "LAN · Unencrypted",
     );
     expect(routeLabel({ kind: "tailscale", address: "mac.tail1234.ts.net:17879", encrypted: true })).toBe(
       "Tailscale · Encrypted",
@@ -212,7 +249,8 @@ describe("machines rows", () => {
   });
 
   test("a row under the name says what the connection is doing", () => {
-    expect(machineLine(MACHINE)).toBe("Connected over LAN · Unencrypted (LAN)");
+    // The state is the row's chip; the line under the name is the route.
+    expect(machineLine(MACHINE)).toBe("LAN · Unencrypted");
     expect(machineLine({ ...MACHINE, state: "connecting" })).toContain("Connecting");
     expect(
       machineLine({

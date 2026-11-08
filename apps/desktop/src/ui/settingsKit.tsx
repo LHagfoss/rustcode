@@ -182,6 +182,7 @@ export function Row({
   title,
   subtitle,
   status,
+  badge,
   children,
   className,
   reset,
@@ -191,6 +192,12 @@ export function Row({
   subtitle?: ReactNode;
   /** A live value shown under the description (a path, why a control is off). */
   status?: ReactNode;
+  /**
+   * A row's short state at its top right (a `Chip`): the same place on every
+   * row, whether or not the row has controls under its text. A row with
+   * controls keeps them in their own row below.
+   */
+  badge?: ReactNode;
   children?: ReactNode;
   className?: string;
   /** Puts the row back to its default; pass it only while the value differs. */
@@ -212,6 +219,7 @@ export function Row({
       className={cx("@container group/row relative", className)}
       data-setting={typeof title === "string" ? title : undefined}
     >
+      {badge && <div className="absolute end-4 top-3 flex items-center gap-2">{badge}</div>}
       <div
         className={cx(
           "flex min-h-12 flex-col gap-3",
@@ -219,7 +227,13 @@ export function Row({
           rowInset,
         )}
       >
-        <div className={cx("min-w-0 flex-1", reset && (stacked ? "pr-7" : "@max-[34rem]:pr-7"))}>
+        <div
+          className={cx(
+            "min-w-0 flex-1",
+            badge ? "pr-24" : undefined,
+            reset && (stacked ? "pr-7" : "@max-[34rem]:pr-7"),
+          )}
+        >
           <div className="flex min-h-5 items-center gap-1.5 font-medium text-body text-fg">{title}</div>
           {subtitle && (
             <div className="max-w-[70ch] pt-1 text-balance text-callout text-fg-muted leading-normal">

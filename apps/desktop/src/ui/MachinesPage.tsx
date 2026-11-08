@@ -100,7 +100,7 @@ export function MachinesPage() {
 
       <Group
         title="Machines"
-        footer="A thread stays on the computer that runs it. Removing a machine forgets its pairing here; the machine keeps listing this computer until you revoke it there."
+        footer="A thread stays on the computer that runs it. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing a machine forgets its pairing here; the machine keeps listing this computer until you revoke it there."
       >
         <ThisComputer />
         {machines.map((machine) => (
@@ -129,12 +129,12 @@ function ThisComputer() {
         </>
       }
       subtitle={`The RustCode server this app runs. ${open === 1 ? "One thread is open." : `${open} threads are open.`}`}
-      status={running ? "This computer's own threads." : "The server is starting."}
-    >
-      <Chip tone={running ? "ok" : "warn"}>
-        {running ? "Connected" : status === "connecting" ? "Starting" : "Stopped"}
-      </Chip>
-    </Row>
+      badge={
+        <Chip tone={running ? "ok" : "warn"}>
+          {running ? "Connected" : status === "connecting" ? "Starting" : "Stopped"}
+        </Chip>
+      }
+    />
   );
 }
 
@@ -164,14 +164,15 @@ function MachineRow({ machine, count, now }: { machine: Machine; count: number |
       status={
         <>
           {platform && `${platform} · `}
-          {machine.state === "connected"
-            ? `Connected ${lastSeen(machine.lastConnectedAt, now)}`
-            : `Last seen ${lastSeen(machine.lastConnectedAt, now)}`}
+          {/* The state is the chip; this line says when and how much, not what. */}
+          {machine.lastConnectedAt
+            ? `Last seen ${lastSeen(machine.lastConnectedAt, now)}`
+            : "Not reached yet"}
           {threads && ` · ${threads}`}
         </>
       }
+      badge={<Chip tone={stateTone(machine)}>{stateLabel(machine)}</Chip>}
     >
-      <Chip tone={stateTone(machine)}>{stateLabel(machine)}</Chip>
       {machine.state === "needsPairing" && <PairAgainAction machine={machine} />}
       <span className="flex items-center gap-2">
         <span className="text-caption text-fg-muted">Main machine</span>

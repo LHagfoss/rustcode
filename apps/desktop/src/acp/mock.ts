@@ -4653,8 +4653,9 @@ export class MockTransport implements Transport {
         throw new Error(
           `refusing to dial ${address}: it is a public address and the gateway has no TLS listener, so the pairing code and the device token would travel in the clear. Dial a LAN, Tailscale or VPN address instead; encrypted transport is tracked in #2651`,
         );
-      // Asked, then accepted on the machine: the code is what comes next.
-      return { requestId: "8f1c2d3e4a5b6c7d", codeLength: 8, expiresInSecs: 120 };
+      // Asked, then accepted on the machine: the code is what comes next. The
+      // ask id is the page's own, and it names the request for `machines_pair`.
+      return { askId: String(args.askId ?? ""), codeLength: 8, expiresInSecs: 120 };
     }
     if (command === "machines_cancel") return null;
     if (command === "machines_pair") {

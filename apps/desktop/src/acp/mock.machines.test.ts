@@ -60,11 +60,15 @@ describe("mock machines", () => {
   test("?machines=connect starts with none, and asking then pairing saves one", async () => {
     const transport = new MockTransport({ machines: "connect" });
     expect(await machineList("connect")).toEqual([]);
-    const ask = (await call(transport, "machines_ask", { address: "192.168.1.20:17879" })) as JsonObject;
+    const ask = (await call(transport, "machines_ask", {
+      askId: "ask-mock-1",
+      address: "192.168.1.20:17879",
+    })) as JsonObject;
     expect(ask.codeLength).toBe(8);
-    expect(typeof ask.requestId).toBe("string");
+    // The ask id is the page's, echoed back so one id names the request throughout.
+    expect(ask.askId).toBe("ask-mock-1");
     const paired = (await call(transport, "machines_pair", {
-      requestId: ask.requestId,
+      askId: ask.askId,
       code: "48219034",
     })) as JsonObject;
     expect(paired.name).toBe("Lars's Linux box");
@@ -77,7 +81,7 @@ describe("mock machines", () => {
 
   test("a short code is refused before it costs a pairing attempt on the machine", async () => {
     const transport = new MockTransport();
-    await expect(call(transport, "machines_pair", { requestId: "x", code: "4821" })).rejects.toThrow(
+    await expect(call(transport, "machines_pair", { askId: "x", code: "4821" })).rejects.toThrow(
       "exactly 8 digits",
     );
   });

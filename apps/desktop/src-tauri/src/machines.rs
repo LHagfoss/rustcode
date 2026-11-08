@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
+use tokio::sync::Notify;
 
 /// How long Bonjour listens when Settings › Machines asks for the machines on
 /// this network.
@@ -122,12 +123,12 @@ pub struct DiscoveredView {
     rename_all_fields = "camelCase"
 )]
 pub enum PairingEvent {
-    /// The request is in front of the owner of that machine. Its id names it
-    /// for `machines_cancel`.
-    Waiting { request_id: String, host: String },
+    /// The request is in front of the owner of that machine. `askId` is the
+    /// page's own name for it, which `machines_cancel` and `machines_pair` take.
+    Waiting { ask_id: String, host: String },
     /// The owner accepted; the code the machine now shows is what pairs it.
     Approved {
-        request_id: String,
+        ask_id: String,
         code_length: u32,
         expires_in_secs: u64,
     },
@@ -139,7 +140,7 @@ pub enum PairingEvent {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskView {
-    request_id: String,
+    ask_id: String,
     code_length: u32,
     expires_in_secs: u64,
 }
@@ -186,9 +187,9 @@ impl Live {
 pub struct Machines {
     live: Mutex<HashMap<String, Live>>,
     approved: Mutex<HashMap<String, PendingApproval>>,
-    /// Requests the page cancelled. A request id arrives before the owner
-    /// answers, so the answer can still be dropped when it comes.
-    cancelled: Mutex<Vec<String>>,
+    /// The asks in flight, by the page's own id for them. Cancelling one wakes
+    /// the command waiting for the owner's answer, which drops its socket.
+    asks: Mutex<HashMap<String, Arc<Notify>>>,
     /// The token store, opened once: reaching the credential store on every
     /// retry would prompt for it again and again.
     tokens: Mutex<Option<Arc<TokenStore>>>,
@@ -584,31 +585,68 @@ fn discovered(machine: &DiscoveredMachine, saved: &[String]) -> DiscoveredView {
 
 /// Ask `address` to let this app in (`Settings › Machines › Add machine`).
 ///
-/// The owner answers on that machine; the accepted request waits here for its
-/// code. A denial or a request nobody answered comes back as this command's
-/// error, in words the page shows where "Waiting for ‹host›…" was.
+/// `ask_id` is the page's own name for the request: it is registered before
+/// anything is dialled, so `machines_cancel` can drop the socket whether the
+/// owner has answered yet or not. The owner answers on that machine; the
+/// accepted request waits here for its code. A denial, a request nobody
+/// answered or a cancel comes back as this command's error, in words the page
+/// shows where "Waiting for ‹host›…" was.
 #[tauri::command]
 pub async fn machines_ask(
     machines: tauri::State<'_, Arc<Machines>>,
+    ask_id: String,
     address: String,
     name: Option<String>,
     on_event: Channel<PairingEvent>,
 ) -> Result<AskView, String> {
+    ensure_ask_id(&ask_id)?;
+    let cancel = Arc::new(Notify::new());
+    machines
+        .asks
+        .lock()
+        .unwrap()
+        .insert(ask_id.clone(), Arc::clone(&cancel));
+    let question = ask_machine(&machines, &ask_id, &address, name, &on_event, &cancel).await;
+    // The ask is over either way; `pair` keeps the accepted one under its own
+    // entry, so this only drops the cancel signal.
+    machines.asks.lock().unwrap().remove(&ask_id);
+    question
+}
+
+async fn ask_machine(
+    machines: &Arc<Machines>,
+    ask_id: &str,
+    address: &str,
+    name: Option<String>,
+    on_event: &Channel<PairingEvent>,
+    cancel: &Arc<Notify>,
+) -> Result<AskView, String> {
     let config_dir = config_dir()?;
     let connector = Machines::connector(&config_dir)?;
-    let label = name.clone().unwrap_or_else(|| address.clone());
+    let label = name.clone().unwrap_or_else(|| address.to_owned());
     let ask = connector
-        .ask(&address)
+        .ask(address)
         .await
         .map_err(|error| format!("{error:#}"))?;
-    let request_id = ask.request_id().to_owned();
     on_event
         .send(PairingEvent::Waiting {
-            request_id: request_id.clone(),
+            ask_id: ask_id.to_owned(),
             host: label.clone(),
         })
         .ok();
-    let approved = match ask.wait(rustcode_client::machine::APPROVAL_TIMEOUT).await {
+    // The wait is dropped (and its socket with it) the moment the page
+    // cancels, instead of holding a request nobody wants for two minutes.
+    let answer = {
+        let waiting = ask.wait(rustcode_client::machine::APPROVAL_TIMEOUT);
+        tokio::pin!(waiting);
+        tokio::select! {
+            answer = &mut waiting => answer,
+            () = cancel.notified() => {
+                return Err("The request was cancelled.".to_owned());
+            }
+        }
+    };
+    let approved = match answer {
         Ok(Some(approved)) => approved,
         Ok(None) => {
             let message =
@@ -626,32 +664,48 @@ pub async fn machines_ask(
             return Err(message);
         }
     };
-    // Cancelled while the owner was deciding: drop the socket instead of
-    // keeping it open for a code nobody will type.
-    if machines.cancelled.lock().unwrap().contains(&request_id) {
+    // Cancelled in the instant between the answer and this line: the cancel
+    // took the entry, so the socket is dropped rather than kept for a code
+    // nobody will type.
+    if !machines.asks.lock().unwrap().contains_key(ask_id) {
         return Err("The request was cancelled.".to_owned());
     }
-    let answer = AskView {
-        request_id: request_id.clone(),
+    let view = AskView {
+        ask_id: ask_id.to_owned(),
         code_length: approved.code_length(),
         expires_in_secs: approved.expires_in().as_secs(),
     };
     on_event
         .send(PairingEvent::Approved {
-            request_id: request_id.clone(),
-            code_length: answer.code_length,
-            expires_in_secs: answer.expires_in_secs,
+            ask_id: ask_id.to_owned(),
+            code_length: view.code_length,
+            expires_in_secs: view.expires_in_secs,
         })
         .ok();
     machines.approved.lock().unwrap().insert(
-        request_id,
+        ask_id.to_owned(),
         PendingApproval {
             approved,
-            address,
+            address: address.to_owned(),
             name,
         },
     );
-    Ok(answer)
+    Ok(view)
+}
+
+/// An ask id travels back and forth as a command argument and a map key: it is
+/// short, printable and never empty.
+fn ensure_ask_id(ask_id: &str) -> Result<(), String> {
+    let usable = !ask_id.is_empty()
+        && ask_id.len() <= 64
+        && ask_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if usable {
+        Ok(())
+    } else {
+        Err("The page sent an ask id that is not one. Start the request again.".to_owned())
+    }
 }
 
 /// The code the machine shows, typed here: the machine is saved, its token
@@ -659,14 +713,14 @@ pub async fn machines_ask(
 #[tauri::command]
 pub async fn machines_pair(
     machines: tauri::State<'_, Arc<Machines>>,
-    request_id: String,
+    ask_id: String,
     code: String,
 ) -> Result<MachineView, String> {
     let pending = machines
         .approved
         .lock()
         .unwrap()
-        .remove(&request_id)
+        .remove(&ask_id)
         .ok_or("That connection request is over. Ask the machine to connect again.")?;
     let code = normalize_code(&code);
     let expected = pending.approved.code_length() as usize;
@@ -706,25 +760,28 @@ pub async fn machines_pair(
     Ok(view(&machine, Some(&connecting)))
 }
 
-/// Stop waiting for a machine's owner. A request that was already accepted
-/// has its socket dropped here; a request still waiting for an answer is
-/// dropped when it arrives.
+/// Stop waiting for a machine's owner, at any point of the ask: a request
+/// still waiting wakes up and drops its socket; an accepted one waiting for
+/// its code is dropped here.
 #[tauri::command(async)]
 pub fn machines_cancel(
     machines: tauri::State<'_, Arc<Machines>>,
-    request_id: String,
+    ask_id: String,
 ) -> Result<(), String> {
-    machines.approved.lock().unwrap().remove(&request_id);
-    let mut cancelled = machines.cancelled.lock().unwrap();
-    cancelled.push(request_id);
-    // Only the open requests matter; a long session cannot grow this without bound.
-    let excess = cancelled.len().saturating_sub(16);
-    cancelled.drain(..excess);
+    if let Some(cancel) = machines.asks.lock().unwrap().remove(&ask_id) {
+        // A permit is kept for a waiter that has not reached its select yet.
+        cancel.notify_one();
+    }
+    machines.approved.lock().unwrap().remove(&ask_id);
     Ok(())
 }
 
 /// Forget a machine and its token. It still lists this computer until it is
 /// revoked there.
+///
+/// The credential goes first: a machine whose token could not be deleted stays
+/// listed, with a plain reason, instead of becoming a row that can never pair
+/// again. (A machine left without a token is re-paired, which works.)
 #[tauri::command(async)]
 pub fn machines_remove(
     machines: tauri::State<'_, Arc<Machines>>,
@@ -736,16 +793,26 @@ pub fn machines_remove(
         .get(&id)
         .ok_or("That machine is no longer saved.")?
         .clone();
+    let tokens = machines.tokens(&config_dir)?;
+    tokens.remove(&machine.host_id).map_err(|error| {
+        format!(
+            "Could not delete {}'s pairing token: {error:#}",
+            machine.name
+        )
+    })?;
+    if let Err(error) = registry.remove(&machine.host_id) {
+        // The token is gone, so the row cannot connect until it is paired
+        // again; say that rather than leaving a row that silently fails.
+        return Err(format!(
+            "{}'s pairing token was deleted, but the machine could not be removed: {error:#}. \
+             Pair with it again, or remove it once more.",
+            machine.name
+        ));
+    }
     if let Some(mut entry) = machines.live.lock().unwrap().remove(&machine.host_id) {
         if let Some(task) = entry.task.take() {
             task.abort();
         }
-    }
-    registry.remove(&machine.host_id).map_err(chain)?;
-    // The record is gone, which is what was asked for; a token that cannot be
-    // deleted is unusable without it, so it is not an error.
-    if let Ok(tokens) = machines.tokens(&config_dir) {
-        let _ = tokens.remove(&machine.host_id);
     }
     Ok(())
 }
@@ -963,20 +1030,20 @@ mod tests {
     fn pairing_events_are_tagged_for_the_page() {
         assert_eq!(
             serde_json::to_string(&PairingEvent::Waiting {
-                request_id: "8f1c2d3e4a5b6c7d".into(),
+                ask_id: "ask-8f1c2d3e".into(),
                 host: "Lars's MacBook Pro".into()
             })
             .unwrap(),
-            r#"{"type":"waiting","requestId":"8f1c2d3e4a5b6c7d","host":"Lars's MacBook Pro"}"#
+            r#"{"type":"waiting","askId":"ask-8f1c2d3e","host":"Lars's MacBook Pro"}"#
         );
         assert_eq!(
             serde_json::to_string(&PairingEvent::Approved {
-                request_id: "8f1c2d3e4a5b6c7d".into(),
+                ask_id: "ask-8f1c2d3e".into(),
                 code_length: 8,
                 expires_in_secs: 120,
             })
             .unwrap(),
-            r#"{"type":"approved","requestId":"8f1c2d3e4a5b6c7d","codeLength":8,"expiresInSecs":120}"#
+            r#"{"type":"approved","askId":"ask-8f1c2d3e","codeLength":8,"expiresInSecs":120}"#
         );
         assert_eq!(
             serde_json::to_string(&PairingEvent::Refused {
@@ -987,13 +1054,50 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&AskView {
-                request_id: "8f1c".into(),
+                ask_id: "ask-8f1c".into(),
                 code_length: 8,
                 expires_in_secs: 120,
             })
             .unwrap(),
-            r#"{"requestId":"8f1c","codeLength":8,"expiresInSecs":120}"#
+            r#"{"askId":"ask-8f1c","codeLength":8,"expiresInSecs":120}"#
         );
+    }
+
+    /// The ask id is the page's name for a request, used as a map key and a
+    /// command argument: anything a map or a log should not hold is refused.
+    #[test]
+    fn an_ask_id_is_short_and_printable() {
+        for usable in ["ask-1", "8f1c2d3e4a5b6c7d", "ask-mg3kq1-1_2"] {
+            assert!(ensure_ask_id(usable).is_ok(), "{usable}");
+        }
+        for refused in ["", "ask 1", "ask\n1", "jänk", &"a".repeat(65)] {
+            let error = ensure_ask_id(refused).unwrap_err();
+            assert!(error.contains("ask id"), "{refused:?} gave {error}");
+        }
+    }
+
+    /// A cancelled ask is refused, whether the page cancels while the owner is
+    /// deciding (which wakes the wait) or right after the answer arrives.
+    #[tokio::test]
+    async fn a_cancelled_ask_never_keeps_a_socket() {
+        let machines = Arc::new(Machines::default());
+        let cancel = Arc::new(Notify::new());
+        machines
+            .asks
+            .lock()
+            .unwrap()
+            .insert("ask-1".to_owned(), Arc::clone(&cancel));
+        // The page cancels: the signal is taken and the waiter woken.
+        assert!(machines.asks.lock().unwrap().remove("ask-1").is_some());
+        cancel.notify_one();
+        // `notified()` completes on the stored permit, so a select already
+        // registered or not yet reached both see it.
+        tokio::time::timeout(Duration::from_secs(1), cancel.notified())
+            .await
+            .expect("the cancel wakes a waiter");
+        // Nothing was stored for a code nobody will type.
+        assert!(machines.approved.lock().unwrap().get("ask-1").is_none());
+        assert!(machines.asks.lock().unwrap().is_empty());
     }
 
     /// A discovered machine offers its LAN address and says whether it is

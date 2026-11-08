@@ -59,19 +59,20 @@ export interface DiscoveredMachine {
 
 /** An accepted connection request, waiting for the code the machine shows. */
 export interface AskView {
-  requestId: string;
+  askId: string;
   codeLength: number;
   expiresInSecs: number;
 }
 
 /**
- * Where the Add machine flow stands. The request id arrives as soon as the
- * request is on that machine, so Cancel can name it in both stages.
+ * Where the Add machine flow stands. `askId` is this page's own name for the
+ * request, made before anything is dialled, so Cancel can drop it at any
+ * point — even while the other machine's owner is still deciding.
  */
 export type Pairing =
-  | { stage: "waiting"; address: string; host: string; requestId?: string }
-  | { stage: "code"; address: string; host: string; requestId: string; codeLength: number; expiresAt: number }
-  | { stage: "pairing"; address: string; host: string; requestId: string };
+  | { stage: "waiting"; address: string; host: string; askId: string }
+  | { stage: "code"; address: string; host: string; askId: string; codeLength: number; expiresAt: number }
+  | { stage: "pairing"; address: string; host: string; askId: string };
 
 interface MachinesStore {
   /** The first `machines_list` came back (or failed). */
@@ -141,21 +142,24 @@ const ROUTE_NAME: Record<string, string> = {
 };
 
 /**
- * One route as people read it: `LAN · Unencrypted (LAN)` for a local network,
- * `Tailscale · Encrypted` for an overlay. Only a LAN route is plain: everything
- * else travels through a network that encrypts it.
+ * One route as people read it: `LAN · Unencrypted`, `Tailscale · Encrypted`.
+ * Only a LAN route is plain: everything else travels through a network that
+ * encrypts it.
  */
 export function routeLabel(route: MachineRoute | null | undefined): string {
   if (!route) return "No route saved";
   const name = ROUTE_NAME[route.kind] ?? route.kind;
-  return `${name} · ${route.encrypted ? "Encrypted" : "Unencrypted (LAN)"}`;
+  return `${name} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
 }
 
-/** What one machine row says under its name. */
+/**
+ * What one machine row says under its name: the route it is on, or what is
+ * wrong. The state itself is the row's chip, so it is not repeated here.
+ */
 export function machineLine(machine: Machine): string {
   switch (machine.state) {
     case "connected":
-      return `Connected over ${routeLabel(machine.route)}`;
+      return routeLabel(machine.route);
     case "connecting":
       return `Connecting over ${routeLabel(machine.route)}`;
     case "needsPairing":
@@ -239,6 +243,16 @@ const opening = new Set<string>();
 let started = false;
 /** Counts asks, so an answer that arrives after Cancel is ignored. */
 let asks = 0;
+
+/**
+ * A name for one ask, made here rather than by the machine: the request has to
+ * be cancellable before the machine has answered, and only this page can name
+ * it that early. Plain ASCII, because it travels as a command argument.
+ */
+export function newAskId(): string {
+  asks += 1;
+  return `ask-${Date.now().toString(36)}-${asks}`;
+}
 
 /**
  * Read the saved machines once, then let each one's supervisor reach the app.
@@ -358,21 +372,21 @@ export async function discoverMachines(): Promise<void> {
 export async function askMachine(address: string, name?: string): Promise<void> {
   const target = address.trim();
   if (!target) return;
+  // One ask at a time: a second press drops the first request (and its socket)
+  // instead of leaving two in front of two machines' owners.
+  if (useMachines.getState().pairing) cancelPairing();
   const host = name?.trim() || target;
-  const asked = { address: target, host };
-  const ask = ++asks;
+  const askId = newAskId();
+  const asked = { address: target, host, askId };
   useMachines.setState({ pairing: { stage: "waiting", ...asked }, pairingError: null });
-  const current = () => ask === asks;
+  const current = () => useMachines.getState().pairing?.askId === askId;
   const waiting = (event: PairingEvent) => {
     if (!current()) return;
-    if (event.type === "waiting")
-      useMachines.setState({ pairing: { stage: "waiting", ...asked, requestId: event.requestId } });
-    else if (event.type === "approved")
+    if (event.type === "approved")
       useMachines.setState({
         pairing: {
           stage: "code",
           ...asked,
-          requestId: event.requestId,
           codeLength: event.codeLength,
           expiresAt: Date.now() + event.expiresInSecs * 1000,
         },
@@ -385,12 +399,17 @@ export async function askMachine(address: string, name?: string): Promise<void> 
       const channel = new Channel<PairingEvent>();
       channel.onmessage = waiting;
       answer = await invoke<AskView>("machines_ask", {
+        askId,
         address: target,
         name: name ?? null,
         onEvent: channel,
       });
     } else {
-      answer = await shellCall<AskView>("machines_ask", { address: target, name: name ?? null });
+      answer = await shellCall<AskView>("machines_ask", {
+        askId,
+        address: target,
+        name: name ?? null,
+      });
     }
     // Without a channel (the mock, `dev:web`) the answer is where the code stage begins.
     waiting({ type: "approved", ...answer });
@@ -403,28 +422,30 @@ export async function askMachine(address: string, name?: string): Promise<void> 
 
 /** What the shell streams while a machine is asked. */
 type PairingEvent =
-  | { type: "waiting"; requestId: string; host: string }
-  | { type: "approved"; requestId: string; codeLength: number; expiresInSecs: number }
+  | { type: "waiting"; askId: string; host: string }
+  | { type: "approved"; askId: string; codeLength: number; expiresInSecs: number }
   | { type: "refused"; message: string };
 
-/** Give up on a request: the owner no longer sees it, and its socket is dropped. */
+/**
+ * Give up on a request. The shell is told by its ask id, which it has had since
+ * before the machine was dialled: a request the owner has not answered yet
+ * loses its socket then and there, and an accepted one loses the one waiting
+ * for its code.
+ */
 export function cancelPairing(): void {
   const pairing = useMachines.getState().pairing;
-  asks += 1;
   useMachines.setState({ pairing: null, pairingError: null });
-  if (pairing && "requestId" in pairing && pairing.requestId)
-    void shellCall("machines_cancel", { requestId: pairing.requestId }).catch(() => undefined);
+  if (pairing) void shellCall("machines_cancel", { askId: pairing.askId }).catch(() => undefined);
 }
 
 /** Send the code the machine shows. */
 export async function pairMachine(code: string): Promise<void> {
   const pairing = useMachines.getState().pairing;
   if (pairing?.stage !== "code") return;
-  asks += 1;
   useMachines.setState({ pairing: { ...pairing, stage: "pairing" }, pairingError: null });
   try {
     const machine = await shellCall<Machine>("machines_pair", {
-      requestId: pairing.requestId,
+      askId: pairing.askId,
       code,
     });
     useMachines.setState((state) => ({

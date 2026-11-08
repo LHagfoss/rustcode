@@ -466,7 +466,7 @@ without a second computer.
 | **Add machine › Machines on this network** | Bonjour, the same browse as `machines discover`: every machine whose record lists `caps=desktops`, with *Ask to connect*. |
 | **Add machine › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
-| A machine row | Its name and platform, the state — *Connected*, *Connecting*, *Offline · retrying in N s*, *Pairing expired* — the route **in use** with **Unencrypted (LAN)** or **Encrypted** for Tailscale and VPN routes, when it was last reached and how many threads it has. |
+| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Pairing expired* — the route **in use** under the name as `LAN · Unencrypted` or `Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. |
 | **Main machine** | The machine listed first and the default **Run on**. One at a time. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
 | **Pair again** | On a machine whose pairing it ended (`Pairing expired`): asks it again, so a new code can be typed. |
