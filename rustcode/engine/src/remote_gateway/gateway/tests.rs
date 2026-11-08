@@ -227,7 +227,12 @@ async fn pairing_with_the_manual_code_yields_a_token_that_authenticates() {
     let harness = Harness::start().await;
     let offer = harness.offer().await;
     assert_eq!(offer.advertised_address, harness.addr.to_string());
-    assert!(harness.status().await.pairing_open);
+    let status = harness.status().await;
+    assert!(status.pairing_open);
+    assert_eq!(
+        offer.instance_id.as_deref(),
+        Some(status.instance_id.as_str())
+    );
 
     let mut client = Client::connect(harness.addr).await;
     client

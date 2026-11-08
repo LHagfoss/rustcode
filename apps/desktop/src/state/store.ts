@@ -175,6 +175,7 @@ import {
   type TurnState,
 } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
+import { challengeIsValid, makeChallenge, newPairedDevice, type PairingChallenge } from "./remotePairing";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
@@ -481,6 +482,8 @@ export interface AppState {
    * is on screen. Read from `_rustcode/remote`.
    */
   remote: RemoteStatus | null;
+  remoteChallenge: PairingChallenge | null;
+  remotePaired: { name: string } | null;
   /** Each open thread's own share, so its header can say a device is attached. */
   remoteByThread: Record<string, RemoteStatus>;
   /**
@@ -735,6 +738,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grants: [],
   resolvedApprovals: {},
   remote: null,
+  remoteChallenge: null,
+  remotePaired: null,
   remoteByThread: {},
   remoteError: null,
   view: { kind: "chat" },
@@ -5065,13 +5070,31 @@ export async function request<T = Json>(
 
 // ---------------------------------------------------------------- remote access
 
-/**
- * Re-read the machine's remote access state. `sessionId` reads one thread's
- * share instead, for its header indicator. Never throws: Settings shows the
- * engine's refusal next to the switch.
- */
+// Discard status reads that started before a pairing request completed.
+let remotePairGeneration = 0;
+
+export function dismissRemoteChallenge() {
+  remotePairGeneration++;
+  set({ remoteChallenge: null });
+}
+
+export function applyRemoteStatus(status: RemoteStatus, now = Date.now()) {
+  set((s) => {
+    const challenge = s.remoteChallenge;
+    const fresh = challenge && newPairedDevice(challenge.baselineIds, status.devices);
+    return {
+      remote: status,
+      remoteError: null,
+      remotePaired: fresh ? { name: fresh.name } : status.enabled ? s.remotePaired : null,
+      remoteChallenge: challenge && !fresh && challengeIsValid(challenge, status, now) ? challenge : null,
+    };
+  });
+}
+
+/** Re-read the machine's remote state, or one thread's share. Never throws. */
 export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | null> {
   const params: JsonObject = sessionId ? { sessionId } : {};
+  const generation = remotePairGeneration;
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.status, params, 10_000));
     if (sessionId)
@@ -5079,7 +5102,7 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
         remoteByThread: { ...s.remoteByThread, [sessionId]: status },
         remoteError: null,
       }));
-    else set({ remote: status, remoteError: null });
+    else if (generation === remotePairGeneration) applyRemoteStatus(status);
     return status;
   } catch (error) {
     // The engine answered nothing (a restart, a dropped request): say so and
@@ -5095,6 +5118,10 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
  * sees anything until it is switched on again. Pairings are kept.
  */
 export async function setRemoteAccess(on: boolean): Promise<void> {
+  if (!on) {
+    dismissRemoteChallenge();
+    set({ remotePaired: null });
+  }
   if (on)
     set({
       remote: {
@@ -5131,9 +5158,27 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
  * if it was off, as `/remote` does in a terminal.
  */
 export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
+  const baselineIds = (get().remote?.devices ?? []).map((device) => device.id);
+  const generation = ++remotePairGeneration;
+  set({ remoteChallenge: null, remotePaired: null });
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.pair, {}, 20_000));
-    set({ remote: status });
+    if (generation === remotePairGeneration) {
+      remotePairGeneration++;
+      const fresh = newPairedDevice(baselineIds, status.devices);
+      const instanceChanged =
+        status.offer?.instanceId &&
+        status.gateway?.instanceId &&
+        status.offer.instanceId !== status.gateway.instanceId;
+      set({
+        remote: status,
+        remotePaired: fresh ? { name: fresh.name } : null,
+        remoteChallenge:
+          status.offer && !fresh && !instanceChanged
+            ? makeChallenge(status.offer, Date.now(), baselineIds)
+            : null,
+      });
+    }
     if (status.pairingError) toast(status.pairingError, "error");
     return status;
   } catch (error) {
@@ -5144,6 +5189,7 @@ export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  remotePairGeneration++;
   lastFocusListAt = 0;
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
@@ -5162,6 +5208,11 @@ export function resetForTests() {
   loading.clear();
   set({
     status: "connecting",
+    remote: null,
+    remoteChallenge: null,
+    remotePaired: null,
+    remoteByThread: {},
+    remoteError: null,
     engineLog: [],
     sessions: [],
     sessionsLoaded: false,

@@ -163,6 +163,9 @@ describe("mock remote access", () => {
       const paired = parseRemoteStatus(await engine.request("_rustcode/remote/pair", {}));
       expect(paired.offer?.qrRows?.length).toBeGreaterThan(0);
       expect(paired.gateway?.pairing?.attemptsLeft).toBe(5);
+      const refreshed = parseRemoteStatus(await engine.request("_rustcode/remote", {}));
+      expect(refreshed.offer).toBeUndefined();
+      expect(refreshed.gateway?.pairingOpen).toBe(true);
 
       const off = parseRemoteStatus(await engine.request("_rustcode/remote/stop", {}));
       expect(off.enabled).toBe(false);

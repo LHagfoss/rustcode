@@ -503,6 +503,7 @@ struct PairingOffer {
     address: String,
     loopback_only: bool,
     gateway_id: String,
+    instance_id: Option<String>,
     challenge: Option<u64>,
     locked_for_secs: Option<u64>,
     expires_at: Instant,
@@ -518,6 +519,7 @@ impl PairingOffer {
             address: offer.advertised_address,
             loopback_only: offer.loopback_only,
             gateway_id: offer.gateway_id,
+            instance_id: offer.instance_id,
             challenge: offer.challenge,
             locked_for_secs: offer.locked_for_secs,
             expires_at: Instant::now() + lifetime,
@@ -1324,6 +1326,7 @@ async fn host_status() -> Value {
     let gateway = status.as_ref().map(|status| {
         json!({
             "connected": true,
+            "instanceId": status.instance_id,
             "advertisedAddress": status.advertised_address,
             "listenAddress": status.listen_address,
             "loopbackOnly": status.loopback_only,
@@ -1418,6 +1421,7 @@ fn offer_json(offer: &PairingOffer, now: Instant) -> Value {
         "expiresInSecs": offer.expires_at.saturating_duration_since(now).as_secs(),
         "loopbackOnly": offer.loopback_only,
         "gatewayId": offer.gateway_id,
+        "instanceId": offer.instance_id,
         "challenge": offer.challenge,
         "lockedForSecs": offer.locked_for_secs,
     })
@@ -2803,6 +2807,7 @@ mod tests {
             advertised_address: "192.168.1.4:8787".to_owned(),
             loopback_only: false,
             gateway_id: "gateway".to_owned(),
+            instance_id: Some("instance".to_owned()),
             credential: Secret::new("credential"),
             code: Secret::new("1234-5678"),
             expires_in_secs: 300,

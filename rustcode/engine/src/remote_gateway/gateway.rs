@@ -453,6 +453,7 @@ impl Shared {
             self.host_name.as_deref(),
             offer,
         );
+        details.instance_id = Some(self.instance_id.clone());
         details.challenge = state.pairing.last_serial();
         details.locked_for_secs = state.pairing.lockout(now).map(|left| left.as_secs().max(1));
         details

@@ -2169,6 +2169,7 @@ export class MockEngine {
       expiresInSecs: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)),
       loopbackOnly: stored.loopbackOnly === true,
       gatewayId: str(stored.gatewayId) ?? "",
+      instanceId: str(stored.instanceId) ?? "mock-instance",
       challenge: num(stored.challenge) ?? 0,
     };
     const lockedFor = num(stored.lockedForSecs);
@@ -2195,6 +2196,7 @@ export class MockEngine {
     if (this.remote.gateway) {
       const gateway: JsonObject = {
         ...this.remote.gateway,
+        instanceId: "mock-instance",
         pairedDevices: this.remote.devices.length,
         pairingOpen: offer !== null,
         sessions: this.remote.shared.size,
@@ -2208,7 +2210,6 @@ export class MockEngine {
       }
       host.gateway = gateway;
     }
-    if (offer) host.offer = offer;
     return host;
   }
 
@@ -2879,7 +2880,7 @@ export class MockEngine {
         this.remote.enabled = true;
         if (!this.remote.gateway) this.remote.gateway = this.remoteGateway();
         this.issueRemoteOffer();
-        return this.remoteStatus(sessionId);
+        return { ...obj(this.remoteStatus(sessionId)), offer: this.remoteOffer() } as Json;
       }
       case "_rustcode/remote/stop": {
         const sessionId = str(params.sessionId) ?? "";

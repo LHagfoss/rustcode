@@ -160,6 +160,9 @@ pub struct OfferDetails {
     #[serde(default)]
     pub loopback_only: bool,
     pub gateway_id: String,
+    /// Gateway instance that issued this offer.
+    #[serde(default)]
+    pub instance_id: Option<String>,
     pub credential: Secret,
     pub code: Secret,
     pub expires_in_secs: u64,
@@ -185,6 +188,7 @@ impl OfferDetails {
         Self {
             advertised_address: address.to_string(),
             gateway_id: gateway_id.to_string(),
+            instance_id: None,
             loopback_only: address.host().is_loopback(),
             qr_payload: Secret::new(pairing::qr_payload(
                 address,

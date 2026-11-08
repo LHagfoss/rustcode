@@ -11,10 +11,19 @@
 // most recently used first, and says why it holds the rest back.
 
 import { Copy, RefreshCw, Smartphone, WifiOff } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { heldBackCount, heldBackReason, type RemoteOffer, type RemotePairing } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
-import { errorText, pairRemoteDevice, refreshRemote, setRemoteAccess, toast, useApp } from "../state/store";
+import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
+import {
+  dismissRemoteChallenge,
+  errorText,
+  pairRemoteDevice,
+  refreshRemote,
+  setRemoteAccess,
+  toast,
+  useApp,
+} from "../state/store";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { Action, Chip, Group, Loading, Row } from "./settingsKit";
 
@@ -46,8 +55,8 @@ export function RemoteAccessPage() {
   const byThread = useApp((s) => s.remoteByThread);
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [readAt, setReadAt] = useState(0);
-  const [paired, setPaired] = useState<{ name: string } | null>(null);
+  const challenge = useApp((s) => s.remoteChallenge);
+  const paired = useApp((s) => s.remotePaired);
   const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);
 
   // The app's open threads, with the harness each runs on. Both kinds are
@@ -68,7 +77,6 @@ export function RemoteAccessPage() {
 
   const refresh = useCallback(async () => {
     await refreshRemote();
-    setReadAt(Date.now());
     // One read per open thread, so the *Open threads* rows and the thread
     // headers say what the engine says about that thread's own share.
     for (const id of idsKey ? idsKey.split("|") : []) void refreshRemote(id);
@@ -88,7 +96,8 @@ export function RemoteAccessPage() {
 
   const devices = remote?.devices ?? [];
   const gateway = remote?.gateway;
-  const offer = remote?.offer;
+  const active = activeChallenge(challenge, now);
+  const offer = active?.offer;
   const pairing = gateway?.pairing;
   const unavailable = remote?.available === false;
   const enabled = remote?.enabled === true;
@@ -98,21 +107,9 @@ export function RemoteAccessPage() {
   const pairingError = remote?.pairingError;
   const ended = remote?.error;
 
-  // A phone that pairs appears in the device list: remember the list from
-  // before the code was asked for, so one that pairs at once is still new.
-  const baselineDevices = useRef<string[] | null>(null);
   useEffect(() => {
-    const baseline = baselineDevices.current;
-    if (!baseline) return;
-    const fresh = devices.find((device) => !baseline.includes(device.id));
-    if (!fresh) return;
-    baselineDevices.current = null;
-    setPaired({ name: fresh.name });
-  }, [devices]);
-
-  useEffect(() => {
-    if (!enabled) setPaired(null);
-  }, [enabled]);
+    if (challenge && now >= challenge.expiresAt) dismissRemoteChallenge();
+  }, [challenge, now]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
     setBusy(label);
@@ -128,13 +125,10 @@ export function RemoteAccessPage() {
   };
 
   const toggle = (next: boolean) => {
-    if (!next) setPaired(null);
     void run("toggle", () => setRemoteAccess(next));
   };
 
   const pair = () => {
-    setPaired(null);
-    baselineDevices.current = devices.map((device) => device.id);
     setPairAskedAt(Date.now());
     void run("pair", () => pairRemoteDevice());
   };
@@ -259,11 +253,12 @@ export function RemoteAccessPage() {
               pending={pending}
               error={pairingError}
               now={now}
-              readAt={readAt}
+              expiresAt={active?.expiresAt}
               overdue={pending && pairAskedAt !== null && now - pairAskedAt > PAIR_DEADLINE_MS}
               busy={busy === "pair"}
               onRenew={pair}
               onStop={() => toggle(false)}
+              onDismiss={dismissRemoteChallenge}
             />
           </Group>
         )
@@ -346,31 +341,32 @@ function mmss(seconds: number): string {
  * The gateway reports the challenge's own countdown, wrong codes left and any
  * lockout, so the card counts down with the engine rather than on its own.
  */
-function PairingCard({
+export function PairingCard({
   offer,
   pairing,
   pending,
   error,
   now,
-  readAt,
+  expiresAt,
   overdue,
   busy,
   onRenew,
   onStop,
+  onDismiss,
 }: {
   offer?: RemoteOffer;
   pairing?: RemotePairing;
   pending: boolean;
   error?: string;
   now: number;
-  readAt: number;
+  expiresAt?: number;
   overdue: boolean;
   busy: boolean;
   onRenew: () => void;
   onStop: () => void;
+  onDismiss: () => void;
 }) {
-  const secs = pairing?.expiresInSecs ?? offer?.expiresInSecs ?? 0;
-  const left = Math.max(0, Math.ceil((readAt + secs * 1000 - now) / 1000));
+  const left = expiresAt === undefined ? 0 : remainingPairingSeconds(expiresAt, now);
   const lockedFor = pairing?.lockedForSecs ?? offer?.lockedForSecs ?? 0;
   const attemptsLeft = pairing?.attemptsLeft;
   return (
@@ -415,6 +411,9 @@ function PairingCard({
               </span>
               {lockedFor > 0 && <Chip tone="warn">Pairing locked</Chip>}
               {offer.loopbackOnly && <Chip tone="warn">This Mac only</Chip>}
+              <Action quiet size="sm" onClick={onDismiss}>
+                Dismiss
+              </Action>
               <Action quiet size="sm" disabled={busy} onClick={onRenew}>
                 {busy ? <Spinner /> : <RefreshCw size={12} />}
                 New code
