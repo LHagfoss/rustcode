@@ -109,6 +109,12 @@ const book = (links: Link[]): LinkBook => ({ ...emptyBook(), links });
 describe("management tools", () => {
   test("parseCall reads them and refuses what cannot run", () => {
     expect(parseCall({ tool: "list_harnesses", args: {} })).toEqual({ tool: "list_harnesses" });
+    // The filters are optional, and what is there is read as a trimmed string.
+    expect(parseCall({ tool: "list_harnesses", args: { harness: " codex ", model: " Opus " } })).toEqual({
+      tool: "list_harnesses",
+      harness: "codex",
+      model: "Opus",
+    });
     expect(parseCall({ tool: "search_sessions", args: { query: " login " } })).toEqual({
       tool: "search_sessions",
       query: "login",

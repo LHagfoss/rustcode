@@ -715,7 +715,7 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
 }
 /// The hard cap before the menu is pruned from the specialised end. The
 /// orchestration tools are the tail and the biggest: a client advertising
-/// version 7 gets the whole built-in menu at 41,370 bytes, 614 under this cap,
+/// version 7 gets the whole built-in menu at 41,897 bytes, 87 under this cap,
 /// so the next tool raises it rather than dropping one. The cap moved from
 /// 40 KiB when the delegation tool descriptions gained what a stalled
 /// delegate costs (a prompt with no TTY, and no default timeout). Raising the

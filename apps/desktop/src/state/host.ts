@@ -19,11 +19,11 @@ import {
   parsePullState,
   pullErrorTitle,
 } from "../acp/rustcode";
-import { type Harness, Method, projectName } from "../acp/types";
+import { type Harness, type HarnessModel, type HarnessSnapshot, Method, projectName } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
-import { selectOption, unavailableReason, usableHarnesses } from "./harness";
+import { restoreChoice, selectOption, unavailableReason, usableHarnesses } from "./harness";
 import { usageOf } from "./harnessUsage";
 import {
   accountLabelOf,
@@ -90,6 +90,7 @@ import {
   quietTree,
   type RuleThread,
   reachesThread,
+  reachOf,
   renderRead,
   restateLinks,
   sameProject,
@@ -124,9 +125,11 @@ import {
   cancel,
   claudeUsageAllowed,
   createSession,
+  effortMemory,
   ensureHarnessModels,
   errorText,
   lastAccountFor,
+  localChoices,
   markUnread,
   openThread,
   permissionModeOf,
@@ -654,7 +657,7 @@ async function perform(
     case "fan_out":
       return fanOut(caller, call);
     case "list_harnesses":
-      return listHarnesses(caller);
+      return listHarnesses(caller, call);
     case "search_sessions":
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return searchSessions(threads(), caller, call.query, call.allProjects);
@@ -734,14 +737,112 @@ async function perform(
 // ---------------------------------------------------------------- reads: no approval
 
 /** Models listed per harness: an agent's context pays for each one. */
-const LISTED_MODELS = 25;
+const LISTED_MODELS = 12;
+/** Models a `model` filter returns: every match worth picking from, still bounded. */
+const FILTERED_MODELS = 50;
+/** Said beside `omitted_models`, so an agent narrows instead of guessing at what it cannot see. */
+const MODEL_FILTER_HINT = "pass model to search the omitted ones";
+/** Said when a `model` filter matched nothing, so an agent narrows it again. */
+const MODEL_MISS_HINT = "no model matches; pass a shorter substring";
 
-async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
+/** Whether a model matches a `model` filter: its id or its name, either case. */
+const matchesModel = (m: HarnessModel, filter: string) =>
+  m.id.toLowerCase().includes(filter) || m.name.toLowerCase().includes(filter);
+
+/**
+ * The models this project's threads ran on, most recent first, per harness: the
+ * models an agent is likeliest to want are the ones the user already uses here.
+ */
+function usedModels(caller: RuleThread): Map<string, string[]> {
+  const reach = reachOf(caller);
+  const recent = useApp
+    .getState()
+    .sessions.filter((t) => t.harness && t.model && sameProject(reach, t.worktree?.repo || t.repo || t.cwd))
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  const out = new Map<string, string[]>();
+  for (const t of recent) {
+    const used = out.get(t.harness!) ?? [];
+    if (!used.includes(t.model!)) used.push(t.model!);
+    out.set(t.harness!, used);
+  }
+  return out;
+}
+
+/**
+ * A harness's models in the order that matters: the one a new thread on it starts
+ * with, then the ones this project's threads used recently, then the harness's own
+ * order. A `filter` narrows to the models whose id or name contains it.
+ */
+function orderedModels(
+  h: Harness,
+  configured: string | null,
+  used: string[],
+  filter: string | undefined,
+): HarnessModel[] {
+  // Only the models it lists lead: a remembered one this listing no longer has
+  // is not offered.
+  const ids = new Set(h.models.map((m) => m.id));
+  const lead = [configured, ...used].filter((id): id is string => !!id && ids.has(id));
+  const rank = new Map<string, number>();
+  for (const id of lead) if (!rank.has(id)) rank.set(id, rank.size);
+  const models = filter ? h.models.filter((m) => matchesModel(m, filter)) : [...h.models];
+  // The sort is stable, so the rest stay in the harness's own order.
+  return models.sort((a, b) => (rank.get(a.id) ?? lead.length) - (rank.get(b.id) ?? lead.length));
+}
+
+/** The efforts every listed model shares, when they share one and it is not empty. */
+function sharedEfforts(models: HarnessModel[]): string[] | undefined {
+  const first = models[0]?.efforts ?? [];
+  if (!first.length) return undefined;
+  const same = models.every(
+    (m) => m.efforts.length === first.length && m.efforts.every((effort, i) => effort === first[i]),
+  );
+  return same ? first : undefined;
+}
+
+async function listHarnesses(
+  caller: RuleThread,
+  asked: { harness?: string; model?: string } = {},
+): Promise<JsonObject> {
   const snapshot = useApp.getState().harnesses;
   const harnesses = snapshot?.harnesses ?? [];
   const signedOut = useApp.getState().signedOutLogins;
   await Promise.all(harnesses.filter((h) => !unavailableReason(h)).map((h) => ensureHarnessModels(h.id)));
   const fresh = useApp.getState().harnesses?.harnesses ?? harnesses;
+  // The models a listing just brought in are the ones on record now, so the
+  // choice a new thread starts on is restored against those, not the snapshot
+  // taken before the ask.
+  const current: HarnessSnapshot | undefined = snapshot ? { ...snapshot, harnesses: fresh } : undefined;
+  const wanted = asked.harness?.toLowerCase();
+  // An id is exact and wins; a display name may be shared by a harness the user
+  // added, so several matches are refused rather than one picked silently.
+  const byId = wanted ? fresh.filter((h) => h.id.toLowerCase() === wanted) : fresh;
+  const named = wanted && !byId.length ? fresh.filter((h) => h.name.toLowerCase() === wanted) : byId;
+  if (wanted && !named.length) {
+    return failureJson(
+      failure(
+        "invalid",
+        `no harness “${asked.harness}”; list_harnesses has ${fresh.map((h) => h.id).join(", ")}`,
+      ),
+    );
+  }
+  if (wanted && named.length > 1) {
+    return failureJson(
+      failure(
+        "invalid",
+        `“${asked.harness}” names ${named.length} harnesses; pass the id: ${named.map((h) => h.id).join(", ")}`,
+      ),
+    );
+  }
+  const listed = named;
+  const filter = asked.model?.toLowerCase();
+  const used = usedModels(caller);
+  // What a new thread on each harness starts with: the same rule the composer uses.
+  const remembered = localChoices();
+  const efforts = effortMemory();
+  const configuredModels = current
+    ? new Map(fresh.map((h) => [h.id, restoreChoice(current, h.id, remembered, efforts).model]))
+    : undefined;
   // Each login's plan windows come from the cache Settings › Usage and the
   // composer's meter fill, never from a read this call starts: a model's tool
   // call must not raise a Keychain prompt or an Anthropic request of its own.
@@ -759,12 +860,16 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
     usageOf(cache[harnessPlanKey(harness, account)], harness !== "claude-code" || claudeReadable);
   return {
     current: { harness: caller.harness ?? "rustcode", ...ranWith(caller.id) },
-    harnesses: fresh.map((h) => {
+    harnesses: listed.map((h) => {
       const reason = unavailableReason(h);
-      const models = h.models.slice(0, LISTED_MODELS).map((m) => ({
+      const models = orderedModels(h, configuredModels?.get(h.id) ?? null, used.get(h.id) ?? [], filter);
+      const shown = models.slice(0, filter ? FILTERED_MODELS : LISTED_MODELS);
+      const omitted = models.length - shown.length;
+      const shared = sharedEfforts(shown);
+      const entries = shown.map((m) => ({
         id: m.id,
         name: m.name,
-        ...(m.efforts.length ? { efforts: m.efforts } : {}),
+        ...(shared || !m.efforts.length ? {} : { efforts: m.efforts }),
       }));
       // The harness's own login has no id, so its windows sit on the harness
       // entry: they are what a thread runs on with no `account`. A named
@@ -791,10 +896,15 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
               }),
             }
           : {}),
-        ...(reason ? { reason } : { models }),
-        ...(!reason && h.models.length > LISTED_MODELS
-          ? { omitted_models: h.models.length - LISTED_MODELS }
-          : {}),
+        ...(reason
+          ? { reason }
+          : {
+              // The efforts every listed model shares sit here once, not on each.
+              ...(shared ? { efforts: shared } : {}),
+              models: entries,
+              ...(omitted ? { omitted_models: omitted, filter: MODEL_FILTER_HINT } : {}),
+              ...(!entries.length && filter ? { filter: MODEL_MISS_HINT } : {}),
+            }),
       };
     }),
   };

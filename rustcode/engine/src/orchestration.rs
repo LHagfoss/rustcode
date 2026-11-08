@@ -496,7 +496,11 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 Some(_) => Err("limit must be a whole number of rows".to_owned()),
             }
         }
-        LIST_HARNESSES | LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
+        LIST_HARNESSES => {
+            optional_name(args, "harness")?;
+            optional_name(args, "model")
+        }
+        LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
         TRANSFER_SESSION => {
             required_name(args, "session_id")?;
             required_name(args, "harness")
@@ -1356,6 +1360,15 @@ mod tests {
     fn version_three_arguments_are_checked() {
         let ok = |name: &str, args: Value| validate(name, &args).is_ok();
         assert!(ok(LIST_HARNESSES, json!({})));
+        // Narrowing a long model list is optional, as an id and a substring.
+        assert!(ok(LIST_HARNESSES, json!({"harness": "codex"})));
+        assert!(ok(
+            LIST_HARNESSES,
+            json!({"harness": "codex", "model": "opus"})
+        ));
+        assert!(!ok(LIST_HARNESSES, json!({"harness": ""})));
+        assert!(!ok(LIST_HARNESSES, json!({"model": 7})));
+        assert!(!ok(LIST_HARNESSES, json!({"harness": ["codex"]})));
         assert!(ok(SEARCH_SESSIONS, json!({"query": "login"})));
         assert!(!ok(SEARCH_SESSIONS, json!({"query": " "})));
         // Reaching every project is a flag, never a string, on the reads.
@@ -1564,6 +1577,32 @@ mod tests {
         let description = listed["description"].as_str().unwrap_or_default();
         assert!(description.contains("used_percent"), "{description}");
         assert!(description.contains("not_enabled"), "{description}");
+    }
+
+    /// A harness may list hundreds of models (OpenCode, Pi), so the tool says
+    /// how to narrow the list; the schema carries both optional filters.
+    #[test]
+    fn list_harnesses_advertises_its_harness_and_model_filters() {
+        let tool = crate::tools::TOOLS
+            .iter()
+            .find(|tool| tool.name == LIST_HARNESSES)
+            .expect("list_harnesses");
+        assert!(
+            tool.description.contains("`harness`"),
+            "{}",
+            tool.description
+        );
+        assert!(tool.description.contains("`model`"), "{}", tool.description);
+        assert!(
+            tool.description.contains("omitted_models"),
+            "{}",
+            tool.description
+        );
+        let schema = (tool.schema)();
+        assert_eq!(schema["properties"]["harness"]["type"], "string");
+        assert_eq!(schema["properties"]["model"]["type"], "string");
+        // Nothing is required: a call with no filter is the plain list.
+        assert!(schema["required"].as_array().is_some_and(Vec::is_empty));
     }
 
     #[tokio::test]
