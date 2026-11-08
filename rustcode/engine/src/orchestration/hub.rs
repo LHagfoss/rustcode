@@ -440,7 +440,7 @@ pub async fn launch_for(
         };
         let command = std::env::current_exe().ok()?;
         let token = hub.register(session_id, client, version);
-        // Smart UI is the client's setting, not the thread's: an engine serves one client.
+        // Smart UI is the client's setting, not the thread's: the newest client's.
         let smart_ui = crate::harness::client_smart_ui() == crate::app::SmartUi::On;
         Some(
             Launch::new(command, session_id, hub.path(), &token)

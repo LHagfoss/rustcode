@@ -4,6 +4,7 @@
 //! own registry beside the built-in sessions; every ACP request that takes a
 //! session id looks there first.
 
+use super::clients::{Peer, SessionClients};
 use crate::harness::session::{ClientSink, ExternalSession, PermissionFuture};
 use crate::harness::{self, HarnessKind, store};
 use agent_client_protocol::schema::v1::{
@@ -11,7 +12,6 @@ use agent_client_protocol::schema::v1::{
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionConfigOptionValue, SessionInfoUpdate, SessionNotification, SessionUpdate,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -236,36 +236,33 @@ pub(crate) async fn complete_onboarding() -> Result<Value, agent_client_protocol
 }
 
 /// Updates and permission requests of one external thread, sent to the ACP
-/// client under the thread's own session id.
+/// clients that have it, under the thread's own session id.
 struct AcpClientSink {
-    connection: ConnectionTo<Client>,
-    session_id: String,
+    clients: SessionClients,
 }
 
 impl ClientSink for AcpClientSink {
     fn update(&self, update: SessionUpdate) {
-        let _ = self
-            .connection
-            .send_notification(SessionNotification::new(self.session_id.clone(), update));
+        let _ = self.clients.update(update);
     }
 
     fn activity(&self, activity: harness::background::Activity) {
         let _ = self
-            .connection
-            .send_notification(super::prompt::SessionActivityNotification {
-                session_id: self.session_id.clone(),
+            .clients
+            .notify(super::prompt::SessionActivityNotification {
+                session_id: self.clients.session_id().to_owned(),
                 state: activity.state.to_owned(),
                 background: activity.background,
             });
     }
 
     fn request_permission(&self, mut request: RequestPermissionRequest) -> PermissionFuture {
-        request.session_id = self.session_id.clone().into();
-        let connection = self.connection.clone();
-        let waiting = crate::thread_status::waiting(&self.session_id);
+        request.session_id = self.clients.session_id().to_owned().into();
+        let clients = self.clients.clone();
+        let waiting = crate::thread_status::waiting(clients.session_id());
         Box::pin(async move {
             let _waiting = waiting;
-            match connection.send_request(request).block_task().await {
+            match clients.request(None, request).await {
                 Ok(response) => response,
                 Err(error) => {
                     crate::dbg_log!("harness permission request failed: {error}");
@@ -292,8 +289,7 @@ pub(crate) async fn new_session(
     sessions: &ExternalSessions,
     request: NewSessionRequest,
     asked: harness::HarnessRequest,
-    connection: &ConnectionTo<Client>,
-    orchestration: u8,
+    peer: &Peer,
     remote: &super::remote::RemoteManager,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
     let cwd = super::canonical_acp_cwd(&request.cwd, "session/new")?;
@@ -340,10 +336,10 @@ pub(crate) async fn new_session(
         &session_id,
         &super::session_workspace(cwd, request.additional_directories.clone()),
     );
+    let clients = peer.attach(&session_id);
     let sink = remote.wrap_sink(
         Arc::new(AcpClientSink {
-            connection: connection.clone(),
-            session_id: session_id.clone(),
+            clients: clients.clone(),
         }),
         &session_id,
     );
@@ -355,9 +351,10 @@ pub(crate) async fn new_session(
         sink,
         true,
     );
-    let orchestrated = attach_orchestrator(&session, orchestration, connection).await;
+    let orchestrated = attach_orchestrator(&session, peer.info().orchestration, &clients).await;
     if let Err(message) = session.ensure_started().await {
         crate::orchestration::hub::release(&session_id);
+        peer.clients().forget_session(&session_id);
         crate::dbg_log!("harness {} failed to start: {message}", resolved.id);
         return Err(agent_client_protocol::Error::internal_error().data(message));
     }
@@ -382,13 +379,12 @@ pub(crate) async fn new_session(
 async fn attach_orchestrator(
     session: &ExternalSession,
     orchestration: u8,
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
 ) -> bool {
     if orchestration < 2 || !harness::capabilities(&session.harness).orchestration {
         return false;
     }
-    let Some(client) = super::preview::orchestration_client_for(true, connection, &session.id)
-    else {
+    let Some(client) = super::preview::orchestration_client_for(true, clients) else {
         return false;
     };
     let launch = crate::orchestration::hub::launch_for(&session.id, client, orchestration).await;
@@ -404,8 +400,7 @@ pub(crate) async fn load_session(
     sessions: &ExternalSessions,
     request: &LoadSessionRequest,
     record: store::HarnessRecord,
-    connection: &ConnectionTo<Client>,
-    orchestration: u8,
+    peer: &Peer,
     remote: &super::remote::RemoteManager,
 ) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
     let session_id = request.session_id.to_string();
@@ -442,10 +437,11 @@ pub(crate) async fn load_session(
         if open.contains_key(&session_id) {
             return Err(failure("session is already active".to_owned()));
         }
+        // The loading client gets the thread's updates; the replay below goes
+        // to it alone.
         let sink = remote.wrap_sink(
             Arc::new(AcpClientSink {
-                connection: connection.clone(),
-                session_id: session_id.clone(),
+                clients: peer.attach(&session_id),
             }),
             &session_id,
         );
@@ -460,7 +456,12 @@ pub(crate) async fn load_session(
         open.insert(session_id.clone(), Arc::clone(&session));
         session
     };
-    let orchestrated = attach_orchestrator(&session, orchestration, connection).await;
+    let orchestrated = attach_orchestrator(
+        &session,
+        peer.info().orchestration,
+        &peer.clients().session(&session_id),
+    )
+    .await;
     super::mark_acp_session(&session_id);
     let mut updates = harness::transcript::replay(&history, Some(&cwd));
     updates.extend(usage);
@@ -470,10 +471,12 @@ pub(crate) async fn load_session(
         ));
     }
     for update in updates {
-        if let Err(error) =
-            connection.send_notification(SessionNotification::new(session_id.clone(), update))
+        if let Err(error) = peer
+            .connection()
+            .send_notification(SessionNotification::new(session_id.clone(), update))
         {
             close(sessions, &session_id, remote).await;
+            peer.clients().forget_session(&session_id);
             return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
         }
     }
@@ -526,8 +529,7 @@ pub(crate) async fn switch(
     sessions: &ExternalSessions,
     request: SwitchHarnessRequest,
     builtin_cwd: Option<std::path::PathBuf>,
-    connection: &ConnectionTo<Client>,
-    orchestration: u8,
+    peer: &Peer,
     remote: &super::remote::RemoteManager,
 ) -> Result<Value, agent_client_protocol::Error> {
     let session_id = request.session_id.clone();
@@ -623,10 +625,10 @@ pub(crate) async fn switch(
     let divider = harness::handoff::divider(&marker);
     history.push(marker);
 
+    let clients = peer.attach(&session_id);
     let sink = remote.wrap_sink(
         Arc::new(AcpClientSink {
-            connection: connection.clone(),
-            session_id: session_id.clone(),
+            clients: clients.clone(),
         }),
         &session_id,
     );
@@ -639,14 +641,14 @@ pub(crate) async fn switch(
         true,
     );
     session.save_now();
-    let orchestrated = attach_orchestrator(&session, orchestration, connection).await;
+    let orchestrated = attach_orchestrator(&session, peer.info().orchestration, &clients).await;
     super::mark_acp_session(&session_id);
     sessions
         .lock()
         .await
         .insert(session_id.clone(), Arc::clone(&session));
     if let Some(divider) = divider {
-        let _ = connection.send_notification(SessionNotification::new(session_id.clone(), divider));
+        let _ = clients.update(divider);
     }
     Ok(serde_json::json!({
         "configOptions": session.config_options().await,
@@ -676,7 +678,7 @@ pub(crate) async fn close(
     true
 }
 
-/// The connection closed: stop every harness.
+/// The engine stops: stop every harness.
 pub(crate) async fn close_all(sessions: &ExternalSessions) {
     let open = sessions.lock().await.drain().collect::<Vec<_>>();
     for (session_id, session) in open {

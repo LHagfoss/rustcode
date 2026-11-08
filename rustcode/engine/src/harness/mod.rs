@@ -33,10 +33,11 @@ use std::sync::{Mutex, OnceLock};
 
 pub(crate) const BUILTIN_ID: &str = "rustcode";
 
-/// The `rustcode-viz` level the connected client draws (`acp.rs`
-/// `client_visualization_level`). An engine serves one client, so external
-/// harnesses started afterwards are taught the same widget types as a
-/// RustCode thread; 0 (no client yet, or one that draws none) teaches none.
+/// The `rustcode-viz` level the newest connected client draws (`acp.rs`
+/// `client_visualization_level`), so external harnesses started afterwards
+/// are taught the same widget types as a RustCode thread; 0 (no client yet,
+/// or one that draws none) teaches none. A built-in thread reads its own
+/// client's level instead (`acp/clients.rs`).
 static CLIENT_VISUALIZATION_LEVEL: AtomicU8 = AtomicU8::new(0);
 
 pub(crate) fn set_client_visualization_level(level: u8) {
