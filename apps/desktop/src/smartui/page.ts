@@ -182,6 +182,7 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 6px 0;
   border-bottom: 1px solid var(--rc-separator); }
 .rc-item:last-child { border-bottom: 0; }
+.rc-item:has(> div, > p) { justify-content: flex-start; }
 .rc-item > * { min-width: 0; overflow-wrap: anywhere; }
 .rc-item > .rc-badge, .rc-item > .rc-chip { flex: none; }
 .rc-item > :last-child:not(:first-child) { font-variant-numeric: tabular-nums; }
