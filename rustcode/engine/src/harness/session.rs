@@ -59,6 +59,10 @@ pub(crate) enum Output {
     /// The harness sent something that became no update of its own: any event
     /// counts as output for the silence deadline (`watchdog`).
     Heartbeat,
+    /// A turn with this prompt starts: what the client is sent from here on
+    /// is the turn's, until [`Output::TurnEnded`].
+    TurnStarted(String),
+    TurnEnded,
 }
 
 pub(crate) type OutputSender = mpsc::UnboundedSender<Output>;
@@ -72,6 +76,11 @@ pub(crate) trait ClientSink: Send + Sync + 'static {
     fn request_permission(&self, request: RequestPermissionRequest) -> PermissionFuture;
     /// What the thread does outside a prompt: background work, or a turn the harness started itself.
     fn activity(&self, _activity: super::background::Activity) {}
+    /// A turn starts with `prompt`, after `history` recorded messages: a
+    /// client that opens the thread mid-turn is sent what it missed.
+    fn turn_started(&self, _history: usize, _prompt: String) {}
+    /// The turn [`ClientSink::turn_started`] began has ended.
+    fn turn_ended(&self) {}
 }
 
 /// The settings an adapter starts with.
@@ -325,7 +334,7 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
                     let _ = reply.send(());
                 }
                 Output::Update(_) | Output::Marker(_) | Output::Activity(_) => {}
-                Output::Heartbeat => {}
+                Output::Heartbeat | Output::TurnStarted(_) | Output::TurnEnded => {}
             }
         }
     });
@@ -523,9 +532,12 @@ fn note_output(progress: &watchdog::Progress, output: &Output) {
         Output::Update(update) | Output::Marker(update) => progress.observe(update),
         Output::Activity(activity) => progress.activity(activity),
         Output::Heartbeat => progress.touch(),
-        // The guard a permission request takes counts it; a flush is the
-        // engine's own barrier, not the harness speaking.
-        Output::Permission { .. } | Output::Flush(_) => {}
+        // The guard a permission request takes counts it; a flush and a
+        // turn's bounds are the engine's own, not the harness speaking.
+        Output::Permission { .. }
+        | Output::Flush(_)
+        | Output::TurnStarted(_)
+        | Output::TurnEnded => {}
     }
 }
 
@@ -751,6 +763,16 @@ impl ExternalSession {
                         }
                         Output::Activity(activity) => sink.activity(activity),
                         Output::Heartbeat => {}
+                        Output::TurnStarted(prompt) => {
+                            // Counted here, after every update before it.
+                            let history = transcript
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .history
+                                .len();
+                            sink.turn_started(history, prompt);
+                        }
+                        Output::TurnEnded => sink.turn_ended(),
                     }
                 }
             });
@@ -778,6 +800,14 @@ impl ExternalSession {
             register(&session);
         }
         session
+    }
+
+    /// Whether the harness gets the orchestration tools.
+    pub(crate) fn orchestrated(&self) -> bool {
+        self.orchestrator
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
     }
 
     /// Give the harness the orchestration tools from its next start.
@@ -1170,6 +1200,16 @@ impl ExternalSession {
         let _turn = self.turn.lock().await;
         // Seen by the idle reaper: no process goes while a turn runs.
         let _mark = self.idle.begin_turn();
+        // Bounds the turn for a client that opens the thread mid-turn,
+        // however this function returns.
+        let _ = self.out.send(Output::TurnStarted(prompt_text(&prompt)));
+        struct TurnBound(OutputSender);
+        impl Drop for TurnBound {
+            fn drop(&mut self) {
+                let _ = self.0.send(Output::TurnEnded);
+            }
+        }
+        let _bound = TurnBound(self.out.clone());
         let _status = crate::thread_status::turn(&self.id);
         if self.persist {
             crate::checkpoints::before_turn(&self.id, &self.cwd, &prompt_text(&prompt), None).await;

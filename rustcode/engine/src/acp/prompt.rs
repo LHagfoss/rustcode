@@ -1,5 +1,5 @@
 use agent_client_protocol::schema::v1::{
-    ContentBlock, SessionInfoUpdate, SessionNotification, SessionUpdate, StopReason,
+    ContentBlock, SessionInfoUpdate, SessionUpdate, StopReason,
 };
 use rustcode_tasks::{TaskEvent, TaskManager};
 use std::collections::HashSet;
@@ -292,6 +292,9 @@ pub(crate) async fn run_prompt(
     // Running from here; the checkpoint is taken once the turn holds the
     // session, so a queued prompt never snapshots a turn still editing.
     let _status = crate::thread_status::turn(&session_id);
+    // A client that loads the session mid-turn is sent the history from
+    // before this prompt, the prompt, and what the turn sent since.
+    let _live = clients.begin_turn(state.lock().await.history.len(), Some(text.clone()));
     let user_index = crate::checkpoints::next_user_index(&state.lock().await.history);
     crate::checkpoints::before_turn(&session_id, &cwd, &text, Some(user_index)).await;
     // ACP turns get the same identity as terminal turns. Remote projection,
@@ -616,6 +619,9 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
     let scheduled = turns.schedule();
     drop(turns);
     let turn = scheduled.begin().await;
+    let _live = wakeup
+        .clients
+        .begin_turn(wakeup.state.lock().await.history.len(), None);
     send_activity(&wakeup.clients, &session_id, "running", 0);
     let mut parked_again = false;
     let turn_id = {
@@ -1084,7 +1090,8 @@ fn send_updates(
             }
             _ => None,
         };
-        let result = clients.notify(SessionNotification::new(session_id.to_owned(), update));
+        debug_assert_eq!(clients.session_id(), session_id);
+        let result = clients.update(update);
         if pending_call_id.is_some() {
             // The pending history result is the start barrier: release only
             // after its ACP notification was accepted by the connections.

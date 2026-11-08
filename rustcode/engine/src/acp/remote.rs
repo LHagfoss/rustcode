@@ -2141,6 +2141,14 @@ impl ClientSink for TeeSink {
             request,
         )
     }
+
+    fn turn_started(&self, history: usize, prompt: String) {
+        self.inner.turn_started(history, prompt);
+    }
+
+    fn turn_ended(&self) {
+        self.inner.turn_ended();
+    }
 }
 
 /// Offer a harness's permission request to paired devices while the app is

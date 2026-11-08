@@ -683,6 +683,14 @@ async fn acp_load_session(
     if let Some(cwd) = crate::worktrees::recover_missing_worktree(&session_id, &request.cwd) {
         request.cwd = cwd;
     }
+    // Open here already, from another client or one that has gone: this
+    // client joins it, mid-turn or not.
+    if let Some(external) = harnesses::get(&server.external, &session_id).await {
+        return harnesses::attach_open(&external, &request, peer).await;
+    }
+    if let Some(response) = attach_open_builtin(server, &request, peer).await? {
+        return Ok(response);
+    }
     if let Some(record) = crate::harness::store::load(&session_id) {
         if session_id_is_active(&*server.sessions.lock().await, &session_id) {
             return Err(
@@ -811,6 +819,92 @@ async fn acp_load_session(
             .config_options(config_options)
             .meta(crate::harness::builtin_session_meta()));
     }
+}
+
+/// `session/load` of a built-in session already open in this engine: `peer`
+/// joins it. `None` when it is not open.
+async fn attach_open_builtin(
+    server: &AcpServer,
+    request: &LoadSessionRequest,
+    peer: &clients::Peer,
+) -> Result<Option<LoadSessionResponse>, agent_client_protocol::Error> {
+    let session_id = request.session_id.to_string();
+    let Some((state, cwd)) = server.session_handle(&session_id).await else {
+        return Ok(None);
+    };
+    if canonical_acp_cwd(&request.cwd, "session/load")? != cwd {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data("session/load cwd does not match the open session"));
+    }
+    let compaction = state.lock().await.last_compaction.clone();
+    attach_with_replay(
+        peer,
+        &session_id,
+        || {
+            let state = Arc::clone(&state);
+            async move { state.lock().await.history.clone() }
+        },
+        |history| replay_history_updates_with_compaction(history, Some(&cwd), compaction.as_ref()),
+    )
+    .await?;
+    let (config_options, usage) = {
+        let state = state.lock().await;
+        (
+            build_session_config_options(&state),
+            usage::usage_update(&state),
+        )
+    };
+    let title = crate::config::session_meta_by_id(&session_id)
+        .map(|meta| meta.title)
+        .filter(|title| !title.trim().is_empty())
+        .map(|title| SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)));
+    for update in title
+        .into_iter()
+        .chain([commands::available_commands_update(), usage])
+    {
+        let _ = peer
+            .connection()
+            .send_notification(SessionNotification::new(session_id.clone(), update));
+    }
+    Ok(Some(crate::worktrees::finish_load(
+        LoadSessionResponse::new()
+            .config_options(config_options)
+            .meta(crate::harness::builtin_session_meta()),
+        &session_id,
+    )))
+}
+
+/// How often a replay is rebuilt when a turn starts or ends while it is
+/// built, before it is sent as it is.
+const ATTACH_ATTEMPTS: usize = 4;
+
+/// Attach `peer` to the open session `session_id` and replay it: the
+/// transcript up to the running turn, what the turn sent so far, then every
+/// update live, with nothing lost or sent twice between them.
+///
+/// `history` reads the session's transcript; `replay` turns a prefix of it
+/// into updates. While a turn runs only the messages from before it are
+/// replayed: the rest is the turn's, and the turn's own record has it.
+pub(crate) async fn attach_with_replay<F>(
+    peer: &clients::Peer,
+    session_id: &str,
+    history: impl Fn() -> F,
+    replay: impl Fn(&[crate::app::ChatMessage]) -> Vec<SessionUpdate>,
+) -> Result<(), agent_client_protocol::Error>
+where
+    F: std::future::Future<Output = rustcode_core::History>,
+{
+    for attempt in 1..=ATTACH_ATTEMPTS {
+        let (generation, base) = peer.clients().turn_marker(session_id);
+        let transcript = history().await;
+        let transcript = transcript.as_slice();
+        let before_turn = &transcript[..base.unwrap_or(transcript.len()).min(transcript.len())];
+        let check = (attempt < ATTACH_ATTEMPTS).then_some(generation);
+        if peer.attach_open(session_id, check, replay(before_turn))? {
+            break;
+        }
+    }
+    Ok(())
 }
 
 const ACP_TERMINAL_LEDGER_CAPACITY: usize = 1024;
@@ -1704,33 +1798,180 @@ pub(crate) fn client_shows_threads(
 }
 
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let startup_state = crate::app::AppState::new();
-    // Servers start on the session's first turn, not here: the app attaches
-    // an engine for chats that may never run one (#2503).
-    crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
-    // The thread above each delegated one, recorded once for threads older than
-    // the record, before the first session list is read (`thread_parent.rs`).
-    // After that first run it reads one `store_meta` row and returns.
-    crate::thread_parent::ensure_ready();
-    crate::thread_index::warm();
-    // Metadata for `rustcode usage` and `rustcode data query`; a background
-    // backfill of the existing threads runs once, on first open.
-    crate::data_store::warm();
-
-    let server = AcpServer::new(auto_approve)?;
+    let engine = AcpEngine::start(auto_approve)?;
     // No harness process outlives the engine, however it ends.
-    struct KillHarnesses;
-    impl Drop for KillHarnesses {
-        fn drop(&mut self) {
-            crate::harness::process::kill_all();
-        }
-    }
     let _kill_harnesses = KillHarnesses;
     // Over stdio the engine has this one client and ends with it.
-    let served = serve_connection(&server, Stdio::new()).await;
-    server.shutdown().await;
+    let served = serve_connection(&engine.server, Stdio::new()).await;
+    engine.shutdown().await;
     served?;
     Ok(())
+}
+
+/// Ends every harness process when dropped: they live as long as the engine
+/// process, whichever way it ends, and no longer.
+pub struct KillHarnesses;
+
+impl Drop for KillHarnesses {
+    fn drop(&mut self) {
+        crate::harness::process::kill_all();
+    }
+}
+
+/// What the engine runs once per process: sessions, their turns and
+/// harnesses, shares and the background work. Every ACP connection
+/// ([`AcpEngine::serve`]) is a client of it; one closing ends nothing that
+/// runs.
+#[derive(Clone)]
+pub struct AcpEngine {
+    server: AcpServer,
+}
+
+impl AcpEngine {
+    /// Warm what every connection reads and start the engine's own tasks.
+    pub fn start(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
+        let startup_state = crate::app::AppState::new();
+        // Servers start on the session's first turn, not here: the app attaches
+        // an engine for chats that may never run one (#2503).
+        crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
+        // The thread above each delegated one, recorded once for threads older than
+        // the record, before the first session list is read (`thread_parent.rs`).
+        // After that first run it reads one `store_meta` row and returns.
+        crate::thread_parent::ensure_ready();
+        crate::thread_index::warm();
+        // Metadata for `rustcode usage` and `rustcode data query`; a background
+        // backfill of the existing threads runs once, on first open.
+        crate::data_store::warm();
+        Ok(Self {
+            server: AcpServer::new(auto_approve)?,
+        })
+    }
+
+    /// An engine that starts and defers nothing (tests): the default
+    /// configuration's MCP servers would otherwise start on a test's turn.
+    #[cfg(test)]
+    pub(crate) fn bare(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
+        Ok(Self {
+            server: AcpServer::new(auto_approve)?,
+        })
+    }
+
+    /// Serve one client over newline-delimited JSON-RPC on `read` and
+    /// `write` until it disconnects.
+    pub async fn serve<R, W>(&self, read: R, write: W) -> Result<(), agent_client_protocol::Error>
+    where
+        R: tokio::io::AsyncRead + Send + Unpin + 'static,
+        W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        serve_connection(&self.server, lines_transport(read, write)).await
+    }
+
+    /// How many clients are connected.
+    pub fn clients(&self) -> usize {
+        self.server.clients.count()
+    }
+
+    /// The engine stops: every share, harness, turn and background task ends.
+    pub async fn shutdown(&self) {
+        self.server.shutdown().await;
+    }
+}
+
+/// Run a turn on the runtime rather than on the connection that asked for
+/// it, whose tasks end with it. Answering a client that has gone fails, and
+/// the turn does not care.
+///
+/// A turn's future is deep to poll in a debug build, deeper than a runtime
+/// worker's stack; on the connection it ran on the thread serving it (the
+/// main thread over stdio). It gets a thread of its own, sized like the
+/// main one's and more, and what it spawns runs on the runtime.
+fn spawn_turn(
+    turn: impl std::future::Future<Output = Result<(), agent_client_protocol::Error>> + Send + 'static,
+) {
+    spawn_on_large_stack("rustcode-turn", async move {
+        if let Err(error) = turn.await {
+            crate::dbg_log!("a turn's answer was not delivered: {error}");
+        }
+    });
+}
+
+/// Poll `future` to completion on a new thread with a large stack, as part of
+/// the current runtime: what it spawns runs on the runtime's workers.
+pub(crate) fn spawn_on_large_stack(
+    name: &str,
+    future: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const STACK: usize = 64 << 20;
+    let runtime = tokio::runtime::Handle::current();
+    // A caller scoped to its own MCP servers (a test, `--prompt`) keeps them.
+    let mcp = crate::mcp::DIRECT_MCP_REGISTRY.try_with(Clone::clone).ok();
+    let spawned = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(STACK)
+        .spawn(move || match mcp {
+            Some(registry) => {
+                runtime.block_on(crate::mcp::DIRECT_MCP_REGISTRY.scope(registry, future))
+            }
+            None => runtime.block_on(future),
+        });
+    if let Err(error) = spawned {
+        crate::dbg_log!("could not start {name}: {error}");
+    }
+}
+
+/// Show a client's prompt to the session's other clients.
+fn echo_prompt(
+    clients: &clients::SessionClients,
+    sender: clients::ClientId,
+    prompt: &[ContentBlock],
+) {
+    let text = prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        return;
+    }
+    clients.update_others(
+        sender,
+        SessionUpdate::UserMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
+            ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
+        )),
+    );
+}
+
+/// Newline-delimited JSON-RPC over a byte stream, as over stdio.
+pub(crate) fn lines_transport<R, W>(
+    read: R,
+    write: W,
+) -> agent_client_protocol::Lines<
+    impl futures_util::Sink<String, Error = std::io::Error> + Send + 'static,
+    impl futures_util::Stream<Item = std::io::Result<String>> + Send + 'static,
+>
+where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let incoming = futures_util::stream::unfold(
+        tokio::io::BufReader::new(read).lines(),
+        async |mut lines| match lines.next_line().await {
+            Ok(Some(line)) => Some((Ok(line), lines)),
+            Ok(None) => None,
+            Err(error) => Some((Err(error), lines)),
+        },
+    );
+    let outgoing = futures_util::sink::unfold(write, async |mut write, line: String| {
+        write.write_all(line.as_bytes()).await?;
+        write.write_all(b"\n").await?;
+        write.flush().await?;
+        Ok::<_, std::io::Error>(write)
+    });
+    agent_client_protocol::Lines::new(Box::pin(outgoing), Box::pin(incoming))
 }
 
 /// Serve one ACP client on `transport` until it disconnects. The sessions it
@@ -3073,7 +3314,13 @@ async fn serve_connection(
                         server.remote.note_prompt_applied(&session_id);
                         let remote = server.remote.clone();
                         let turn_session = session_id.clone();
-                        return connection.spawn(async move {
+                        // The other clients that have the thread show the
+                        // prompt too; the one that sent it already does.
+                        echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt);
+                        // The turn belongs to the engine, not this connection:
+                        // it runs on if the client goes, and only its answer
+                        // is lost.
+                        spawn_turn(async move {
                             let result = external.prompt(request.prompt).await;
                             remote.note_turn_returned(&turn_session);
                             match result {
@@ -3086,6 +3333,7 @@ async fn serve_connection(
                             }
                             Ok(())
                         });
+                        return Ok(());
                     }
                     let session = server
                         .sessions
@@ -3131,6 +3379,7 @@ async fn serve_connection(
                             agent_client_protocol::Error::invalid_params().data(message)
                         })?
                         .text;
+                    echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt);
 
                     // A report only reads the session, so it answers now, beside
                     // a running turn, instead of queueing at the turn gate.
@@ -3159,7 +3408,9 @@ async fn serve_connection(
                     let session_clients = server.clients.session(&session_id);
                     let presence_cwd = cwd.clone();
                     server.presence.turn_started(&session_id, &presence_cwd);
-                    connection.spawn(async move {
+                    // The turn belongs to the engine, not this connection: it
+                    // runs on if the client goes, and only its answer is lost.
+                    spawn_turn(async move {
                         let result = prompt::run_prompt(
                             Arc::clone(&state),
                             cwd,
@@ -3196,7 +3447,7 @@ async fn serve_connection(
                             }
                         }
                         Ok(())
-                    })?;
+                    });
                     Ok(())
                 }
             },
@@ -5472,7 +5723,7 @@ mod tests {
             // A leaves. B, its session and A's session all go on.
             let _ = close_a.send(());
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while server.clients.len() != 1 {
+            while server.clients.count() != 1 {
                 assert!(std::time::Instant::now() < deadline, "a never disconnected");
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
@@ -5523,10 +5774,415 @@ mod tests {
             2,
             "both of b's reports reached b"
         );
-        assert_eq!(server.clients.len(), 0);
+        assert_eq!(server.clients.count(), 0);
         // Closing connections ended nothing: only the engine's shutdown does.
         assert!(server.sessions.lock().await.contains_key(&a_session));
         server.shutdown().await;
         assert!(server.sessions.lock().await.is_empty());
+    }
+
+    /// A chat-completions provider whose first streamed reply sends `first`,
+    /// then waits for `release` to send `rest` and finish. Any later request
+    /// is answered at once.
+    async fn held_provider(
+        first: &'static str,
+        rest: &'static str,
+    ) -> (String, tokio::sync::oneshot::Sender<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        async fn read_request(socket: &mut tokio::net::TcpStream) {
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                let Ok(read) = socket.read(&mut buffer).await else {
+                    return;
+                };
+                if read == 0 {
+                    return;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    return;
+                }
+            }
+        }
+        fn delta(text: &str) -> String {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({ "choices": [{ "delta": { "content": text } }] })
+            )
+        }
+        const HEAD: &str =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+        const END: &str =
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind provider");
+        let address = listener.local_addr().expect("provider address");
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let mut released = Some(released);
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let held = released.take();
+                tokio::spawn(async move {
+                    read_request(&mut socket).await;
+                    let _ = socket.write_all(HEAD.as_bytes()).await;
+                    match held {
+                        Some(released) => {
+                            let _ = socket.write_all(delta(first).as_bytes()).await;
+                            let _ = socket.flush().await;
+                            let _ = released.await;
+                            let _ = socket.write_all(delta(rest).as_bytes()).await;
+                        }
+                        None => {
+                            let _ = socket.write_all(delta("ok").as_bytes()).await;
+                        }
+                    }
+                    let _ = socket.write_all(END.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        (format!("http://{address}/v1/chat/completions"), release)
+    }
+
+    /// Run `test` with MCP servers of its own, none: a real turn otherwise
+    /// starts the configured ones (the default config names one run by `npx`).
+    async fn without_mcp(test: impl std::future::Future<Output = ()>) {
+        crate::mcp::DIRECT_MCP_REGISTRY
+            .scope(Default::default(), test)
+            .await;
+    }
+
+    /// Serve a connection on a thread of its own, as the server does.
+    fn serve_on_thread(
+        server: &AcpServer,
+        transport: agent_client_protocol::Channel,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), agent_client_protocol::Error>> {
+        let (done, served) = tokio::sync::oneshot::channel();
+        let server = server.clone();
+        spawn_on_large_stack("test-connection", async move {
+            let _ = done.send(serve_connection(&server, transport).await);
+        });
+        served
+    }
+
+    /// Point a session at `endpoint`, with an earlier exchange in its history.
+    async fn use_provider(server: &AcpServer, session_id: &str, endpoint: &str) {
+        use crate::config::{ApiProtocol, ModelProfile};
+        let state = Arc::clone(&server.sessions.lock().await[session_id].state);
+        let mut state = state.lock().await;
+        state.api_base_url = endpoint.to_owned();
+        state.model_name = "held-test".to_owned();
+        state.config.models = vec![ModelProfile {
+            name: state.model_name.clone(),
+            url: endpoint.to_owned(),
+            model: state.model_name.clone(),
+            api_protocol: Some(ApiProtocol::ChatCompletions),
+            context_window: Some(8_192),
+            ..ModelProfile::default()
+        }];
+        state.record_function_calling_support(endpoint, false);
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "an earlier question"));
+        state.history.push(crate::app::ChatMessage::new(
+            "assistant",
+            "an earlier answer",
+        ));
+    }
+
+    /// A client that sends every `session/update` it gets to `updates` and
+    /// stays connected until `close` fires.
+    async fn recording_client(
+        transport: agent_client_protocol::Channel,
+        updates: tokio::sync::mpsc::UnboundedSender<SessionUpdate>,
+        connected: tokio::sync::oneshot::Sender<agent_client_protocol::ConnectionTo<Agent>>,
+        close: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        agent_client_protocol::Client
+            .builder()
+            .on_receive_notification(
+                async move |notification: SessionNotification, _connection| {
+                    let _ = updates.send(notification.update);
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_request(
+                async move |_request: agent_client_protocol::UntypedMessage,
+                            responder,
+                            _connection| {
+                    responder.respond(serde_json::json!({}))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_with(transport, async move |connection| {
+                let _ = connected.send(connection);
+                let _ = close.await;
+                Ok(())
+            })
+            .await
+    }
+
+    /// The text of a message chunk: `("user" | "agent", text)`.
+    fn said(update: &SessionUpdate) -> Option<(&'static str, String)> {
+        let (who, chunk) = match update {
+            SessionUpdate::UserMessageChunk(chunk) => ("user", chunk),
+            SessionUpdate::AgentMessageChunk(chunk) => ("agent", chunk),
+            _ => return None,
+        };
+        match &chunk.content {
+            ContentBlock::Text(text) => Some((who, text.text.clone())),
+            _ => None,
+        }
+    }
+
+    /// Wait for the message chunk that contains `text`, collecting every
+    /// chunk said on the way.
+    async fn wait_for_text(
+        updates: &mut tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>,
+        text: &str,
+        said_so_far: &mut Vec<(&'static str, String)>,
+    ) {
+        let deadline = std::time::Duration::from_secs(20);
+        tokio::time::timeout(deadline, async {
+            while let Some(update) = updates.recv().await {
+                if let Some(chunk) = said(&update) {
+                    let found = chunk.1.contains(text);
+                    said_so_far.push(chunk);
+                    if found {
+                        return;
+                    }
+                }
+            }
+            panic!("the client closed before {text:?}");
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no {text:?} within {deadline:?}: {said_so_far:?}"));
+    }
+
+    async fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !done() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what} never happened"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[test]
+    fn a_turn_outlives_its_client_and_a_client_that_loads_it_mid_turn_gets_all_of_it() {
+        on_a_large_stack(without_mcp(turn_outlives_client()));
+    }
+
+    async fn turn_outlives_client() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+        let (endpoint, release) = held_provider("the first half, ", "then the rest").await;
+
+        // A starts a thread, prompts, and leaves once the reply has begun.
+        let (a_engine, a_transport) = agent_client_protocol::Channel::duplex();
+        let (a_updates_tx, mut a_updates) = tokio::sync::mpsc::unbounded_channel();
+        let (a_ready_tx, a_ready) = tokio::sync::oneshot::channel();
+        let (close_a, a_closed) = tokio::sync::oneshot::channel();
+        let a_serving = serve_on_thread(&server, a_engine);
+        let a_client = tokio::spawn(recording_client(
+            a_transport,
+            a_updates_tx,
+            a_ready_tx,
+            a_closed,
+        ));
+        let a = a_ready.await.expect("a connects");
+        a.send_request(initialize_with(serde_json::json!({})))
+            .block_task()
+            .await
+            .expect("a initializes");
+        let session_id = a
+            .send_request(NewSessionRequest::new(cwd_path.clone()))
+            .block_task()
+            .await
+            .expect("a creates a session")
+            .session_id
+            .to_string();
+        use_provider(&server, &session_id, &endpoint).await;
+        // Not awaited: A leaves before the turn answers it.
+        let _unanswered = a.send_request(PromptRequest::new(
+            session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new("do the thing"))],
+        ));
+        let mut a_said = Vec::new();
+        wait_for_text(&mut a_updates, "the first half", &mut a_said).await;
+        let _ = close_a.send(());
+        a_client
+            .await
+            .expect("a's client")
+            .expect("a's client ends cleanly");
+        a_serving
+            .await
+            .expect("a's connection")
+            .expect("a's connection ends cleanly");
+        assert_eq!(server.clients.count(), 0);
+        assert!(
+            server.clients.turn_running(&session_id),
+            "closing the client did not stop the turn"
+        );
+
+        // B loads the thread mid-turn: the history, the turn so far, then live.
+        let (b_engine, b_transport) = agent_client_protocol::Channel::duplex();
+        let (b_updates_tx, mut b_updates) = tokio::sync::mpsc::unbounded_channel();
+        let (b_ready_tx, b_ready) = tokio::sync::oneshot::channel();
+        let (close_b, b_closed) = tokio::sync::oneshot::channel();
+        let b_serving = serve_on_thread(&server, b_engine);
+        let b_client = tokio::spawn(recording_client(
+            b_transport,
+            b_updates_tx,
+            b_ready_tx,
+            b_closed,
+        ));
+        let b = b_ready.await.expect("b connects");
+        b.send_request(initialize_with(serde_json::json!({})))
+            .block_task()
+            .await
+            .expect("b initializes");
+        b.send_request(LoadSessionRequest::new(
+            session_id.clone(),
+            cwd_path.clone(),
+        ))
+        .block_task()
+        .await
+        .expect("b loads the running thread");
+        let mut b_said = Vec::new();
+        wait_for_text(&mut b_updates, "the first half", &mut b_said).await;
+        assert_eq!(
+            b_said,
+            vec![
+                ("user", "an earlier question".to_owned()),
+                ("agent", "an earlier answer".to_owned()),
+                ("user", "do the thing".to_owned()),
+                ("agent", "the first half, ".to_owned()),
+            ],
+            "the transcript, then the turn so far, each once"
+        );
+
+        let _ = release.send(());
+        wait_for_text(&mut b_updates, "then the rest", &mut b_said).await;
+        wait_until("the turn ends", || {
+            !server.clients.turn_running(&session_id)
+        })
+        .await;
+        let answer = {
+            let state = Arc::clone(&server.sessions.lock().await[&session_id].state);
+            let state = state.lock().await;
+            state.history.last().map(|message| message.content.clone())
+        };
+        assert_eq!(
+            answer.as_deref(),
+            Some("the first half, then the rest"),
+            "the turn finished with nobody connected for part of it"
+        );
+
+        let _ = close_b.send(());
+        b_client
+            .await
+            .expect("b's client")
+            .expect("b's client ends cleanly");
+        b_serving
+            .await
+            .expect("b's connection")
+            .expect("b's connection ends cleanly");
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn two_clients_of_one_thread_see_it_live() {
+        on_a_large_stack(without_mcp(two_clients_one_thread()));
+    }
+
+    async fn two_clients_one_thread() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+        let (endpoint, release) = held_provider("streaming to both, ", "still both").await;
+        let mut clients = Vec::new();
+        for _ in 0..2 {
+            let (engine, transport) = agent_client_protocol::Channel::duplex();
+            let (updates_tx, updates) = tokio::sync::mpsc::unbounded_channel();
+            let (ready_tx, ready) = tokio::sync::oneshot::channel();
+            let (close, closed) = tokio::sync::oneshot::channel();
+            let serving = serve_on_thread(&server, engine);
+            let client = tokio::spawn(recording_client(transport, updates_tx, ready_tx, closed));
+            let connection = ready.await.expect("connects");
+            connection
+                .send_request(initialize_with(serde_json::json!({})))
+                .block_task()
+                .await
+                .expect("initializes");
+            clients.push((connection, updates, close, serving, client));
+        }
+        let session_id = clients[0]
+            .0
+            .send_request(NewSessionRequest::new(cwd_path.clone()))
+            .block_task()
+            .await
+            .expect("a creates a session")
+            .session_id
+            .to_string();
+        use_provider(&server, &session_id, &endpoint).await;
+        clients[1]
+            .0
+            .send_request(LoadSessionRequest::new(
+                session_id.clone(),
+                cwd_path.clone(),
+            ))
+            .block_task()
+            .await
+            .expect("b loads the open thread");
+
+        let prompt = clients[0].0.send_request(PromptRequest::new(
+            session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new("tell us both"))],
+        ));
+        let mut said = [Vec::new(), Vec::new()];
+        for ((_, updates, ..), said) in clients.iter_mut().zip(&mut said) {
+            wait_for_text(updates, "streaming to both", said).await;
+        }
+        let _ = release.send(());
+        for ((_, updates, ..), said) in clients.iter_mut().zip(&mut said) {
+            wait_for_text(updates, "still both", said).await;
+        }
+        assert_eq!(
+            prompt.block_task().await.expect("the prompt").stop_reason,
+            StopReason::EndTurn
+        );
+        // B is shown A's prompt; A shows its own already.
+        let prompt_shown = |said: &[(&str, String)]| {
+            said.iter()
+                .any(|(who, text)| *who == "user" && text == "tell us both")
+        };
+        assert!(!prompt_shown(&said[0]), "a: {:?}", said[0]);
+        assert!(prompt_shown(&said[1]), "b: {:?}", said[1]);
+
+        for (_, _, close, serving, client) in clients {
+            let _ = close.send(());
+            client.await.expect("client").expect("client ends cleanly");
+            serving
+                .await
+                .expect("connection")
+                .expect("connection ends cleanly");
+        }
+        server.shutdown().await;
     }
 }
