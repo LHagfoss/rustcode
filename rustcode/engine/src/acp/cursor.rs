@@ -62,6 +62,8 @@ pub(crate) struct Logged {
 /// fall inside a newer one). Microseconds keep them below 2^53, which a
 /// JavaScript client reads exactly.
 pub(crate) struct UpdateLog {
+    /// Where the numbering started: the first update is `start + 1`.
+    start: u64,
     /// The cursor of the newest update, or the starting point when none.
     head: u64,
     /// The updates with cursors `head - len + 1 ..= head`, oldest first.
@@ -79,6 +81,7 @@ impl UpdateLog {
 
     pub(crate) fn starting_at(head: u64) -> Self {
         Self {
+            start: head,
             head,
             entries: VecDeque::new(),
             bytes: 0,
@@ -137,6 +140,22 @@ impl UpdateLog {
                 .iter()
                 .filter(move |logged| logged.cursor > cursor),
         )
+    }
+}
+
+/// Where a session's log stood when a load of the closed session began
+/// ([`super::clients::Clients::load_mark`]): its newest cursor, or `None` while
+/// the session had no log. Taking a mark makes no log, so a load that fails
+/// (an unknown thread, a cwd that does not match) leaves nothing behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LogMark(pub(crate) Option<u64>);
+
+impl UpdateLog {
+    /// The updates logged after `mark`, oldest first; `None` when they are
+    /// not all kept. A log that did not exist at the mark was made after it,
+    /// so everything it numbered came after it.
+    pub(crate) fn since_mark(&self, mark: LogMark) -> Option<impl Iterator<Item = &Logged>> {
+        self.since(mark.0.unwrap_or(self.start))
     }
 }
 
@@ -255,6 +274,40 @@ mod tests {
         assert!(log.since(seen).is_none());
         assert_eq!(cursors(&log, log.head()), Some(vec![]));
         assert_eq!(log.push(&chunk("b")), seen + 2);
+    }
+
+    #[test]
+    fn a_mark_from_before_the_log_existed_covers_all_it_numbered() {
+        let mut log = UpdateLog::starting_at(500);
+        let none = LogMark(None);
+        assert_eq!(
+            log.since_mark(none).map(|kept| kept.count()),
+            Some(0),
+            "nothing logged yet"
+        );
+        log.push(&chunk("a"));
+        log.push(&chunk("b"));
+        assert_eq!(
+            log.since_mark(none)
+                .map(|kept| kept.map(|logged| logged.cursor).collect::<Vec<_>>()),
+            Some(vec![501, 502])
+        );
+        assert_eq!(
+            log.since_mark(LogMark(Some(501)))
+                .map(|kept| kept.map(|logged| logged.cursor).collect::<Vec<_>>()),
+            Some(vec![502])
+        );
+        // A rewrite since the mark, or more than the log keeps, refuses it.
+        log.invalidate();
+        assert!(log.since_mark(none).is_none());
+        let mut full = UpdateLog::starting_at(0);
+        for _ in 0..LOG_UPDATES + 1 {
+            full.push(&chunk("x"));
+        }
+        assert!(
+            full.since_mark(none).is_none(),
+            "the first update was dropped"
+        );
     }
 
     #[test]

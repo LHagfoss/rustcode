@@ -700,7 +700,7 @@ async fn acp_load_session(
     let cwd = canonical_acp_cwd(&request.cwd, "session/load")?;
     // Where the session's log is before its transcript is read: whatever it
     // logs after this is not in the transcript.
-    let base = server.clients.head(&session_id);
+    let base = server.clients.load_mark(&session_id);
     let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
         agent_client_protocol::Error::invalid_params()
             .data(format!("unknown or unresumable ACP session: {session_id}"))
