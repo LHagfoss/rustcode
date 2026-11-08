@@ -146,7 +146,7 @@ export function RemoteAccessPage() {
       : enabled
         ? shared.length
           ? `Sharing ${shared.length === 1 ? "this thread" : `these ${shared.length} threads`} with paired devices.`
-          : "Remote access is on for this Mac. An open thread is shared from the next pass."
+          : "Remote access is on for this computer. An open thread is shared from the next pass."
         : "Nothing is shared from this app.";
 
   return (
@@ -160,8 +160,8 @@ export function RemoteAccessPage() {
         footer="Shared with the RustCode app on your phone through the remote gateway (docs/remote.md). Plain LAN traffic is authenticated but not encrypted: use NetBird away from a trusted network."
       >
         <Row
-          title="Share this Mac's threads with a phone"
-          subtitle="Starts the gateway and shares every thread this app has open — on the built-in harness or on Codex, Claude Code, Pi or any other — with the paired devices. Turning it off stops remote access for this Mac, including a share a terminal started; paired devices stay paired."
+          title="Share this computer's threads with a phone"
+          subtitle="Starts the gateway and shares every thread this app has open — on the built-in harness or on Codex, Claude Code, Pi or any other — with the paired devices. Turning it off stops remote access for this computer, including a share a terminal started; paired devices stay paired."
           status={status}
         >
           <Switch
@@ -181,7 +181,7 @@ export function RemoteAccessPage() {
                 {gateway.connected && gateway.connectedDevices.length > 0
                   ? ` · ${gateway.connectedDevices.length} device${gateway.connectedDevices.length === 1 ? "" : "s"} connected`
                   : ""}
-                {gateway.loopbackOnly ? " · this Mac only" : ""}
+                {gateway.loopbackOnly ? " · this computer only" : ""}
               </span>
             ) : enabled ? (
               "The gateway has not announced an address yet."
@@ -223,7 +223,7 @@ export function RemoteAccessPage() {
         {heldBack > 0 && (
           <Row
             title="Held back threads"
-            subtitle={`This Mac shares at most 32 threads at once, the ones used most recently. ${heldBack === 1 ? "One open thread is" : `${heldBack} open threads are`} held back; each says why under Open threads.`}
+            subtitle={`This computer shares at most 32 threads at once, the ones used most recently. ${heldBack === 1 ? "One open thread is" : `${heldBack} open threads are`} held back; each says why under Open threads.`}
             status={heldBack === 1 ? "1 thread" : `${heldBack} threads`}
           >
             <Chip tone="warn">Over the limit</Chip>
@@ -414,7 +414,7 @@ export function PairingCard({
                   : `${WRONG_CODES_ALLOWED} wrong codes allowed`}
               </span>
               {lockedFor > 0 && <Chip tone="warn">Pairing locked</Chip>}
-              {offer.loopbackOnly && <Chip tone="warn">This Mac only</Chip>}
+              {offer.loopbackOnly && <Chip tone="warn">This computer only</Chip>}
               <Action quiet size="sm" onClick={onDismiss}>
                 Dismiss
               </Action>
@@ -431,8 +431,8 @@ export function PairingCard({
             )}
             {offer.loopbackOnly && (
               <p className="m-0 pt-2 text-caption text-fg-faint">
-                The gateway is listening on loopback only, so a phone cannot reach this Mac. Give it a LAN or
-                NetBird address (docs/remote.md › Automatic address selection).
+                The gateway is listening on loopback only, so a phone cannot reach this computer. Give it a
+                LAN or NetBird address (docs/remote.md › Automatic address selection).
               </p>
             )}
           </div>
@@ -442,7 +442,7 @@ export function PairingCard({
           <div className="flex flex-col gap-3 text-callout text-fg-muted">
             <p className="m-0">
               The gateway did not answer in time. It may be starting, or another program holds it. Try again,
-              or turn remote access off for this Mac.
+              or turn remote access off for this computer.
             </p>
             <div className="flex items-center gap-2">
               <Action onClick={onRenew}>

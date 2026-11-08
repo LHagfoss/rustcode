@@ -1,3 +1,4 @@
+import { formatBinding } from "../lib/keys";
 // `?catalog` in a dev build: every shared control on one page, so a change to a recipe, or a
 // control that drifts from it, shows at a glance. Not part of the app (main.tsx).
 
@@ -104,7 +105,7 @@ export function Catalog() {
           </Section>
           <Section title="Field">
             <input className={inputClass} placeholder="Placeholder" />
-            <Kbd>⌘K</Kbd>
+            <Kbd>{formatBinding("mod+k")}</Kbd>
           </Section>
           <Section title="Menu">
             <DropdownMenu.Root modal={false}>
@@ -115,7 +116,7 @@ export function Catalog() {
                 <DropdownMenu.Label className={menuLabel}>Label</DropdownMenu.Label>
                 <DropdownMenu.Item className={menuItem}>
                   <Copy size={13} className="text-fg-muted" /> Item
-                  <MenuShortcut>⌘C</MenuShortcut>
+                  <MenuShortcut>{formatBinding("mod+c")}</MenuShortcut>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item disabled className={menuItem}>
                   Disabled

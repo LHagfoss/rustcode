@@ -1,3 +1,5 @@
+import { formatBinding } from "../lib/keys";
+import { fileManagerName, primaryModifier } from "../lib/platform";
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
@@ -522,7 +524,7 @@ export const Composer = memo(function Composer({
         setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : fileList.length - 1)) % fileList.length);
         return;
       }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey)) {
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))) {
         e.preventDefault();
         const path = fileList[selected];
         if (path) reference(path);
@@ -540,7 +542,7 @@ export const Composer = memo(function Composer({
         setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length);
         return;
       }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey)) {
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))) {
         e.preventDefault();
         const command = list[selected];
         if (command) complete(command, e.key === "Enter");
@@ -572,7 +574,7 @@ export const Composer = memo(function Composer({
       // A held Enter sends one message, not one a frame.
       if (e.repeat) return;
       e.preventDefault();
-      send(e.metaKey || e.ctrlKey);
+      send(primaryModifier(e));
       return;
     }
     if (e.key === "Escape") {
@@ -657,7 +659,7 @@ export const Composer = memo(function Composer({
         ? "Send a message to decline and redirect the agent…"
         : running
           ? decision?.action === "steer"
-            ? "⏎ queues it for the next turn, ⌘⏎ steers this one…"
+            ? `⏎ queues it for the next turn, ${formatBinding("mod+enter")} steers this one…`
             : decision?.action === "interruptRestart"
               ? "⏎ stops this turn and starts a new one…"
               : "⏎ queues it for the next turn…"
@@ -1368,7 +1370,7 @@ function FolderActions({ cwd }: { cwd: string }) {
         {middleEllipsis(cwd, PATH_CHARS + 10)}
       </div>
       <CardMenuItem onSelect={() => openPath(cwd)}>
-        <FolderOpen size={13} className="text-fg-muted" /> Open in Finder
+        <FolderOpen size={13} className="text-fg-muted" /> Open in {fileManagerName()}
       </CardMenuItem>
       {canOpenTerminal() && (
         <CardMenuItem onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}>
@@ -1492,7 +1494,7 @@ function PlusMenu({
       <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
       <CardMenuItem onSelect={() => startNewThread()}>
         <SquarePen size={13} className="text-fg-muted" /> New Thread
-        <MenuShortcut>⌘N</MenuShortcut>
+        <MenuShortcut>{formatBinding("mod+n")}</MenuShortcut>
       </CardMenuItem>
       <CardMenuItem
         onSelect={() =>

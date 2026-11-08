@@ -732,7 +732,7 @@ function useNow(every = 30_000): number {
 }
 
 /**
- * The plan windows this Mac is signed in to, from the cache the composer's meter
+ * The plan windows this computer is signed in to, from the cache the composer's meter
  * reads (`_rustcode/usage/plans`): each window's used bar and when it resets.
  * Nothing is asked for here — Settings › Usage and the background poll read it.
  */
@@ -917,8 +917,8 @@ function UsageFootnote({
   return (
     <div className="space-y-1">
       <span className="block">
-        Every turn in this Mac's local data store.{period ? ` Each tile compares ${period}.` : ""} A blank
-        count means no turn in that row reported it.
+        Every turn in this computer's local data store.{period ? ` Each tile compares ${period}.` : ""} A
+        blank count means no turn in that row reported it.
       </span>
       <HowThisIsCounted>
         <span className="block">

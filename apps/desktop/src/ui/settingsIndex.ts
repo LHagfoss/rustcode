@@ -181,7 +181,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // ------------------------------------------------------------ Remote access
   {
     section: "remote",
-    title: "Share this Mac's threads with a phone",
+    title: "Share this computer's threads with a phone",
     keywords:
       "remote access phone device mobile share paired pair gateway on off switch every thread harness",
   },

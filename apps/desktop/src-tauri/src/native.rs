@@ -16,6 +16,10 @@ const LOGIN_TOOLS: &[&str] = &[
     "rustcode",
 ];
 
+fn is_known_login_tool(tool: &str) -> bool {
+    LOGIN_TOOLS.contains(&tool)
+}
+
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
 fn absolute_dir(path: &str) -> Result<PathBuf, String> {
@@ -36,6 +40,18 @@ pub fn open_url(url: String) -> Result<(), String> {
         return Err("Only web and mail links open.".into());
     }
     open_with_system(&url)
+}
+
+/// Path a file manager should open or select for a reveal action.
+///
+/// macOS and Windows can select the requested item. On other systems, open a
+/// directory itself, or the containing directory for a file.
+fn reveal_target(path: &Path, can_select: bool) -> &Path {
+    if can_select || path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -75,15 +91,31 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     {
         crate::process::command("open")
             .arg("-R")
-            .arg(&path)
+            .arg(reveal_target(&path, true))
             .spawn()
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        open_with_system(&path.parent().unwrap_or(&path).display().to_string())
+        crate::process::command("explorer")
+            .arg(format!("/select,{}", reveal_target(&path, true).display()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Could not open Explorer: {e}"))
     }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        open_with_system(&reveal_target(&path, false).display().to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn interactive_command(program: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+    command
 }
 
 /// POSIX single-quote a word for a shell command line.
@@ -114,11 +146,7 @@ pub fn open_login_terminal(
     env: Option<Vec<(String, String)>>,
 ) -> Result<(), String> {
     let tool = command.first().ok_or("No command.")?;
-    let name = Path::new(tool)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    if !LOGIN_TOOLS.contains(&name) || tool.contains('/') {
+    if !is_known_login_tool(tool) {
         return Err(format!("{tool} is not a known harness login."));
     }
     if command.iter().any(|w| w.contains('\n') || w.contains('\r')) {
@@ -148,11 +176,54 @@ pub fn open_login_terminal(
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let quote = |word: &str| format!("'{}'", word.replace('\'', "''"));
+        let mut script = String::new();
+        for (key, value) in &env {
+            script.push_str(&format!("$env:{key} = {}; ", quote(value)));
+        }
+        script.push_str("& ");
+        script.push_str(
+            &command
+                .iter()
+                .map(|word| quote(word))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        let _ = line;
+        interactive_command("powershell.exe")
+            .args(["-NoExit", "-Command", &script])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Could not open PowerShell: {e}"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         let _ = line;
+        let mut args: Vec<String> = env
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        args.extend(command);
+        for terminal in ["x-terminal-emulator", "gnome-terminal", "konsole"] {
+            let separator = if terminal == "gnome-terminal" {
+                "--"
+            } else {
+                "-e"
+            };
+            if crate::process::command(terminal)
+                .arg(separator)
+                .arg("env")
+                .args(&args)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
         Err(
-            "Opening a terminal is only supported on macOS so far; copy the command instead."
+            "Could not open a terminal; install a supported terminal or copy the command instead."
                 .into(),
         )
     }
@@ -337,10 +408,31 @@ pub fn open_terminal_at(path: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        let _ = path;
-        Err("Opening a terminal is only supported on macOS so far.".into())
+        for terminal in ["wt.exe", "cmd.exe"] {
+            if interactive_command(terminal)
+                .current_dir(&path)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("Could not open Windows Terminal or Command Prompt.".into())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for terminal in ["x-terminal-emulator", "gnome-terminal", "konsole"] {
+            if crate::process::command(terminal)
+                .current_dir(&path)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("Could not open a supported terminal.".into())
     }
 }
 
@@ -767,6 +859,25 @@ mod tests {
         assert!(open_login_terminal(vec!["rm".into(), "-rf".into()], None).is_err());
         assert!(open_login_terminal(vec!["/tmp/codex".into()], None).is_err());
         assert!(open_login_terminal(vec![], None).is_err());
+    }
+
+    #[test]
+    fn login_tool_allowlist_rejects_paths() {
+        for tool in LOGIN_TOOLS {
+            assert!(is_known_login_tool(tool));
+        }
+        assert!(!is_known_login_tool("C:\\tools\\codex"));
+        assert!(!is_known_login_tool("/tmp/codex"));
+        assert!(!is_known_login_tool("codex.exe"));
+    }
+
+    #[test]
+    fn reveal_uses_the_requested_directory_and_file_parent() {
+        let directory = std::env::current_dir().unwrap();
+        let file = std::env::current_exe().unwrap();
+        assert_eq!(reveal_target(&directory, false), directory.as_path());
+        assert_eq!(reveal_target(&file, false), file.parent().unwrap());
+        assert_eq!(reveal_target(&file, true), file.as_path());
     }
 
     #[test]

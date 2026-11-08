@@ -1,3 +1,4 @@
+import { fileManagerName } from "../lib/platform";
 // Settings › Capabilities: skills and MCP servers in one place, through the
 // engine process that runs them (`_rustcode/capabilities*`), so a status
 // is never a guess. Skills by where they come from, each with its file;
@@ -507,10 +508,10 @@ function SkillsSection({
                       </button>
                     </Tooltip>
                   )}
-                  <Tooltip label="Show in Finder">
+                  <Tooltip label={`Show in ${fileManagerName()}`}>
                     <button
                       type="button"
-                      aria-label={`Show ${s.name} in Finder`}
+                      aria-label={`Show ${s.name} in ${fileManagerName()}`}
                       onClick={() => revealPath(s.path)}
                       className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
                     >

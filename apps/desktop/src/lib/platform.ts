@@ -26,3 +26,24 @@ export function applyPlatform(): Platform {
   document.documentElement.dataset.platform = platform;
   return platform;
 }
+
+/** The system file browser name in actions. */
+export function fileManagerName(platform: Platform = currentPlatform()): string {
+  return platform === "mac" ? "Finder" : platform === "windows" ? "Explorer" : "file manager";
+}
+
+/** The platform primary shortcut modifier. */
+export function primaryModifier(
+  event: { metaKey: boolean; ctrlKey: boolean },
+  platform: Platform = currentPlatform(),
+): boolean {
+  return platform === "mac" ? event.metaKey : event.ctrlKey;
+}
+
+/** A wheel gesture that zooms a picture: Ctrl-wheel pinches on macOS. */
+export function zoomGestureModifier(
+  event: { metaKey: boolean; ctrlKey: boolean },
+  platform: Platform = currentPlatform(),
+): boolean {
+  return primaryModifier(event, platform) || (platform === "mac" && event.ctrlKey);
+}
