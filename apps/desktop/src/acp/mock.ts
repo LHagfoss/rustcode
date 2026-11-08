@@ -2770,7 +2770,7 @@ export class MockEngine {
               { label: "Weekly", usedPercent: 12, windowMinutes: 10080, resetsAt: at(90) },
             ],
           },
-        ].filter((a) => p?.claudeAccounts || a.id === p?.claudeAccount);
+        ].filter((a) => (p?.claude && p?.claudeAccounts) || a.id === p?.claudeAccount);
         return {
           plans: [
             p?.claude

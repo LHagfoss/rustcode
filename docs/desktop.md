@@ -395,14 +395,17 @@ composer's keys stay outside the table.
   logins the app's poll asks for (`backgroundPlansAsk`, through
   `state/plans.ts`), so it never reads a login nothing was read for or one a
   failed read paused, and it keeps the rows it did not ask rather than dropping
-  them; when the plan cache is fresh (the poll read the same logins) it waits,
-  so one Keychain item is not read twice per cycle. A read that fails doubles
-  the wait, up to fifteen minutes, and a read that answers puts it back on the
+  them; the foot keeps the time of the last whole read, since a background read
+  does not ask for every named login. It reads even when the app's own poll just
+  filled the plan cache — the rows on screen come from the page's read, and the
+  engine shares a read that is already under way. A read that fails doubles the
+  wait, up to fifteen minutes, and a read that answers puts it back on the
   interval; a read in flight is never doubled, and Refresh still reads at once,
   past the engine's minute of cache. What the page reads fills the same cache
   `list_harnesses` reports to an agent (`state/harnessUsage.ts`,
   `docs/orchestrator.md`), which answers without a Keychain read or a request of
-  its own and refreshes the stale named logins in the background.
+  its own and refreshes the stale named logins in the background. With Claude's
+  switch off, an answer that was already in flight commits no Claude row.
   A Claude access token lives hours and is renewed only when Claude Code runs,
   so a login nobody ran a thread on since reads as lapsed. The row then draws
   the numbers RustCode last read for that login, from `claude-usage.json` in

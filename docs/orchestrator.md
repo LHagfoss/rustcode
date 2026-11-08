@@ -546,7 +546,10 @@ before and has since gone stale — the accounts an agent is choosing between.
 A login nothing was read for is never asked for (reading an unseen Keychain item
 can prompt macOS), nor is one a failed read paused (`denied`, `forbidden`,
 signed out). It happens at most once per 180 seconds however often the tool is
-called, one login at a time, and the answer itself is never waited on.
+called — that one call covers the app's own ask as well as the named logins —
+one login at a time, and the answer itself is never waited on. An entry is
+treated as stale fifteen seconds before the poll interval, since a read stamps
+its time when it finishes: the app reads every three minutes, not every six.
 
 ## Orchestration tools v4
 

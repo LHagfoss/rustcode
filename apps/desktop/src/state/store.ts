@@ -14,6 +14,7 @@ import {
   parsePlanUsage,
   planHarness,
   planKey,
+  planOf,
   type SubagentInfo,
   type UsagePlan,
   type UsageWindow,
@@ -4744,9 +4745,17 @@ export function commandsFor(s: CommandsSource, threadId?: string | null): SlashC
 /** How often the app asks for every plan while its window is visible. */
 export const PLAN_CACHE_POLL_MS = 180_000;
 
-/** True when a harness's numbers are missing or older than the poll interval. */
+/**
+ * How much before the poll interval an entry counts as stale. A read stamps
+ * `fetchedAt` when it finishes, a moment after the timer that asked for it
+ * fired, so comparing against the whole interval would always miss the next
+ * tick and read every other one — every six minutes instead of three.
+ */
+export const PLAN_STALE_MARGIN_MS = 15_000;
+
+/** True when a harness's numbers are missing or old enough for the next tick to read them again. */
 export function planIsStale(plan: CachedPlan | undefined, now = Date.now()): boolean {
-  return !plan?.fetchedAt || now - plan.fetchedAt >= PLAN_CACHE_POLL_MS;
+  return !plan?.fetchedAt || now - plan.fetchedAt >= PLAN_CACHE_POLL_MS - PLAN_STALE_MARGIN_MS;
 }
 
 /** True when anything in the cache wants a refresh: an entry past the poll, or none at all. */
@@ -4962,6 +4971,9 @@ export function setClaudeUsageAllowed(on: boolean): void {
  * what unpauses them.
  */
 export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
+  // A read already in flight when the switch went off still answers Claude's
+  // rows; nothing may put them back while the meter is off.
+  if (!claudeUsageAllowed()) answers = answers.filter((p) => planOf(p) !== CLAUDE_CODE);
   if (asked) planPauses = NO_PAUSES;
   const gone = answers.filter((p) => p.status === "signedOut" || p.status === "notInstalled").map(planKey);
   const kept = forgetPlans(get().planCache, gone);
@@ -5055,22 +5067,23 @@ const CLAUDE_CODE = "claude-code";
 let planLoginsAskedAt = 0;
 
 /**
- * Asks in the background for the named logins that were read before and are
- * stale now, for a caller that can only report what the cache holds
- * (`list_harnesses`): without this only the default login and the account of
- * the thread on screen are ever read (`currentPlansAsk`), so the accounts an
- * agent is choosing between never get numbers.
+ * Asks in the background for the numbers a caller that can only report the
+ * cache needs newer ones of (`list_harnesses`): the app's own ask — the default
+ * login and the account of the thread on screen (`currentPlansAsk`) — and every
+ * named login that was read before and has gone stale, which the poll alone
+ * never reads.
  *
  * A login nothing was read for is never asked for: reading an unseen Keychain
  * item can prompt macOS, and the user never asked for that. Neither is one a
- * failed read paused (`failurePauses` in `state/plans.ts`). The whole thing
- * runs at most once per poll interval however often it is called, and the
- * requests queue behind the one in flight, so one Keychain item is read at a
- * time. The caller's answer stays cache-only: this never awaits.
+ * failed read paused (`failurePauses` in `state/plans.ts`). All of it happens
+ * at most once per poll interval however often it is called, and the requests
+ * queue behind the one in flight, so one Keychain item is read at a time. The
+ * caller's answer stays cache-only: this never awaits.
  */
 export function refreshReadPlanLogins(now = Date.now()): void {
-  if (!connection || get().status !== "ready" || !claudeUsageAllowed()) return;
+  if (!connection || get().status !== "ready") return;
   if (now - planLoginsAskedAt < PLAN_CACHE_POLL_MS) return;
+  planLoginsAskedAt = now;
   const cache = get().planCache;
   const prefix = `${CLAUDE_CODE}#`;
   const stale = Object.keys(cache)
@@ -5078,8 +5091,6 @@ export function refreshReadPlanLogins(now = Date.now()): void {
     .map((key) => key.slice(prefix.length))
     .filter((id) => planIsStale(cache[harnessPlanKey(CLAUDE_CODE, id)], now))
     .filter((id) => !planPauses.accounts.has(id));
-  if (!stale.length) return;
-  planLoginsAskedAt = now;
   for (const account of stale) plansQueued = queueAsks(plansQueued, { claude: false, account });
   // One request at a time: with one in flight its loop drains these asks, and
   // otherwise the app's own ask goes first and they follow it.

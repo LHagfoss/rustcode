@@ -85,12 +85,11 @@ function retryable(plan: UsagePlan): boolean {
 /**
  * Whether Settings › Usage reads on its own now. Its interval (`everyMs` in
  * [`watchUsageRefresh`], the app's one plan-poll length) reads on every tick
- * while the window is visible, unless the app's plan cache was read within
- * that interval: the app's own poll (`state/store.ts` `startPlanPolling`)
- * reads the same logins, so reading them again here would read one Keychain
- * item twice per cycle. Coming back to the window reads only when what is drawn
- * is older than that interval, so switching away and back costs nothing. A read
- * already in flight is never doubled.
+ * while the window is visible: the rows on screen come from the page's own
+ * answer, so a skipped tick would leave the page frozen while something else
+ * kept the app's cache warm. Coming back to the window reads only when what is
+ * drawn is older than that interval, so switching away and back costs nothing.
+ * A read already in flight is never doubled.
  */
 export function usageAutoRead(input: {
   /** When the drawn numbers were read, or null with nothing drawn yet. */
@@ -100,16 +99,14 @@ export function usageAutoRead(input: {
   visible: boolean;
   /** A read is in flight. */
   reading: boolean;
-  /** Nothing in the plan cache wants a read (`!planCacheStale` in `state/store.ts`). */
-  cacheFresh: boolean;
   /** The interval fired, or the window came back. */
   trigger: "tick" | "resumed";
   /** The interval's length; the app's `PLAN_CACHE_POLL_MS`. */
   everyMs: number;
 }): boolean {
-  const { readAt, now = Date.now(), visible, reading, cacheFresh, trigger, everyMs } = input;
+  const { readAt, now = Date.now(), visible, reading, trigger, everyMs } = input;
   if (!visible || reading) return false;
-  if (trigger === "tick") return !cacheFresh;
+  if (trigger === "tick") return true;
   return readAt === null || now - readAt >= everyMs;
 }
 
@@ -145,8 +142,6 @@ export function watchUsageRefresh(loop: {
   reading: () => boolean;
   /** `document.visibilityState === "visible"`. */
   visible: () => boolean;
-  /** Nothing in the plan cache wants a read (`!planCacheStale` in `state/store.ts`). */
-  cacheFresh: () => boolean;
   /** When the drawn numbers were read, or null with nothing drawn yet. */
   readAt: () => number | null;
   /** The interval's length in milliseconds (state/store.ts `PLAN_CACHE_POLL_MS`). */
@@ -167,7 +162,6 @@ export function watchUsageRefresh(loop: {
       readAt: loop.readAt(),
       visible: loop.visible(),
       reading: loop.reading(),
-      cacheFresh: loop.cacheFresh(),
       trigger,
       everyMs: loop.everyMs,
     });

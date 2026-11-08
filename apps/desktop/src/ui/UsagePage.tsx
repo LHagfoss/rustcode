@@ -31,7 +31,6 @@ import {
   commitPlansAnswer,
   harnessOf,
   PLAN_CACHE_POLL_MS,
-  planCacheStale,
   request,
   setClaudeUsageAllowed,
   useApp,
@@ -89,10 +88,17 @@ export function UsagePage() {
       const shownPage = cachedPage<UsageAnswer>(USAGE_PLANS_KEY);
       const shown = shownPage?.data.plans ?? [];
       const whole = asked && withClaude;
-      const next = commitPage(USAGE_PLANS_KEY, token, {
-        plans: answeredPlans(shown, plans, whole),
-        asked: whole,
-      });
+      // A background read with Claude on answers part of the page: the default
+      // login and one account, not every named login, so the foot keeps the
+      // time of the last whole read instead of saying "just now" over rows it
+      // did not ask. With Claude off a read answers every row there is.
+      const partial = withClaude && !asked;
+      const next = commitPage(
+        USAGE_PLANS_KEY,
+        token,
+        { plans: answeredPlans(shown, plans, whole), asked: whole },
+        partial ? shownPage?.readAt : undefined,
+      );
       if (!next) return true;
       // The same answer fills the cache the composer's meter reads, and asking
       // here is what lets the background poll read Claude again after a pause.
@@ -130,16 +136,15 @@ export function UsagePage() {
   // its window is visible, one on coming back after being hidden longer than
   // that, and a longer wait after one that failed. The numbers, the bars and
   // the foot's read time then move without a press; a press of Refresh reads now
-  // instead, past the engine's minute of cache. With the app's plan cache fresh
-  // (its own poll reads the same logins) the tick waits, so one login is not
-  // read twice per cycle.
+  // instead, past the engine's minute of cache. The tick reads even when the
+  // app's own poll just filled the cache: the rows on screen come from this
+  // read, and the engine shares a read that is already under way.
   useEffect(() => {
     if (status !== "ready") return;
     return watchUsageRefresh({
       read: () => load(claude, false, false),
       reading: () => reading.current,
       visible: () => document.visibilityState === "visible",
-      cacheFresh: () => !planCacheStale(useApp.getState().planCache),
       readAt: () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY)?.readAt ?? null,
       everyMs: PLAN_CACHE_POLL_MS,
     });

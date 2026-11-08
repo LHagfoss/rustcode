@@ -248,14 +248,13 @@ describe("the page keeps itself current", () => {
     await settle();
   };
 
-  test("a tick reads while the window is visible, unless a read is in flight or the cache is fresh", () => {
+  test("a tick reads while the window is visible, unless a read is in flight", () => {
     const tick = (over: Partial<Parameters<typeof usageAutoRead>[0]> = {}) =>
       usageAutoRead({
         readAt: NOW,
         now: NOW,
         visible: true,
         reading: false,
-        cacheFresh: false,
         trigger: "tick",
         everyMs: EVERY,
         ...over,
@@ -265,9 +264,42 @@ describe("the page keeps itself current", () => {
     expect(tick({ visible: false })).toBe(false);
     // Neither does one that is already reading.
     expect(tick({ reading: true })).toBe(false);
-    // Nor one whose logins the app's own poll just read: the same login would
-    // otherwise be read twice per cycle.
-    expect(tick({ cacheFresh: true })).toBe(false);
+  });
+
+  test("a tick reads even when the app's plan cache is fresh, so the page never freezes", async () => {
+    // The rows on screen come from the page's own read: skipping the tick
+    // because another loop kept the cache warm left the page drawing old
+    // numbers. (The engine shares a read already under way, so the overlap
+    // costs one request.)
+    expect(
+      usageAutoRead({
+        readAt: NOW,
+        now: NOW,
+        visible: true,
+        reading: false,
+        trigger: "tick",
+        everyMs: EVERY,
+      }),
+    ).toBe(true);
+    jest.useFakeTimers();
+    let reads = 0;
+    const stop = watchUsageRefresh({
+      read: () => {
+        reads += 1;
+        return true;
+      },
+      reading: () => false,
+      visible: () => true,
+      // Just read, by this page and by the app's poll.
+      readAt: () => Date.now(),
+      everyMs: EVERY,
+      onChange: () => () => {},
+    });
+    await advance(EVERY);
+    expect(reads).toBe(1);
+    await advance(EVERY);
+    expect(reads).toBe(2);
+    stop();
   });
 
   test("coming back reads only when what is drawn is older than the interval", () => {
@@ -277,7 +309,6 @@ describe("the page keeps itself current", () => {
         now: NOW,
         visible: true,
         reading: false,
-        cacheFresh: false,
         trigger: "resumed",
         everyMs: EVERY,
       });
@@ -311,7 +342,6 @@ describe("the page keeps itself current", () => {
       },
       reading: () => reading,
       visible: () => visible,
-      cacheFresh: () => false,
       readAt: () => readAt,
       everyMs: EVERY,
       onChange: (handler) => {
@@ -375,7 +405,6 @@ describe("the page keeps itself current", () => {
       },
       reading: () => false,
       visible: () => true,
-      cacheFresh: () => false,
       readAt: () => Date.now(),
       everyMs: STEP,
       onChange: () => () => {},
@@ -423,7 +452,6 @@ describe("the page keeps itself current", () => {
       },
       reading: () => false,
       visible: () => true,
-      cacheFresh: () => false,
       readAt: () => Date.now(),
       everyMs: EVERY,
       onChange: () => () => {},

@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
-import { harnessPlanKey, parsePlans } from "../acp/rustcode";
+import { harnessPlanKey, parsePlans, type UsagePlan } from "../acp/rustcode";
 import type { Transport, TransportEvent } from "../acp/transport";
 import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
@@ -63,6 +63,7 @@ import {
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
+  PLAN_STALE_MARGIN_MS,
   pairRemoteDevice,
   parsePanels,
   peekThread,
@@ -1040,23 +1041,12 @@ describe("engine controller with the mock engine", () => {
       refreshReadPlanLogins();
       await new Promise((r) => setTimeout(r, 20));
       expect(asked.length).toBe(sent);
-      // Past the interval, with every login it read fresh again, it asks for no
-      // account at all: only what has gone stale is read.
-      const cache = useApp.getState().planCache;
-      useApp.setState({
-        planCache: {
-          ...cache,
-          "claude-code#paral-2": { ...cache["claude-code#paral-2"]!, fetchedAt: Date.now() },
-        },
-      });
-      refreshReadPlanLogins(at + PLAN_CACHE_POLL_MS + 1);
+      // The app's own ask is rate-limited with the rest: the logins it read are
+      // stale again by the next interval, so only the throttle is in question
+      // here — a call a moment later reads nothing.
+      refreshReadPlanLogins(at + PLAN_CACHE_POLL_MS - 1);
       await new Promise((r) => setTimeout(r, 20));
-      expect(
-        asked
-          .slice(sent)
-          .map((p) => p.claudeAccount)
-          .filter(Boolean),
-      ).toEqual([]);
+      expect(asked.length).toBe(sent);
       // The paused login was never asked for.
       expect(asked.some((p) => p.claudeAccount === "paused")).toBe(false);
     } finally {
@@ -3589,6 +3579,18 @@ describe("a message sent from the new-thread screen", () => {
 });
 
 describe("plan usage cache", () => {
+  // `commitPlansAnswer` keeps no Claude row while the meter is off, so these
+  // tests read as if the user had allowed it.
+  let storage: ReturnType<typeof testStorage>;
+  beforeEach(() => {
+    storage = testStorage();
+    setClaudeUsageAllowed(true);
+  });
+  afterEach(() => {
+    setClaudeUsageAllowed(false);
+    storage.done();
+  });
+
   const plan = (used: number, fetchedAt: number): CachedPlan => ({
     source: "claude-code",
     windows: [{ usedPercent: used, minutes: 300 }],
@@ -3615,12 +3617,60 @@ describe("plan usage cache", () => {
     expect((before as Record<string, CachedPlan>).codex).toBeUndefined();
   });
 
-  test("staleness follows the three-minute poll", () => {
+  test("staleness follows the three-minute poll, with room for a read that ends after its tick", () => {
     const now = 10_000_000;
     expect(PLAN_CACHE_POLL_MS).toBe(180_000);
+    expect(PLAN_STALE_MARGIN_MS).toBe(15_000);
     expect(planIsStale(undefined, now)).toBe(true);
-    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS + 1), now)).toBe(false);
-    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS), now)).toBe(true);
+    const whole = PLAN_CACHE_POLL_MS - PLAN_STALE_MARGIN_MS;
+    expect(planIsStale(plan(20, now - whole + 1), now)).toBe(false);
+    expect(planIsStale(plan(20, now - whole), now)).toBe(true);
+    // A read stamps `fetchedAt` a moment after the tick that asked for it, so
+    // the exact interval would leave this fresh at the next tick and read every
+    // six minutes instead of three.
+    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS + 5_000), now)).toBe(true);
+  });
+
+  test("a plans answer that arrives after the switch went off keeps no Claude rows", () => {
+    resetForTests();
+    const storage = testStorage();
+    try {
+      const claude: UsagePlan = {
+        id: "claude",
+        name: "Claude",
+        via: "Claude Code",
+        harness: "claude-code",
+        status: "ok",
+        plan: "max",
+        windows: [{ label: "5-hour", usedPercent: 18, minutes: 300 }],
+      };
+      const codex: UsagePlan = {
+        id: "codex",
+        name: "ChatGPT",
+        via: "Codex CLI",
+        status: "ok",
+        windows: [{ label: "Weekly", usedPercent: 46, minutes: 10_080 }],
+      };
+      setClaudeUsageAllowed(true);
+      commitPlansAnswer([claude, codex]);
+      expect(useApp.getState().planCache["claude-code"]).toBeDefined();
+      // The user switches the meter off while a read is in flight; that read's
+      // answer must not put Claude's numbers back (or its sign-out record).
+      setClaudeUsageAllowed(false);
+      commitPlansAnswer([
+        claude,
+        { ...claude, id: "claude:work", account: "work", status: "signedOut" },
+        codex,
+      ]);
+      expect(useApp.getState().planCache["claude-code"]).toBeUndefined();
+      expect(useApp.getState().planCache["claude-code#work"]).toBeUndefined();
+      expect(useApp.getState().signedOutLogins["claude-code"]).toBeUndefined();
+      // Every other subscription is committed as usual.
+      expect(useApp.getState().planCache.codex?.windows[0]?.usedPercent).toBe(46);
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
   });
 
   test("the plans answer maps a subscription to its harness, dropping ones with no windows", () => {
