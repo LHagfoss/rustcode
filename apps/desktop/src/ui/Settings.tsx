@@ -310,6 +310,7 @@ function GeneralPage() {
         </Row>
         <Row
           title="Auto-compact"
+          stacked
           reset={
             autoCompact.mode === SETTINGS_DEFAULTS.autoCompact.mode
               ? undefined
