@@ -796,7 +796,7 @@ describe("engine controller with the mock engine", () => {
     expect(answer.text).toBeUndefined();
   });
 
-  test("a thread moves to another folder, and the default folder is separate", async () => {
+  test("a thread moves to another folder, and a new thread starts in the default one", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     const id = useApp.getState().sessions[0]!.id;
@@ -807,10 +807,19 @@ describe("engine controller with the mock engine", () => {
     await until(() => selected()?.loaded === true);
     expect(selected()!.cwd).toBe("/tmp/elsewhere");
 
+    // With no default chosen, a new thread from an open one starts in that thread's folder.
+    expect(useApp.getState().defaultCwd).toBe("");
+    startNewThread();
+    expect(useApp.getState().projectCwd).toBe("/tmp/elsewhere");
+
+    // The default wins over the open thread: ⌘N, the sidebar's button and the command palette start
+    // where the reader said, not where the thread they were reading lives.
+    selectThread(id);
     setDefaultCwd("/tmp/default");
     startNewThread();
-    // A new thread from an open one starts in that thread's folder; picking another keeps the default.
-    expect(useApp.getState().projectCwd).toBe("/tmp/elsewhere");
+    expect(useApp.getState().projectCwd).toBe("/tmp/default");
+    // Picking another folder for this one thread keeps the default, and the next new thread starts
+    // there again.
     setProjectCwd("/tmp/just-this-one");
     expect(useApp.getState().defaultCwd).toBe("/tmp/default");
     startNewThread();

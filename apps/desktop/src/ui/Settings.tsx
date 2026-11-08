@@ -258,7 +258,7 @@ function GeneralPage() {
       <Group title="New threads">
         <Row
           title="Default project folder"
-          subtitle="Where a new thread starts unless the composer's folder was changed."
+          subtitle="Where a new thread starts, in place of the folder of the open thread. A folder picked for one new thread still wins."
           status={defaultCwd || "None chosen"}
         >
           <Action onClick={() => void pickFolder(defaultCwd).then((p) => p && setDefaultCwd(p))}>

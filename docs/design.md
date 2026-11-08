@@ -214,11 +214,11 @@ edge. Everything in the card starts on one left edge: the field, the chips, the 
 hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round controls carry 8px of their
 own, which puts their icons on that same edge.
 
-The composer is its own, lighter pair, because it is the one surface text
+The composer is its own pair, because it is the one surface text
 scrolls under all day: `surface-2` at **66%** (78% focused) in light, and in
-dark a step lighter than `surface-2` (10% of the text mixed in) at **58%**
-(70% focused), so it reads as light glass over a dark pane instead of a darker
-slab. Its own `--rc-composer-filter` (`saturate(1.12) blur(22px)`;
+dark the resting `surface` at **62%** (76% focused), so it is the screen's
+one darker pane over the transcript while still reading as glass. Its own
+`--rc-composer-filter` (`saturate(1.12) blur(22px)`;
 `saturate(1.18) blur(28px)` in dark) does the frosting, and a 1px
 `--rc-composer-outline` (`black` at 7% in light, `white` at 12% in dark) draws
 the hairline, with a 7% `white` inner highlight in dark. It keeps a radius token
@@ -226,14 +226,14 @@ of its own, at the `2xl` step. The strip under it takes the same glass with a
 4% lift of the text colour (`--rc-composer-footer-bg`), so field and strip read
 as one frosted unit.
 
-Frosted rather than near-solid on purpose: the field is what the screen is about, so it is
-the lightest surface in the app, and the blur keeps text scrolling under it a hint rather
-than a smear. One filter per surface, two recipes in all
+Frosted rather than near-solid on purpose: the blur keeps text scrolling under the field a hint
+rather than a smear, and the glass stays see-through enough to read as a card over the
+transcript rather than a slab on it. One filter per surface, two recipes in all
 (the shared glass and the composer's): no larger radius, no second blur
 stacked on the first, no blur on a pane or a scrolling row.
 
 A new thread draws its chosen picture behind the whole pane, so the field there takes a third
-value of its own: 85% (`--rc-composer-bg-over`, `.rc-composer-over`, ui/ChatView.tsx), which
+value of its own: 88% (`--rc-composer-bg-over`, `.rc-composer-over`, ui/ChatView.tsx), which
 reads as a panel rather than as another window on the picture. The cards under it are the
 screen's one see-through surface, `.rc-glass-faint`: a third of `surface-2` and the shared
 filter, no edge ring, so the picture runs on behind them. Both go solid under Reduce
@@ -668,7 +668,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   its text inside the scroller. The control row at the bottom of the card
   is `px-3 pt-1 pb-3`, its round controls carrying a few px of their own,
   which puts their icons on the same 20px edge. Glass at
-  `--rc-composer-bg` (66%, 78% focused; see Glass) with `--rc-composer-filter`
+  `--rc-composer-bg` (66%, 78% focused in light; 62%, 76% in dark; see Glass) with
+  `--rc-composer-filter`
   and a 1px `--rc-composer-outline`; no ring or colour on focus, the glass step
   is the focus. The card clips to its own corner. The editor reads at
   `text-body leading-relaxed` (22.75px), two lines at rest above the control
