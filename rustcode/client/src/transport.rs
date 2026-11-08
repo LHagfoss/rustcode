@@ -246,19 +246,35 @@ impl AcpChannel {
     }
 
     /// The next ACP frame, or `None` when the machine closed the channel.
+    ///
+    /// This waits at most [`CONNECT_TIMEOUT`]: it is for a round trip. A
+    /// connection that stays open and relays frames uses [`Self::next`].
     pub async fn recv(&mut self) -> Result<Option<Value>> {
-        self.recv_by(tokio::time::Instant::now() + CONNECT_TIMEOUT)
+        self.recv_by(Some(tokio::time::Instant::now() + CONNECT_TIMEOUT))
             .await
     }
 
+    /// The next ACP frame, waiting as long as the machine keeps the channel
+    /// open; `None` when it closed it.
+    ///
+    /// This is what a relay reads: a quiet thread sends nothing for minutes at
+    /// a time, and the gateway's pings must not end the wait.
+    pub async fn next(&mut self) -> Result<Option<Value>> {
+        self.recv_by(None).await
+    }
+
     /// The next frame before `deadline`; pings do not restart the wait.
-    async fn recv_by(&mut self, deadline: tokio::time::Instant) -> Result<Option<Value>> {
+    async fn recv_by(&mut self, deadline: Option<tokio::time::Instant>) -> Result<Option<Value>> {
         loop {
-            match tokio::time::timeout_at(deadline, self.socket.next())
-                .await
-                .with_context(|| {
-                    format!("the machine stopped sending ACP frames for {CONNECT_TIMEOUT:?}")
-                })? {
+            let next = match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline, self.socket.next())
+                    .await
+                    .with_context(|| {
+                        format!("the machine stopped sending ACP frames for {CONNECT_TIMEOUT:?}")
+                    })?,
+                None => self.socket.next().await,
+            };
+            match next {
                 Some(Ok(Message::Text(text))) => {
                     return Ok(Some(
                         serde_json::from_str(&text)
@@ -287,7 +303,7 @@ impl AcpChannel {
         let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
         loop {
             let frame = self
-                .recv_by(deadline)
+                .recv_by(Some(deadline))
                 .await?
                 .context("the machine closed the ACP channel before answering")?;
             if frame.get("id") == Some(&Value::from(id)) && frame.get("method").is_none() {
@@ -474,6 +490,51 @@ mod tests {
             "the pings restarted the deadline: waited {elapsed:?}"
         );
         server.abort();
+    }
+
+    /// A relay waits as long as the machine is quiet; pings alone do not
+    /// answer it, and a closed channel ends it.
+    #[tokio::test]
+    async fn next_waits_through_a_quiet_channel() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // The switch to ACP, then a quiet stretch with only pings.
+            assert!(matches!(socket.next().await, Some(Ok(Message::Text(_)))));
+            socket
+                .send(Message::text(r#"{"type":"acp_opened"}"#))
+                .await
+                .unwrap();
+            for _ in 0..3 {
+                socket
+                    .send(Message::Ping(Default::default()))
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            socket
+                .send(Message::text(
+                    r#"{"jsonrpc":"2.0","method":"session/update"}"#,
+                ))
+                .await
+                .unwrap();
+            // The close frame, and a moment for it to reach the other side:
+            // dropping the socket right after it would reset the connection.
+            socket.close(None).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+        let mut channel = Connection::open(&addr.to_string())
+            .await
+            .unwrap()
+            .acp_open()
+            .await
+            .expect("the stub opens ACP");
+        let frame = channel.next().await.unwrap().expect("a frame arrives");
+        assert_eq!(frame["method"], "session/update");
+        assert!(channel.next().await.unwrap().is_none(), "then it closes");
+        server.await.unwrap();
     }
 
     #[test]

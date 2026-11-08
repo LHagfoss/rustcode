@@ -51,6 +51,19 @@ Next, in rough order:
    sidebar listed from the index, lazy transcript import.
 5. The rest of [Not yet ported](#not-yet-ported).
 
+Several machines (#3202): Settings › **Machines** pairs the app with another
+computer's RustCode server and keeps the connection, so one app can reach its
+own threads here and other machines' threads there. This step ships the page,
+the pairing flow and the connection itself — the state of each machine, the
+route it is reached over, and its thread count from `session/list`; listing
+and driving those threads in the sidebar is the next step. The Rust shell
+owns one connection supervisor per machine (`src-tauri/src/machines.rs`,
+`rustcode/client`) and the webview gives each a channel (`MachineTransport` in
+`src/acp/transport.ts`, `src/state/machines.ts`), because a web view cannot
+dial a gateway and the pairing token belongs in the credential store.
+`?machines=paired|connect|offline|revoked` in the mock walks the page without a
+second computer.
+
 Item 4 and the rest of the orchestration work move the domain model from
 sessions to an execution graph:
 [architecture/execution-graph.md](architecture/execution-graph.md) records that

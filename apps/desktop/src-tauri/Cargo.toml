@@ -25,11 +25,18 @@ tauri-plugin-notification = "=2.8.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+# Machines: the error chain from the machine client, and the times the
+# registry records (src/machines.rs).
+anyhow = "1"
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "std"] }
+# The machine client: saved machines, pairing, and the WebSocket to another
+# machine's gateway (src/machines.rs).
+rustcode-client = { path = "../../../rustcode/client" }
 # Checks a downloaded update against the release SHA256SUMS (src/updater.rs); the version tauri already uses.
 sha2 = "0.10"
 # Link previews: fetched here, never by the webview (src/links.rs).
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-tokio = { version = "1", features = ["net", "time"] }
+tokio = { version = "1", features = ["net", "time", "sync"] }
 # The workspace terminal (src/pty.rs).
 portable-pty = "0.9"
 

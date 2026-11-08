@@ -428,6 +428,33 @@ holds until encrypted transport (#2651) lands.
   rather than trusted. Racing routes, learning new addresses and moving back to
   a better route are not implemented yet; the saved order decides.
 
+### In the desktop app
+
+Settings › **Machines** is the same pairing without a terminal: *This Mac* (or
+*This PC*) first — the app's own RustCode server — then one row per saved
+machine. `?machines=paired|connect|offline|revoked` in the mock shows the page
+without a second computer.
+
+| In the app | What it does |
+| --- | --- |
+| **Add machine › Machines on this network** | Bonjour, the same browse as `machines discover`: every machine whose record lists `caps=desktops`, with *Ask to connect*. |
+| **Add machine › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). |
+| **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
+| A machine row | Its name and platform, the state — *Connected*, *Connecting*, *Offline · retrying in N s*, *Pairing expired* — the route **in use** with **Unencrypted (LAN)** or **Encrypted** for Tailscale and VPN routes, when it was last reached and how many threads it has. |
+| **Main machine** | The machine listed first and the default **Run on**. One at a time. |
+| **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
+| **Pair again** | On a machine whose pairing it ended (`Pairing expired`): asks it again, so a new code can be typed. |
+
+The app keeps one connection per machine, retried with jittered backoff from a
+second up to five minutes (reset after half a minute connected), so a machine
+that is asleep or away comes back on its own. A pairing that was refused is
+not retried: nothing changes until it is paired again, and the row says so.
+The connection and the token live in the app's Rust shell
+(`apps/desktop/src-tauri/src/machines.rs`); the page only shows what it is
+told, and the thread count comes from the machine's own `session/list` over
+ACP. Showing and driving those threads in the sidebar is the next step
+(#3202).
+
 ## Revoking and stopping
 
 - Settings › Remote access › *Revoke* on a paired device does the same as
