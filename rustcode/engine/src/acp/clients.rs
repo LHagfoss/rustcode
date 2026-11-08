@@ -497,6 +497,10 @@ impl Peer {
         if generation.is_some_and(|generation| generation != registry.generation(session_id)) {
             return Ok(false);
         }
+        // A client that has gone is not brought back by a late load.
+        if !registry.entries.contains_key(&self.id) {
+            return Ok(true);
+        }
         // Sent under the registry's lock, which every session update takes
         // to find its audience: nothing reaches this client between the
         // replay and the live updates, and nothing is sent twice. Sending
@@ -511,10 +515,9 @@ impl Peer {
                 .send_notification(SessionNotification::new(session_id.to_owned(), update))?;
         }
         let at = registry.tick();
-        registry
-            .entry(self.id, &self.connection)
-            .sessions
-            .insert(session_id.to_owned(), at);
+        if let Some(entry) = registry.entries.get_mut(&self.id) {
+            entry.sessions.insert(session_id.to_owned(), at);
+        }
         Ok(true)
     }
 }
@@ -719,7 +722,7 @@ mod tests {
         peer.clients().subscribe(peer.id(), Topic::Themes);
         let session = peer.attach("closed-session");
         assert_eq!(
-            clients.len(),
+            clients.count(),
             0,
             "late operations do not recreate the entry"
         );
