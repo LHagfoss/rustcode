@@ -110,6 +110,7 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import type { ConnectCode } from "./connectRequests";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { parseGrants, type TimedGrant } from "./grants";
 import {
@@ -489,6 +490,11 @@ export interface AppState {
    * look off.
    */
   remoteError: string | null;
+  /**
+   * The code shown after accepting a phone that asked to connect, until the phone pairs or it
+   * runs out (`state/connectRequests.ts`). The only copy: never persisted.
+   */
+  connectCode: ConnectCode | null;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -737,6 +743,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   remote: null,
   remoteByThread: {},
   remoteError: null,
+  connectCode: null,
   view: { kind: "chat" },
   checkpoints: {},
   attempts: {},
@@ -5142,6 +5149,54 @@ export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
   }
 }
 
+/**
+ * Accept or deny a phone that asked to connect. Accepting shows the code the phone needs
+ * (`connectCode`); the request's own prompt goes with the next status either way.
+ */
+export async function answerConnectRequest(id: string, accept: boolean): Promise<boolean> {
+  try {
+    const status = parseRemoteStatus(await request(RemoteMethod.answer, { id, accept }, 15_000));
+    set({ remote: status, remoteError: null });
+    if (status.connectError) {
+      toast(status.connectError, "error");
+      return false;
+    }
+    const answer = status.connectAnswer;
+    if (accept && answer?.code) {
+      set({
+        connectCode: {
+          requestId: answer.id,
+          deviceName: answer.deviceName,
+          code: answer.code,
+          expiresAt: Date.now() + (answer.expiresInSecs ?? 120) * 1000,
+          lockedForSecs: answer.lockedForSecs,
+        },
+      });
+    }
+    return true;
+  } catch (error) {
+    toast(errorText(error), "error");
+    return false;
+  }
+}
+
+/** Take the connection code off the screen. */
+export function closeConnectCode() {
+  set({ connectCode: null });
+}
+
+/** Forget a paired device: its token stops working and its connections close. */
+export async function revokeRemoteDevice(id: string): Promise<void> {
+  try {
+    const status = parseRemoteStatus(await request(RemoteMethod.revoke, { deviceId: id }, 15_000));
+    set({ remote: status, remoteError: null });
+    if (status.revokeError) toast(status.revokeError, "error");
+    else if (status.revoked) toast(`${status.revoked.name} can no longer connect.`, "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
   lastFocusListAt = 0;
@@ -5182,6 +5237,7 @@ export function resetForTests() {
     onboardingOpen: false,
     toasts: [],
     toastsPaused: false,
+    connectCode: null,
     limitWaits: {},
     continueAfterLimit: true,
     agent: undefined,

@@ -185,3 +185,67 @@ describe("mock remote access", () => {
     }
   });
 });
+
+describe("mock connection requests", () => {
+  test("a phone asks, is accepted, and pairs with the code", async () => {
+    const engine = mockEngine({ remote: "connect" });
+    try {
+      let status = parseRemoteStatus(await engine.request("_rustcode/remote", {}));
+      expect(status.enabled).toBe(true);
+      expect(status.connectRequests.map((r) => [r.deviceName, r.platform, r.state])).toEqual([
+        ["Lars's Pixel", "android", "pending"],
+      ]);
+      const id = status.connectRequests[0]?.id ?? "";
+      status = parseRemoteStatus(await engine.request("_rustcode/remote/answer", { id, accept: true }));
+      expect(status.connectAnswer).toMatchObject({
+        id,
+        accepted: true,
+        code: "4821-9034",
+        expiresInSecs: 120,
+      });
+      expect(status.connectRequests[0]?.state).toBe("approved");
+      expect(await engine.request("_mock/remote/enterCode", {})).toEqual({ paired: true });
+      status = parseRemoteStatus(await engine.request("_rustcode/remote", {}));
+      expect(status.connectRequests).toEqual([]);
+      const ended = status.endedConnectRequests.at(-1);
+      expect(ended?.end).toBe("paired");
+      expect(status.devices.map((d) => d.name)).toContain("Lars's Pixel");
+      expect(status.devices.some((d) => d.id === ended?.deviceId)).toBe(true);
+    } finally {
+      await engine.done();
+    }
+  });
+
+  test("a denied request ends, and cannot be answered again", async () => {
+    const engine = mockEngine({ remote: "connect" });
+    try {
+      const { id } = (await engine.request("_mock/remote/askToConnect", { remoteAddr: "192.168.1.50" })) as {
+        id: string;
+      };
+      let status = parseRemoteStatus(await engine.request("_rustcode/remote/answer", { id, accept: false }));
+      expect(status.connectAnswer?.accepted).toBe(false);
+      expect(status.connectRequests.some((r) => r.id === id)).toBe(false);
+      expect(status.endedConnectRequests.at(-1)?.end).toBe("denied");
+      status = parseRemoteStatus(await engine.request("_rustcode/remote/answer", { id, accept: true }));
+      expect(status.connectError).toBe("that connection request is no longer open");
+    } finally {
+      await engine.done();
+    }
+  });
+
+  test("revoking forgets the device", async () => {
+    const engine = mockEngine();
+    try {
+      let status = parseRemoteStatus(await engine.request("_rustcode/remote", {}));
+      const device = status.devices[0];
+      if (!device) throw new Error("the mock starts with a paired phone");
+      status = parseRemoteStatus(await engine.request("_rustcode/remote/revoke", { deviceId: device.id }));
+      expect(status.revoked).toEqual(device);
+      expect(status.devices).toEqual([]);
+      status = parseRemoteStatus(await engine.request("_rustcode/remote/revoke", { deviceId: device.id }));
+      expect(status.revokeError).toBeDefined();
+    } finally {
+      await engine.done();
+    }
+  });
+});

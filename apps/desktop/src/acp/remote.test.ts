@@ -8,6 +8,8 @@ describe("remote access", () => {
       start: "_rustcode/remote/start",
       pair: "_rustcode/remote/pair",
       stop: "_rustcode/remote/stop",
+      answer: "_rustcode/remote/answer",
+      revoke: "_rustcode/remote/revoke",
     });
   });
 

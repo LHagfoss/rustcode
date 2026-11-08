@@ -175,8 +175,8 @@ export async function defaultTransport(): Promise<Transport> {
       claudeUsage: (["expired", "refused", "forbidden", "denied", "recorded"] as const).find(
         (f) => f === q.get("claudeUsage"),
       ),
-      // Remote access states the happy path does not reach (`?remote=disconnected|expired`).
-      remote: (["disconnected", "expired"] as const).find((f) => f === q.get("remote")),
+      // Remote access states the happy path does not reach (`?remote=disconnected|expired|connect`).
+      remote: (["disconnected", "expired", "connect"] as const).find((f) => f === q.get("remote")),
     });
   }
   const port = import.meta.env.VITE_BRIDGE_PORT ?? "1421";
