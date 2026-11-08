@@ -470,7 +470,9 @@ export function Transcript({
       else loose.push(row);
     }
     out.push(...loose);
-    if (thread.running || settleEnd) {
+    // A quiet turn is the app's own (an automatic compaction): it draws no working line, so the
+    // transcript the reader is on does not move for it, and the notice it leaves is the record.
+    if ((thread.running && !thread.quiet) || settleEnd) {
       // `Working for 12s` heads the turn, under the message that started it; when the turn just
       // ended, the same row holds a green check for a moment instead of vanishing.
       let at = out.length;

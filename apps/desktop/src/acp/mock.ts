@@ -3578,6 +3578,25 @@ export class MockEngine {
         thread.compactions = (thread.compactions ?? 0) + 1;
         const before = 18_400;
         const after = 15_500;
+        // A harness compacts with a call of its own (Claude Code's `Compact conversation`) and then
+        // says so; the app keeps the call out of a turn it started itself, so one notice is the
+        // record of it and the answer above stays where the reader left it (`state/thread.ts`).
+        const compactId = `compact-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: compactId,
+          title: "Compact conversation",
+          kind: "think",
+          status: "in_progress",
+          rawInput: { summary: "Summarize the conversation" },
+        });
+        await this.sleep();
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: compactId,
+          status: "completed",
+          rawOutput: { content: "Summarized the conversation." },
+        });
         push({
           sessionUpdate: "agent_message_chunk",
           content: text(`Context compacted: reduced from ${before / 1_000}k to ${after / 1_000}k tokens.`),

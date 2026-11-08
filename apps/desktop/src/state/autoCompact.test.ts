@@ -30,6 +30,7 @@ const input = (over: Partial<AutoCompactInput> = {}): AutoCompactInput => ({
   waiting: false,
   limitWaiting: false,
   snoozed: false,
+  unread: false,
   typing: false,
   compactedThisIdle: false,
   delegated: false,
@@ -38,8 +39,8 @@ const input = (over: Partial<AutoCompactInput> = {}): AutoCompactInput => ({
 });
 
 describe("auto-compact settings", () => {
-  test("a fresh install is on for Claude Code's two rules and 150k", () => {
-    expect(DEFAULT_AUTO_COMPACT).toEqual({ mode: "cache", threshold: 150_000 });
+  test("a fresh install compacts on size only, at 150k", () => {
+    expect(DEFAULT_AUTO_COMPACT).toEqual({ mode: "size", threshold: 150_000 });
     expect(AUTO_COMPACT_DEFAULT_THRESHOLD).toBe(150_000);
   });
 
@@ -50,6 +51,8 @@ describe("auto-compact settings", () => {
       threshold: 90_000,
     });
     expect(parseAutoCompactSettings('"off"')).toEqual({ ...DEFAULT_AUTO_COMPACT, mode: "off" });
+    // A mode written by a build whose default was the cache rule is kept: it was chosen then.
+    expect(parseAutoCompactSettings('{"mode":"cache","threshold":150000}').mode).toBe("cache");
     expect(parseAutoCompactSettings("nonsense")).toEqual(DEFAULT_AUTO_COMPACT);
   });
 
@@ -68,8 +71,12 @@ describe("auto-compact settings", () => {
 });
 
 describe("rule 1: the context size after a turn", () => {
-  test("compacts at once at the threshold and never below it", () => {
-    expect(autoCompactDecision(input({ usedTokens: 149_999 })).action).toBe("wait");
+  test("rule 1 compacts at once at the threshold and never below it", () => {
+    // 149,999 is below the size threshold, and the default mode has no cache rule to wait for.
+    expect(autoCompactDecision(input({ usedTokens: 149_999 }))).toMatchObject({
+      action: "none",
+      reason: "below the threshold",
+    });
     expect(autoCompactDecision(input({ usedTokens: 150_000 }))).toEqual({
       action: "compact",
       rule: "size",
@@ -110,6 +117,22 @@ describe("rule 1: the context size after a turn", () => {
       action: "none",
       reason: "thread snoozed",
     });
+    // Not while the answer it would rewrite is still unread, on either rule.
+    expect(autoCompactDecision(input({ unread: true, usedTokens: 200_000 }))).toMatchObject({
+      action: "none",
+      reason: "the last answer is unread",
+    });
+    expect(
+      autoCompactDecision(
+        input({
+          unread: true,
+          usedTokens: 80_000,
+          settings: { mode: "cache", threshold: 150_000 },
+          idleSince: NOW,
+          now: NOW + AUTO_COMPACT_CACHE_IDLE_MS,
+        }),
+      ),
+    ).toMatchObject({ action: "none", reason: "the last answer is unread" });
   });
 
   test("stops for the user, a settled thread, a delegate nobody talks to, and a second time", () => {
@@ -147,9 +170,13 @@ describe("rule 1: the context size after a turn", () => {
 });
 
 describe("rule 2: before the prompt cache expires", () => {
+  const cache = { ...DEFAULT_AUTO_COMPACT, mode: "cache" as const };
+
   test("waits until 4.5 minutes after the turn and then compacts above 60k", () => {
     const idleSince = NOW;
-    const early = autoCompactDecision(input({ idleSince, now: idleSince + 60_000, usedTokens: 80_000 }));
+    const early = autoCompactDecision(
+      input({ settings: cache, idleSince, now: idleSince + 60_000, usedTokens: 80_000 }),
+    );
     expect(early).toEqual({
       action: "wait",
       rule: "cache",
@@ -158,7 +185,12 @@ describe("rule 2: before the prompt cache expires", () => {
     });
     expect(
       autoCompactDecision(
-        input({ idleSince, now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS, usedTokens: 80_000 }),
+        input({
+          settings: cache,
+          idleSince,
+          now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS,
+          usedTokens: 80_000,
+        }),
       ),
     ).toEqual({ action: "compact", rule: "cache", before: 80_000 });
   });
@@ -168,6 +200,7 @@ describe("rule 2: before the prompt cache expires", () => {
     expect(
       autoCompactDecision(
         input({
+          settings: cache,
           idleSince,
           now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS + AUTO_COMPACT_CACHE_WINDOW_MS,
           usedTokens: 80_000,
@@ -177,6 +210,7 @@ describe("rule 2: before the prompt cache expires", () => {
     expect(
       autoCompactDecision(
         input({
+          settings: cache,
           idleSince,
           now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS + AUTO_COMPACT_CACHE_WINDOW_MS + 1,
           usedTokens: 80_000,
@@ -189,7 +223,12 @@ describe("rule 2: before the prompt cache expires", () => {
     const idleSince = NOW;
     expect(
       autoCompactDecision(
-        input({ idleSince, now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS, usedTokens: 59_999 }),
+        input({
+          settings: cache,
+          idleSince,
+          now: idleSince + AUTO_COMPACT_CACHE_IDLE_MS,
+          usedTokens: 59_999,
+        }),
       ).action,
     ).toBe("none");
     expect(AUTO_COMPACT_CACHE_THRESHOLD).toBe(60_000);
@@ -197,17 +236,19 @@ describe("rule 2: before the prompt cache expires", () => {
 
   test("a thread nobody followed up for an hour does not pay for the summary", () => {
     const idleSince = NOW - AUTO_COMPACT_FOLLOW_UP_MS - 1;
-    expect(autoCompactDecision(input({ idleSince, now: NOW, usedTokens: 80_000 }))).toMatchObject({
+    expect(
+      autoCompactDecision(input({ settings: cache, idleSince, now: NOW, usedTokens: 80_000 })),
+    ).toMatchObject({
       action: "none",
       reason: "no follow-up within the hour",
     });
   });
 
-  test("the size-only mode never waits for the cache", () => {
+  test("the default size-only mode never waits for the cache", () => {
     expect(
       autoCompactDecision(
         input({
-          settings: { mode: "size", threshold: 150_000 },
+          settings: DEFAULT_AUTO_COMPACT,
           usedTokens: 80_000,
           idleSince: NOW,
           now: NOW + 60_000,
@@ -218,11 +259,14 @@ describe("rule 2: before the prompt cache expires", () => {
 
   test("Codex gets the cache rule but not the size rule", () => {
     const policy = autoCompactPolicy("codex", "codex");
+    const at = NOW + 60_000;
     expect(
-      autoCompactDecision(input({ policy, usedTokens: 200_000, idleSince: NOW, now: NOW + 60_000 })).action,
+      autoCompactDecision(input({ policy, settings: cache, usedTokens: 200_000, idleSince: NOW, now: at }))
+        .action,
     ).toBe("wait");
     expect(
-      autoCompactDecision(input({ policy, usedTokens: 80_000, idleSince: NOW, now: NOW + 60_000 })).action,
+      autoCompactDecision(input({ policy, settings: cache, usedTokens: 80_000, idleSince: NOW, now: at }))
+        .action,
     ).toBe("wait");
   });
 });
@@ -242,7 +286,7 @@ describe("what the thread shows", () => {
 
   test("the context bar marks the threshold only while rule 1 applies", () => {
     const claude = autoCompactPolicy("claude-code", "acp");
-    expect(autoCompactMark({ mode: "cache", threshold: 150_000 }, claude)).toBe(150_000);
+    expect(autoCompactMark(DEFAULT_AUTO_COMPACT, claude)).toBe(150_000);
     expect(autoCompactMark({ mode: "off", threshold: 150_000 }, claude)).toBeUndefined();
     expect(
       autoCompactMark({ mode: "cache", threshold: 150_000 }, autoCompactPolicy("codex", "codex")),
