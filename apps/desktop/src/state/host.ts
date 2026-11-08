@@ -1349,10 +1349,33 @@ function message(caller: RuleThread, targetId: string, text: string): Promise<Js
   return withLinkGate(() => messageNow(caller, targetId, text));
 }
 
+/** Do not turn an explicit stop, settle, or archive into a background retry. */
+function messageTargetRefusal(state: AppState, targetId: string): Failure | null {
+  if (targetId in state.archived) {
+    return failure("conflict", "that thread is archived; unarchive it before messaging");
+  }
+  const target = ruleThread(state, targetId);
+  if (target && statusOf(state, targetId) === "done") {
+    return failure("conflict", "that thread is settled; set it to idle before messaging");
+  }
+  const thread = state.threads[targetId];
+  const lastTurn = thread?.items.findLast((item) => item.kind === "turnEnd");
+  if (!thread?.running && lastTurn?.kind === "turnEnd" && lastTurn.outcome === "cancelled") {
+    return failure(
+      "conflict",
+      "that thread's last turn was stopped; start a new turn there before messaging it",
+    );
+  }
+  return null;
+}
+
 async function messageNow(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
-  const target = ruleThread(useApp.getState(), targetId);
+  const state = useApp.getState();
+  const target = ruleThread(state, targetId);
   const refused = checkMessage(caller, target, book(), false, false, delegateLimits());
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
+  const unavailable = messageTargetRefusal(state, targetId);
+  if (unavailable) return failureJson(unavailable);
   const no = await permitted(caller, target.id, {
     kind: "message",
     caller: caller.id,
@@ -1362,20 +1385,23 @@ async function messageNow(caller: RuleThread, targetId: string, text: string): P
   });
   if (no) return failureJson(no);
   // The user took their time: look again.
-  const again = checkMessage(
-    caller,
-    ruleThread(useApp.getState(), targetId),
-    book(),
-    false,
-    false,
-    delegateLimits(),
-  );
+  const afterPermission = useApp.getState();
+  const current = ruleThread(afterPermission, targetId);
+  const again = checkMessage(caller, current, book(), false, false, delegateLimits());
   if (again) return failureJson(again);
+  const stopped = messageTargetRefusal(afterPermission, targetId);
+  if (stopped) return failureJson(stopped);
   // A thread whose last turn failed, or whose harness process was stopped for idling, is opened
   // and prompted like any other: the engine starts its harness again with the prompt, as it does
   // when the user types there. Only a thread that cannot be opened at all is unavailable.
   const openError = await openThread(target.id);
-  const thread = useApp.getState().threads[target.id];
+  const afterOpen = useApp.getState();
+  const openedTarget = ruleThread(afterOpen, targetId);
+  const noLongerReachable = checkMessage(caller, openedTarget, book(), false, false, delegateLimits());
+  if (noLongerReachable) return failureJson(noLongerReachable);
+  const noLongerAvailable = messageTargetRefusal(afterOpen, targetId);
+  if (noLongerAvailable) return failureJson(noLongerAvailable);
+  const thread = afterOpen.threads[target.id];
   if (openError || !thread || thread.openFailed) {
     return failureJson(failure("target_unavailable", openError ?? "that thread could not be opened"));
   }

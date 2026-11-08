@@ -7,6 +7,12 @@
 
 /** From this share of the context window up, a rejected request is most likely the size. */
 export const FULL_CONTEXT_PERCENT = 90;
+const MAX_DISPLAY_ERROR_CHARS = 500;
+const MAX_PROVIDER_MESSAGE_CHARS = 240;
+
+function clipped(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
 
 /** The standard reason phrases a provider body often says instead of a code. */
 const REASONS: Record<number, string> = {
@@ -97,6 +103,9 @@ export function readableTurnError(raw: string, contextPercent?: number): string 
   const prefixed = /^([A-Z][\w .-]{0,30}?):\s+([\s\S]+)$/.exec(text);
   const who = prefixed?.[1];
   const rest = prefixed?.[2] ?? text;
+  // Proxy error pages can include a JSON-looking example or script; their markup is still the
+  // error body, so do not parse it as a provider envelope or infer context exhaustion from it.
+  if (/<(?:!doctype\s+html|html|body)\b/i.test(rest)) return clipped(text, MAX_DISPLAY_ERROR_CHARS);
   const json = jsonIn(rest);
   const body = json?.body;
   const message = body ? messageOf(body) : undefined;
@@ -105,17 +114,25 @@ export function readableTurnError(raw: string, contextPercent?: number): string 
   const clientSide = status === undefined || status < 500;
   const hint = `The conversation is ${contextPercent}% full — compact it or start a new thread.`;
   // No body: the text is already words, and stays; a refusal of a full conversation still says why.
-  if (!body)
-    return status !== undefined && status < 500 && full ? `${text.replace(/[.\s]+$/, "")}. ${hint}` : text;
-  if (!message && status === undefined) return text;
+  if (!body) {
+    if (status !== undefined && status < 500 && full) {
+      const prefix = clipped(text.replace(/[.\s]+$/, ""), MAX_DISPLAY_ERROR_CHARS - hint.length - 2);
+      return `${prefix}. ${hint}`;
+    }
+    return clipped(text, MAX_DISPLAY_ERROR_CHARS);
+  }
+  if (!message && status === undefined) return clipped(text, MAX_DISPLAY_ERROR_CHARS);
   const reason = status !== undefined ? REASONS[status] : undefined;
   const code = status !== undefined ? `HTTP ${status}${reason ? ` ${reason}` : ""}` : undefined;
   const subject = who ?? "The provider";
   const verb =
     status !== undefined && status >= 500 ? "could not answer the request" : "rejected the request";
   const same = !message || (reason !== undefined && message.toLowerCase() === reason.toLowerCase());
+  const shortMessage = message
+    ? clipped(message.replace(/\s+/g, " "), MAX_PROVIDER_MESSAGE_CHARS)
+    : undefined;
   const sentence = same
     ? `${subject} ${verb} (${code ?? message}).`
-    : `${subject} ${verb}${code ? ` (${code})` : ""}: ${message.replace(/[.\s]+$/, "")}.`;
-  return full && clientSide ? `${sentence} ${hint}` : sentence;
+    : `${subject} ${verb}${code ? ` (${code})` : ""}: ${shortMessage!.replace(/[.\s]+$/, "")}.`;
+  return clipped(full && clientSide ? `${sentence} ${hint}` : sentence, MAX_DISPLAY_ERROR_CHARS);
 }

@@ -43,4 +43,23 @@ describe("a failed turn in words", () => {
       "Codex: unexpected status 400 Bad Request. The conversation is 95% full — compact it or start a new thread.",
     );
   });
+
+  test("HTML bodies remain text and very long errors stay compact", () => {
+    const html = "Codex: <!DOCTYPE html><html><body>400 Bad Request</body></html>";
+    expect(readableTurnError(html, 97)).toBe(html);
+    const htmlWithJson = 'Codex: <html><body>{"detail":"Bad Request"}</body></html>';
+    expect(readableTurnError(htmlWithJson, 97)).toBe(htmlWithJson);
+
+    const raw = `Codex: {"detail":"${"x".repeat(2_000)}"}`;
+    const readable = readableTurnError(raw);
+    expect(readable.startsWith("Codex rejected the request:")).toBe(true);
+    expect(readable.length).toBeLessThanOrEqual(500);
+    expect(readable.endsWith("….")).toBe(true);
+    const withHint = readableTurnError(raw, 97);
+    expect(withHint).toContain("The conversation is 97% full");
+    expect(withHint.length).toBeLessThanOrEqual(500);
+
+    const plain = `Codex: ${"y".repeat(2_000)}`;
+    expect(readableTurnError(plain).length).toBeLessThanOrEqual(500);
+  });
 });

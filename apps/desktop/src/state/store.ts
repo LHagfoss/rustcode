@@ -912,6 +912,8 @@ let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
 /** Sessions whose `session/load` replay is arriving. */
 const loading = new Set<string>();
+/** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
+const opening = new Map<string, Promise<string | null>>();
 
 /**
  * Threads whose messages contain `query`, from the engine's SQLite index
@@ -1712,40 +1714,48 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
  * open error when it could not be opened, so a caller can say why instead of
  * reporting an empty thread.
  */
-export async function openThread(id: string): Promise<string | null> {
+export function openThread(id: string): Promise<string | null> {
+  const inFlight = opening.get(id);
+  if (inFlight) return inFlight;
   const conn = connection;
   const existing = get().threads[id];
   // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
   // be opened once (the engine was restarting, its harness was down) is not refused for good.
   if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
-    return null;
+    return Promise.resolve(null);
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
+  let pending: Promise<string | null>;
+  pending = Promise.resolve().then(async () => {
+    try {
+      const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
+      updateThread(id, (t) => ({
+        ...finishLoad(t),
+        configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
+        harness: parseSessionHarness(result) ?? t.harness,
+      }));
+      const opened = get().threads[id];
+      if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
+      void refreshPlanUsage(id);
+      void refreshCheckpoints(id);
+      // A thread opened after it went idle can still be before its cache deadline.
+      scheduleAutoCompact(id);
+      return null;
+    } catch (error) {
+      const message = `Could not open this thread: ${errorText(error)}`;
+      updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
+      return message;
+    } finally {
+      loading.delete(id);
+      if (opening.get(id) === pending) opening.delete(id);
+    }
+  });
+  opening.set(id, pending);
   loading.add(id);
   set((s) => ({
     threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
   }));
-  try {
-    const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
-    updateThread(id, (t) => ({
-      ...finishLoad(t),
-      configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
-      harness: parseSessionHarness(result) ?? t.harness,
-    }));
-    const opened = get().threads[id];
-    if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
-    void refreshPlanUsage(id);
-    void refreshCheckpoints(id);
-    // A thread opened after it went idle can still be before its cache deadline.
-    scheduleAutoCompact(id);
-    return null;
-  } catch (error) {
-    const message = `Could not open this thread: ${errorText(error)}`;
-    updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
-    return message;
-  } finally {
-    loading.delete(id);
-  }
+  return pending;
 }
 
 /**
@@ -5225,6 +5235,7 @@ export function resetForTests() {
   transport = null;
   setShellTransport(null);
   loading.clear();
+  opening.clear();
   set({
     status: "connecting",
     remote: null,

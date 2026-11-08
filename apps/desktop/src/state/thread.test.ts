@@ -1020,9 +1020,17 @@ describe("a subagent row's text", () => {
     );
     expect(shortCommand("RUST_LOG=debug cargo build")).toBe("cargo build");
     expect(shortCommand("export PATH=/opt/bin:$PATH && /usr/local/bin/git status")).toBe("git status");
-    expect(shortCommand("env A=1 B=2 node script.js")).toBe("node script.js");
+    expect(shortCommand("env A=1 B=2 node script.js")).toBe("node …");
     expect(shortCommand("bun run /Users/lagos/code/rustcode/scripts/check.ts")).toBe("bun run …");
     expect(shortCommand("`bun test`")).toBe("bun test");
+    expect(shortCommand("TOKEN='private value' cargo test")).toBe("cargo test");
+    expect(shortCommand("export API_KEY=private-value")).toBe("");
+    expect(shortCommand("env -S 'API_KEY=private-value cargo test'")).toBe("");
+    expect(shortCommand("cat /private/tmp/private-file")).toBe("cat …");
+    expect(shortCommand("echo private-value")).not.toContain("private-value");
+    expect(shortCommand("curl https://user:private-value@example.com")).toBe("curl …");
+    expect(shortCommand("curl https://user:private-value@example.com")).not.toContain("private-value");
+    expect(shortCommand("echo 'API_KEY=private-value'")).not.toContain("private-value");
     // Nothing a reader would recognise is left: the row says "Running a command".
     expect(shortCommand("F=/private/tmp/rc-1234/out.txt")).toBe("");
     expect(shortCommand('"$CMD" --flag')).toBe("");

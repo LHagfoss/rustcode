@@ -1291,9 +1291,35 @@ export function subagentTitle(name: string, task: string): string {
 /** A leading part of a shell line that only sets up where or with what it runs: `cd x`, `export A=1`, `A=1`. */
 const SETUP_PART =
   /^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)(?:\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*))*)\s*(?:&&|;|\n)\s*/;
+/** Environment assignments can contain spaces and secrets; remove the entire quoted value first. */
+const ENV_ASSIGNMENT = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=(?:"(?:\\.|[^"])*"|'[^']*'|[^\s;&|]*)/g;
 
 /** The word a reader knows a program by: `cargo`, not `/usr/local/bin/cargo`. */
 const programName = (token: string) => token.split("/").filter(Boolean).at(-1) ?? "";
+const SAFE_SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
+  bun: new Set(["test", "run", "build", "check", "install", "add", "remove", "update", "x", "pm"]),
+  cargo: new Set(["test", "build", "check", "clippy", "fmt", "run", "clean", "metadata", "tree", "doc"]),
+  git: new Set([
+    "status",
+    "diff",
+    "log",
+    "show",
+    "branch",
+    "switch",
+    "checkout",
+    "worktree",
+    "commit",
+    "fetch",
+    "pull",
+    "push",
+    "add",
+    "restore",
+  ]),
+  npm: new Set(["test", "run", "build", "install", "ci", "update", "outdated", "exec"]),
+  pnpm: new Set(["test", "run", "build", "install", "add", "remove", "update", "exec"]),
+  yarn: new Set(["test", "run", "build", "install", "add", "remove", "up", "exec"]),
+};
+const SAFE_OPTION = /^--?[A-Za-z][A-Za-z0-9-]*$/;
 
 /**
  * A shell line cut to its program and first argument (`grep -rnE …`), without what only sets it
@@ -1309,6 +1335,11 @@ export function shortCommand(command: string): string {
     if (next === line) break;
     line = next;
   }
+  line = line.replace(ENV_ASSIGNMENT, "$1").replace(/\s+/g, " ").trim();
+  const env = /^(?:[^\s;&|]+\/)?env(?:\s+|$)([\s\S]*)$/.exec(line);
+  // `env -S` embeds a whole shell command (often with inline secrets) in one argument. A shell
+  // parser would be needed to safely extract its program, so keep this activity generic.
+  if (env && /(?:^|\s)(?:-S|--split-string)(?:=|\s|$)/.test(env[1]!)) return "";
   // The first line is what runs first; a heredoc or a script below it is not a label.
   line = line.split("\n")[0]!.trim();
   const tokens = line.split(/\s+/).filter(Boolean);
@@ -1321,11 +1352,12 @@ export function shortCommand(command: string): string {
     assigns();
   }
   const name = programName(tokens[0] ?? "");
+  if (name === "export") return "";
   // A program the line computes (`$CMD`, `"$(…)"`), or punctuation, names nothing.
   if (!/^[A-Za-z0-9_.+-]+$/.test(name)) return "";
   const raw = tokens[1]?.replace(/[;&|]+$/, "");
-  // A path argument reads as its file name; one that is still long, or only punctuation, is left out.
-  const first = raw && /[A-Za-z0-9]/.test(raw) ? (raw.includes("/") ? programName(raw) : raw) : undefined;
+  // Keep only ordinary flags and known tool verbs; arbitrary arguments can be paths, URLs or secrets.
+  const first = raw && (SAFE_OPTION.test(raw) || SAFE_SUBCOMMANDS[name]?.has(raw)) ? raw : undefined;
   const shown = first && first.length <= 24 ? first : undefined;
   const head = shown ? `${name} ${shown}` : name;
   return tokens.length > (shown ? 2 : 1) ? `${head} …` : head;

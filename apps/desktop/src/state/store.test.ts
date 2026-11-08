@@ -141,6 +141,33 @@ const until = async (check: () => boolean, ms = 2000) => {
   }
 };
 
+class HeldSessionLoadTransport extends MockTransport {
+  readonly requests: JsonObject[] = [];
+  target: string | undefined;
+  heldLoad: string | undefined;
+
+  override send(line: string): void {
+    const request = JSON.parse(line) as JsonObject;
+    this.requests.push(request);
+    const params = request.params as JsonObject | undefined;
+    if (
+      request.method === Method.sessionLoad &&
+      params?.sessionId === this.target &&
+      this.heldLoad === undefined
+    ) {
+      this.heldLoad = line;
+      return;
+    }
+    super.send(line);
+  }
+
+  releaseLoad(): void {
+    const line = this.heldLoad;
+    this.heldLoad = undefined;
+    if (line) super.send(line);
+  }
+}
+
 /**
  * The app's storage in a test (there is no window): a map `store()` writes into, seeded with an
  * entry an earlier build left. `done()` takes it away again, so the next test starts empty.
@@ -3652,6 +3679,108 @@ describe("a delegate whose turn failed", () => {
     expect(useApp.getState().threads[target]?.openFailed).toBeUndefined();
   });
 
+  test("a message waits for one in-flight open and is delivered once", async () => {
+    const transport = new HeldSessionLoadTransport();
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const caller = useApp.getState().sessions[0]!.id;
+    setPermissionMode(caller, "full");
+    const target = useApp
+      .getState()
+      .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
+    transport.target = target;
+
+    const opening = openThread(target);
+    await until(() => transport.heldLoad !== undefined);
+    expect(openThread(target)).toBe(opening);
+    let messageSettled = false;
+    const message = send(caller, target, "deliver once after load").then((answer) => {
+      messageSettled = true;
+      return answer;
+    });
+    const matching = (method: string) =>
+      transport.requests.filter(
+        (request) =>
+          request.method === method && (request.params as JsonObject | undefined)?.sessionId === target,
+      );
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(messageSettled).toBe(false);
+      expect(matching(Method.sessionPrompt)).toHaveLength(0);
+      transport.releaseLoad();
+      await opening;
+      const answer = await message;
+      expect(answer.error).toBeUndefined();
+      await until(() => matching(Method.sessionPrompt).length === 1);
+      expect(matching(Method.sessionLoad)).toHaveLength(1);
+      expect(matching(Method.sessionPrompt)).toHaveLength(1);
+      expect(
+        useApp
+          .getState()
+          .threads[target]!.items.filter(
+            (item) => item.kind === "user" && item.text.includes("deliver once"),
+          ),
+      ).toHaveLength(1);
+    } finally {
+      transport.releaseLoad();
+    }
+  });
+
+  test("a thread archived while it is opening does not receive a delegate message", async () => {
+    const transport = new HeldSessionLoadTransport();
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const caller = useApp.getState().sessions[0]!.id;
+    setPermissionMode(caller, "full");
+    const target = useApp
+      .getState()
+      .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
+    transport.target = target;
+
+    const message = send(caller, target, "do not reopen after archive");
+    await until(() => transport.heldLoad !== undefined);
+    setArchived(target, true);
+    try {
+      transport.releaseLoad();
+      const answer = await message;
+      expect((answer.error as JsonObject).message).toContain("archived");
+      expect(
+        transport.requests.filter(
+          (request) =>
+            request.method === Method.sessionPrompt &&
+            (request.params as JsonObject | undefined)?.sessionId === target,
+        ),
+      ).toHaveLength(0);
+    } finally {
+      transport.releaseLoad();
+    }
+  });
+
+  test("settled and deliberately stopped threads return a clear refusal", async () => {
+    const { caller, target } = await ready();
+    setArchived(target, true);
+    const archived = await send(caller, target, "archived");
+    expect((archived.error as JsonObject).message).toContain("unarchive it");
+
+    setArchived(target, false);
+    await setThreadStatus(target, "done");
+    const settled = await send(caller, target, "settled");
+    expect((settled.error as JsonObject).message).toContain("settled");
+
+    await setThreadStatus(target, "idle");
+    updateThread(target, (thread) => ({
+      ...thread,
+      items: [
+        ...thread.items,
+        { kind: "turnEnd", id: "user-stopped", at: Date.now(), outcome: "cancelled" },
+        { kind: "notice", id: "stop-note", text: "Stopped", tone: "info" },
+      ],
+    }));
+    const stopped = await send(caller, target, "stopped");
+    expect((stopped.error as JsonObject).message).toContain("last turn was stopped");
+  });
+
   test("a message queued on it fails with the reason instead of staying Queued", async () => {
     const { caller, target } = await ready();
     updateThread(target, (t) => ({ ...t, running: true }));
@@ -3673,6 +3802,17 @@ describe("a delegate whose turn failed", () => {
     const queue = useApp.getState().threads[target]!.queue;
     expect(queue.map((q) => q.id)).toEqual(["user-1"]);
     expect(useApp.getState().threads[target]!.queueHeld).toBe(true);
+    expect(
+      useApp
+        .getState()
+        .threads[target]!.items.filter(
+          (item) => item.kind === "user" && item.text.includes("after that, this"),
+        ),
+    ).toHaveLength(0);
+    // Ending the same failure twice does not enqueue or deliver the message a second time.
+    threadTurnEnded(target, false, "failed", "Codex rejected the request (HTTP 400 Bad Request).", []);
+    expect(useApp.getState().links.links.find((l) => l.id === id)?.state).toBe("failed");
+    expect(useApp.getState().threads[target]!.queue.map((q) => q.id)).toEqual(["user-1"]);
   });
 
   test("settling it takes its failed turn out of the Inbox", async () => {

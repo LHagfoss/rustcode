@@ -118,9 +118,7 @@ describe("the needs-you inbox", () => {
   });
 
   test("a settled thread's failed turn is no row, from either source", () => {
-    const settled = sessions.map((s) =>
-      s.id === "one" || s.id === "two" ? { ...s, status: "done" as const } : s,
-    );
+    const settled = sessions.map((s) => (s.id === "one" ? { ...s, status: "done" as const } : s));
     const items = deriveInbox(
       {
         sessions: settled,
@@ -131,6 +129,7 @@ describe("the needs-you inbox", () => {
           },
         },
         failed: { one: NOW - 1_000 },
+        archived: { two: NOW },
         links: [],
       },
       NOW,

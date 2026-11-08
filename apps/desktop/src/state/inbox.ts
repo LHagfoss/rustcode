@@ -51,6 +51,8 @@ export interface InboxRead {
   >;
   /** Threads whose last turn failed while you looked elsewhere (state/store.ts `failed`). */
   failed: Readonly<Record<string, number>>;
+  /** Hidden threads; their failure can return to the inbox if the user unarchives them. */
+  archived?: Readonly<Record<string, number>>;
   /** The link book, for delegates that ask for the user. */
   links: readonly Link[];
 }
@@ -125,7 +127,10 @@ export function deriveInbox(read: InboxRead, now = Date.now()): InboxItem[] {
 
   // A settled thread's failed turn waits on nobody: the thread was put away (by the user, by
   // `cleanup_worktree`, by the orchestrator that replaced it), so it is not a card to retry.
-  const settled = new Set(read.sessions.filter((s) => s.status === "done").map((s) => s.id));
+  const settled = new Set([
+    ...read.sessions.filter((s) => s.status === "done").map((s) => s.id),
+    ...Object.keys(read.archived ?? {}),
+  ]);
   const failedThreads = new Set<string>(settled);
   for (const [threadId, at] of Object.entries(read.failed)) {
     if (settled.has(threadId)) continue;
