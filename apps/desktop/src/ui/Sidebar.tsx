@@ -65,7 +65,7 @@ import {
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
-import { listCommandFor } from "../lib/keys";
+import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
@@ -889,7 +889,7 @@ const ThreadRow = memo(function ThreadRow({
                 <button
                   type="button"
                   aria-label={`Actions for ${session.title || "thread"}`}
-                  title="Actions · ⇧F10"
+                  title={`Actions · ${formatBinding("shift+f10")}`}
                   className="flex size-[26px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
                 >
                   <Ellipsis size={15} />

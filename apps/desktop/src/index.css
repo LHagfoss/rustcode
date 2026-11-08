@@ -1430,13 +1430,6 @@
   --font-rounded: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
 }
-:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) {
-  --rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) 72%, transparent);
-}
-/* The body's pane colour would hide the material under the sidebar; the chat paints its own. */
-:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) body {
-  background: transparent;
-}
 :root[data-platform="linux"] {
   --font-sans: Inter, Cantarell, Ubuntu, "Noto Sans", system-ui, sans-serif;
   --font-rounded: Inter, Cantarell, Ubuntu, "Noto Sans", system-ui, sans-serif;
@@ -1444,6 +1437,14 @@
 }
 :root:is([data-platform="windows"], [data-platform="linux"]) body {
   -webkit-font-smoothing: auto;
+}
+/* Mica after the type rules, so the more specific body rule comes last. */
+:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) {
+  --rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) 72%, transparent);
+}
+/* The body's pane colour would hide the material under the sidebar; the chat paints its own. */
+:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) body {
+  background: transparent;
 }
 
 /*

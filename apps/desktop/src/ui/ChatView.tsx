@@ -709,14 +709,15 @@ export function ChatView() {
       aria-label="Chat"
       onMouseDown={releaseComposer}
     >
-      {/* The chosen picture covers the whole pane, the header included (`height` is the column's,
-          which starts under the header), so the screen is the picture all the way down. */}
+      {/* The chosen picture covers the whole pane, the header included: the header floats over the
+          column, so the column's `height` is the pane's, and the screen is the picture all the way
+          down without running past the window's bottom edge. */}
       {showsBanner && (
         <NewThreadBanner
           key={banner.style}
           name={banner.name}
           style={banner.style}
-          height={Math.round(height) + HEADER_HEIGHT}
+          height={Math.round(height)}
           blur={banner.blur}
           className="!absolute top-0 left-0 rc-fade-in"
         />
@@ -859,7 +860,11 @@ export function ChatView() {
                 type="button"
                 aria-expanded={overview}
                 aria-controls="new-thread-overview"
-                className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted hover:bg-fill-subtle"
+                className={cx(
+                  "flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted",
+                  // Over a picture the label needs the floating pills' glass to read.
+                  showsBanner ? "rc-glass hover:text-fg" : "hover:bg-fill-subtle",
+                )}
                 onClick={toggleOverview}
               >
                 <ChevronDown

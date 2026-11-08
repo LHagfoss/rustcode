@@ -101,7 +101,7 @@ export function Group({
       >
         {children}
       </fieldset>
-      {footer && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-faint">{footer}</div>}
+      {footer && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-muted">{footer}</div>}
     </section>
   );
 }
@@ -226,7 +226,7 @@ export function Row({
               {subtitle}
             </div>
           )}
-          {status && <div className="pt-0.5 text-caption text-fg-faint">{status}</div>}
+          {status && <div className="pt-0.5 text-caption text-fg-muted">{status}</div>}
         </div>
         {(children || reset) && (
           <div className="flex shrink-0 items-center gap-2">
