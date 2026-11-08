@@ -261,6 +261,10 @@ impl Shared {
         text: &str,
     ) -> Result<Admitted, HandshakeResponse> {
         match HandshakeRequest::parse(text)? {
+            HandshakeRequest::ConnectRequest { .. } => Err(HandshakeResponse::error(
+                ErrorCode::NotImplemented,
+                "connection requests are not yet available",
+            )),
             HandshakeRequest::Pair {
                 method,
                 secret,

@@ -66,6 +66,13 @@ pub enum PairingMethod {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeRequest {
+    /// Ask the host to approve a connection before presenting a code.
+    ConnectRequest {
+        protocol_version: u32,
+        device_name: String,
+        platform: String,
+        install_id: Option<String>,
+    },
     /// Exchange a pairing challenge for a device token.
     Pair {
         protocol_version: u32,
@@ -98,8 +105,12 @@ pub enum HandshakeRequest {
 impl HandshakeRequest {
     /// Whether the device asked for the thread names on the wire.
     pub fn wants_thread_names(&self) -> bool {
-        let (Self::Pair { wire_names, .. } | Self::Authenticate { wire_names, .. }) = self;
-        wire_names.as_deref() == Some(WIRE_NAMES_THREAD)
+        match self {
+            Self::Pair { wire_names, .. } | Self::Authenticate { wire_names, .. } => {
+                wire_names.as_deref() == Some(WIRE_NAMES_THREAD)
+            }
+            Self::ConnectRequest { .. } => false,
+        }
     }
 
     /// Parse a first frame. The version is checked before the shape, so a
@@ -136,6 +147,17 @@ impl HandshakeRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeResponse {
+    ConnectPending {
+        request_id: String,
+        expires_in_secs: u64,
+    },
+    ConnectApproved {
+        request_id: String,
+        code_length: u8,
+        expires_in_secs: u64,
+    },
+    ConnectDenied,
+    ConnectExpired,
     /// Pairing succeeded. `token` is shown exactly once; the connection is
     /// authenticated as this device from here on.
     Paired {
@@ -209,6 +231,8 @@ impl HandshakeResponse {
 pub enum ErrorCode {
     /// The frame is not JSON, not text, or not a known handshake request.
     InvalidFrame,
+    ConnectBusy,
+    ConnectRateLimited,
     FrameTooLarge,
     UnsupportedVersion,
     /// No frame arrived within the handshake deadline.
@@ -238,6 +262,39 @@ pub enum ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_request_parses_and_responses_serialize() {
+        let text = r#"{"type":"connect_request","protocol_version":1,"device_name":"Lars's iPhone","platform":"ios","install_id":"install-12345678"}"#;
+        assert!(
+            matches!(HandshakeRequest::parse(text), Ok(HandshakeRequest::ConnectRequest { device_name, platform, .. }) if device_name == "Lars's iPhone" && platform == "ios")
+        );
+        assert_eq!(
+            HandshakeResponse::ConnectPending {
+                request_id: "r1".into(),
+                expires_in_secs: 120
+            }
+            .to_text(),
+            r#"{"type":"connect_pending","request_id":"r1","expires_in_secs":120}"#
+        );
+        assert_eq!(
+            HandshakeResponse::ConnectApproved {
+                request_id: "r1".into(),
+                code_length: 8,
+                expires_in_secs: 120
+            }
+            .to_text(),
+            r#"{"type":"connect_approved","request_id":"r1","code_length":8,"expires_in_secs":120}"#
+        );
+        assert_eq!(
+            HandshakeResponse::ConnectDenied.to_text(),
+            r#"{"type":"connect_denied"}"#
+        );
+        assert_eq!(
+            HandshakeResponse::ConnectExpired.to_text(),
+            r#"{"type":"connect_expired"}"#
+        );
+    }
 
     #[test]
     fn request_wire_shapes_are_stable() {
