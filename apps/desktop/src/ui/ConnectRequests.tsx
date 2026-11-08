@@ -7,15 +7,15 @@
 // The machine's remote status is read here for the whole app: every few seconds while the
 // gateway runs, rarely while it does not, so a request reaches the user whichever page is open.
 
-import { Copy, Smartphone, X } from "lucide-react";
+import { Copy, Monitor, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { RemoteConnectRequest } from "../acp/remote";
+import type { DeviceKind, RemoteConnectRequest } from "../acp/remote";
 import {
   type ConnectCode,
   clock,
   connectPollMs,
+  deviceLabel,
   endedMessage,
-  platformLabel,
   promptedRequests,
   settleCode,
 } from "../state/connectRequests";
@@ -97,6 +97,11 @@ export function ConnectRequests() {
   );
 }
 
+function DeviceIcon({ kind }: { kind: DeviceKind }) {
+  const Icon = kind === "desktop" ? Monitor : kind === "cli" ? SquareTerminal : Smartphone;
+  return <Icon size={16} className="mt-1 shrink-0 text-fg-muted" aria-hidden />;
+}
+
 function RequestCard({
   request,
   left,
@@ -116,11 +121,11 @@ function RequestCard({
       className="elevated rc-toast-in pointer-events-auto p-4"
     >
       <div className="flex items-start gap-3">
-        <Smartphone size={16} className="mt-1 shrink-0 text-fg-muted" aria-hidden />
+        <DeviceIcon kind={request.deviceKind} />
         <div className="min-w-0 flex-1">
           <div className="truncate font-medium text-body text-fg">{request.deviceName} wants to connect</div>
           <div className="pt-1 text-callout text-fg-muted">
-            {platformLabel(request.platform)}
+            {deviceLabel(request.deviceKind, request.platform)}
             {request.remoteAddr ? ` at ${request.remoteAddr}` : ""}
           </div>
           <p className="m-0 pt-2 text-caption text-fg-faint leading-normal">

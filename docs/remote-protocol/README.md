@@ -154,6 +154,16 @@ Host → client:
   connection still open with them is closed with `revoked`, and the answer
   carries a new `device_id`. Without it, every pairing adds a record. The host
   stores only its SHA-256 digest.
+- `device_kind`, `platform` and `host_id` in `pair` are optional and say what
+  the device is, for the owner's device list. `device_kind` is `phone`,
+  `desktop` (the desktop app on another machine) or `cli`; absent, or a kind
+  the gateway does not know, is `phone`. `platform` is `ios`, `android`,
+  `macos`, `windows`, `linux`, … (as in `connect_request`); absent is
+  `unknown`. `host_id` is the stable identifier of the machine a desktop app
+  or command line runs on (16 to 128 printable ASCII characters; anything else
+  is ignored). They are labels, not permissions: every kind gets the same
+  access. A gateway that records them lists `desktops` in its Bonjour `caps`
+  and in the `sessions` result's `capabilities`; an older one ignores them.
 
 The pairing QR code encodes this JSON, as one line:
 
@@ -201,6 +211,7 @@ sent by this one.
 A phone that found the host on the local network can ask its owner to let it
 pair, instead of scanning a QR code. The gateway takes it when its Bonjour
 record (`_rustcode._tcp`) carries `caps=connect_requests` in its TXT record
+(`caps=connect_requests,desktops` when a desktop app may pair too)
 (next to `protocol=1` and `gateway=<gateway_id>`); a paired device also sees
 `connect_requests` in the `sessions` result's `capabilities`. A gateway
 without it answers `connect_request` with `invalid_frame`.
@@ -214,8 +225,13 @@ The exchange, all on one WebSocket:
    ```
 
    No secret. `device_name` is a label shown to the owner (trimmed and
-   bounded like in `pair`); `platform` is `ios`, `android`, … (lowercase
-   letters, digits, `-_.`, up to 32); `install_id` is optional, as in `pair`.
+   bounded like in `pair`); `platform` is `ios`, `android`, `macos`,
+   `windows`, `linux`, … (lowercase letters, digits, `-_.`, up to 32);
+   `install_id`, `device_kind` and `host_id` are optional, as in `pair`. A
+   desktop app sends `"device_kind": "desktop"`, and the owner sees *Windows
+   desktop* rather than a phone. The device is recorded with the kind,
+   platform and host of its request, which is what the owner accepted,
+   whatever its `pair` frame says.
 
 2. Host → client: `{"type": "connect_pending", "request_id": "5be1c4a07d2e9f63", "expires_in_secs": 120}`.
    The request is in front of the owner. Wait on the same socket, sending

@@ -10,6 +10,7 @@
 //! Every frame is one JSON object in one WebSocket text frame, tagged by
 //! `type`. Unknown fields are ignored, so fields can be added.
 
+use super::devices::DeviceProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -76,13 +77,21 @@ pub enum HandshakeRequest {
         protocol_version: u32,
         /// A label chosen by the device, shown to the owner. Never an identity.
         device_name: String,
-        /// What the device is, for the owner: `ios`, `android`, ….
+        /// What the device runs on, for the owner: `ios`, `android`,
+        /// `macos`, `windows`, `linux`, ….
         platform: String,
         /// As in `pair`. A new request from the same address and install
         /// replaces the one still open, so a reconnecting app does not wait
         /// for its old request to expire.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         install_id: Option<String>,
+        /// As in `pair`. Recorded with the device when it pairs, over
+        /// whatever its `pair` frame says, because it is what the owner saw.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_kind: Option<String>,
+        /// As in `pair`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_id: Option<String>,
     },
     /// Exchange a pairing challenge for a device token.
     Pair {
@@ -101,6 +110,21 @@ pub enum HandshakeRequest {
         /// `"thread"` asks for the thread names on the wire; see [`WIRE_NAMES_THREAD`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// What the device is: `phone`, `desktop` (the desktop app on
+        /// another machine) or `cli`. Absent, or a kind this gateway does
+        /// not know, is a phone. A label for the owner, not a permission.
+        /// Gateways that list `desktops` in their capabilities record it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_kind: Option<String>,
+        /// What the device runs on: `ios`, `android`, `macos`, `windows`,
+        /// `linux`, …. Absent is `unknown`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        platform: Option<String>,
+        /// The stable identifier of the machine a desktop app or command
+        /// line runs on, which the owner may pair with in turn. Ignored
+        /// unless it is 16 to 128 printable ASCII characters.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_id: Option<String>,
     },
     /// Present a device token obtained from an earlier `paired` frame.
     Authenticate {
@@ -121,6 +145,33 @@ impl HandshakeRequest {
                 wire_names.as_deref() == Some(WIRE_NAMES_THREAD)
             }
             Self::ConnectRequest { .. } => false,
+        }
+    }
+
+    /// What a `connect_request` or `pair` frame says the device is, kept to
+    /// what is usable. An `authenticate` frame says nothing: the device was
+    /// recorded when it paired.
+    pub fn device_profile(&self) -> DeviceProfile {
+        match self {
+            Self::ConnectRequest {
+                platform,
+                device_kind,
+                host_id,
+                ..
+            } => {
+                DeviceProfile::from_wire(device_kind.as_deref(), Some(platform), host_id.as_deref())
+            }
+            Self::Pair {
+                device_kind,
+                platform,
+                host_id,
+                ..
+            } => DeviceProfile::from_wire(
+                device_kind.as_deref(),
+                platform.as_deref(),
+                host_id.as_deref(),
+            ),
+            Self::Authenticate { .. } => DeviceProfile::default(),
         }
     }
 
@@ -286,6 +337,7 @@ pub enum ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_gateway::devices::DeviceKind;
 
     #[test]
     fn connect_request_parses_and_responses_serialize() {
@@ -326,6 +378,43 @@ mod tests {
     }
 
     #[test]
+    fn device_fields_round_trip_and_older_frames_mean_a_phone() {
+        let connect = r#"{"type":"connect_request","protocol_version":1,"device_name":"Lars's PC","platform":"windows","install_id":"install-12345678","device_kind":"desktop","host_id":"host-0123456789abcdef"}"#;
+        let parsed = HandshakeRequest::parse(connect).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), connect);
+        let profile = parsed.device_profile();
+        assert_eq!(profile.kind, DeviceKind::Desktop);
+        assert_eq!(profile.platform, "windows");
+        assert_eq!(profile.host_id.as_deref(), Some("host-0123456789abcdef"));
+
+        let pair = r#"{"type":"pair","protocol_version":1,"method":"code","secret":"1234-5678","device_name":"box","device_kind":"cli","platform":"linux","host_id":"host-fedcba9876543210"}"#;
+        let parsed = HandshakeRequest::parse(pair).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), pair);
+        let profile = parsed.device_profile();
+        assert_eq!(profile.kind, DeviceKind::Cli);
+        assert_eq!(profile.platform, "linux");
+
+        // Frames from apps that predate the fields: a phone on an unknown platform.
+        let old = HandshakeRequest::parse(
+            r#"{"type":"pair","protocol_version":1,"method":"code","secret":"1234-5678","device_name":"phone"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.device_profile(), DeviceProfile::default());
+        let old = HandshakeRequest::parse(
+            r#"{"type":"connect_request","protocol_version":1,"device_name":"phone","platform":"ios"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.device_profile().kind, DeviceKind::Phone);
+        assert_eq!(old.device_profile().platform, "ios");
+        // A kind from a newer client still parses; it is recorded as a phone.
+        let newer = HandshakeRequest::parse(
+            r#"{"type":"pair","protocol_version":1,"method":"code","secret":"1","device_name":"x","device_kind":"link"}"#,
+        )
+        .unwrap();
+        assert_eq!(newer.device_profile().kind, DeviceKind::Phone);
+    }
+
+    #[test]
     fn request_wire_shapes_are_stable() {
         let pair = HandshakeRequest::Pair {
             protocol_version: 1,
@@ -334,6 +423,9 @@ mod tests {
             device_name: "phone".into(),
             install_id: None,
             wire_names: None,
+            device_kind: None,
+            platform: None,
+            host_id: None,
         };
         assert_eq!(
             serde_json::to_string(&pair).unwrap(),
@@ -466,6 +558,9 @@ mod tests {
             device_name: "phone".into(),
             install_id: None,
             wire_names: None,
+            device_kind: None,
+            platform: None,
+            host_id: None,
         };
         let paired = HandshakeResponse::Paired {
             protocol_version: 1,

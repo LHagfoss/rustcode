@@ -59,6 +59,7 @@ export interface MockOptions {
 interface MockConnectRequest {
   id: string;
   deviceName: string;
+  deviceKind: string;
   platform: string;
   remoteAddr: string;
   createdAt: number;
@@ -1810,7 +1811,15 @@ export class MockEngine {
     enabled: false,
     shared: new Set<string>(),
     gateway: null as JsonObject | null,
-    devices: [{ id: "7c1f3a2b", name: "Lars's iPhone" }],
+    devices: [
+      {
+        id: "7c1f3a2b",
+        name: "Lars's iPhone",
+        kind: "phone",
+        platform: "ios",
+        lastSeenAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+      },
+    ] as JsonObject[],
     offer: null as JsonObject | null,
     pairingDue: false,
     pairingError: null as string | null,
@@ -1966,13 +1975,19 @@ export class MockEngine {
     }
   }
 
-  /** A phone on the network asks to connect, as `connect_request` does at the gateway. */
-  private askToConnect(deviceName: string, platform: string, remoteAddr: string): string {
+  /** A phone (or a desktop app) on the network asks to connect, as `connect_request` does at the gateway. */
+  private askToConnect(
+    deviceName: string,
+    platform: string,
+    remoteAddr: string,
+    deviceKind = "phone",
+  ): string {
     const id = Math.random().toString(16).slice(2, 18).padEnd(16, "0");
     const now = Date.now();
     this.remote.connect.push({
       id,
       deviceName,
+      deviceKind,
       platform,
       remoteAddr,
       createdAt: now,
@@ -1995,7 +2010,13 @@ export class MockEngine {
     const request = this.remote.connect.find((entry) => entry.state === "approved");
     if (!request) return false;
     const deviceId = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
-    this.remote.devices.push({ id: deviceId, name: request.deviceName });
+    this.remote.devices.push({
+      id: deviceId,
+      name: request.deviceName,
+      kind: request.deviceKind,
+      platform: request.platform,
+      lastSeenAt: new Date().toISOString(),
+    });
     this.endConnect(request.id, "paired", deviceId);
     return true;
   }
@@ -2009,6 +2030,7 @@ export class MockEngine {
       connectRequests: this.remote.connect.map((request) => ({
         id: request.id,
         deviceName: request.deviceName,
+        deviceKind: request.deviceKind,
         platform: request.platform,
         remoteAddr: request.remoteAddr,
         ageSecs: Math.floor((now - request.createdAt) / 1000),
@@ -2275,7 +2297,11 @@ export class MockEngine {
       pairingError: this.remote.pairingError,
       notShared: this.remote.refused.size,
       pairedDevices: this.remote.devices.length,
-      devices: this.remote.devices,
+      // The machine's answer says which paired devices are connected; the mock's gateway has them all.
+      devices: this.remote.devices.map((device) => ({
+        ...device,
+        connected: this.remote.gateway !== null && this.options.remote !== "disconnected",
+      })),
       ...this.connectRequestsJson(),
     };
     if (this.remote.gateway) {
@@ -3009,7 +3035,10 @@ export class MockEngine {
         const device = this.remote.devices.find((entry) => entry.id === deviceId);
         if (!device) return { ...this.remoteHost(), revokeError: `no paired device matches ${deviceId}` };
         this.remote.devices = this.remote.devices.filter((entry) => entry !== device);
-        return { ...this.remoteHost(), revoked: { deviceId: device.id, deviceName: device.name } };
+        return {
+          ...this.remoteHost(),
+          revoked: { deviceId: str(device.id) ?? deviceId, deviceName: str(device.name) ?? deviceId },
+        };
       }
       // Test and mock-window hooks: a phone asks to connect, or enters the code it was shown.
       case "_mock/remote/askToConnect":
@@ -3018,6 +3047,7 @@ export class MockEngine {
             str(params.deviceName) ?? "Lars's iPhone",
             str(params.platform) ?? "ios",
             str(params.remoteAddr) ?? "192.168.1.42",
+            str(params.deviceKind) ?? "phone",
           ),
         };
       case "_mock/remote/enterCode":

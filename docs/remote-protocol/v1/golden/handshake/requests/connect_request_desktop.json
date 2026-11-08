@@ -1,0 +1,9 @@
+{
+  "type": "connect_request",
+  "protocol_version": 1,
+  "device_name": "Lars's Windows PC",
+  "platform": "windows",
+  "install_id": "0B7C5E2A-41D9-4F6E-9A3B-7C2D1E0F9A8B",
+  "device_kind": "desktop",
+  "host_id": "3f9a1c7e5b2d4086"
+}

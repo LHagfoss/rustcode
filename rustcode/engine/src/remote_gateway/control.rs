@@ -8,6 +8,7 @@
 
 use super::address::AdvertisedAddress;
 use super::connect::{RequestEnd, RequestState};
+use super::devices::{DeviceKind, DeviceRecord, UNKNOWN_PLATFORM};
 use super::handshake::Secret;
 use super::hub::SessionSummary;
 use super::pairing::{self, ChallengeEnd, PairingOffer};
@@ -134,6 +135,32 @@ pub struct DeviceSummary {
     /// When the device last paired or connected; `None` when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Phone, desktop or command line. A phone from an older gateway.
+    #[serde(default)]
+    pub kind: DeviceKind,
+    /// `ios`, `windows`, …; `unknown` from an older gateway.
+    #[serde(default = "unknown_platform")]
+    pub platform: String,
+    /// The paired machine's own identifier, for a desktop or command line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+}
+
+fn unknown_platform() -> String {
+    UNKNOWN_PLATFORM.to_owned()
+}
+
+impl From<&DeviceRecord> for DeviceSummary {
+    fn from(device: &DeviceRecord) -> Self {
+        Self {
+            id: device.id.clone(),
+            name: device.name.clone(),
+            last_seen_at: device.last_seen_at,
+            kind: device.kind,
+            platform: device.platform.clone(),
+            host_id: device.host_id.clone(),
+        }
+    }
 }
 
 /// Where pairing stands, without any secret.
@@ -169,6 +196,9 @@ pub struct ConnectRequestSummary {
     pub id: String,
     /// The label the device sent, trimmed and bounded. Not an identity.
     pub device_name: String,
+    /// What the device says it is. A phone from an older gateway.
+    #[serde(default)]
+    pub device_kind: DeviceKind,
     pub platform: String,
     /// The network address the request came from.
     pub remote_addr: String,

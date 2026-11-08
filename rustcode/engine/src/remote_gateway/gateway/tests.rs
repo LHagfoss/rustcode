@@ -1439,3 +1439,81 @@ async fn pairing_again_through_a_request_replaces_the_install_record() {
     );
     harness.stop().await;
 }
+
+#[tokio::test]
+async fn a_desktop_asks_to_connect_and_is_recorded_as_the_owner_saw_it() {
+    use crate::remote_gateway::devices::DeviceKind;
+    let harness = Harness::start().await;
+    let mut desktop = Client::connect(harness.addr).await;
+    desktop
+        .send(json!({
+            "type": "connect_request",
+            "protocol_version": 1,
+            "device_name": "Lars's PC",
+            "platform": "Windows",
+            "device_kind": "desktop",
+            "host_id": "host-0123456789abcdef",
+        }))
+        .await;
+    let pending = desktop.next_json().await;
+    assert_eq!(pending["type"], "connect_pending", "{pending}");
+    let id = pending["request_id"].as_str().unwrap().to_owned();
+
+    let status = harness.status().await;
+    let request = &status.connect_requests[0];
+    assert_eq!(request.device_kind, DeviceKind::Desktop);
+    assert_eq!(request.platform, "windows");
+
+    let code = harness.answer(&id, true).await.code.unwrap();
+    assert_eq!(desktop.next_json().await["type"], "connect_approved");
+    // The pair frame claims something else; the request the owner accepted wins.
+    desktop
+        .send(json!({
+            "type": "pair",
+            "protocol_version": 1,
+            "method": "code",
+            "secret": code.expose(),
+            "device_name": "Lars's PC",
+            "device_kind": "phone",
+            "platform": "ios",
+        }))
+        .await;
+    let paired = desktop.next_json().await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+
+    let status = harness.status().await;
+    let device = &status.devices[0];
+    assert_eq!(device.kind, DeviceKind::Desktop);
+    assert_eq!(device.platform, "windows");
+    assert_eq!(device.host_id.as_deref(), Some("host-0123456789abcdef"));
+    assert!(device.last_seen_at.is_some());
+    let stored = harness.lifecycle.devices().unwrap();
+    assert_eq!(stored[0].kind, DeviceKind::Desktop);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_device_pairing_with_the_code_says_what_it_is() {
+    use crate::remote_gateway::devices::DeviceKind;
+    let harness = Harness::start().await;
+    let offer = harness.offer().await;
+    let mut client = Client::connect(harness.addr).await;
+    client
+        .send(json!({
+            "type": "pair",
+            "protocol_version": 1,
+            "method": "code",
+            "secret": offer.code.expose(),
+            "device_name": "build box",
+            "device_kind": "cli",
+            "platform": "linux",
+            "host_id": "host-fedcba9876543210",
+        }))
+        .await;
+    assert_eq!(client.next_json().await["type"], "paired");
+    let device = harness.status().await.devices.remove(0);
+    assert_eq!(device.kind, DeviceKind::Cli);
+    assert_eq!(device.platform, "linux");
+    assert_eq!(device.host_id.as_deref(), Some("host-fedcba9876543210"));
+    harness.stop().await;
+}

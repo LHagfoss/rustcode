@@ -201,6 +201,9 @@ mod tests {
                 id: (*id).into(),
                 name: (*name).into(),
                 last_seen_at: None,
+                kind: Default::default(),
+                platform: "ios".into(),
+                host_id: None,
             })
             .collect();
         status

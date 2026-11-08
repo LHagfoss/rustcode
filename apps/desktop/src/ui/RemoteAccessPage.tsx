@@ -14,6 +14,7 @@ import { Copy, RefreshCw, Smartphone, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { heldBackCount, heldBackReason, type RemoteOffer, type RemotePairing } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
+import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
   dismissRemoteChallenge,
@@ -273,15 +274,20 @@ export function RemoteAccessPage() {
       >
         {devices.length ? (
           devices.map((device) => (
-            <Row key={device.id} title={device.name} status={<span className="font-mono">{device.id}</span>}>
-              <Chip tone="ok">Paired</Chip>
+            <Row
+              key={device.id}
+              title={device.name}
+              subtitle={`${deviceLabel(device.kind, device.platform)} · ${lastSeenLabel(device, now)}`}
+              status={<span className="font-mono">{device.id}</span>}
+            >
+              <Chip tone={device.connected ? "ok" : "idle"}>{device.connected ? "Connected" : "Paired"}</Chip>
               <RevokeDeviceAction device={device} />
             </Row>
           ))
         ) : (
           <Row
             title="No devices paired yet"
-            subtitle="A phone appears here once it scans the QR code, enters the eight-digit code, or asks to connect and you accept."
+            subtitle="A phone or another computer's RustCode app appears here once it scans the QR code, enters the eight-digit code, or asks to connect and you accept."
           />
         )}
       </Group>

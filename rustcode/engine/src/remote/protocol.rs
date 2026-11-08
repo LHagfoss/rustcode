@@ -30,6 +30,11 @@ pub mod host_capability {
     /// host's owner accepts and reads it a code. Also in the Bonjour record
     /// as `caps=connect_requests`, so a device knows before it pairs.
     pub const CONNECT_REQUESTS: &str = "connect_requests";
+    /// A desktop app or command line on another machine may pair as a
+    /// device: `connect_request` and `pair` take `device_kind`, `platform`
+    /// and `host_id`, and the host lists the device by kind. Also in the
+    /// Bonjour record as `caps=connect_requests,desktops`.
+    pub const DESKTOPS: &str = "desktops";
 }
 
 /// Optional operations one session owner implements, in

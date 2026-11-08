@@ -16,8 +16,8 @@ describe("pairing challenge", () => {
 
   test("recognizes a new device by id even when names match", () => {
     const devices = [
-      { id: "old", name: "iPhone" },
-      { id: "new", name: "iPhone" },
+      { id: "old", name: "iPhone", kind: "phone" as const, platform: "ios" },
+      { id: "new", name: "iPhone", kind: "phone" as const, platform: "ios" },
     ];
     expect(newPairedDevice(["old"], devices)?.id).toBe("new");
     expect(newPairedDevice(["old", "new"], devices)).toBeUndefined();

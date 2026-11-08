@@ -6,8 +6,9 @@ use std::process::Stdio;
 
 /// The TXT record's `caps` value: comma-separated optional handshakes.
 /// `connect_requests` means a device may send `connect_request` and have the
-/// host's owner accept it ([`super::connect`]).
-pub const TXT_CAPS: &str = "caps=connect_requests";
+/// host's owner accept it ([`super::connect`]); `desktops` that a desktop app
+/// may pair as a device ([`crate::remote::host_capability::DESKTOPS`]).
+pub const TXT_CAPS: &str = "caps=connect_requests,desktops";
 
 pub fn advertise(port: u16, loopback: bool, gateway_id: &str) -> Option<tokio::process::Child> {
     if loopback {

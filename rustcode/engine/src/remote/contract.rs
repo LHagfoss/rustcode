@@ -108,6 +108,9 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 device_name: "Lars's iPhone".to_owned(),
                 install_id: Some("6F9619FF-8B86-D011-B42D-00C04FC964FF".to_owned()),
                 wire_names: None,
+                device_kind: Some("phone".to_owned()),
+                platform: Some("ios".to_owned()),
+                host_id: None,
             },
         ),
         (
@@ -119,6 +122,9 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 device_name: "Lars's iPhone".to_owned(),
                 install_id: None,
                 wire_names: None,
+                device_kind: None,
+                platform: None,
+                host_id: None,
             },
         ),
         (
@@ -128,6 +134,19 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 device_name: "Lars's iPhone".to_owned(),
                 platform: "ios".to_owned(),
                 install_id: Some("6F9619FF-8B86-D011-B42D-00C04FC964FF".to_owned()),
+                device_kind: None,
+                host_id: None,
+            },
+        ),
+        (
+            "connect_request_desktop",
+            HandshakeRequest::ConnectRequest {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_name: "Lars's Windows PC".to_owned(),
+                platform: "windows".to_owned(),
+                install_id: Some("0B7C5E2A-41D9-4F6E-9A3B-7C2D1E0F9A8B".to_owned()),
+                device_kind: Some("desktop".to_owned()),
+                host_id: Some("3f9a1c7e5b2d4086".to_owned()),
             },
         ),
         (

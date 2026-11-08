@@ -26,9 +26,23 @@
     {
       "description": "Ask the host's owner to let this device pair. Carries no secret. The\nsocket stays open for the answer (`connect_pending`, then\n`connect_approved`, `connect_denied` or `connect_expired`); after\n`connect_approved` it sends one `pair` frame with `method: \"code\"` and\nthe code the owner reads off the host. Only gateways that list\n`connect_requests` in their Bonjour `caps` take it.",
       "properties": {
+        "device_kind": {
+          "description": "As in `pair`. Recorded with the device when it pairs, over\nwhatever its `pair` frame says, because it is what the owner saw.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "device_name": {
           "description": "A label chosen by the device, shown to the owner. Never an identity.",
           "type": "string"
+        },
+        "host_id": {
+          "description": "As in `pair`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "install_id": {
           "description": "As in `pair`. A new request from the same address and install\nreplaces the one still open, so a reconnecting app does not wait\nfor its old request to expire.",
@@ -38,7 +52,7 @@
           ]
         },
         "platform": {
-          "description": "What the device is, for the owner: `ios`, `android`, ….",
+          "description": "What the device runs on, for the owner: `ios`, `android`,\n`macos`, `windows`, `linux`, ….",
           "type": "string"
         },
         "protocol_version": {
@@ -62,9 +76,23 @@
     {
       "description": "Exchange a pairing challenge for a device token.",
       "properties": {
+        "device_kind": {
+          "description": "What the device is: `phone`, `desktop` (the desktop app on\nanother machine) or `cli`. Absent, or a kind this gateway does\nnot know, is a phone. A label for the owner, not a permission.\nGateways that list `desktops` in their capabilities record it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "device_name": {
           "description": "A label chosen by the device. Never an identity.",
           "type": "string"
+        },
+        "host_id": {
+          "description": "The stable identifier of the machine a desktop app or command\nline runs on, which the owner may pair with in turn. Ignored\nunless it is 16 to 128 printable ASCII characters.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "install_id": {
           "description": "A random identifier the app generates once per install and keeps.\nPairing again with the same one replaces that install's earlier\ndevice record and revokes its token, instead of adding a record.\nNot tied to the user; ignored unless it is 16 to 128 printable\nASCII characters. Older apps leave it out.",
@@ -75,6 +103,13 @@
         },
         "method": {
           "$ref": "#/$defs/PairingMethod"
+        },
+        "platform": {
+          "description": "What the device runs on: `ios`, `android`, `macos`, `windows`,\n`linux`, …. Absent is `unknown`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "protocol_version": {
           "format": "uint32",

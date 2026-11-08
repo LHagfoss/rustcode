@@ -13,6 +13,7 @@
 //! with the code the owner reads off the host.
 
 use super::connect::Outcome;
+use super::devices::DeviceProfile;
 use super::gateway::{
     Admitted, ConnectTicket, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot,
 };
@@ -78,12 +79,18 @@ pub(super) async fn serve_connection(
                 device_name,
                 platform,
                 install_id,
+                device_kind,
+                host_id,
                 ..
             }) => {
                 let ticket = shared.open_connect_request(
                     slot.ip(),
                     &device_name,
-                    &platform,
+                    DeviceProfile::from_wire(
+                        device_kind.as_deref(),
+                        Some(&platform),
+                        host_id.as_deref(),
+                    ),
                     install_id.as_deref(),
                 );
                 match ticket {

@@ -11,7 +11,7 @@
 //! passed in. Each open request has a [`tokio::sync::watch`] channel to the
 //! socket that made it, which is how an answer given on the host reaches it.
 
-use super::devices::sanitize_name;
+use super::devices::{DeviceProfile, sanitize_name};
 use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -27,9 +27,6 @@ pub const MAX_OPEN_REQUESTS: usize = 4;
 
 /// How long a network address waits after a denial before it may ask again.
 pub const DENY_COOLDOWN: Duration = Duration::from_secs(30);
-
-/// Longest platform label kept.
-pub const MAX_PLATFORM_CHARS: usize = 32;
 
 /// Ended requests the status keeps, newest last.
 const ENDED_KEPT: usize = 8;
@@ -78,7 +75,8 @@ pub enum RequestEnd {
 pub struct Request {
     pub id: String,
     pub device_name: String,
-    pub platform: String,
+    /// What the device said it is; recorded with the device if it pairs.
+    pub profile: DeviceProfile,
     install_id: Option<String>,
     pub remote_addr: IpAddr,
     pub created: Instant,
@@ -131,7 +129,7 @@ impl ConnectRequests {
         lifetime: Duration,
         remote_addr: IpAddr,
         device_name: &str,
-        platform: &str,
+        profile: DeviceProfile,
         install_id: Option<&str>,
     ) -> Result<Opened, OpenError> {
         let remote_addr = remote_addr.to_canonical();
@@ -157,7 +155,7 @@ impl ConnectRequests {
         self.open.push(Request {
             id: id.clone(),
             device_name: sanitize_name(device_name),
-            platform: sanitize_platform(platform),
+            profile,
             install_id: install_id.map(str::to_owned),
             remote_addr,
             created: now,
@@ -273,25 +271,14 @@ impl ConnectRequests {
     }
 }
 
-/// Keep a device-supplied platform label printable, short and lowercase.
-fn sanitize_platform(platform: &str) -> String {
-    let cleaned: String = platform
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        .take(MAX_PLATFORM_CHARS)
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if cleaned.is_empty() {
-        "unknown".to_owned()
-    } else {
-        cleaned
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+
+    fn ios() -> DeviceProfile {
+        DeviceProfile::from_wire(None, Some("ios"), None)
+    }
 
     fn ip(last: u8) -> IpAddr {
         IpAddr::V4(Ipv4Addr::new(192, 168, 1, last))
@@ -307,7 +294,7 @@ mod tests {
                 REQUEST_LIFETIME,
                 ip(2),
                 "Lars's\u{1b}[31m iPhone",
-                "iOS 26!",
+                DeviceProfile::from_wire(Some("desktop"), Some("iOS 26!"), None),
                 None,
             )
             .unwrap();
@@ -316,7 +303,11 @@ mod tests {
         assert_eq!(*opened.outcome.borrow(), Outcome::Pending);
         let request = requests.get(&opened.id).unwrap();
         assert_eq!(request.device_name, "Lars's[31m iPhone");
-        assert_eq!(request.platform, "ios26");
+        assert_eq!(request.profile.platform, "ios26");
+        assert_eq!(
+            request.profile.kind,
+            super::super::devices::DeviceKind::Desktop
+        );
         assert_eq!(request.state, RequestState::Pending);
     }
 
@@ -325,22 +316,22 @@ mod tests {
         let mut requests = ConnectRequests::default();
         let now = Instant::now();
         requests
-            .open(now, REQUEST_LIFETIME, ip(1), "a", "ios", None)
+            .open(now, REQUEST_LIFETIME, ip(1), "a", ios(), None)
             .unwrap();
         assert_eq!(
             requests
-                .open(now, REQUEST_LIFETIME, ip(1), "b", "ios", None)
+                .open(now, REQUEST_LIFETIME, ip(1), "b", ios(), None)
                 .err(),
             Some(OpenError::Busy)
         );
         for last in 2..=MAX_OPEN_REQUESTS as u8 {
             requests
-                .open(now, REQUEST_LIFETIME, ip(last), "a", "ios", None)
+                .open(now, REQUEST_LIFETIME, ip(last), "a", ios(), None)
                 .unwrap();
         }
         assert_eq!(
             requests
-                .open(now, REQUEST_LIFETIME, ip(99), "a", "ios", None)
+                .open(now, REQUEST_LIFETIME, ip(99), "a", ios(), None)
                 .err(),
             Some(OpenError::Busy)
         );
@@ -351,7 +342,7 @@ mod tests {
         let mut requests = ConnectRequests::default();
         let now = Instant::now();
         let opened = requests
-            .open(now, REQUEST_LIFETIME, ip(3), "phone", "ios", None)
+            .open(now, REQUEST_LIFETIME, ip(3), "phone", ios(), None)
             .unwrap();
         requests.finish(now, &opened.id, RequestEnd::Denied, None);
         assert_eq!(*opened.outcome.borrow(), Outcome::Denied);
@@ -359,7 +350,7 @@ mod tests {
         let later = now + Duration::from_secs(10);
         assert_eq!(
             requests
-                .open(later, REQUEST_LIFETIME, ip(3), "phone", "ios", None)
+                .open(later, REQUEST_LIFETIME, ip(3), "phone", ios(), None)
                 .err(),
             Some(OpenError::RateLimited {
                 retry_after: Duration::from_secs(20)
@@ -367,7 +358,7 @@ mod tests {
         );
         // Other addresses are not affected, and the cooldown ends.
         requests
-            .open(later, REQUEST_LIFETIME, ip(4), "phone", "ios", None)
+            .open(later, REQUEST_LIFETIME, ip(4), "phone", ios(), None)
             .unwrap();
         requests
             .open(
@@ -375,7 +366,7 @@ mod tests {
                 REQUEST_LIFETIME,
                 ip(3),
                 "phone",
-                "ios",
+                ios(),
                 None,
             )
             .unwrap();
@@ -388,7 +379,7 @@ mod tests {
         let mut requests = ConnectRequests::default();
         let now = Instant::now();
         let opened = requests
-            .open(now, REQUEST_LIFETIME, ip(5), "phone", "ios", None)
+            .open(now, REQUEST_LIFETIME, ip(5), "phone", ios(), None)
             .unwrap();
         assert!(requests.approved().is_none());
         assert!(requests.approve(now, &opened.id, now + Duration::from_secs(120)));
@@ -411,7 +402,7 @@ mod tests {
         let now = Instant::now();
         let install = "install-0123456789abcdef";
         let first = requests
-            .open(now, REQUEST_LIFETIME, ip(6), "phone", "ios", Some(install))
+            .open(now, REQUEST_LIFETIME, ip(6), "phone", ios(), Some(install))
             .unwrap();
         assert_eq!(requests.replaceable(ip(6), Some(install)), Some(first.id));
         assert_eq!(requests.replaceable(ip(7), Some(install)), None);
@@ -428,14 +419,14 @@ mod tests {
         let now = Instant::now();
         for _ in 0..ENDED_KEPT + 2 {
             let opened = requests
-                .open(now, REQUEST_LIFETIME, ip(8), "phone", "ios", None)
+                .open(now, REQUEST_LIFETIME, ip(8), "phone", ios(), None)
                 .unwrap();
             requests.finish(now, &opened.id, RequestEnd::Withdrawn, None);
         }
         assert_eq!(requests.ended().count(), ENDED_KEPT);
         assert!(requests.expired(now).is_empty());
         let opened = requests
-            .open(now, REQUEST_LIFETIME, ip(9), "phone", "ios", None)
+            .open(now, REQUEST_LIFETIME, ip(9), "phone", ios(), None)
             .unwrap();
         assert_eq!(requests.expired(now + REQUEST_LIFETIME), vec![opened.id]);
     }

@@ -172,7 +172,10 @@ of `0` and `1`, quiet zone included), `target` (the harness a shared thread
 runs on), `notShared` (why this thread is held back on a thread's answer, the
 count of held-back threads on the machine's) and, for the machine,
 `gateway.pairing` and `gateway.connectedDevices` from the gateway's own
-status, plus `connectRequests` (open: `id`, `deviceName`, `platform`,
+status, plus `devices` (each paired device's `id`, `name`, `kind` `phone`,
+`desktop` or `cli`, `platform`, `hostId`, `lastSeenAt` and, on the machine's
+answer, `connected`), `connectRequests` (open: `id`, `deviceName`,
+`deviceKind`, `platform`,
 `remoteAddr`, `ageSecs`, `expiresInSecs`, `state` `pending` or `approved`) and
 `endedConnectRequests` (the last eight: `id`, `deviceName`, `end`, `deviceId`
 when it paired, `endedSecsAgo`). `_rustcode/remote/answer { id, accept }`
@@ -243,7 +246,7 @@ remote access on is the short moment before it has registered.
 | `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
 | `rustcode remote off` | Stop the running gateway (alias of `stop`). |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
-| `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time, when each was last seen and expiry. Never a token. |
+| `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
 | `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
@@ -348,7 +351,10 @@ the local network (Bonjour `_rustcode._tcp`, whose record lists
 and the desktop app shows *‹name› wants to connect* wherever the user is.
 
 1. The phone opens a WebSocket and sends `connect_request` with its name,
-   platform and install identifier. It carries no secret.
+   platform and install identifier. It carries no secret. A desktop app on
+   another machine asks the same way with `device_kind: "desktop"` and its
+   machine's identifier (the record lists `caps=connect_requests,desktops`),
+   and is shown and listed as, for example, *Windows desktop*.
 2. The Mac shows the request. *Deny* ends it, and that address cannot ask
    again for 30 seconds. Nobody answering ends it after two minutes.
 3. *Accept* issues a pairing challenge bound to that request: it replaces any

@@ -298,7 +298,9 @@ describe("remote access", () => {
     expect(status.gateway?.pairing?.attemptsLeft).toBe(4);
     expect(status.offer?.qrRows).toEqual(["0110", "1001"]);
     expect(status.offer?.code).toBe("4821-7730");
-    expect(status.devices).toEqual([{ id: "device-1", name: "Lars's iPhone" }]);
+    expect(status.devices).toEqual([
+      { id: "device-1", name: "Lars's iPhone", kind: "phone", platform: "unknown" },
+    ]);
   });
 
   test("a thread's share names the device attached to it", () => {

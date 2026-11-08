@@ -5,9 +5,10 @@ import {
   type ConnectCode,
   clock,
   connectPollMs,
+  deviceLabel,
   endedMessage,
   IDLE_POLL_MS,
-  platformLabel,
+  lastSeenLabel,
   promptedRequests,
   settleCode,
 } from "./connectRequests";
@@ -157,12 +158,46 @@ describe("connection requests", () => {
   });
 
   test("labels and clocks read as people say them", () => {
-    expect(platformLabel("ios")).toBe("iPhone or iPad");
-    expect(platformLabel("android")).toBe("Android");
-    expect(platformLabel("unknown")).toBe("Device");
-    expect(platformLabel("watchos")).toBe("watchos");
+    expect(deviceLabel("phone", "ios")).toBe("iPhone");
+    expect(deviceLabel("phone", "android")).toBe("Android phone");
+    expect(deviceLabel("phone", "unknown")).toBe("Phone");
+    expect(deviceLabel("desktop", "windows")).toBe("Windows desktop");
+    expect(deviceLabel("desktop", "macos")).toBe("Mac desktop");
+    expect(deviceLabel("desktop", "linux")).toBe("Linux desktop");
+    expect(deviceLabel("desktop", "freebsd")).toBe("Freebsd desktop");
+    expect(deviceLabel("desktop", "unknown")).toBe("Desktop app");
+    expect(deviceLabel("cli", "linux")).toBe("Linux command line");
+    expect(deviceLabel("cli", "")).toBe("Command line");
     expect(clock(119.2)).toBe("2:00");
     expect(clock(61)).toBe("1:01");
     expect(clock(-3)).toBe("0:00");
+  });
+
+  test("a desktop asking to connect is labelled as one, and an older engine's request as a phone", () => {
+    const asked = status({
+      connectRequests: [
+        { ...request("r1", "pending"), deviceName: "Lars's PC", deviceKind: "desktop", platform: "windows" },
+        request("r2", "pending"),
+      ],
+    });
+    const [desktop, phone] = promptedRequests(asked);
+    expect(desktop && deviceLabel(desktop.deviceKind, desktop.platform)).toBe("Windows desktop");
+    expect(phone?.deviceKind).toBe("phone");
+    expect(phone && deviceLabel(phone.deviceKind, phone.platform)).toBe("iPhone");
+  });
+
+  test("last seen reads as a relative time, and a connected device as connected", () => {
+    const now = Date.parse("2026-11-08T12:00:00Z");
+    const ago = (ms: number) => ({ lastSeenAt: now - ms });
+    expect(lastSeenLabel({ connected: true, lastSeenAt: now - 86_400_000 }, now)).toBe("Connected now");
+    expect(lastSeenLabel({}, now)).toBe("Last seen: unknown");
+    expect(lastSeenLabel(ago(20_000), now)).toBe("Last seen just now");
+    expect(lastSeenLabel(ago(12 * 60_000), now)).toBe("Last seen 12 min ago");
+    expect(lastSeenLabel(ago(3 * 3_600_000), now)).toBe("Last seen 3 h ago");
+    expect(lastSeenLabel(ago(26 * 3_600_000), now)).toBe("Last seen 1 day ago");
+    expect(lastSeenLabel(ago(9 * 86_400_000), now)).toBe("Last seen 9 days ago");
+    expect(lastSeenLabel(ago(90 * 86_400_000), now)).toMatch(/^Last seen \S/);
+    // A clock that ran behind the engine's never reads as the future.
+    expect(lastSeenLabel({ lastSeenAt: now + 60_000 }, now)).toBe("Last seen just now");
   });
 });
