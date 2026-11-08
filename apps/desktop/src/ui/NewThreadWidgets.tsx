@@ -89,7 +89,7 @@ function Card({
         span,
       )}
     >
-      <h3 className="flex shrink-0 items-center gap-1.5 text-caption font-medium text-fg-faint">
+      <h3 className="flex shrink-0 items-center gap-1.5 text-caption font-medium text-fg-muted">
         <Icon size={12} className="shrink-0" />
         {label}
       </h3>
@@ -100,7 +100,7 @@ function Card({
 
 /** A card's one quiet line when it has nothing else to draw. */
 function Nothing({ children }: { children: ReactNode }) {
-  return <p className="text-caption text-fg-faint">{children}</p>;
+  return <p className="text-caption text-fg-muted">{children}</p>;
 }
 
 /** A row in a card's list: a control, so the card is walkable with the keyboard. */
@@ -182,7 +182,7 @@ function RecentThreadsCard({ project }: { project: string }) {
               title={thread.title || "Untitled thread"}
             >
               <span className="min-w-0 flex-1 truncate text-fg">{thread.title || "Untitled thread"}</span>
-              <span className="shrink-0 text-caption text-fg-faint tabular">
+              <span className="shrink-0 text-caption text-fg-muted tabular">
                 {relativeAge(thread.updatedAt)}
               </span>
             </CardRow>
@@ -191,7 +191,7 @@ function RecentThreadsCard({ project }: { project: string }) {
       ) : (
         <Nothing>No threads in this project yet.</Nothing>
       )}
-      <span className="mt-auto shrink-0 text-caption text-fg-faint">
+      <span className="mt-auto shrink-0 text-caption text-fg-muted">
         {more > 0 ? `${count(more, "more thread", "more threads")} in the sidebar` : "Open in the sidebar"}
       </span>
     </Card>
@@ -229,7 +229,7 @@ function UsageCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
           </span>
         </div>
       )}
-      <span className="shrink-0 text-caption text-fg-faint">
+      <span className="shrink-0 text-caption text-fg-muted">
         {rows === undefined ? "Last 30 days" : `${count(totals.turns, "turn")} in ${USAGE_DAYS} days`}
       </span>
     </Card>
@@ -314,14 +314,14 @@ function PullsCard({ project }: { project: string }) {
             >
               <PullMark pull={pull} />
               <span className="min-w-0 flex-1 truncate text-fg">{pull.title}</span>
-              <span className="shrink-0 text-caption text-fg-faint tabular">#{pull.number}</span>
+              <span className="shrink-0 text-caption text-fg-muted tabular">#{pull.number}</span>
             </CardRow>
           ))}
         </div>
       ) : (
         <Nothing>No pull requests in this project.</Nothing>
       )}
-      <span className="mt-auto shrink-0 text-caption text-fg-faint">
+      <span className="mt-auto shrink-0 text-caption text-fg-muted">
         {recent.length
           ? "Opens on GitHub"
           : !project
@@ -399,7 +399,7 @@ function ThisMonthCard({ rows }: { rows?: UsageRow[] }) {
           />
         </div>
       )}
-      <span className="shrink-0 text-caption text-fg-faint">Compared with last month</span>
+      <span className="shrink-0 text-caption text-fg-muted">Compared with last month</span>
     </Card>
   );
 }
