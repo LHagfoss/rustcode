@@ -32,7 +32,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification, JsonRpcRequest};
 use serde_json::json;
 
-use super::cursor::{Position, UpdateLog, rustcode_meta};
+use super::cursor::{LogMark, Position, UpdateLog, rustcode_meta};
 
 /// A connection's id, unique for the life of the engine.
 pub(crate) type ClientId = u64;
@@ -404,11 +404,20 @@ impl Clients {
         }
     }
 
-    /// The cursor of the newest update of `session_id`: a load of a session
-    /// that is not open yet takes it before it reads the history, and
-    /// [`Peer::attach_closed`] sends everything logged after it.
+    /// The cursor of the newest update of `session_id` (tests).
+    #[cfg(test)]
     pub(crate) fn head(&self, session_id: &str) -> u64 {
         self.registry().log(session_id).head()
+    }
+
+    /// Where `session_id`'s log is now: a load of a session that is not open
+    /// yet takes it before it reads the history, and [`Peer::attach_closed`]
+    /// sends everything logged after it. It makes no log of its own, so a
+    /// load that fails before the session opens (an unknown thread, a cwd
+    /// that does not match) leaves nothing in the registry for the server's
+    /// life.
+    pub(crate) fn load_mark(&self, session_id: &str) -> LogMark {
+        LogMark(self.registry().logs.get(session_id).map(UpdateLog::head))
     }
 
     /// Where `session_id`'s turn is: a generation that changes whenever a
@@ -608,8 +617,8 @@ impl Peer {
 
     /// This client loads `session_id`, which was not open: the engine read
     /// its transcript from disk, then opened it, and `replay` is that
-    /// transcript. `base` is [`Clients::head`] from before the transcript was
-    /// read. Updates the session logged since (another client loaded it and
+    /// transcript. `base` is [`Clients::load_mark`] from before the
+    /// transcript was read. Updates the session logged since (another client loaded it and
     /// ran a turn, a title arrived) are not in the transcript: they are sent
     /// after it, each with its cursor, so the cursor the answer names covers
     /// nothing this connection was not sent.
@@ -619,7 +628,7 @@ impl Peer {
     pub(crate) fn attach_closed(
         &self,
         session_id: &str,
-        base: u64,
+        base: LogMark,
         replay: Vec<SessionUpdate>,
         reset: bool,
     ) -> Result<Option<Position>, agent_client_protocol::Error> {
@@ -630,7 +639,7 @@ impl Peer {
         &self,
         session_id: &str,
         generation: Option<u64>,
-        base: Option<u64>,
+        base: Option<LogMark>,
         replay: Vec<SessionUpdate>,
         reset: bool,
     ) -> Result<Option<Position>, agent_client_protocol::Error> {
@@ -647,7 +656,7 @@ impl Peer {
         // The log after `base`, if it is all still there.
         let missed = match base {
             None => Vec::new(),
-            Some(base) => match registry.log(session_id).since(base) {
+            Some(base) => match registry.log(session_id).since_mark(base) {
                 Some(logged) => logged
                     .map(|logged| (logged.cursor, logged.update.clone()))
                     .collect(),
@@ -1357,7 +1366,8 @@ mod tests {
         use super::super::cursor::LOG_UPDATES;
         let clients = Clients::default();
         let sender = clients.session("busy");
-        let base = clients.head("busy");
+        sender.update(text("before")).expect("send");
+        let base = clients.load_mark("busy");
         for n in 0..LOG_UPDATES + 5 {
             sender.update(text(&format!("{n}"))).expect("send");
         }
@@ -1368,7 +1378,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let base = clients.head("busy");
+        let base = clients.load_mark("busy");
         sender.update(text("one")).expect("send");
         sender.update(text("two")).expect("send");
         clients.invalidate_cursors("busy");
@@ -1381,11 +1391,50 @@ mod tests {
         assert!(notes.try_recv().is_err(), "nothing was sent");
         let head = clients.head("busy");
         let position = loader
-            .attach_closed("busy", head, vec![text("history")], false)
+            .attach_closed(
+                "busy",
+                clients.load_mark("busy"),
+                vec![text("history")],
+                false,
+            )
             .unwrap()
             .unwrap();
         assert_eq!(position.cursor, head);
         assert!(notes.recv().await.expect("history").meta.is_none());
+    }
+
+    /// Taking the mark of a closed session makes no log: a load that then
+    /// fails (an unknown thread, a cwd that does not match) leaves nothing in
+    /// the registry. One that goes on gets what the session logged after the
+    /// mark, even when the log only began after it.
+    #[tokio::test]
+    async fn a_load_mark_makes_no_log_and_still_covers_what_came_after() {
+        let clients = Clients::default();
+        for n in 0..100 {
+            let id = format!("unknown-{n}");
+            assert_eq!(clients.load_mark(&id), LogMark(None));
+        }
+        assert!(
+            clients.registry().logs.is_empty(),
+            "failed loads leave no log behind"
+        );
+
+        let mark = clients.load_mark("late");
+        // Another client opens the thread and it logs, before this load attaches.
+        let sender = clients.session("late");
+        sender.update(text("one")).expect("send");
+        sender.update(text("two")).expect("send");
+        let head = clients.head("late");
+        let (loader, mut notes, _close) = connected(&clients).await;
+        let position = loader
+            .attach_closed("late", mark, vec![text("history")], false)
+            .unwrap()
+            .expect("the log reaches back to the mark");
+        assert_eq!(position.cursor, head);
+        assert!(notes.recv().await.expect("history").meta.is_none());
+        let one = notes.recv().await.expect("one");
+        let two = notes.recv().await.expect("two");
+        assert_eq!((cursor_of(&one), cursor_of(&two)), (head - 1, head));
     }
 
     /// A load cut off halfway has no cursor to resume from, so the next one

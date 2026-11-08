@@ -11,7 +11,7 @@
 // Keychain: they are read only while the switch below allows it.
 
 import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { usageRows } from "../state/logins";
@@ -39,6 +39,7 @@ import { relativeAge } from "../state/thread";
 import {
   answeredPlans,
   failureText,
+  oneReadAtATime,
   USAGE_PLANS_KEY,
   type UsageAnswer,
   usageView,
@@ -47,6 +48,13 @@ import {
 import { PlanWindow } from "./ComposerUsage";
 import { Skeleton, Spinner, Switch } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
+
+/** One read of the page: whether it asks for Claude, past the engine's cache, as an explicit look. */
+interface PageRead {
+  withClaude: boolean;
+  force: boolean;
+  asked: boolean;
+}
 
 export function UsagePage() {
   const status = useApp((s) => s.status);
@@ -57,11 +65,10 @@ export function UsagePage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // One read at a time: the interval and a press of Refresh never double a
-  // Keychain read or an Anthropic request.
-  const reading = useRef(false);
-  const load = useCallback(async (withClaude: boolean, force: boolean, asked = true): Promise<boolean> => {
-    if (reading.current) return true;
-    reading.current = true;
+  // Keychain read or an Anthropic request. An explicit look that comes while a
+  // read is in flight (Claude's switch turned on during the interval's read)
+  // runs once it ends instead of being dropped (`oneReadAtATime`).
+  const readPage = async ({ withClaude, force, asked }: PageRead): Promise<boolean> => {
     const token = beginPageRead(USAGE_PLANS_KEY);
     setLoading(true);
     try {
@@ -116,10 +123,17 @@ export function UsagePage() {
       if (isLatestPageRead(USAGE_PLANS_KEY, token)) setError(e instanceof Error ? e.message : String(e));
       return false;
     } finally {
-      reading.current = false;
       if (isLatestPageRead(USAGE_PLANS_KEY, token)) setLoading(false);
     }
-  }, []);
+  };
+  // Made once: `readPage` uses only state setters and module state, which do
+  // not change between renders.
+  const [reads] = useState(() => oneReadAtATime<PageRead>(readPage));
+  const load = useCallback(
+    (withClaude: boolean, force: boolean, asked = true): Promise<boolean> =>
+      reads.run({ withClaude, force, asked }, asked),
+    [reads],
+  );
   useEffect(() => {
     if (status !== "ready") {
       // The engine went away, and with it its answers: draw nothing from it.
@@ -143,12 +157,12 @@ export function UsagePage() {
     if (status !== "ready") return;
     return watchUsageRefresh({
       read: () => load(claude, false, false),
-      reading: () => reading.current,
+      reading: () => reads.busy(),
       visible: () => document.visibilityState === "visible",
       readAt: () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY)?.readAt ?? null,
       everyMs: PLAN_CACHE_POLL_MS,
     });
-  }, [status, claude, load]);
+  }, [status, claude, load, reads.busy]);
   const allowClaude = (on: boolean) => {
     setClaudeUsageAllowed(on);
     setClaude(on);

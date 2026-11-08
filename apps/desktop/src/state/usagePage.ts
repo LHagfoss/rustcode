@@ -126,6 +126,41 @@ export function refreshBackoff(everyMs: number, failures: number): number {
 }
 
 /**
+ * One page read at a time, without losing an explicit one. A background read
+ * (the page's own interval) that finds a read in flight is dropped: the next
+ * tick reads. An explicit look (opening the page, turning Claude's switch on,
+ * Refresh) is kept instead and runs as soon as the read in flight ends, the
+ * newest one only; dropping it would leave Claude's rows unread until the next
+ * tick, three minutes later, after the switch was turned on during a tick's
+ * read. A kept look answers true at once: it has not failed.
+ */
+export function oneReadAtATime<A>(read: (args: A) => Promise<boolean>): {
+  run: (args: A, explicit: boolean) => Promise<boolean>;
+  busy: () => boolean;
+} {
+  let busy = false;
+  let waiting: { args: A } | null = null;
+  const run = async (args: A, explicit: boolean): Promise<boolean> => {
+    if (busy) {
+      if (explicit) waiting = { args };
+      return true;
+    }
+    busy = true;
+    try {
+      return await read(args);
+    } catch {
+      return false;
+    } finally {
+      busy = false;
+      const next = waiting;
+      waiting = null;
+      if (next) void run(next.args, true);
+    }
+  };
+  return { run, busy: () => busy };
+}
+
+/**
  * Wires the page's own refresh: a timer that reads while the window is visible,
  * a read when the window comes back after being hidden longer than the
  * interval, and a longer wait after a read that failed ([`refreshBackoff`]).
