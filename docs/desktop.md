@@ -322,10 +322,10 @@ composer's keys stay outside the table.
   cards are one sideways-scrolling row, and a window shorter than 700px leaves
   toggle and cards out.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
-  links in replies and messages render as chips: a globe icon and the title on a
-  tint of the page's `theme-color`, else neutral. The icon is the app's own
-  rather than the site's favicon, whose contrast against the chip no theme
-  knows. The prompt still carries
+  links in replies and messages render as chips: the site's favicon, or a globe
+  when it has none or it will not decode, and the title on a tint of the page's
+  `theme-color`, else neutral. The favicon sits on a small white tile so a dark
+  mark still reads on the chip in the dark theme. The prompt still carries
   the plain URL. Settings › Chat › Link previews turns fetching off.
 - **Thread actions.** A row's ⋯ menu or right-click: Mark for Review,
   Settle, Pin, Rename, Move to Trash. Settle is **Unsettle** once the thread
