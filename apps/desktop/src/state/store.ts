@@ -112,6 +112,7 @@ import {
   splitImageMarkers,
 } from "./compose";
 import type { ConnectCode } from "./connectRequests";
+import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { parseGrants, type TimedGrant } from "./grants";
 import {
@@ -219,6 +220,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { userTypedPrompt } from "./topLevel";
+import { readableTurnError } from "./turnError";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -924,6 +926,8 @@ let remoteStatusReadId = 0;
 let latestRemoteStatusReadId = 0;
 /** Sessions whose `session/load` replay is arriving. */
 const loading = new Set<string>();
+/** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
+const opening = new Map<string, Promise<string | null>>();
 
 /**
  * Threads whose messages contain `query`, from the engine's SQLite index
@@ -1729,37 +1733,48 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
  * open error when it could not be opened, so a caller can say why instead of
  * reporting an empty thread.
  */
-export async function openThread(id: string): Promise<string | null> {
+export function openThread(id: string): Promise<string | null> {
+  const inFlight = opening.get(id);
+  if (inFlight) return inFlight;
   const conn = connection;
   const existing = get().threads[id];
-  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return null;
+  // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
+  // be opened once (the engine was restarting, its harness was down) is not refused for good.
+  if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
+    return Promise.resolve(null);
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
+  let pending: Promise<string | null>;
+  pending = Promise.resolve().then(async () => {
+    try {
+      const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
+      updateThread(id, (t) => ({
+        ...finishLoad(t),
+        configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
+        harness: parseSessionHarness(result) ?? t.harness,
+      }));
+      const opened = get().threads[id];
+      if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
+      void refreshPlanUsage(id);
+      void refreshCheckpoints(id);
+      // A thread opened after it went idle can still be before its cache deadline.
+      scheduleAutoCompact(id);
+      return null;
+    } catch (error) {
+      const message = `Could not open this thread: ${errorText(error)}`;
+      updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
+      return message;
+    } finally {
+      loading.delete(id);
+      if (opening.get(id) === pending) opening.delete(id);
+    }
+  });
+  opening.set(id, pending);
   loading.add(id);
   set((s) => ({
     threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
   }));
-  try {
-    const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
-    updateThread(id, (t) => ({
-      ...finishLoad(t),
-      configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
-      harness: parseSessionHarness(result) ?? t.harness,
-    }));
-    const opened = get().threads[id];
-    if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
-    void refreshPlanUsage(id);
-    void refreshCheckpoints(id);
-    // A thread opened after it went idle can still be before its cache deadline.
-    scheduleAutoCompact(id);
-    return null;
-  } catch (error) {
-    const message = `Could not open this thread: ${errorText(error)}`;
-    updateThread(id, (t) => ({ ...finishLoad(t), error: message }));
-    return message;
-  } finally {
-    loading.delete(id);
-  }
+  return pending;
 }
 
 /**
@@ -2914,14 +2929,20 @@ export async function runPrompt(
     outcome = "failed";
     failure = errorText(error);
   }
-  updateThread(id, (t) =>
-    requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
-  );
+  // A provider's raw answer (`Codex: {"detail":"Bad Request"}`) is said in words, with what to do
+  // when the conversation is full; the raw text stays on the thread, behind the error's Details.
+  const rawFailure = failure;
+  if (failure !== undefined) failure = readableTurnError(failure, contextPercent(get().threads[id]?.usage));
+  updateThread(id, (t) => ({
+    ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
+    ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
+  }));
   // The limit is settled first: a turn it stopped is reported as the limit, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact
     ? (get().limitWaits[id] ?? null)
-    : settleLimitWait(id, outcome, failure, startIndex);
+    : // The limit is read from what the harness said, not the words the thread shows.
+      settleLimitWait(id, outcome, rawFailure, startIndex);
   // An automatic compaction is not a turn the user waits for: it is not "Done"
   // news, and it must not wake the thread's parent as if its work finished.
   if (!options.autoCompact) {
@@ -4119,7 +4140,15 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
   const wanted = new Set(ids);
-  set((s) => ({ sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)) }));
+  set((s) => ({
+    sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)),
+    // A settled thread asks nothing of the user: a turn of it that failed is no longer theirs to
+    // retry (`cleanup_worktree`, a fan-out's losers, a delegate its parent replaced), so its
+    // Inbox card goes with the settle.
+    ...(status === "done"
+      ? { failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))) }
+      : {}),
+  }));
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);
@@ -5306,6 +5335,7 @@ export function resetForTests() {
   transport = null;
   setShellTransport(null);
   loading.clear();
+  opening.clear();
   set({
     status: "connecting",
     remote: null,

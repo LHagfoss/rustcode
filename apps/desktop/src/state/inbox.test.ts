@@ -117,6 +117,26 @@ describe("the needs-you inbox", () => {
     ]);
   });
 
+  test("a settled thread's failed turn is no row, from either source", () => {
+    const settled = sessions.map((s) => (s.id === "one" ? { ...s, status: "done" as const } : s));
+    const items = deriveInbox(
+      {
+        sessions: settled,
+        threads: {
+          two: {
+            permissions: [],
+            items: [{ kind: "turnEnd", outcome: "failed", at: NOW - 500 }],
+          },
+        },
+        failed: { one: NOW - 1_000 },
+        archived: { two: NOW },
+        links: [],
+      },
+      NOW,
+    );
+    expect(items).toEqual([]);
+  });
+
   test("a delegate that asks is one row, and not a second one beside its request", () => {
     const items = deriveInbox(
       {

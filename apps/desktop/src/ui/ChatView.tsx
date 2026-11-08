@@ -392,26 +392,40 @@ function Header({
 
 function ErrorBanner({
   text,
+  detail,
   onDismiss,
   action,
 }: {
   text: string;
+  /** What the harness or engine sent, when `text` says it in other words: shown under Details. */
+  detail?: string;
   onDismiss?: () => void;
   action?: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(false);
   return (
     <Callout
       floating
       action={
-        (action || onDismiss) && (
+        (action || onDismiss || detail) && (
           <>
             {action}
+            {detail && (
+              <Pill aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+                {open ? "Hide details" : "Details"}
+              </Pill>
+            )}
             {onDismiss && <Pill onClick={onDismiss}>Dismiss</Pill>}
           </>
         )
       }
     >
       {text}
+      {detail && open && (
+        <span className="mt-1 block select-text break-all font-mono text-caption text-fg-muted">
+          {detail}
+        </span>
+      )}
     </Callout>
   );
 }
@@ -762,7 +776,9 @@ export function ChatView() {
               {error && (
                 <LaneItem over>
                   <ErrorBanner
+                    key={error}
                     text={error}
+                    detail={thread?.errorDetail}
                     action={
                       thread && error.startsWith("Could not open this thread") ? (
                         <Pill prominent onClick={() => void repairThread(thread.id)}>

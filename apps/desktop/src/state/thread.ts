@@ -312,7 +312,15 @@ export interface ThreadState {
   harness?: SessionHarness;
   /** The worktree the thread runs in, from `session/new` or the list. */
   worktree?: import("../acp/v2").Worktree;
+  /** What went wrong, as the thread shows it: a failed open or a failed turn. */
   error?: string;
+  /** The failure as the harness or engine sent it, when {@link error} says it in other words. */
+  errorDetail?: string;
+  /**
+   * Opening it failed (`store.ts` `openThread`), as opposed to a turn that failed: the next open
+   * tries again instead of keeping the failed copy.
+   */
+  openFailed?: boolean;
   /** Turn timing seen on replayed replies, closed into a `turnEnd` row at the next user message. */
   pendingTurn?: { id?: string; elapsedMs?: number; at?: number; outcome?: string };
 }
@@ -702,6 +710,7 @@ export function beginTurn(
     waiting: undefined,
     woken: undefined,
     error: undefined,
+    errorDetail: undefined,
     items: [
       ...closed.items,
       {
@@ -743,6 +752,7 @@ export function beginQuietTurn(state: ThreadState, now = Date.now()): ThreadStat
     waiting: undefined,
     woken: undefined,
     error: undefined,
+    errorDetail: undefined,
   };
 }
 
@@ -756,6 +766,7 @@ export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
     turnStartedAt: now,
     turnUsage: usageBaseline(state),
     error: undefined,
+    errorDetail: undefined,
     items: [
       ...state.items,
       { kind: "notice", id: localId("wake"), text: "Background task finished", tone: "info" },
@@ -822,6 +833,7 @@ export function finishTurn(
     pendingTurn: undefined,
     permissions: [],
     error,
+    errorDetail: undefined,
     turnUsage: undefined,
     items: quiet
       ? items
@@ -1164,8 +1176,9 @@ export function relativeAge(at: number | undefined, now = Date.now()): string {
  * The live line under a running turn: what the agent does right now. The
  * newest step of the turn decides: a running tool (as "Running <command>" for
  * a shell), a thought still streaming (its latest bold heading), a reply being written, else "Working".
+ * `short` is for a row: the step as {@link agentStepLabel} says it.
  */
-export function workingLabel(items: TranscriptItem[]): string {
+export function workingLabel(items: TranscriptItem[], short = false): string {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]!;
     if (item.kind === "user") break;
@@ -1180,7 +1193,9 @@ export function workingLabel(items: TranscriptItem[]): string {
         ).length;
         return working > 1 ? `${working} agents working` : `${agent.name} · ${agent.task}`;
       }
-      return stepLabel(item);
+      // A row (a delegate's, under the thread that started it) has one short line: the step a
+      // reader recognises, never the raw shell line with its `cd` and variables.
+      return short ? agentStepLabel(item) : stepLabel(item);
     }
     if (item.kind === "thought") {
       if (item.done) return "Working";
@@ -1273,21 +1288,79 @@ export function subagentTitle(name: string, task: string): string {
   return line || type || "Agent";
 }
 
-/** A shell line without a leading `cd <path> &&`, cut to its command and first argument. */
-function shortCommand(command: string): string {
-  let line = unwrapShell(command.trim());
-  // A `cd` says where the work happens, not what it is; so does a leading `FOO=1`.
+/** A leading part of a shell line that only sets up where or with what it runs: `cd x`, `export A=1`, `A=1`. */
+const SETUP_PART =
+  /^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)(?:\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*))*)\s*(?:&&|;|\n)\s*/;
+/** Environment assignments can contain spaces and secrets; remove the entire quoted value first. */
+const ENV_ASSIGNMENT = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=(?:"(?:\\.|[^"])*"|'[^']*'|[^\s;&|]*)/g;
+
+/** The word a reader knows a program by: `cargo`, not `/usr/local/bin/cargo`. */
+const programName = (token: string) => token.split("/").filter(Boolean).at(-1) ?? "";
+const SAFE_SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
+  bun: new Set(["test", "run", "build", "check", "install", "add", "remove", "update", "x", "pm"]),
+  cargo: new Set(["test", "build", "check", "clippy", "fmt", "run", "clean", "metadata", "tree", "doc"]),
+  git: new Set([
+    "status",
+    "diff",
+    "log",
+    "show",
+    "branch",
+    "switch",
+    "checkout",
+    "worktree",
+    "commit",
+    "fetch",
+    "pull",
+    "push",
+    "add",
+    "restore",
+  ]),
+  npm: new Set(["test", "run", "build", "install", "ci", "update", "outdated", "exec"]),
+  pnpm: new Set(["test", "run", "build", "install", "add", "remove", "update", "exec"]),
+  yarn: new Set(["test", "run", "build", "install", "add", "remove", "up", "exec"]),
+};
+const SAFE_OPTION = /^--?[A-Za-z][A-Za-z0-9-]*$/;
+
+/**
+ * A shell line cut to its program and first argument (`grep -rnE …`), without what only sets it
+ * up: a leading `cd <path> &&`, `export A=1;`, or `A=1` before the program. Empty when nothing a
+ * reader would recognise is left (a line that only assigns, a variable for a program), so the row
+ * says "Running a command" instead of a raw line such as `F=/private/tmp/…`.
+ */
+export function shortCommand(command: string): string {
+  // A title may hold the line as code: `` `bun test` ``.
+  let line = unwrapShell(command.trim().replace(/^`+|`+$/g, "")).trim();
   for (;;) {
-    const next = line.replace(/^cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*/, "");
+    const next = line.replace(SETUP_PART, "");
     if (next === line) break;
     line = next;
   }
+  line = line.replace(ENV_ASSIGNMENT, "$1").replace(/\s+/g, " ").trim();
+  const env = /^(?:[^\s;&|]+\/)?env(?:\s+|$)([\s\S]*)$/.exec(line);
+  // `env -S` embeds a whole shell command (often with inline secrets) in one argument. A shell
+  // parser would be needed to safely extract its program, so keep this activity generic.
+  if (env && /(?:^|\s)(?:-S|--split-string)(?:=|\s|$)/.test(env[1]!)) return "";
+  // The first line is what runs first; a heredoc or a script below it is not a label.
+  line = line.split("\n")[0]!.trim();
   const tokens = line.split(/\s+/).filter(Boolean);
-  while (tokens.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]!)) tokens.shift();
-  const [name, first] = tokens;
-  if (!name) return "";
-  const head = first ? `${name} ${first}` : name;
-  return tokens.length > 2 ? `${head} …` : head;
+  const assigns = () => {
+    while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]!)) tokens.shift();
+  };
+  assigns();
+  if (tokens[0] === "env") {
+    tokens.shift();
+    assigns();
+  }
+  const name = programName(tokens[0] ?? "");
+  if (name === "export") return "";
+  // A program the line computes (`$CMD`, `"$(…)"`), or punctuation, names nothing.
+  if (!/^[A-Za-z0-9_.+-]+$/.test(name)) return "";
+  const raw = tokens[1]?.replace(/[;&|]+$/, "");
+  // Keep only ordinary flags and known tool verbs; arbitrary arguments can be paths, URLs or secrets.
+  const first = raw && (SAFE_OPTION.test(raw) || SAFE_SUBCOMMANDS[name]?.has(raw)) ? raw : undefined;
+  const shown = first && first.length <= 24 ? first : undefined;
+  const head = shown ? `${name} ${shown}` : name;
+  return tokens.length > (shown ? 2 : 1) ? `${head} …` : head;
 }
 
 /**
@@ -1301,7 +1374,9 @@ export function agentStepLabel(item: ToolItem): string {
   const kind = item.toolKind?.toLowerCase() ?? "";
   const title = item.title.trim();
   if (kind === "execute" || /^(bash|shell)\b/i.test(title)) {
-    const command = shortCommand(field(input.command) || item.summary || title);
+    const line = field(input.command) || item.summary?.trim() || title;
+    // A tool name alone (`Bash`, `shell`) is no command.
+    const command = /^(?:bash|shell|terminal|exec(?:ute)?)$/i.test(line) ? "" : shortCommand(line);
     return command ? `Running ${command}` : "Running a command";
   }
   if (kind === "read" || /^read\b/i.test(title)) {
@@ -1311,9 +1386,18 @@ export function agentStepLabel(item: ToolItem): string {
   }
   if (kind === "search" || /^(grep|glob|search|find)\b/i.test(title)) {
     const query = field(input.pattern) || field(input.query) || usefulSummary(item.summary);
-    return query ? `Searching for ${query}` : "Searching the files";
+    return query ? `Searching for ${clipLabel(query, 40)}` : "Searching the files";
   }
-  return stepLabel(item);
+  return clipLabel(stepLabel(item), STEP_LABEL_MAX);
+}
+
+/** How long a row's one-line step may be before it is cut. */
+const STEP_LABEL_MAX = 60;
+
+/** `text` on one line, at most `max` long, its cut marked. */
+function clipLabel(text: string, max: number): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
 }
 
 /**

@@ -28,6 +28,7 @@ export function useInboxItems(): InboxItem[] {
   const sessions = useApp((s) => s.sessions);
   const failed = useApp((s) => s.failed);
   const links = useApp((s) => s.links.links);
+  const archived = useApp((s) => s.archived);
   const signature = useApp((s) => threadSignature(s.threads));
   // biome-ignore lint/correctness/useExhaustiveDependencies: the signature stands for the threads it was built from
   return useMemo(
@@ -36,9 +37,10 @@ export function useInboxItems(): InboxItem[] {
         sessions,
         failed,
         links,
+        archived,
         threads: useApp.getState().threads,
       }),
-    [sessions, failed, links, signature],
+    [sessions, failed, links, archived, signature],
   );
 }
 
