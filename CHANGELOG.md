@@ -1,3 +1,11 @@
+## [v1.21.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.21.0) - 2026-11-08
+
+### Features
+- Remote access mirrors every open desktop thread, on any harness, to paired phones, with its prompts and approvals. Switch it on and pair a phone in Settings › Remote access. (#3183)
+- A thread started on a paired phone opens in the desktop app on the harness and model the phone picks. (#3197)
+- The new-thread overview fades open and closed, the dark composer is darker, and a new thread starts in the default project folder even while another thread is open. (#3194)
+- What's New reads the release's own changelog: categories as small badges, pull requests as `#N` links, a skeleton while it loads, and a card that scales in and out. Link chips keep their site icon on a light tile, so dark icons stay visible. (#3195)
+- Auto-compact keeps the last answer in view, with one quiet row under it. By default it runs only when the context passes its size threshold, and never while the last answer is unread. The thread menu copies the thread ID in one click. (#3196)
 ## [v1.20.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.20.1) - 2026-11-08
 
 ### Features
