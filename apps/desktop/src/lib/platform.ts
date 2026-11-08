@@ -33,6 +33,17 @@ export function fileManagerName(platform: Platform = currentPlatform()): string 
 }
 
 /** The platform primary shortcut modifier. */
-export function primaryModifier(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
-  return currentPlatform() === "mac" ? event.metaKey : event.ctrlKey;
+export function primaryModifier(
+  event: { metaKey: boolean; ctrlKey: boolean },
+  platform: Platform = currentPlatform(),
+): boolean {
+  return platform === "mac" ? event.metaKey : event.ctrlKey;
+}
+
+/** A wheel gesture that zooms a picture: Ctrl-wheel pinches on macOS. */
+export function zoomGestureModifier(
+  event: { metaKey: boolean; ctrlKey: boolean },
+  platform: Platform = currentPlatform(),
+): boolean {
+  return primaryModifier(event, platform) || (platform === "mac" && event.ctrlKey);
 }

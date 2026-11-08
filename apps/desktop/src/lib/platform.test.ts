@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { fileManagerName, platformFor } from "./platform";
+import * as platform from "./platform";
+
+const { fileManagerName, platformFor } = platform;
 
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
 const WINDOWS =
@@ -28,4 +30,12 @@ test("names each platform file manager", () => {
   expect(fileManagerName("mac")).toBe("Finder");
   expect(fileManagerName("windows")).toBe("Explorer");
   expect(fileManagerName("linux")).toBe("file manager");
+});
+
+test("keeps Ctrl-wheel pinch zoom working on macOS", () => {
+  const zoomGestureModifier = platform.zoomGestureModifier;
+  expect(zoomGestureModifier?.({ metaKey: false, ctrlKey: true }, "mac")).toBe(true);
+  expect(zoomGestureModifier?.({ metaKey: true, ctrlKey: false }, "mac")).toBe(true);
+  expect(zoomGestureModifier?.({ metaKey: false, ctrlKey: true }, "windows")).toBe(true);
+  expect(zoomGestureModifier?.({ metaKey: true, ctrlKey: false }, "windows")).toBe(false);
 });

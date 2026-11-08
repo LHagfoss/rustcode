@@ -16,6 +16,10 @@ const LOGIN_TOOLS: &[&str] = &[
     "rustcode",
 ];
 
+fn is_known_login_tool(tool: &str) -> bool {
+    LOGIN_TOOLS.contains(&tool)
+}
+
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
 fn absolute_dir(path: &str) -> Result<PathBuf, String> {
@@ -36,6 +40,18 @@ pub fn open_url(url: String) -> Result<(), String> {
         return Err("Only web and mail links open.".into());
     }
     open_with_system(&url)
+}
+
+/// Path a file manager should open or select for a reveal action.
+///
+/// macOS and Windows can select the requested item. On other systems, open a
+/// directory itself, or the containing directory for a file.
+fn reveal_target(path: &Path, can_select: bool) -> &Path {
+    if can_select || path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -75,7 +91,7 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     {
         crate::process::command("open")
             .arg("-R")
-            .arg(&path)
+            .arg(reveal_target(&path, true))
             .spawn()
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -83,14 +99,14 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         crate::process::command("explorer")
-            .arg(format!("/select,{}", path.display()))
+            .arg(format!("/select,{}", reveal_target(&path, true).display()))
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Could not open Explorer: {e}"))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        open_with_system(&path.parent().unwrap_or(&path).display().to_string())
+        open_with_system(&reveal_target(&path, false).display().to_string())
     }
 }
 
@@ -130,11 +146,7 @@ pub fn open_login_terminal(
     env: Option<Vec<(String, String)>>,
 ) -> Result<(), String> {
     let tool = command.first().ok_or("No command.")?;
-    let name = Path::new(tool)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    if !LOGIN_TOOLS.contains(&name) || tool.contains('/') {
+    if !is_known_login_tool(tool) {
         return Err(format!("{tool} is not a known harness login."));
     }
     if command.iter().any(|w| w.contains('\n') || w.contains('\r')) {
@@ -847,6 +859,25 @@ mod tests {
         assert!(open_login_terminal(vec!["rm".into(), "-rf".into()], None).is_err());
         assert!(open_login_terminal(vec!["/tmp/codex".into()], None).is_err());
         assert!(open_login_terminal(vec![], None).is_err());
+    }
+
+    #[test]
+    fn login_tool_allowlist_rejects_paths() {
+        for tool in LOGIN_TOOLS {
+            assert!(is_known_login_tool(tool));
+        }
+        assert!(!is_known_login_tool("C:\\tools\\codex"));
+        assert!(!is_known_login_tool("/tmp/codex"));
+        assert!(!is_known_login_tool("codex.exe"));
+    }
+
+    #[test]
+    fn reveal_uses_the_requested_directory_and_file_parent() {
+        let directory = std::env::current_dir().unwrap();
+        let file = std::env::current_exe().unwrap();
+        assert_eq!(reveal_target(&directory, false), directory.as_path());
+        assert_eq!(reveal_target(&file, false), file.parent().unwrap());
+        assert_eq!(reveal_target(&file, true), file.as_path());
     }
 
     #[test]

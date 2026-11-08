@@ -43,6 +43,13 @@ describe("shortcut bindings", () => {
     expect(bindingFromEvent(press("k", { ctrlKey: true }), "mac")).toBeNull();
   });
 
+  test("normalizes browser arrow names in shortcuts", () => {
+    expect(bindingFromEvent(press("ArrowLeft", { ctrlKey: true }), "windows")).toBe("mod+left");
+    expect(bindingFromEvent(press("ArrowUp", { ctrlKey: true, shiftKey: true }), "linux")).toBe(
+      "mod+shift+up",
+    );
+  });
+
   test("⌘+ and ⌘= are one binding, because + only exists shifted", () => {
     expect(bindingFromEvent(cmd("+", { shiftKey: true }))).toBe("mod+=");
     expect(bindingFromEvent(cmd("="))).toBe("mod+=");
@@ -188,11 +195,32 @@ describe("what a binding may be", () => {
     expect(RESERVED_BINDINGS).toEqual(["mod+q", "mod+w", "mod+h", "mod+m", "mod+tab"]);
   });
 
-  test("refuses the editing keys the menu answers first", () => {
+  test("refuses the editing keys a field owns", () => {
     for (const binding of RESERVED_EDITING) {
-      expect(bindingProblem({}, "new-thread", binding)).toContain("copy, paste and undo");
+      expect(bindingProblem({}, "new-thread", binding)).toContain("text editing");
     }
     expect(parseOverrides(JSON.stringify({ "new-thread": "mod+v" }))).toEqual({});
+  });
+
+  test("keeps word editing shortcuts available in fields", () => {
+    for (const binding of [
+      "mod+y",
+      "mod+backspace",
+      "mod+delete",
+      "mod+left",
+      "mod+right",
+      "mod+up",
+      "mod+down",
+      "mod+shift+left",
+      "mod+shift+right",
+      "mod+shift+up",
+      "mod+shift+down",
+      "mod+home",
+      "mod+end",
+    ]) {
+      expect(bindingProblem({}, "new-thread", binding)).not.toBeNull();
+    }
+    expect(parseOverrides(JSON.stringify({ "toggle-sidebar": "mod+left" }))).toEqual({});
   });
 
   test("names the command that already answers the key", () => {
@@ -259,7 +287,7 @@ describe("stored overrides", () => {
 
   test("two commands never share one key, whatever the file says", () => {
     // The first command in the table keeps the binding; the later one is dropped.
-    const stored = JSON.stringify({ "toggle-sidebar": "mod+y", "new-thread": "mod+y" });
-    expect(parseOverrides(stored)).toEqual({ "new-thread": "mod+y" });
+    const stored = JSON.stringify({ "toggle-sidebar": "mod+alt+y", "new-thread": "mod+alt+y" });
+    expect(parseOverrides(stored)).toEqual({ "new-thread": "mod+alt+y" });
   });
 });

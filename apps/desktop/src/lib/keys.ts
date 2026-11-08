@@ -209,7 +209,8 @@ function eventKey(event: KeyEventLike): { key: string; shifted: boolean } | null
     if (base) return { key: base, shifted: false };
     return { key: lower, shifted: true };
   }
-  return KEY_NAMES.has(lower) ? { key: lower, shifted: true } : null;
+  const key = lower.startsWith("arrow") ? lower.slice("arrow".length) : lower;
+  return KEY_NAMES.has(key) ? { key, shifted: true } : null;
 }
 
 export interface KeyEventLike {
@@ -307,11 +308,7 @@ export function commandHint(binding: string, command?: AppCommand): string {
 /** Combos the system or the app's own menu owns; a remap may not take them. */
 export const RESERVED_BINDINGS: readonly string[] = ["mod+q", "mod+w", "mod+h", "mod+m", "mod+tab"];
 
-/**
- * The editing keys every text field has. The window's menu or the webview
- * answers them before a page sees the keydown, so a remap to one would never
- * fire: refused rather than stored and dead.
- */
+/** Editing keys owned by text fields; an app shortcut would consume them first. */
 export const RESERVED_EDITING: readonly string[] = [
   "mod+c",
   "mod+v",
@@ -319,6 +316,23 @@ export const RESERVED_EDITING: readonly string[] = [
   "mod+a",
   "mod+z",
   "mod+shift+z",
+  "mod+y",
+  "mod+backspace",
+  "mod+shift+backspace",
+  "mod+delete",
+  "mod+shift+delete",
+  "mod+left",
+  "mod+right",
+  "mod+up",
+  "mod+down",
+  "mod+shift+left",
+  "mod+shift+right",
+  "mod+shift+up",
+  "mod+shift+down",
+  "mod+home",
+  "mod+end",
+  "mod+shift+home",
+  "mod+shift+end",
 ];
 
 /** Alt and ⌘ are modifiers; Shift alone (or nothing) is not enough. */
@@ -393,7 +407,7 @@ export function bindingProblem(
   if (!parsed) return "That is not a key this app can use.";
   const text = formatBinding(binding);
   if (RESERVED_BINDINGS.includes(binding)) return `${text} is reserved by the system.`;
-  if (RESERVED_EDITING.includes(binding)) return `${text} belongs to copy, paste and undo.`;
+  if (RESERVED_EDITING.includes(binding)) return `${text} belongs to text editing.`;
   // A list key is typed where nothing else takes it (a row has the keyboard), so a bare letter
   // is usable for one; every other command needs ⌘/⌥ or a function key, and so does a list key
   // that is not a character of its own (Tab, Space, the arrows).
