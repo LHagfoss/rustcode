@@ -123,8 +123,12 @@ export function deriveInbox(read: InboxRead, now = Date.now()): InboxItem[] {
     }
   }
 
-  const failedThreads = new Set<string>();
+  // A settled thread's failed turn waits on nobody: the thread was put away (by the user, by
+  // `cleanup_worktree`, by the orchestrator that replaced it), so it is not a card to retry.
+  const settled = new Set(read.sessions.filter((s) => s.status === "done").map((s) => s.id));
+  const failedThreads = new Set<string>(settled);
   for (const [threadId, at] of Object.entries(read.failed)) {
+    if (settled.has(threadId)) continue;
     failedThreads.add(threadId);
     items.push({
       key: `${threadId}:failed`,

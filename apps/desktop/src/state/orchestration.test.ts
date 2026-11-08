@@ -28,6 +28,7 @@ import {
   doneLinks,
   effectivePerThreadLimit,
   emptyBook,
+  failQueuedLinks,
   failureJson,
   fillAnswers,
   foldWake,
@@ -1723,5 +1724,35 @@ describe("paging a rendered answer", () => {
       text: "",
       nextOffset: null,
     });
+  });
+});
+
+describe("a message queued on a thread whose turn failed", () => {
+  test("fails with the reason instead of staying Queued, and nothing else changes", () => {
+    const queued = link("parent", "child", "queued");
+    const other = { ...link("parent", "elsewhere", "queued"), id: "parent/2" };
+    const working = { ...link("parent", "child", "working"), id: "parent/3" };
+    const { book: next, failed } = failQueuedLinks(
+      book([queued, other, working]),
+      "child",
+      "Codex rejected the request (HTTP 400 Bad Request).",
+      1000,
+    );
+    expect(failed).toEqual([queued.id]);
+    const after = next.links.find((l) => l.id === queued.id)!;
+    expect(after.state).toBe("failed");
+    expect(after.settledAt).toBe(1000);
+    expect(after.answer).toContain("Not delivered");
+    expect(after.answer).toContain("HTTP 400 Bad Request");
+    expect(after.answer).toContain("message the thread again");
+    expect(next.links.find((l) => l.id === other.id)!.state).toBe("queued");
+    expect(next.links.find((l) => l.id === working.id)!.state).toBe("working");
+  });
+
+  test("a thread with nothing queued keeps the same book", () => {
+    const start = book([link("parent", "child", "working")]);
+    const { book: next, failed } = failQueuedLinks(start, "child", undefined, 1000);
+    expect(failed).toEqual([]);
+    expect(next).toBe(start);
   });
 });

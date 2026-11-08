@@ -110,6 +110,7 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { parseGrants, type TimedGrant } from "./grants";
 import {
@@ -217,6 +218,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { userTypedPrompt } from "./topLevel";
+import { readableTurnError } from "./turnError";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -1713,7 +1715,10 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
 export async function openThread(id: string): Promise<string | null> {
   const conn = connection;
   const existing = get().threads[id];
-  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return null;
+  // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
+  // be opened once (the engine was restarting, its harness was down) is not refused for good.
+  if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
+    return null;
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
   loading.add(id);
@@ -1736,7 +1741,7 @@ export async function openThread(id: string): Promise<string | null> {
     return null;
   } catch (error) {
     const message = `Could not open this thread: ${errorText(error)}`;
-    updateThread(id, (t) => ({ ...finishLoad(t), error: message }));
+    updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
     return message;
   } finally {
     loading.delete(id);
@@ -2895,14 +2900,20 @@ export async function runPrompt(
     outcome = "failed";
     failure = errorText(error);
   }
-  updateThread(id, (t) =>
-    requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
-  );
+  // A provider's raw answer (`Codex: {"detail":"Bad Request"}`) is said in words, with what to do
+  // when the conversation is full; the raw text stays on the thread, behind the error's Details.
+  const rawFailure = failure;
+  if (failure !== undefined) failure = readableTurnError(failure, contextPercent(get().threads[id]?.usage));
+  updateThread(id, (t) => ({
+    ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
+    ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
+  }));
   // The limit is settled first: a turn it stopped is reported as the limit, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact
     ? (get().limitWaits[id] ?? null)
-    : settleLimitWait(id, outcome, failure, startIndex);
+    : // The limit is read from what the harness said, not the words the thread shows.
+      settleLimitWait(id, outcome, rawFailure, startIndex);
   // An automatic compaction is not a turn the user waits for: it is not "Done"
   // news, and it must not wake the thread's parent as if its work finished.
   if (!options.autoCompact) {
@@ -4100,7 +4111,15 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
   const wanted = new Set(ids);
-  set((s) => ({ sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)) }));
+  set((s) => ({
+    sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)),
+    // A settled thread asks nothing of the user: a turn of it that failed is no longer theirs to
+    // retry (`cleanup_worktree`, a fan-out's losers, a delegate its parent replaced), so its
+    // Inbox card goes with the settle.
+    ...(status === "done"
+      ? { failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))) }
+      : {}),
+  }));
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);

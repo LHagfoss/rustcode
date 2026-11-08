@@ -26,6 +26,7 @@ import {
   settledWait,
   settleEveryWait,
   shortAge,
+  shortCommand,
   splitSubagentSteps,
   startedLinks,
   stripHarnessMarkup,
@@ -1011,6 +1012,41 @@ describe("a subagent row's text", () => {
       rawInput: { command: "bun test src/ui" },
     });
     expect(agentStepLabel(short)).toBe("Running bun test …");
+  });
+
+  test("a shell step never shows a raw line with its variables and paths", () => {
+    expect(shortCommand("F=/private/tmp/rc-1234/out.txt; cargo test -p rustcode-engine > $F")).toBe(
+      "cargo test …",
+    );
+    expect(shortCommand("RUST_LOG=debug cargo build")).toBe("cargo build");
+    expect(shortCommand("export PATH=/opt/bin:$PATH && /usr/local/bin/git status")).toBe("git status");
+    expect(shortCommand("env A=1 B=2 node script.js")).toBe("node script.js");
+    expect(shortCommand("bun run /Users/lagos/code/rustcode/scripts/check.ts")).toBe("bun run …");
+    expect(shortCommand("`bun test`")).toBe("bun test");
+    // Nothing a reader would recognise is left: the row says "Running a command".
+    expect(shortCommand("F=/private/tmp/rc-1234/out.txt")).toBe("");
+    expect(shortCommand('"$CMD" --flag')).toBe("");
+    const raw = tool({
+      toolCallId: "b3",
+      title: "F=/private/tmp/rc-1234/out.txt",
+      kind: "execute",
+      status: "in_progress",
+    });
+    expect(agentStepLabel(raw)).toBe("Running a command");
+    const bare = tool({ toolCallId: "b4", title: "Bash", kind: "execute", status: "in_progress" });
+    expect(agentStepLabel(bare)).toBe("Running a command");
+  });
+
+  test("a delegate row's working line is the short step", () => {
+    const user = { kind: "user", id: "u", text: "go" } as const;
+    const step = tool({
+      toolCallId: "b5",
+      title: "F=/private/tmp/x; cd /tmp && cargo test -p engine",
+      kind: "execute",
+      status: "in_progress",
+      rawInput: { command: "F=/private/tmp/x; cd /tmp && cargo test -p engine" },
+    });
+    expect(workingLabel([user, step], true)).toBe("Running cargo test …");
   });
 
   test("a step the row has no shorter form for keeps its label", () => {

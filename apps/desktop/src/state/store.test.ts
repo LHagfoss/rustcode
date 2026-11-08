@@ -51,6 +51,7 @@ import {
   loadTotalLimit,
   localChoices,
   MAX_PANELS,
+  markFinished,
   mergePlans,
   moveThread,
   newThreadChoice,
@@ -3596,5 +3597,89 @@ describe("continuing after a limit", () => {
     expect(useApp.getState().limitWaits).toEqual({});
     setContinueAfterLimit(true);
     await continueDueThreads();
+  });
+});
+
+describe("a delegate whose turn failed", () => {
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const caller = useApp.getState().sessions[0]!.id;
+    setPermissionMode(caller, "full");
+    const target = useApp
+      .getState()
+      .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
+    await openThread(target);
+    return { caller, target };
+  };
+  const send = (caller: string, target: string, message: string) =>
+    answerOrchestration({
+      sessionId: caller,
+      tool: "message_session",
+      args: { session_id: target, message },
+    });
+
+  test("can be messaged again: the failure is no reason to refuse it", async () => {
+    const { caller, target } = await ready();
+    // Its turn failed (and its harness process may since have been stopped for idling): the thread
+    // keeps the error on screen, which used to read as "could not be opened".
+    updateThread(target, (t) => ({
+      ...t,
+      running: false,
+      error: "Codex rejected the request (HTTP 400 Bad Request).",
+    }));
+    const answer = await send(caller, target, "try again with less");
+    expect(answer.error).toBeUndefined();
+    expect(answer.receipt).toBe("started");
+    await until(
+      () =>
+        useApp
+          .getState()
+          .threads[target]?.items.some((i) => i.kind === "user" && i.text.includes("try again with less")) ??
+        false,
+    );
+  });
+
+  test("a thread whose open failed is opened again before it is refused", async () => {
+    const { caller, target } = await ready();
+    updateThread(target, (t) => ({
+      ...t,
+      openFailed: true,
+      error: "Could not open this thread: engine restarting",
+    }));
+    const answer = await send(caller, target, "are you there");
+    expect(answer.error).toBeUndefined();
+    expect(useApp.getState().threads[target]?.openFailed).toBeUndefined();
+  });
+
+  test("a message queued on it fails with the reason instead of staying Queued", async () => {
+    const { caller, target } = await ready();
+    updateThread(target, (t) => ({ ...t, running: true }));
+    const answer = await send(caller, target, "after that, this");
+    expect(answer.receipt).toBe("queued");
+    const id = String(answer.link_id);
+    // The user's own queued message stays held for Resume.
+    updateThread(target, (t) => ({
+      ...t,
+      running: false,
+      queueHeld: true,
+      queue: [...t.queue, { id: "user-1", text: "mine", queuedAt: Date.now() }],
+    }));
+    threadTurnEnded(target, false, "failed", "Codex rejected the request (HTTP 400 Bad Request).", []);
+    const link = useApp.getState().links.links.find((l) => l.id === id)!;
+    expect(link.state).toBe("failed");
+    expect(link.answer).toContain("Not delivered");
+    expect(link.answer).toContain("HTTP 400 Bad Request");
+    const queue = useApp.getState().threads[target]!.queue;
+    expect(queue.map((q) => q.id)).toEqual(["user-1"]);
+    expect(useApp.getState().threads[target]!.queueHeld).toBe(true);
+  });
+
+  test("settling it takes its failed turn out of the Inbox", async () => {
+    const { target } = await ready();
+    markFinished(target, Date.now(), true);
+    expect(target in useApp.getState().failed).toBe(true);
+    await setThreadStatus(target, "done");
+    expect(target in useApp.getState().failed).toBe(false);
   });
 });

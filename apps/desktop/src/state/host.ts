@@ -44,6 +44,7 @@ import {
   emptyBook,
   type Failure,
   type FanOut,
+  failQueuedLinks,
   failure,
   failureJson,
   fillAnswers,
@@ -1370,10 +1371,13 @@ async function messageNow(caller: RuleThread, targetId: string, text: string): P
     delegateLimits(),
   );
   if (again) return failureJson(again);
-  await openThread(target.id);
+  // A thread whose last turn failed, or whose harness process was stopped for idling, is opened
+  // and prompted like any other: the engine starts its harness again with the prompt, as it does
+  // when the user types there. Only a thread that cannot be opened at all is unavailable.
+  const openError = await openThread(target.id);
   const thread = useApp.getState().threads[target.id];
-  if (!thread || thread.error) {
-    return failureJson(failure("target_unavailable", "that thread could not be opened"));
+  if (openError || !thread || thread.openFailed) {
+    return failureJson(failure("target_unavailable", openError ?? "that thread could not be opened"));
   }
   const busy = thread.running;
   const id = addLink({
@@ -2744,7 +2748,25 @@ export function threadTurnEnded(
     const says = answerFor(thread, items, outcome === "completed" ? undefined : failed);
     setBook((b) => restateLinks(b, thread, says, now, woken));
   }
+  if (outcome === "failed") failQueuedOn(thread, failed);
   wakeTick();
+}
+
+/**
+ * A failed turn holds the thread's queue (`thread.ts` `holdsQueue`), so a message another thread
+ * queued there would say Queued for good. It fails instead, with the reason, and leaves the queue:
+ * its parent reads why and may message the thread again, which reopens it (`messageNow`). The
+ * user's own queued messages stay held for Resume.
+ */
+function failQueuedOn(thread: string, failure: string | undefined) {
+  const { book: next, failed } = failQueuedLinks(book(), thread, failure, Date.now());
+  if (!failed.length) return;
+  const gone = new Set(failed);
+  updateThread(thread, (t) => {
+    const queue = t.queue.filter((item) => !item.link || !gone.has(item.link));
+    return { ...t, queue, queueHeld: queue.length ? t.queueHeld : undefined };
+  });
+  setBook(() => next);
 }
 
 /** A queued link message was removed from the target's queue. */
