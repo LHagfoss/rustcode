@@ -57,8 +57,9 @@ sessions to an execution graph:
 decision, the current → target mapping and the migration order (#2879).
 
 Checking UI: `bun run mock-window open` in `apps/desktop`, one shared, visible
-Chrome window on the mock at native scale (`eval`, `click`, `type`, `press`,
-`screenshot`, `close`), never a browser pane in the user's terminal; WebKit
+Chrome window on the mock at native scale (`eval`, `click`, `dblclick`, `hover`,
+`drag`, `scroll`, `move`, `type`, `press`, `screenshot`, `close`), never a
+browser pane in the user's terminal; WebKit
 (the app) can differ from Chrome, so check alignment-sensitive changes in the
 app. Releases:
 `scripts/release-notes.sh > notes.md`, edit, then

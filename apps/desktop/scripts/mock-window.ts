@@ -1,4 +1,7 @@
 // `bun run mock-window <open [path] | eval "<js>" | click "<css>" [--at <x>,<y>] |
+//   dblclick "<css>" [--at <x>,<y>] | hover "<css>" [--at <x>,<y>] [--wait <ms>] |
+//   drag "<from css>" "<to css>" [--from <x>,<y>] [--to <x>,<y>] [--steps <n>] |
+//   scroll "<css>" <dy> | move <x>,<y> |
 //   type "<text>" | press <key> [--shift] [--ctrl] [--alt] [--meta] |
 //   screenshot <file.png> | close>`:
 // one shared, visible Chrome window on the mock dev server at native scale, so UI
@@ -41,6 +44,20 @@ const KEYS: Record<string, { code: string; vk: number; text?: string }> = {
   End: { code: "End", vk: 35 },
 };
 
+/** A hover card needs the pointer to rest on its trigger: 500 ms ones have opened by then. */
+const HOVER_WAIT = 700;
+/** Movements a drag makes between press and release, so the app sees a drag, not a teleport. */
+const DRAG_STEPS = 12;
+
+const USAGE =
+  'Usage: bun run mock-window <open [path] | eval "<js>" | click "<css>" [--at <x>,<y>] | ' +
+  'dblclick "<css>" [--at <x>,<y>] | hover "<css>" [--at <x>,<y>] [--wait <ms>] | ' +
+  'drag "<from css>" "<to css>" [--from <x>,<y>] [--to <x>,<y>] [--steps <n>] | ' +
+  'scroll "<css>" <dy> | move <x>,<y> | type "<text>" | ' +
+  "press <key> [--shift] [--ctrl] [--alt] [--meta] | screenshot <file> | close>";
+
+type Point = { x: number; y: number };
+type Flags = Map<string, string | true>;
 type Server = { pid: number; cwd: string; port: number };
 type Target = { id: string; type: string; url: string; webSocketDebuggerUrl?: string };
 // biome-ignore lint/suspicious/noExplicitAny: DevTools protocol results are untyped here
@@ -313,77 +330,299 @@ async function focused(send: (method: string, params?: object) => Promise<Cdp>) 
   return pageValue(await evaluate(send, expression)) ?? "none";
 }
 
+/** Flags that take the word after them; every other `--flag` is a switch. */
+const VALUED = new Set(["--at", "--from", "--to", "--wait", "--steps"]);
+
+/** `<x>,<y>`, taken from the element's top-left as `--at`, `--from` and `--to` do. */
+function parsePoint(text: string, flag: string): Point {
+  const [x, y] = text.split(",").map(Number);
+  if (!Number.isFinite(x) || !Number.isFinite(y))
+    throw new Error(`${flag} needs <x>,<y> from the element's top-left, got "${text}"`);
+  return { x: x!, y: y! };
+}
+
+/** `--at`, `--from` or `--to` when given, else the element's centre. */
+function offsetOf(flags: Flags, flag: string) {
+  const value = flags.get(flag);
+  return value === undefined ? null : parsePoint(String(value), flag);
+}
+
+/** A counted option such as `--wait <ms>` or `--steps <n>`, else its default. */
+function countOf(flags: Flags, flag: string, fallback: number) {
+  const value = flags.get(flag);
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${flag} needs a whole number, got "${String(value)}"`);
+  return n;
+}
+
 /** Splits `--flag` options from the words before them, so a selector may hold spaces. */
 function parseArgs(args: string[]) {
-  const words: string[] = [];
-  const flags = new Set<string>();
-  let at: string | undefined;
+  const list: string[] = [];
+  const flags: Flags = new Map();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (!arg.startsWith("--")) words.push(arg);
-    else {
-      flags.add(arg);
-      if (arg === "--at") at = args[++i] ?? "";
-    }
-  }
-  let offset: { x: number; y: number } | null = null;
-  if (at !== undefined) {
-    const [x, y] = at.split(",").map(Number);
-    if (!Number.isFinite(x) || !Number.isFinite(y))
-      throw new Error(`--at needs <x>,<y> from the element's top-left, got "${at}"`);
-    offset = { x: x!, y: y! };
+    if (!arg.startsWith("--")) list.push(arg);
+    else if (VALUED.has(arg)) flags.set(arg, args[++i] ?? "");
+    else flags.set(arg, true);
   }
   const modifiers =
     (flags.has("--alt") ? 1 : 0) |
     (flags.has("--ctrl") ? 2 : 0) |
     (flags.has("--meta") ? 4 : 0) |
     (flags.has("--shift") ? 8 : 0);
-  return { words: words.join(" "), offset, modifiers };
+  return { words: list.join(" "), list, flags, modifiers };
 }
 
 const modifierNames = (m: number) =>
   [m & 1 ? "Alt+" : "", m & 2 ? "Ctrl+" : "", m & 4 ? "Meta+" : "", m & 8 ? "Shift+" : ""].join("");
 
-/** Scrolls a selector into view, checks the press would hit it, then presses it. */
-async function click(selector: string, offset: { x: number; y: number } | null) {
-  const hint = offset ? "" : " — pass --at <x>,<y> to press a visible part of it";
+/** Page-side helper naming an element for output: `<div role=tooltip aria-label="x">`. */
+const NAME = `(e) =>
+  e
+    ? "<" + e.tagName.toLowerCase() +
+      (e.getAttribute("role") ? " role=" + e.getAttribute("role") : "") +
+      (e.getAttribute("aria-label") ? ' aria-label="' + e.getAttribute("aria-label") + '"' : "") + ">"
+    : "nothing"`;
+
+type Located = Point & { self: string; under: string; covers: boolean };
+
+/** Where a command acts: the element's centre or `offset` from its top-left, and
+ * what sits there. `scroll` centres the element first, which moves the page. */
+async function locate(
+  send: (method: string, params?: object) => Promise<Cdp>,
+  selector: string,
+  offset: Point | null,
+  scroll = true,
+): Promise<Located> {
   const page = `(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) throw new Error("Nothing matches the selector " + ${JSON.stringify(selector)});
-    el.scrollIntoView({ block: "center", inline: "center" });
+    ${scroll ? `el.scrollIntoView({ block: "center", inline: "center" });` : ""}
     const b = el.getBoundingClientRect();
     const x = b.x + ${offset ? offset.x : "b.width / 2"};
     const y = b.y + ${offset ? offset.y : "b.height / 2"};
-    const name = (e) => e
-      ? "<" + e.tagName.toLowerCase() +
-        (e.getAttribute("aria-label") ? ' aria-label="' + e.getAttribute("aria-label") + '"' : "") + ">"
-      : "nothing";
+    const name = ${NAME};
     const hit = document.elementFromPoint(x, y);
-    if (hit !== el && !(hit && el.contains(hit)))
-      throw new Error("A press at " + Math.round(x) + "," + Math.round(y) + " would land on " +
-        name(hit) + ", not " + name(el) + ${JSON.stringify(hint)});
-    return { x, y };
+    return {
+      x, y,
+      self: name(el),
+      under: name(hit),
+      covers: hit === el || (hit ? el.contains(hit) : false),
+    };
   })()`;
-  await withInput(async (send) => {
-    const { x, y } = pageValue(await evaluate(send, page)) as { x: number; y: number };
-    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-    await sleep(250); // long enough for someone watching to see the pointer land
+  return pageValue(await evaluate(send, page)) as Located;
+}
+
+/** A press has to land on its element: a covered one is pressed instead, or nothing happens. */
+async function pressPoint(
+  send: (method: string, params?: object) => Promise<Cdp>,
+  selector: string,
+  offset: Point | null,
+  flag: string,
+) {
+  const at = await locate(send, selector, offset);
+  if (!at.covers)
+    throw new Error(
+      `A press at ${Math.round(at.x)},${Math.round(at.y)} would land on ${at.under}, not ${at.self}` +
+        (offset ? "" : ` — pass ${flag} <x>,<y> to press a visible part of it`),
+    );
+  return at;
+}
+
+/** Clicks counted from one: a double click is the second press of a pair. */
+async function clickCountAt(
+  send: (method: string, params?: object) => Promise<Cdp>,
+  at: Point,
+  counts: number[],
+) {
+  for (const clickCount of counts) {
     await send("Input.dispatchMouseEvent", {
       type: "mousePressed",
-      x,
-      y,
+      x: at.x,
+      y: at.y,
       button: "left",
-      clickCount: 1,
+      buttons: 1,
+      clickCount,
     });
     await send("Input.dispatchMouseEvent", {
       type: "mouseReleased",
-      x,
-      y,
+      x: at.x,
+      y: at.y,
       button: "left",
-      clickCount: 1,
+      buttons: 0,
+      clickCount,
     });
+  }
+}
+
+/** Scrolls a selector into view, checks the press would hit it, then presses it. */
+async function click(selector: string, offset: Point | null) {
+  await withInput(async (send) => {
+    const { x, y } = await pressPoint(send, selector, offset, "--at");
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await sleep(250); // long enough for someone watching to see the pointer land
+    await clickCountAt(send, { x, y }, [1]);
     await sleep(300);
     console.log(`Clicked ${selector} at ${Math.round(x)},${Math.round(y)}; focus is ${await focused(send)}.`);
+  });
+}
+
+/** Two presses at the same point: the second one makes the `dblclick`. */
+async function dblclick(selector: string, offset: Point | null) {
+  await withInput(async (send) => {
+    const { x, y } = await pressPoint(send, selector, offset, "--at");
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await sleep(250);
+    await clickCountAt(send, { x, y }, [1, 2]);
+    await sleep(300);
+    console.log(
+      `Double-clicked ${selector} at ${Math.round(x)},${Math.round(y)}; focus is ${await focused(send)}.`,
+    );
+  });
+}
+
+/** Anything a hover opened: a tooltip, a Radix popper or an open hover card, named
+ * with its first words. The innermost wins, so a popper wrapper does not repeat
+ * the tooltip it holds. */
+const OPEN_POPOVER = `(() => {
+  const name = ${NAME};
+  const shown = (el) => {
+    const b = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return b.width > 0 && b.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  };
+  const describe = (el) => {
+    const text = (el.textContent || "").trim().replace(/\\s+/g, " ");
+    return name(el) + (text ? ' "' + text.slice(0, 60) + '"' : "");
+  };
+  const found = [
+    ...document.querySelectorAll(
+      '[role=tooltip], [data-radix-popper-content-wrapper], [data-state=open]',
+    ),
+  ].filter(shown);
+  return found
+    .filter((el) => !found.some((other) => other !== el && el.contains(other)))
+    .slice(0, 3)
+    .map(describe)
+    .join(", ");
+})()`;
+
+/** Rests the pointer on an element and reports what it opened. */
+async function hover(selector: string, offset: Point | null, wait: number) {
+  await withInput(async (send) => {
+    const { x, y, under } = await locate(send, selector, offset);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await sleep(wait);
+    const popover = pageValue(await evaluate(send, OPEN_POPOVER)) as string;
+    console.log(
+      `Hovered ${selector} at ${Math.round(x)},${Math.round(y)} for ${wait} ms; under the pointer is ` +
+        `${under}; ${popover ? `opened ${popover}.` : "no tooltip or popover opened."}`,
+    );
+  });
+}
+
+/** Moves the pointer without pressing, e.g. off an element to dismiss its hover card. */
+async function move(point: Point) {
+  await withInput(async (send) => {
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+    await sleep(300);
+    const under = pageValue(
+      await evaluate(send, `(${NAME})(document.elementFromPoint(${point.x}, ${point.y}))`),
+    );
+    console.log(`Moved the pointer to ${Math.round(point.x)},${Math.round(point.y)}; under it is ${under}.`);
+  });
+}
+
+/** Presses on one element, moves in `steps` to another and releases. */
+async function drag(
+  from: string,
+  to: string,
+  fromOffset: Point | null,
+  toOffset: Point | null,
+  steps: number,
+) {
+  await withInput(async (send) => {
+    const start = await pressPoint(send, from, fromOffset, "--from");
+    // Without scrolling again: centring the target would move the source out from under.
+    const end = await locate(send, to, toOffset, false);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: start.x, y: start.y });
+    await sleep(250);
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: start.x,
+      y: start.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    for (let step = 1; step <= steps; step++) {
+      const t = step / steps;
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+        button: "left",
+        buttons: 1,
+      });
+      await sleep(20); // one frame apart, so a drag over a list keeps up
+    }
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: end.x,
+      y: end.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(400);
+    console.log(
+      `Dragged ${from} at ${Math.round(start.x)},${Math.round(start.y)} to ${to} at ` +
+        `${Math.round(end.x)},${Math.round(end.y)} in ${steps} steps, over ${end.under}.`,
+    );
+  });
+}
+
+/** `scrollTop` of an element and each ancestor, before a wheel turns. */
+const scrollTops = (selector: string) => `(() => {
+  const el = document.querySelector(${JSON.stringify(selector)});
+  if (!el) throw new Error("Nothing matches the selector " + ${JSON.stringify(selector)});
+  const tops = [];
+  for (let s = el; s; s = s.parentElement) tops.push(Math.round(s.scrollTop));
+  return tops;
+})()`;
+
+/** Which of those moved, then how far it can go: the wheel goes to the nearest
+ * scroller under the pointer, or up to the page when none of them can. */
+const scrolledTo = (selector: string, before: number[]) => `(() => {
+  const el = document.querySelector(${JSON.stringify(selector)});
+  const before = ${JSON.stringify(before)};
+  let depth = 0;
+  for (let s = el; s; s = s.parentElement, depth++) {
+    const now = Math.round(s.scrollTop);
+    if (now !== before[depth])
+      return "the scroller moved to " + now + " of " + Math.round(s.scrollHeight - s.clientHeight);
+  }
+  return "nothing under it scrolled";
+})()`;
+
+/** Turns the wheel over an element: downward for a positive `<dy>`. */
+async function scroll(selector: string, dy: number) {
+  await withInput(async (send) => {
+    const { x, y, under } = await locate(send, selector, null);
+    const before = pageValue(await evaluate(send, scrollTops(selector))) as number[];
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x,
+      y,
+      deltaX: 0,
+      deltaY: dy,
+    });
+    await sleep(400); // smooth scrolling settles within this
+    const state = pageValue(await evaluate(send, scrolledTo(selector, before))) as string;
+    console.log(
+      `Scrolled ${selector} by ${dy} at ${Math.round(x)},${Math.round(y)} over ${under}; ${state}.`,
+    );
   });
 }
 
@@ -471,9 +710,44 @@ async function main() {
     }
     console.log(JSON.stringify(r.result?.value, null, 2));
   } else if (command === "click") {
-    const { words, offset } = parseArgs(rest);
+    const { words, flags } = parseArgs(rest);
     if (!words) throw new Error('Usage: bun run mock-window click "<css selector>" [--at <x>,<y>]');
-    await click(words, offset);
+    await click(words, offsetOf(flags, "--at"));
+  } else if (command === "dblclick") {
+    const { words, flags } = parseArgs(rest);
+    if (!words) throw new Error('Usage: bun run mock-window dblclick "<css selector>" [--at <x>,<y>]');
+    await dblclick(words, offsetOf(flags, "--at"));
+  } else if (command === "hover") {
+    const { words, flags } = parseArgs(rest);
+    if (!words)
+      throw new Error('Usage: bun run mock-window hover "<css selector>" [--at <x>,<y>] [--wait <ms>]');
+    await hover(words, offsetOf(flags, "--at"), countOf(flags, "--wait", HOVER_WAIT));
+  } else if (command === "drag") {
+    const { list, flags } = parseArgs(rest);
+    if (list.length !== 2)
+      throw new Error(
+        'Usage: bun run mock-window drag "<from css>" "<to css>" ' +
+          "[--from <x>,<y>] [--to <x>,<y>] [--steps <n>]",
+      );
+    await drag(
+      list[0]!,
+      list[1]!,
+      offsetOf(flags, "--from"),
+      offsetOf(flags, "--to"),
+      countOf(flags, "--steps", DRAG_STEPS),
+    );
+  } else if (command === "scroll") {
+    const { list } = parseArgs(rest);
+    const dy = Number(list.at(-1));
+    // The selector may hold spaces, so only the last word is the distance.
+    const selector = list.slice(0, -1).join(" ");
+    if (list.length < 2 || !selector || !Number.isFinite(dy))
+      throw new Error('Usage: bun run mock-window scroll "<css selector>" <dy>');
+    await scroll(selector, dy);
+  } else if (command === "move") {
+    const text = rest.join(" ");
+    if (!text) throw new Error("Usage: bun run mock-window move <x>,<y>");
+    await move(parsePoint(text, "move"));
   } else if (command === "type") {
     const text = rest.join(" ");
     if (!text) throw new Error('Usage: bun run mock-window type "<text>"');
@@ -492,9 +766,7 @@ async function main() {
     await Bun.write(file, Buffer.from(data, "base64"));
     console.log(`Saved ${resolve(file)}`);
   } else {
-    throw new Error(
-      'Usage: bun run mock-window <open [path] | eval "<js>" | click "<css>" [--at <x>,<y>] | type "<text>" | press <key> [--shift] [--ctrl] [--alt] [--meta] | screenshot <file> | close>',
-    );
+    throw new Error(USAGE);
   }
 }
 
