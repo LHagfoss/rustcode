@@ -144,7 +144,11 @@ instructions for work in this repository.
   anything a user does, prefer `click "<css>"` (with `--at <x>,<y>` for a
   partly covered element), `type "<text>"` and `press <key>` over `eval`: they
   send real input and focus, so the check exercises what the user does and the
-  window shows it. Keep the window open for the whole check, and close only
+  window shows it. For hover cards, drag-to-reorder, wheel scrolling and double
+  clicks that is `hover "<css>" [--wait <ms>]` (prints what opened),
+  `drag "<from css>" "<to css>" [--steps <n>]`, `scroll "<css>" <dy>`,
+  `dblclick "<css>"` and `move <x>,<y>` (off an element, to dismiss it), which
+  send real input too. Keep the window open for the whole check, and close only
   when finished. Agents must not launch their own Chrome for UI checks; when
   several threads work concurrently, only the orchestrating thread drives the
   window, and the others gate on `bun run check` and unit tests. Do not open
