@@ -62,22 +62,8 @@ impl OutboundQueue {
     }
 }
 
-const EXACT_METHODS: &[&str] = &[
-    "initialize",
-    "_rustcode/settings/get",
-    "_rustcode/settings/set",
-    "_rustcode/settings/changed",
-    "_rustcode/threads/changes",
-    "_rustcode/harnesses",
-    "_rustcode/createOptions",
-    "_rustcode/pending",
-];
-const METHOD_PREFIXES: &[&str] = &[
-    "session/",
-    "_rustcode/thread/",
-    "_rustcode/queue/",
-    "_rustcode/pulls",
-];
+const EXACT_METHODS: &[&str] = &["initialize", "_rustcode/harnesses"];
+const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls"];
 
 fn allowed(method: &str) -> bool {
     EXACT_METHODS.contains(&method)
@@ -221,28 +207,8 @@ mod tests {
 
     #[test]
     fn desktop_allowlist_contract() {
-        assert_eq!(
-            EXACT_METHODS,
-            &[
-                "initialize",
-                "_rustcode/settings/get",
-                "_rustcode/settings/set",
-                "_rustcode/settings/changed",
-                "_rustcode/threads/changes",
-                "_rustcode/harnesses",
-                "_rustcode/createOptions",
-                "_rustcode/pending"
-            ]
-        );
-        assert_eq!(
-            METHOD_PREFIXES,
-            &[
-                "session/",
-                "_rustcode/thread/",
-                "_rustcode/queue/",
-                "_rustcode/pulls"
-            ]
-        );
+        assert_eq!(EXACT_METHODS, &["initialize", "_rustcode/harnesses",]);
+        assert_eq!(METHOD_PREFIXES, &["session/", "_rustcode/pulls"]);
         for method in [
             "initialize",
             "session/load",
@@ -250,22 +216,24 @@ mod tests {
             "session/prompt",
             "session/cancel",
             "session/future",
-            "_rustcode/thread/get",
-            "_rustcode/queue/add",
             "_rustcode/pulls",
             "_rustcode/pulls/list",
             "_rustcode/pullsFuture",
-            "_rustcode/settings/get",
-            "_rustcode/settings/set",
-            "_rustcode/settings/changed",
-            "_rustcode/threads/changes",
             "_rustcode/harnesses",
-            "_rustcode/createOptions",
-            "_rustcode/pending",
         ] {
             assert!(allowed(method), "{method}");
         }
         for method in [
+            "_rustcode/settings/get",
+            "_rustcode/settings/set",
+            "_rustcode/settings/changed",
+            "_rustcode/threads/changes",
+            "_rustcode/createOptions",
+            "_rustcode/pending",
+            "_rustcode/thread/",
+            "_rustcode/queue/",
+            "_rustcode/thread/get",
+            "_rustcode/queue/add",
             "",
             "session",
             "initialize/x",

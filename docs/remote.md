@@ -713,12 +713,9 @@ local server closes the connection with `internal`.
 Client requests and notifications are restricted to these exact methods:
 
 - `initialize`
-- `_rustcode/settings/get`, `_rustcode/settings/set`, `_rustcode/settings/changed`
-- `_rustcode/threads/changes`
-- `_rustcode/harnesses`, `_rustcode/createOptions`, `_rustcode/pending`
+- `_rustcode/harnesses`
 
-The only allowed prefixes are `session/`, `_rustcode/thread/`,
-`_rustcode/queue/` and `_rustcode/pulls`. Everything else is denied, including
+The only allowed prefixes are `session/` and `_rustcode/pulls`. Everything else is denied, including
 provider credentials and login, pairing and remote management, `_rustcode/server/*`,
 MCP server configuration and data-store SQL. Denied requests receive a JSON-RPC
 error with the same `id`, numeric code `-32601` and
