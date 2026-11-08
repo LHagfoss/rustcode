@@ -1,3 +1,20 @@
+## [v1.23.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.23.0) - 2026-11-08
+
+### Features
+- `rustcode server install` runs the RustCode server in the background so threads keep running after you close the app; `server status`, `restart`, `logs` and `uninstall` manage it. (#3218)
+- The new thread screen asks "What should we build in <project>?" again (click the name to change folder) and shows a tip with a shortcut above the field. (#3226)
+- Added `rustcode server run` and `rustcode server connect`: one RustCode server that several clients share, where threads keep running when a client closes. (#3213)
+- A client that reconnects to the server gets only the updates it missed instead of reloading the whole thread. (#3217)
+- Remote access now works on Windows, and machines are found on the network without dns-sd or Avahi. (#3212)
+- Paired devices show what they are (phone or desktop, and the platform) and when they were last seen. (#3211)
+- Update in the app now installs the new version on Linux (AppImage and .deb) and Windows, not only macOS. (#3216)
+- Windows uses Mica and Linux gets back its blur, with a Reduce transparency setting; the new-thread background can be darkened, blurred and shown in threads; the chat input is a little shorter. (#3215)
+- The new thread's picture no longer pushes the window's content up when the overview opens, and text over it, Settings notes and the Usage page read more clearly. (#3223)
+- Agents can see each harness account's usage windows in list_harnesses, and Settings › Usage refreshes every 3 minutes. (#3219)
+- The transcript no longer redraws finished turns while a reply streams. (#3222)
+- Fix Claude Code and Pi exiting immediately when RustCode runs as a Linux AppImage. (#3221)
+- Fix a server memory leak on failed thread loads, a Usage refresh that could be dropped, and a partial file left behind by a failed AppImage update. (#3224)
+- A desktop app you approve on this machine can open threads here over remote access; `rustcode remote devices allow` and `deny` grant and remove that access. (#3225)
 ## [v1.22.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.22.0) - 2026-11-08
 
 ### Features
