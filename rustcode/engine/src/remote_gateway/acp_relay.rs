@@ -7,7 +7,11 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
 };
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
@@ -62,6 +66,38 @@ impl OutboundQueue {
     }
 }
 
+const MAX_PENDING_REQUESTS: usize = 1024;
+
+#[derive(Default)]
+struct PendingRequests(Mutex<HashSet<String>>);
+
+impl PendingRequests {
+    fn remember(&self, frame: &str) -> Result<(), ErrorCode> {
+        let Ok(value) = serde_json::from_str::<Value>(frame) else {
+            return Ok(());
+        };
+        if value.get("method").and_then(Value::as_str).is_none() {
+            return Ok(());
+        }
+        let Some(id) = value
+            .get("id")
+            .filter(|id| id.is_string() || id.is_number())
+        else {
+            return Ok(());
+        };
+        let mut pending = self.0.lock().unwrap();
+        if pending.len() >= MAX_PENDING_REQUESTS {
+            return Err(ErrorCode::SlowConsumer);
+        }
+        pending.insert(id.to_string());
+        Ok(())
+    }
+
+    fn answer(&self, id: &Value) -> bool {
+        self.0.lock().unwrap().remove(&id.to_string())
+    }
+}
+
 const EXACT_METHODS: &[&str] = &["initialize", "_rustcode/harnesses"];
 const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls"];
 
@@ -102,6 +138,7 @@ pub(super) async fn relay(
     }
     let (server_read, mut server_write) = tokio::io::split(stream);
     let (sink, mut queue) = OutboundQueue::new(control);
+    let pending = PendingRequests::default();
     let produce = async {
         let mut server = BufReader::new(server_read);
         loop {
@@ -119,6 +156,9 @@ pub(super) async fn relay(
             let Ok(text) = String::from_utf8(bytes) else {
                 return Some(ErrorCode::InvalidFrame);
             };
+            if let Err(code) = pending.remember(&text) {
+                return Some(code);
+            }
             if sink
                 .send(text.trim_end_matches(['\r', '\n']).to_owned())
                 .is_err()
@@ -159,6 +199,9 @@ pub(super) async fn relay(
                             }
                         } else if value.get("id").is_none() || (value.get("result").is_none() && value.get("error").is_none()) {
                             return Some(ErrorCode::InvalidFrame);
+                        }
+                        if value.get("method").is_none() && !pending.answer(&value["id"]) {
+                            continue;
                         }
                         // Forward the same parsed object that was authorized, avoiding
                         // duplicate-key parser differences. Resume metadata is opaque.
@@ -203,6 +246,27 @@ mod tests {
         assert_eq!(sink.send("x".into()), Err(ErrorCode::SlowConsumer));
         assert!(control.cancel.is_cancelled());
         assert_eq!(control.reason(), ErrorCode::SlowConsumer);
+    }
+
+    #[test]
+    fn server_request_ids_are_bounded_and_answers_are_single_use() {
+        let pending = PendingRequests::default();
+        pending
+            .remember(r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission"}"#)
+            .unwrap();
+        assert!(!pending.answer(&json!("7")));
+        assert!(!pending.answer(&json!(99)));
+        assert!(pending.answer(&json!(7)));
+        assert!(!pending.answer(&json!(7)));
+        for id in 0..MAX_PENDING_REQUESTS {
+            pending
+                .remember(&json!({"id":id,"method":"session/request_permission"}).to_string())
+                .unwrap();
+        }
+        assert_eq!(
+            pending.remember(r#"{"id":"overflow","method":"session/request_permission"}"#),
+            Err(ErrorCode::SlowConsumer)
+        );
     }
 
     #[test]

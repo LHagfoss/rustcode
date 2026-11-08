@@ -720,7 +720,10 @@ provider credentials and login, pairing and remote management, `_rustcode/server
 MCP server configuration and data-store SQL. Denied requests receive a JSON-RPC
 error with the same `id`, numeric code `-32601` and
 `data: {"code":"unauthorized_access"}`. Denied notifications are dropped.
-JSON-RPC responses to server requests pass through. Batch messages are refused.
+JSON-RPC responses pass through only for an outstanding server request ID,
+once per request. Unknown or repeated answers are dropped. At most 1,024 server
+requests may be outstanding; exceeding this closes with `slow_consumer`.
+Batch messages are refused.
 
 `session/load` resume metadata (`_meta.rustcode.resume: {cursor}`) passes through
 without modification. The gateway translates WebSocket messages to the local

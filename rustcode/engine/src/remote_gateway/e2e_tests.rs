@@ -1250,6 +1250,10 @@ async fn remote_acp_desktop_round_trip_resume_denial_and_server_close() {
             .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\n")
             .await
             .unwrap();
+        write.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":\"server-1\",\"method\":\"session/request_permission\",\"params\":{}}\n").await.unwrap();
+        let answer: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(answer["id"], "server-1");
         // Wait until the client explicitly closes, proving denied requests
         // and notifications never reached the server in the meantime.
         assert!(lines.next_line().await.unwrap().is_none());
@@ -1272,6 +1276,16 @@ async fn remote_acp_desktop_round_trip_resume_denial_and_server_close() {
         .await;
     device.send(json!({"jsonrpc":"2.0","id":3,"method":"session/load","params":{"sessionId":"test","_meta":{"rustcode":{"resume":{"cursor":"cursor-unchanged"}}}}})).await;
     assert_eq!(device.read().await.unwrap()["id"], 3);
+    assert_eq!(device.read().await.unwrap()["id"], "server-1");
+    device
+        .send(json!({"jsonrpc":"2.0","id":"unknown","result":{}}))
+        .await;
+    device
+        .send(json!({"jsonrpc":"2.0","id":"server-1","result":{}}))
+        .await;
+    device
+        .send(json!({"jsonrpc":"2.0","id":"server-1","result":{}}))
+        .await;
     bounded(device.socket.close(None)).await.unwrap();
     bounded(server).await.unwrap();
     host.stop_gateway().await;
