@@ -26,15 +26,17 @@ export const RemoteMethod = {
 /**
  * What a paired device is, as it said when it paired: the phone app, the desktop app on another
  * machine, or the `rustcode` command line there. A label, not a permission. Devices paired
- * before the engine kept it are phones.
+ * before the engine kept it are phones; a kind from a newer engine stays unknown.
  */
-export type DeviceKind = "phone" | "desktop" | "cli";
+export type DeviceKind = "phone" | "desktop" | "cli" | "unknown";
 
 const DEVICE_KINDS: readonly DeviceKind[] = ["phone", "desktop", "cli"];
 
-/** A kind as the engine sends it; anything else (an older or newer engine) is a phone. */
+/** A kind as the engine sends it; an older engine's missing kind is a phone. */
 export function parseDeviceKind(value: Json | undefined): DeviceKind {
-  return DEVICE_KINDS.find((kind) => kind === str(value)) ?? "phone";
+  const received = str(value);
+  if (received === undefined) return "phone";
+  return DEVICE_KINDS.find((kind) => kind === received) ?? "unknown";
 }
 
 /**
@@ -45,7 +47,7 @@ export interface RemoteConnectRequest {
   id: string;
   /** The label the device sent. Not an identity. */
   deviceName: string;
-  /** What the device says it is: a phone, or the desktop app on another machine. */
+  /** What the device says it is: a phone, desktop app or command line. */
   deviceKind: DeviceKind;
   /** `ios`, `android`, `macos`, `windows`, `linux`, … as the device says. */
   platform: string;
@@ -84,7 +86,7 @@ export interface RemoteConnectAnswer {
   lockedForSecs?: number;
 }
 
-/** A device paired with this Mac (a phone, or the desktop app on another machine), as `_rustcode/remote` names it. */
+/** A device paired with this Mac (a phone, desktop app or command line), as `_rustcode/remote` names it. */
 export interface RemoteDevice {
   id: string;
   name: string;

@@ -1,13 +1,13 @@
-// A phone asking to connect, answered from anywhere in the app (docs/remote.md › Connection
-// requests). The phone found this Mac on the network and tapped Connect; the gateway holds the
+// A device asking to connect, answered from anywhere in the app (docs/remote.md › Connection
+// requests). It found this Mac on the network and tapped Connect; the gateway holds the
 // request and this asks: "<device> wants to connect", Deny or Accept. Accept shows the code the
-// phone now asks for, large, with Copy and its countdown, until the phone pairs with it or it runs
+// device now asks for, large, with Copy and its countdown, until it pairs with the code or it runs
 // out. Glass cards in the window's bottom-right corner, over Settings too, like the toasts above.
 //
 // The machine's remote status is read here for the whole app: every few seconds while the
 // gateway runs, rarely while it does not, so a request reaches the user whichever page is open.
 
-import { Copy, Monitor, Smartphone, SquareTerminal, X } from "lucide-react";
+import { CircleHelp, Copy, Monitor, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { DeviceKind, RemoteConnectRequest } from "../acp/remote";
 import {
@@ -98,7 +98,14 @@ export function ConnectRequests() {
 }
 
 function DeviceIcon({ kind }: { kind: DeviceKind }) {
-  const Icon = kind === "desktop" ? Monitor : kind === "cli" ? SquareTerminal : Smartphone;
+  const Icon =
+    kind === "desktop"
+      ? Monitor
+      : kind === "cli"
+        ? SquareTerminal
+        : kind === "unknown"
+          ? CircleHelp
+          : Smartphone;
   return <Icon size={16} className="mt-1 shrink-0 text-fg-muted" aria-hidden />;
 }
 
@@ -159,7 +166,7 @@ function CodeCard({ code, now }: { code: ConnectCode; now: number }) {
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate font-medium text-body text-fg">Enter this code on {code.deviceName}</div>
-          <div className="pt-1 text-callout text-fg-muted">The phone asks for it now. It works once.</div>
+          <div className="pt-1 text-callout text-fg-muted">This device asks for it now. It works once.</div>
         </div>
         <button
           type="button"

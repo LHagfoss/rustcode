@@ -129,6 +129,8 @@ export function deviceLabel(kind: DeviceKind, platform: string): string {
       const system = systemName(platform);
       return system ? `${system} command line` : "Command line";
     }
+    case "unknown":
+      return "Unknown device";
   }
 }
 

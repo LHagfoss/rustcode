@@ -48,7 +48,7 @@ const MAX_STORE_BYTES: u64 = 256 * 1024;
 
 /// What a paired device is, as it says. A label for the owner, never a
 /// permission: every kind gets the same access today.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceKind {
     /// The phone app. Records stored before devices said their kind are phones.
@@ -58,6 +58,23 @@ pub enum DeviceKind {
     Desktop,
     /// The `rustcode` command line on another machine.
     Cli,
+    /// A kind written by a newer gateway. Kept loadable and display-only.
+    Unknown,
+}
+
+impl<'de> Deserialize<'de> for DeviceKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "phone" => Self::Phone,
+            "desktop" => Self::Desktop,
+            "cli" => Self::Cli,
+            _ => Self::Unknown,
+        })
+    }
 }
 
 impl DeviceKind {
@@ -76,6 +93,7 @@ impl DeviceKind {
             Self::Phone => "phone",
             Self::Desktop => "desktop",
             Self::Cli => "cli",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -800,6 +818,28 @@ mod tests {
         assert!(written["devices"][0].get("host_id").is_none());
         let again: Devices = serde_json::from_value(written).unwrap();
         assert_eq!(again, old);
+    }
+
+    #[test]
+    fn a_kind_written_by_a_newer_gateway_does_not_break_store_loading() {
+        let (_dir, store) = store();
+        let mut devices = store.load().unwrap();
+        devices.enroll("Lars's desktop").unwrap();
+        store.save(&devices).unwrap();
+
+        let stored = std::fs::read_to_string(store.path()).unwrap();
+        let future_kind = stored.replace(r#""kind":"phone""#, r#""kind":"tablet""#);
+        assert_ne!(stored, future_kind, "test fixture must replace the kind");
+        std::fs::write(store.path(), future_kind).unwrap();
+
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.list()[0].kind, DeviceKind::Unknown);
+        assert_eq!(loaded.list()[0].kind.to_string(), "unknown");
+        // Rewriting the store gives the catch-all a stable, known spelling.
+        store.save(&loaded).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+        assert_eq!(written["devices"][0]["kind"], "unknown");
     }
 
     #[test]

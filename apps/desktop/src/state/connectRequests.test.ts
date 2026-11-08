@@ -168,6 +168,7 @@ describe("connection requests", () => {
     expect(deviceLabel("desktop", "unknown")).toBe("Desktop app");
     expect(deviceLabel("cli", "linux")).toBe("Linux command line");
     expect(deviceLabel("cli", "")).toBe("Command line");
+    expect(deviceLabel("unknown", "ios")).toBe("Unknown device");
     expect(clock(119.2)).toBe("2:00");
     expect(clock(61)).toBe("1:01");
     expect(clock(-3)).toBe("0:00");

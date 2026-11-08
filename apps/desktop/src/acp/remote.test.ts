@@ -100,7 +100,7 @@ describe("remote access", () => {
         connected: false,
       },
       { id: "device-2", name: "box", kind: "cli", platform: "linux", connected: true },
-      { id: "device-3", name: "?", kind: "phone", platform: "ios" },
+      { id: "device-3", name: "?", kind: "unknown", platform: "ios" },
     ]);
     expect(status.connectRequests[0]?.deviceKind).toBe("desktop");
   });
