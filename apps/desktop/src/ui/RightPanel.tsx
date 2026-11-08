@@ -410,11 +410,11 @@ export function RightPanel() {
       ref={attachDock}
       aria-hidden={!open}
       inert={!open}
-      // Above the header's glass (`z-10`, ui/MainHeader.tsx): the header spans the whole view and
-      // fades 24px past its foot, which would otherwise wash over the card's top 12px. The card
-      // starts below the header's band, so nothing of it covers the header's own controls.
+      // The dock is a spacer, not a surface: it carries no z-index, so the transparent room above
+      // the card stays under the header (`z-10`, ui/MainHeader.tsx) and never takes a click meant
+      // for the header's right-hand controls. The card inside it is the part that rises.
       className={cx(
-        "relative z-20 flex min-h-0 shrink-0 justify-end overflow-clip",
+        "relative flex min-h-0 shrink-0 justify-end overflow-clip",
         !open && "pointer-events-none",
       )}
       style={
@@ -437,7 +437,10 @@ export function RightPanel() {
         }}
         className={cx(
           CARD_SURFACE,
-          "relative flex flex-col overflow-hidden outline-none transition-opacity duration-200",
+          // Above the header's glass (`z-10`): the header spans the whole view and fades 24px past
+          // its foot, which would otherwise wash over the card's top 12px. The card starts below
+          // the header's band, so nothing of it covers the header's own controls.
+          "relative z-20 flex flex-col overflow-hidden outline-none transition-opacity duration-200",
           open ? "opacity-100" : "opacity-0",
         )}
         style={{

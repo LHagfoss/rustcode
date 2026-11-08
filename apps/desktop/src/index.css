@@ -1033,14 +1033,17 @@
 
 /*
  * The new thread's heading and its tip (ui/ChatView.tsx): a pill behind either of them would cover
- * the picture the screen is about, so over a chosen picture the words carry a soft halo of the
- * pane's colour instead — tight enough to hold the glyph's edge, wide enough to read on a busy
- * photo — and over the pane itself there is nothing to carry.
+ * the picture the screen is about, so over a chosen picture the words carry a halo of the pane's
+ * own colour instead — a crisp 1px stroke that holds each glyph's edge on any photo, plus the tight
+ * and the wide lift around it. The colour is the theme's, so it is white under the light theme's
+ * dark glyphs and near-black under the dark theme's light ones; over the pane itself none of it is
+ * drawn.
  */
 .rc-text-over-image {
   text-shadow:
-    0 1px 2px color-mix(in srgb, var(--rc-bg) 85%, transparent),
-    0 0 12px color-mix(in srgb, var(--rc-bg) 60%, transparent);
+    0 0 1px var(--rc-bg),
+    0 1px 2px color-mix(in srgb, var(--rc-bg) 90%, transparent),
+    0 0 12px color-mix(in srgb, var(--rc-bg) 55%, transparent);
 }
 
 /* A day of the activity heatmap's grid: 2px, under the smallest radius step, on a 7px cell. */

@@ -757,8 +757,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **New thread screen:** a centred heading and a rotating tip above the field and its strip, with optional cards below.
   The project name in the heading opens the folder picker; there is no path line or starter prompts.
   Neither the heading nor the tip sits in a pill: over a chosen picture both take
-  `.rc-text-over-image`, a soft halo of the pane's colour that holds the glyphs off the photo, and
-  over the pane itself they carry no background at all. The tip hides in short windows, and stays
+  `.rc-text-over-image`, a halo of the pane's colour (a crisp 1px stroke plus tight and wide
+  lifts, white or near-black with the theme) that holds the glyphs off the photo, and the tip
+  reads in `fg` rather than muted there, so a dark photo's scrim cannot swallow it; over the pane
+  itself they carry no background at all. The tip hides in short windows, and stays
   while the overview is open (its cards scroll below the field and never move it). The folder pill in the strip
   also picks the project, and its
   panel already lists the projects and ends with `Choose Folder…`. A chosen picture covers the
@@ -1000,10 +1002,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   nothing about its size depends on the composer. The chat column is `flex-1` and
   narrows by the card: the lane re-centres in the room that is left and the
   transcript stops at the card's edge rather than scrolling under it. The header
-  floats above both, and the card draws above the header's glass (the dock's
+  floats above both, and the card draws above the header's glass (the card's
   `z-20` against the header's `z-10`): the glass fades 24px past its foot, and
   that fade stops at the card's top edge instead of washing over it. The card
-  itself starts `HEADER_HEIGHT` down, so it never covers the header's controls.
+  itself starts `HEADER_HEIGHT` down, so it never covers the header's controls,
+  and the dock around it carries no z-index of its own, so the empty room above
+  the card never takes a click meant for them.
   A pane's header row is a `HEADER_HEIGHT` band inside the card
   with a segmented switch between the views and a close button, divided from the
   view by a hairline; views add a slim toolbar (`h-9`) under it. The card draws

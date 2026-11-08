@@ -633,7 +633,9 @@ function NewThreadHeading({
         )}
       </h2>
       {showTip && tip && shortcut && (
-        <p className={cx("text-caption text-fg-muted", banner && "rc-text-over-image")}>
+        // Over a picture the tip reads in `fg`, not muted: a muted line lands near what a dark
+        // photo leaves under the scrim, and the halo alone cannot make that difference up.
+        <p className={cx("text-caption", banner ? "rc-text-over-image text-fg" : "text-fg-muted")}>
           Tip: {tip.text} with <Kbd>{shortcut}</Kbd>
         </p>
       )}
