@@ -423,6 +423,11 @@ impl Clients {
         )
     }
 
+    /// How many threads have a turn running, built-in or on another harness.
+    pub(crate) fn running_turns(&self) -> usize {
+        self.registry().turns.len()
+    }
+
     /// Whether a turn runs in `session_id` (tests).
     #[cfg(test)]
     pub(crate) fn turn_running(&self, session_id: &str) -> bool {
