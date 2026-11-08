@@ -21,6 +21,7 @@ import {
   formatClock,
   formatDuration,
   idleSettled,
+  lastWords,
   messageTime,
   requeueSteers,
   settledWait,
@@ -491,6 +492,35 @@ describe("sidebar times", () => {
     expect(shortAge(now - 5 * 60_000, now)).toBe("5m");
     expect(shortAge(now - 3 * 3_600_000, now)).toBe("3h");
     expect(shortAge(now - 2 * 86_400_000, now)).toBe("2d");
+  });
+});
+
+describe("the last thing said", () => {
+  const said = (id: string, text: string): TranscriptItem => ({ kind: "assistant", id, text });
+  test("the newest message or answer, with its steps and pictures left out", () => {
+    expect(
+      lastWords([
+        { kind: "user", id: "u", text: "run the tests" },
+        said("a1", "On it."),
+        { kind: "tool", id: "t", title: "bun test", status: "completed", diffs: [] },
+        { kind: "turnEnd", id: "e", elapsedMs: 1000, outcome: "completed" },
+      ]),
+    ).toBe("On it.");
+    // A picture is a marker in the text: the preview quotes the words around it.
+    expect(lastWords([{ kind: "user", id: "u", text: "what is this? ![image](file:///tmp/a.png)" }])).toBe(
+      "what is this?",
+    );
+    expect(lastWords([])).toBeUndefined();
+    expect(lastWords(undefined)).toBeUndefined();
+  });
+
+  test("one line, however it was written, and cut when it is long", () => {
+    expect(lastWords([said("a", "  two\n lines\tand  spaces ")])?.replace(/\s+/g, " ")).toBe(
+      "two lines and spaces",
+    );
+    const long = lastWords([said("a", "x".repeat(400))])!;
+    expect(long).toHaveLength(220);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
 
