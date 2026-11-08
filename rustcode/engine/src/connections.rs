@@ -104,7 +104,7 @@ async fn github_status() -> GitHubStatus {
         .expect("login mutex")
         .as_ref()
         .and_then(|login| login.done.borrow().is_none().then(|| login.code.clone()));
-    let output = tokio::process::Command::new(gh())
+    let output = crate::platform::tokio_command(gh())
         .args(["auth", "status", "--json", "hosts"])
         .stdin(Stdio::null())
         .output()
@@ -210,7 +210,7 @@ static LOGIN: Mutex<Option<Login>> = Mutex::new(None);
 /// A sign-in already running is cancelled first.
 pub async fn start_github_login() -> Result<DeviceCode, String> {
     cancel_github_login();
-    let mut child = tokio::process::Command::new(gh())
+    let mut child = crate::platform::tokio_command(gh())
         .args(["auth", "login", "--web", "--hostname", GITHUB_HOST])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -328,7 +328,7 @@ pub fn cancel_github_login() {
 }
 
 pub async fn github_logout(host: &str, login: &str) -> Result<(), String> {
-    let output = tokio::process::Command::new(gh())
+    let output = crate::platform::tokio_command(gh())
         .args(["auth", "logout", "--hostname", host, "--user", login])
         .stdin(Stdio::null())
         .output()

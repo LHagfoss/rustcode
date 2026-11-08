@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -1007,7 +1007,7 @@ pub fn ensure_sync_gitignore(dir: &Path) -> Result<(), String> {
 }
 
 pub fn get_sync_branch(dir: &Path) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::platform::command("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(dir)
         .output();
@@ -1033,7 +1033,7 @@ fn sync_path_is_allowed(path: &str) -> bool {
 /// their local copies. This makes the allowlist safe for repositories that
 /// were initialized before the narrower sync scope existed.
 pub(crate) fn untrack_non_sync_files(dir: &Path) -> Result<usize, String> {
-    let listed = Command::new("git")
+    let listed = crate::platform::command("git")
         .args(["ls-files", "-z"])
         .current_dir(dir)
         .output()
@@ -1059,7 +1059,7 @@ pub(crate) fn untrack_non_sync_files(dir: &Path) -> Result<usize, String> {
         return Ok(0);
     }
 
-    let mut child = Command::new("git")
+    let mut child = crate::platform::command("git")
         .args(["update-index", "--force-remove", "-z", "--stdin"])
         .current_dir(dir)
         .stdin(Stdio::piped())
@@ -1096,7 +1096,7 @@ fn stage_sync_files(dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let status = Command::new("git")
+    let status = crate::platform::command("git")
         .args(args)
         .current_dir(dir)
         .status()
@@ -1117,7 +1117,7 @@ pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
 
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
-        let init_status = std::process::Command::new("git")
+        let init_status = crate::platform::command("git")
             .args(["init"])
             .current_dir(&dir)
             .status()
@@ -1128,12 +1128,12 @@ pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
     }
 
     // Set remote origin
-    let _ = std::process::Command::new("git")
+    let _ = crate::platform::command("git")
         .args(["remote", "remove", "origin"])
         .current_dir(&dir)
         .status();
 
-    let remote_status = std::process::Command::new("git")
+    let remote_status = crate::platform::command("git")
         .args(["remote", "add", "origin", remote_url])
         .current_dir(&dir)
         .status()
@@ -1164,7 +1164,7 @@ pub fn sync_config_pull() -> Result<(), String> {
     // refuses to pull in that state when remote files would overwrite the
     // existing untracked config. Record the local snapshot first so the
     // normal rebase pull can merge it with the remote history.
-    let has_head = std::process::Command::new("git")
+    let has_head = crate::platform::command("git")
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(&dir)
         .output()
@@ -1174,7 +1174,7 @@ pub fn sync_config_pull() -> Result<(), String> {
         untrack_non_sync_files(&dir)?;
         stage_sync_files(&dir)?;
 
-        let commit_out = std::process::Command::new("git")
+        let commit_out = crate::platform::command("git")
             .args([
                 "-c",
                 "user.name=rustcode",
@@ -1196,7 +1196,7 @@ pub fn sync_config_pull() -> Result<(), String> {
         }
     }
 
-    let pull_out = std::process::Command::new("git")
+    let pull_out = crate::platform::command("git")
         .args(["pull", "--rebase", "--autostash", "origin", &branch])
         .current_dir(&dir)
         .output()
@@ -1210,7 +1210,7 @@ pub fn sync_config_pull() -> Result<(), String> {
         Ok(())
     } else {
         // Abort rebase if in progress to keep the repo clean and usable
-        let _ = std::process::Command::new("git")
+        let _ = crate::platform::command("git")
             .args(["rebase", "--abort"])
             .current_dir(&dir)
             .status();
@@ -1242,7 +1242,7 @@ pub fn sync_config_push() -> Result<(), String> {
     let host = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("HOST"))
         .unwrap_or_else(|_| {
-            std::process::Command::new("hostname")
+            crate::platform::command("hostname")
                 .output()
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -1266,7 +1266,7 @@ pub fn sync_config_push() -> Result<(), String> {
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
         host
     );
-    let commit_status = std::process::Command::new("git")
+    let commit_status = crate::platform::command("git")
         .args(["commit", "-m", &commit_msg])
         .current_dir(&dir)
         .status();
@@ -1283,7 +1283,7 @@ pub fn sync_config_push() -> Result<(), String> {
 
     // 3. Push to remote
     if committed {
-        let push_out = std::process::Command::new("git")
+        let push_out = crate::platform::command("git")
             .args(["push", "-u", "origin", &branch])
             .current_dir(&dir)
             .output()

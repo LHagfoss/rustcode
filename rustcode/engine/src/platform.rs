@@ -122,3 +122,15 @@ mod tests {
         assert_eq!(augmented_path_from("", None, false, true), "");
     }
 }
+
+/// Construct a non-interactive std process without a Windows console.
+pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    rustcode_command::hidden_command(program)
+}
+
+/// Construct a non-interactive Tokio process without a Windows console.
+pub(crate) fn tokio_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(program);
+    rustcode_command::hide_console_window(command.as_std_mut());
+    command
+}

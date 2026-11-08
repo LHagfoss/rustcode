@@ -526,7 +526,7 @@ fn is_inside_git_worktree(path: &Path) -> bool {
 }
 
 fn run_git(path: &Path, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
+    let out = crate::platform::command("git")
         .args(args)
         .current_dir(path)
         .output()
@@ -666,7 +666,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
             assert!(
-                std::process::Command::new("git")
+                crate::platform::command("git")
                     .args(args)
                     .current_dir(dir.path())
                     .status()

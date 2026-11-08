@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// The footer should notice branch changes promptly without making Git part of
@@ -23,7 +22,7 @@ impl WorkspaceLocation {
             _ => absolute_path,
         };
 
-        let branch = Command::new("git")
+        let branch = crate::platform::command("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(cwd)
             .output()
@@ -135,12 +134,11 @@ mod tests {
     use super::{LOCATION_REFRESH_INTERVAL, WorkspaceLocation, WorkspaceLocationCache};
     use std::fs;
     use std::path::Path;
-    use std::process::Command;
     use std::time::Instant;
     use tempfile::TempDir;
 
     fn git(cwd: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = crate::platform::command("git")
             .args(args)
             .current_dir(cwd)
             .status()

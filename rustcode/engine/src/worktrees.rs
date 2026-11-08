@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -72,7 +72,7 @@ pub(crate) fn git_with(
     env: &[(&str, &std::ffi::OsStr)],
     timeout: Duration,
 ) -> Result<String, String> {
-    let mut command = Command::new("git");
+    let mut command = crate::platform::command("git");
     command
         .arg("-C")
         .arg(dir)

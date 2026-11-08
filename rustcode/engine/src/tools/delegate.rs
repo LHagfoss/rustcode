@@ -112,7 +112,7 @@ pub fn delegate_task(args: &Value) -> Result<String, String> {
             path.display()
         ));
     };
-    let output = std::process::Command::new(&binary)
+    let output = crate::platform::command(&binary)
         .arg("-p")
         .arg(task)
         .current_dir(path.parent().unwrap_or(std::path::Path::new(".")))

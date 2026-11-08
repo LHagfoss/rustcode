@@ -11,7 +11,7 @@ pub fn advertise(port: u16, loopback: bool, gateway_id: &str) -> Option<tokio::p
     let name = super::gateway::host_name().unwrap_or_else(|| "RustCode".into());
     #[cfg(target_os = "macos")]
     let mut command = {
-        let mut command = tokio::process::Command::new("/usr/bin/dns-sd");
+        let mut command = crate::platform::tokio_command("/usr/bin/dns-sd");
         command.args([
             "-R",
             &name,
@@ -25,7 +25,7 @@ pub fn advertise(port: u16, loopback: bool, gateway_id: &str) -> Option<tokio::p
     };
     #[cfg(not(target_os = "macos"))]
     let mut command = {
-        let mut command = tokio::process::Command::new("avahi-publish-service");
+        let mut command = crate::platform::tokio_command("avahi-publish-service");
         command.args([
             &name,
             "_rustcode._tcp",

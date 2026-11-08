@@ -95,6 +95,7 @@ pub fn pty_open(
         .openpty(size(cols, rows))
         .map_err(|e| e.to_string())?;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    // The shell owns a PTY (ConPTY on Windows); do not use CREATE_NO_WINDOW.
     let mut command = CommandBuilder::new(&shell);
     command.arg("-l");
     command.cwd(&cwd);

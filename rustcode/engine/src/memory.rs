@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -881,7 +880,7 @@ fn stable_key(value: &str) -> String {
 }
 
 fn git_value(root: &Path, args: &[&str]) -> Option<PathBuf> {
-    let output = Command::new("git")
+    let output = crate::platform::command("git")
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1191,7 +1190,7 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join("README.md"), "root\n").unwrap();
         let git = |cwd: &Path, args: &[&str]| {
-            let status = Command::new("git")
+            let status = crate::platform::command("git")
                 .args(args)
                 .current_dir(cwd)
                 .status()

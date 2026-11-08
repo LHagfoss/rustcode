@@ -396,6 +396,7 @@ impl DaemonLifecycle {
                 Ok(())
             });
         }
+        rustcode_command::hide_console_window(command.as_std_mut());
         let mut child = StartingChild(Some(command.spawn()?));
         let pid = child.0.as_ref().unwrap().id().context("child exited")?;
         let status = tokio::time::timeout(self.health_timeout, async {
@@ -618,7 +619,7 @@ mod tests {
         let (child, release_fd) = fork_waiting_with_lock(held_lock.as_raw_fd());
         drop(held_lock);
         let start = tokio::spawn(async move {
-            let mut command = tokio::process::Command::new("/usr/bin/tail");
+            let mut command = crate::platform::tokio_command("/usr/bin/tail");
             command.args(["-f", "/dev/null"]);
             lifecycle.start(command).await
         });
@@ -656,7 +657,7 @@ mod tests {
     async fn detached_start_waits_for_health_and_stop_cleans_up() {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let lifecycle = DaemonLifecycle::new(dir.path());
-        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        let mut command = crate::platform::tokio_command(std::env::current_exe().unwrap());
         command
             .args([
                 "--exact",
@@ -679,7 +680,7 @@ mod tests {
         let mut lifecycle = DaemonLifecycle::new(dir.path());
         assert!(
             lifecycle
-                .start(tokio::process::Command::new("/usr/bin/false"))
+                .start(crate::platform::tokio_command("/usr/bin/false"))
                 .await
                 .unwrap_err()
                 .to_string()
@@ -688,7 +689,7 @@ mod tests {
         lifecycle.health_timeout = Duration::from_millis(60);
         // The child must remain alive until start's health deadline wins, even
         // if this test is descheduled longer than a short sleep would last.
-        let mut command = tokio::process::Command::new("/usr/bin/tail");
+        let mut command = crate::platform::tokio_command("/usr/bin/tail");
         command.args(["-f", "/dev/null"]);
         let error = lifecycle.start(command).await.unwrap_err();
         assert!(

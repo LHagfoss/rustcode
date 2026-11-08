@@ -193,7 +193,7 @@ async fn gh_json(cwd: &Path, args: &[&str]) -> Result<Value, PullError> {
 /// printed, or its error.
 async fn gh(cwd: &Path, args: &[&str], stdin: Option<Vec<u8>>) -> Result<Vec<u8>, PullError> {
     use tokio::io::AsyncWriteExt;
-    let mut command = tokio::process::Command::new(crate::platform::resolve_bin("gh"));
+    let mut command = crate::platform::tokio_command(crate::platform::resolve_bin("gh"));
     command
         .args(args)
         .current_dir(cwd)

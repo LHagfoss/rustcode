@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{Mutex, Notify, mpsc};
 
 pub struct McpClient {
@@ -732,7 +732,7 @@ fn pkce_pair() -> (String, String) {
 fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
+        let _ = crate::platform::command("open")
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -741,7 +741,7 @@ fn open_browser(url: &str) {
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
+        let _ = crate::platform::command("cmd")
             .args(["/c", "start", "", url])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -750,7 +750,7 @@ fn open_browser(url: &str) {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = std::process::Command::new("xdg-open")
+        let _ = crate::platform::command("xdg-open")
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -924,7 +924,7 @@ impl McpClient {
         env: HashMap<String, String>,
         workspace: Option<&std::path::Path>,
     ) -> Result<Arc<Self>, String> {
-        let mut process = Command::new(&command);
+        let mut process = crate::platform::tokio_command(&command);
         if let Some(workspace) = workspace {
             process.current_dir(workspace);
         }

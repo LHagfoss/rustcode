@@ -56,7 +56,7 @@ impl Drop for KeepAwake {
 
 #[cfg(all(target_os = "macos", not(test)))]
 fn start() -> Option<std::process::Child> {
-    std::process::Command::new("/usr/bin/caffeinate")
+    crate::platform::command("/usr/bin/caffeinate")
         .args(["-i", "-w", &std::process::id().to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -83,7 +83,7 @@ mod tests {
     /// A sleeping child stands in for `caffeinate`, so the test checks the
     /// holding without changing how the machine sleeps.
     fn sleeper() -> Option<std::process::Child> {
-        std::process::Command::new("sleep").arg("30").spawn().ok()
+        crate::platform::command("sleep").arg("30").spawn().ok()
     }
 
     fn child_id() -> Option<u32> {
