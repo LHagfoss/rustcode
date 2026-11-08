@@ -3,17 +3,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 pub fn executable_path() -> Result<PathBuf> {
-    let current = std::env::current_exe()?;
-    // Preserve a Homebrew symlink so the service follows future upgrades.
-    for candidate in [
-        PathBuf::from("/opt/homebrew/bin/rustcode"),
-        PathBuf::from("/usr/local/bin/rustcode"),
-    ] {
-        if candidate.canonicalize().ok().as_ref() == Some(&current) {
-            return Ok(candidate);
-        }
-    }
-    Ok(current)
+    crate::service::executable_path()
 }
 
 #[cfg(target_os = "macos")]
@@ -25,13 +15,7 @@ fn label(config: &Path) -> String {
     )
 }
 #[cfg(target_os = "macos")]
-fn xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
+use crate::service::xml_escape as xml;
 
 /// The search path an installed agent already runs with, as written in its
 /// document. Terminals differ in theirs: taking each caller's would rewrite

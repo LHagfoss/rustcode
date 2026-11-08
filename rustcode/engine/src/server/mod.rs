@@ -51,13 +51,25 @@ pub enum RunOutcome {
 }
 
 /// `rustcode server run`: serve every client of this user until a signal
-/// stops the process.
-pub async fn run(auto_approve: bool) -> anyhow::Result<RunOutcome> {
+/// stops the process. `service` is set by a service manager (`--service`):
+/// on Windows it has no console window to keep open.
+pub async fn run(auto_approve: bool, service: bool) -> anyhow::Result<RunOutcome> {
     let dir = run_dir()?;
     let lock = match lock::acquire(&dir)? {
         lock::Acquired::Held(lock) => lock,
         lock::Acquired::Running(info) => return Ok(RunOutcome::AlreadyRunning(info)),
     };
+    if service {
+        detach_console();
+    }
+    // `rustcode server logs` reads this; only a server writes it.
+    crate::logger::mirror_to_server_log();
+    crate::dbg_log!(
+        "RustCode server {} starting (pid {}{})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+        if service { ", as a service" } else { "" }
+    );
     let endpoint = listen::endpoint(&dir);
     let mut listener = listen::Listener::bind(&endpoint)?;
     let engine = AcpEngine::start(auto_approve)?;
@@ -66,6 +78,7 @@ pub async fn run(auto_approve: bool) -> anyhow::Result<RunOutcome> {
     lock.publish(&ServerInfo::now(endpoint))?;
     crate::dbg_log!("RustCode server listening");
     serve(&engine, &mut listener, stop_signal()).await;
+    crate::dbg_log!("RustCode server stopping");
     engine.shutdown().await;
     drop(listener);
     drop(lock);
@@ -112,6 +125,23 @@ where
     });
 }
 
+/// A server started by a Windows scheduled task has a console window it does
+/// not need: close it.
+fn detach_console() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn FreeConsole() -> i32;
+        }
+        // SAFETY: FreeConsole has no preconditions; it fails harmlessly when
+        // the process has no console.
+        unsafe {
+            FreeConsole();
+        }
+    }
+}
+
 /// Resolves when the process is asked to stop: Ctrl-C, or on Unix
 /// `SIGTERM` (launchd, systemd) and `SIGHUP`.
 async fn stop_signal() {
@@ -152,7 +182,8 @@ pub async fn connect(program: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn connect_running() -> io::Result<listen::ClientStream> {
+/// A connection to the server this user runs.
+pub(crate) async fn connect_running() -> io::Result<listen::ClientStream> {
     let info = running()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no RustCode server is running"))?;
     listen::connect(&info.endpoint).await
@@ -175,17 +206,23 @@ async fn wait_for_server() -> anyhow::Result<listen::ClientStream> {
     }
 }
 
-/// Where a server started in the background writes what it prints.
-fn log_path() -> io::Result<PathBuf> {
-    Ok(run_dir()?.join("server.log"))
+/// Where a server writes its log, and where one started in the background
+/// writes what it prints: `<config dir>/logs/server.log`.
+pub fn log_path() -> io::Result<PathBuf> {
+    crate::logger::server_log_path()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no RustCode config directory"))
 }
 
 /// Start `program server run` detached from this process: its own process
 /// group, no terminal, nothing inherited but the environment, so it lives
 /// on when the client that started it ends.
-fn start_in_background(program: &std::path::Path) -> io::Result<()> {
+pub(crate) fn start_in_background(program: &std::path::Path) -> io::Result<()> {
     let dir = run_dir()?;
     lock::ensure_private_dir(&dir)?;
+    let log_path = log_path()?;
+    if let Some(logs) = log_path.parent() {
+        std::fs::create_dir_all(logs)?;
+    }
     let mut log = std::fs::OpenOptions::new();
     log.create(true).append(true);
     #[cfg(unix)]
@@ -193,7 +230,7 @@ fn start_in_background(program: &std::path::Path) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         log.mode(0o600);
     }
-    let log = log.open(log_path()?)?;
+    let log = log.open(log_path)?;
     let mut command = std::process::Command::new(program);
     command
         .args(["server", "run"])

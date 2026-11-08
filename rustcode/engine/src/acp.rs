@@ -15,6 +15,7 @@ mod prompt;
 pub(crate) mod questions;
 mod remote;
 mod rewind;
+mod server_status;
 mod session;
 pub(crate) mod session_move;
 mod session_repair;
@@ -2894,6 +2895,15 @@ async fn serve_connection(
                         }
                         Ok(())
                     })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |_request: server_status::ServerStatusRequest, responder, _connection| {
+                    responder.respond(server_status::status(&server))
                 }
             },
             agent_client_protocol::on_receive_request!(),

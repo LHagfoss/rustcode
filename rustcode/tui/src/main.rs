@@ -6,6 +6,7 @@ mod cli;
 mod inline_terminal;
 mod run;
 mod runtime;
+mod server_command;
 mod terminal_probe;
 mod ui;
 

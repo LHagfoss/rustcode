@@ -219,3 +219,36 @@ async fn the_bridge_relays_both_ways_and_waits_for_the_last_answer() {
     assert_eq!(answer, b"{\"id\":1,\"result\":{}}\n");
     bridged.await.expect("bridge").expect("relayed");
 }
+
+#[test]
+fn the_status_request_is_answered_by_a_running_server() {
+    on_a_large_stack(async {
+        let run = tempfile::tempdir().expect("run dir");
+        let endpoint = listen::endpoint(run.path());
+        let mut listener = listen::Listener::bind(&endpoint).expect("listen");
+        let engine = AcpEngine::bare(false).expect("engine");
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let serving = tokio::spawn({
+            let engine = engine.clone();
+            async move {
+                serve(&engine, &mut listener, async {
+                    let _ = stopped.await;
+                })
+                .await;
+            }
+        });
+
+        // Without `initialize`: the asker is not a client.
+        let stream = listen::connect(&endpoint).await.expect("connects");
+        let status = crate::service::server_service::ask_status(stream)
+            .await
+            .expect("status");
+        assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(status.pid, std::process::id());
+        assert_eq!(status.clients, 0);
+        assert_eq!(status.running_turns, 0);
+
+        let _ = stop.send(());
+        serving.await.expect("server stops");
+    });
+}

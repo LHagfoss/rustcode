@@ -356,10 +356,52 @@ pub enum DaemonCommands {
 pub enum ServerCommands {
     /// Run the server in the foreground until stopped; exits at once if one
     /// already runs for this user
-    Run,
+    Run {
+        /// Set by the service manager that starts the server at login
+        #[arg(long, hide = true)]
+        service: bool,
+    },
     /// Relay ACP on stdin and stdout to the server, starting it in the
     /// background if it is not running
     Connect,
+    /// Run the server in the background from login: a LaunchAgent on macOS,
+    /// a systemd user unit on Linux, a logon task on Windows
+    Install {
+        /// Install a development build (inside a cargo target directory) anyway
+        #[arg(long)]
+        force_dev: bool,
+    },
+    /// Show whether the server is installed and running, its clients and
+    /// running turns, and what is wrong
+    Status {
+        /// Print JSON for scripts
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop the server and start it again from the installed service
+    Restart {
+        /// Wait until no turn is running first
+        #[arg(long)]
+        when_idle: bool,
+        /// Restart even if turns are running, without asking
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Remove the background service (threads, settings and pairings stay)
+    Uninstall {
+        /// Stop a server with turns running without asking
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Show the server's log
+    Logs {
+        /// Keep printing what is appended
+        #[arg(short, long)]
+        follow: bool,
+        /// How many of the last lines to show
+        #[arg(short = 'n', long, default_value_t = 100)]
+        lines: usize,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1225,19 +1267,66 @@ mod tests {
 
     #[test]
     fn parses_server_commands() {
-        let cli = Cli::try_parse_from(["rustcode", "server", "run"]).unwrap();
+        let server = |args: &[&str]| {
+            let mut all = vec!["rustcode", "server"];
+            all.extend_from_slice(args);
+            match Cli::try_parse_from(all).unwrap().command {
+                Some(Commands::Server { command }) => command,
+                other => panic!("expected a server command, got {other:?}"),
+            }
+        };
         assert!(matches!(
-            cli.command,
-            Some(Commands::Server {
-                command: ServerCommands::Run
-            })
+            server(&["run"]),
+            ServerCommands::Run { service: false }
         ));
-        let cli = Cli::try_parse_from(["rustcode", "server", "connect"]).unwrap();
         assert!(matches!(
-            cli.command,
-            Some(Commands::Server {
-                command: ServerCommands::Connect
-            })
+            server(&["run", "--service"]),
+            ServerCommands::Run { service: true }
+        ));
+        assert!(matches!(server(&["connect"]), ServerCommands::Connect));
+        assert!(matches!(
+            server(&["install"]),
+            ServerCommands::Install { force_dev: false }
+        ));
+        assert!(matches!(
+            server(&["install", "--force-dev"]),
+            ServerCommands::Install { force_dev: true }
+        ));
+        assert!(matches!(
+            server(&["status", "--json"]),
+            ServerCommands::Status { json: true }
+        ));
+        assert!(matches!(
+            server(&["restart", "--when-idle"]),
+            ServerCommands::Restart {
+                when_idle: true,
+                yes: false
+            }
+        ));
+        assert!(matches!(
+            server(&["restart", "-y"]),
+            ServerCommands::Restart {
+                when_idle: false,
+                yes: true
+            }
+        ));
+        assert!(matches!(
+            server(&["uninstall"]),
+            ServerCommands::Uninstall { yes: false }
+        ));
+        assert!(matches!(
+            server(&["logs"]),
+            ServerCommands::Logs {
+                follow: false,
+                lines: 100
+            }
+        ));
+        assert!(matches!(
+            server(&["logs", "-f", "--lines", "20"]),
+            ServerCommands::Logs {
+                follow: true,
+                lines: 20
+            }
         ));
         assert!(Cli::try_parse_from(["rustcode", "server"]).is_err());
     }

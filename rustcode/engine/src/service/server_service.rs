@@ -1,0 +1,891 @@
+//! The RustCode server as a background service: `rustcode server install`,
+//! `status`, `restart`, `uninstall` and `logs` (`docs/server.md`).
+//!
+//! What can be decided without the machine is plain functions
+//! ([`service_name`], [`definition`], [`build_report`], [`plan_restart`]),
+//! and the waiting for an idle server takes its observations as a closure
+//! ([`wait_until_idle`]), so all of it is tested against fakes. Nothing here
+//! runs from a test.
+
+use super::{Definition, Installed, Manager, Problem, State};
+use anyhow::Result;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// How long `install` and `restart` wait for the server to listen.
+const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a request to the running server may take.
+const ASK_TIMEOUT: Duration = Duration::from_secs(5);
+/// The ACP extension method that answers [`LiveStatus`].
+pub const STATUS_METHOD: &str = "_rustcode/server/status";
+
+/// The service's name: `server`, or `server-<hash of the directory>` for a
+/// server of another `RUSTCODE_CONFIG_DIR`, so that one never replaces the
+/// definition of the server of the default directory.
+pub fn service_name(config_override: Option<&Path>) -> String {
+    use sha2::{Digest, Sha256};
+    match config_override {
+        Some(dir) if !dir.as_os_str().is_empty() => format!(
+            "server-{}",
+            hex::encode(&Sha256::digest(dir.as_os_str().as_encoded_bytes())[..4])
+        ),
+        _ => "server".to_owned(),
+    }
+}
+
+fn config_override() -> Option<PathBuf> {
+    std::env::var_os("RUSTCODE_CONFIG_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
+/// What the operating system runs: `program server run --service`, with the
+/// configuration directory it was installed for when that is not the default.
+pub fn definition(program: &Path, config_override: Option<&Path>, log: PathBuf) -> Definition {
+    Definition {
+        name: service_name(config_override),
+        description: "RustCode server".to_owned(),
+        program: program.to_owned(),
+        args: ["server", "run", "--service"].map(str::to_owned).to_vec(),
+        env: config_override
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map(|dir| {
+                vec![(
+                    "RUSTCODE_CONFIG_DIR".to_owned(),
+                    dir.to_string_lossy().into_owned(),
+                )]
+            })
+            .unwrap_or_default(),
+        log,
+    }
+}
+
+fn current_manager() -> Result<(Box<dyn Manager>, Definition)> {
+    let program = super::executable_path()?;
+    let log = crate::server::log_path()?;
+    let overridden = config_override();
+    let definition = definition(&program, overridden.as_deref(), log);
+    Ok((super::manager(&definition.name)?, definition))
+}
+
+/// What a running server says of itself (`_rustcode/server/status`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LiveStatus {
+    pub version: String,
+    pub pid: u32,
+    /// Connected clients that said `initialize`.
+    pub clients: usize,
+    /// Threads with a turn running.
+    pub running_turns: usize,
+}
+
+/// Ask a server on `stream` for its status. The reply is read past any
+/// notification the server sends first.
+pub async fn ask_status<S>(stream: S) -> std::io::Result<LiveStatus>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let (read, mut write) = tokio::io::split(stream);
+    let request = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": STATUS_METHOD, "params": {}
+    });
+    write.write_all(format!("{request}\n").as_bytes()).await?;
+    write.flush().await?;
+    let mut lines = tokio::io::BufReader::new(read).lines();
+    while let Some(line) = lines.next_line().await? {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if message.get("id") != Some(&serde_json::json!(1)) || message.get("method").is_some() {
+            continue;
+        }
+        if let Some(error) = message.get("error") {
+            return Err(std::io::Error::other(format!(
+                "the server refused the status request: {error}"
+            )));
+        }
+        return serde_json::from_value(message["result"].clone())
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+    }
+    Err(std::io::ErrorKind::UnexpectedEof.into())
+}
+
+/// The running server's status, or `None` when none answers.
+pub async fn live_status() -> Option<LiveStatus> {
+    let ask = async {
+        let stream = crate::server::connect_running().await.ok()?;
+        ask_status(stream).await.ok()
+    };
+    tokio::time::timeout(ASK_TIMEOUT, ask).await.ok().flatten()
+}
+
+/// One problem `server status` can report.
+fn problem(code: &'static str, message: impl Into<String>) -> Problem {
+    Problem {
+        code,
+        message: message.into(),
+    }
+}
+
+/// What `server status` knows.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StatusReport {
+    /// A definition is in place.
+    pub installed: bool,
+    /// A server answers on its socket.
+    pub running: bool,
+    /// The running server's version.
+    pub version: Option<String>,
+    /// This `rustcode`'s version.
+    pub cli_version: String,
+    pub pid: Option<u32>,
+    pub uptime_secs: Option<u64>,
+    /// The Unix socket's path, or the Windows pipe's name.
+    pub socket: Option<String>,
+    /// The program the installed service runs.
+    pub binary: Option<String>,
+    pub service: ServiceReport,
+    pub clients: Option<usize>,
+    pub running_turns: Option<usize>,
+    pub log: String,
+    pub problems: Vec<Problem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ServiceReport {
+    /// `launchd`, `systemd`, `scheduled-task` or `run-key`.
+    pub kind: String,
+    /// The definition's file, when it is one.
+    pub path: Option<String>,
+}
+
+/// Everything [`build_report`] needs, gathered by [`status`].
+pub struct Observed {
+    pub kind: String,
+    pub state: State,
+    /// From a socket that answered.
+    pub live: Option<LiveStatus>,
+    /// From the description the server published.
+    pub info: Option<crate::server::ServerInfo>,
+    /// A `restart --when-idle` is waiting.
+    pub restart_waiting: bool,
+    /// The manager's own problems (lingering).
+    pub manager_problems: Vec<Problem>,
+    pub cli_version: String,
+    pub log: PathBuf,
+}
+
+/// Turn what was observed into the report, and name what is wrong.
+pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
+    let Observed {
+        kind,
+        state,
+        live,
+        info,
+        restart_waiting,
+        manager_problems,
+        cli_version,
+        log,
+    } = observed;
+    let mut problems = Vec::new();
+    if !state.installed {
+        problems.push(problem(
+            "not-installed",
+            "The server is not installed as a background service: threads stop with the app. Run `rustcode server install`.",
+        ));
+    } else {
+        problems.extend(manager_problems);
+        if live.is_none() {
+            problems.push(problem(
+                "stopped",
+                "The service is installed but no server answers. See `rustcode server logs`, or run `rustcode server restart`.",
+            ));
+        }
+    }
+    if let Some(live) = &live {
+        if live.version != cli_version {
+            problems.push(problem(
+                "version-mismatch",
+                format!(
+                    "The server runs {} and this rustcode is {cli_version}. `rustcode server restart --when-idle` brings the server up to date.",
+                    live.version
+                ),
+            ));
+        }
+        if state.installed && state.pid.is_some_and(|managed| managed != live.pid) {
+            problems.push(problem(
+                "unmanaged",
+                format!(
+                    "The server answering (pid {}) was not started by the service. `rustcode server restart` hands it over.",
+                    live.pid
+                ),
+            ));
+        }
+    }
+    if restart_waiting {
+        problems.push(problem(
+            "restart-pending",
+            "A restart is waiting for running turns to finish.",
+        ));
+    }
+    // The description a crashed server left behind says nothing.
+    let info = info.filter(|info| live.as_ref().is_some_and(|live| live.pid == info.pid));
+    StatusReport {
+        installed: state.installed,
+        running: live.is_some(),
+        version: live.as_ref().map(|live| live.version.clone()),
+        cli_version,
+        pid: live.as_ref().map(|live| live.pid),
+        uptime_secs: info
+            .as_ref()
+            .map(|info| now_secs.saturating_sub(info.started_at)),
+        socket: info.map(|info| info.endpoint),
+        binary: state
+            .program
+            .map(|program| program.to_string_lossy().into_owned()),
+        service: ServiceReport {
+            kind,
+            path: state.path.map(|path| path.to_string_lossy().into_owned()),
+        },
+        clients: live.as_ref().map(|live| live.clients),
+        running_turns: live.as_ref().map(|live| live.running_turns),
+        log: log.to_string_lossy().into_owned(),
+        problems,
+    }
+}
+
+impl StatusReport {
+    /// The report as `rustcode server status` prints it.
+    pub fn human(&self) -> String {
+        let mut out = String::new();
+        let line = |out: &mut String, label: &str, value: String| {
+            out.push_str(&format!("{label:<12}{value}\n"));
+        };
+        line(
+            &mut out,
+            "Installed",
+            if self.installed {
+                format!("yes ({})", self.service.kind)
+            } else {
+                "no".to_owned()
+            },
+        );
+        line(
+            &mut out,
+            "Running",
+            match (&self.version, self.pid) {
+                (Some(version), Some(pid)) => format!("yes (version {version}, pid {pid})"),
+                _ => "no".to_owned(),
+            },
+        );
+        if let Some(uptime) = self.uptime_secs {
+            line(&mut out, "Uptime", human_duration(uptime));
+        }
+        if let Some(socket) = &self.socket {
+            line(&mut out, "Socket", socket.clone());
+        }
+        if let Some(binary) = &self.binary {
+            line(&mut out, "Binary", binary.clone());
+        }
+        if let Some(clients) = self.clients {
+            line(&mut out, "Clients", clients.to_string());
+        }
+        if let Some(turns) = self.running_turns {
+            line(&mut out, "Turns", format!("{turns} running"));
+        }
+        line(&mut out, "Log", self.log.clone());
+        for problem in &self.problems {
+            out.push_str(&format!(
+                "Problem     {}: {}\n",
+                problem.code, problem.message
+            ));
+        }
+        out
+    }
+}
+
+fn human_duration(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}m {}s", secs / 60, secs % 60),
+        3600..86400 => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+        _ => format!("{}d {}h", secs / 86400, secs % 86400 / 3600),
+    }
+}
+
+/// Look at the service and the server.
+pub async fn status() -> Result<StatusReport> {
+    let (manager, _) = current_manager()?;
+    let state = manager.state()?;
+    let live = live_status().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    Ok(build_report(
+        Observed {
+            kind: manager.kind().to_owned(),
+            manager_problems: if state.installed {
+                manager.problems()
+            } else {
+                Vec::new()
+            },
+            state,
+            live,
+            info: crate::server::running(),
+            restart_waiting: restart_waiting(),
+            cli_version: env!("CARGO_PKG_VERSION").to_owned(),
+            log: crate::server::log_path()?,
+        },
+        now,
+    ))
+}
+
+/// What `install` did.
+#[derive(Debug)]
+pub struct InstallReport {
+    pub kind: &'static str,
+    pub program: PathBuf,
+    pub outcome: Installed,
+    /// The server that answered once installed.
+    pub live: Option<LiveStatus>,
+    /// What the user should still do, in order.
+    pub problems: Vec<Problem>,
+}
+
+/// `rustcode server install`: write the definition, start the service and
+/// wait for the server to listen. A definition that is already as wanted
+/// changes nothing.
+pub async fn install(force_dev: bool) -> Result<InstallReport> {
+    let (manager, definition) = current_manager()?;
+    super::refuse_dev_binary(&definition.program, force_dev)?;
+    let outcome = manager.install(&definition)?;
+    let live = wait_for_server(None).await;
+    let mut problems = manager.problems();
+    if outcome == Installed::Started && live.is_none() {
+        problems.push(problem(
+            "stopped",
+            format!(
+                "The service was installed but the server did not answer within {}s. See `rustcode server logs`.",
+                START_TIMEOUT.as_secs()
+            ),
+        ));
+    }
+    if outcome == Installed::ChangedWhileActive {
+        problems.push(problem(
+            "restart-pending",
+            "The service definition changed. The running server keeps the old one until `rustcode server restart --when-idle`.",
+        ));
+    }
+    if let (Some(live), Some(managed)) = (&live, manager.state()?.pid)
+        && live.pid != managed
+    {
+        problems.push(problem(
+            "unmanaged",
+            format!(
+                "A server started by an app (pid {}) is already running and keeps running; `rustcode server restart` hands it to the service.",
+                live.pid
+            ),
+        ));
+    }
+    Ok(InstallReport {
+        kind: manager.kind(),
+        program: definition.program,
+        outcome,
+        live,
+        problems,
+    })
+}
+
+/// Wait for a server to answer, a different one than `not_pid` when given.
+async fn wait_for_server(not_pid: Option<u32>) -> Option<LiveStatus> {
+    let deadline = tokio::time::Instant::now() + START_TIMEOUT;
+    loop {
+        if let Some(live) = live_status().await
+            && Some(live.pid) != not_pid
+        {
+            return Some(live);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// What `restart` does, given what the user asked and what runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartPlan {
+    /// Restart now.
+    Now,
+    /// Turns are running: ask before ending them.
+    Confirm { running: usize },
+    /// Wait for no turn to run, then restart.
+    WaitForIdle,
+}
+
+/// `running` is the turns running, or `None` when no server answers.
+pub fn plan_restart(when_idle: bool, yes: bool, running: Option<usize>) -> RestartPlan {
+    match running {
+        _ if when_idle => RestartPlan::WaitForIdle,
+        Some(running) if running > 0 && !yes => RestartPlan::Confirm { running },
+        _ => RestartPlan::Now,
+    }
+}
+
+/// How waiting for an idle server ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Idle {
+    /// No turn is running.
+    Idle,
+    /// The server stopped answering; there is nothing to wait for.
+    ServerGone,
+    /// Turns were still running at the deadline.
+    TimedOut { running: usize },
+}
+
+/// Poll `running_turns` until it has said `0` `settled` times in a row (a
+/// queued prompt can start right after a turn ends). `None` from it means no
+/// server answers. `progress` hears every change of the count.
+pub async fn wait_until_idle<F, Fut>(
+    mut running_turns: F,
+    poll: Duration,
+    settled: u32,
+    timeout: Option<Duration>,
+    mut progress: impl FnMut(usize),
+) -> Idle
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<usize>>,
+{
+    let deadline = timeout.map(|timeout| tokio::time::Instant::now() + timeout);
+    let mut idle_polls = 0;
+    let mut last = None;
+    loop {
+        let Some(running) = running_turns().await else {
+            return Idle::ServerGone;
+        };
+        if last != Some(running) {
+            progress(running);
+            last = Some(running);
+        }
+        if running == 0 {
+            idle_polls += 1;
+            if idle_polls >= settled {
+                return Idle::Idle;
+            }
+        } else {
+            idle_polls = 0;
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                return Idle::TimedOut { running };
+            }
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
+/// Holds the marker that `status` reads as `restart-pending` while a
+/// `restart --when-idle` waits. The operating system drops it with the
+/// process, however that ends.
+pub struct PendingRestart(#[allow(dead_code)] std::fs::File);
+
+fn pending_path() -> Result<PathBuf> {
+    Ok(crate::server::run_dir()?.join("restart-pending"))
+}
+
+/// Mark a restart as waiting; `None` when another one already does.
+pub fn mark_restart_pending() -> Result<Option<PendingRestart>> {
+    let dir = crate::server::run_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(pending_path()?)?;
+    Ok(file.try_lock().ok().map(|()| PendingRestart(file)))
+}
+
+fn restart_waiting() -> bool {
+    let Ok(path) = pending_path() else {
+        return false;
+    };
+    let Ok(file) = std::fs::OpenOptions::new().read(true).open(path) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
+/// The server's pid and running turns now, for deciding on a restart.
+pub async fn running_turns() -> Option<usize> {
+    live_status().await.map(|live| live.running_turns)
+}
+
+/// `rustcode server restart`: stop the server and start it again from the
+/// installed definition, waiting for it to listen. Returns the new server.
+pub async fn restart() -> Result<Option<LiveStatus>> {
+    let (manager, _) = current_manager()?;
+    let state = manager.state()?;
+    anyhow::ensure!(
+        state.installed,
+        "the server is not installed as a background service; run `rustcode server install`"
+    );
+    let before = live_status().await;
+    // A server the service did not start (an app's) would make the service's
+    // new one exit at once, finding it: end it first.
+    if let Some(before) = &before
+        && state.pid != Some(before.pid)
+    {
+        terminate(before.pid)?;
+        wait_until_gone(before.pid).await;
+    }
+    manager.restart()?;
+    Ok(wait_for_server(before.as_ref().map(|live| live.pid)).await)
+}
+
+async fn wait_until_gone(pid: u32) {
+    for _ in 0..150 {
+        if live_status().await.is_none_or(|live| live.pid != pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Ask the process to end, as a service manager does.
+fn terminate(pid: u32) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use anyhow::Context;
+        let pid = i32::try_from(pid).context("the pid is out of range")?;
+        // SAFETY: kill has no memory preconditions.
+        if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error).context("could not stop the running server");
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let output = super::run_tool("taskkill", &["/PID", &pid.to_string(), "/F"])?;
+        anyhow::ensure!(
+            output.status.success(),
+            "could not stop the running server: {}",
+            super::failure(&output)
+        );
+        Ok(())
+    }
+}
+
+/// `rustcode server uninstall`: stop the service and remove its definition.
+/// Threads, settings, pairings and logs stay.
+pub fn uninstall() -> Result<bool> {
+    let (manager, _) = current_manager()?;
+    let installed = manager.state()?.installed;
+    manager.uninstall()?;
+    Ok(installed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_server_is_named_server_and_another_directory_gets_its_own() {
+        assert_eq!(service_name(None), "server");
+        assert_eq!(service_name(Some(Path::new(""))), "server");
+        let one = service_name(Some(Path::new("/tmp/one")));
+        assert!(
+            one.starts_with("server-") && one.len() == "server-".len() + 8,
+            "{one}"
+        );
+        assert_eq!(one, service_name(Some(Path::new("/tmp/one"))));
+        assert_ne!(one, service_name(Some(Path::new("/tmp/two"))));
+    }
+
+    #[test]
+    fn the_service_runs_server_run_with_the_configuration_it_was_installed_for() {
+        let plain = definition(
+            Path::new("/usr/bin/rustcode"),
+            None,
+            "/c/logs/server.log".into(),
+        );
+        assert_eq!(plain.args, ["server", "run", "--service"]);
+        assert!(plain.env.is_empty());
+        let other = definition(
+            Path::new("/usr/bin/rustcode"),
+            Some(Path::new("/tmp/rc")),
+            "/c/logs/server.log".into(),
+        );
+        assert_eq!(
+            other.env,
+            [("RUSTCODE_CONFIG_DIR".to_owned(), "/tmp/rc".to_owned())]
+        );
+    }
+
+    fn installed_state() -> State {
+        State {
+            installed: true,
+            active: true,
+            pid: Some(10),
+            path: Some("/home/ada/.config/systemd/user/rustcode-server.service".into()),
+            program: Some("/usr/bin/rustcode".into()),
+        }
+    }
+
+    fn live(version: &str, pid: u32) -> LiveStatus {
+        LiveStatus {
+            version: version.to_owned(),
+            pid,
+            clients: 2,
+            running_turns: 1,
+        }
+    }
+
+    fn observed(state: State, live: Option<LiveStatus>) -> Observed {
+        Observed {
+            kind: "systemd".to_owned(),
+            state,
+            info: live.as_ref().map(|live| crate::server::ServerInfo {
+                pid: live.pid,
+                version: live.version.clone(),
+                endpoint: "/run/server.sock".to_owned(),
+                started_at: 1_000,
+            }),
+            live,
+            restart_waiting: false,
+            manager_problems: Vec::new(),
+            cli_version: "1.23.0".to_owned(),
+            log: "/c/logs/server.log".into(),
+        }
+    }
+
+    fn codes(report: &StatusReport) -> Vec<&'static str> {
+        report.problems.iter().map(|problem| problem.code).collect()
+    }
+
+    #[test]
+    fn status_json_has_the_documented_shape() {
+        let report = build_report(observed(installed_state(), Some(live("1.23.0", 10))), 1_090);
+        let json = serde_json::to_value(&report).expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "installed": true,
+                "running": true,
+                "version": "1.23.0",
+                "cli_version": "1.23.0",
+                "pid": 10,
+                "uptime_secs": 90,
+                "socket": "/run/server.sock",
+                "binary": "/usr/bin/rustcode",
+                "service": {
+                    "kind": "systemd",
+                    "path": "/home/ada/.config/systemd/user/rustcode-server.service"
+                },
+                "clients": 2,
+                "running_turns": 1,
+                "log": "/c/logs/server.log",
+                "problems": []
+            })
+        );
+    }
+
+    #[test]
+    fn a_missing_service_and_server_is_reported_with_nulls() {
+        let report = build_report(observed(State::default(), None), 5);
+        let json = serde_json::to_value(&report).expect("json");
+        assert_eq!(json["installed"], false);
+        assert_eq!(json["running"], false);
+        for key in [
+            "version",
+            "pid",
+            "uptime_secs",
+            "socket",
+            "binary",
+            "clients",
+            "running_turns",
+        ] {
+            assert!(json[key].is_null(), "{key}");
+        }
+        assert_eq!(codes(&report), ["not-installed"]);
+    }
+
+    #[test]
+    fn problems_have_stable_codes() {
+        let stopped = build_report(observed(installed_state(), None), 0);
+        assert_eq!(codes(&stopped), ["stopped"]);
+
+        let old = build_report(observed(installed_state(), Some(live("1.22.0", 10))), 0);
+        assert_eq!(codes(&old), ["version-mismatch"]);
+
+        let stray = build_report(observed(installed_state(), Some(live("1.23.0", 99))), 0);
+        assert_eq!(codes(&stray), ["unmanaged"]);
+
+        let mut waiting = observed(installed_state(), Some(live("1.23.0", 10)));
+        waiting.restart_waiting = true;
+        waiting.manager_problems = vec![problem("linger-disabled", "x")];
+        assert_eq!(
+            codes(&build_report(waiting, 0)),
+            ["linger-disabled", "restart-pending"]
+        );
+    }
+
+    #[test]
+    fn a_stale_description_is_not_trusted() {
+        let mut observed = observed(installed_state(), None);
+        observed.info = Some(crate::server::ServerInfo {
+            pid: 7,
+            version: "1".to_owned(),
+            endpoint: "/gone.sock".to_owned(),
+            started_at: 1,
+        });
+        let report = build_report(observed, 100);
+        assert_eq!(report.socket, None);
+        assert_eq!(report.uptime_secs, None);
+    }
+
+    #[test]
+    fn the_human_report_names_every_fact() {
+        let report = build_report(observed(installed_state(), Some(live("1.22.0", 10))), 1_090);
+        let text = report.human();
+        for expected in [
+            "Installed   yes (systemd)",
+            "Running     yes (version 1.22.0, pid 10)",
+            "Uptime      1m 30s",
+            "Socket      /run/server.sock",
+            "Binary      /usr/bin/rustcode",
+            "Clients     2",
+            "Turns       1 running",
+            "Problem     version-mismatch:",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+    }
+
+    #[test]
+    fn restart_asks_only_when_turns_would_be_lost() {
+        assert_eq!(plan_restart(false, false, Some(0)), RestartPlan::Now);
+        assert_eq!(plan_restart(false, false, None), RestartPlan::Now);
+        assert_eq!(
+            plan_restart(false, false, Some(2)),
+            RestartPlan::Confirm { running: 2 }
+        );
+        assert_eq!(plan_restart(false, true, Some(2)), RestartPlan::Now);
+        assert_eq!(plan_restart(true, false, Some(2)), RestartPlan::WaitForIdle);
+        assert_eq!(plan_restart(true, true, Some(2)), RestartPlan::WaitForIdle);
+    }
+
+    /// A server whose running-turn count follows a script, then stays at its
+    /// last value; `None` entries are a server that does not answer.
+    fn scripted(
+        script: Vec<Option<usize>>,
+    ) -> (
+        impl FnMut() -> std::future::Ready<Option<usize>>,
+        std::rc::Rc<std::cell::Cell<usize>>,
+    ) {
+        let polls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = polls.clone();
+        let next = move || {
+            let at = seen.get();
+            seen.set(at + 1);
+            std::future::ready(script[at.min(script.len() - 1)])
+        };
+        (next, polls)
+    }
+
+    #[tokio::test]
+    async fn restart_when_idle_waits_for_the_turns_to_finish() {
+        let (server, polls) = scripted(vec![Some(2), Some(2), Some(1), Some(0), Some(0)]);
+        let mut heard = Vec::new();
+        let outcome = wait_until_idle(server, Duration::from_millis(1), 2, None, |running| {
+            heard.push(running)
+        })
+        .await;
+        assert_eq!(outcome, Idle::Idle);
+        assert_eq!(heard, [2, 1, 0]);
+        assert_eq!(polls.get(), 5, "it needs two idle readings in a row");
+    }
+
+    #[tokio::test]
+    async fn a_turn_starting_between_idle_readings_restarts_the_count() {
+        let (server, polls) = scripted(vec![Some(0), Some(1), Some(0), Some(0)]);
+        let outcome = wait_until_idle(server, Duration::from_millis(1), 2, None, |_| {}).await;
+        assert_eq!(outcome, Idle::Idle);
+        assert_eq!(polls.get(), 4);
+    }
+
+    #[tokio::test]
+    async fn waiting_stops_when_the_server_goes() {
+        let (server, _) = scripted(vec![Some(3), None]);
+        let outcome = wait_until_idle(server, Duration::from_millis(1), 2, None, |_| {}).await;
+        assert_eq!(outcome, Idle::ServerGone);
+    }
+
+    #[tokio::test]
+    async fn waiting_gives_up_at_the_deadline() {
+        let (server, _) = scripted(vec![Some(3)]);
+        let outcome = wait_until_idle(
+            server,
+            Duration::from_millis(5),
+            2,
+            Some(Duration::from_millis(20)),
+            |_| {},
+        )
+        .await;
+        assert_eq!(outcome, Idle::TimedOut { running: 3 });
+    }
+
+    #[tokio::test]
+    async fn the_status_request_is_answered_past_notifications() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (client, server) = tokio::io::duplex(4096);
+        let fake = tokio::spawn(async move {
+            let (read, mut write) = tokio::io::split(server);
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            let request: serde_json::Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(request["method"], STATUS_METHOD);
+            let id = request["id"].clone();
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0", "method": "session/update", "params": {}
+            });
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {"version": "1.23.0", "pid": 42, "clients": 3, "running_turns": 1}
+            });
+            write
+                .write_all(format!("{notification}\n{reply}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        let status = ask_status(client).await.expect("status");
+        assert_eq!(
+            status,
+            LiveStatus {
+                version: "1.23.0".to_owned(),
+                pid: 42,
+                clients: 3,
+                running_turns: 1,
+            }
+        );
+        fake.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_error_reply_is_an_error() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            let (read, mut write) = tokio::io::split(server);
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            let _ = lines.next_line().await;
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "no"}
+            });
+            let _ = write.write_all(format!("{reply}\n").as_bytes()).await;
+        });
+        assert!(ask_status(client).await.is_err());
+    }
+}

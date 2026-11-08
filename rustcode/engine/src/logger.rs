@@ -517,7 +517,56 @@ fn append_line_with_session(line: &str, session_id: Option<&str>) {
         }
         let formatted = format!("[{now}] {line}");
         append_line_to_logs(&log_dir, session_id.as_deref(), &formatted);
+        append_server_log(&log_dir, &formatted);
     }
+}
+
+/// Keep the server's log bounded: the current and previous files
+/// (`server.log` and `server.log.1`) are kept.
+const MAX_SERVER_LOG_BYTES: u64 = 20 * 1024 * 1024;
+
+static SERVER_LOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Where the RustCode server's log is: `<config dir>/logs/server.log`.
+pub fn server_log_path() -> Option<PathBuf> {
+    crate::config::get_config_dir().map(|dir| dir.join("logs").join("server.log"))
+}
+
+/// From now on every line this process logs is also written to the server's
+/// log, which `rustcode server logs` reads. Called by the server only: a
+/// service manager's own capture of standard output (a crash's trace) goes to
+/// the same file, but cannot be rotated from here.
+pub fn mirror_to_server_log() {
+    SERVER_LOG.store(true, Ordering::Release);
+}
+
+fn append_server_log(config_dir: &Path, line: &str) {
+    if !SERVER_LOG.load(Ordering::Acquire) {
+        return;
+    }
+    append_server_log_bounded(
+        &config_dir.join("logs").join("server.log"),
+        line,
+        MAX_SERVER_LOG_BYTES,
+    );
+}
+
+fn append_server_log_bounded(path: &Path, line: &str, limit_bytes: u64) {
+    let _guard = log_write_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let line = capped_log_line(line, limit_bytes);
+    let append_bytes = line.len().saturating_add(1) as u64;
+    let current_bytes = std::fs::metadata(path).map_or(0, |metadata| metadata.len());
+    if current_bytes.saturating_add(append_bytes) > limit_bytes && current_bytes > 0 {
+        let mut rotated = path.as_os_str().to_owned();
+        rotated.push(".1");
+        let rotated = PathBuf::from(rotated);
+        // Renaming over a file fails on Windows.
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(path, &rotated);
+    }
+    append_line_to_path(path, &line);
 }
 
 /// The line that opens this process's writes to a session's log, naming the
@@ -1205,6 +1254,25 @@ pub(crate) fn append_line_for_session(session_id: &str, line: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_server_log_is_bounded_to_two_files() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("logs/server.log");
+        for n in 0..10 {
+            append_server_log_bounded(&path, &format!("line {n:02}"), 40);
+        }
+        let current = std::fs::read_to_string(&path).expect("current");
+        let previous =
+            std::fs::read_to_string(dir.path().join("logs/server.log.1")).expect("previous");
+        assert!(
+            current.len() <= 40 && previous.len() <= 40,
+            "{current:?} {previous:?}"
+        );
+        assert!(current.ends_with("line 09\n"));
+        assert!(previous.contains("line 0"));
+        assert!(!dir.path().join("logs/server.log.2").exists());
+    }
 
     #[test]
     fn each_session_log_opens_once_with_the_engine_version() {
