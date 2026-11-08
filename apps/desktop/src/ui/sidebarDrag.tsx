@@ -1,7 +1,7 @@
 // Dragging a thread row to another place in its section (ui/Sidebar.tsx).
 //
 // A press on a row is still a click until the pointer has moved a few pixels
-// (state/sidebarOrder.ts `moveDrag`): a shiver of the hand opens the thread as it
+// (state/sidebarOrder.ts `advanceDrag`): a shiver of the hand opens the thread as it
 // always did, a real drag takes the row with the pointer, draws the rule it would
 // drop on, and arranges the section on release. The click a drag leaves behind is
 // swallowed once, so a row that was dragged never also opens itself.
@@ -12,7 +12,7 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useRef, useState } from "react";
 import { insertIndex } from "../state/headerButtons";
-import { type DragPhase, moveDrag, startDrag, swallowsClick } from "../state/sidebarOrder";
+import { advanceDrag, type DragPhase, startDrag, swallowsClick } from "../state/sidebarOrder";
 
 /** What the row being dragged belongs to: the section key it arranges, and the rows drawn there. */
 export interface DragHome {
@@ -127,14 +127,21 @@ export function useThreadDrag({
     document.addEventListener("pointerdown", unswallow, true);
   };
 
-  /** Puts the row back the way it was drawn, whatever else the press did. */
-  const release = (p: Press) => {
+  /**
+   * Puts the row back the way it was drawn, whatever else the press did. `landed` is a drop: it
+   * leaves one click behind that must not open the row. A cancelled press (Escape, a capture the
+   * window took back) leaves none, and a press that never moved is the click itself — in both the
+   * swallow goes, so it cannot eat the next press.
+   */
+  const release = (p: Press, landed: boolean) => {
     press.current = null;
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
     window.removeEventListener("pointercancel", abort);
     window.removeEventListener("keydown", onKey);
     window.removeEventListener("blur", abort);
+    p.el.removeEventListener("lostpointercapture", abort);
+    if (p.el.hasPointerCapture(p.pointerId)) p.el.releasePointerCapture(p.pointerId);
     const { style } = p.el;
     style.transform = "";
     style.zIndex = "";
@@ -144,18 +151,18 @@ export function useThreadDrag({
     document.body.style.userSelect = "";
     setDraggedId(null);
     setLine(null);
-    // A press that never moved is a click, and its click goes through as it always did.
-    if (!swallowsClick(p.drag)) unswallow();
+    if (!landed) unswallow();
   };
 
   const onMove = (e: PointerEvent) => {
     const p = press.current;
     if (!p || e.pointerId !== p.pointerId) return;
-    const next = moveDrag(p.drag, e.clientX, e.clientY);
-    if (next === p.drag) return;
-    const beginning = p.drag.phase === "pending";
-    p.drag = next;
-    if (beginning) lift(p);
+    // The move that crosses the threshold is its own step: from there on every move carries the
+    // row, even though the phase stops changing (state/sidebarOrder.ts `advanceDrag`).
+    const step = advanceDrag(p.drag, e.clientX, e.clientY);
+    p.drag = step.next;
+    if (step.began) lift(p);
+    if (!swallowsClick(p.drag)) return;
     if (e.cancelable) e.preventDefault();
     p.el.style.transform = `translateY(${e.clientY - p.drag.y}px)`;
     place(p, e.clientY);
@@ -166,13 +173,13 @@ export function useThreadDrag({
     if (!p || e.pointerId !== p.pointerId) return;
     const index = p.index;
     const dragged = swallowsClick(p.drag);
-    release(p);
+    release(p, dragged);
     if (dragged && index !== null) drop(p.home, p.id, index);
   };
 
   const abort = () => {
     const p = press.current;
-    if (p) release(p);
+    if (p) release(p, false);
   };
 
   const onKey = (e: KeyboardEvent) => {
@@ -181,7 +188,10 @@ export function useThreadDrag({
 
   /** A press on a row: a drag if the pointer moves, a click if it does not. */
   const start = (e: ReactPointerEvent) => {
-    if (!enabled || press.current || e.button !== 0 || !e.isPrimary) return;
+    if (!enabled || e.button !== 0 || !e.isPrimary) return;
+    // A press the window never ended (its release went somewhere it could not see) must not keep
+    // the list from starting another: one press at a time is all a primary pointer can have.
+    if (press.current) abort();
     // A modified press is the list's own: ⌘-click picks, ⇧-click takes a range.
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const target = e.target as HTMLElement | null;
@@ -203,6 +213,14 @@ export function useThreadDrag({
       index: null,
       el: row,
     };
+    // The row keeps the pointer wherever it goes, a release outside the window included: without
+    // it the row can be left lifted and the list unable to start another drag.
+    try {
+      row.setPointerCapture(e.pointerId);
+    } catch {
+      // A pointer the browser already dropped has no capture to take; the window still sees it.
+    }
+    row.addEventListener("lostpointercapture", abort);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", abort);

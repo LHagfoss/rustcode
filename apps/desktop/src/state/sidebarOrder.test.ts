@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
 import {
+  advanceDrag,
   applyOrder,
   DRAG_THRESHOLD,
+  keepThreads,
   moveBy,
-  moveDrag,
   reorder,
   sectionOrderKey,
   startDrag,
   swallowsClick,
+  withoutThreads,
 } from "./sidebarOrder";
 
 const row = (id: string): SessionSummary => ({ id, cwd: "/code/rustcode" });
@@ -80,26 +82,80 @@ describe("a press that becomes a drag", () => {
   test("a still pointer is a click, and a small shiver still is", () => {
     const press = startDrag(20, 120);
     expect(press.phase).toBe("pending");
-    // The same object back: nothing to redraw, and nothing to suppress.
-    expect(moveDrag(press, 20, 120)).toBe(press);
-    expect(moveDrag(press, 20 + DRAG_THRESHOLD, 120)).toBe(press);
+    const still = advanceDrag(press, 20, 120);
+    // The same phase back: nothing to redraw, and nothing to suppress.
+    expect(still.next).toBe(press);
+    expect(still.began).toBe(false);
+    expect(advanceDrag(press, 20 + DRAG_THRESHOLD, 120).next).toBe(press);
     expect(swallowsClick(press)).toBe(false);
   });
 
   test("past the threshold it is a drag, and stays one back over the row", () => {
     const press = startDrag(20, 120);
-    const dragging = moveDrag(press, 20, 120 + DRAG_THRESHOLD + 1);
-    expect(dragging.phase).toBe("dragging");
-    expect(swallowsClick(dragging)).toBe(true);
-    // Returning to where it started does not turn it back into a click.
-    expect(moveDrag(dragging, 20, 120).phase).toBe("dragging");
+    const crossed = advanceDrag(press, 20, 120 + DRAG_THRESHOLD + 1);
+    expect(crossed.began).toBe(true);
+    expect(crossed.next.phase).toBe("dragging");
+    expect(swallowsClick(crossed.next)).toBe(true);
+    // Returning to where it started does not turn it back into a click, and is not a second
+    // beginning.
+    expect(advanceDrag(crossed.next, 20, 120).next.phase).toBe("dragging");
+    expect(advanceDrag(crossed.next, 20, 120).began).toBe(false);
     // Sideways counts too: the row is dragged by its whole press.
-    expect(moveDrag(press, 20 + DRAG_THRESHOLD + 1, 120).phase).toBe("dragging");
+    expect(advanceDrag(press, 20 + DRAG_THRESHOLD + 1, 120).began).toBe(true);
+  });
+
+  test("several moves in a row: one beginning, then every move carries the row", () => {
+    // The bug the phase alone cannot catch: from the move that crosses the threshold on, the
+    // phase stops changing, so a caller that only compared phases stopped carrying the row.
+    let press = startDrag(20, 120);
+    const moves = [121, 126, 180, 320, 640];
+    const phases: string[] = [];
+    const beginnings: boolean[] = [];
+    for (const y of moves) {
+      const step = advanceDrag(press, 20, y);
+      press = step.next;
+      phases.push(press.phase);
+      beginnings.push(step.began);
+    }
+    expect(phases).toEqual(["pending", "dragging", "dragging", "dragging", "dragging"]);
+    expect(beginnings).toEqual([false, true, false, false, false]);
+    // Each move still measures from where the press went down, so the row follows the pointer.
+    expect(moves.map((y) => y - press.y)).toEqual([1, 6, 60, 200, 520]);
   });
 
   test("a custom threshold is the caller's", () => {
     const press = startDrag(0, 0);
-    expect(moveDrag(press, 0, 3, 2).phase).toBe("dragging");
-    expect(moveDrag(press, 0, 3, 8)).toBe(press);
+    expect(advanceDrag(press, 0, 3, 2).began).toBe(true);
+    expect(advanceDrag(press, 0, 3, 8).next).toBe(press);
+  });
+});
+
+describe("an arrangement that forgets a thread", () => {
+  const order = { pinned: ["a", "b"], threads: ["b", "c"], "threads:/code/b": ["c"] };
+
+  test("a trashed thread leaves every section", () => {
+    expect(withoutThreads(order, ["b"])).toEqual({
+      pinned: ["a"],
+      threads: ["c"],
+      "threads:/code/b": ["c"],
+    });
+  });
+
+  test("nothing to forget keeps the same value, so nothing is written", () => {
+    expect(withoutThreads(order, ["z"])).toBe(order);
+    expect(withoutThreads(order, [])).toBe(order);
+  });
+
+  test("a section that loses its last id goes with it", () => {
+    expect(withoutThreads({ pinned: ["a"], threads: ["b", "c"] }, ["a"])).toEqual({
+      threads: ["b", "c"],
+    });
+  });
+
+  test("the engine's list keeps only the threads it names", () => {
+    expect(keepThreads(order, (id) => id !== "c")).toEqual({ pinned: ["a", "b"], threads: ["b"] });
+    // Every id still there: the stored value is handed back untouched.
+    expect(keepThreads(order, () => true)).toBe(order);
+    expect(keepThreads(order, () => false)).toEqual({});
   });
 });

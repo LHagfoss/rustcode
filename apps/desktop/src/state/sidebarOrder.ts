@@ -8,7 +8,9 @@
 // are kept — a thread that comes back (re-pinned, unfolded, filtered in again)
 // returns to the place it was put rather than to the end — and an id the section
 // draws that was never arranged comes after the arranged ones, in the order the
-// section itself gives it.
+// section itself gives it. An id for a thread that no longer exists is not kept:
+// `withoutThreads` on a trashed one and `keepThreads` against the engine's list
+// (state/store.ts) keep the stored value the size of the work in it.
 
 import type { SessionSummary } from "../acp/types";
 
@@ -112,18 +114,47 @@ export function startDrag(x: number, y: number): DragPhase {
 }
 
 /**
- * The press after the pointer reaches (`x`, `y`): the same object while it is still a
- * click, so a caller comparing references does nothing until the drag begins.
+ * The press after the pointer reaches (`x`, `y`), and whether this move is the one that turned it
+ * into a drag. The phase itself stops changing once it is a drag — where the row has got to is the
+ * pointer's own business (`ui/sidebarDrag.tsx` `onMove`) — so the crossing is reported on the move
+ * it happens, and a caller that only compared phases would stop carrying the row after the first.
  */
-export function moveDrag(drag: DragPhase, x: number, y: number, threshold = DRAG_THRESHOLD): DragPhase {
-  if (drag.phase === "dragging") return drag;
+export function advanceDrag(
+  drag: DragPhase,
+  x: number,
+  y: number,
+  threshold = DRAG_THRESHOLD,
+): { next: DragPhase; began: boolean } {
+  if (drag.phase === "dragging") return { next: drag, began: false };
   const dx = x - drag.x;
   const dy = y - drag.y;
-  if (Math.hypot(dx, dy) <= threshold) return drag;
-  return { ...drag, phase: "dragging" };
+  if (Math.hypot(dx, dy) <= threshold) return { next: drag, began: false };
+  return { next: { ...drag, phase: "dragging" }, began: true };
 }
 
 /** A press that became a drag must not also open the row it started on. */
 export function swallowsClick(drag: DragPhase | null | undefined): boolean {
   return drag?.phase === "dragging";
+}
+
+/**
+ * The arrangement limited to the ids `keep` allows, and the same object back when it keeps
+ * everything: the caller writes to storage only when something was actually forgotten. A section
+ * left with no ids goes with them.
+ */
+export function keepThreads(order: SidebarOrder, keep: (id: string) => boolean): SidebarOrder {
+  let changed = false;
+  const next: SidebarOrder = {};
+  for (const [key, list] of Object.entries(order)) {
+    const kept = list.filter(keep);
+    if (kept.length !== list.length) changed = true;
+    if (kept.length) next[key] = kept;
+  }
+  return changed ? next : order;
+}
+
+/** The arrangement without `ids`: a thread that is gone takes no place in any section. */
+export function withoutThreads(order: SidebarOrder, ids: readonly string[]): SidebarOrder {
+  const gone = new Set(ids);
+  return keepThreads(order, (id) => !gone.has(id));
 }
