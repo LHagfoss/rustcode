@@ -133,7 +133,7 @@ pub async fn start(
         // SAFETY: geteuid has no preconditions.
         let domain = format!("gui/{}", unsafe { libc::geteuid() });
         let service = format!("{domain}/{label}");
-        let loaded = tokio::process::Command::new("/bin/launchctl")
+        let loaded = crate::platform::tokio_command("/bin/launchctl")
             .args(["print", &service])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -143,7 +143,7 @@ pub async fn start(
         let unchanged = installed.as_deref() == Some(document.as_str());
         if !loaded || !unchanged {
             let loaded_now = || async {
-                tokio::process::Command::new("/bin/launchctl")
+                crate::platform::tokio_command("/bin/launchctl")
                     .args(["print", &service])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -152,7 +152,7 @@ pub async fn start(
                     .is_ok_and(|status| status.success())
             };
             if loaded {
-                let _ = tokio::process::Command::new("/bin/launchctl")
+                let _ = crate::platform::tokio_command("/bin/launchctl")
                     .args(["bootout", &service])
                     .status()
                     .await;
@@ -183,7 +183,7 @@ pub async fn start(
             file.write_all(document.as_bytes())?;
             let mut attempts = 0;
             let result = loop {
-                let result = tokio::process::Command::new("/bin/launchctl")
+                let result = crate::platform::tokio_command("/bin/launchctl")
                     .args(["bootstrap", &domain])
                     .arg(&agent)
                     .output()
@@ -227,7 +227,7 @@ pub async fn uninstall(config: &Path) -> Result<()> {
         let label = label(config);
         // SAFETY: geteuid has no preconditions.
         let service = format!("gui/{}/{label}", unsafe { libc::geteuid() });
-        let _ = tokio::process::Command::new("/bin/launchctl")
+        let _ = crate::platform::tokio_command("/bin/launchctl")
             .args(["bootout", &service])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

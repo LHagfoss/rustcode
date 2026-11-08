@@ -286,7 +286,7 @@ fn run_quick_env(
     remove: &[&str],
 ) -> Option<(bool, String, String)> {
     let path = resolve_program(program)?;
-    let mut command = std::process::Command::new(path);
+    let mut command = crate::platform::command(path);
     command
         .args(args)
         .env("PATH", search_path())

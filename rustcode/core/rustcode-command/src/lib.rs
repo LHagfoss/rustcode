@@ -158,9 +158,9 @@ impl BoundedOutput {
 fn shell_command(command: &str) -> Command {
     let bash = std::path::Path::new("/bin/bash");
     let mut cmd = if bash.is_file() {
-        Command::new(bash)
+        hidden_command(bash)
     } else {
-        Command::new("sh")
+        hidden_command("sh")
     };
     if bash.is_file() {
         cmd.args(["-o", "pipefail", "-c", command]);
@@ -175,7 +175,7 @@ fn shell_command(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
 
     let (kind, program) = shell::windows_shell();
-    let mut cmd = Command::new(program);
+    let mut cmd = hidden_command(program);
     match shell_arguments(*kind, command) {
         ShellArguments::Escaped(arguments) => {
             cmd.args(arguments);
@@ -640,7 +640,7 @@ fn terminate_process_tree(child: &mut std::process::Child, process_group: bool) 
     {
         // taskkill's tree flag covers descendants even when the shell did not
         // create a Windows process group of its own.
-        let _ = Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(["/F", "/T", "/PID", &child.id().to_string()])
             .status();
     }
@@ -893,7 +893,7 @@ mod tests {
         let marker = directory.path().join("outside-marker");
         std::fs::write(&startup, format!("touch {}\n", marker.display())).unwrap();
 
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let status = crate::hidden_command(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "tests::sandboxed_shell_does_not_source_ambient_bash_env_before_wrapper",
@@ -935,7 +935,7 @@ mod tests {
         let function_name = "BASH_FUNC_rustcode_outside_probe%%";
         let function_body = format!("() {{ touch {}; }}", marker.display());
 
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let status = crate::hidden_command(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "tests::sandboxed_shell_does_not_import_ambient_bash_functions",
@@ -1165,4 +1165,23 @@ mod tests {
         command.process_group = true;
         assert!(run_with_timeout(&command, None).unwrap().success);
     }
+}
+
+/// Hide a non-interactive child console on Windows.
+pub fn hide_console_window(command: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+/// Construct a non-interactive command without opening a console window.
+pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    hide_console_window(&mut command);
+    command
 }

@@ -336,7 +336,7 @@ fn try_ripgrep(
     include: Option<&str>,
     ignore_case: bool,
 ) -> Option<Result<SearchOutput, String>> {
-    let mut cmd = std::process::Command::new("rg");
+    let mut cmd = crate::platform::command("rg");
     cmd.arg("--line-number")
         .arg("--color=never")
         .arg("--heading")

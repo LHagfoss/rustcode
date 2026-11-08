@@ -4798,7 +4798,7 @@ async fn compiler_check_uses_disposable_temp_outside_workspace() {
 
     let project = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
+    let output = crate::platform::command(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "network::tests::compiler_check_uses_disposable_temp_outside_workspace",

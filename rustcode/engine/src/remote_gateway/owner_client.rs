@@ -84,7 +84,7 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn command(&self) -> tokio::process::Command {
-        let mut command = tokio::process::Command::new(&self.program);
+        let mut command = crate::platform::tokio_command(&self.program);
         command
             .env("RUSTCODE_CONFIG_DIR", &self.config_directory)
             .args(["remote", "serve"]);

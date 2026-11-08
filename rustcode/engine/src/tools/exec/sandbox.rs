@@ -858,7 +858,7 @@ fn probe_network_namespace(bubblewrap: &Path, filter: &Arc<std::fs::File>) -> Re
     use std::os::unix::process::CommandExt;
 
     let fd = filter.as_raw_fd();
-    let mut probe = std::process::Command::new(bubblewrap);
+    let mut probe = crate::platform::command(bubblewrap);
     let mut args = base_bubblewrap_arguments(true, Some(fd));
     args.extend(["--".to_string(), "/bin/true".to_string()]);
     probe.args(args);
@@ -1943,7 +1943,7 @@ https://githubstatus.com"
         )
         .unwrap();
 
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let status = crate::platform::command(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "tools::exec::sandbox::tests::sandbox_wrapper_does_not_run_ambient_bash_env_before_entering_sandbox",

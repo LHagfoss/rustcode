@@ -690,7 +690,7 @@ impl WorkspaceRouter {
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(&start.log_path)?;
-            let mut command = tokio::process::Command::new(program);
+            let mut command = crate::platform::tokio_command(program);
             command
                 .args(["remote", "session-owner", "--session-id", &session_id])
                 .current_dir(directory)

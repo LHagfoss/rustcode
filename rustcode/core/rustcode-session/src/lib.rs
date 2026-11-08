@@ -1162,7 +1162,7 @@ impl SessionStore {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("create subagent directory: {error}"))?;
         }
-        let output = std::process::Command::new("git")
+        let output = rustcode_command::hidden_command("git")
             .args(["worktree", "add", "--detach"])
             .arg(&root)
             .arg("HEAD")
@@ -1183,7 +1183,7 @@ impl SessionStore {
 
     /// Whether `path` lies inside a git work tree.
     pub fn is_git_work_tree(path: &Path) -> bool {
-        std::process::Command::new("git")
+        rustcode_command::hidden_command("git")
             .args(["rev-parse", "--is-inside-work-tree"])
             .current_dir(path)
             .stdout(std::process::Stdio::piped())
@@ -1195,7 +1195,7 @@ impl SessionStore {
     }
 
     pub fn write_subagent_review_manifest(workspace: &Path, agent_id: u32) -> Option<PathBuf> {
-        let output = std::process::Command::new("git")
+        let output = rustcode_command::hidden_command("git")
             .args(["status", "--short"])
             .current_dir(workspace)
             .output()
@@ -1898,7 +1898,7 @@ mod tests {
     }
 
     fn git(directory: &Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
+        let status = rustcode_command::hidden_command("git")
             .args(args)
             .current_dir(directory)
             .stdout(std::process::Stdio::null())

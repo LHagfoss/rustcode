@@ -9,7 +9,7 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const WORKSPACES_DIR: &str = "workspaces";
@@ -174,7 +174,7 @@ fn default_branch(cwd: &Path) -> Option<String> {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, WorkspaceError> {
-    Command::new("git")
+    rustcode_command::hidden_command("git")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -1133,7 +1133,7 @@ impl CreationLock {
 
 #[cfg(unix)]
 fn process_is_running(pid: u32) -> bool {
-    Command::new("kill")
+    rustcode_command::hidden_command("kill")
         .args(["-0", &pid.to_string()])
         .output()
         .is_ok_and(|output| output.status.success())
@@ -1141,7 +1141,7 @@ fn process_is_running(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn process_is_running(pid: u32) -> bool {
-    Command::new("tasklist")
+    rustcode_command::hidden_command("tasklist")
         .args(["/FI", &format!("PID eq {pid}")])
         .output()
         .is_ok_and(|output| {
@@ -1169,7 +1169,7 @@ fn validate_component(value: &str, branch: bool) -> Result<(), WorkspaceError> {
 }
 
 fn validate_branch(branch: &str) -> Result<(), WorkspaceError> {
-    let valid = Command::new("git")
+    let valid = rustcode_command::hidden_command("git")
         .args(["check-ref-format", "--branch", branch])
         .output()
         .is_ok_and(|output| output.status.success());
@@ -1340,7 +1340,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn git(cwd: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = rustcode_command::hidden_command("git")
             .args(args)
             .current_dir(cwd)
             .output()

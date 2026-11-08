@@ -1342,7 +1342,7 @@ fn effective_writable_roots(
 /// transport/authentication problem is deliberately inconclusive and lets
 /// `gh` report that real problem; only an absent remote or absent ref blocks.
 fn remote_base_missing(cwd: Option<&std::path::Path>, base: &str) -> bool {
-    let mut remote = std::process::Command::new("git");
+    let mut remote = crate::platform::command("git");
     if let Some(cwd) = cwd {
         remote.current_dir(cwd);
     }
@@ -1354,7 +1354,7 @@ fn remote_base_missing(cwd: Option<&std::path::Path>, base: &str) -> bool {
     }
 
     let ref_name = format!("refs/heads/{base}");
-    let mut refs = std::process::Command::new("git");
+    let mut refs = crate::platform::command("git");
     if let Some(cwd) = cwd {
         refs.current_dir(cwd);
     }
@@ -2187,7 +2187,7 @@ fn terminate_background_pid(pid: u32) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        return std::process::Command::new("taskkill")
+        return crate::platform::command("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .status()
             .is_ok_and(|status| status.success());
@@ -2321,7 +2321,7 @@ mod tests {
     fn background_termination_kills_the_command_process_group() {
         use std::os::unix::process::CommandExt;
 
-        let mut command = std::process::Command::new("sh");
+        let mut command = crate::platform::command("sh");
         command
             .args(["-c", "sleep 30 & wait"])
             .process_group(0)
@@ -2421,7 +2421,7 @@ mod tests {
             eprintln!("skipping trusted-mode runtime assertion: sandbox probe unavailable");
             return;
         }
-        if std::process::Command::new("python3")
+        if crate::platform::command("python3")
             .arg("-c")
             .arg("pass")
             .status()
@@ -3205,7 +3205,7 @@ mod tests {
     #[test]
     fn pr_creation_is_guarded_when_origin_has_no_base() {
         let root = tempfile::tempdir().expect("temporary repository");
-        let status = std::process::Command::new("git")
+        let status = crate::platform::command("git")
             .args(["init", "-q"])
             .current_dir(root.path())
             .status()

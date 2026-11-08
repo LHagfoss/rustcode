@@ -5,7 +5,6 @@
 //! of the CLI's pretty output or the web page.
 
 use serde_json::Value;
-use std::process::Command;
 
 use super::{Tool, ToolCapability, ToolSafety};
 
@@ -170,7 +169,7 @@ fn gh_json(args: &[&str], repo: Option<&str>) -> Result<Value, String> {
 /// Run `gh` in the workspace. `pending_ok` keeps the output of `gh pr checks`,
 /// which exits non-zero while checks fail or are still running.
 fn run_gh(args: &[&str], repo: Option<&str>, pending_ok: bool) -> Result<String, String> {
-    let mut command = Command::new(crate::platform::resolve_bin("gh"));
+    let mut command = crate::platform::command(crate::platform::resolve_bin("gh"));
     command.args(args);
     if let Some(repo) = repo {
         command.args(["--repo", repo]);

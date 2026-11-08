@@ -2,7 +2,6 @@
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Harness tools whose own login may be started in Terminal. Anything else is
 /// refused, so a compromised page cannot run arbitrary commands.
@@ -41,7 +40,7 @@ pub fn open_url(url: String) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn open_with_system(target: &str) -> Result<(), String> {
-    Command::new("open")
+    crate::process::command("open")
         .arg(target)
         .spawn()
         .map(|_| ())
@@ -50,7 +49,7 @@ fn open_with_system(target: &str) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn open_with_system(target: &str) -> Result<(), String> {
-    Command::new("explorer")
+    crate::process::command("explorer")
         .arg(target)
         .spawn()
         .map(|_| ())
@@ -59,7 +58,7 @@ fn open_with_system(target: &str) -> Result<(), String> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn open_with_system(target: &str) -> Result<(), String> {
-    Command::new("xdg-open")
+    crate::process::command("xdg-open")
         .arg(target)
         .spawn()
         .map(|_| ())
@@ -74,7 +73,7 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        crate::process::command("open")
             .arg("-R")
             .arg(&path)
             .spawn()
@@ -142,7 +141,7 @@ pub fn open_login_terminal(
             "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
             line.replace('\\', "\\\\").replace('"', "\\\"")
         );
-        Command::new("osascript")
+        crate::process::command("osascript")
             .arg("-e")
             .arg(script)
             .spawn()
@@ -189,7 +188,7 @@ pub struct GitChanges {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::process::command("git")
         .arg("-C")
         .arg(cwd)
         .args(["-c", "core.quotepath=off"])
@@ -331,7 +330,7 @@ pub fn open_terminal_at(path: String) -> Result<(), String> {
     let path = absolute_dir(&path)?;
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        crate::process::command("open")
             .args(["-a", "Terminal"])
             .arg(&path)
             .spawn()
@@ -351,7 +350,7 @@ pub fn open_terminal_at(path: String) -> Result<(), String> {
 pub fn reduce_transparency() -> bool {
     #[cfg(target_os = "macos")]
     {
-        Command::new("defaults")
+        crate::process::command("defaults")
             .args(["read", "com.apple.universalaccess", "reduceTransparency"])
             .output()
             .map(|out| String::from_utf8_lossy(&out.stdout).trim() == "1")
@@ -508,7 +507,7 @@ pub fn open_path(path: String) -> Result<(), String> {
         let markdown = path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
-        let mut command = Command::new("open");
+        let mut command = crate::process::command("open");
         // Markdown opens in its own app; other text in the default text editor.
         if !dir && !markdown {
             command.arg("-t");
@@ -621,7 +620,7 @@ pub fn open_in_editor(path: String, line: Option<u32>, column: Option<u32>) -> R
     };
     for (tool, places) in EDITOR_TOOLS {
         if let Some(bin) = places.iter().map(Path::new).find(|p| p.is_file()) {
-            let mut command = Command::new(bin);
+            let mut command = crate::process::command(bin);
             if *tool != "zed" {
                 command.arg("-g");
             }
@@ -634,7 +633,7 @@ pub fn open_in_editor(path: String, line: Option<u32>, column: Option<u32>) -> R
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        crate::process::command("open")
             .arg("-t")
             .arg(&path)
             .spawn()
@@ -654,7 +653,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rc-project-files-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
-            assert!(std::process::Command::new("git")
+            assert!(crate::process::command("git")
                 .arg("-C")
                 .arg(&dir)
                 .args(args)

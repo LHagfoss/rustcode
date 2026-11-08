@@ -1922,7 +1922,7 @@ fn sync_index_cleanup_preserves_local_runtime_files() {
     ensure_sync_gitignore(dir.path()).unwrap();
 
     let run_git = |args: &[&str]| {
-        let status = std::process::Command::new("git")
+        let status = crate::platform::command("git")
             .args(args)
             .current_dir(dir.path())
             .status()
@@ -1951,7 +1951,7 @@ fn sync_index_cleanup_preserves_local_runtime_files() {
     assert!(dir.path().join("backups/archive.tar.gz").exists());
 
     let tracked = String::from_utf8(
-        std::process::Command::new("git")
+        crate::platform::command("git")
             .args(["ls-files"])
             .current_dir(dir.path())
             .output()

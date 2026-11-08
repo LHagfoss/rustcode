@@ -271,9 +271,9 @@ fn probe_login_shell() -> Option<HashMap<String, String>> {
 }
 
 fn probe_once(shell: &str, flags: &[&str]) -> Option<HashMap<String, String>> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let mut cmd = Command::new(shell);
+    let mut cmd = crate::platform::command(shell);
     for flag in flags {
         cmd.arg(flag);
     }

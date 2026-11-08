@@ -9,7 +9,6 @@
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::io::Write;
-use std::process::Command;
 use std::sync::LazyLock;
 
 use rustcode_core::update::{
@@ -265,7 +264,7 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
 /// the file, and the ad-hoc signature stays.
 #[cfg(target_os = "macos")]
 fn sign_with_local_identity(executable: &std::path::Path) {
-    let signed = std::process::Command::new("/usr/bin/codesign")
+    let signed = crate::platform::command("/usr/bin/codesign")
         .args([
             "--force",
             "--sign",
@@ -432,7 +431,7 @@ pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
     println!("Refreshing Homebrew via `{BREW_UPDATE_COMMAND}`...");
     let _ = std::io::stdout().flush();
 
-    let update_status = Command::new("brew")
+    let update_status = crate::platform::command("brew")
         .arg("update")
         .status()
         .map_err(|e| format!("failed to run brew (is Homebrew installed?): {e}"))?;
@@ -445,7 +444,7 @@ pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
     println!("Updating RustCode via `{BREW_UPGRADE_COMMAND}`...");
     let _ = std::io::stdout().flush();
 
-    let status = Command::new("brew")
+    let status = crate::platform::command("brew")
         .args(["upgrade", "rustcode"])
         .status()
         .map_err(|e| format!("failed to run brew (is Homebrew installed?): {e}"))?;
@@ -468,7 +467,7 @@ pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
 }
 
 fn installed_brew_version() -> Result<Version, String> {
-    let output = Command::new("brew")
+    let output = crate::platform::command("brew")
         .args(["list", "--versions", "rustcode"])
         .output()
         .map_err(|e| format!("failed to inspect the installed brew formula: {e}"))?;

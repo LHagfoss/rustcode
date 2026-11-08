@@ -1,6 +1,5 @@
 use serde_json::Value;
 use std::path::PathBuf;
-use std::process::Command;
 
 use super::{Tool, ToolCapability, ToolSafety};
 
@@ -25,7 +24,7 @@ fn run_git(args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_in(cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = crate::platform::command("git")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -284,7 +283,7 @@ mod tests {
         );
 
         let repo = tempfile::tempdir().expect("repo dir");
-        let init = Command::new("git")
+        let init = crate::platform::command("git")
             .args(["init", "-q", "-b", "trunk"])
             .current_dir(repo.path())
             .status()

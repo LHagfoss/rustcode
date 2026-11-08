@@ -515,7 +515,7 @@ async fn diff_opens_a_panel_and_keeps_git_output_out_of_provider_history() {
 
     let mut app = crate::app::AppState::new();
     let root = tempfile::tempdir().unwrap();
-    let output = std::process::Command::new("git")
+    let output = crate::platform::command("git")
         .args(["init", "-b", "main"])
         .current_dir(root.path())
         .output()

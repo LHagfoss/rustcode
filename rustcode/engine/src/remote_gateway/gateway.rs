@@ -108,7 +108,7 @@ fn read_host_name() -> Option<String> {
     // macOS often takes its BSD host name from reverse DNS, which names the
     // ISP connection rather than the Mac; the computer name is the user's.
     #[cfg(target_os = "macos")]
-    if let Some(name) = std::process::Command::new("/usr/sbin/scutil")
+    if let Some(name) = crate::platform::command("/usr/sbin/scutil")
         .args(["--get", "ComputerName"])
         .output()
         .ok()

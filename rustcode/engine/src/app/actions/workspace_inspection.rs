@@ -99,7 +99,7 @@ fn format_git_error(error: GitError) -> String {
 }
 
 async fn run_git(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, GitError> {
-    let mut command = tokio::process::Command::new("git");
+    let mut command = crate::platform::tokio_command("git");
     command
         .arg("--no-pager")
         .arg("-c")
@@ -215,7 +215,7 @@ mod tests {
     use std::path::Path;
 
     fn git(root: &Path, args: &[&str]) {
-        let output = std::process::Command::new("git")
+        let output = crate::platform::command("git")
             .args(args)
             .current_dir(root)
             .output()
