@@ -178,7 +178,7 @@ pub(super) struct Shared {
     /// The local address the listener is bound to, for interface-scoped Bonjour.
     bind: tokio::sync::watch::Sender<IpAddr>,
     registration: Arc<Mutex<GatewayRegistration>>,
-    lifecycle: RemoteLifecycle,
+    pub(super) lifecycle: RemoteLifecycle,
     pub(super) limits: Limits,
     pub(super) router: Arc<dyn FrameRouter>,
     sessions: Option<Arc<SessionHub>>,
@@ -228,6 +228,7 @@ pub(super) struct LiveConnection {
     shared: Arc<Shared>,
     pub(super) context: DeviceContext,
     pub(super) control: Arc<ConnectionControl>,
+    pub(super) kind: super::devices::DeviceKind,
 }
 
 impl Drop for LiveConnection {
@@ -651,6 +652,7 @@ impl Shared {
                     device_name: record.name.clone(),
                 },
                 control,
+                kind: record.kind,
             },
             welcome,
             sink,
