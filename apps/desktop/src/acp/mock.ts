@@ -2208,7 +2208,6 @@ export class MockEngine {
       }
       host.gateway = gateway;
     }
-    if (offer) host.offer = offer;
     return host;
   }
 
@@ -2879,7 +2878,7 @@ export class MockEngine {
         this.remote.enabled = true;
         if (!this.remote.gateway) this.remote.gateway = this.remoteGateway();
         this.issueRemoteOffer();
-        return this.remoteStatus(sessionId);
+        return { ...obj(this.remoteStatus(sessionId)), offer: this.remoteOffer() } as Json;
       }
       case "_rustcode/remote/stop": {
         const sessionId = str(params.sessionId) ?? "";

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseRemoteStatus } from "../acp/remote";
-import { activeChallenge, makeChallenge, newPairedDevice } from "./pairingChallenge";
+import { activeChallenge, makeChallenge, newPairedDevice } from "../state/remotePairing";
 
 describe("pairing challenge", () => {
   test("survives a status refresh without an offer until expiry", () => {
