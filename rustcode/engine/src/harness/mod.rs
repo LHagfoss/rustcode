@@ -28,37 +28,17 @@ pub(crate) mod watchdog;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) const BUILTIN_ID: &str = "rustcode";
 
-/// The `rustcode-viz` level the newest connected client draws (`acp.rs`
-/// `client_visualization_level`), so external harnesses started afterwards
-/// are taught the same widget types as a RustCode thread; 0 (no client yet,
-/// or one that draws none) teaches none. A built-in thread reads its own
-/// client's level instead (`acp/clients.rs`).
-static CLIENT_VISUALIZATION_LEVEL: AtomicU8 = AtomicU8::new(0);
-
-pub(crate) fn set_client_visualization_level(level: u8) {
-    CLIENT_VISUALIZATION_LEVEL.store(level, Ordering::Relaxed);
-}
-
-pub(crate) fn client_visualization_level() -> u8 {
-    CLIENT_VISUALIZATION_LEVEL.load(Ordering::Relaxed)
-}
-
-/// The client's Smart UI state (`acp.rs` `client_smart_ui`). A RustCode thread
-/// learns Smart UI from its root prompt and the `smart-ui` skill; an external
-/// harness has neither, so it is taught the fence from this.
-static CLIENT_SMART_UI: AtomicU8 = AtomicU8::new(0);
-
-pub(crate) fn set_client_smart_ui(smart_ui: crate::app::SmartUi) {
-    CLIENT_SMART_UI.store(smart_ui.as_u8(), Ordering::Relaxed);
-}
-
-pub(crate) fn client_smart_ui() -> crate::app::SmartUi {
-    crate::app::SmartUi::from_u8(CLIENT_SMART_UI.load(Ordering::Relaxed))
+/// How this session's client displays replies. External harnesses get these
+/// values when they start or resume, so another connection cannot change the
+/// instructions for an already loaded thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ClientDisplay {
+    pub(crate) visualization_level: u8,
+    pub(crate) smart_ui: crate::app::SmartUi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -633,6 +633,10 @@ async fn the_workspaces_mcp_servers_are_thread_config() {
         Script::Reply,
         None,
         StartOptions {
+            client_display: crate::harness::ClientDisplay {
+                visualization_level: 2,
+                smart_ui: crate::app::SmartUi::On,
+            },
             mcp: vec![
                 crate::config::McpServerConfig {
                     name: "files".to_owned(),
@@ -694,7 +698,7 @@ async fn the_workspaces_mcp_servers_are_thread_config() {
     );
     assert!(
         instructions.ends_with(&crate::tools::schema::harness_output_style(
-            crate::harness::client_smart_ui()
+            crate::app::SmartUi::On
         ))
     );
 }
@@ -710,6 +714,10 @@ async fn the_threads_skills_note_rides_in_the_developer_instructions() {
         None,
         StartOptions {
             skills_note: Some(note.to_owned()),
+            client_display: crate::harness::ClientDisplay {
+                visualization_level: 1,
+                smart_ui: crate::app::SmartUi::Off,
+            },
             ..StartOptions::default()
         },
     )
@@ -723,7 +731,7 @@ async fn the_threads_skills_note_rides_in_the_developer_instructions() {
     assert!(instructions.contains(note), "{instructions}");
     assert!(
         instructions.ends_with(&crate::tools::schema::harness_output_style(
-            crate::harness::client_smart_ui()
+            crate::app::SmartUi::Off
         )),
         "the note comes before the reply style"
     );

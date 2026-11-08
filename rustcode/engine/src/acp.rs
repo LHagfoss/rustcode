@@ -1113,6 +1113,9 @@ struct AcpServer {
     /// The connected clients: each one's capabilities and the sessions it
     /// created or loaded, which is where those sessions' updates go.
     clients: clients::Clients,
+    /// Serializes capability registry changes with the process-wide features
+    /// derived from them (presence and remote thread hosting).
+    client_capability_updates: Arc<std::sync::Mutex<()>>,
     /// Discord Rich Presence, while a connected client asks for it (#2179).
     presence: presence::Presence,
     /// `/remote` shares and their pairing offers.
@@ -1390,6 +1393,7 @@ impl AcpServer {
             auto_approve,
             task_routes,
             clients: clients::Clients::default(),
+            client_capability_updates: Arc::new(std::sync::Mutex::new(())),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             share_retry_at: Arc::new(std::sync::Mutex::new(None)),
@@ -1401,17 +1405,20 @@ impl AcpServer {
     /// `initialize` from the connection `peer`: keep what it advertised, and
     /// start what the engine runs once for all its clients.
     fn client_initialized(&self, peer: &clients::Peer, info: clients::ClientInfo) {
-        self.clients.connect(peer.id(), peer.connection(), info);
-        // External harnesses have no root prompt or skill: they are taught
-        // the fence and the widgets from the newest client's capabilities.
-        crate::harness::set_client_visualization_level(info.visualization_level);
-        crate::harness::set_client_smart_ui(info.smart_ui);
-        // A thread's status is shown in every client's thread list.
-        let clients = self.clients.clone();
-        crate::thread_status::set_notifier(move |session_id, update| {
-            clients.broadcast(SessionNotification::new(session_id, update));
-        });
-        self.refresh_presence();
+        {
+            let _updates = self
+                .client_capability_updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.clients.connect(peer.id(), peer.connection(), info);
+            // A thread's status is shown in every client's thread list.
+            let clients = self.clients.clone();
+            crate::thread_status::set_notifier(move |session_id, update| {
+                clients.broadcast(SessionNotification::new(session_id, update));
+            });
+            self.refresh_presence();
+            self.refresh_thread_host();
+        }
         // While remote access is on for this machine, every thread the
         // engine has open shares itself, the way a terminal does
         // (`docs/remote.md`). The flag is read again on every pass:
@@ -1428,19 +1435,20 @@ impl AcpServer {
                 }
             });
         }
-        // A paired device's `create_session` starts its thread in this
-        // engine, on the harness it names, while the app shares a thread: the
-        // share advertises `host_threads` and the gateway routes new threads
-        // here instead of starting a session owner (`docs/remote.md`). Only a
-        // client that lists the thread the engine starts may host them: a
-        // terminal's client does not. The newest such client gets the thread.
-        if info.shows_threads {
-            let hosted_server = self.clone();
-            self.remote.set_thread_host(move |ask| {
-                let server = hosted_server.clone();
-                Box::pin(async move { hosted::start(&server, ask).await })
-            });
+    }
+
+    /// Advertise thread creation only while a connected client can list the
+    /// thread the engine starts for a paired device.
+    fn refresh_thread_host(&self) {
+        if !self.clients.any(|info| info.shows_threads) {
+            self.remote.clear_thread_host();
+            return;
         }
+        let hosted_server = self.clone();
+        self.remote.set_thread_host(move |ask| {
+            let server = hosted_server.clone();
+            Box::pin(async move { hosted::start(&server, ask).await })
+        });
     }
 
     /// Presence follows whether any connected client asks for it.
@@ -1452,12 +1460,24 @@ impl AcpServer {
     /// The connection `id` ended. What it started keeps running: sessions,
     /// turns and harness processes belong to the engine.
     fn client_closed(&self, id: clients::ClientId) {
+        let _updates = self
+            .client_capability_updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.clients.disconnect(id);
         self.refresh_presence();
+        self.refresh_thread_host();
     }
 
     /// The engine stops: every share, harness, turn and background task ends.
     async fn shutdown(&self) {
+        {
+            let _updates = self
+                .client_capability_updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.remote.clear_thread_host();
+        }
         self.remote.shutdown().await;
         harnesses::close_all(&self.external).await;
         let route_ids = self
@@ -2747,7 +2767,7 @@ async fn serve_connection(
         .on_receive_request(
             async |request: themes::ThemesRequest, responder, connection| {
                 // A client that lists themes restyles when they change.
-                server.clients.subscribe(client_id, &connection, clients::Topic::Themes);
+                server.clients.subscribe(client_id, clients::Topic::Themes);
                 themes::start_watching(&server.clients);
                 connection.spawn(async move {
                     match tokio::task::spawn_blocking(move || themes::answer(request)).await {
@@ -2761,7 +2781,7 @@ async fn serve_connection(
         )
         .on_receive_request(
             async |request: themes::SetThemeRequest, responder, connection| {
-                server.clients.subscribe(client_id, &connection, clients::Topic::Themes);
+                server.clients.subscribe(client_id, clients::Topic::Themes);
                 themes::start_watching(&server.clients);
                 connection.spawn(async move {
                     match tokio::task::spawn_blocking(move || themes::answer_set(request)).await {
@@ -3058,8 +3078,8 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: PullWatchStartRequest, responder, connection| {
-                server.clients.subscribe(client_id, &connection, clients::Topic::PullWatches);
+            async move |request: PullWatchStartRequest, responder, _connection| {
+                server.clients.subscribe(client_id, clients::Topic::PullWatches);
                 start_pull_watching(&server.clients);
                 let Some(store) = crate::pull_watch::WatchStore::default_store() else {
                     return responder.respond(serde_json::json!({ "error": { "code": "failed", "message": "No config directory" } }));
@@ -3088,10 +3108,10 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: PullWatchesRequest, responder, connection| {
+            async move |request: PullWatchesRequest, responder, _connection| {
                 // The app asks on launch: watches from before a restart
                 // carry on from here.
-                server.clients.subscribe(client_id, &connection, clients::Topic::PullWatches);
+                server.clients.subscribe(client_id, clients::Topic::PullWatches);
                 start_pull_watching(&server.clients);
                 let watches = crate::pull_watch::WatchStore::default_store()
                     .map(|store| store.list(request.session_id.as_deref()))
@@ -3636,9 +3656,6 @@ mod tests {
         );
         assert_eq!(parse(serde_json::json!({})), SmartUi::Unsupported);
         assert_eq!(crate::app::AppState::new().smart_ui, SmartUi::Unsupported);
-        for value in [SmartUi::Unsupported, SmartUi::Off, SmartUi::On] {
-            assert_eq!(SmartUi::from_u8(value.as_u8()), value);
-        }
     }
 
     #[test]
@@ -3703,6 +3720,7 @@ mod tests {
             auto_approve: false,
             task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             clients: clients::Clients::default(),
+            client_capability_updates: Arc::new(std::sync::Mutex::new(())),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             share_retry_at: Arc::new(std::sync::Mutex::new(None)),
@@ -5654,7 +5672,7 @@ mod tests {
             let b = b_ready.await.expect("client b connects");
             // A is an app with the preview and orchestration; B advertises nothing.
             a.send_request(initialize_with(
-                serde_json::json!({ "rustcode": { "preview": 1, "orchestration": 3 } }),
+                serde_json::json!({ "rustcode": { "preview": 1, "orchestration": 3, "threads": 1, "visualizations": 2, "smartUi": 1 } }),
             ))
             .block_task()
             .await
@@ -5663,6 +5681,8 @@ mod tests {
                 .block_task()
                 .await
                 .expect("b initializes");
+            #[cfg(unix)]
+            assert!(server.remote.can_host_threads());
             let a_session = a
                 .send_request(NewSessionRequest::new(cwd.path().to_path_buf()))
                 .block_task()
@@ -5689,6 +5709,8 @@ mod tests {
             let a_preview = {
                 let state = a_state.lock().await;
                 assert_eq!(state.orchestration_version, 3);
+                assert_eq!(state.visualization_level, 2);
+                assert_eq!(state.smart_ui, crate::app::SmartUi::On);
                 assert!(state.orchestration_client.is_some());
                 state
                     .preview_client
@@ -5698,6 +5720,8 @@ mod tests {
             {
                 let state = b_state.lock().await;
                 assert_eq!(state.orchestration_version, 0);
+                assert_eq!(state.visualization_level, 0);
+                assert_eq!(state.smart_ui, crate::app::SmartUi::Unsupported);
                 assert!(state.orchestration_client.is_none());
                 assert!(state.preview_client.is_none());
             }
@@ -5727,6 +5751,8 @@ mod tests {
                 assert!(std::time::Instant::now() < deadline, "a never disconnected");
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
+            #[cfg(unix)]
+            assert!(!server.remote.can_host_threads());
             {
                 let sessions = server.sessions.lock().await;
                 assert!(sessions.contains_key(&a_session));

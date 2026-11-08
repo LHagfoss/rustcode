@@ -590,6 +590,14 @@ impl RemoteManager {
         }
     }
 
+    /// Stop advertising thread creation when no connected client can list the
+    /// thread that would be started.
+    pub(crate) fn clear_thread_host(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.thread_host = None;
+        }
+    }
+
     /// Whether this engine starts threads for devices.
     pub(crate) fn can_host_threads(&self) -> bool {
         self.inner
@@ -1199,6 +1207,8 @@ impl RemoteManager {
             + 'static,
     {
     }
+
+    pub(crate) fn clear_thread_host(&self) {}
 
     pub(crate) fn can_host_threads(&self) -> bool {
         false

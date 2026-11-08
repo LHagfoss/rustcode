@@ -74,6 +74,13 @@ impl ClientInfo {
             Capability::Threads => self.shows_threads,
         }
     }
+
+    pub(crate) fn display(&self) -> crate::harness::ClientDisplay {
+        crate::harness::ClientDisplay {
+            visualization_level: self.visualization_level,
+            smart_ui: self.smart_ui,
+        }
+    }
 }
 
 /// A request only some clients answer.
@@ -222,10 +229,12 @@ impl Clients {
 
     /// The connection `id`, as a request handler sees it.
     pub(crate) fn peer(&self, id: ClientId, connection: &ConnectionTo<Client>) -> Peer {
+        let info = self.info(id);
         Peer {
             clients: self.clone(),
             id,
             connection: connection.clone(),
+            info,
         }
     }
 
@@ -278,7 +287,12 @@ impl Clients {
             .iter()
             .filter(|(_, entry)| entry.info.has(capability))
             .max_by_key(|(_, entry)| entry.since)
-            .map(|(id, entry)| self.peer(*id, &entry.connection))
+            .map(|(id, entry)| Peer {
+                clients: self.clone(),
+                id: *id,
+                connection: entry.connection.clone(),
+                info: entry.info,
+            })
     }
 
     /// Where `session_id`'s updates go.
@@ -318,8 +332,10 @@ impl Clients {
     }
 
     /// `id` also gets the notifications of `topic`.
-    pub(crate) fn subscribe(&self, id: ClientId, connection: &ConnectionTo<Client>, topic: Topic) {
-        self.registry().entry(id, connection).topics.insert(topic);
+    pub(crate) fn subscribe(&self, id: ClientId, topic: Topic) {
+        if let Some(entry) = self.registry().entries.get_mut(&id) {
+            entry.topics.insert(topic);
+        }
     }
 
     /// Tell every connected client.
@@ -354,13 +370,12 @@ impl Clients {
         }
     }
 
-    fn attach(&self, id: ClientId, connection: &ConnectionTo<Client>, session_id: &str) {
+    fn attach(&self, id: ClientId, session_id: &str) {
         let mut registry = self.registry();
         let at = registry.tick();
-        registry
-            .entry(id, connection)
-            .sessions
-            .insert(session_id.to_owned(), at);
+        if let Some(entry) = registry.entries.get_mut(&id) {
+            entry.sessions.insert(session_id.to_owned(), at);
+        }
     }
 
     /// The connections that have `session_id`.
@@ -435,6 +450,7 @@ pub(crate) struct Peer {
     clients: Clients,
     id: ClientId,
     connection: ConnectionTo<Client>,
+    info: ClientInfo,
 }
 
 impl Peer {
@@ -452,13 +468,13 @@ impl Peer {
 
     /// What this client advertised in `initialize`.
     pub(crate) fn info(&self) -> ClientInfo {
-        self.clients.info(self.id)
+        self.info
     }
 
     /// This client created or loaded `session_id`: it gets its updates from
     /// now on. Answers where they go.
     pub(crate) fn attach(&self, session_id: &str) -> SessionClients {
-        self.clients.attach(self.id, &self.connection, session_id);
+        self.clients.attach(self.id, session_id);
         self.clients.session(session_id)
     }
 
@@ -613,5 +629,111 @@ impl SessionClients {
             )));
         };
         connection.send_request(request).block_task().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::{
+        AgentCapabilities, InitializeRequest, InitializeResponse,
+    };
+    use agent_client_protocol::{Agent, Channel, Client};
+
+    #[tokio::test]
+    async fn late_attach_and_subscribe_do_not_restore_a_disconnected_client() {
+        let clients = Clients::default();
+        let id = clients.new_id();
+        let (engine, transport) = Channel::duplex();
+        let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+        let peer_tx = Arc::new(std::sync::Mutex::new(Some(peer_tx)));
+        let (close_tx, close_rx) = tokio::sync::oneshot::channel();
+        let server_clients = clients.clone();
+
+        let server = tokio::spawn(async move {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async move |_: InitializeRequest, responder, connection| {
+                        let clients = server_clients.clone();
+                        let peer_tx = Arc::clone(&peer_tx);
+                        clients.connect(
+                            id,
+                            &connection,
+                            ClientInfo {
+                                preview: true,
+                                ..ClientInfo::default()
+                            },
+                        );
+                        if let Some(peer_tx) = peer_tx
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take()
+                        {
+                            let _ = peer_tx.send(clients.peer(id, &connection));
+                        }
+                        responder.respond(
+                            InitializeResponse::new(
+                                agent_client_protocol::schema::ProtocolVersion::V1,
+                            )
+                            .agent_capabilities(AgentCapabilities::new()),
+                        )
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(engine)
+                .await
+        });
+        let client = tokio::spawn(async move {
+            Client
+                .builder()
+                .connect_with(transport, async move |connection| {
+                    connection
+                        .send_request(InitializeRequest::new(
+                            agent_client_protocol::schema::ProtocolVersion::V1,
+                        ))
+                        .block_task()
+                        .await?;
+                    let _ = close_rx.await;
+                    Ok(())
+                })
+                .await
+        });
+
+        let peer = peer_rx.await.expect("initialize captured its peer");
+        let _ = close_tx.send(());
+        server
+            .await
+            .expect("server task")
+            .expect("server closes cleanly");
+        client
+            .await
+            .expect("client task")
+            .expect("client closes cleanly");
+        clients.disconnect(id);
+
+        assert!(
+            peer.info().preview,
+            "a peer keeps its initialized capabilities"
+        );
+        peer.clients().subscribe(peer.id(), Topic::Themes);
+        let session = peer.attach("closed-session");
+        assert_eq!(
+            clients.len(),
+            0,
+            "late operations do not recreate the entry"
+        );
+        assert!(session.requester(Some(Capability::Preview)).is_none());
+        assert!(
+            session
+                .update(SessionUpdate::UserMessageChunk(
+                    agent_client_protocol::schema::v1::ContentChunk::new(
+                        agent_client_protocol::schema::v1::ContentBlock::Text(
+                            agent_client_protocol::schema::v1::TextContent::new("unseen"),
+                        ),
+                    ),
+                ))
+                .is_ok()
+        );
     }
 }

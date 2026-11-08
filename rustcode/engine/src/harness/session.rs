@@ -94,6 +94,8 @@ pub(crate) struct StartOptions {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub log_session: Option<String>,
+    /// What the client that opened this thread can render.
+    pub client_display: super::ClientDisplay,
     /// The `rustcode mcp-orchestrator` to add to the harness's session.
     pub orchestrator: Option<crate::orchestration::hub::Launch>,
     /// The MCP servers the user configured for this workspace, so a thread on any harness has the
@@ -701,6 +703,7 @@ pub(crate) struct ExternalSession {
     transcript: Arc<StdMutex<Transcript>>,
     closed: AtomicBool,
     persist: bool,
+    client_display: StdMutex<super::ClientDisplay>,
     orchestrator: StdMutex<Option<crate::orchestration::hub::Launch>>,
     /// The turn in flight's progress, for the silence deadline.
     progress: Arc<watchdog::Progress>,
@@ -789,6 +792,7 @@ impl ExternalSession {
             transcript,
             closed: AtomicBool::new(false),
             persist,
+            client_display: StdMutex::new(super::ClientDisplay::default()),
             orchestrator: StdMutex::new(None),
             progress,
             silence: StdMutex::new(None),
@@ -816,6 +820,13 @@ impl ExternalSession {
             .orchestrator
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = launch;
+    }
+
+    pub(crate) fn set_client_display(&self, display: super::ClientDisplay) {
+        *self
+            .client_display
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = display;
     }
 
     pub(crate) fn record(&self) -> HarnessRecord {
@@ -998,12 +1009,17 @@ impl ExternalSession {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
+        let client_display = *self
+            .client_display
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         Ok(StartOptions {
             resume: record.native_session_id.clone(),
             account,
             model: record.model.clone(),
             effort: record.effort.clone(),
             log_session: self.persist.then(|| self.id.clone()),
+            client_display,
             orchestrator,
             // The caller adds the workspace's servers; a test wants none.
             mcp: Vec::new(),
