@@ -10,10 +10,10 @@
 use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1::{Meta, NewSessionRequest};
-use agent_client_protocol::{Client, ConnectionTo};
 use serde_json::json;
 
 use super::AcpServer;
+use super::clients::{Capability, Peer};
 use super::remote::{RemoteSession, ThreadStart};
 use crate::harness::{self, HarnessKind};
 use crate::remote::{RemoteError, RemoteErrorCode, RemoteSessionInfo};
@@ -135,18 +135,23 @@ fn acp_failure(error: agent_client_protocol::Error) -> RemoteError {
     internal(detail)
 }
 
-/// Start the thread `ask` names, share it, and answer with its row.
+/// Start the thread `ask` names, share it, and answer with its row. The
+/// newest connected client that lists threads has it open.
 pub(crate) async fn start(
     server: &AcpServer,
-    connection: &ConnectionTo<Client>,
     ask: ThreadStart,
 ) -> Result<RemoteSessionInfo, RemoteError> {
+    let Some(peer) = server.clients.newest_with(Capability::Threads) else {
+        return Err(internal(
+            "no RustCode app is connected to open the new thread".to_owned(),
+        ));
+    };
     let choice = choice(&ask)?;
     let cwd = directory(ask.path.as_deref())?;
     let session_id = if choice.harness == harness::BUILTIN_ID {
-        builtin(server, connection, &cwd, &choice).await?
+        builtin(server, &peer, &cwd, &choice).await?
     } else {
-        external(server, connection, &cwd, &choice).await?
+        external(server, &peer, &cwd, &choice).await?
     };
     let info = server
         .remote
@@ -154,13 +159,16 @@ pub(crate) async fn start(
         .ok_or_else(|| internal(format!("the new thread {session_id} is not shared")))?;
     // The app lists its threads from the store, which has no row for a thread
     // before its first turn: this is what puts it in the sidebar now.
-    let _ = connection.send_notification(super::ThreadCreatedNotification {
-        session_id: info.session_id.clone(),
-        cwd: cwd.clone(),
-        title: (!info.title.trim().is_empty()).then(|| info.title.clone()),
-        harness: info.harness.clone(),
-        model: (!info.model.trim().is_empty()).then(|| info.model.clone()),
-    });
+    server.clients.broadcast_to(
+        Capability::Threads,
+        super::ThreadCreatedNotification {
+            session_id: info.session_id.clone(),
+            cwd: cwd.clone(),
+            title: (!info.title.trim().is_empty()).then(|| info.title.clone()),
+            harness: info.harness.clone(),
+            model: (!info.model.trim().is_empty()).then(|| info.model.clone()),
+        },
+    );
     Ok(info)
 }
 
@@ -168,13 +176,13 @@ pub(crate) async fn start(
 /// shared from its `AppState`, so a prompt from the device runs a turn here.
 async fn builtin(
     server: &AcpServer,
-    connection: &ConnectionTo<Client>,
+    peer: &Peer,
     cwd: &Path,
     choice: &Choice,
 ) -> Result<String, RemoteError> {
     let mut request = NewSessionRequest::new(cwd.to_path_buf());
     request.meta = Some(meta(choice));
-    let response = super::create_builtin_session(server, connection, request)
+    let response = super::create_builtin_session(server, peer, request)
         .await
         .map_err(acp_failure)?;
     let session_id = response.session_id.to_string();
@@ -184,7 +192,7 @@ async fn builtin(
             RemoteSession::from_acp(
                 session_id.clone(),
                 session,
-                connection.clone(),
+                server.clients.session(&session_id),
                 std::sync::Arc::clone(&server.client),
                 server.auto_approve,
                 server.presence.clone(),
@@ -209,7 +217,7 @@ async fn builtin(
 /// harness in the thread's folder, then the share of its updates.
 async fn external(
     server: &AcpServer,
-    connection: &ConnectionTo<Client>,
+    peer: &Peer,
     cwd: &Path,
     choice: &Choice,
 ) -> Result<String, RemoteError> {
@@ -221,18 +229,10 @@ async fn external(
         model: choice.model.clone(),
         effort: None,
     };
-    let response = super::harnesses::new_session(
-        &server.external,
-        request,
-        asked,
-        connection,
-        server
-            .client_has_orchestration
-            .load(std::sync::atomic::Ordering::Relaxed),
-        &server.remote,
-    )
-    .await
-    .map_err(acp_failure)?;
+    let response =
+        super::harnesses::new_session(&server.external, request, asked, peer, &server.remote)
+            .await
+            .map_err(acp_failure)?;
     let session_id = response.session_id.to_string();
     let session = super::harnesses::get(&server.external, &session_id)
         .await
@@ -243,7 +243,12 @@ async fn external(
         })?;
     server
         .remote
-        .start_harness(session_id.clone(), session, Some(connection.clone()), false)
+        .start_harness(
+            session_id.clone(),
+            session,
+            Some(server.clients.session(&session_id)),
+            false,
+        )
         .await
         .map_err(|error| acp_failure(error.into_acp()))?;
     Ok(session_id)

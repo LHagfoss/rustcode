@@ -270,8 +270,8 @@ impl CodexAdapter {
         // computed when the thread started this process.
         let output_style = crate::tools::schema::harness_instructions(
             &harness.name,
-            super::client_visualization_level(),
-            super::client_smart_ui(),
+            options.client_display.visualization_level,
+            options.client_display.smart_ui,
             options.skills_note.as_deref(),
         );
         let mut thread = None;
