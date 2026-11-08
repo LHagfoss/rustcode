@@ -49,13 +49,13 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | `text` | Primary text and icons | `#ededed` | `#171717` |
 | `text-muted` | Secondary text, idle icons | `#a1a1a1` | `#5c5c5c` |
 | `text-faint` | Metadata, placeholders, disabled | `#6b6b6b` | `#9a9a9a` |
-| `accent` | Links, toggles on, progress, selection marks | `#5b8def` | `#2f6fe4` |
-| `accent-text` | Text and icons drawn on `accent` | `#ffffff` | `#ffffff` |
+| `accent` | Links, toggles on, progress, selection marks | `#93a3e8` | `#2f6fe4` |
+| `accent-text` | Text and icons drawn on `accent` | `#0b0b0c` | `#ffffff` |
 | `danger` | Errors, destructive actions | `#f26d6d` | `#d93d3d` |
 | `success` | Passed, connected, added lines | `#4ec27a` | `#1f9d55` |
 | `warning` | Needs you, warnings | `#e5a54b` | `#b7791f` |
-| `focus` | The keyboard focus ring (drawn at 40%) | `#5b8def` | `#2f6fe4` |
-| `selection` | Selected text | `#5b8def4d` | `#2f6fe433` |
+| `focus` | The keyboard focus ring (drawn at 40%) | `#93a3e8` | `#2f6fe4` |
+| `selection` | Selected text | `#93a3e84d` | `#2f6fe433` |
 | `code-bg` | Code blocks, diffs, terminal | `#111113` | `#f6f6f7` |
 | `scrollbar` | Scrollbar thumb | `#ffffff26` | `#00000026` |
 
