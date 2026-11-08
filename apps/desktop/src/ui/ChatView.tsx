@@ -55,13 +55,14 @@ import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
-import { NEW_THREAD_TIPS } from "./newThreadTips";
+import { boundTips } from "./newThreadTips";
 import { ProjectMark } from "./ProjectMark";
 import {
   Callout,
   Cluster,
   ClusterButton,
   cx,
+  Kbd,
   MenuContent,
   menuItem,
   menuSeparator,
@@ -598,16 +599,17 @@ function NewThreadHeading({
   banner: boolean;
   showTip: boolean;
 }) {
-  const [tip] = useState(
-    () => NEW_THREAD_TIPS[Math.floor(Math.random() * NEW_THREAD_TIPS.length)] ?? NEW_THREAD_TIPS[0],
-  );
-  const shortcut = useShortcutHint(tip.command);
+  const [tip] = useState(() => {
+    const tips = boundTips(useApp.getState().shortcuts);
+    return tips[Math.floor(Math.random() * tips.length)];
+  });
+  const shortcut = useShortcutHint(tip?.command ?? "");
   return (
     <div className="flex min-w-0 max-w-full flex-col items-center gap-2 pb-2 text-center">
       <h2
         className={cx(
-          "min-w-0 max-w-full rounded-xl px-3 py-1 font-semibold text-title tracking-tight",
-          banner && "bg-bg",
+          "min-w-0 max-w-full rounded-full px-3 py-1 font-semibold text-title tracking-tight",
+          banner && "rc-glass",
         )}
       >
         {project ? (
@@ -628,9 +630,9 @@ function NewThreadHeading({
           "What should we build?"
         )}
       </h2>
-      {showTip && (
-        <p className={cx("rounded-full px-3 py-1 text-caption text-fg-muted", banner && "bg-bg")}>
-          Tip: {tip.text} with <kbd>{shortcut}</kbd>
+      {showTip && tip && shortcut && (
+        <p className={cx("rounded-full px-3 py-1 text-caption text-fg-muted", banner && "rc-glass")}>
+          Tip: {tip.text} with <Kbd>{shortcut}</Kbd>
         </p>
       )}
     </div>

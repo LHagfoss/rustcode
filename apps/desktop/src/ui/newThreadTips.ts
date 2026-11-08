@@ -1,4 +1,4 @@
-import { formatBinding } from "../lib/keys";
+import { bindingOf, formatBinding } from "../lib/keys";
 import type { Platform } from "../lib/platform";
 
 export const NEW_THREAD_TIPS = [
@@ -18,4 +18,9 @@ export const NEW_THREAD_TIPS = [
 
 export function tipBinding(binding: string, platform: Platform): string {
   return formatBinding(binding, platform);
+}
+
+/** Tips with a currently assigned shortcut. */
+export function boundTips(overrides: Readonly<Record<string, string>>) {
+  return NEW_THREAD_TIPS.filter((tip) => !!bindingOf(overrides, tip.command));
 }
